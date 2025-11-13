@@ -37,11 +37,6 @@ jobs:
             });
 
             for (const pr of prs) {
-              if (pr.draft) {
-                core.info(`Skipping draft PR #${pr.number}`);
-                continue;
-              }
-
               const lastUpdated = new Date(pr.updated_at);
               if (lastUpdated > cutoff) {
                 continue;
