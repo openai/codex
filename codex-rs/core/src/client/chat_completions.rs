@@ -32,7 +32,6 @@ use std::task::Context;
 use std::task::Poll;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
-use tracing::debug;
 use tracing::trace;
 
 /// Implementation for the classic Chat Completions API.
@@ -828,10 +827,7 @@ where
                                 // seen any deltas; otherwise, deltas already built the
                                 // cumulative text and this would duplicate it.
                                 if this.cumulative.is_empty()
-                                    && let ResponseItem::Message {
-                                        content,
-                                        ..
-                                    } = &item
+                                    && let ResponseItem::Message { content, .. } = &item
                                     && let Some(text) = content.iter().find_map(|c| match c {
                                         ContentItem::OutputText { text } => Some(text),
                                         _ => None,
@@ -938,9 +934,7 @@ where
                     this.cumulative_reasoning.push_str(&delta);
                     if matches!(this.mode, AggregateMode::Streaming) {
                         // In streaming mode, also forward the delta immediately.
-                        return Poll::Ready(Some(Ok(
-                            ResponseEvent::ReasoningContentDelta(delta),
-                        )));
+                        return Poll::Ready(Some(Ok(ResponseEvent::ReasoningContentDelta(delta))));
                     }
                 }
                 Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryDelta(_)))) => {}

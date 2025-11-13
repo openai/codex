@@ -1,4 +1,3 @@
-use std::io::BufRead;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -356,12 +355,11 @@ impl ModelClient {
                 // stream so downstream consumers (Session) can surface an
                 // initial TokenCount snapshot, even when the provider does not
                 // send explicit rate limit headers.
-                let snapshot = parse_rate_limit_snapshot(resp.headers()).or_else(|| {
-                    Some(RateLimitSnapshot {
+                let snapshot =
+                    parse_rate_limit_snapshot(resp.headers()).or(Some(RateLimitSnapshot {
                         primary: None,
                         secondary: None,
-                    })
-                });
+                    }));
                 if let Some(snapshot) = snapshot
                     && tx_event
                         .send(Ok(ResponseEvent::RateLimits(snapshot)))
@@ -945,7 +943,7 @@ async fn handle_sse_event(
                                 *response_error = Some(CodexErr::QuotaExceeded);
                             } else {
                                 let delay = try_parse_retry_after(&error);
-                                let message = error.message.clone().unwrap_or_default();
+                                let message = error.message.unwrap_or_default();
                                 *response_error = Some(CodexErr::Stream(message, delay));
                             }
                         }
@@ -1033,7 +1031,7 @@ mod tests {
     use codex_app_server_protocol::AuthMode;
     use codex_protocol::ConversationId;
     use codex_protocol::models::ResponseItem;
-    use codex_protocol::protocol::SessionSource;
+    
     use futures::StreamExt;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -1196,7 +1194,7 @@ mod tests {
         }
 
         assert_eq!(events.len(), 3);
-        matches!(events[0], Ok(ResponseEvent::Created {}));
+        matches!(events[0], Ok(ResponseEvent::Created));
         matches!(
             &events[1],
             Ok(ResponseEvent::OutputItemDone(ResponseItem::Message { role, .. }))
