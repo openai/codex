@@ -93,7 +93,10 @@ fn parse_pattern_token<'v>(value: Value<'v>) -> Result<PatternToken> {
                 value
                     .unpack_str()
                     .ok_or_else(|| {
-                        Error::InvalidPattern("pattern alternative must be a string".to_string())
+                        Error::InvalidPattern(format!(
+                            "pattern alternative must be a string (got {})",
+                            value.get_type()
+                        ))
                     })
                     .map(str::to_string)
             })
