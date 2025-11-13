@@ -1339,6 +1339,10 @@ impl Session {
                 "Auto-continue paused after an interrupt. It will resume automatically with your next instruction."
                     .to_string(),
             ),
+            AutoContinueStopReason::AwaitingUserInput => Some(
+                "Auto-continue paused until you provide the requested inputs. It will resume automatically after your next message."
+                    .to_string(),
+            ),
         }
     }
 
