@@ -168,9 +168,17 @@ impl AutoContinueRuntimeState {
             return AutoContinueDecision::Stop(AutoContinueStopReason::EmptyMessage);
         };
 
-        if should_stop_after_message(message) {
-            self.disable(AutoContinueStopReason::StopPhrase);
-            return AutoContinueDecision::Stop(AutoContinueStopReason::StopPhrase);
+        let lower = message.to_ascii_lowercase();
+
+        if !message_has_next_step_signal(&lower) {
+            if message_requires_user_input(&lower) {
+                self.disable(AutoContinueStopReason::AwaitingUserInput);
+                return AutoContinueDecision::Stop(AutoContinueStopReason::AwaitingUserInput);
+            }
+            if has_negative_stop_phrase(&lower) {
+                self.disable(AutoContinueStopReason::StopPhrase);
+                return AutoContinueDecision::Stop(AutoContinueStopReason::StopPhrase);
+            }
         }
 
         let normalized = normalize_for_repetition(message);
@@ -231,6 +239,9 @@ pub(crate) enum AutoContinueStopReason {
     StopPhrase,
     RepeatedOutput,
     Interrupted,
+    /// Assistant is waiting on user-provided inputs (e.g.,
+    /// "I cannot proceed without the sessions and config path").
+    AwaitingUserInput,
 }
 
 fn normalize_for_repetition(message: &str) -> String {
@@ -241,13 +252,7 @@ fn normalize_for_repetition(message: &str) -> String {
         .to_ascii_lowercase()
 }
 
-fn should_stop_after_message(message: &str) -> bool {
-    let lower = message.to_ascii_lowercase();
-
-    if message_has_next_step_signal(&lower) {
-        return false;
-    }
-
+fn has_negative_stop_phrase(lower: &str) -> bool {
     AUTO_CONTINUE_NEGATIVE_PATTERNS
         .iter()
         .any(|pattern| lower.contains(pattern))
@@ -255,6 +260,12 @@ fn should_stop_after_message(message: &str) -> bool {
 
 fn message_has_next_step_signal(lower: &str) -> bool {
     AUTO_CONTINUE_NEXT_PATTERNS
+        .iter()
+        .any(|pattern| lower.contains(pattern))
+}
+
+fn message_requires_user_input(lower: &str) -> bool {
+    AUTO_CONTINUE_INPUT_BLOCKED_PATTERNS
         .iter()
         .any(|pattern| lower.contains(pattern))
 }
@@ -279,6 +290,38 @@ const AUTO_CONTINUE_NEGATIVE_PATTERNS: &[&str] = &[
     "this should complete",
     "no remaining tasks",
     "nothing outstanding",
+];
+
+// Phrases that indicate the assistant is blocked until the user provides
+// required information or confirmation.
+const AUTO_CONTINUE_INPUT_BLOCKED_PATTERNS: &[&str] = &[
+    "cannot proceed without",
+    "can't proceed without",
+    "cannot continue without",
+    "can't continue without",
+    "unable to proceed without",
+    "blocked until you provide",
+    "blocked until you share",
+    "i'm blocked until you",
+    "i am blocked until you",
+    "i need the",
+    "i need",
+    "need the",
+    "need you to",
+    "please provide",
+    "please share",
+    "provide them to continue",
+    "provide them to proceed",
+    "share them to continue",
+    "share them to proceed",
+    "standing by for",
+    "standing by",
+    "on standby",
+    "waiting for you to",
+    "awaiting your",
+    "waiting on your",
+    "ready to proceed as soon as you",
+    "ready to execute as soon as you",
 ];
 
 const AUTO_CONTINUE_NEXT_PATTERNS: &[&str] = &[
@@ -326,6 +369,16 @@ mod tests {
         let mut runtime = AutoContinueRuntimeState::new(make_config());
         match runtime.decide(Some("No further actions remain.")) {
             AutoContinueDecision::Stop(AutoContinueStopReason::StopPhrase) => {}
+            other => panic!("unexpected decision: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn auto_continue_stops_when_awaiting_user_input() {
+        let mut runtime = AutoContinueRuntimeState::new(make_config());
+        let msg = "I cannot proceed without the sessions and config path. Please provide them to continue.";
+        match runtime.decide(Some(msg)) {
+            AutoContinueDecision::Stop(AutoContinueStopReason::AwaitingUserInput) => {}
             other => panic!("unexpected decision: {other:?}"),
         }
     }
@@ -403,6 +456,14 @@ mod tests {
     fn auto_continue_rearms_after_interrupt() {
         let mut runtime = AutoContinueRuntimeState::new(make_config());
         runtime.disable(AutoContinueStopReason::Interrupted);
+        assert!(runtime.rearm_if_allowed());
+        assert!(runtime.config().enabled);
+    }
+
+    #[test]
+    fn auto_continue_rearms_after_awaiting_user_input() {
+        let mut runtime = AutoContinueRuntimeState::new(make_config());
+        runtime.disable(AutoContinueStopReason::AwaitingUserInput);
         assert!(runtime.rearm_if_allowed());
         assert!(runtime.config().enabled);
     }
