@@ -28,11 +28,20 @@ use crate::rule::validate_not_match_examples;
 pub struct PolicyParser;
 
 impl PolicyParser {
-    pub fn parse(policy_source: &str, unparsed_policy: &str) -> Result<crate::policy::Policy> {
+    /// Parses a policy, tagging parser errors with `policy_identifier` so failures include the
+    /// identifier alongside line numbers.
+    pub fn parse(
+        policy_identifier: &str,
+        policy_file_contents: &str,
+    ) -> Result<crate::policy::Policy> {
         let mut dialect = Dialect::Extended.clone();
         dialect.enable_f_strings = true;
-        let ast = AstModule::parse(policy_source, unparsed_policy.to_string(), &dialect)
-            .map_err(|e| Error::Starlark(e.to_string()))?;
+        let ast = AstModule::parse(
+            policy_identifier,
+            policy_file_contents.to_string(),
+            &dialect,
+        )
+        .map_err(|e| Error::Starlark(e.to_string()))?;
         let globals = GlobalsBuilder::standard().with(policy_builtins).build();
         let module = Module::new();
 

@@ -44,8 +44,11 @@ fn cmd_check(policy_path: PathBuf, args: Vec<String>) -> Result<()> {
 }
 
 fn load_policy(policy_path: &Path) -> Result<codex_execpolicy2::Policy> {
-    let content = fs::read_to_string(policy_path)
+    let policy_file_contents = fs::read_to_string(policy_path)
         .with_context(|| format!("failed to read policy at {}", policy_path.display()))?;
-    let policy_source = policy_path.to_string_lossy();
-    Ok(PolicyParser::parse(policy_source.as_ref(), &content)?)
+    let policy_identifier = policy_path.to_string_lossy();
+    Ok(PolicyParser::parse(
+        policy_identifier.as_ref(),
+        &policy_file_contents,
+    )?)
 }
