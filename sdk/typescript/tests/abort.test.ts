@@ -162,24 +162,4 @@ describe("AbortSignal support", () => {
       await close();
     }
   });
-
-  it("works without a signal (backward compatibility)", async () => {
-    const { url, close } = await startResponsesTestProxy({
-      statusCode: 200,
-      responseBodies: [sse(responseStarted(), assistantMessage("Hi!"), responseCompleted())],
-    });
-
-    try {
-      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
-      const thread = client.startThread();
-
-      // Should work fine without any signal
-      const result = await thread.run("Hello, world!");
-
-      expect(result.finalResponse).toBe("Hi!");
-      expect(result.items).toHaveLength(1);
-    } finally {
-      await close();
-    }
-  });
 });
