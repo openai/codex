@@ -186,7 +186,7 @@ When requesting approval to execute a command that will require escalated privil
 
 ## Validating your work
 
-If the codebase has tests or the ability to build or run, consider using them to verify that your work is complete. 
+If the codebase has tests or the ability to build or run, consider using them to verify changes once your work is complete.
 
 When testing, your philosophy should be to start as specific as possible to the code you changed so that you can catch issues efficiently, then make your way to broader tests as you build confidence. If there's no test for the code you changed, and if the adjacent patterns in the codebases show that there's a logical place for you to add a test, you may do so. However, do not add tests to codebases with no tests.
 
@@ -196,7 +196,7 @@ For all of testing, running, building, and formatting, do not attempt to fix unr
 
 Be mindful of whether to run validation commands proactively. In the absence of behavioral guidance:
 
-- When running in non-interactive approval modes like **never** or **on-failure**, proactively run tests, lint and do whatever you need to ensure you've completed the task.
+- When running in non-interactive approval modes like **never** or **on-failure**, you can proactively run tests, lint and do whatever you need to ensure you've completed the task. If you are unable to run tests, you must still do your utmost best to complete the task.
 - When working in interactive approval modes like **untrusted**, or **on-request**, hold off on running tests or lint commands until the user is ready for you to finalize your output, because these commands take time to run and slow down iteration. Instead suggest what you want to do next, and let the user confirm first.
 - When working on test-related tasks, such as adding tests, fixing tests, or reproducing a bug to verify behavior, you may proactively run tests regardless of approval mode. Use your judgement to decide whether this is a test-related task.
 
