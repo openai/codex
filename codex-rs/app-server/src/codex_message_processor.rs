@@ -2696,7 +2696,6 @@ async fn apply_bespoke_event_handling(
                 });
             }
             ApiVersion::V2 => {
-                let item_id = call_id.clone();
                 let request = FileChangeRequest {
                     call_id,
                     file_changes: changes
@@ -2708,8 +2707,9 @@ async fn apply_bespoke_event_handling(
                 };
                 let params = FileChangeRequestApprovalParams {
                     thread_id: conversation_id.to_string(),
-                    turn_id: event_id.clone(),
-                    item_id,
+                    // TODO: use the actual IDs once we have them
+                    turn_id: "placeholder_turn_id".to_string(),
+                    item_id: "placeholder_item_id".to_string(),
                     request,
                 };
                 let rx = outgoing
@@ -2746,7 +2746,6 @@ async fn apply_bespoke_event_handling(
                 });
             }
             ApiVersion::V2 => {
-                let item_id = call_id.clone();
                 let request = CommandExecutionRequest {
                     call_id,
                     command,
@@ -2757,8 +2756,9 @@ async fn apply_bespoke_event_handling(
                 };
                 let params = CommandExecutionRequestApprovalParams {
                     thread_id: conversation_id.to_string(),
-                    turn_id: event_id.clone(),
-                    item_id,
+                    // TODO: use the actual IDs once we have them
+                    turn_id: "placeholder_turn_id".to_string(),
+                    item_id: "placeholder_item_id".to_string(),
                     request,
                 };
                 let rx = outgoing
