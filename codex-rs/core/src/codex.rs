@@ -96,6 +96,7 @@ use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
+use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnDiffEvent;
 use crate::protocol::WarningEvent;
 use crate::rollout::RolloutRecorder;
@@ -1078,6 +1079,36 @@ impl Session {
                     turn_context.client.get_model_context_window(),
                 );
             }
+        }
+        self.send_token_count_event(turn_context).await;
+    }
+
+    pub(crate) async fn override_last_token_usage_estimate(
+        &self,
+        turn_context: &TurnContext,
+        estimated_total_tokens: i64,
+    ) {
+        {
+            let mut state = self.state.lock().await;
+            let mut info = state.token_info().unwrap_or(TokenUsageInfo {
+                total_token_usage: TokenUsage::default(),
+                last_token_usage: TokenUsage::default(),
+                model_context_window: None,
+            });
+
+            info.last_token_usage = TokenUsage {
+                input_tokens: 0,
+                cached_input_tokens: 0,
+                output_tokens: 0,
+                reasoning_output_tokens: 0,
+                total_tokens: estimated_total_tokens.max(0),
+            };
+
+            if info.model_context_window.is_none() {
+                info.model_context_window = turn_context.client.get_model_context_window();
+            }
+
+            state.set_token_info(Some(info));
         }
         self.send_token_count_event(turn_context).await;
     }
