@@ -2,14 +2,14 @@
 source: tui/src/model_migration.rs
 expression: terminal.backend()
 ---
-> Introducing our GPT-5.1-Codex-Mini models
+> Introducing our gpt-5.1-codex-mini models
 
   We've upgraded our family of models supported in Codex to
-  GPT-5.1, GPT-5.1-Codex and GPT-5.1-Codex-Mini.
+  gpt-5.1, gpt-5.1-codex and gpt-5.1-codex-mini.
 
   You can continue using legacy models by specifying them
   directly with the -m option or in your config.toml.
 
-  Learn more at www.openai.com/index/gpt-5-1
+  Learn more at www.openai.com/index/gpt-5-1.
 
-  Press enter to try now
+  Press enter to continue
