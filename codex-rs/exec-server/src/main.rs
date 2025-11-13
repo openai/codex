@@ -387,16 +387,13 @@ async fn shell_exec(params: ExecParams) -> anyhow::Result<ExecResult> {
             ],
             cwd: PathBuf::from(&workdir),
             timeout_ms,
-            env: {
-                let mut env = HashMap::new();
-                env.insert("CODEX_ESCALATE_SOCKET".to_string(), client_fd.to_string());
-                let current_exe = std::env::current_exe()?;
-                env.insert(
+            env: HashMap::from([
+                ("CODEX_ESCALATE_SOCKET".to_string(), client_fd.to_string()),
+                (
                     "BASH_EXEC_WRAPPER".to_string(),
-                    format!("{} escalate", current_exe.to_string_lossy()),
-                );
-                env
-            },
+                    format!("{} escalate", std::env::current_exe()?.to_string_lossy()),
+                ),
+            ]),
             with_escalated_permissions,
             justification,
             arg0: None,
