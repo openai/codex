@@ -2397,7 +2397,7 @@ impl ChatWidget {
         ]);
         header.push(line!["Turn it on to enable sandboxed commands on Windows."]);
 
-        let preset_clone = preset.clone();
+        let preset_clone = preset;
         let items = vec![SelectionItem {
             name: "Turn on Windows sandbox and use Auto mode".to_string(),
             description: Some(
@@ -2440,13 +2440,11 @@ impl ChatWidget {
     pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self) {
         if self.config.forced_auto_mode_downgraded_on_windows
             && codex_core::get_platform_sandbox().is_none()
-        {
-            if let Some(preset) = builtin_approval_presets()
+            && let Some(preset) = builtin_approval_presets()
                 .into_iter()
                 .find(|preset| preset.id == "auto")
-            {
-                self.open_windows_sandbox_enable_prompt(preset);
-            }
+        {
+            self.open_windows_sandbox_enable_prompt(preset);
         }
     }
 
