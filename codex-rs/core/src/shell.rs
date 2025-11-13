@@ -160,6 +160,12 @@ fn get_powershell_shell() -> Option<PowerShellConfig> {
     shell_path.map(|shell_path| PowerShellConfig { shell_path })
 }
 
+pub fn get_shell_by_model_provided_path(shell_path: &PathBuf) -> Shell {
+    detect_shell_type(shell_path)
+        .and_then(get_shell)
+        .unwrap_or(Shell::Unknown)
+}
+
 pub fn get_shell(shell_type: ShellType) -> Option<Shell> {
     match shell_type {
         ShellType::Zsh => get_zsh_shell().map(Shell::Zsh),
