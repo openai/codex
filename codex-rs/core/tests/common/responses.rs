@@ -12,6 +12,8 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path_regex;
 
+use crate::test_codex::ApplyPatchModelOutput;
+
 #[derive(Debug, Clone)]
 pub struct ResponseMock {
     requests: Arc<Mutex<Vec<ResponsesRequest>>>,
@@ -365,6 +367,21 @@ pub fn ev_local_shell_call(call_id: &str, status: &str, command: Vec<&str>) -> V
             }
         }
     })
+}
+
+pub fn ev_apply_patch_call(
+    call_id: &str,
+    patch: &str,
+    output_type: ApplyPatchModelOutput,
+) -> Value {
+    match output_type {
+        ApplyPatchModelOutput::Freeform => ev_apply_patch_custom_tool_call(call_id, patch),
+        ApplyPatchModelOutput::Function => ev_apply_patch_function_call(call_id, patch),
+        ApplyPatchModelOutput::Shell => ev_apply_patch_shell_call(call_id, patch),
+        ApplyPatchModelOutput::ShellViaHeredoc => {
+            ev_apply_patch_shell_call_via_heredoc(call_id, patch)
+        }
+    }
 }
 
 /// Convenience: SSE event for an `apply_patch` custom tool call with raw patch
