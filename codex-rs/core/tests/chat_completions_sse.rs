@@ -505,14 +505,19 @@ async fn aggregated_assistant_text_precedes_tool_call() {
     );
 
     let events = run_stream_aggregated_only(sse).await;
-    assert_eq!(events.len(), 3, "unexpected events: {events:?}");
+    assert_eq!(events.len(), 4, "unexpected events: {events:?}");
 
     match &events[0] {
+        ResponseEvent::OutputItemAdded(ResponseItem::Message { .. }) => {}
+        other => panic!("expected assistant item added, got {other:?}"),
+    }
+
+    match &events[1] {
         ResponseEvent::OutputItemDone(item) => assert_message(item, "preamble"),
         other => panic!("expected assistant message, got {other:?}"),
     }
 
-    match &events[1] {
+    match &events[2] {
         ResponseEvent::OutputItemDone(ResponseItem::FunctionCall {
             name,
             arguments,
@@ -526,7 +531,7 @@ async fn aggregated_assistant_text_precedes_tool_call() {
         other => panic!("expected function call, got {other:?}"),
     }
 
-    assert!(matches!(events[2], ResponseEvent::Completed { .. }));
+    assert!(matches!(events[3], ResponseEvent::Completed { .. }));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -544,14 +549,19 @@ async fn aggregated_reasoning_precedes_tool_call() {
     );
 
     let events = run_stream_aggregated_only(sse).await;
-    assert_eq!(events.len(), 3, "unexpected events: {events:?}");
+    assert_eq!(events.len(), 4, "unexpected events: {events:?}");
 
     match &events[0] {
+        ResponseEvent::OutputItemAdded(ResponseItem::Reasoning { .. }) => {}
+        other => panic!("expected reasoning item added, got {other:?}"),
+    }
+
+    match &events[1] {
         ResponseEvent::OutputItemDone(item) => assert_reasoning(item, "pre-tool"),
         other => panic!("expected reasoning item, got {other:?}"),
     }
 
-    match &events[1] {
+    match &events[2] {
         ResponseEvent::OutputItemDone(ResponseItem::FunctionCall {
             name,
             arguments,
@@ -565,7 +575,7 @@ async fn aggregated_reasoning_precedes_tool_call() {
         other => panic!("expected function call, got {other:?}"),
     }
 
-    assert!(matches!(events[2], ResponseEvent::Completed { .. }));
+    assert!(matches!(events[3], ResponseEvent::Completed { .. }));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
