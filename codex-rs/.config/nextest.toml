@@ -3,6 +3,6 @@
 slow-timeout = { period = "15s", terminate-after = 2 }
 
 
-[[profile.ci.overrides]]
+[[profile.default.overrides]]
 filter = 'test(rmcp_client)'
 slow-timeout = { period = "1m", terminate-after = 2 }
