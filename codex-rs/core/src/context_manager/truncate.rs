@@ -125,7 +125,7 @@ fn truncate_formatted_exec_output(
         result.push_str(marker_text);
     }
 
-    let remaining = MODEL_FORMAT_MAX_BYTES.saturating_sub(result.len());
+    let remaining = limit_bytes.saturating_sub(result.len());
     if remaining == 0 {
         return result;
     }
