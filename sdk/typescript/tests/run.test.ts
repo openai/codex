@@ -14,6 +14,7 @@ import {
   sse,
   responseFailed,
   startResponsesTestProxy,
+  SseResponseBody,
 } from "./responsesProxy";
 
 const codexExecPath = path.join(process.cwd(), "..", "..", "codex-rs", "target", "debug", "codex");
@@ -572,10 +573,12 @@ describe("Codex", () => {
   it("throws ThreadRunError on turn failures", async () => {
     const { url, close } = await startResponsesTestProxy({
       statusCode: 200,
-      responseBodies: [
-        sse(responseStarted("response_1")),
-        sse(responseFailed("rate limit exceeded")),
-      ],
+      responseBodies: (function* (): Generator<SseResponseBody> {
+        yield sse(responseStarted("response_1"));
+        while (true) {
+          yield sse(responseFailed("rate limit exceeded"));
+        }
+      })(),
     });
 
     try {

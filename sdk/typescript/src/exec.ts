@@ -71,7 +71,10 @@ export class CodexExec {
     }
 
     if (args.networkAccessEnabled !== undefined) {
-      commandArgs.push("--config", `sandbox_workspace_write.network_access=${args.networkAccessEnabled}`);
+      commandArgs.push(
+        "--config",
+        `sandbox_workspace_write.network_access=${args.networkAccessEnabled}`,
+      );
     }
 
     if (args.webSearchEnabled !== undefined) {
