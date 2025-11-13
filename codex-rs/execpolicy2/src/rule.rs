@@ -60,6 +60,7 @@ impl PrefixPattern {
 #[serde(rename_all = "camelCase")]
 pub enum RuleMatch {
     PrefixRuleMatch {
+        #[serde(rename = "matchedPrefix")]
         matched_prefix: Vec<String>,
         decision: Decision,
     },
