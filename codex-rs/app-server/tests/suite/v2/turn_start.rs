@@ -7,6 +7,7 @@ use app_test_support::create_shell_sse_response;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::ParsedCommand;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadStartParams;
@@ -17,7 +18,6 @@ use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::protocol_config_types::ReasoningEffort;
 use codex_core::protocol_config_types::ReasoningSummary;
-use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use core_test_support::skip_if_no_network;
@@ -235,7 +235,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     .await??;
     let ThreadStartResponse { thread } = to_response::<ThreadStartResponse>(start_resp)?;
 
-    // turn/start — expect ExecCommandApproval request from server
+    // turn/start — expect CommandExecutionRequestApproval request from server
     let first_turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
@@ -258,12 +258,12 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
         mcp.read_stream_until_request_message(),
     )
     .await??;
-    let ServerRequest::ExecCommandApproval { request_id, params } = server_req else {
-        panic!("expected ExecCommandApproval request");
+    let ServerRequest::CommandExecutionRequestApproval { request_id, params } = server_req else {
+        panic!("expected CommandExecutionRequestApproval request");
     };
-    assert_eq!(params.call_id, "call1");
+    assert_eq!(params.request.call_id, "call1");
     assert_eq!(
-        params.parsed_cmd,
+        params.request.parsed_cmd,
         vec![ParsedCommand::Unknown {
             cmd: "python3 -c 'print(42)'".to_string()
         }]
@@ -302,7 +302,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     )
     .await??;
 
-    // Ensure we do NOT receive an ExecCommandApproval request before task completes
+    // Ensure we do NOT receive a CommandExecutionRequestApproval request before task completes
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("codex/event/task_complete"),
