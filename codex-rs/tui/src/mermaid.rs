@@ -503,6 +503,36 @@ fn compute_label_spans(line: &str) -> Vec<(usize, usize)> {
     spans
 }
 
+fn leading_indent(haystack: &str, m: &regex::Match) -> String {
+    let start = m.start();
+    let line_start = haystack[..start]
+        .rfind('\n')
+        .map(|idx| idx.saturating_add(1))
+        .unwrap_or(0);
+    haystack[line_start..start]
+        .chars()
+        .take_while(|ch| ch.is_whitespace())
+        .collect()
+}
+
+fn indent_block(block: &str, indent: &str) -> String {
+    if indent.is_empty() {
+        return block.to_string();
+    }
+
+    block
+        .lines()
+        .map(|line| {
+            if line.is_empty() {
+                indent.to_string()
+            } else {
+                format!("{indent}{line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn is_already_quoted(raw: &str) -> bool {
     let trimmed = raw.trim();
     trimmed.len() >= 2
@@ -565,17 +595,30 @@ pub(crate) fn fix_mermaid_blocks(input: &str) -> String {
 
     let after_fenced = MERMAID_FENCE_RE
         .replace_all(input, |caps: &Captures| {
+            let full_match = caps
+                .get(0)
+                .expect("full match is always present for fenced mermaid block");
+            let indent = leading_indent(input, &full_match);
             let body = caps
                 .get(1)
                 .map(|m| m.as_str())
                 .unwrap_or("")
                 .trim_matches('\n');
-            lint_and_wrap(body)
+            let wrapped = lint_and_wrap(body);
+            if indent.is_empty() {
+                wrapped
+            } else {
+                indent_block(&wrapped, &indent)
+            }
         })
         .into_owned();
 
     let after_generic = GENERIC_FENCE_RE
         .replace_all(&after_fenced, |caps: &Captures| {
+            let full_match = caps
+                .get(0)
+                .expect("full match is always present for fenced code block");
+            let indent = leading_indent(&after_fenced, &full_match);
             let lang = caps
                 .get(1)
                 .map(|m| m.as_str())
@@ -605,7 +648,12 @@ pub(crate) fn fix_mermaid_blocks(input: &str) -> String {
             .iter()
             .any(|prefix| head.starts_with(prefix))
             {
-                lint_and_wrap(body)
+                let wrapped = lint_and_wrap(body);
+                if indent.is_empty() {
+                    wrapped
+                } else {
+                    indent_block(&wrapped, &indent)
+                }
             } else {
                 caps.get(0)
                     .map(|m| m.as_str().to_string())
