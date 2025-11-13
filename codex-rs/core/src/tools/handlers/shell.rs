@@ -328,6 +328,7 @@ mod tests {
 
     use crate::is_safe_command::is_known_safe_command;
     use crate::shell::BashShell;
+    use crate::shell::PowerShellConfig;
     use crate::shell::Shell;
     use crate::shell::ZshShell;
 
@@ -346,16 +347,10 @@ mod tests {
         });
         assert_safe(&zsh_shell, "ls -la");
 
-        #[cfg(target_os = "windows")]
-        {
-            use crate::shell::PowerShellConfig;
-
-            let powershell = Shell::PowerShell(PowerShellConfig {
-                exe: "pwsh.exe".to_string(),
-                bash_exe_fallback: None,
-            });
-            assert_safe(&powershell, "ls -Name");
-        }
+        let powershell = Shell::PowerShell(PowerShellConfig {
+            shell_path: PathBuf::from("pwsh.exe"),
+        });
+        assert_safe(&powershell, "ls -Name");
     }
 
     fn assert_safe(shell: &Shell, command: &str) {

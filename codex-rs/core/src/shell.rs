@@ -100,7 +100,7 @@ fn get_user_shell_path() -> Option<PathBuf> {
 }
 
 #[cfg(not(unix))]
-fn get_user_shell() -> Option<String> {
+fn get_user_shell_path() -> Option<PathBuf> {
     None
 }
 
@@ -188,16 +188,15 @@ pub fn detect_shell_type(shell_path: &PathBuf) -> Option<ShellType> {
     }
 }
 
-fn detect_default_user_shell() -> Shell {
-    get_user_shell_path()
-        .and_then(|shell| detect_shell_type(&shell))
-        .and_then(get_shell)
-        .unwrap_or(Shell::Unknown)
-}
-
-#[cfg(unix)]
 pub async fn default_user_shell() -> Shell {
-    detect_default_user_shell()
+    if cfg!(windows) {
+        get_shell(ShellType::PowerShell).unwrap_or(Shell::Unknown)
+    } else {
+        get_user_shell_path()
+            .and_then(|shell| detect_shell_type(&shell))
+            .and_then(get_shell)
+            .unwrap_or(Shell::Unknown)
+    }
 }
 
 #[cfg(test)]
@@ -302,16 +301,26 @@ mod tests {
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use std::process::Command;
+
+    #[tokio::test]
+    async fn detects_powershell_as_default() {
+        let powershell_shell = default_user_shell().await;
+        let PowerShellConfig { shell_path } = match powershell_shell {
+            Shell::PowerShell(powershell_shell) => powershell_shell,
+            _ => panic!("expected powershell shell"),
+        };
+
+        assert!(shell_path.ends_with("pwsh.exe") || shell_path.ends_with("powershell.exe"));
+    }
 
     #[test]
-    fn detects_powershell() {
+    fn finds_poweshell() {
         let powershell_shell = get_shell(ShellType::PowerShell).unwrap();
         let PowerShellConfig { shell_path } = match powershell_shell {
             Shell::PowerShell(powershell_shell) => powershell_shell,
             _ => panic!("expected powershell shell"),
         };
 
-        assert_eq!(shell_path, PathBuf::from("pwsh.exe"));
+        assert!(shell_path.ends_with("pwsh.exe") || shell_path.ends_with("powershell.exe"));
     }
 }
