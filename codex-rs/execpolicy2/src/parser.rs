@@ -18,6 +18,7 @@ use crate::decision::Decision;
 use crate::error::Error;
 use crate::error::Result;
 use crate::policy::validate_match_examples;
+use crate::policy::validate_not_match_examples;
 use crate::rule::PatternToken;
 use crate::rule::PrefixPattern;
 use crate::rule::PrefixRule;
@@ -228,10 +229,7 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
             })
             .collect();
 
-        rules
-            .iter()
-            .try_for_each(|rule| rule.validate_not_matches(&not_matches))?;
-
+        validate_not_match_examples(&rules, &not_matches)?;
         validate_match_examples(&rules, &matches)?;
 
         rules.into_iter().for_each(|rule| builder.add_rule(rule));
