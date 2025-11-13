@@ -47,17 +47,19 @@ impl PolicyParser {
     pub fn parse(&mut self, policy_identifier: &str, policy_file_contents: &str) -> Result<()> {
         let mut dialect = Dialect::Extended.clone();
         dialect.enable_f_strings = true;
-        let globals = GlobalsBuilder::standard().with(policy_builtins).build();
         let ast = AstModule::parse(
             policy_identifier,
             policy_file_contents.to_string(),
             &dialect,
         )
         .map_err(Error::Starlark)?;
+        let globals = GlobalsBuilder::standard().with(policy_builtins).build();
         let module = Module::new();
-        let mut eval = Evaluator::new(&module);
-        eval.extra = Some(&self.builder);
-        eval.eval_module(ast, &globals).map_err(Error::Starlark)?;
+        {
+            let mut eval = Evaluator::new(&module);
+            eval.extra = Some(&self.builder);
+            eval.eval_module(ast, &globals).map_err(Error::Starlark)?;
+        }
         Ok(())
     }
 
