@@ -38,7 +38,7 @@ async fn accepts_add_dir_flag() -> anyhow::Result<()> {
 }
 
 /// Verify that multiple --add-dir flags can be specified.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn accepts_multiple_add_dir_flags() -> anyhow::Result<()> {
     let test = test_codex_exec();
 
