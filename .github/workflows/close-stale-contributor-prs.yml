@@ -39,7 +39,7 @@ jobs:
             for (const pr of prs) {
               const lastUpdated = new Date(pr.updated_at);
               if (lastUpdated > cutoff) {
-                core.info(`PR ${pr.number} is fresh`);
+                core.info(`PR ${pr.number} is fresh ${lastUpdated} > ${cutoff}`);
                 continue;
               }
 
