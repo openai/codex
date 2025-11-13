@@ -63,27 +63,10 @@ impl SessionTask for UserShellCommandTask {
         // Execute the user's script under their default shell when known; this
         // allows commands that use shell features (pipes, &&, redirects, etc.).
         // We do not source rc files or otherwise reformat the script.
-        let shell_invocation = match session.user_shell() {
-            crate::shell::Shell::Zsh(zsh) => vec![
-                zsh.shell_path.clone(),
-                "-lc".to_string(),
-                self.command.clone(),
-            ],
-            crate::shell::Shell::Bash(bash) => vec![
-                bash.shell_path.clone(),
-                "-lc".to_string(),
-                self.command.clone(),
-            ],
-            crate::shell::Shell::PowerShell(ps) => vec![
-                ps.exe.clone(),
-                "-NoProfile".to_string(),
-                "-Command".to_string(),
-                self.command.clone(),
-            ],
-            crate::shell::Shell::Unknown => {
-                shlex::split(&self.command).unwrap_or_else(|| vec![self.command.clone()])
-            }
-        };
+        let use_login_shell = true;
+        let shell_invocation = session
+            .user_shell()
+            .derive_exec_args(&self.command, use_login_shell);
 
         let call_id = Uuid::new_v4().to_string();
         let raw_command = self.command.clone();

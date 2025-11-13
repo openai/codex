@@ -4,6 +4,7 @@ use crate::history_cell::HistoryCell;
 use chrono::Duration as ChronoDuration;
 use chrono::TimeZone;
 use chrono::Utc;
+use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
@@ -25,6 +26,14 @@ fn test_config(temp_home: &TempDir) -> Config {
         temp_home.path().to_path_buf(),
     )
     .expect("load config")
+}
+
+fn test_auth_manager(config: &Config) -> AuthManager {
+    AuthManager::new(
+        config.codex_home.clone(),
+        false,
+        config.cli_auth_credentials_store_mode,
+    )
 }
 
 fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
@@ -85,6 +94,7 @@ fn status_snapshot_includes_reasoning_details() {
 
     config.cwd = PathBuf::from("/workspace/tests");
 
+    let auth_manager = test_auth_manager(&config);
     let usage = TokenUsage {
         input_tokens: 1_200,
         cached_input_tokens: 200,
@@ -113,6 +123,7 @@ fn status_snapshot_includes_reasoning_details() {
 
     let composite = new_status_output(
         &config,
+        &auth_manager,
         &usage,
         Some(&usage),
         &None,
@@ -137,6 +148,7 @@ fn status_snapshot_includes_monthly_limit() {
     config.model_provider_id = "openai".to_string();
     config.cwd = PathBuf::from("/workspace/tests");
 
+    let auth_manager = test_auth_manager(&config);
     let usage = TokenUsage {
         input_tokens: 800,
         cached_input_tokens: 0,
@@ -161,6 +173,7 @@ fn status_snapshot_includes_monthly_limit() {
 
     let composite = new_status_output(
         &config,
+        &auth_manager,
         &usage,
         Some(&usage),
         &None,
@@ -184,6 +197,7 @@ fn status_card_token_usage_excludes_cached_tokens() {
     config.model = "gpt-5-codex".to_string();
     config.cwd = PathBuf::from("/workspace/tests");
 
+    let auth_manager = test_auth_manager(&config);
     let usage = TokenUsage {
         input_tokens: 1_200,
         cached_input_tokens: 200,
@@ -197,7 +211,15 @@ fn status_card_token_usage_excludes_cached_tokens() {
         .single()
         .expect("timestamp");
 
-    let composite = new_status_output(&config, &usage, Some(&usage), &None, None, now);
+    let composite = new_status_output(
+        &config,
+        &auth_manager,
+        &usage,
+        Some(&usage),
+        &None,
+        None,
+        now,
+    );
     let rendered = render_lines(&composite.display_lines(120));
 
     assert!(
@@ -216,6 +238,7 @@ fn status_snapshot_truncates_in_narrow_terminal() {
     config.model_reasoning_summary = ReasoningSummary::Detailed;
     config.cwd = PathBuf::from("/workspace/tests");
 
+    let auth_manager = test_auth_manager(&config);
     let usage = TokenUsage {
         input_tokens: 1_200,
         cached_input_tokens: 200,
@@ -240,6 +263,7 @@ fn status_snapshot_truncates_in_narrow_terminal() {
 
     let composite = new_status_output(
         &config,
+        &auth_manager,
         &usage,
         Some(&usage),
         &None,
@@ -264,6 +288,7 @@ fn status_snapshot_shows_missing_limits_message() {
     config.model = "gpt-5-codex".to_string();
     config.cwd = PathBuf::from("/workspace/tests");
 
+    let auth_manager = test_auth_manager(&config);
     let usage = TokenUsage {
         input_tokens: 500,
         cached_input_tokens: 0,
@@ -277,7 +302,15 @@ fn status_snapshot_shows_missing_limits_message() {
         .single()
         .expect("timestamp");
 
-    let composite = new_status_output(&config, &usage, Some(&usage), &None, None, now);
+    let composite = new_status_output(
+        &config,
+        &auth_manager,
+        &usage,
+        Some(&usage),
+        &None,
+        None,
+        now,
+    );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
     if cfg!(windows) {
         for line in &mut rendered_lines {
@@ -295,6 +328,7 @@ fn status_snapshot_shows_empty_limits_message() {
     config.model = "gpt-5-codex".to_string();
     config.cwd = PathBuf::from("/workspace/tests");
 
+    let auth_manager = test_auth_manager(&config);
     let usage = TokenUsage {
         input_tokens: 500,
         cached_input_tokens: 0,
@@ -315,6 +349,7 @@ fn status_snapshot_shows_empty_limits_message() {
 
     let composite = new_status_output(
         &config,
+        &auth_manager,
         &usage,
         Some(&usage),
         &None,
@@ -338,6 +373,7 @@ fn status_snapshot_shows_stale_limits_message() {
     config.model = "gpt-5-codex".to_string();
     config.cwd = PathBuf::from("/workspace/tests");
 
+    let auth_manager = test_auth_manager(&config);
     let usage = TokenUsage {
         input_tokens: 1_200,
         cached_input_tokens: 200,
@@ -367,6 +403,7 @@ fn status_snapshot_shows_stale_limits_message() {
 
     let composite = new_status_output(
         &config,
+        &auth_manager,
         &usage,
         Some(&usage),
         &None,
@@ -389,6 +426,7 @@ fn status_context_window_uses_last_usage() {
     let mut config = test_config(&temp_home);
     config.model_context_window = Some(272_000);
 
+    let auth_manager = test_auth_manager(&config);
     let total_usage = TokenUsage {
         input_tokens: 12_800,
         cached_input_tokens: 0,
@@ -409,7 +447,15 @@ fn status_context_window_uses_last_usage() {
         .single()
         .expect("timestamp");
 
-    let composite = new_status_output(&config, &total_usage, Some(&last_usage), &None, None, now);
+    let composite = new_status_output(
+        &config,
+        &auth_manager,
+        &total_usage,
+        Some(&last_usage),
+        &None,
+        None,
+        now,
+    );
     let rendered_lines = render_lines(&composite.display_lines(80));
     let context_line = rendered_lines
         .into_iter()

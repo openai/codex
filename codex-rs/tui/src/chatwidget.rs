@@ -132,7 +132,7 @@ struct RunningCommand {
 }
 
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
-const NUDGE_MODEL_SLUG: &str = "gpt-5-codex-mini";
+const NUDGE_MODEL_SLUG: &str = "gpt-5.1-codex-mini";
 const RATE_LIMIT_SWITCH_PROMPT_THRESHOLD: f64 = 90.0;
 
 #[derive(Default)]
@@ -1709,6 +1709,7 @@ impl ChatWidget {
         };
         self.add_to_history(crate::status::new_status_output(
             &self.config,
+            self.auth_manager.as_ref(),
             total_usage,
             context_usage,
             &self.conversation_id,
@@ -1835,11 +1836,12 @@ impl ChatWidget {
                 Some(preset.description.to_string())
             };
             let is_current = preset.model == current_model;
-            let preset_for_action = preset;
-            let single_supported_effort = preset_for_action.supported_reasoning_efforts.len() == 1;
+            let single_supported_effort = preset.supported_reasoning_efforts.len() == 1;
+            let preset_for_action = preset.clone();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                let preset_for_event = preset_for_action.clone();
                 tx.send(AppEvent::OpenReasoningPopup {
-                    model: preset_for_action,
+                    model: preset_for_event,
                 });
             })];
             items.push(SelectionItem {
@@ -1854,7 +1856,10 @@ impl ChatWidget {
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Select Model and Effort".to_string()),
-            subtitle: Some("Switch the model for this and future Codex CLI sessions".to_string()),
+            subtitle: Some(
+                "Access legacy models by running codex -m <model_name> or in your config.toml"
+                    .to_string(),
+            ),
             footer_hint: Some("Press enter to select reasoning effort, or esc to dismiss.".into()),
             items,
             ..Default::default()
@@ -1933,7 +1938,7 @@ impl ChatWidget {
 
             let warning = "⚠ High reasoning effort can quickly consume Plus plan rate limits.";
             let show_warning =
-                preset.model.starts_with("gpt-5-codex") && effort == ReasoningEffortConfig::High;
+                preset.model.starts_with("gpt-5.1-codex") && effort == ReasoningEffortConfig::High;
             let selected_description = show_warning.then(|| {
                 description
                     .as_ref()

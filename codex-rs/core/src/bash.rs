@@ -104,7 +104,7 @@ pub fn extract_bash_command(command: &[String]) -> Option<(&str, &str)> {
     let [shell, flag, script] = command else {
         return None;
     };
-    if flag != "-lc" || !is_well_known_sh_shell(shell) {
+    if !matches!(flag.as_str(), "-lc" | "-c") || !is_well_known_sh_shell(shell) {
         return None;
     }
     Some((shell, script))
