@@ -1,5 +1,4 @@
 use multimap::MultiMap;
-use parking_lot::Mutex;
 use shlex;
 use starlark::any::ProvidesStaticType;
 use starlark::environment::GlobalsBuilder;
@@ -12,6 +11,8 @@ use starlark::values::Value;
 use starlark::values::list::ListRef;
 use starlark::values::list::UnpackList;
 use starlark::values::none::NoneType;
+use std::cell::RefCell;
+use std::cell::RefMut;
 use std::sync::Arc;
 
 use crate::decision::Decision;
@@ -45,36 +46,35 @@ impl PolicyParser {
         let globals = GlobalsBuilder::standard().with(policy_builtins).build();
         let module = Module::new();
 
-        let builder = PolicyBuilder::new();
+        let builder = RefCell::new(PolicyBuilder::new());
         {
             let mut eval = Evaluator::new(&module);
             eval.extra = Some(&builder);
             eval.eval_module(ast, &globals).map_err(Error::Starlark)?;
         }
-        Ok(builder.build())
+        Ok(builder.into_inner().build())
     }
 }
 
 #[derive(Debug, ProvidesStaticType)]
 struct PolicyBuilder {
-    rules_by_program: Mutex<MultiMap<String, RuleRef>>,
+    rules_by_program: MultiMap<String, RuleRef>,
 }
 
 impl PolicyBuilder {
     fn new() -> Self {
         Self {
-            rules_by_program: Mutex::new(MultiMap::new()),
+            rules_by_program: MultiMap::new(),
         }
     }
 
-    fn add_rule(&self, rule: RuleRef) {
+    fn add_rule(&mut self, rule: RuleRef) {
         self.rules_by_program
-            .lock()
             .insert(rule.program().to_string(), rule);
     }
 
-    fn build(&self) -> crate::policy::Policy {
-        crate::policy::Policy::new(self.rules_by_program.lock().clone())
+    fn build(self) -> crate::policy::Policy {
+        crate::policy::Policy::new(self.rules_by_program)
     }
 }
 
@@ -183,13 +183,14 @@ fn parse_list_example(list: &ListRef) -> Result<Vec<String>> {
     }
 }
 
-fn policy_builder<'v, 'a>(eval: &Evaluator<'v, 'a, '_>) -> &'a PolicyBuilder {
+fn policy_builder<'v, 'a>(eval: &Evaluator<'v, 'a, '_>) -> RefMut<'a, PolicyBuilder> {
     #[expect(clippy::expect_used)]
     eval.extra
         .as_ref()
         .expect("policy_builder requires Evaluator.extra to be populated")
-        .downcast_ref::<PolicyBuilder>()
+        .downcast_ref::<RefCell<PolicyBuilder>>()
         .expect("Evaluator.extra must contain a PolicyBuilder")
+        .borrow_mut()
 }
 
 #[starlark_module]
@@ -215,7 +216,7 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
             .transpose()?
             .unwrap_or_default();
 
-        let builder = policy_builder(eval);
+        let mut builder = policy_builder(eval);
 
         let (first_token, remaining_tokens) = pattern_tokens
             .split_first()
