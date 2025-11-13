@@ -1,6 +1,6 @@
+//!
 use anyhow::Context as _;
 use anyhow::Result;
-use anyhow::bail;
 use clap::Parser;
 use clap::Subcommand;
 use codex_core::exec::SandboxType;
@@ -39,9 +39,9 @@ mod socket;
 
 use crate::socket::AsyncSocket;
 
-// C->S
+// C->S on the escalate socket
 #[derive(Clone, Serialize, Deserialize, Debug)]
-enum ClientMessage {
+enum EscalateClientMessage {
     EscalateRequest {
         file: String,
         argv: Vec<String>,
@@ -50,15 +50,17 @@ enum ClientMessage {
     },
 }
 
-// C->S
+// C->S on the escalate socket
 #[derive(Clone, Serialize, Deserialize, Debug)]
-enum ServerMessage {
+enum EscalateServerMessage {
     EscalateResponse(EscalateAction),
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 enum EscalateAction {
     RunInSandbox,
+
+    // This message is expected to come with an fd which is a socket for super-exec.
     Escalate,
 }
 
@@ -76,8 +78,11 @@ struct SuperExecResult {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ExecParams {
+    /// The bash string to execute.
     pub command: String,
+    /// The working directory to execute the command in. Must be an absolute path.
     pub workdir: String,
+    /// The timeout for the command in milliseconds.
     pub timeout_ms: Option<u64>,
 }
 
@@ -90,6 +95,7 @@ pub struct ExecResult {
 }
 
 fn decide_escalate(file: &str, argv: &[String], _workdir: &PathBuf) -> EscalateAction {
+    // TODO: execpolicy
     if file == "/opt/homebrew/bin/gh" && argv[1] == "issue" && argv[2] == "list" {
         EscalateAction::Escalate
     } else {
@@ -97,6 +103,7 @@ fn decide_escalate(file: &str, argv: &[String], _workdir: &PathBuf) -> EscalateA
     }
 }
 
+/// Handle a single super-exec request.
 async fn super_exec_task(
     socket: AsyncSocket,
     file: String,
@@ -118,11 +125,15 @@ async fn super_exec_task(
         Command::new(file)
             .args(&argv[1..])
             .arg0(argv[0].clone())
+            .envs(env)
             .current_dir(workdir)
+            // We null out the standard FDs because we will dup2() the forwarded FDs in pre_exec().
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .envs(env)
+            // This moves the forwarded FDs into the correct positions in the child process.
+            // `msg.fds` will be dropped and thus closed after this call, but that's OK because
+            // they've been dup2()ed.
             .pre_exec(move || {
                 for (dst_fd, src_fd) in msg.fds.iter().zip(&fds) {
                     libc::dup2(src_fd.as_raw_fd(), *dst_fd);
@@ -145,62 +156,20 @@ async fn super_exec_task(
 
 async fn escalate_task(socket: AsyncSocket) -> anyhow::Result<()> {
     loop {
-        let msg = socket.receive::<ClientMessage>().await?;
+        let msg = socket.receive::<EscalateClientMessage>().await?;
 
-        let ClientMessage::EscalateRequest {
+        let EscalateClientMessage::EscalateRequest {
             file,
             argv,
             workdir,
             env,
         } = msg;
-        /*
-        let response = context
-            .peer
-            .create_elicitation(CreateElicitationRequestParam {
-                message: format!("Allow Codex to run `{command:?}` in `{workdir:?}`?"),
-                requested_schema: ElicitationSchema::builder()
-                    .property("dummy", PrimitiveSchema::String(StringSchema::new()))
-                    .build()
-                    .expect("failed to build elicitation schema"),
-            })
-            .await
-            .expect("failed to create elicitation");
-        match response.action {
-            ElicitationAction::Accept => {
-                let response_message =
-                    ServerMessage::EscalateResponse(EscalateAction::EscalateRequest);
-                escalate_socket
-                    .server
-                    .send_message(
-                        &serde_json::to_vec(&response_message)
-                            .expect("failed to serialize response message"),
-                    )
-                    .await
-                    .expect("failed to send message");
-            }
-            ElicitationAction::Decline => {
-                let response_message =
-                    ServerMessage::EscalateResponse(EscalateAction::RunInSandbox);
-                escalate_socket
-                    .server
-                    .send_message(
-                        &serde_json::to_vec(&response_message)
-                            .expect("failed to serialize response message"),
-                    )
-                    .await
-                    .expect("failed to send message");
-            }
-            ElicitationAction::Cancel => {
-                todo!("kill the task probably");
-            }
-        }
-        */
         let action = decide_escalate(&file, &argv, &workdir);
         tracing::debug!("decided {action:?} for {file:?} {argv:?} {workdir:?}");
         match action {
             EscalateAction::RunInSandbox => {
                 socket
-                    .send(ServerMessage::EscalateResponse(
+                    .send(EscalateServerMessage::EscalateResponse(
                         EscalateAction::RunInSandbox,
                     ))
                     .await?;
@@ -211,7 +180,7 @@ async fn escalate_task(socket: AsyncSocket) -> anyhow::Result<()> {
                 tokio::spawn(super_exec_task(super_exec_server, file, argv, workdir, env));
                 socket
                     .send_with_fds(
-                        ServerMessage::EscalateResponse(EscalateAction::Escalate),
+                        EscalateServerMessage::EscalateResponse(EscalateAction::Escalate),
                         &[client_socket.into()],
                     )
                     .await?;
@@ -285,9 +254,8 @@ impl ExecTool {
         }
     }
 
-    #[tool(
-        description = "Runs a shell command and returns its output. You MUST provide the workdir as an absolute path."
-    )]
+    /// Runs a shell command and returns its output. You MUST provide the workdir as an absolute path.
+    #[tool]
     async fn shell(
         &self,
         _context: RequestContext<RoleServer>,
@@ -297,6 +265,26 @@ impl ExecTool {
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![Content::json(result)?]))
+    }
+
+    #[allow(dead_code)]
+    async fn prompt(
+        &self,
+        command: String,
+        workdir: String,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CreateElicitationResult, McpError> {
+        context
+            .peer
+            .create_elicitation(CreateElicitationRequestParam {
+                message: format!("Allow Codex to run `{command:?}` in `{workdir:?}`?"),
+                requested_schema: ElicitationSchema::builder()
+                    .property("dummy", PrimitiveSchema::String(StringSchema::new()))
+                    .build()
+                    .expect("failed to build elicitation schema"),
+            })
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))
     }
 }
 
@@ -342,7 +330,13 @@ enum Commands {
     ShellExec(ShellExecArgs),
 }
 
-/// Invoked inside the sandbox to (potentially) escalate permissions.
+fn get_escalate_client() -> anyhow::Result<AsyncSocket> {
+    // TODO: we should defensively require only calling this once, since AsyncSocket will take ownership of the fd.
+    let client_fd = std::env::var("CODEX_ESCALATE_SOCKET")?.parse::<i32>()?;
+    Ok(unsafe { AsyncSocket::from_raw_fd(client_fd) }?)
+}
+
+/// Invoked from within the sandbox to (potentially) escalate permissions.
 #[derive(Parser, Debug)]
 struct EscalateArgs {
     file: String,
@@ -352,36 +346,36 @@ struct EscalateArgs {
 }
 
 impl EscalateArgs {
+    /// This is the escalate client. It talks to the escalate server to determine whether to exec()
+    /// the command directly or to proxy to the escalate server.
     async fn run(&self) -> anyhow::Result<()> {
         let EscalateArgs { file, argv } = self;
-        let client_fd = std::env::var("CODEX_ESCALATE_SOCKET")
-            .context("CODEX_ESCALATE_SOCKET is not set")?
-            .parse::<i32>()
-            .context("CODEX_ESCALATE_SOCKET is not a valid integer")?;
-        let client = unsafe { AsyncSocket::from_raw_fd(client_fd)? };
+        let client = get_escalate_client()?;
         client
-            .send(ClientMessage::EscalateRequest {
+            .send(EscalateClientMessage::EscalateRequest {
                 file: file.clone(),
                 argv: argv.clone(),
-                workdir: std::env::current_dir().context("failed to get current directory")?,
+                workdir: std::env::current_dir()?,
                 env: std::env::vars().collect(),
             })
             .await?;
-        let (message, mut fds) = client.receive_with_fds::<ServerMessage>().await?;
-        let ServerMessage::EscalateResponse(action) = message;
+        let (message, mut fds) = client.receive_with_fds::<EscalateServerMessage>().await?;
+        let EscalateServerMessage::EscalateResponse(action) = message;
         match action {
             EscalateAction::Escalate => {
-                if fds.len() != 1 {
-                    bail!("expected 1 fd, got {}", fds.len());
-                }
-                let fd = fds.remove(0);
-                let escalate_socket = AsyncSocket::from_fd(fd)?;
+                assert_eq!(fds.len(), 1);
+                let super_exec_socket = AsyncSocket::from_fd(fds.remove(0))?;
+
+                // TODO: maybe we should send ALL open FDs (except the escalate client)?
                 let fds_to_send = [
                     unsafe { OwnedFd::from_raw_fd(io::stdin().as_raw_fd()) },
                     unsafe { OwnedFd::from_raw_fd(io::stdout().as_raw_fd()) },
                     unsafe { OwnedFd::from_raw_fd(io::stderr().as_raw_fd()) },
                 ];
-                escalate_socket
+
+                // TODO: also forward signals over the super-exec socket
+
+                super_exec_socket
                     .send_with_fds(
                         SuperExecMessage {
                             fds: fds_to_send.iter().map(AsRawFd::as_raw_fd).collect(),
@@ -390,10 +384,13 @@ impl EscalateArgs {
                     )
                     .await?;
                 let SuperExecResult { exit_code } =
-                    escalate_socket.receive::<SuperExecResult>().await?;
+                    super_exec_socket.receive::<SuperExecResult>().await?;
                 std::process::exit(exit_code);
             }
             EscalateAction::RunInSandbox => {
+                // We avoid std::process::Command here because we want to be as transparent as
+                // possible. std::os::unix::process::CommandExt has .exec() but it does some funky
+                // stuff with signal masks and dup2() on its standard FDs, which we don't want.
                 use std::ffi::CString;
                 let file = CString::new(file.as_str()).context("NUL in file")?;
 
