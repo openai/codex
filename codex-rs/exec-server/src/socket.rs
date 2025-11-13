@@ -10,10 +10,14 @@ use socket2::Type;
 use std::io::IoSlice;
 use std::mem::MaybeUninit;
 use std::os::fd::AsRawFd;
-use std::os::fd::BorrowedFd;
 use std::os::fd::FromRawFd;
 use std::os::fd::OwnedFd;
 use std::os::fd::RawFd;
+use tokio::io::Interest;
+use tokio::io::unix::AsyncFd;
+
+const MAX_MESSAGE_SIZE: usize = 64 * 1024;
+const MAX_FDS_PER_MESSAGE: usize = 16;
 
 #[derive(Debug)]
 struct ReceivedMessage {
@@ -57,8 +61,7 @@ fn extract_fds(control: &mut [MaybeUninit<u8>], len: usize) -> std::io::Result<V
     }
     Ok(fds)
 }
-const MAX_FDS_PER_MESSAGE: usize = 16;
-const MAX_MESSAGE_SIZE: usize = 64 * 1024;
+
 fn receive_message(socket: &Socket) -> std::io::Result<ReceivedMessage> {
     let mut data = [MaybeUninit::<u8>::uninit(); MAX_MESSAGE_SIZE];
     let mut control = vec![MaybeUninit::<u8>::uninit(); control_space_for_fds(MAX_FDS_PER_MESSAGE)];
@@ -82,7 +85,7 @@ pub(crate) fn receive_json_message<T: for<'de> Deserialize<'de>>(
     let message: T = serde_json::from_slice(&data)?;
     Ok((message, fds))
 }
-fn send_message_bytes(socket: &Socket, data: &[u8], fds: &[BorrowedFd<'_>]) -> std::io::Result<()> {
+fn send_message_bytes(socket: &Socket, data: &[u8], fds: &[OwnedFd]) -> std::io::Result<()> {
     if fds.len() > MAX_FDS_PER_MESSAGE {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -107,25 +110,74 @@ fn send_message_bytes(socket: &Socket, data: &[u8], fds: &[BorrowedFd<'_>]) -> s
     Ok(())
 }
 
-pub(crate) fn send_json_message<T: ?Sized + Serialize>(
+pub(crate) fn send_json_message<T: Serialize>(
     socket: &Socket,
-    msg: &T,
-    fds: &[BorrowedFd<'_>],
+    msg: T,
+    fds: &[OwnedFd],
 ) -> std::io::Result<()> {
-    let data = serde_json::to_vec(msg)?;
+    let data = serde_json::to_vec(&msg)?;
     send_message_bytes(socket, &data, fds)
 }
 
-pub(crate) struct EscalateSocket {
-    pub(crate) server: Socket,
-    pub(crate) client: Socket,
+pub(crate) struct AsyncSocket {
+    inner: AsyncFd<Socket>,
 }
 
-impl EscalateSocket {
-    pub(crate) fn open() -> anyhow::Result<EscalateSocket> {
+impl AsyncSocket {
+    fn new(socket: Socket) -> std::io::Result<AsyncSocket> {
+        socket.set_nonblocking(true)?;
+        let async_socket = AsyncFd::new(socket)?;
+        Ok(AsyncSocket {
+            inner: async_socket,
+        })
+    }
+
+    pub unsafe fn from_raw_fd(fd: RawFd) -> std::io::Result<AsyncSocket> {
+        AsyncSocket::new(unsafe { Socket::from_raw_fd(fd) })
+    }
+
+    pub fn from_fd(fd: OwnedFd) -> std::io::Result<AsyncSocket> {
+        AsyncSocket::new(Socket::from(fd))
+    }
+
+    pub fn pair() -> std::io::Result<(AsyncSocket, AsyncSocket)> {
         let (server, client) = Socket::pair(Domain::UNIX, Type::DGRAM, None)?;
-        client.set_cloexec(false)?;
-        let socket = EscalateSocket { server, client };
-        Ok(socket)
+        Ok((AsyncSocket::new(server)?, AsyncSocket::new(client)?))
+    }
+
+    pub async fn send_with_fds<T: Serialize>(
+        &self,
+        msg: T,
+        fds: &[OwnedFd],
+    ) -> std::io::Result<()> {
+        self.inner
+            .async_io(Interest::WRITABLE, |socket| {
+                send_json_message(socket, &msg, fds)
+            })
+            .await
+    }
+
+    pub async fn receive_with_fds<T: for<'de> Deserialize<'de>>(
+        &self,
+    ) -> std::io::Result<(T, Vec<OwnedFd>)> {
+        self.inner
+            .async_io(Interest::READABLE, |socket| receive_json_message(socket))
+            .await
+    }
+
+    pub async fn send<T>(&self, msg: T) -> std::io::Result<()>
+    where
+        T: Serialize,
+    {
+        self.send_with_fds(&msg, &[]).await
+    }
+
+    pub async fn receive<T: for<'de> Deserialize<'de>>(&self) -> std::io::Result<T> {
+        let (msg, _) = self.receive_with_fds().await?;
+        Ok(msg)
+    }
+
+    pub fn into_inner(self) -> Socket {
+        self.inner.into_inner()
     }
 }

@@ -22,30 +22,22 @@ use rmcp::tool_router;
 use rmcp::transport::stdio;
 use serde::Deserialize;
 use serde::Serialize;
-use socket2::Domain;
-use socket2::Socket;
-use socket2::Type;
 use std::collections::HashMap;
 use std::io;
-use std::os::fd::AsFd;
 use std::os::fd::AsRawFd;
-use std::os::fd::BorrowedFd;
-use std::os::fd::FromRawFd;
+use std::os::fd::FromRawFd as _;
+use std::os::fd::OwnedFd;
 use std::os::fd::RawFd;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
-use tokio::io::Interest;
-use tokio::io::unix::AsyncFd;
 use tokio::process::Command;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::{self};
 
-use crate::socket::EscalateSocket;
-use crate::socket::receive_json_message;
-use crate::socket::send_json_message;
-
 mod socket;
+
+use crate::socket::AsyncSocket;
 
 // C->S
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -69,11 +61,13 @@ enum EscalateAction {
     Escalate,
 }
 
+// C->S on the super-exec socket
 #[derive(Clone, Serialize, Deserialize, Debug)]
 struct SuperExecMessage {
     fds: Vec<RawFd>,
 }
 
+// S->C on the super-exec socket
 #[derive(Clone, Serialize, Deserialize, Debug)]
 struct SuperExecResult {
     exit_code: i32,
@@ -84,8 +78,6 @@ pub struct ExecParams {
     pub command: String,
     pub workdir: String,
     pub timeout_ms: Option<u64>,
-    pub with_escalated_permissions: Option<bool>,
-    pub justification: Option<String>,
 }
 
 #[derive(Debug, serde::Serialize, schemars::JsonSchema)]
@@ -96,8 +88,8 @@ pub struct ExecResult {
     pub timed_out: bool,
 }
 
-fn decide_escalate(file: &str, _argv: &[String], _workdir: &PathBuf) -> EscalateAction {
-    if file == "/bin/echo" {
+fn decide_escalate(file: &str, argv: &[String], _workdir: &PathBuf) -> EscalateAction {
+    if file == "/opt/homebrew/bin/gh" && argv[1] == "issue" && argv[2] == "list" {
         EscalateAction::Escalate
     } else {
         EscalateAction::RunInSandbox
@@ -105,19 +97,12 @@ fn decide_escalate(file: &str, _argv: &[String], _workdir: &PathBuf) -> Escalate
 }
 
 async fn super_exec_task(
-    socket: Socket,
+    socket: AsyncSocket,
     file: String,
     argv: Vec<String>,
     workdir: PathBuf,
 ) -> anyhow::Result<()> {
-    socket.set_nonblocking(true)?;
-    let server_async_fd = AsyncFd::new(socket)?;
-    let (msg, fds) = server_async_fd
-        .async_io(Interest::READABLE, |socket| {
-            receive_json_message::<SuperExecMessage>(socket)
-        })
-        .await
-        .context("failed to receive message")?;
+    let (msg, fds) = socket.receive_with_fds::<SuperExecMessage>().await?;
     assert_eq!(fds.len(), msg.fds.len());
 
     assert!(
@@ -146,29 +131,18 @@ async fn super_exec_task(
     };
 
     let exit_status = child.wait().await?;
-    let result = SuperExecResult {
-        exit_code: exit_status.code().unwrap_or(127),
-    };
-    server_async_fd
-        .async_io(Interest::WRITABLE, |server| {
-            send_json_message(server, &result, &[])
+    socket
+        .send(SuperExecResult {
+            exit_code: exit_status.code().unwrap_or(127),
         })
-        .await
-        .context("failed to receive message")?;
+        .await?;
 
     Ok(())
 }
 
-async fn escalate_task(socket: Socket) -> anyhow::Result<()> {
-    socket.set_nonblocking(true)?;
-    let server_async_fd = AsyncFd::new(socket)?;
+async fn escalate_task(socket: AsyncSocket) -> anyhow::Result<()> {
     loop {
-        let (msg, _) = server_async_fd
-            .async_io(Interest::READABLE, |socket| {
-                receive_json_message::<ClientMessage>(socket)
-            })
-            .await
-            .context("failed to receive message")?;
+        let msg = socket.receive::<ClientMessage>().await?;
 
         let ClientMessage::EscalateRequest {
             file,
@@ -221,30 +195,22 @@ async fn escalate_task(socket: Socket) -> anyhow::Result<()> {
         tracing::debug!("decided {action:?} for {file:?} {argv:?} {workdir:?}");
         match action {
             EscalateAction::RunInSandbox => {
-                server_async_fd
-                    .async_io(Interest::WRITABLE, |server| {
-                        server.send(&serde_json::to_vec(&ServerMessage::EscalateResponse(
-                            EscalateAction::RunInSandbox,
-                        ))?)
-                    })
-                    .await
-                    .context("failed to send message")?;
+                socket
+                    .send(ServerMessage::EscalateResponse(
+                        EscalateAction::RunInSandbox,
+                    ))
+                    .await?;
             }
             EscalateAction::Escalate => {
-                let (super_exec_server, super_exec_client) =
-                    Socket::pair(Domain::UNIX, Type::DGRAM, None)
-                        .context("failed to create socket pair")?;
+                let (super_exec_server, super_exec_client) = AsyncSocket::pair()?;
+                let client_socket = super_exec_client.into_inner();
                 tokio::spawn(super_exec_task(super_exec_server, file, argv, workdir));
-                server_async_fd
-                    .async_io(Interest::WRITABLE, |server| {
-                        send_json_message(
-                            server,
-                            &ServerMessage::EscalateResponse(EscalateAction::Escalate),
-                            &[super_exec_client.as_fd()],
-                        )
-                    })
-                    .await
-                    .context("failed to send message")?;
+                socket
+                    .send_with_fds(
+                        ServerMessage::EscalateResponse(EscalateAction::Escalate),
+                        &[client_socket.into()],
+                    )
+                    .await?;
             }
         }
     }
@@ -255,13 +221,21 @@ async fn shell_exec(params: ExecParams) -> anyhow::Result<ExecResult> {
         command,
         workdir,
         timeout_ms,
-        with_escalated_permissions,
-        justification,
     } = params;
-    let escalate_socket = EscalateSocket::open()?;
+    let (escalate_server, escalate_client) = AsyncSocket::pair()?;
+    let client_socket = escalate_client.into_inner();
+    client_socket.set_cloexec(false)?;
 
-    let client_fd = escalate_socket.client.as_raw_fd();
-    let escalate_task = tokio::spawn(escalate_task(escalate_socket.server));
+    let escalate_task = tokio::spawn(escalate_task(escalate_server));
+    let mut env = std::env::vars().collect::<HashMap<String, String>>();
+    env.insert(
+        "CODEX_ESCALATE_SOCKET".to_string(),
+        client_socket.as_raw_fd().to_string(),
+    );
+    env.insert(
+        "BASH_EXEC_WRAPPER".to_string(),
+        format!("{} escalate", std::env::current_exe()?.to_string_lossy()),
+    );
     let result = process_exec_tool_call(
         codex_core::exec::ExecParams {
             command: vec![
@@ -271,15 +245,9 @@ async fn shell_exec(params: ExecParams) -> anyhow::Result<ExecResult> {
             ],
             cwd: PathBuf::from(&workdir),
             timeout_ms,
-            env: HashMap::from([
-                ("CODEX_ESCALATE_SOCKET".to_string(), client_fd.to_string()),
-                (
-                    "BASH_EXEC_WRAPPER".to_string(),
-                    format!("{} escalate", std::env::current_exe()?.to_string_lossy()),
-                ),
-            ]),
-            with_escalated_permissions,
-            justification,
+            env,
+            with_escalated_permissions: None,
+            justification: None,
             arg0: None,
         },
         get_platform_sandbox().unwrap_or(SandboxType::None),
@@ -313,27 +281,17 @@ impl ExecTool {
         }
     }
 
-    #[tool(description = "Runs a shell command and returns its output.")]
+    #[tool(
+        description = "Runs a shell command and returns its output. You MUST provide the workdir as an absolute path."
+    )]
     async fn shell(
         &self,
         _context: RequestContext<RoleServer>,
-        Parameters(ExecParams {
-            command,
-            workdir,
-            timeout_ms,
-            with_escalated_permissions,
-            justification,
-        }): Parameters<ExecParams>,
+        Parameters(params): Parameters<ExecParams>,
     ) -> Result<CallToolResult, McpError> {
-        let result = shell_exec(ExecParams {
-            command,
-            workdir,
-            timeout_ms,
-            with_escalated_permissions,
-            justification,
-        })
-        .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let result = shell_exec(params)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![Content::json(result)?]))
     }
 }
@@ -349,11 +307,12 @@ impl ServerHandler for ExecTool {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             protocol_version: ProtocolVersion::V_2024_11_05,
-            capabilities: ServerCapabilities::builder()
-                .enable_tools()
-                .build(),
+            capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: Implementation::from_build_env(),
-            instructions: Some("This server provides counter tools and prompts. Tools: increment, decrement, get_value, say_hello, echo, sum. Prompts: example_prompt (takes a message), counter_analysis (analyzes counter state with a goal).".to_string()),
+            instructions: Some(
+                "This server provides a tool to execute shell commands and return their output."
+                    .to_string(),
+            ),
         }
     }
 
@@ -389,23 +348,21 @@ struct EscalateArgs {
 }
 
 impl EscalateArgs {
-    fn run(&self) -> anyhow::Result<()> {
+    async fn run(&self) -> anyhow::Result<()> {
         let EscalateArgs { file, argv } = self;
         let client_fd = std::env::var("CODEX_ESCALATE_SOCKET")
             .context("CODEX_ESCALATE_SOCKET is not set")?
             .parse::<i32>()
             .context("CODEX_ESCALATE_SOCKET is not a valid integer")?;
-        let client = unsafe { Socket::from_raw_fd(client_fd) };
-        send_json_message(
-            &client,
-            &ClientMessage::EscalateRequest {
+        let client = unsafe { AsyncSocket::from_raw_fd(client_fd)? };
+        client
+            .send(ClientMessage::EscalateRequest {
                 file: file.clone(),
                 argv: argv.clone(),
                 workdir: std::env::current_dir().context("failed to get current directory")?,
-            },
-            &[],
-        )?;
-        let (message, mut fds) = receive_json_message::<ServerMessage>(&client)?;
+            })
+            .await?;
+        let (message, mut fds) = client.receive_with_fds::<ServerMessage>().await?;
         let ServerMessage::EscalateResponse(action) = message;
         match action {
             EscalateAction::Escalate => {
@@ -413,24 +370,22 @@ impl EscalateArgs {
                     bail!("expected 1 fd, got {}", fds.len());
                 }
                 let fd = fds.remove(0);
-                let escalate_socket = Socket::from(fd);
-                let all_fds = [
-                    io::stdin().as_raw_fd(),
-                    io::stdout().as_raw_fd(),
-                    io::stderr().as_raw_fd(),
+                let escalate_socket = AsyncSocket::from_fd(fd)?;
+                let fds_to_send = [
+                    unsafe { OwnedFd::from_raw_fd(io::stdin().as_raw_fd()) },
+                    unsafe { OwnedFd::from_raw_fd(io::stdout().as_raw_fd()) },
+                    unsafe { OwnedFd::from_raw_fd(io::stderr().as_raw_fd()) },
                 ];
-                let fds: Vec<BorrowedFd> = all_fds
-                    .iter()
-                    .copied()
-                    .filter(|&fd| fd >= 0)
-                    .map(|fd| unsafe { BorrowedFd::borrow_raw(fd) })
-                    .collect();
-                let message = SuperExecMessage {
-                    fds: fds.iter().map(AsRawFd::as_raw_fd).collect(),
-                };
-                send_json_message(&escalate_socket, &message, &fds)?;
-                let (message, _) = receive_json_message::<SuperExecResult>(&escalate_socket)?;
-                let SuperExecResult { exit_code } = message;
+                escalate_socket
+                    .send_with_fds(
+                        SuperExecMessage {
+                            fds: fds_to_send.iter().map(AsRawFd::as_raw_fd).collect(),
+                        },
+                        &fds_to_send,
+                    )
+                    .await?;
+                let SuperExecResult { exit_code } =
+                    escalate_socket.receive::<SuperExecResult>().await?;
                 std::process::exit(exit_code);
             }
             EscalateAction::RunInSandbox => {
@@ -457,6 +412,7 @@ impl EscalateArgs {
     }
 }
 
+/// Debugging command to emulate an MCP "shell" tool call.
 #[derive(Parser, Debug)]
 struct ShellExecArgs {
     command: String,
@@ -474,7 +430,7 @@ async fn main() -> anyhow::Result<()> {
     if let Some(subcommand) = cli.subcommand {
         match subcommand {
             Commands::Escalate(args) => {
-                args.run()?;
+                args.run().await?;
             }
             Commands::ShellExec(args) => {
                 let result = shell_exec(ExecParams {
@@ -484,8 +440,6 @@ async fn main() -> anyhow::Result<()> {
                         .to_string_lossy()
                         .to_string(),
                     timeout_ms: None,
-                    with_escalated_permissions: None,
-                    justification: None,
                 })
                 .await?;
                 println!("{result:?}");
