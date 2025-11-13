@@ -76,10 +76,10 @@ fn parse_pattern<'v>(pattern: UnpackList<Value<'v>>) -> Result<Vec<PatternToken>
         .map(parse_pattern_token)
         .collect::<Result<_>>()?;
     if tokens.is_empty() {
-        return Err(Error::InvalidPattern("pattern cannot be empty".to_string()));
+        Err(Error::InvalidPattern("pattern cannot be empty".to_string()))
+    } else {
+        Ok(tokens)
     }
-
-    Ok(tokens)
 }
 
 fn parse_pattern_token<'v>(value: Value<'v>) -> Result<PatternToken> {
