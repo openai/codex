@@ -217,7 +217,7 @@ pub fn detect_shell_type(shell_path: &PathBuf) -> Option<ShellType> {
 fn detect_default_user_shell() -> Shell {
     get_user_shell_path()
         .and_then(|shell| detect_shell_type(&shell))
-        .and_then(|t| get_shell(t))
+        .and_then(get_shell)
         .unwrap_or(Shell::Unknown)
 }
 
@@ -232,17 +232,44 @@ mod detect_shell_type_tests {
 
     #[test]
     fn test_detect_shell_type() {
-        assert_eq!(detect_shell_type("zsh"), ShellType::Zsh);
-        assert_eq!(detect_shell_type("bash"), ShellType::Bash);
-        assert_eq!(detect_shell_type("pwsh"), ShellType::PowerShell);
-        assert_eq!(detect_shell_type("powershell"), ShellType::PowerShell);
-        assert_eq!(detect_shell_type("fish"), ShellType::Unknown);
-        assert_eq!(detect_shell_type("other"), ShellType::Unknown);
-        assert_eq!(detect_shell_type("/bin/zsh"), ShellType::Zsh);
-        assert_eq!(detect_shell_type("/bin/bash"), ShellType::Bash);
-        assert_eq!(detect_shell_type("powershell.exe"), ShellType::PowerShell);
-        assert_eq!(detect_shell_type("pwsh.exe"), ShellType::PowerShell);
-        assert_eq!(detect_shell_type("/usr/local/bin/pwsh"), ShellType::Unknown);
+        assert_eq!(
+            detect_shell_type(&PathBuf::from("zsh")),
+            Some(ShellType::Zsh)
+        );
+        assert_eq!(
+            detect_shell_type(&PathBuf::from("bash")),
+            Some(ShellType::Bash)
+        );
+        assert_eq!(
+            detect_shell_type(&PathBuf::from("pwsh")),
+            Some(ShellType::PowerShell)
+        );
+        assert_eq!(
+            detect_shell_type(&PathBuf::from("powershell")),
+            Some(ShellType::PowerShell)
+        );
+        assert_eq!(detect_shell_type(&PathBuf::from("fish")), None);
+        assert_eq!(detect_shell_type(&PathBuf::from("other")), None);
+        assert_eq!(
+            detect_shell_type(&PathBuf::from("/bin/zsh")),
+            Some(ShellType::Zsh)
+        );
+        assert_eq!(
+            detect_shell_type(&PathBuf::from("/bin/bash")),
+            Some(ShellType::Bash)
+        );
+        assert_eq!(
+            detect_shell_type(&PathBuf::from("powershell.exe")),
+            Some(ShellType::PowerShell)
+        );
+        assert_eq!(
+            detect_shell_type(&PathBuf::from("pwsh.exe")),
+            Some(ShellType::PowerShell)
+        );
+        assert_eq!(
+            detect_shell_type(&PathBuf::from("/usr/local/bin/pwsh")),
+            None
+        );
     }
 }
 
@@ -252,6 +279,12 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::process::Command;
+
+    #[test]
+    fn detects_zsh() {
+        let zsh_shell = get_zsh_shell().unwrap();
+        assert_eq!(zsh_shell.shell_path, PathBuf::from("/bin/zsh"));
+    }
 
     #[tokio::test]
     async fn test_current_shell_detects_zsh() {
