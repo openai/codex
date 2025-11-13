@@ -17,6 +17,7 @@ use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
+use codex_common::model_presets::ModelUpgrade;
 use codex_common::model_presets::all_model_presets;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
@@ -64,7 +65,7 @@ fn should_show_model_migration_prompt(
 
     all_model_presets()
         .iter()
-        .filter(|preset| preset.recommended_upgrade_model.is_some())
+        .filter(|preset| preset.upgrade.is_some())
         .any(|preset| preset.model == current_model)
 }
 
@@ -73,38 +74,59 @@ async fn handle_model_migration_prompt_if_needed(
     config: &mut Config,
     app_event_tx: &AppEventSender,
 ) -> Option<AppExitInfo> {
-    let target_model = all_model_presets()
+    let upgrade = all_model_presets()
         .iter()
         .find(|preset| preset.model == config.model)
-        .and_then(|preset| preset.recommended_upgrade_model)
-        .unwrap_or(&config.model)
-        .to_string();
-    let hide_prompt_flag = config.notices.hide_gpt5_1_migration_prompt;
-    if !should_show_model_migration_prompt(&config.model, &target_model, hide_prompt_flag) {
-        return None;
-    }
+        .and_then(|preset| preset.upgrade.as_ref());
 
-    match run_model_migration_prompt(tui, &target_model).await {
-        ModelMigrationOutcome::Accepted => {
-            app_event_tx.send(AppEvent::PersistModelMigrationPromptAcknowledged {
-                migration_config: "hide_gpt5_1_migration_prompt".to_string(),
-            });
-            config.model = target_model.clone();
-            if let Some(family) = find_family_for_model(&target_model) {
-                config.model_family = family;
-            }
-            app_event_tx.send(AppEvent::UpdateModel(target_model.clone()));
-            app_event_tx.send(AppEvent::PersistModelSelection {
-                model: target_model,
-                effort: config.model_reasoning_effort,
-            });
+    if let Some(ModelUpgrade {
+        id: target_model,
+        reasoning_effort_mapping,
+    }) = upgrade
+    {
+        let target_model = target_model.to_string();
+        let hide_prompt_flag = config.notices.hide_gpt5_1_migration_prompt;
+        if !should_show_model_migration_prompt(&config.model, &target_model, hide_prompt_flag) {
+            return None;
         }
-        ModelMigrationOutcome::Exit => {
-            return Some(AppExitInfo {
-                token_usage: TokenUsage::default(),
-                conversation_id: None,
-                update_action: None,
-            });
+
+        match run_model_migration_prompt(tui).await {
+            ModelMigrationOutcome::Accepted => {
+                app_event_tx.send(AppEvent::PersistModelMigrationPromptAcknowledged {
+                    migration_config: "hide_gpt5_1_migration_prompt".to_string(),
+                });
+                config.model = target_model.to_string();
+                if let Some(family) = find_family_for_model(&target_model) {
+                    config.model_family = family;
+                }
+
+                let mapped_effort = if let Some(reasoning_effort_mapping) = reasoning_effort_mapping
+                    && let Some(reasoning_effort) = config.model_reasoning_effort
+                {
+                    reasoning_effort_mapping
+                        .get(&reasoning_effort)
+                        .cloned()
+                        .or(config.model_reasoning_effort)
+                } else {
+                    config.model_reasoning_effort
+                };
+
+                config.model_reasoning_effort = mapped_effort;
+
+                app_event_tx.send(AppEvent::UpdateModel(target_model.clone()));
+                app_event_tx.send(AppEvent::UpdateReasoningEffort(mapped_effort));
+                app_event_tx.send(AppEvent::PersistModelSelection {
+                    model: target_model.clone(),
+                    effort: mapped_effort,
+                });
+            }
+            ModelMigrationOutcome::Exit => {
+                return Some(AppExitInfo {
+                    token_usage: TokenUsage::default(),
+                    conversation_id: None,
+                    update_action: None,
+                });
+            }
         }
     }
 

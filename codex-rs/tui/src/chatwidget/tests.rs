@@ -1533,7 +1533,7 @@ fn single_reasoning_option_skips_selection() {
         default_reasoning_effort: ReasoningEffortConfig::High,
         supported_reasoning_efforts: &SINGLE_EFFORT,
         is_default: false,
-        recommended_upgrade_model: None,
+        upgrade: None,
     };
     chat.open_reasoning_popup(preset);
 

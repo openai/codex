@@ -24,10 +24,7 @@ pub(crate) enum ModelMigrationOutcome {
     Exit,
 }
 
-pub(crate) async fn run_model_migration_prompt(
-    tui: &mut Tui,
-    target_model: &str,
-) -> ModelMigrationOutcome {
+pub(crate) async fn run_model_migration_prompt(tui: &mut Tui) -> ModelMigrationOutcome {
     // Render the prompt on the terminal's alternate screen so exiting or cancelling
     // does not leave a large blank region in the normal scrollback. This does not
     // change the prompt's appearance – only where it is drawn.
@@ -48,7 +45,7 @@ pub(crate) async fn run_model_migration_prompt(
 
     let alt = AltScreenGuard::enter(tui);
 
-    let mut screen = ModelMigrationScreen::new(alt.tui.frame_requester(), target_model);
+    let mut screen = ModelMigrationScreen::new(alt.tui.frame_requester());
 
     let _ = alt.tui.draw(u16::MAX, |frame| {
         frame.render_widget_ref(&screen, frame.area());
@@ -79,16 +76,14 @@ pub(crate) async fn run_model_migration_prompt(
 
 struct ModelMigrationScreen {
     request_frame: FrameRequester,
-    target_model: String,
     done: bool,
     should_exit: bool,
 }
 
 impl ModelMigrationScreen {
-    fn new(request_frame: FrameRequester, target_model: &str) -> Self {
+    fn new(request_frame: FrameRequester) -> Self {
         Self {
             request_frame,
-            target_model: target_model.to_string(),
             done: false,
             should_exit: false,
         }
@@ -140,10 +135,7 @@ impl WidgetRef for &ModelMigrationScreen {
         column.push("");
         column.push(Line::from(vec![
             "> ".into(),
-            "Introducing ".bold(),
-            "our ".bold(),
-            self.target_model.clone().bold(),
-            " models".bold(),
+            "Introducing our gpt-5.1 models".bold(),
         ]));
         column.push(Line::from(""));
 
@@ -199,7 +191,7 @@ mod tests {
         let mut terminal = Terminal::with_options(backend).expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, width, height));
 
-        let screen = ModelMigrationScreen::new(FrameRequester::test_dummy(), "gpt-5.1-codex");
+        let screen = ModelMigrationScreen::new(FrameRequester::test_dummy());
 
         {
             let mut frame = terminal.get_frame();
@@ -216,7 +208,7 @@ mod tests {
         let mut terminal = Terminal::with_options(backend).expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, 65, 12));
 
-        let screen = ModelMigrationScreen::new(FrameRequester::test_dummy(), "gpt-5.1");
+        let screen = ModelMigrationScreen::new(FrameRequester::test_dummy());
         {
             let mut frame = terminal.get_frame();
             frame.render_widget_ref(&screen, frame.area());
@@ -231,7 +223,7 @@ mod tests {
         let mut terminal = Terminal::with_options(backend).expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, 60, 12));
 
-        let screen = ModelMigrationScreen::new(FrameRequester::test_dummy(), "gpt-5.1-codex");
+        let screen = ModelMigrationScreen::new(FrameRequester::test_dummy());
         {
             let mut frame = terminal.get_frame();
             frame.render_widget_ref(&screen, frame.area());
@@ -246,7 +238,7 @@ mod tests {
         let mut terminal = Terminal::with_options(backend).expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, 60, 12));
 
-        let screen = ModelMigrationScreen::new(FrameRequester::test_dummy(), "gpt-5.1-codex-mini");
+        let screen = ModelMigrationScreen::new(FrameRequester::test_dummy());
         {
             let mut frame = terminal.get_frame();
             frame.render_widget_ref(&screen, frame.area());
@@ -257,8 +249,7 @@ mod tests {
 
     #[test]
     fn escape_key_accepts_prompt() {
-        let screen_target = "gpt-5.1-codex";
-        let mut screen = ModelMigrationScreen::new(FrameRequester::test_dummy(), screen_target);
+        let mut screen = ModelMigrationScreen::new(FrameRequester::test_dummy());
 
         // Simulate pressing Escape
         screen.handle_key(KeyEvent::new(

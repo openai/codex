@@ -19,10 +19,12 @@ use ts_rs::TS;
     JsonSchema,
     TS,
     EnumIter,
+    Hash,
 )]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum ReasoningEffort {
+    None,
     Minimal,
     Low,
     #[default]
