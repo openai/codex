@@ -12,19 +12,16 @@ pub enum ShellType {
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct ZshShell {
     pub(crate) shell_path: PathBuf,
-    pub(crate) zshrc_path: Option<PathBuf>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct BashShell {
     pub(crate) shell_path: PathBuf,
-    pub(crate) bashrc_path: Option<PathBuf>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct PowerShellConfig {
-    pub(crate) exe: PathBuf, // Executable name or path, e.g. "pwsh" or "powershell.exe".
-    pub(crate) bash_exe_fallback: Option<BashShell>, // In case the model generates a bash command.
+    pub(crate) shell_path: PathBuf, // Executable name or path, e.g. "pwsh" or "powershell.exe".
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
@@ -43,7 +40,10 @@ impl Shell {
                     .file_name()
                     .map(|s| s.to_string_lossy().to_string())
             }
-            Shell::PowerShell(ps) => ps.exe.file_stem().map(|s| s.to_string_lossy().to_string()),
+            Shell::PowerShell(ps) => ps
+                .shell_path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string()),
             Shell::Unknown => None,
         }
     }
@@ -61,7 +61,10 @@ impl Shell {
                 ]
             }
             Shell::PowerShell(ps) => {
-                let mut args = vec![ps.exe.to_string_lossy().to_string(), "-NoLogo".to_string()];
+                let mut args = vec![
+                    ps.shell_path.to_string_lossy().to_string(),
+                    "-NoLogo".to_string(),
+                ];
                 if !use_login_shell {
                     args.push("-NoProfile".to_string());
                 }
@@ -73,30 +76,6 @@ impl Shell {
             Shell::Unknown => shlex::split(command).unwrap_or_else(|| vec![command.to_string()]),
         }
     }
-}
-
-#[cfg(unix)]
-fn get_user_home() -> Option<String> {
-    use libc::getpwuid;
-    use libc::getuid;
-    use std::ffi::CStr;
-
-    unsafe {
-        let uid = getuid();
-        let pw = getpwuid(uid);
-
-        if !pw.is_null() {
-            let home_path = CStr::from_ptr((*pw).pw_dir).to_string_lossy().into_owned();
-            Some(home_path)
-        } else {
-            None
-        }
-    }
-}
-
-#[cfg(not(unix))]
-fn get_user_home() -> Option<String> {
-    std::env::var("HOME").ok()
 }
 
 #[cfg(unix)]
@@ -165,31 +144,20 @@ fn get_shell_path(
 fn get_zsh_shell() -> Option<ZshShell> {
     let shell_path = get_shell_path(ShellType::Zsh, "zsh", vec!["/bin/zsh"]);
 
-    shell_path.map(|shell_path| ZshShell {
-        shell_path,
-        zshrc_path: get_user_home()
-            .and_then(|home| file_exists(&PathBuf::from(format!("{home}/.zshrc")))),
-    })
+    shell_path.map(|shell_path| ZshShell { shell_path })
 }
 
 fn get_bash_shell() -> Option<BashShell> {
     let shell_path = get_shell_path(ShellType::Bash, "bash", vec!["/bin/bash"]);
 
-    shell_path.map(|shell_path| BashShell {
-        shell_path,
-        bashrc_path: get_user_home()
-            .and_then(|home| file_exists(&PathBuf::from(format!("{home}/.bashrc")))),
-    })
+    shell_path.map(|shell_path| BashShell { shell_path })
 }
 
 fn get_powershell_shell() -> Option<PowerShellConfig> {
     let shell_path = get_shell_path(ShellType::PowerShell, "pwsh", vec!["/usr/local/bin/pwsh"])
         .or_else(|| get_shell_path(ShellType::PowerShell, "powershell", vec![]));
 
-    shell_path.map(|shell_path| PowerShellConfig {
-        exe: shell_path,
-        bash_exe_fallback: get_bash_shell(),
-    })
+    shell_path.map(|shell_path| PowerShellConfig { shell_path })
 }
 
 pub fn get_shell(shell_type: ShellType) -> Option<Shell> {
@@ -207,9 +175,15 @@ pub fn detect_shell_type(shell_path: &PathBuf) -> Option<ShellType> {
         Some("pwsh") => Some(ShellType::PowerShell),
         Some("powershell") => Some(ShellType::PowerShell),
         _ => {
-            let shell_name = std::path::Path::new(shell_path).file_stem();
+            let shell_name = shell_path.file_stem();
 
-            shell_name.and_then(|name| detect_shell_type(&PathBuf::from(name)))
+            if let Some(shell_name) = shell_name
+                && shell_name != shell_path
+            {
+                detect_shell_type(&PathBuf::from(shell_name))
+            } else {
+                None
+            }
         }
     }
 }
@@ -268,7 +242,7 @@ mod detect_shell_type_tests {
         );
         assert_eq!(
             detect_shell_type(&PathBuf::from("/usr/local/bin/pwsh")),
-            None
+            Some(ShellType::PowerShell)
         );
     }
 }
@@ -282,8 +256,25 @@ mod tests {
 
     #[test]
     fn detects_zsh() {
-        let zsh_shell = get_zsh_shell().unwrap();
-        assert_eq!(zsh_shell.shell_path, PathBuf::from("/bin/zsh"));
+        let zsh_shell = get_shell(ShellType::Zsh).unwrap();
+
+        let ZshShell { shell_path } = match zsh_shell {
+            Shell::Zsh(zsh_shell) => zsh_shell,
+            _ => panic!("expected zsh shell"),
+        };
+
+        assert_eq!(shell_path, PathBuf::from("/bin/zsh"));
+    }
+
+    #[test]
+    fn detects_bash() {
+        let bash_shell = get_shell(ShellType::Bash).unwrap();
+        let BashShell { shell_path } = match bash_shell {
+            Shell::Bash(bash_shell) => bash_shell,
+            _ => panic!("expected bash shell"),
+        };
+
+        assert_eq!(shell_path, PathBuf::from("/bin/bash"));
     }
 
     #[tokio::test]
@@ -294,292 +285,33 @@ mod tests {
             .output()
             .unwrap();
 
-        let home = std::env::var("HOME").unwrap();
         let shell_path = String::from_utf8_lossy(&shell.stdout).trim().to_string();
         if shell_path.ends_with("/zsh") {
             assert_eq!(
                 default_user_shell().await,
                 Shell::Zsh(ZshShell {
-                    shell_path: shell_path.to_string(),
-                    zshrc_path: format!("{home}/.zshrc",),
+                    shell_path: PathBuf::from(shell_path),
                 })
             );
         }
     }
-
-    #[tokio::test]
-    async fn test_run_with_profile_bash_escaping_and_execution() {
-        let shell_path = "/bin/bash";
-
-        let cases = vec![
-            (
-                vec!["myecho"],
-                vec![shell_path, "-lc", "source BASHRC_PATH && (myecho)"],
-                Some("It works!\n"),
-            ),
-            (
-                vec!["bash", "-lc", "echo 'single' \"double\""],
-                vec![
-                    shell_path,
-                    "-lc",
-                    "source BASHRC_PATH && (echo 'single' \"double\")",
-                ],
-                Some("single double\n"),
-            ),
-        ];
-
-        for (input, expected_cmd, expected_output) in cases {
-            use std::collections::HashMap;
-
-            use crate::exec::ExecParams;
-            use crate::exec::SandboxType;
-            use crate::exec::process_exec_tool_call;
-            use crate::protocol::SandboxPolicy;
-
-            let temp_home = tempfile::tempdir().unwrap();
-            let bashrc_path = temp_home.path().join(".bashrc");
-            std::fs::write(
-                &bashrc_path,
-                r#"
-                set -x
-                function myecho {
-                    echo 'It works!'
-                }
-                "#,
-            )
-            .unwrap();
-            let command = expected_cmd
-                .iter()
-                .map(|s| s.replace("BASHRC_PATH", bashrc_path.to_str().unwrap()))
-                .collect::<Vec<_>>();
-
-            let output = process_exec_tool_call(
-                ExecParams {
-                    command: command.clone(),
-                    cwd: PathBuf::from(temp_home.path()),
-                    timeout_ms: None,
-                    env: HashMap::from([(
-                        "HOME".to_string(),
-                        temp_home.path().to_str().unwrap().to_string(),
-                    )]),
-                    with_escalated_permissions: None,
-                    justification: None,
-                    arg0: None,
-                },
-                SandboxType::None,
-                &SandboxPolicy::DangerFullAccess,
-                temp_home.path(),
-                &None,
-                None,
-            )
-            .await
-            .unwrap();
-
-            assert_eq!(output.exit_code, 0, "input: {input:?} output: {output:?}");
-            if let Some(expected) = expected_output {
-                assert_eq!(
-                    output.stdout.text, expected,
-                    "input: {input:?} output: {output:?}"
-                );
-            }
-        }
-    }
 }
 
 #[cfg(test)]
-#[cfg(target_os = "macos")]
-mod macos_tests {
-    use std::path::PathBuf;
-
-    #[tokio::test]
-    async fn test_run_with_profile_escaping_and_execution() {
-        let shell_path = "/bin/zsh";
-
-        let cases = vec![
-            (
-                vec!["myecho"],
-                vec![shell_path, "-lc", "source ZSHRC_PATH && (myecho)"],
-                Some("It works!\n"),
-            ),
-            (
-                vec!["myecho"],
-                vec![shell_path, "-lc", "source ZSHRC_PATH && (myecho)"],
-                Some("It works!\n"),
-            ),
-            (
-                vec!["bash", "-c", "echo 'single' \"double\""],
-                vec![
-                    shell_path,
-                    "-lc",
-                    "source ZSHRC_PATH && (bash -c \"echo 'single' \\\"double\\\"\")",
-                ],
-                Some("single double\n"),
-            ),
-            (
-                vec!["bash", "-lc", "echo 'single' \"double\""],
-                vec![
-                    shell_path,
-                    "-lc",
-                    "source ZSHRC_PATH && (echo 'single' \"double\")",
-                ],
-                Some("single double\n"),
-            ),
-        ];
-        for (input, expected_cmd, expected_output) in cases {
-            use std::collections::HashMap;
-
-            use crate::exec::ExecParams;
-            use crate::exec::SandboxType;
-            use crate::exec::process_exec_tool_call;
-            use crate::protocol::SandboxPolicy;
-
-            let temp_home = tempfile::tempdir().unwrap();
-            let zshrc_path = temp_home.path().join(".zshrc");
-            std::fs::write(
-                &zshrc_path,
-                r#"
-                set -x
-                function myecho {
-                    echo 'It works!'
-                }
-                "#,
-            )
-            .unwrap();
-            let command = expected_cmd
-                .iter()
-                .map(|s| s.replace("ZSHRC_PATH", zshrc_path.to_str().unwrap()))
-                .collect::<Vec<_>>();
-
-            let output = process_exec_tool_call(
-                ExecParams {
-                    command: command.clone(),
-                    cwd: PathBuf::from(temp_home.path()),
-                    timeout_ms: None,
-                    env: HashMap::from([(
-                        "HOME".to_string(),
-                        temp_home.path().to_str().unwrap().to_string(),
-                    )]),
-                    with_escalated_permissions: None,
-                    justification: None,
-                    arg0: None,
-                },
-                SandboxType::None,
-                &SandboxPolicy::DangerFullAccess,
-                temp_home.path(),
-                &None,
-                None,
-            )
-            .await
-            .unwrap();
-
-            assert_eq!(output.exit_code, 0, "input: {input:?} output: {output:?}");
-            if let Some(expected) = expected_output {
-                assert_eq!(
-                    output.stdout.text, expected,
-                    "input: {input:?} output: {output:?}"
-                );
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-#[cfg(target_os = "windows")]
-mod tests_windows {
+#[cfg(windows)]
+mod tests {
     use super::*;
+    use std::path::PathBuf;
+    use std::process::Command;
 
     #[test]
-    fn test_format_default_shell_invocation_powershell() {
-        use std::path::PathBuf;
+    fn detects_powershell() {
+        let powershell_shell = get_shell(ShellType::PowerShell).unwrap();
+        let PowerShellConfig { shell_path } = match powershell_shell {
+            Shell::PowerShell(powershell_shell) => powershell_shell,
+            _ => panic!("expected powershell shell"),
+        };
 
-        let cases = vec![
-            (
-                PowerShellConfig {
-                    exe: "pwsh.exe".to_string(),
-                    bash_exe_fallback: None,
-                },
-                vec!["bash", "-lc", "echo hello"],
-                vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"],
-            ),
-            (
-                PowerShellConfig {
-                    exe: "powershell.exe".to_string(),
-                    bash_exe_fallback: None,
-                },
-                vec!["bash", "-lc", "echo hello"],
-                vec!["powershell.exe", "-NoProfile", "-Command", "echo hello"],
-            ),
-            (
-                PowerShellConfig {
-                    exe: "pwsh.exe".to_string(),
-                    bash_exe_fallback: Some(PathBuf::from("bash.exe")),
-                },
-                vec!["bash", "-lc", "echo hello"],
-                vec!["bash.exe", "-lc", "echo hello"],
-            ),
-            (
-                PowerShellConfig {
-                    exe: "pwsh.exe".to_string(),
-                    bash_exe_fallback: Some(PathBuf::from("bash.exe")),
-                },
-                vec![
-                    "bash",
-                    "-lc",
-                    "apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: destination_file.txt\n-original content\n+modified content\n*** End Patch\nEOF",
-                ],
-                vec![
-                    "bash.exe",
-                    "-lc",
-                    "apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: destination_file.txt\n-original content\n+modified content\n*** End Patch\nEOF",
-                ],
-            ),
-            (
-                PowerShellConfig {
-                    exe: "pwsh.exe".to_string(),
-                    bash_exe_fallback: Some(PathBuf::from("bash.exe")),
-                },
-                vec!["echo", "hello"],
-                vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"],
-            ),
-            (
-                PowerShellConfig {
-                    exe: "pwsh.exe".to_string(),
-                    bash_exe_fallback: Some(PathBuf::from("bash.exe")),
-                },
-                vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"],
-                vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"],
-            ),
-            (
-                PowerShellConfig {
-                    exe: "powershell.exe".to_string(),
-                    bash_exe_fallback: Some(PathBuf::from("bash.exe")),
-                },
-                vec![
-                    "codex-mcp-server.exe",
-                    "--codex-run-as-apply-patch",
-                    "*** Begin Patch\n*** Update File: C:\\Users\\person\\destination_file.txt\n-original content\n+modified content\n*** End Patch",
-                ],
-                vec![
-                    "codex-mcp-server.exe",
-                    "--codex-run-as-apply-patch",
-                    "*** Begin Patch\n*** Update File: C:\\Users\\person\\destination_file.txt\n-original content\n+modified content\n*** End Patch",
-                ],
-            ),
-        ];
-
-        for (config, input, expected_cmd) in cases {
-            let command = expected_cmd
-                .iter()
-                .map(|s| (*s).to_string())
-                .collect::<Vec<_>>();
-
-            // These tests assert the final command for each scenario now that the helper
-            // has been removed. The inputs remain to document the original coverage.
-            let expected = expected_cmd
-                .iter()
-                .map(|s| (*s).to_string())
-                .collect::<Vec<_>>();
-            assert_eq!(command, expected, "input: {input:?} config: {config:?}");
-        }
+        assert_eq!(shell_path, PathBuf::from("pwsh.exe"));
     }
 }
