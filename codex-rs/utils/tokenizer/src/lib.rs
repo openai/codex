@@ -41,11 +41,8 @@ pub enum TokenizerError {
 
 fn model_cache() -> &'static BlockingLruCache<String, CoreBPE> {
     static MODEL_CACHE: OnceLock<BlockingLruCache<String, CoreBPE>> = OnceLock::new();
-    MODEL_CACHE.get_or_init(|| {
-        BlockingLruCache::new(
-            NonZeroUsize::new(64).expect("tokenizer model cache capacity must be non-zero"),
-        )
-    })
+    MODEL_CACHE
+        .get_or_init(|| BlockingLruCache::new(NonZeroUsize::new(64).unwrap_or(NonZeroUsize::MIN)))
 }
 
 /// Thin wrapper around a `tiktoken_rs::CoreBPE` tokenizer.
