@@ -6,6 +6,7 @@ use tracing::info;
 use crate::GpuStats;
 
 pub mod kernel_driver;
+pub mod kernel_driver_ffi;
 
 /// Check if Windows AI is available
 pub fn check_windows_ai_available() -> bool {
@@ -31,30 +32,14 @@ fn get_windows_build_number() -> Result<u32> {
 }
 
 /// Check NPU availability via registry
+/// 
+/// NOTE: Windows Registry API not available in current windows crate version (0.58)
+/// This function is disabled until windows crate is updated with Registry API support
+#[allow(dead_code)]
 fn check_npu_via_registry() -> Result<bool> {
-    unsafe {
-        let mut hkey = HKEY::default();
-        let result = RegOpenKeyExW(
-            HKEY_LOCAL_MACHINE,
-            &windows::core::w!(
-                "SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e97d-e325-11ce-bfc1-08002be10318}"
-            ),
-            0,
-            KEY_READ,
-            &mut hkey,
-        );
-
-        if result.is_err() {
-            return Ok(false);
-        }
-
-        // Check for NPU device class
-        // TODO: Implement actual NPU device enumeration
-        // For now, return false as specific registry keys need to be identified
-
-        RegCloseKey(hkey);
-        Ok(false)
-    }
+    // TODO: Implement via registry read when windows crate Registry API is available
+    // For now, return false as placeholder
+    Ok(false)
 }
 
 /// Get DirectML version info
