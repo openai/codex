@@ -329,6 +329,7 @@ mod tests {
             Some(workspace_write_policy(vec!["/repo"], false)),
             Some(Shell::Bash(BashShell {
                 shell_path: "/bin/bash".into(),
+                bashrc_path: "/home/user/.bashrc".into(),
             })),
         );
         let context2 = EnvironmentContext::new(
@@ -337,6 +338,7 @@ mod tests {
             Some(workspace_write_policy(vec!["/repo"], false)),
             Some(Shell::Zsh(ZshShell {
                 shell_path: "/bin/zsh".into(),
+                zshrc_path: "/home/user/.zshrc".into(),
             })),
         );
 
