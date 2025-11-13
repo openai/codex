@@ -46,6 +46,7 @@ enum ClientMessage {
         file: String,
         argv: Vec<String>,
         workdir: PathBuf,
+        env: HashMap<String, String>,
     },
 }
 
@@ -101,6 +102,7 @@ async fn super_exec_task(
     file: String,
     argv: Vec<String>,
     workdir: PathBuf,
+    env: HashMap<String, String>,
 ) -> anyhow::Result<()> {
     let (msg, fds) = socket.receive_with_fds::<SuperExecMessage>().await?;
     assert_eq!(fds.len(), msg.fds.len());
@@ -120,6 +122,7 @@ async fn super_exec_task(
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
+            .envs(env)
             .pre_exec(move || {
                 for (dst_fd, src_fd) in msg.fds.iter().zip(&fds) {
                     libc::dup2(src_fd.as_raw_fd(), *dst_fd);
@@ -148,6 +151,7 @@ async fn escalate_task(socket: AsyncSocket) -> anyhow::Result<()> {
             file,
             argv,
             workdir,
+            env,
         } = msg;
         /*
         let response = context
@@ -204,7 +208,7 @@ async fn escalate_task(socket: AsyncSocket) -> anyhow::Result<()> {
             EscalateAction::Escalate => {
                 let (super_exec_server, super_exec_client) = AsyncSocket::pair()?;
                 let client_socket = super_exec_client.into_inner();
-                tokio::spawn(super_exec_task(super_exec_server, file, argv, workdir));
+                tokio::spawn(super_exec_task(super_exec_server, file, argv, workdir, env));
                 socket
                     .send_with_fds(
                         ServerMessage::EscalateResponse(EscalateAction::Escalate),
@@ -360,6 +364,7 @@ impl EscalateArgs {
                 file: file.clone(),
                 argv: argv.clone(),
                 workdir: std::env::current_dir().context("failed to get current directory")?,
+                env: std::env::vars().collect(),
             })
             .await?;
         let (message, mut fds) = client.receive_with_fds::<ServerMessage>().await?;
