@@ -17,7 +17,6 @@ use chrono::Utc;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::AuthDotJson;
 use codex_core::auth::save_auth;
-use codex_core::default_client::originator;
 use codex_core::token_data::TokenData;
 use codex_core::token_data::parse_id_token;
 use rand::RngCore;
@@ -27,6 +26,7 @@ use tiny_http::Request;
 use tiny_http::Response;
 use tiny_http::Server;
 use tiny_http::StatusCode;
+use codex_core::client::http::originator;
 
 const DEFAULT_ISSUER: &str = "https://auth.openai.com";
 const DEFAULT_PORT: u16 = 1455;

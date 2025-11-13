@@ -13,8 +13,6 @@ use codex_protocol::protocol::SessionSource;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
-use codex_core::default_client::USER_AGENT_SUFFIX;
-use codex_core::default_client::get_codex_user_agent;
 use codex_core::protocol::Submission;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
@@ -35,6 +33,7 @@ use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task;
+use codex_core::client::http::{get_codex_user_agent, USER_AGENT_SUFFIX};
 
 pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
