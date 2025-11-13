@@ -61,7 +61,9 @@ describe("AbortSignal support", () => {
           expect(event).toBeUndefined();
         }
         // If we get here, the test should fail
-        throw new Error("Expected iteration to throw due to aborted signal, but it completed successfully");
+        throw new Error(
+          "Expected iteration to throw due to aborted signal, but it completed successfully",
+        );
       } catch (error) {
         // We expect an error to be thrown
         expect(iterationStarted).toBe(false); // Should fail before any iteration
@@ -115,6 +117,7 @@ describe("AbortSignal support", () => {
       let eventCount = 0;
       await expect(async () => {
         for await (const event of events) {
+          void event; // Consume the event
           eventCount++;
           // Abort after first event
           if (eventCount === 1) {
@@ -181,7 +184,7 @@ describe("AbortSignal support", () => {
         res.setHeader("content-type", "text/event-stream");
 
         // Start the response
-        res.write('event: response.created\n');
+        res.write("event: response.created\n");
         res.write('data: {"type":"response.created","response":{"id":"resp_test"}}\n\n');
 
         let toolCallCount = 0;
@@ -193,14 +196,18 @@ describe("AbortSignal support", () => {
           }
           toolCallCount++;
           // Stream a tool call in progress
-          res.write('event: response.output_item.done\n');
-          res.write(`data: {"type":"response.output_item.done","item":{"id":"tool_${toolCallCount}","type":"mcp_tool_call","server":"test_server","tool":"infinite_loop","arguments":{},"status":"in_progress"}}\n\n`);
+          res.write("event: response.output_item.done\n");
+          res.write(
+            `data: {"type":"response.output_item.done","item":{"id":"tool_${toolCallCount}","type":"mcp_tool_call","server":"test_server","tool":"infinite_loop","arguments":{},"status":"in_progress"}}\n\n`,
+          );
 
           // Then immediately complete it
           setTimeout(() => {
             if (!serverClosed) {
-              res.write('event: response.output_item.done\n');
-              res.write(`data: {"type":"response.output_item.done","item":{"id":"tool_${toolCallCount}","type":"mcp_tool_call","server":"test_server","tool":"infinite_loop","arguments":{},"result":{"content":[{"type":"text","text":"keep going"}],"structured_content":null},"status":"completed"}}\n\n`);
+              res.write("event: response.output_item.done\n");
+              res.write(
+                `data: {"type":"response.output_item.done","item":{"id":"tool_${toolCallCount}","type":"mcp_tool_call","server":"test_server","tool":"infinite_loop","arguments":{},"result":{"content":[{"type":"text","text":"keep going"}],"structured_content":null},"status":"completed"}}\n\n`,
+              );
             }
           }, 50);
         }, 100); // New tool call every 100ms
@@ -238,7 +245,9 @@ describe("AbortSignal support", () => {
       const startTime = Date.now();
 
       // Start the long-running operation with infinite tool calls
-      const runPromise = thread.runStreamed("Start infinite tool loop", { signal: controller.signal });
+      const runPromise = thread.runStreamed("Start infinite tool loop", {
+        signal: controller.signal,
+      });
 
       // Abort after 200ms (should be mid-execution with several tool calls processed)
       setTimeout(() => controller.abort("Test timeout"), 200);
@@ -247,7 +256,7 @@ describe("AbortSignal support", () => {
       await expect(async () => {
         const { events } = await runPromise;
         for await (const event of events) {
-          // Should be interrupted mid-stream
+          void event; // Should be interrupted mid-stream
         }
       }).rejects.toThrow();
 
