@@ -55,11 +55,25 @@ impl ChatComposerHistory {
     /// Record a message submitted by the user in the current session so it can
     /// be recalled later.
     pub fn record_local_submission(&mut self, text: &str) {
-        if !text.is_empty() {
-            self.local_history.push(text.to_string());
-            self.history_cursor = None;
-            self.last_history_text = None;
+        if text.is_empty() {
+            return;
         }
+
+        self.history_cursor = None;
+        self.last_history_text = None;
+
+        // Avoid inserting a duplicate if identical to the previous entry.
+        if self.local_history.last().is_some_and(|prev| prev == text) {
+            return;
+        }
+
+        self.local_history.push(text.to_string());
+    }
+
+    /// Reset navigation tracking so the next Up key resumes from the latest entry.
+    pub fn reset_navigation(&mut self) {
+        self.history_cursor = None;
+        self.last_history_text = None;
     }
 
     /// Should Up/Down key presses be interpreted as history navigation given
@@ -182,15 +196,37 @@ impl ChatComposerHistory {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::expect_used)]
     use super::*;
     use crate::app_event::AppEvent;
     use codex_core::protocol::Op;
-    use std::sync::mpsc::channel;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    #[test]
+    fn duplicate_submissions_are_not_recorded() {
+        let mut history = ChatComposerHistory::new();
+
+        // Empty submissions are ignored.
+        history.record_local_submission("");
+        assert_eq!(history.local_history.len(), 0);
+
+        // First entry is recorded.
+        history.record_local_submission("hello");
+        assert_eq!(history.local_history.len(), 1);
+        assert_eq!(history.local_history.last().unwrap(), "hello");
+
+        // Identical consecutive entry is skipped.
+        history.record_local_submission("hello");
+        assert_eq!(history.local_history.len(), 1);
+
+        // Different entry is recorded.
+        history.record_local_submission("world");
+        assert_eq!(history.local_history.len(), 2);
+        assert_eq!(history.local_history.last().unwrap(), "world");
+    }
 
     #[test]
     fn navigation_with_async_fetch() {
-        let (tx, rx) = channel::<AppEvent>();
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
 
         let mut history = ChatComposerHistory::new();
@@ -240,5 +276,25 @@ mod tests {
             Some("older".into()),
             history.on_entry_response(1, 1, Some("older".into()))
         );
+    }
+
+    #[test]
+    fn reset_navigation_resets_cursor() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+
+        let mut history = ChatComposerHistory::new();
+        history.set_metadata(1, 3);
+        history.fetched_history.insert(1, "command2".into());
+        history.fetched_history.insert(2, "command3".into());
+
+        assert_eq!(Some("command3".into()), history.navigate_up(&tx));
+        assert_eq!(Some("command2".into()), history.navigate_up(&tx));
+
+        history.reset_navigation();
+        assert!(history.history_cursor.is_none());
+        assert!(history.last_history_text.is_none());
+
+        assert_eq!(Some("command3".into()), history.navigate_up(&tx));
     }
 }

@@ -3,6 +3,7 @@
     "rust-analyzer.check.command": "clippy",
     "rust-analyzer.check.extraArgs": ["--all-features", "--tests"],
     "rust-analyzer.rustfmt.extraArgs": ["--config", "imports_granularity=Item"],
+    "rust-analyzer.cargo.targetDir": "${workspaceFolder}/codex-rs/target/rust-analyzer",
     "[rust]": {
         "editor.defaultFormatter": "rust-lang.rust-analyzer",
         "editor.formatOnSave": true,
@@ -11,6 +12,8 @@
         "editor.defaultFormatter": "tamasfe.even-better-toml",
         "editor.formatOnSave": true,
     },
-    "evenBetterToml.formatter.reorderArrays": true,
+    // Array order for options in ~/.codex/config.toml such as `notify` and the
+    // `args` for an MCP server is significant, so we disable reordering.
+    "evenBetterToml.formatter.reorderArrays": false,
     "evenBetterToml.formatter.reorderKeys": true,
 }

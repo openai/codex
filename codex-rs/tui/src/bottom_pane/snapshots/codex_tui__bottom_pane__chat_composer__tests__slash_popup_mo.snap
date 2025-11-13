@@ -1,0 +1,9 @@
+---
+source: tui/src/bottom_pane/chat_composer.rs
+expression: terminal.backend()
+---
+"                                                            "
+"› /mo                                                       "
+"                                                            "
+"  /model    choose what model and reasoning effort to use   "
+"  /mention  mention a file                                  "

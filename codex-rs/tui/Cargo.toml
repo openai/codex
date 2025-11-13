@@ -11,65 +11,99 @@ path = "src/main.rs"
 name = "codex_tui"
 path = "src/lib.rs"
 
+[features]
+# Enable vt100-based tests (emulator) when running with `--features vt100-tests`.
+vt100-tests = []
+# Gate verbose debug logging inside the TUI implementation.
+debug-logs = []
+
 [lints]
 workspace = true
 
 [dependencies]
-anyhow = "1"
-base64 = "0.22.1"
-chrono = { version = "0.4", features = ["serde"] }
-clap = { version = "4", features = ["derive"] }
-codex-ansi-escape = { path = "../ansi-escape" }
-codex-arg0 = { path = "../arg0" }
-codex-common = { path = "../common", features = [
+anyhow = { workspace = true }
+async-stream = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+clap = { workspace = true, features = ["derive"] }
+codex-ansi-escape = { workspace = true }
+codex-app-server-protocol = { workspace = true }
+codex-arg0 = { workspace = true }
+codex-common = { workspace = true, features = [
     "cli",
     "elapsed",
     "sandbox_summary",
 ] }
-codex-core = { path = "../core" }
-codex-file-search = { path = "../file-search" }
-codex-login = { path = "../login" }
-color-eyre = "0.6.3"
-crossterm = { version = "0.28.1", features = ["bracketed-paste"] }
-image = { version = "^0.25.6", default-features = false, features = ["jpeg"] }
-lazy_static = "1"
-mcp-types = { path = "../mcp-types" }
-path-clean = "1.0.1"
-ratatui = { version = "0.29.0", features = [
+codex-core = { workspace = true }
+codex-feedback = { workspace = true }
+codex-file-search = { workspace = true }
+codex-login = { workspace = true }
+codex-ollama = { workspace = true }
+codex-protocol = { workspace = true }
+color-eyre = { workspace = true }
+crossterm = { workspace = true, features = ["bracketed-paste", "event-stream"] }
+derive_more = { workspace = true, features = ["is_variant"] }
+diffy = { workspace = true }
+dirs = { workspace = true }
+dunce = { workspace = true }
+image = { workspace = true, features = ["jpeg", "png"] }
+itertools = { workspace = true }
+lazy_static = { workspace = true }
+mcp-types = { workspace = true }
+opentelemetry-appender-tracing = { workspace = true }
+pathdiff = { workspace = true }
+pulldown-cmark = { workspace = true }
+rand = { workspace = true }
+ratatui = { workspace = true, features = [
     "scrolling-regions",
+    "unstable-backend-writer",
     "unstable-rendered-line-info",
     "unstable-widget-ref",
 ] }
-ratatui-image = "8.0.0"
-regex-lite = "0.1"
-reqwest = { version = "0.12", features = ["json"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["preserve_order"] }
-shlex = "1.3.0"
-strum = "0.27.2"
-strum_macros = "0.27.2"
-supports-color = "3.0.2"
-textwrap = "0.16.2"
-tokio = { version = "1", features = [
+ratatui-macros = { workspace = true }
+regex-lite = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["preserve_order"] }
+shlex = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
+supports-color = { workspace = true }
+tempfile = { workspace = true }
+textwrap = { workspace = true }
+tokio = { workspace = true, features = [
     "io-std",
     "macros",
     "process",
     "rt-multi-thread",
     "signal",
 ] }
-tracing = { version = "0.1.41", features = ["log"] }
-tracing-appender = "0.2.3"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-tui-input = "0.14.0"
-tui-markdown = "0.3.3"
-unicode-segmentation = "1.12.0"
-unicode-width = "0.1"
-uuid = "1"
+tokio-stream = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true, features = ["log"] }
+tracing-appender = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+tree-sitter-bash = { workspace = true }
+tree-sitter-highlight = { workspace = true }
+unicode-segmentation = { workspace = true }
+unicode-width = { workspace = true }
+url = { workspace = true }
 
+codex-windows-sandbox = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+# Clipboard support via `arboard` is not available on Android/Termux.
+# Only include it for non-Android targets so the crate builds on Android.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+arboard = { workspace = true }
 
 
 [dev-dependencies]
-insta = "1.43.1"
-pretty_assertions = "1"
-rand = "0.8"
-chrono = { version = "0.4", features = ["serde"] }
+assert_matches = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+insta = { workspace = true }
+pretty_assertions = { workspace = true }
+rand = { workspace = true }
+serial_test = { workspace = true }
+vt100 = { workspace = true }

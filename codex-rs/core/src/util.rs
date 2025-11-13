@@ -1,32 +1,11 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use rand::Rng;
-use tokio::sync::Notify;
 use tracing::debug;
-
-use crate::config::Config;
+use tracing::error;
 
 const INITIAL_DELAY_MS: u64 = 200;
-const BACKOFF_FACTOR: f64 = 1.3;
-
-/// Make a CancellationToken that is fulfilled when SIGINT occurs.
-pub fn notify_on_sigint() -> Arc<Notify> {
-    let notify = Arc::new(Notify::new());
-
-    tokio::spawn({
-        let notify = Arc::clone(&notify);
-        async move {
-            loop {
-                tokio::signal::ctrl_c().await.ok();
-                debug!("Keyboard interrupt");
-                notify.notify_waiters();
-            }
-        }
-    });
-
-    notify
-}
+const BACKOFF_FACTOR: f64 = 2.0;
 
 pub(crate) fn backoff(attempt: u64) -> Duration {
     let exp = BACKOFF_FACTOR.powi(attempt.saturating_sub(1) as i32);
@@ -35,32 +14,54 @@ pub(crate) fn backoff(attempt: u64) -> Duration {
     Duration::from_millis((base as f64 * jitter) as u64)
 }
 
-/// Return `true` if the project folder specified by the `Config` is inside a
-/// Git repository.
-///
-/// The check walks up the directory hierarchy looking for a `.git` file or
-/// directory (note `.git` can be a file that contains a `gitdir` entry). This
-/// approach does **not** require the `git` binary or the `git2` crate and is
-/// therefore fairly lightweight.
-///
-/// Note that this does **not** detect *work‑trees* created with
-/// `git worktree add` where the checkout lives outside the main repository
-/// directory. If you need Codex to work from such a checkout simply pass the
-/// `--allow-no-git-exec` CLI flag that disables the repo requirement.
-pub fn is_inside_git_repo(config: &Config) -> bool {
-    let mut dir = config.cwd.to_path_buf();
+pub(crate) fn error_or_panic(message: String) {
+    if cfg!(debug_assertions) || env!("CARGO_PKG_VERSION").contains("alpha") {
+        panic!("{message}");
+    } else {
+        error!("{message}");
+    }
+}
 
-    loop {
-        if dir.join(".git").exists() {
-            return true;
-        }
+pub(crate) fn try_parse_error_message(text: &str) -> String {
+    debug!("Parsing server error response: {}", text);
+    let json = serde_json::from_str::<serde_json::Value>(text).unwrap_or_default();
+    if let Some(error) = json.get("error")
+        && let Some(message) = error.get("message")
+        && let Some(message_str) = message.as_str()
+    {
+        return message_str.to_string();
+    }
+    if text.is_empty() {
+        return "Unknown error".to_string();
+    }
+    text.to_string()
+}
 
-        // Pop one component (go up one directory).  `pop` returns false when
-        // we have reached the filesystem root.
-        if !dir.pop() {
-            break;
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_try_parse_error_message() {
+        let text = r#"{
+  "error": {
+    "message": "Your refresh token has already been used to generate a new access token. Please try signing in again.",
+    "type": "invalid_request_error",
+    "param": null,
+    "code": "refresh_token_reused"
+  }
+}"#;
+        let message = try_parse_error_message(text);
+        assert_eq!(
+            message,
+            "Your refresh token has already been used to generate a new access token. Please try signing in again."
+        );
     }
 
-    false
+    #[test]
+    fn test_try_parse_error_message_no_error() {
+        let text = r#"{"message": "test"}"#;
+        let message = try_parse_error_message(text);
+        assert_eq!(message, r#"{"message": "test"}"#);
+    }
 }

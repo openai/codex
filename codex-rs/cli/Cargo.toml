@@ -15,24 +15,47 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
-anyhow = "1"
-clap = { version = "4", features = ["derive"] }
-clap_complete = "4"
-codex-arg0 = { path = "../arg0" }
-codex-chatgpt = { path = "../chatgpt" }
-codex-common = { path = "../common", features = ["cli"] }
-codex-core = { path = "../core" }
-codex-exec = { path = "../exec" }
-codex-login = { path = "../login" }
-codex-mcp-server = { path = "../mcp-server" }
-codex-tui = { path = "../tui" }
-serde_json = "1"
-tokio = { version = "1", features = [
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+clap_complete = { workspace = true }
+codex-app-server = { workspace = true }
+codex-app-server-protocol = { workspace = true }
+codex-arg0 = { workspace = true }
+codex-chatgpt = { workspace = true }
+codex-cloud-tasks = { path = "../cloud-tasks" }
+codex-common = { workspace = true, features = ["cli"] }
+codex-core = { workspace = true }
+codex-exec = { workspace = true }
+codex-login = { workspace = true }
+codex-mcp-server = { workspace = true }
+codex-process-hardening = { workspace = true }
+codex-protocol = { workspace = true }
+codex-responses-api-proxy = { workspace = true }
+codex-rmcp-client = { workspace = true }
+codex-stdio-to-uds = { workspace = true }
+codex-tui = { workspace = true }
+ctor = { workspace = true }
+libc = { workspace = true }
+owo-colors = { workspace = true }
+regex-lite = { workspace = true}
+serde_json = { workspace = true }
+supports-color = { workspace = true }
+toml = { workspace = true }
+tokio = { workspace = true, features = [
     "io-std",
     "macros",
     "process",
     "rt-multi-thread",
     "signal",
 ] }
-tracing = "0.1.41"
-tracing-subscriber = "0.3.19"
+tracing = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+codex_windows_sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+assert_matches = { workspace = true }
+predicates = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

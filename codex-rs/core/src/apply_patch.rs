@@ -1,6 +1,6 @@
 use crate::codex::Session;
-use crate::models::FunctionCallOutputPayload;
-use crate::models::ResponseInputItem;
+use crate::codex::TurnContext;
+use crate::function_tool::FunctionCallError;
 use crate::protocol::FileChange;
 use crate::protocol::ReviewDecision;
 use crate::safety::SafetyCheck;
@@ -8,7 +8,6 @@ use crate::safety::assess_patch_safety;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
 use std::collections::HashMap;
-use std::path::Path;
 use std::path::PathBuf;
 
 pub const CODEX_APPLY_PATCH_ARG1: &str = "--codex-run-as-apply-patch";
@@ -17,7 +16,7 @@ pub(crate) enum InternalApplyPatchInvocation {
     /// The `apply_patch` call was handled programmatically, without any sort
     /// of sandbox, because the user explicitly approved it. This is the
     /// result to use with the `shell` function call that contained `apply_patch`.
-    Output(ResponseInputItem),
+    Output(Result<String, FunctionCallError>),
 
     /// The `apply_patch` call was approved, either automatically because it
     /// appears that it should be allowed based on the user's sandbox policy
@@ -28,41 +27,31 @@ pub(crate) enum InternalApplyPatchInvocation {
     DelegateToExec(ApplyPatchExec),
 }
 
+#[derive(Debug)]
 pub(crate) struct ApplyPatchExec {
     pub(crate) action: ApplyPatchAction,
     pub(crate) user_explicitly_approved_this_action: bool,
 }
 
-impl From<ResponseInputItem> for InternalApplyPatchInvocation {
-    fn from(item: ResponseInputItem) -> Self {
-        InternalApplyPatchInvocation::Output(item)
-    }
-}
-
 pub(crate) async fn apply_patch(
     sess: &Session,
-    sub_id: &str,
+    turn_context: &TurnContext,
     call_id: &str,
     action: ApplyPatchAction,
 ) -> InternalApplyPatchInvocation {
-    let writable_roots_snapshot = {
-        #[allow(clippy::unwrap_used)]
-        let guard = sess.writable_roots.lock().unwrap();
-        guard.clone()
-    };
-
     match assess_patch_safety(
         &action,
-        sess.approval_policy,
-        &writable_roots_snapshot,
-        &sess.cwd,
+        turn_context.approval_policy,
+        &turn_context.sandbox_policy,
+        &turn_context.cwd,
     ) {
-        SafetyCheck::AutoApprove { .. } => {
-            InternalApplyPatchInvocation::DelegateToExec(ApplyPatchExec {
-                action,
-                user_explicitly_approved_this_action: false,
-            })
-        }
+        SafetyCheck::AutoApprove {
+            user_explicitly_approved,
+            ..
+        } => InternalApplyPatchInvocation::DelegateToExec(ApplyPatchExec {
+            action,
+            user_explicitly_approved_this_action: user_explicitly_approved,
+        }),
         SafetyCheck::AskUser => {
             // Compute a readable summary of path changes to include in the
             // approval request so the user can make an informed decision.
@@ -72,7 +61,13 @@ pub(crate) async fn apply_patch(
             // that similar patches can be auto-approved in the future during
             // this session.
             let rx_approve = sess
-                .request_patch_approval(sub_id.to_owned(), call_id.to_owned(), &action, None, None)
+                .request_patch_approval(
+                    turn_context,
+                    call_id.to_owned(),
+                    convert_apply_patch_to_protocol(&action),
+                    None,
+                    None,
+                )
                 .await;
             match rx_approve.await.unwrap_or_default() {
                 ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {
@@ -82,25 +77,15 @@ pub(crate) async fn apply_patch(
                     })
                 }
                 ReviewDecision::Denied | ReviewDecision::Abort => {
-                    ResponseInputItem::FunctionCallOutput {
-                        call_id: call_id.to_owned(),
-                        output: FunctionCallOutputPayload {
-                            content: "patch rejected by user".to_string(),
-                            success: Some(false),
-                        },
-                    }
-                    .into()
+                    InternalApplyPatchInvocation::Output(Err(FunctionCallError::RespondToModel(
+                        "patch rejected by user".to_string(),
+                    )))
                 }
             }
         }
-        SafetyCheck::Reject { reason } => ResponseInputItem::FunctionCallOutput {
-            call_id: call_id.to_owned(),
-            output: FunctionCallOutputPayload {
-                content: format!("patch rejected: {reason}"),
-                success: Some(false),
-            },
-        }
-        .into(),
+        SafetyCheck::Reject { reason } => InternalApplyPatchInvocation::Output(Err(
+            FunctionCallError::RespondToModel(format!("patch rejected: {reason}")),
+        )),
     }
 }
 
@@ -114,7 +99,9 @@ pub(crate) fn convert_apply_patch_to_protocol(
             ApplyPatchFileChange::Add { content } => FileChange::Add {
                 content: content.clone(),
             },
-            ApplyPatchFileChange::Delete => FileChange::Delete,
+            ApplyPatchFileChange::Delete { content } => FileChange::Delete {
+                content: content.clone(),
+            },
             ApplyPatchFileChange::Update {
                 unified_diff,
                 move_path,
@@ -129,29 +116,27 @@ pub(crate) fn convert_apply_patch_to_protocol(
     result
 }
 
-pub(crate) fn get_writable_roots(cwd: &Path) -> Vec<PathBuf> {
-    let mut writable_roots = Vec::new();
-    if cfg!(target_os = "macos") {
-        // On macOS, $TMPDIR is private to the user.
-        writable_roots.push(std::env::temp_dir());
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
 
-        // Allow pyenv to update its shims directory. Without this, any tool
-        // that happens to be managed by `pyenv` will fail with an error like:
-        //
-        //   pyenv: cannot rehash: $HOME/.pyenv/shims isn't writable
-        //
-        // which is emitted every time `pyenv` tries to run `rehash` (for
-        // example, after installing a new Python package that drops an entry
-        // point). Although the sandbox is intentionally read‑only by default,
-        // writing to the user's local `pyenv` directory is safe because it
-        // is already user‑writable and scoped to the current user account.
-        if let Ok(home_dir) = std::env::var("HOME") {
-            let pyenv_dir = PathBuf::from(home_dir).join(".pyenv");
-            writable_roots.push(pyenv_dir);
-        }
+    use tempfile::tempdir;
+
+    #[test]
+    fn convert_apply_patch_maps_add_variant() {
+        let tmp = tempdir().expect("tmp");
+        let p = tmp.path().join("a.txt");
+        // Create an action with a single Add change
+        let action = ApplyPatchAction::new_add_for_test(&p, "hello".to_string());
+
+        let got = convert_apply_patch_to_protocol(&action);
+
+        assert_eq!(
+            got.get(&p),
+            Some(&FileChange::Add {
+                content: "hello".to_string()
+            })
+        );
     }
-
-    writable_roots.push(cwd.to_path_buf());
-
-    writable_roots
 }

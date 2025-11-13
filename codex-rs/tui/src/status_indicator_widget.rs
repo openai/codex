@@ -1,206 +1,243 @@
 //! A live status indicator that shows the *latest* log line emitted by the
 //! application while the agent is processing a long‑running task.
 
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
-use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 
+use codex_core::protocol::Op;
+use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
-use ratatui::layout::Alignment;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
-use ratatui::style::Modifier;
-use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::text::Span;
-use ratatui::widgets::Block;
-use ratatui::widgets::BorderType;
-use ratatui::widgets::Borders;
-use ratatui::widgets::Padding;
-use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
-
-use codex_ansi_escape::ansi_escape_line;
+use crate::exec_cell::spinner;
+use crate::key_hint;
+use crate::render::renderable::Renderable;
+use crate::shimmer::shimmer_spans;
+use crate::tui::FrameRequester;
 
 pub(crate) struct StatusIndicatorWidget {
-    /// Latest text to display (truncated to the available width at render
-    /// time).
-    text: String,
+    /// Animated header text (defaults to "Working").
+    header: String,
+    show_interrupt_hint: bool,
 
-    frame_idx: Arc<AtomicUsize>,
-    running: Arc<AtomicBool>,
-    // Keep one sender alive to prevent the channel from closing while the
-    // animation thread is still running. The field itself is currently not
-    // accessed anywhere, therefore the leading underscore silences the
-    // `dead_code` warning without affecting behavior.
-    _app_event_tx: AppEventSender,
+    elapsed_running: Duration,
+    last_resume_at: Instant,
+    is_paused: bool,
+    app_event_tx: AppEventSender,
+    frame_requester: FrameRequester,
+}
+
+// Format elapsed seconds into a compact human-friendly form used by the status line.
+// Examples: 0s, 59s, 1m 00s, 59m 59s, 1h 00m 00s, 2h 03m 09s
+pub fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
+    if elapsed_secs < 60 {
+        return format!("{elapsed_secs}s");
+    }
+    if elapsed_secs < 3600 {
+        let minutes = elapsed_secs / 60;
+        let seconds = elapsed_secs % 60;
+        return format!("{minutes}m {seconds:02}s");
+    }
+    let hours = elapsed_secs / 3600;
+    let minutes = (elapsed_secs % 3600) / 60;
+    let seconds = elapsed_secs % 60;
+    format!("{hours}h {minutes:02}m {seconds:02}s")
 }
 
 impl StatusIndicatorWidget {
-    /// Create a new status indicator and start the animation timer.
-    pub(crate) fn new(app_event_tx: AppEventSender) -> Self {
-        let frame_idx = Arc::new(AtomicUsize::new(0));
-        let running = Arc::new(AtomicBool::new(true));
-
-        // Animation thread.
-        {
-            let frame_idx_clone = Arc::clone(&frame_idx);
-            let running_clone = Arc::clone(&running);
-            let app_event_tx_clone = app_event_tx.clone();
-            thread::spawn(move || {
-                let mut counter = 0usize;
-                while running_clone.load(Ordering::Relaxed) {
-                    std::thread::sleep(Duration::from_millis(100));
-                    counter = counter.wrapping_add(1);
-                    frame_idx_clone.store(counter, Ordering::Relaxed);
-                    app_event_tx_clone.send(AppEvent::RequestRedraw);
-                }
-            });
-        }
-
+    pub(crate) fn new(app_event_tx: AppEventSender, frame_requester: FrameRequester) -> Self {
         Self {
-            text: String::from("waiting for logs…"),
-            frame_idx,
-            running,
-            _app_event_tx: app_event_tx,
+            header: String::from("Working"),
+            show_interrupt_hint: true,
+            elapsed_running: Duration::ZERO,
+            last_resume_at: Instant::now(),
+            is_paused: false,
+
+            app_event_tx,
+            frame_requester,
         }
     }
 
-    pub fn desired_height(&self, _width: u16) -> u16 {
+    pub(crate) fn interrupt(&self) {
+        self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
+    }
+
+    /// Update the animated header label (left of the brackets).
+    pub(crate) fn update_header(&mut self, header: String) {
+        self.header = header;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn header(&self) -> &str {
+        &self.header
+    }
+
+    pub(crate) fn set_interrupt_hint_visible(&mut self, visible: bool) {
+        self.show_interrupt_hint = visible;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn interrupt_hint_visible(&self) -> bool {
+        self.show_interrupt_hint
+    }
+
+    pub(crate) fn pause_timer(&mut self) {
+        self.pause_timer_at(Instant::now());
+    }
+
+    pub(crate) fn resume_timer(&mut self) {
+        self.resume_timer_at(Instant::now());
+    }
+
+    pub(crate) fn pause_timer_at(&mut self, now: Instant) {
+        if self.is_paused {
+            return;
+        }
+        self.elapsed_running += now.saturating_duration_since(self.last_resume_at);
+        self.is_paused = true;
+    }
+
+    pub(crate) fn resume_timer_at(&mut self, now: Instant) {
+        if !self.is_paused {
+            return;
+        }
+        self.last_resume_at = now;
+        self.is_paused = false;
+        self.frame_requester.schedule_frame();
+    }
+
+    fn elapsed_duration_at(&self, now: Instant) -> Duration {
+        let mut elapsed = self.elapsed_running;
+        if !self.is_paused {
+            elapsed += now.saturating_duration_since(self.last_resume_at);
+        }
+        elapsed
+    }
+
+    fn elapsed_seconds_at(&self, now: Instant) -> u64 {
+        self.elapsed_duration_at(now).as_secs()
+    }
+
+    pub fn elapsed_seconds(&self) -> u64 {
+        self.elapsed_seconds_at(Instant::now())
+    }
+}
+
+impl Renderable for StatusIndicatorWidget {
+    fn desired_height(&self, _width: u16) -> u16 {
         1
     }
 
-    /// Update the line that is displayed in the widget.
-    pub(crate) fn update_text(&mut self, text: String) {
-        self.text = text.replace(['\n', '\r'], " ");
-    }
-}
-
-impl Drop for StatusIndicatorWidget {
-    fn drop(&mut self) {
-        use std::sync::atomic::Ordering;
-        self.running.store(false, Ordering::Relaxed);
-    }
-}
-
-impl WidgetRef for StatusIndicatorWidget {
-    fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let widget_style = Style::default();
-        let block = Block::default()
-            .padding(Padding::new(1, 0, 0, 0))
-            .borders(Borders::LEFT)
-            .border_type(BorderType::QuadrantOutside)
-            .border_style(widget_style.dim());
-        let idx = self.frame_idx.load(std::sync::atomic::Ordering::Relaxed);
-        let header_text = "Working";
-        let header_chars: Vec<char> = header_text.chars().collect();
-
-        let padding = 4usize; // virtual padding around the word for smoother loop
-        let period = header_chars.len() + padding * 2;
-        let pos = idx % period;
-
-        let has_true_color = supports_color::on_cached(supports_color::Stream::Stdout)
-            .map(|level| level.has_16m)
-            .unwrap_or(false);
-
-        // Width of the bright band (in characters).
-        let band_half_width = 2.0;
-
-        let mut header_spans: Vec<Span<'static>> = Vec::new();
-        for (i, ch) in header_chars.iter().enumerate() {
-            let i_pos = i as isize + padding as isize;
-            let pos = pos as isize;
-            let dist = (i_pos - pos).abs() as f32;
-
-            let t = if dist <= band_half_width {
-                let x = std::f32::consts::PI * (dist / band_half_width);
-                0.5 * (1.0 + x.cos())
-            } else {
-                0.0
-            };
-
-            let brightness = 0.4 + 0.6 * t;
-            let level = (brightness * 255.0).clamp(0.0, 255.0) as u8;
-            let style = if has_true_color {
-                Style::default()
-                    .fg(Color::Rgb(level, level, level))
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                // Bold makes dark gray and gray look the same, so don't use it
-                // when true color is not supported.
-                Style::default().fg(color_for_level(level))
-            };
-
-            header_spans.push(Span::styled(ch.to_string(), style));
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        if area.is_empty() {
+            return;
         }
 
-        header_spans.push(Span::styled(
-            " ",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        ));
+        // Schedule next animation frame.
+        self.frame_requester
+            .schedule_frame_in(Duration::from_millis(32));
+        let now = Instant::now();
+        let elapsed_duration = self.elapsed_duration_at(now);
+        let pretty_elapsed = fmt_elapsed_compact(elapsed_duration.as_secs());
 
-        // Ensure we do not overflow width.
-        let inner_width = block.inner(area).width as usize;
-
-        // Sanitize and colour‑strip the potentially colourful log text.  This
-        // ensures that **no** raw ANSI escape sequences leak into the
-        // back‑buffer which would otherwise cause cursor jumps or stray
-        // artefacts when the terminal is resized.
-        let line = ansi_escape_line(&self.text);
-        let mut sanitized_tail: String = line
-            .spans
-            .iter()
-            .map(|s| s.content.as_ref())
-            .collect::<Vec<_>>()
-            .join("");
-
-        // Truncate *after* stripping escape codes so width calculation is
-        // accurate. See UTF‑8 boundary comments above.
-        let header_len: usize = header_spans.iter().map(|s| s.content.len()).sum();
-
-        if header_len + sanitized_tail.len() > inner_width {
-            let available_bytes = inner_width.saturating_sub(header_len);
-
-            if sanitized_tail.is_char_boundary(available_bytes) {
-                sanitized_tail.truncate(available_bytes);
-            } else {
-                let mut idx = available_bytes;
-                while idx < sanitized_tail.len() && !sanitized_tail.is_char_boundary(idx) {
-                    idx += 1;
-                }
-                sanitized_tail.truncate(idx);
-            }
+        // Plain rendering: no borders or padding so the live cell is visually indistinguishable from terminal scrollback.
+        let mut spans = Vec::with_capacity(5);
+        spans.push(spinner(Some(self.last_resume_at)));
+        spans.push(" ".into());
+        spans.extend(shimmer_spans(&self.header));
+        spans.push(" ".into());
+        if self.show_interrupt_hint {
+            spans.extend(vec![
+                format!("({pretty_elapsed} • ").dim(),
+                key_hint::plain(KeyCode::Esc).into(),
+                " to interrupt)".dim(),
+            ]);
+        } else {
+            spans.push(format!("({pretty_elapsed})").dim());
         }
 
-        let mut spans = header_spans;
-
-        // Re‑apply the DIM modifier so the tail appears visually subdued
-        // irrespective of the colour information preserved by
-        // `ansi_escape_line`.
-        spans.push(Span::styled(sanitized_tail, Style::default().dim()));
-
-        let paragraph = Paragraph::new(Line::from(spans))
-            .block(block)
-            .alignment(Alignment::Left);
-        paragraph.render_ref(area, buf);
+        Line::from(spans).render_ref(area, buf);
     }
 }
 
-fn color_for_level(level: u8) -> Color {
-    if level < 128 {
-        Color::DarkGray
-    } else if level < 192 {
-        Color::Gray
-    } else {
-        Color::White
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_event::AppEvent;
+    use crate::app_event_sender::AppEventSender;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use std::time::Duration;
+    use std::time::Instant;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn fmt_elapsed_compact_formats_seconds_minutes_hours() {
+        assert_eq!(fmt_elapsed_compact(0), "0s");
+        assert_eq!(fmt_elapsed_compact(1), "1s");
+        assert_eq!(fmt_elapsed_compact(59), "59s");
+        assert_eq!(fmt_elapsed_compact(60), "1m 00s");
+        assert_eq!(fmt_elapsed_compact(61), "1m 01s");
+        assert_eq!(fmt_elapsed_compact(3 * 60 + 5), "3m 05s");
+        assert_eq!(fmt_elapsed_compact(59 * 60 + 59), "59m 59s");
+        assert_eq!(fmt_elapsed_compact(3600), "1h 00m 00s");
+        assert_eq!(fmt_elapsed_compact(3600 + 60 + 1), "1h 01m 01s");
+        assert_eq!(fmt_elapsed_compact(25 * 3600 + 2 * 60 + 3), "25h 02m 03s");
+    }
+
+    #[test]
+    fn renders_with_working_header() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
+
+        // Render into a fixed-size test terminal and snapshot the backend.
+        let mut terminal = Terminal::new(TestBackend::new(80, 2)).expect("terminal");
+        terminal
+            .draw(|f| w.render(f.area(), f.buffer_mut()))
+            .expect("draw");
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn renders_truncated() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
+
+        // Render into a fixed-size test terminal and snapshot the backend.
+        let mut terminal = Terminal::new(TestBackend::new(20, 2)).expect("terminal");
+        terminal
+            .draw(|f| w.render(f.area(), f.buffer_mut()))
+            .expect("draw");
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn timer_pauses_when_requested() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut widget = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
+
+        let baseline = Instant::now();
+        widget.last_resume_at = baseline;
+
+        let before_pause = widget.elapsed_seconds_at(baseline + Duration::from_secs(5));
+        assert_eq!(before_pause, 5);
+
+        widget.pause_timer_at(baseline + Duration::from_secs(5));
+        let paused_elapsed = widget.elapsed_seconds_at(baseline + Duration::from_secs(10));
+        assert_eq!(paused_elapsed, before_pause);
+
+        widget.resume_timer_at(baseline + Duration::from_secs(10));
+        let after_resume = widget.elapsed_seconds_at(baseline + Duration::from_secs(13));
+        assert_eq!(after_resume, before_pause + 3);
     }
 }

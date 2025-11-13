@@ -1,23 +1,15 @@
 use codex_file_search::FileMatch;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::prelude::Constraint;
-use ratatui::style::Color;
-use ratatui::style::Modifier;
-use ratatui::style::Style;
-use ratatui::text::Line;
-use ratatui::text::Span;
-use ratatui::widgets::Block;
-use ratatui::widgets::BorderType;
-use ratatui::widgets::Borders;
-use ratatui::widgets::Cell;
-use ratatui::widgets::Row;
-use ratatui::widgets::Table;
-use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 
-/// Maximum number of suggestions shown in the popup.
-const MAX_RESULTS: usize = 8;
+use crate::render::Insets;
+use crate::render::RectExt;
+
+use super::popup_consts::MAX_POPUP_ROWS;
+use super::scroll_state::ScrollState;
+use super::selection_popup_common::GenericDisplayRow;
+use super::selection_popup_common::render_rows;
 
 /// Visual state for the file-search popup.
 pub(crate) struct FileSearchPopup {
@@ -30,8 +22,8 @@ pub(crate) struct FileSearchPopup {
     waiting: bool,
     /// Cached matches; paths relative to the search dir.
     matches: Vec<FileMatch>,
-    /// Currently selected index inside `matches` (if any).
-    selected_idx: Option<usize>,
+    /// Shared selection/scroll state.
+    state: ScrollState,
 }
 
 impl FileSearchPopup {
@@ -41,7 +33,7 @@ impl FileSearchPopup {
             pending_query: String::new(),
             waiting: true,
             matches: Vec::new(),
-            selected_idx: None,
+            state: ScrollState::new(),
         }
     }
 
@@ -61,8 +53,19 @@ impl FileSearchPopup {
 
         if !keep_existing {
             self.matches.clear();
-            self.selected_idx = None;
+            self.state.reset();
         }
+    }
+
+    /// Put the popup into an "idle" state used for an empty query (just "@").
+    /// Shows a hint instead of matches until the user types more characters.
+    pub(crate) fn set_empty_prompt(&mut self) {
+        self.display_query.clear();
+        self.pending_query.clear();
+        self.waiting = false;
+        self.matches.clear();
+        // Reset selection/scroll state when showing the empty prompt.
+        self.state.reset();
     }
 
     /// Replace matches when a `FileSearchResult` arrives.
@@ -75,40 +78,32 @@ impl FileSearchPopup {
         self.display_query = query.to_string();
         self.matches = matches;
         self.waiting = false;
-        self.selected_idx = if self.matches.is_empty() {
-            None
-        } else {
-            Some(0)
-        };
+        let len = self.matches.len();
+        self.state.clamp_selection(len);
+        self.state.ensure_visible(len, len.min(MAX_POPUP_ROWS));
     }
 
     /// Move selection cursor up.
     pub(crate) fn move_up(&mut self) {
-        if let Some(idx) = self.selected_idx {
-            if idx > 0 {
-                self.selected_idx = Some(idx - 1);
-            }
-        }
+        let len = self.matches.len();
+        self.state.move_up_wrap(len);
+        self.state.ensure_visible(len, len.min(MAX_POPUP_ROWS));
     }
 
     /// Move selection cursor down.
     pub(crate) fn move_down(&mut self) {
-        if let Some(idx) = self.selected_idx {
-            if idx + 1 < self.matches.len() {
-                self.selected_idx = Some(idx + 1);
-            }
-        } else if !self.matches.is_empty() {
-            self.selected_idx = Some(0);
-        }
+        let len = self.matches.len();
+        self.state.move_down_wrap(len);
+        self.state.ensure_visible(len, len.min(MAX_POPUP_ROWS));
     }
 
     pub(crate) fn selected_match(&self) -> Option<&str> {
-        self.selected_idx
+        self.state
+            .selected_idx
             .and_then(|idx| self.matches.get(idx))
             .map(|file_match| file_match.path.as_str())
     }
 
-    /// Preferred height (rows) including border.
     pub(crate) fn calculate_required_height(&self) -> u16 {
         // Row count depends on whether we already have matches. If no matches
         // yet (e.g. initial search or query with no results) reserve a single
@@ -116,71 +111,44 @@ impl FileSearchPopup {
         // up to MAX_RESULTS regardless of the waiting flag so the list
         // remains stable while a newer search is in-flight.
 
-        self.matches.len().clamp(1, MAX_RESULTS) as u16
+        self.matches.len().clamp(1, MAX_POPUP_ROWS) as u16
     }
 }
 
 impl WidgetRef for &FileSearchPopup {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        // Prepare rows.
-        let rows: Vec<Row> = if self.matches.is_empty() {
-            vec![Row::new(vec![
-                Cell::from(if self.waiting {
-                    "(searching …)"
-                } else {
-                    "no matches"
-                })
-                .style(Style::new().add_modifier(Modifier::ITALIC | Modifier::DIM)),
-            ])]
+        // Convert matches to GenericDisplayRow, translating indices to usize at the UI boundary.
+        let rows_all: Vec<GenericDisplayRow> = if self.matches.is_empty() {
+            Vec::new()
         } else {
             self.matches
                 .iter()
-                .take(MAX_RESULTS)
-                .enumerate()
-                .map(|(i, file_match)| {
-                    let FileMatch { path, indices, .. } = file_match;
-                    let path = path.as_str();
-                    #[allow(clippy::expect_used)]
-                    let indices = indices.as_ref().expect("indices should be present");
-
-                    // Build spans with bold on matching indices.
-                    let mut idx_iter = indices.iter().peekable();
-                    let mut spans: Vec<Span> = Vec::with_capacity(path.len());
-
-                    for (char_idx, ch) in path.chars().enumerate() {
-                        let mut style = Style::default();
-                        if idx_iter
-                            .peek()
-                            .is_some_and(|next| **next == char_idx as u32)
-                        {
-                            idx_iter.next();
-                            style = style.add_modifier(Modifier::BOLD);
-                        }
-                        spans.push(Span::styled(ch.to_string(), style));
-                    }
-
-                    // Create cell from the spans.
-                    let mut cell = Cell::from(Line::from(spans));
-
-                    // If selected, also paint yellow.
-                    if Some(i) == self.selected_idx {
-                        cell = cell.style(Style::default().fg(Color::Yellow));
-                    }
-
-                    Row::new(vec![cell])
+                .map(|m| GenericDisplayRow {
+                    name: m.path.clone(),
+                    match_indices: m
+                        .indices
+                        .as_ref()
+                        .map(|v| v.iter().map(|&i| i as usize).collect()),
+                    is_current: false,
+                    display_shortcut: None,
+                    description: None,
                 })
                 .collect()
         };
 
-        let table = Table::new(rows, vec![Constraint::Percentage(100)])
-            .block(
-                Block::default()
-                    .borders(Borders::LEFT)
-                    .border_type(BorderType::QuadrantOutside)
-                    .border_style(Style::default().fg(Color::DarkGray)),
-            )
-            .widths([Constraint::Percentage(100)]);
+        let empty_message = if self.waiting {
+            "loading..."
+        } else {
+            "no matches"
+        };
 
-        table.render(area, buf);
+        render_rows(
+            area.inset(Insets::tlbr(0, 2, 0, 0)),
+            buf,
+            &rows_all,
+            &self.state,
+            MAX_POPUP_ROWS,
+            empty_message,
+        );
     }
 }

@@ -7,7 +7,7 @@
 //! `config.toml`.
 
 use clap::ValueEnum;
-use codex_core::config_types::SandboxMode;
+use codex_protocol::config_types::SandboxMode;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 #[value(rename_all = "kebab-case")]

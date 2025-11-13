@@ -5,30 +5,30 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use codex_core::Codex;
-use codex_core::codex_wrapper::CodexConversation;
-use codex_core::codex_wrapper::init_codex;
+use crate::exec_approval::handle_exec_approval_request;
+use crate::outgoing_message::OutgoingMessageSender;
+use crate::outgoing_message::OutgoingNotificationMeta;
+use crate::patch_approval::handle_patch_approval_request;
+use codex_core::CodexConversation;
+use codex_core::ConversationManager;
+use codex_core::NewConversation;
 use codex_core::config::Config as CodexConfig;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
+use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::Submission;
 use codex_core::protocol::TaskCompleteEvent;
+use codex_protocol::ConversationId;
+use codex_protocol::user_input::UserInput;
 use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
 use mcp_types::RequestId;
 use mcp_types::TextContent;
 use serde_json::json;
 use tokio::sync::Mutex;
-use uuid::Uuid;
-
-use crate::exec_approval::handle_exec_approval_request;
-use crate::outgoing_message::OutgoingMessageSender;
-use crate::outgoing_message::OutgoingNotificationMeta;
-use crate::patch_approval::handle_patch_approval_request;
 
 pub(crate) const INVALID_PARAMS_ERROR_CODE: i64 = -32602;
 
@@ -41,15 +41,14 @@ pub async fn run_codex_tool_session(
     initial_prompt: String,
     config: CodexConfig,
     outgoing: Arc<OutgoingMessageSender>,
-    session_map: Arc<Mutex<HashMap<Uuid, Arc<Codex>>>>,
-    running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, Uuid>>>,
+    conversation_manager: Arc<ConversationManager>,
+    running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ConversationId>>>,
 ) {
-    let CodexConversation {
-        codex,
+    let NewConversation {
+        conversation_id,
+        conversation,
         session_configured,
-        session_id,
-        ..
-    } = match init_codex(config).await {
+    } = match conversation_manager.new_conversation(config).await {
         Ok(res) => res,
         Err(e) => {
             let result = CallToolResult {
@@ -61,20 +60,19 @@ pub async fn run_codex_tool_session(
                 is_error: Some(true),
                 structured_content: None,
             };
-            outgoing.send_response(id.clone(), result.into()).await;
+            outgoing.send_response(id.clone(), result).await;
             return;
         }
     };
-    let codex = Arc::new(codex);
 
-    // update the session map so we can retrieve the session in a reply, and then drop it, since
-    // we no longer need it for this function
-    session_map.lock().await.insert(session_id, codex.clone());
-    drop(session_map);
-
+    let session_configured_event = Event {
+        // Use a fake id value for now.
+        id: "".to_string(),
+        msg: EventMsg::SessionConfigured(session_configured.clone()),
+    };
     outgoing
         .send_event_as_notification(
-            &session_configured,
+            &session_configured_event,
             Some(OutgoingNotificationMeta::new(Some(id.clone()))),
         )
         .await;
@@ -89,41 +87,47 @@ pub async fn run_codex_tool_session(
     running_requests_id_to_codex_uuid
         .lock()
         .await
-        .insert(id.clone(), session_id);
+        .insert(id.clone(), conversation_id);
     let submission = Submission {
         id: sub_id.clone(),
         op: Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: initial_prompt.clone(),
             }],
         },
     };
 
-    if let Err(e) = codex.submit_with_id(submission).await {
+    if let Err(e) = conversation.submit_with_id(submission).await {
         tracing::error!("Failed to submit initial prompt: {e}");
         // unregister the id so we don't keep it in the map
         running_requests_id_to_codex_uuid.lock().await.remove(&id);
         return;
     }
 
-    run_codex_tool_session_inner(codex, outgoing, id, running_requests_id_to_codex_uuid).await;
+    run_codex_tool_session_inner(
+        conversation,
+        outgoing,
+        id,
+        running_requests_id_to_codex_uuid,
+    )
+    .await;
 }
 
 pub async fn run_codex_tool_session_reply(
-    codex: Arc<Codex>,
+    conversation: Arc<CodexConversation>,
     outgoing: Arc<OutgoingMessageSender>,
     request_id: RequestId,
     prompt: String,
-    running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, Uuid>>>,
-    session_id: Uuid,
+    running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ConversationId>>>,
+    conversation_id: ConversationId,
 ) {
     running_requests_id_to_codex_uuid
         .lock()
         .await
-        .insert(request_id.clone(), session_id);
-    if let Err(e) = codex
+        .insert(request_id.clone(), conversation_id);
+    if let Err(e) = conversation
         .submit(Op::UserInput {
-            items: vec![InputItem::Text { text: prompt }],
+            items: vec![UserInput::Text { text: prompt }],
         })
         .await
     {
@@ -137,7 +141,7 @@ pub async fn run_codex_tool_session_reply(
     }
 
     run_codex_tool_session_inner(
-        codex,
+        conversation,
         outgoing,
         request_id,
         running_requests_id_to_codex_uuid,
@@ -146,10 +150,10 @@ pub async fn run_codex_tool_session_reply(
 }
 
 async fn run_codex_tool_session_inner(
-    codex: Arc<Codex>,
+    codex: Arc<CodexConversation>,
     outgoing: Arc<OutgoingMessageSender>,
     request_id: RequestId,
-    running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, Uuid>>>,
+    running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ConversationId>>>,
 ) {
     let request_id_str = match &request_id {
         RequestId::String(s) => s.clone(),
@@ -174,6 +178,8 @@ async fn run_codex_tool_session_inner(
                         cwd,
                         call_id,
                         reason: _,
+                        risk,
+                        parsed_cmd,
                     }) => {
                         handle_exec_approval_request(
                             command,
@@ -184,6 +190,8 @@ async fn run_codex_tool_session_inner(
                             request_id_str.clone(),
                             event.id.clone(),
                             call_id,
+                            parsed_cmd,
+                            risk,
                         )
                         .await;
                         continue;
@@ -195,6 +203,9 @@ async fn run_codex_tool_session_inner(
                         });
                         outgoing.send_response(request_id.clone(), result).await;
                         break;
+                    }
+                    EventMsg::Warning(_) => {
+                        continue;
                     }
                     EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
                         call_id,
@@ -218,7 +229,7 @@ async fn run_codex_tool_session_inner(
                     }
                     EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
                         let text = match last_agent_message {
-                            Some(msg) => msg.clone(),
+                            Some(msg) => msg,
                             None => "".to_string(),
                         };
                         let result = CallToolResult {
@@ -230,9 +241,7 @@ async fn run_codex_tool_session_inner(
                             is_error: None,
                             structured_content: None,
                         };
-                        outgoing
-                            .send_response(request_id.clone(), result.into())
-                            .await;
+                        outgoing.send_response(request_id.clone(), result).await;
                         // unregister the id so we don't keep it in the map
                         running_requests_id_to_codex_uuid
                             .lock()
@@ -252,21 +261,43 @@ async fn run_codex_tool_session_inner(
                     EventMsg::AgentMessage(AgentMessageEvent { .. }) => {
                         // TODO: think how we want to support this in the MCP
                     }
-                    EventMsg::TaskStarted
+                    EventMsg::AgentReasoningRawContent(_)
+                    | EventMsg::AgentReasoningRawContentDelta(_)
+                    | EventMsg::TaskStarted(_)
                     | EventMsg::TokenCount(_)
                     | EventMsg::AgentReasoning(_)
+                    | EventMsg::AgentReasoningSectionBreak(_)
                     | EventMsg::McpToolCallBegin(_)
                     | EventMsg::McpToolCallEnd(_)
+                    | EventMsg::McpListToolsResponse(_)
+                    | EventMsg::ListCustomPromptsResponse(_)
                     | EventMsg::ExecCommandBegin(_)
                     | EventMsg::ExecCommandOutputDelta(_)
                     | EventMsg::ExecCommandEnd(_)
                     | EventMsg::BackgroundEvent(_)
+                    | EventMsg::StreamError(_)
                     | EventMsg::PatchApplyBegin(_)
                     | EventMsg::PatchApplyEnd(_)
                     | EventMsg::TurnDiff(_)
+                    | EventMsg::WebSearchBegin(_)
+                    | EventMsg::WebSearchEnd(_)
                     | EventMsg::GetHistoryEntryResponse(_)
                     | EventMsg::PlanUpdate(_)
-                    | EventMsg::ShutdownComplete => {
+                    | EventMsg::TurnAborted(_)
+                    | EventMsg::UserMessage(_)
+                    | EventMsg::ShutdownComplete
+                    | EventMsg::ViewImageToolCall(_)
+                    | EventMsg::RawResponseItem(_)
+                    | EventMsg::EnteredReviewMode(_)
+                    | EventMsg::ItemStarted(_)
+                    | EventMsg::ItemCompleted(_)
+                    | EventMsg::AgentMessageContentDelta(_)
+                    | EventMsg::ReasoningContentDelta(_)
+                    | EventMsg::ReasoningRawContentDelta(_)
+                    | EventMsg::UndoStarted(_)
+                    | EventMsg::UndoCompleted(_)
+                    | EventMsg::ExitedReviewMode(_)
+                    | EventMsg::DeprecationNotice(_) => {
                         // For now, we do not do anything extra for these
                         // events. Note that
                         // send(codex_event_to_notification(&event)) above has
@@ -288,9 +319,7 @@ async fn run_codex_tool_session_inner(
                     // structured way.
                     structured_content: None,
                 };
-                outgoing
-                    .send_response(request_id.clone(), result.into())
-                    .await;
+                outgoing.send_response(request_id.clone(), result).await;
                 break;
             }
         }

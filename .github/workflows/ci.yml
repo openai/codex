@@ -1,7 +1,7 @@
 name: ci
 
 on:
-  pull_request: { branches: [main] }
+  pull_request: {}
   push: { branches: [main] }
 
 jobs:
@@ -12,67 +12,44 @@ jobs:
       NODE_OPTIONS: --max-old-space-size=4096
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
+        uses: actions/checkout@v5
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10.8.1
           run_install: false
 
-      - name: Get pnpm store directory
-        id: pnpm-cache
-        shell: bash
-        run: |
-          echo "store_path=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
-
-      - name: Setup pnpm cache
-        uses: actions/cache@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
         with:
-          path: ${{ steps.pnpm-cache.outputs.store_path }}
-          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-
+          node-version: 22
 
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
-      # Run all tasks using workspace filters
+      # stage_npm_packages.py requires DotSlash when staging releases.
+      - uses: facebook/install-dotslash@v2
 
-      - name: Check TypeScript code formatting
-        working-directory: codex-cli
-        run: pnpm run format
-
-      - name: Check Markdown and config file formatting
-        run: pnpm run format
-
-      - name: Run tests
-        run: pnpm run test
-
-      - name: Lint
-        run: |
-          pnpm --filter @openai/codex exec -- eslint src tests --ext ts --ext tsx \
-            --report-unused-disable-directives \
-            --rule "no-console:error" \
-            --rule "no-debugger:error" \
-            --max-warnings=-1
-
-      - name: Type-check
-        run: pnpm run typecheck
-
-      - name: Build
-        run: pnpm run build
-
-      - name: Ensure staging a release works.
-        working-directory: codex-cli
+      - name: Stage npm package
+        id: stage_npm_package
         env:
           GH_TOKEN: ${{ github.token }}
-        run: pnpm stage-release
+        run: |
+          set -euo pipefail
+          CODEX_VERSION=0.40.0
+          OUTPUT_DIR="${RUNNER_TEMP}"
+          python3 ./scripts/stage_npm_packages.py \
+            --release-version "$CODEX_VERSION" \
+            --package codex \
+            --output-dir "$OUTPUT_DIR"
+          PACK_OUTPUT="${OUTPUT_DIR}/codex-npm-${CODEX_VERSION}.tgz"
+          echo "pack_output=$PACK_OUTPUT" >> "$GITHUB_OUTPUT"
+
+      - name: Upload staged npm package artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: codex-npm-staging
+          path: ${{ steps.stage_npm_package.outputs.pack_output }}
 
       - name: Ensure root README.md contains only ASCII and certain Unicode code points
         run: ./scripts/asciicheck.py README.md
@@ -83,3 +60,6 @@ jobs:
         run: ./scripts/asciicheck.py codex-cli/README.md
       - name: Check codex-cli/README ToC
         run: python3 scripts/readme_toc.py codex-cli/README.md
+
+      - name: Prettier (run `pnpm run format:fix` to fix)
+        run: pnpm run format

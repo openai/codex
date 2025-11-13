@@ -2,60 +2,106 @@
 // The standalone `codex-tui` binary prints a short help message before the
 // alternate‑screen mode starts; that file opts‑out locally via `allow`.
 #![deny(clippy::print_stdout, clippy::print_stderr)]
+#![deny(clippy::disallowed_methods)]
+use additional_dirs::add_dir_warning_message;
 use app::App;
+pub use app::AppExitInfo;
+use codex_app_server_protocol::AuthMode;
+use codex_core::AuthManager;
+use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
+use codex_core::CodexAuth;
+use codex_core::INTERACTIVE_SESSION_SOURCES;
+use codex_core::RolloutRecorder;
+use codex_core::auth::enforce_login_restrictions;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
-use codex_core::config_types::SandboxMode;
+use codex_core::find_conversation_path_by_id_str;
+use codex_core::get_platform_sandbox;
 use codex_core::protocol::AskForApproval;
-use codex_core::util::is_inside_git_repo;
-use codex_login::load_auth;
-use log_layer::TuiLogLayer;
+use codex_ollama::DEFAULT_OSS_MODEL;
+use codex_protocol::config_types::SandboxMode;
+use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use std::fs::OpenOptions;
-use std::io::Write;
 use std::path::PathBuf;
 use tracing::error;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::filter::Targets;
 use tracing_subscriber::prelude::*;
 
+mod additional_dirs;
 mod app;
+mod app_backtrack;
 mod app_event;
 mod app_event_sender;
+mod ascii_animation;
 mod bottom_pane;
 mod chatwidget;
-mod citation_regex;
 mod cli;
-mod custom_terminal;
+mod clipboard_paste;
+mod color;
+pub mod custom_terminal;
+mod diff_render;
+mod exec_cell;
 mod exec_command;
 mod file_search;
+mod frames;
 mod get_git_diff;
-mod git_warning_screen;
 mod history_cell;
-mod insert_history;
-mod log_layer;
+pub mod insert_history;
+mod key_hint;
+pub mod live_wrap;
 mod markdown;
+mod markdown_render;
+mod markdown_stream;
+pub mod onboarding;
+mod pager_overlay;
+pub mod public_widgets;
+mod render;
+mod resume_picker;
+mod selection_list;
+mod session_log;
+mod shimmer;
 mod slash_command;
+mod status;
 mod status_indicator_widget;
-mod text_block;
+mod streaming;
+mod style;
+mod terminal_palette;
 mod text_formatting;
 mod tui;
-mod user_approval_widget;
-
-#[cfg(not(debug_assertions))]
+mod ui_consts;
+pub mod update_action;
+mod update_prompt;
 mod updates;
-#[cfg(not(debug_assertions))]
-use color_eyre::owo_colors::OwoColorize;
+mod version;
 
+mod wrapping;
+
+#[cfg(test)]
+pub mod test_backend;
+
+use crate::onboarding::TrustDirectorySelection;
+use crate::onboarding::WSL_INSTRUCTIONS;
+use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
+use crate::onboarding::onboarding_screen::run_onboarding_app;
+use crate::tui::Tui;
 pub use cli::Cli;
+pub use markdown_render::render_markdown_text;
+pub use public_widgets::composer_input::ComposerAction;
+pub use public_widgets::composer_input::ComposerInput;
+use std::io::Write as _;
+
+// (tests access modules directly within the crate)
 
 pub async fn run_main(
-    cli: Cli,
+    mut cli: Cli,
     codex_linux_sandbox_exe: Option<PathBuf>,
-) -> std::io::Result<codex_core::protocol::TokenUsage> {
+) -> std::io::Result<AppExitInfo> {
     let (sandbox_mode, approval_policy) = if cli.full_auto {
         (
             Some(SandboxMode::WorkspaceWrite),
-            Some(AskForApproval::OnFailure),
+            Some(AskForApproval::OnRequest),
         )
     } else if cli.dangerously_bypass_approvals_and_sandbox {
         (
@@ -69,39 +115,80 @@ pub async fn run_main(
         )
     };
 
-    let config = {
-        // Load configuration and support CLI overrides.
-        let overrides = ConfigOverrides {
-            model: cli.model.clone(),
-            approval_policy,
-            sandbox_mode,
-            cwd: cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p)),
-            model_provider: None,
-            config_profile: cli.config_profile.clone(),
-            codex_linux_sandbox_exe,
-            base_instructions: None,
-            include_plan_tool: Some(true),
-        };
-        // Parse `-c` overrides from the CLI.
-        let cli_kv_overrides = match cli.config_overrides.parse_overrides() {
-            Ok(v) => v,
-            #[allow(clippy::print_stderr)]
-            Err(e) => {
-                eprintln!("Error parsing -c overrides: {e}");
-                std::process::exit(1);
-            }
-        };
+    // Map the legacy --search flag to the new feature toggle.
+    if cli.web_search {
+        cli.config_overrides
+            .raw_overrides
+            .push("features.web_search_request=true".to_string());
+    }
 
+    // When using `--oss`, let the bootstrapper pick the model (defaulting to
+    // gpt-oss:20b) and ensure it is present locally. Also, force the built‑in
+    // `oss` model provider.
+    let model = if let Some(model) = &cli.model {
+        Some(model.clone())
+    } else if cli.oss {
+        Some(DEFAULT_OSS_MODEL.to_owned())
+    } else {
+        None // No model specified, will use the default.
+    };
+
+    let model_provider_override = if cli.oss {
+        Some(BUILT_IN_OSS_MODEL_PROVIDER_ID.to_owned())
+    } else {
+        None
+    };
+
+    // canonicalize the cwd
+    let cwd = cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p));
+    let additional_dirs = cli.add_dir.clone();
+
+    let overrides = ConfigOverrides {
+        model,
+        review_model: None,
+        approval_policy,
+        sandbox_mode,
+        cwd,
+        model_provider: model_provider_override,
+        config_profile: cli.config_profile.clone(),
+        codex_linux_sandbox_exe,
+        base_instructions: None,
+        developer_instructions: None,
+        compact_prompt: None,
+        include_apply_patch_tool: None,
+        show_raw_agent_reasoning: cli.oss.then_some(true),
+        tools_web_search_request: None,
+        experimental_sandbox_command_assessment: None,
+        additional_writable_roots: additional_dirs,
+    };
+    let raw_overrides = cli.config_overrides.raw_overrides.clone();
+    let overrides_cli = codex_common::CliConfigOverrides { raw_overrides };
+    let cli_kv_overrides = match overrides_cli.parse_overrides() {
+        Ok(v) => v,
         #[allow(clippy::print_stderr)]
-        match Config::load_with_cli_overrides(cli_kv_overrides, overrides) {
-            Ok(config) => config,
-            Err(err) => {
-                eprintln!("Error loading configuration: {err}");
-                std::process::exit(1);
-            }
+        Err(e) => {
+            eprintln!("Error parsing -c overrides: {e}");
+            std::process::exit(1);
         }
     };
 
+    let config = load_config_or_exit(cli_kv_overrides.clone(), overrides.clone()).await;
+
+    if let Some(warning) = add_dir_warning_message(&cli.add_dir, &config.sandbox_policy) {
+        #[allow(clippy::print_stderr)]
+        {
+            eprintln!("Error adding directories: {warning}");
+            std::process::exit(1);
+        }
+    }
+
+    #[allow(clippy::print_stderr)]
+    if let Err(err) = enforce_login_restrictions(&config).await {
+        eprintln!("{err}");
+        std::process::exit(1);
+    }
+
+    let active_profile = config.active_profile.clone();
     let log_dir = codex_core::config::log_dir(&config)?;
     std::fs::create_dir_all(&log_dir)?;
     // Open (or create) your log file, appending to it.
@@ -125,91 +212,80 @@ pub async fn run_main(
 
     // use RUST_LOG env var, default to info for codex crates.
     let env_filter = || {
-        EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new("codex_core=info,codex_tui=info"))
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+            EnvFilter::new("codex_core=info,codex_tui=info,codex_rmcp_client=info")
+        })
     };
 
-    // Build layered subscriber:
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(non_blocking)
         .with_target(false)
+        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
         .with_filter(env_filter());
 
-    // Channel that carries formatted log lines to the UI.
-    let (log_tx, log_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    let tui_layer = TuiLogLayer::new(log_tx.clone(), 120).with_filter(env_filter());
+    let feedback = codex_feedback::CodexFeedback::new();
+    let targets = Targets::new().with_default(tracing::Level::TRACE);
 
-    let _ = tracing_subscriber::registry()
-        .with(file_layer)
-        .with(tui_layer)
-        .try_init();
+    let feedback_layer = tracing_subscriber::fmt::layer()
+        .with_writer(feedback.make_writer())
+        .with_ansi(false)
+        .with_target(false)
+        .with_filter(targets);
+
+    if cli.oss {
+        codex_ollama::ensure_oss_ready(&config)
+            .await
+            .map_err(|e| std::io::Error::other(format!("OSS setup failed: {e}")))?;
+    }
+
+    let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"));
 
     #[allow(clippy::print_stderr)]
-    #[cfg(not(debug_assertions))]
-    if let Some(latest_version) = updates::get_upgrade_version(&config) {
-        let current_version = env!("CARGO_PKG_VERSION");
-        let exe = std::env::current_exe()?;
-        let managed_by_npm = std::env::var_os("CODEX_MANAGED_BY_NPM").is_some();
-
-        eprintln!(
-            "{} {current_version} -> {latest_version}.",
-            "✨⬆️ Update available!".bold().cyan()
-        );
-
-        if managed_by_npm {
-            let npm_cmd = "npm install -g @openai/codex@latest";
-            eprintln!("Run {} to update.", npm_cmd.cyan().on_black());
-        } else if cfg!(target_os = "macos")
-            && (exe.starts_with("/opt/homebrew") || exe.starts_with("/usr/local"))
-        {
-            let brew_cmd = "brew upgrade codex";
-            eprintln!("Run {} to update.", brew_cmd.cyan().on_black());
-        } else {
-            eprintln!(
-                "See {} for the latest releases and installation options.",
-                "https://github.com/openai/codex/releases/latest"
-                    .cyan()
-                    .on_black()
-            );
-        }
-
-        eprintln!("");
-    }
-
-    let show_login_screen = should_show_login_screen(&config);
-    if show_login_screen {
-        std::io::stdout()
-            .write_all(b"No API key detected.\nLogin with your ChatGPT account? [Yn] ")?;
-        std::io::stdout().flush()?;
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input)?;
-        let trimmed = input.trim();
-        if !(trimmed.is_empty() || trimmed.eq_ignore_ascii_case("y")) {
+    let otel = match otel {
+        Ok(otel) => otel,
+        Err(e) => {
+            eprintln!("Could not create otel exporter: {e}");
             std::process::exit(1);
         }
-        // Spawn a task to run the login command.
-        // Block until the login command is finished.
-        codex_login::login_with_chatgpt(&config.codex_home, false).await?;
+    };
 
-        std::io::stdout().write_all(b"Login successful.\n")?;
-    }
+    if let Some(provider) = otel.as_ref() {
+        let otel_layer = OpenTelemetryTracingBridge::new(&provider.logger).with_filter(
+            tracing_subscriber::filter::filter_fn(codex_core::otel_init::codex_export_filter),
+        );
 
-    // Determine whether we need to display the "not a git repo" warning
-    // modal. The flag is shown when the current working directory is *not*
-    // inside a Git repository **and** the user did *not* pass the
-    // `--allow-no-git-exec` flag.
-    let show_git_warning = !cli.skip_git_repo_check && !is_inside_git_repo(&config);
+        let _ = tracing_subscriber::registry()
+            .with(file_layer)
+            .with(feedback_layer)
+            .with(otel_layer)
+            .try_init();
+    } else {
+        let _ = tracing_subscriber::registry()
+            .with(file_layer)
+            .with(feedback_layer)
+            .try_init();
+    };
 
-    run_ratatui_app(cli, config, show_git_warning, log_rx)
-        .map_err(|err| std::io::Error::other(err.to_string()))
+    run_ratatui_app(
+        cli,
+        config,
+        overrides,
+        cli_kv_overrides,
+        active_profile,
+        feedback,
+    )
+    .await
+    .map_err(|err| std::io::Error::other(err.to_string()))
 }
 
-fn run_ratatui_app(
+async fn run_ratatui_app(
     cli: Cli,
-    config: Config,
-    show_git_warning: bool,
-    mut log_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
-) -> color_eyre::Result<codex_core::protocol::TokenUsage> {
+    initial_config: Config,
+    overrides: ConfigOverrides,
+    cli_kv_overrides: Vec<(String, toml::Value)>,
+    active_profile: Option<String>,
+    feedback: codex_feedback::CodexFeedback,
+) -> color_eyre::Result<AppExitInfo> {
     color_eyre::install()?;
 
     // Forward panic reports through tracing so they appear in the UI status
@@ -221,28 +297,184 @@ fn run_ratatui_app(
         tracing::error!("panic: {info}");
         prev_hook(info);
     }));
-    let mut terminal = tui::init(&config)?;
+    let mut terminal = tui::init()?;
     terminal.clear()?;
 
-    let Cli { prompt, images, .. } = cli;
-    let mut app = App::new(config.clone(), prompt, show_git_warning, images);
+    let mut tui = Tui::new(terminal);
 
-    // Bridge log receiver into the AppEvent channel so latest log lines update the UI.
+    #[cfg(not(debug_assertions))]
     {
-        let app_event_tx = app.event_sender();
-        tokio::spawn(async move {
-            while let Some(line) = log_rx.recv().await {
-                app_event_tx.send(crate::app_event::AppEvent::LatestLog(line));
+        use crate::update_prompt::UpdatePromptOutcome;
+
+        let skip_update_prompt = cli.prompt.as_ref().is_some_and(|prompt| !prompt.is_empty());
+        if !skip_update_prompt {
+            match update_prompt::run_update_prompt_if_needed(&mut tui, &initial_config).await? {
+                UpdatePromptOutcome::Continue => {}
+                UpdatePromptOutcome::RunUpdate(action) => {
+                    crate::tui::restore()?;
+                    return Ok(AppExitInfo {
+                        token_usage: codex_core::protocol::TokenUsage::default(),
+                        conversation_id: None,
+                        update_action: Some(action),
+                    });
+                }
             }
-        });
+        }
     }
 
-    let app_result = app.run(&mut terminal);
-    let usage = app.token_usage();
+    // Initialize high-fidelity session event logging if enabled.
+    session_log::maybe_init(&initial_config);
+
+    let auth_manager = AuthManager::shared(
+        initial_config.codex_home.clone(),
+        false,
+        initial_config.cli_auth_credentials_store_mode,
+    );
+    let login_status = get_login_status(&initial_config);
+    let should_show_trust_screen = should_show_trust_screen(&initial_config);
+    let should_show_windows_wsl_screen =
+        cfg!(target_os = "windows") && !initial_config.windows_wsl_setup_acknowledged;
+    let should_show_onboarding = should_show_onboarding(
+        login_status,
+        &initial_config,
+        should_show_trust_screen,
+        should_show_windows_wsl_screen,
+    );
+
+    let config = if should_show_onboarding {
+        let onboarding_result = run_onboarding_app(
+            OnboardingScreenArgs {
+                show_login_screen: should_show_login_screen(login_status, &initial_config),
+                show_windows_wsl_screen: should_show_windows_wsl_screen,
+                show_trust_screen: should_show_trust_screen,
+                login_status,
+                auth_manager: auth_manager.clone(),
+                config: initial_config.clone(),
+            },
+            &mut tui,
+        )
+        .await?;
+        if onboarding_result.should_exit {
+            restore();
+            session_log::log_session_end();
+            let _ = tui.terminal.clear();
+            return Ok(AppExitInfo {
+                token_usage: codex_core::protocol::TokenUsage::default(),
+                conversation_id: None,
+                update_action: None,
+            });
+        }
+        if onboarding_result.windows_install_selected {
+            restore();
+            session_log::log_session_end();
+            let _ = tui.terminal.clear();
+            if let Err(err) = writeln!(std::io::stdout(), "{WSL_INSTRUCTIONS}") {
+                tracing::error!("Failed to write WSL instructions: {err}");
+            }
+            return Ok(AppExitInfo {
+                token_usage: codex_core::protocol::TokenUsage::default(),
+                conversation_id: None,
+                update_action: None,
+            });
+        }
+        // if the user acknowledged windows or made an explicit decision ato trust the directory, reload the config accordingly
+        if should_show_windows_wsl_screen
+            || onboarding_result
+                .directory_trust_decision
+                .map(|d| d == TrustDirectorySelection::Trust)
+                .unwrap_or(false)
+        {
+            load_config_or_exit(cli_kv_overrides, overrides).await
+        } else {
+            initial_config
+        }
+    } else {
+        initial_config
+    };
+
+    // Determine resume behavior: explicit id, then resume last, then picker.
+    let resume_selection = if let Some(id_str) = cli.resume_session_id.as_deref() {
+        match find_conversation_path_by_id_str(&config.codex_home, id_str).await? {
+            Some(path) => resume_picker::ResumeSelection::Resume(path),
+            None => {
+                error!("Error finding conversation path: {id_str}");
+                restore();
+                session_log::log_session_end();
+                let _ = tui.terminal.clear();
+                if let Err(err) = writeln!(
+                    std::io::stdout(),
+                    "No saved session found with ID {id_str}. Run `codex resume` without an ID to choose from existing sessions."
+                ) {
+                    error!("Failed to write resume error message: {err}");
+                }
+                return Ok(AppExitInfo {
+                    token_usage: codex_core::protocol::TokenUsage::default(),
+                    conversation_id: None,
+                    update_action: None,
+                });
+            }
+        }
+    } else if cli.resume_last {
+        let provider_filter = vec![config.model_provider_id.clone()];
+        match RolloutRecorder::list_conversations(
+            &config.codex_home,
+            1,
+            None,
+            INTERACTIVE_SESSION_SOURCES,
+            Some(provider_filter.as_slice()),
+            &config.model_provider_id,
+        )
+        .await
+        {
+            Ok(page) => page
+                .items
+                .first()
+                .map(|it| resume_picker::ResumeSelection::Resume(it.path.clone()))
+                .unwrap_or(resume_picker::ResumeSelection::StartFresh),
+            Err(_) => resume_picker::ResumeSelection::StartFresh,
+        }
+    } else if cli.resume_picker {
+        match resume_picker::run_resume_picker(
+            &mut tui,
+            &config.codex_home,
+            &config.model_provider_id,
+        )
+        .await?
+        {
+            resume_picker::ResumeSelection::Exit => {
+                restore();
+                session_log::log_session_end();
+                return Ok(AppExitInfo {
+                    token_usage: codex_core::protocol::TokenUsage::default(),
+                    conversation_id: None,
+                    update_action: None,
+                });
+            }
+            other => other,
+        }
+    } else {
+        resume_picker::ResumeSelection::StartFresh
+    };
+
+    let Cli { prompt, images, .. } = cli;
+
+    let app_result = App::run(
+        &mut tui,
+        auth_manager,
+        config,
+        active_profile,
+        prompt,
+        images,
+        resume_selection,
+        feedback,
+    )
+    .await;
 
     restore();
+    // Mark the end of the recorded session.
+    session_log::log_session_end();
     // ignore error when collecting usage – report underlying error instead
-    app_result.map(|_| usage)
+    app_result
 }
 
 #[expect(
@@ -257,21 +489,149 @@ fn restore() {
     }
 }
 
-#[allow(clippy::unwrap_used)]
-fn should_show_login_screen(config: &Config) -> bool {
-    if config.model_provider.requires_auth {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoginStatus {
+    AuthMode(AuthMode),
+    NotAuthenticated,
+}
+
+fn get_login_status(config: &Config) -> LoginStatus {
+    if config.model_provider.requires_openai_auth {
         // Reading the OpenAI API key is an async operation because it may need
         // to refresh the token. Block on it.
         let codex_home = config.codex_home.clone();
-        match load_auth(&codex_home, true) {
-            Ok(Some(_)) => false,
-            Ok(None) => true,
+        match CodexAuth::from_auth_storage(&codex_home, config.cli_auth_credentials_store_mode) {
+            Ok(Some(auth)) => LoginStatus::AuthMode(auth.mode),
+            Ok(None) => LoginStatus::NotAuthenticated,
             Err(err) => {
                 error!("Failed to read auth.json: {err}");
-                true
+                LoginStatus::NotAuthenticated
             }
         }
     } else {
-        false
+        LoginStatus::NotAuthenticated
+    }
+}
+
+async fn load_config_or_exit(
+    cli_kv_overrides: Vec<(String, toml::Value)>,
+    overrides: ConfigOverrides,
+) -> Config {
+    #[allow(clippy::print_stderr)]
+    match Config::load_with_cli_overrides(cli_kv_overrides, overrides).await {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("Error loading configuration: {err}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Determine if user has configured a sandbox / approval policy,
+/// or if the current cwd project is already trusted. If not, we need to
+/// show the trust screen.
+fn should_show_trust_screen(config: &Config) -> bool {
+    if cfg!(target_os = "windows") && get_platform_sandbox().is_none() {
+        // If the experimental sandbox is not enabled, Native Windows cannot enforce sandboxed write access without WSL; skip the trust prompt entirely.
+        return false;
+    }
+    if config.did_user_set_custom_approval_policy_or_sandbox_mode {
+        // Respect explicit approval/sandbox overrides made by the user.
+        return false;
+    }
+    // otherwise, skip iff the active project is trusted
+    !config.active_project.is_trusted()
+}
+
+fn should_show_onboarding(
+    login_status: LoginStatus,
+    config: &Config,
+    show_trust_screen: bool,
+    show_windows_wsl_screen: bool,
+) -> bool {
+    if show_windows_wsl_screen {
+        return true;
+    }
+
+    if show_trust_screen {
+        return true;
+    }
+
+    should_show_login_screen(login_status, config)
+}
+
+fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool {
+    // Only show the login screen for providers that actually require OpenAI auth
+    // (OpenAI or equivalents). For OSS/other providers, skip login entirely.
+    if !config.model_provider.requires_openai_auth {
+        return false;
+    }
+
+    login_status == LoginStatus::NotAuthenticated
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_core::config::ConfigOverrides;
+    use codex_core::config::ConfigToml;
+    use codex_core::config::ProjectConfig;
+    use codex_core::set_windows_sandbox_enabled;
+    use serial_test::serial;
+    use tempfile::TempDir;
+
+    #[test]
+    #[serial]
+    fn windows_skips_trust_prompt_without_sandbox() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let mut config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            temp_dir.path().to_path_buf(),
+        )?;
+        config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
+        config.active_project = ProjectConfig { trust_level: None };
+        set_windows_sandbox_enabled(false);
+
+        let should_show = should_show_trust_screen(&config);
+        if cfg!(target_os = "windows") {
+            assert!(
+                !should_show,
+                "Windows trust prompt should always be skipped on native Windows"
+            );
+        } else {
+            assert!(
+                should_show,
+                "Non-Windows should still show trust prompt when project is untrusted"
+            );
+        }
+        Ok(())
+    }
+    #[test]
+    #[serial]
+    fn windows_shows_trust_prompt_with_sandbox() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let mut config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            temp_dir.path().to_path_buf(),
+        )?;
+        config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
+        config.active_project = ProjectConfig { trust_level: None };
+        set_windows_sandbox_enabled(true);
+
+        let should_show = should_show_trust_screen(&config);
+        if cfg!(target_os = "windows") {
+            assert!(
+                should_show,
+                "Windows trust prompt should be shown on native Windows with sandbox enabled"
+            );
+        } else {
+            assert!(
+                should_show,
+                "Non-Windows should still show trust prompt when project is untrusted"
+            );
+        }
+        Ok(())
     }
 }

@@ -40,6 +40,7 @@ pub struct FileMatch {
     pub indices: Option<Vec<u32>>, // Sorted & deduplicated when present
 }
 
+#[derive(Debug)]
 pub struct FileSearchResults {
     pub matches: Vec<FileMatch>,
     pub total_match_count: usize,
@@ -105,6 +106,7 @@ pub async fn run_main<T: Reporter>(
         threads,
         cancel_flag,
         compute_indices,
+        true,
     )?;
     let match_count = matches.len();
     let matches_truncated = total_match_count > match_count;
@@ -121,6 +123,7 @@ pub async fn run_main<T: Reporter>(
 
 /// The worker threads will periodically check `cancel_flag` to see if they
 /// should stop processing files.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     pattern_text: &str,
     limit: NonZero<usize>,
@@ -129,6 +132,7 @@ pub fn run(
     threads: NonZero<usize>,
     cancel_flag: Arc<AtomicBool>,
     compute_indices: bool,
+    respect_gitignore: bool,
 ) -> anyhow::Result<FileSearchResults> {
     let pattern = create_pattern(pattern_text);
     // Create one BestMatchesList per worker thread so that each worker can
@@ -151,7 +155,23 @@ pub fn run(
     // Use the same tree-walker library that ripgrep uses. We use it directly so
     // that we can leverage the parallelism it provides.
     let mut walk_builder = WalkBuilder::new(search_directory);
-    walk_builder.threads(num_walk_builder_threads);
+    walk_builder
+        .threads(num_walk_builder_threads)
+        // Allow hidden entries.
+        .hidden(false)
+        // Follow symlinks to search their contents.
+        .follow_links(true)
+        // Don't require git to be present to apply to apply git-related ignore rules.
+        .require_git(false);
+    if !respect_gitignore {
+        walk_builder
+            .git_ignore(false)
+            .git_global(false)
+            .git_exclude(false)
+            .ignore(false)
+            .parents(false);
+    }
+
     if !exclude.is_empty() {
         let mut override_builder = OverrideBuilder::new(search_directory);
         for exclude in exclude {
@@ -228,11 +248,11 @@ pub fn run(
         for &Reverse((score, ref line)) in best_list.binary_heap.iter() {
             if global_heap.len() < limit.get() {
                 global_heap.push(Reverse((score, line.clone())));
-            } else if let Some(min_element) = global_heap.peek() {
-                if score > min_element.0.0 {
-                    global_heap.pop();
-                    global_heap.push(Reverse((score, line.clone())));
-                }
+            } else if let Some(min_element) = global_heap.peek()
+                && score > min_element.0.0
+            {
+                global_heap.pop();
+                global_heap.push(Reverse((score, line.clone())));
             }
         }
     }
@@ -281,10 +301,27 @@ pub fn run(
 
 /// Sort matches in-place by descending score, then ascending path.
 fn sort_matches(matches: &mut [(u32, String)]) {
-    matches.sort_by(|a, b| match b.0.cmp(&a.0) {
-        std::cmp::Ordering::Equal => a.1.cmp(&b.1),
+    matches.sort_by(cmp_by_score_desc_then_path_asc::<(u32, String), _, _>(
+        |t| t.0,
+        |t| t.1.as_str(),
+    ));
+}
+
+/// Returns a comparator closure suitable for `slice.sort_by(...)` that orders
+/// items by descending score and then ascending path using the provided accessors.
+pub fn cmp_by_score_desc_then_path_asc<T, FScore, FPath>(
+    score_of: FScore,
+    path_of: FPath,
+) -> impl FnMut(&T, &T) -> std::cmp::Ordering
+where
+    FScore: Fn(&T) -> u32,
+    FPath: Fn(&T) -> &str,
+{
+    use std::cmp::Ordering;
+    move |a, b| match score_of(b).cmp(&score_of(a)) {
+        Ordering::Equal => path_of(a).cmp(path_of(b)),
         other => other,
-    });
+    }
 }
 
 /// Maintains the `max_count` best matches for a given pattern.
@@ -320,11 +357,11 @@ impl BestMatchesList {
 
             if self.binary_heap.len() < self.max_count {
                 self.binary_heap.push(Reverse((score, line.to_string())));
-            } else if let Some(min_element) = self.binary_heap.peek() {
-                if score > min_element.0.0 {
-                    self.binary_heap.pop();
-                    self.binary_heap.push(Reverse((score, line.to_string())));
-                }
+            } else if let Some(min_element) = self.binary_heap.peek()
+                && score > min_element.0.0
+            {
+                self.binary_heap.pop();
+                self.binary_heap.push(Reverse((score, line.to_string())));
             }
         }
     }

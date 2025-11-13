@@ -31,10 +31,7 @@ use std::time::Duration;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 
-#[allow(clippy::unwrap_used)]
 const MAX_FILE_SEARCH_RESULTS: NonZeroUsize = NonZeroUsize::new(8).unwrap();
-
-#[allow(clippy::unwrap_used)]
 const NUM_FILE_SEARCH_THREADS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 
 /// How long to wait after a keystroke before firing the first search when none
@@ -84,7 +81,7 @@ impl FileSearchManager {
     /// Call whenever the user edits the `@` token.
     pub fn on_user_query(&self, query: String) {
         {
-            #[allow(clippy::unwrap_used)]
+            #[expect(clippy::unwrap_used)]
             let mut st = self.state.lock().unwrap();
             if query == st.latest_query {
                 // No change, nothing to do.
@@ -97,13 +94,13 @@ impl FileSearchManager {
 
             // If there is an in-flight search that is definitely obsolete,
             // cancel it now.
-            if let Some(active_search) = &st.active_search {
-                if !query.starts_with(&active_search.query) {
-                    active_search
-                        .cancellation_token
-                        .store(true, Ordering::Relaxed);
-                    st.active_search = None;
-                }
+            if let Some(active_search) = &st.active_search
+                && !query.starts_with(&active_search.query)
+            {
+                active_search
+                    .cancellation_token
+                    .store(true, Ordering::Relaxed);
+                st.active_search = None;
             }
 
             // Schedule a search to run after debounce.
@@ -125,7 +122,7 @@ impl FileSearchManager {
             // `active_search` is cleared.
             thread::sleep(FILE_SEARCH_DEBOUNCE);
             loop {
-                #[allow(clippy::unwrap_used)]
+                #[expect(clippy::unwrap_used)]
                 if state.lock().unwrap().active_search.is_none() {
                     break;
                 }
@@ -137,7 +134,7 @@ impl FileSearchManager {
             let cancellation_token = Arc::new(AtomicBool::new(false));
             let token = cancellation_token.clone();
             let query = {
-                #[allow(clippy::unwrap_used)]
+                #[expect(clippy::unwrap_used)]
                 let mut st = state.lock().unwrap();
                 let query = st.latest_query.clone();
                 st.is_search_scheduled = false;
@@ -175,6 +172,7 @@ impl FileSearchManager {
                 NUM_FILE_SEARCH_THREADS,
                 cancellation_token.clone(),
                 compute_indices,
+                true,
             )
             .map(|res| res.matches)
             .unwrap_or_default();
@@ -188,12 +186,12 @@ impl FileSearchManager {
             // that we are clearing the ActiveSearch that corresponds to the
             // cancellation token we were given.
             {
-                #[allow(clippy::unwrap_used)]
+                #[expect(clippy::unwrap_used)]
                 let mut st = search_state.lock().unwrap();
-                if let Some(active_search) = &st.active_search {
-                    if Arc::ptr_eq(&active_search.cancellation_token, &cancellation_token) {
-                        st.active_search = None;
-                    }
+                if let Some(active_search) = &st.active_search
+                    && Arc::ptr_eq(&active_search.cancellation_token, &cancellation_token)
+                {
+                    st.active_search = None;
                 }
             }
         });

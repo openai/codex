@@ -3,22 +3,10 @@
   "private": true,
   "description": "Tools for repo-wide maintenance.",
   "scripts": {
-    "release": "pnpm --filter @openai/codex run release",
-    "format": "prettier --check *.json *.md .github/workflows/*.yml",
-    "format:fix": "prettier --write *.json *.md .github/workflows/*.yml",
-    "build": "pnpm --filter @openai/codex run build",
-    "test": "pnpm --filter @openai/codex run test",
-    "lint": "pnpm --filter @openai/codex run lint",
-    "lint:fix": "pnpm --filter @openai/codex run lint:fix",
-    "typecheck": "pnpm --filter @openai/codex run typecheck",
-    "changelog": "git-cliff --config cliff.toml --output CHANGELOG.ignore.md $LAST_RELEASE_TAG..HEAD",
-    "prepare": "husky",
-    "husky:add": "husky add"
+    "format": "prettier --check *.json *.md docs/*.md .github/workflows/*.yml **/*.js",
+    "format:fix": "prettier --write *.json *.md docs/*.md .github/workflows/*.yml **/*.js"
   },
   "devDependencies": {
-    "git-cliff": "^2.8.0",
-    "husky": "^9.1.7",
-    "lint-staged": "^15.5.1",
     "prettier": "^3.5.3"
   },
   "resolutions": {
@@ -29,24 +17,9 @@
   "overrides": {
     "punycode": "^2.3.1"
   },
-  "pnpm": {
-    "patchedDependencies": {
-      "marked-terminal@7.3.0": "patches/marked-terminal@7.3.0.patch"
-    }
-  },
   "engines": {
     "node": ">=22",
     "pnpm": ">=9.0.0"
-  },
-  "lint-staged": {
-    "*.json": "prettier --write",
-    "*.md": "prettier --write",
-    ".github/workflows/*.yml": "prettier --write",
-    "**/*.{js,ts,tsx}": [
-      "prettier --write",
-      "pnpm --filter @openai/codex run lint",
-      "cd codex-cli && pnpm run typecheck"
-    ]
   },
   "packageManager": "pnpm@10.8.1"
 }

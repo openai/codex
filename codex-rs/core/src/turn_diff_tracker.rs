@@ -65,7 +65,7 @@ impl TurnDiffTracker {
                 let baseline_file_info = if path.exists() {
                     let mode = file_mode_for_path(path);
                     let mode_val = mode.unwrap_or(FileMode::Regular);
-                    let content = blob_bytes(path, &mode_val).unwrap_or_default();
+                    let content = blob_bytes(path, mode_val).unwrap_or_default();
                     let oid = if mode == Some(FileMode::Symlink) {
                         format!("{:x}", git_blob_sha1_hex_bytes(&content))
                     } else {
@@ -266,7 +266,7 @@ impl TurnDiffTracker {
         };
 
         let current_mode = file_mode_for_path(&current_external_path).unwrap_or(FileMode::Regular);
-        let right_bytes = blob_bytes(&current_external_path, &current_mode);
+        let right_bytes = blob_bytes(&current_external_path, current_mode);
 
         // Compute displays with &mut self before borrowing any baseline content.
         let left_display = self.relative_to_git_root_str(&baseline_external_path);
@@ -388,7 +388,7 @@ enum FileMode {
 }
 
 impl FileMode {
-    fn as_str(&self) -> &'static str {
+    fn as_str(self) -> &'static str {
         match self {
             FileMode::Regular => "100644",
             #[cfg(unix)]
@@ -427,9 +427,9 @@ fn file_mode_for_path(_path: &Path) -> Option<FileMode> {
     Some(FileMode::Regular)
 }
 
-fn blob_bytes(path: &Path, mode: &FileMode) -> Option<Vec<u8>> {
+fn blob_bytes(path: &Path, mode: FileMode) -> Option<Vec<u8>> {
     if path.exists() {
-        let contents = if *mode == FileMode::Symlink {
+        let contents = if mode == FileMode::Symlink {
             symlink_blob_bytes(path)
                 .ok_or_else(|| anyhow!("failed to read symlink target for {}", path.display()))
         } else {
@@ -466,7 +466,6 @@ fn is_windows_drive_or_unc_root(p: &std::path::Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
     use super::*;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
@@ -579,7 +578,12 @@ index {ZERO_OID}..{right_oid}
         fs::write(&file, "x\n").unwrap();
 
         let mut acc = TurnDiffTracker::new();
-        let del_changes = HashMap::from([(file.clone(), FileChange::Delete)]);
+        let del_changes = HashMap::from([(
+            file.clone(),
+            FileChange::Delete {
+                content: "x\n".to_string(),
+            },
+        )]);
         acc.on_patch_begin(&del_changes);
 
         // Simulate apply: delete the file from disk.
@@ -674,7 +678,7 @@ index {left_oid}..{right_oid}
         let dest = dir.path().join("dest.txt");
         let mut acc = TurnDiffTracker::new();
         let mv = HashMap::from([(
-            src.clone(),
+            src,
             FileChange::Update {
                 unified_diff: "".into(),
                 move_path: Some(dest.clone()),
@@ -742,7 +746,12 @@ index {left_oid}..{right_oid}
         assert_eq!(first, expected_first);
 
         // Next: introduce a brand-new path b.txt into baseline snapshots via a delete change.
-        let del_b = HashMap::from([(b.clone(), FileChange::Delete)]);
+        let del_b = HashMap::from([(
+            b.clone(),
+            FileChange::Delete {
+                content: "z\n".to_string(),
+            },
+        )]);
         acc.on_patch_begin(&del_b);
         // Simulate apply: delete b.txt.
         let baseline_mode = file_mode_for_path(&b).unwrap_or(FileMode::Regular);
