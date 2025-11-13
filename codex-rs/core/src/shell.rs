@@ -260,6 +260,7 @@ mod tests {
     use std::process::Command;
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn detects_zsh() {
         let zsh_shell = get_shell(ShellType::Zsh).unwrap();
 
