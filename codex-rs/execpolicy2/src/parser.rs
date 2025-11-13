@@ -139,11 +139,10 @@ fn parse_string_example(raw: &str) -> Result<Vec<String>> {
         Error::InvalidExample("example string has invalid shell syntax".to_string())
     })?;
 
-    match tokens.as_slice() {
-        [] => Err(Error::InvalidExample(
-            "example cannot be an empty string".to_string(),
-        )),
-        _ => Ok(tokens),
+    if tokens.is_empty() {
+        Err(Error::InvalidExample("example cannot be an empty string".to_string()))
+    } else {
+        Ok(tokens)
     }
 }
 
@@ -164,11 +163,10 @@ fn parse_list_example(list: &ListRef) -> Result<Vec<String>> {
         })
         .collect::<Result<_>>()?;
 
-    match tokens.as_slice() {
-        [] => Err(Error::InvalidExample(
-            "example cannot be an empty list".to_string(),
-        )),
-        _ => Ok(tokens),
+    if tokens.is_empty() {
+        Err(Error::InvalidExample("example cannot be an empty list".to_string()))
+    } else {
+        Ok(tokens)
     }
 }
 
