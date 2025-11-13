@@ -14,6 +14,7 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::skip_if_no_network;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use std::collections::VecDeque;
 use tempfile::TempDir;
 
@@ -364,6 +365,91 @@ async fn manual_compact_uses_custom_prompt() {
 
     assert!(found_custom_prompt, "custom prompt should be injected");
     assert!(!found_default_prompt, "default prompt should be replaced");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn manual_compact_emits_estimated_token_usage_event() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    // First turn: normal user input and reply with non-zero usage.
+    let sse_user = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_tokens("r1", 1_000),
+    ]);
+
+    // Second turn: compact run where the API reports zero tokens in usage.
+    // Our local estimator should still compute a non-zero context size.
+    let sse_compact = sse(vec![
+        ev_assistant_message("m2", SUMMARY_TEXT),
+        ev_completed_with_tokens("r2", 0),
+    ]);
+
+    let _request_log = mount_sse_sequence(&server, vec![sse_user, sse_compact]).await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+    let home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&home);
+    config.model_provider = model_provider;
+    set_test_compact_prompt(&mut config);
+
+    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+    let NewConversation {
+        conversation: codex,
+        ..
+    } = conversation_manager.new_conversation(config).await.unwrap();
+
+    // Seed history with a user turn.
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello world".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    // Drain events until the first TaskComplete so the stream is at a clean point.
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    // Trigger manual compact and collect TokenCount events for the compact turn.
+    codex.submit(Op::Compact).await.unwrap();
+
+    // First TokenCount: from the compact API call (usage.total_tokens = 0).
+    let first = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::TokenCount(tc) => tc
+            .info
+            .as_ref()
+            .map(|info| info.last_token_usage.total_tokens),
+        _ => None,
+    })
+    .await;
+
+    // Second TokenCount: from the local post-compaction estimate.
+    let last = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::TokenCount(tc) => tc
+            .info
+            .as_ref()
+            .map(|info| info.last_token_usage.total_tokens),
+        _ => None,
+    })
+    .await;
+
+    // Ensure the compact task itself completes.
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    assert_eq!(
+        first, 0,
+        "expected first TokenCount from compact API usage to be zero"
+    );
+    assert!(
+        last > 0,
+        "second TokenCount should reflect a non-zero estimated context size after compaction"
+    );
 }
 
 // Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
