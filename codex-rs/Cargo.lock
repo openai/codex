@@ -1153,6 +1153,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shlex",
+ "socket2 0.6.0",
  "supports-color",
  "tempfile",
  "tokio",
@@ -1169,10 +1170,13 @@ name = "codex-exec-server"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "clap",
  "codex-core",
+ "libc",
  "rmcp",
  "serde",
  "serde_json",
+ "socket2 0.6.0",
  "tokio",
  "tracing",
  "tracing-subscriber",
