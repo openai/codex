@@ -84,7 +84,7 @@ async fn handle_model_migration_prompt_if_needed(
         return None;
     }
 
-    match run_model_migration_prompt(tui, &target_model).await {
+    match run_model_migration_prompt(tui).await {
         ModelMigrationOutcome::Accepted => {
             app_event_tx.send(AppEvent::PersistModelMigrationPromptAcknowledged {
                 migration_config: "hide_gpt5_1_migration_prompt".to_string(),
