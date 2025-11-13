@@ -666,9 +666,10 @@ pub enum ThreadItem {
     CommandExecution {
         id: String,
         command: String,
-        aggregated_output: String,
-        exit_code: Option<i32>,
         status: CommandExecutionStatus,
+        is_user_shell_command: bool,
+        aggregated_output: Option<String>,
+        exit_code: Option<i32>,
         duration_ms: Option<i64>,
     },
     FileChange {
@@ -916,7 +917,6 @@ pub struct FileChangeRequestApprovalResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct CommandExecutionRequest {
-    pub call_id: String,
     pub command: Vec<String>,
     pub cwd: PathBuf,
     /// Optional explanatory reason (e.g. request for network access).
@@ -929,7 +929,6 @@ pub struct CommandExecutionRequest {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct FileChangeRequest {
-    pub call_id: String,
     pub file_changes: HashMap<PathBuf, FileChange>,
     /// Optional explanatory reason (e.g. request for extra write access).
     pub reason: Option<String>,

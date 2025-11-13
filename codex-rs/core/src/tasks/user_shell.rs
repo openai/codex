@@ -77,6 +77,7 @@ impl SessionTask for UserShellCommandTask {
                 turn_context.as_ref(),
                 EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                     call_id: call_id.clone(),
+                    turn_id: turn_context.sub_id.clone(),
                     command: shell_invocation.clone(),
                     cwd: turn_context.cwd.clone(),
                     parsed_cmd,

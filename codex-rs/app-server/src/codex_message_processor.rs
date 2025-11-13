@@ -2696,8 +2696,10 @@ async fn apply_bespoke_event_handling(
                 });
             }
             ApiVersion::V2 => {
+                // TODO: Until we migrate the core to be aware of a first class FileChangeItem
+                // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
+                let item_id = call_id.clone();
                 let request = FileChangeRequest {
-                    call_id,
                     file_changes: changes
                         .into_iter()
                         .map(|(path, change)| (path, V2FileChange::from(change)))
@@ -2709,7 +2711,7 @@ async fn apply_bespoke_event_handling(
                     thread_id: conversation_id.to_string(),
                     // TODO: use the actual IDs once we have them
                     turn_id: "placeholder_turn_id".to_string(),
-                    item_id: "placeholder_item_id".to_string(),
+                    item_id,
                     request,
                 };
                 let rx = outgoing
@@ -2747,7 +2749,6 @@ async fn apply_bespoke_event_handling(
             }
             ApiVersion::V2 => {
                 let request = CommandExecutionRequest {
-                    call_id,
                     command,
                     cwd,
                     reason,
@@ -2758,7 +2759,9 @@ async fn apply_bespoke_event_handling(
                     thread_id: conversation_id.to_string(),
                     // TODO: use the actual IDs once we have them
                     turn_id: "placeholder_turn_id".to_string(),
-                    item_id: "placeholder_item_id".to_string(),
+                    // TODO: Until we migrate the core to be aware of a first class CommandExecutionItem
+                    // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
+                    item_id: call_id.clone(),
                     request,
                 };
                 let rx = outgoing
