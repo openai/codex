@@ -309,8 +309,10 @@ fn assert_truncated_message_matches(message: &str, line: &str, total_lines: usiz
 }
 
 fn truncated_message_pattern(line: &str, total_lines: usize) -> String {
-    let head_take = MODEL_FORMAT_MAX_LINES.min(total_lines);
-    let tail_take = MODEL_FORMAT_MAX_LINES.min(total_lines.saturating_sub(head_take));
+    let head_lines = MODEL_FORMAT_MAX_LINES / 2;
+    let tail_lines = MODEL_FORMAT_MAX_LINES - head_lines;
+    let head_take = head_lines.min(total_lines);
+    let tail_take = tail_lines.min(total_lines.saturating_sub(head_take));
     let omitted = total_lines.saturating_sub(head_take + tail_take);
     let escaped_line = regex_lite::escape(line);
     if omitted == 0 {
