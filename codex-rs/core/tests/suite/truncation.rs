@@ -19,6 +19,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
@@ -119,9 +120,8 @@ async fn tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> {
     });
 
     // First response: model tells us to run the tool; second: complete the turn.
-    mount_sse_once_match(
+    mount_sse_once(
         &server,
-        any(),
         sse(vec![
             responses::ev_response_created("resp-1"),
             responses::ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),

@@ -74,6 +74,7 @@ fn truncate_formatted_exec_output(
     limit_bytes: usize,
     limit_lines: usize,
 ) -> String {
+    debug_panic_on_double_truncation(content);
     let head_lines: usize = limit_lines / 2;
     let tail_lines: usize = limit_lines - head_lines; // 128
     let head_bytes: usize = limit_bytes / 2;
@@ -134,4 +135,18 @@ fn truncate_formatted_exec_output(
     result.push_str(tail_part);
 
     result
+}
+
+fn debug_panic_on_double_truncation(content: &str) {
+    if content.contains("Total output lines:") && content.contains("omitted") {
+        if cfg!(debug_assertions) {
+            panic!(
+                "FunctionCallOutput content was already truncated before ContextManager::record_items; this would cause double truncation"
+            );
+        } else {
+            tracing::error!(
+                "FunctionCallOutput content was already truncated before ContextManager::record_items; this would cause double truncatio {content}"
+            );
+        }
+    }
 }
