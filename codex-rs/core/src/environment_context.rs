@@ -221,6 +221,34 @@ impl From<EnvironmentContext> for ResponseItem {
     }
 }
 
+/// Returns information about the current operating system for the running process, if available.
+pub fn get_operating_system_info() -> Option<OperatingSystemInfo> {
+    operating_system_info_impl()
+}
+
+/// Map a Windows drive-letter path (e.g., `C:\Users\Alice`) to a `/mnt/<drive>` WSL path.
+/// Returns `None` if the input does not look like a drive-letter path.
+pub fn try_map_windows_drive_to_wsl_path(win_path: &str) -> Option<PathBuf> {
+    let trimmed = win_path.trim();
+    let mut chars = trimmed.chars();
+    let drive = chars.next()?;
+    if !drive.is_ascii_alphabetic() {
+        return None;
+    }
+    if chars.next()? != ':' {
+        return None;
+    }
+
+    let remainder = chars.as_str().trim_start_matches(['\\', '/']);
+    let sanitized = remainder.replace('\\', "/");
+    let drive_lower = drive.to_ascii_lowercase();
+    if sanitized.is_empty() {
+        Some(PathBuf::from(format!("/mnt/{drive_lower}")))
+    } else {
+        Some(PathBuf::from(format!("/mnt/{drive_lower}/{sanitized}")))
+    }
+}
+
 // Restrict Operating System Info to Windows and Linux inside WSL for now
 #[cfg(target_os = "windows")]
 fn operating_system_info_impl() -> Option<OperatingSystemInfo> {
@@ -459,5 +487,21 @@ mod tests {
         );
 
         assert!(context1.equals_except_shell(&context2));
+    }
+
+    #[test]
+    fn try_map_windows_drive_path_to_wsl() {
+        let mapped =
+            try_map_windows_drive_to_wsl_path(r"C:\Users\Alice\Pictures\example.png").unwrap();
+        assert_eq!(
+            mapped,
+            PathBuf::from("/mnt/c/Users/Alice/Pictures/example.png")
+        );
+    }
+
+    #[test]
+    fn try_map_windows_drive_rejects_non_drive_paths() {
+        assert!(try_map_windows_drive_to_wsl_path("/tmp/example.png").is_none());
+        assert!(try_map_windows_drive_to_wsl_path("drive").is_none());
     }
 }
