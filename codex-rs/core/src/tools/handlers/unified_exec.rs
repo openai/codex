@@ -33,7 +33,7 @@ struct ExecCommandArgs {
     #[serde(default = "default_login")]
     login: bool,
     #[serde(default)]
-    yield_time_ms: Option<u64>,
+    yield_time_ms: u64,
     #[serde(default)]
     max_output_tokens: Option<usize>,
     #[serde(default)]
@@ -51,6 +51,10 @@ struct WriteStdinArgs {
     yield_time_ms: Option<u64>,
     #[serde(default)]
     max_output_tokens: Option<usize>,
+}
+
+fn default_yield_time_ms() -> u64 {
+    10000
 }
 
 fn default_shell() -> String {
