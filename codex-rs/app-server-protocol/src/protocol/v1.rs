@@ -256,6 +256,12 @@ pub struct GetUserAgentResponse {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct GetClientInfoResponse {
+    pub client_version: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct UserInfoResponse {
     pub alleged_user_email: Option<String>,
 }
