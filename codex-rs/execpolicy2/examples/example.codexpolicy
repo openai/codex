@@ -1,14 +1,5 @@
-prefix_rule(
-    pattern = ["git", "status"],
-    match = [
-        ["git", "status"],
-        ["git", "status", "--", "path/to/file"],
-    ],
-    not_match = [
-        ["git", "-c", "pager.status=false", "status"],
-        ["git", "--no-optional-locks", "status"],
-    ],
-)
+
+# Example policy to illustrate syntax; not comprehensive and not recommended for actual use.
 
 prefix_rule(
     pattern = ["git", "reset", "--hard"],
@@ -18,7 +9,7 @@ prefix_rule(
     ],
     not_match = [
         ["git", "reset", "--keep"],
-        ["git", "reset", "--merge"],
+        "git reset --merge",
     ],
 )
 
@@ -44,7 +35,7 @@ prefix_rule(
     decision = "prompt",
     match = [
         ["cp", "foo", "bar"],
-        ["cp", "-r", "src", "dest"],
+        "cp -r src dest",
     ],
 )
 
