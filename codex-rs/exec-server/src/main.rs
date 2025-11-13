@@ -1,4 +1,61 @@
+//! This is an MCP that implements an alternative `shell` tool with fine-grained privilege
+//! escalation based on a per-exec() policy.
 //!
+//! We spawn Bash process inside a sandbox. The Bash we spawn is patched to allow us to intercept
+//! every exec() call it makes by invoking a wrapper program and passing in the arguments it would
+//! have passed to exec(). The Bash process (and its descendants) inherit a communication socket
+//! from us, and we give its fd number in the CODEX_ESCALATE_SOCKET environment variable.
+//!
+//! When we intercept an exec() call, we send a message over the socket back to the main
+//! MCP process. The MCP process can then decide whether to allow the exec() call to proceed
+//! or to escalate privileges and run the requested command with elevated permissions. In the
+//! latter case, we send a message back to the child requesting that it forward its open FDs to us.
+//! We then execute the requested command on its behalf, patching in the forwarded FDs.
+//!
+//!
+//! ### The privilege escalation flow
+//!
+//! Child  MCP   Bash   Escalate Helper
+//!         |
+//!         o----->o
+//!         |      |
+//!         |      o--(exec)-->o
+//!         |      |           |
+//!         o<--(EscalateReq)--o
+//!         |      |           |
+//!         o---(Escalate)---->o
+//!         |      |           |
+//!         |o<---------(fds)--o
+//!         ||     |           |
+//!   o<-----o     |           |
+//!   |     ||     |           |
+//!   x----->o     |           |
+//!         ||     |           |
+//!         |x--(exit code)--->o
+//!         |      |           |
+//!         |      o<--(exit)--x
+//!         |      |
+//!         o<-----x
+//!
+//! ### The non-escalation flow
+//!
+//!  MCP   Bash   Escalate Helper   Child
+//!   |
+//!   o----->o
+//!   |      |
+//!   |      o--(exec)-->o
+//!   |      |           |
+//!   o<--(EscalateReq)--o
+//!   |      |           |
+//!   o--(RunInSandbox)->o
+//!   |      |           |
+//!   |      |           x--(exec)-->o
+//!   |      |                       |
+//!   |      o<--------------(exit)--x
+//!   |      |
+//!   o<-----x
+//!
+use crate::socket::AsyncSocket;
 use anyhow::Context as _;
 use anyhow::Result;
 use clap::Parser;
@@ -36,8 +93,6 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::{self};
 
 mod socket;
-
-use crate::socket::AsyncSocket;
 
 // C->S on the escalate socket
 #[derive(Clone, Serialize, Deserialize, Debug)]
