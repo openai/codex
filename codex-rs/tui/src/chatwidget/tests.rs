@@ -638,6 +638,7 @@ fn begin_exec(chat: &mut ChatWidget, call_id: &str, raw_cmd: &str) {
         id: call_id.to_string(),
         msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
             call_id: call_id.to_string(),
+            turn_id: "turn-1".to_string(),
             command,
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             parsed_cmd,
@@ -656,6 +657,7 @@ fn end_exec(chat: &mut ChatWidget, call_id: &str, stdout: &str, stderr: &str, ex
         id: call_id.to_string(),
         msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: call_id.to_string(),
+            turn_id: "turn-1".to_string(),
             stdout: stdout.to_string(),
             stderr: stderr.to_string(),
             aggregated_output: aggregated.clone(),
@@ -1710,6 +1712,7 @@ async fn binary_size_transcript_snapshot() {
                                 id: ev.id,
                                 msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                                     call_id: e.call_id.clone(),
+                                    turn_id: e.turn_id,
                                     command: e.command,
                                     cwd: e.cwd,
                                     parsed_cmd,
@@ -2770,6 +2773,7 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
         id: "c1".into(),
         msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
             call_id: "c1".into(),
+            turn_id: "turn-1".into(),
             command: vec!["bash".into(), "-lc".into(), "rg \"Change Approved\"".into()],
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             parsed_cmd: vec![
@@ -2791,6 +2795,7 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
         id: "c1".into(),
         msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: "c1".into(),
+            turn_id: "turn-1".into(),
             stdout: String::new(),
             stderr: String::new(),
             aggregated_output: String::new(),

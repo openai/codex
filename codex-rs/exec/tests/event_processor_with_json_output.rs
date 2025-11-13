@@ -623,6 +623,7 @@ fn exec_command_end_success_produces_completed_command_item() {
         "c1",
         EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
             call_id: "1".to_string(),
+            turn_id: "turn-1".to_string(),
             command: vec!["bash".to_string(), "-lc".to_string(), "echo hi".to_string()],
             cwd: std::env::current_dir().unwrap(),
             parsed_cmd: Vec::new(),
@@ -650,6 +651,7 @@ fn exec_command_end_success_produces_completed_command_item() {
         "c2",
         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: "1".to_string(),
+            turn_id: "turn-1".to_string(),
             stdout: String::new(),
             stderr: String::new(),
             aggregated_output: "hi\n".to_string(),
@@ -684,6 +686,7 @@ fn exec_command_end_failure_produces_failed_command_item() {
         "c1",
         EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
             call_id: "2".to_string(),
+            turn_id: "turn-1".to_string(),
             command: vec!["sh".to_string(), "-c".to_string(), "exit 1".to_string()],
             cwd: std::env::current_dir().unwrap(),
             parsed_cmd: Vec::new(),
@@ -710,6 +713,7 @@ fn exec_command_end_failure_produces_failed_command_item() {
         "c2",
         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: "2".to_string(),
+            turn_id: "turn-1".to_string(),
             stdout: String::new(),
             stderr: String::new(),
             aggregated_output: String::new(),
@@ -744,6 +748,7 @@ fn exec_command_end_without_begin_is_ignored() {
         "c1",
         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: "no-begin".to_string(),
+            turn_id: "turn-1".to_string(),
             stdout: String::new(),
             stderr: String::new(),
             aggregated_output: String::new(),

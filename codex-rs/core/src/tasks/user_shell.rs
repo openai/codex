@@ -128,6 +128,7 @@ impl SessionTask for UserShellCommandTask {
                         turn_context.as_ref(),
                         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                             call_id,
+                            turn_id: turn_context.sub_id.clone(),
                             stdout: String::new(),
                             stderr: aborted_message.clone(),
                             aggregated_output: aborted_message.clone(),
@@ -144,6 +145,7 @@ impl SessionTask for UserShellCommandTask {
                         turn_context.as_ref(),
                         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                             call_id: call_id.clone(),
+                            turn_id: turn_context.sub_id.clone(),
                             stdout: output.stdout.text.clone(),
                             stderr: output.stderr.text.clone(),
                             aggregated_output: output.aggregated_output.text.clone(),
@@ -175,6 +177,7 @@ impl SessionTask for UserShellCommandTask {
                         turn_context.as_ref(),
                         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                             call_id,
+                            turn_id: turn_context.sub_id.clone(),
                             stdout: exec_output.stdout.text.clone(),
                             stderr: exec_output.stderr.text.clone(),
                             aggregated_output: exec_output.aggregated_output.text.clone(),
