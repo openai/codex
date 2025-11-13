@@ -140,7 +140,9 @@ fn parse_string_example(raw: &str) -> Result<Vec<String>> {
     })?;
 
     if tokens.is_empty() {
-        Err(Error::InvalidExample("example cannot be an empty string".to_string()))
+        Err(Error::InvalidExample(
+            "example cannot be an empty string".to_string(),
+        ))
     } else {
         Ok(tokens)
     }
@@ -164,19 +166,21 @@ fn parse_list_example(list: &ListRef) -> Result<Vec<String>> {
         .collect::<Result<_>>()?;
 
     if tokens.is_empty() {
-        Err(Error::InvalidExample("example cannot be an empty list".to_string()))
+        Err(Error::InvalidExample(
+            "example cannot be an empty list".to_string(),
+        ))
     } else {
         Ok(tokens)
     }
 }
 
 fn policy_builder<'v, 'a>(eval: &Evaluator<'v, 'a, '_>) -> &'a PolicyBuilder {
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::expect_used)]
     eval.extra
         .as_ref()
-        .unwrap()
+        .expect("policy_builder requires Evaluator.extra to be populated")
         .downcast_ref::<PolicyBuilder>()
-        .unwrap()
+        .expect("Evaluator.extra must contain a PolicyBuilder")
 }
 
 #[starlark_module]
