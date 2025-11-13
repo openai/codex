@@ -1,2 +1,8 @@
 [profile.default]
-slow-timeout = { period = "15s", terminate-after = 4 }
+# Do not increase, either fix your test or as a last resort add an override.
+slow-timeout = { period = "15s", terminate-after = 2 }
+
+
+[[profile.ci.overrides]]
+filter = 'rmcp_client'
+slow-timeout = { period = "1m", terminate-after = 2 }
