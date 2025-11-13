@@ -53,9 +53,9 @@ fn load_policies(policy_paths: &[PathBuf]) -> Result<codex_execpolicy2::Policy> 
         })
         .collect::<Result<_>>()
         .context("failed to load policy files")?;
-    Ok(PolicyParser::parse_many(loaded_policies.iter().map(
-        |(policy_identifier, policy_file_contents)| {
-            (policy_identifier.as_str(), policy_file_contents.as_str())
-        },
-    ))?)
+    let mut parser = PolicyParser::new();
+    for (policy_identifier, policy_file_contents) in &loaded_policies {
+        parser.parse(policy_identifier, policy_file_contents)?;
+    }
+    Ok(parser.build())
 }
