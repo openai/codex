@@ -35,6 +35,7 @@ use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::RemoveConversationListenerParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ResumeConversationParams;
+use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserTurnParams;
 use codex_app_server_protocol::ServerRequest;
@@ -375,6 +376,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("turn/interrupt", params).await
+    }
+
+    /// Send a `review/start` JSON-RPC request (v2).
+    pub async fn send_review_start_request(
+        &mut self,
+        params: ReviewStartParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("review/start", params).await
     }
 
     /// Send a `cancelLoginChatGpt` JSON-RPC request.

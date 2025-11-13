@@ -68,6 +68,8 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result as JsonRpcResult;
 use codex_app_server_protocol::ResumeConversationParams;
 use codex_app_server_protocol::ResumeConversationResponse;
+use codex_app_server_protocol::ReviewStartParams;
+use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserMessageResponse;
@@ -129,7 +131,10 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
+use codex_core::protocol::ReviewOutputEvent;
+use codex_core::protocol::ReviewRequest;
 use codex_core::read_head_for_summary;
+use codex_core::review_format::format_review_findings_block;
 use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
@@ -246,6 +251,79 @@ impl CodexMessageProcessor {
         }
     }
 
+    fn review_request_from_target(
+        target: ReviewTarget,
+    ) -> Result<(ReviewRequest, String), JSONRPCErrorError> {
+        fn invalid_request(message: String) -> JSONRPCErrorError {
+            JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message,
+                data: None,
+            }
+        }
+
+        match target {
+            ReviewTarget::UncommittedChanges => Ok((
+                ReviewRequest {
+                    prompt: "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.".to_string(),
+                    user_facing_hint: "current changes".to_string(),
+                },
+                "Review uncommitted changes".to_string(),
+            )),
+            ReviewTarget::BaseBranch { branch } => {
+                let branch = branch.trim().to_string();
+                if branch.is_empty() {
+                    return Err(invalid_request("branch must not be empty".to_string()));
+                }
+                let prompt = format!(
+                    "Review the code changes against the base branch '{branch}'. Start by finding the merge diff between the current branch and {branch}'s upstream e.g. (`git merge-base HEAD \"$(git rev-parse --abbrev-ref \"{branch}@{{upstream}}\")\"`), then run `git diff` against that SHA to see what changes we would merge into the {branch} branch. Provide prioritized, actionable findings."
+                );
+                let hint = format!("changes against '{branch}'");
+                let display = format!("Review changes against base branch '{branch}'");
+                Ok((ReviewRequest { prompt, user_facing_hint: hint }, display))
+            }
+            ReviewTarget::Commit { sha, title } => {
+                let sha = sha.trim().to_string();
+                if sha.is_empty() {
+                    return Err(invalid_request("sha must not be empty".to_string()));
+                }
+                let brief_title = title
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty());
+                let prompt = if let Some(title) = brief_title.clone() {
+                    format!(
+                        "Review the code changes introduced by commit {sha} (\"{title}\"). Provide prioritized, actionable findings."
+                    )
+                } else {
+                    format!(
+                        "Review the code changes introduced by commit {sha}. Provide prioritized, actionable findings."
+                    )
+                };
+                let short_sha = sha.chars().take(7).collect::<String>();
+                let hint = format!("commit {short_sha}");
+                let display = if let Some(title) = brief_title {
+                    format!("Review commit {short_sha}: {title}")
+                } else {
+                    format!("Review commit {short_sha}")
+                };
+                Ok((ReviewRequest { prompt, user_facing_hint: hint }, display))
+            }
+            ReviewTarget::Custom { instructions } => {
+                let trimmed = instructions.trim().to_string();
+                if trimmed.is_empty() {
+                    return Err(invalid_request("instructions must not be empty".to_string()));
+                }
+                Ok((
+                    ReviewRequest {
+                        prompt: trimmed.clone(),
+                        user_facing_hint: trimmed.clone(),
+                    },
+                    trimmed,
+                ))
+            }
+        }
+    }
+
     pub async fn process_request(&mut self, request: ClientRequest) {
         match request {
             ClientRequest::Initialize { .. } => {
@@ -276,6 +354,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::TurnInterrupt { request_id, params } => {
                 self.turn_interrupt(request_id, params).await;
+            }
+            ClientRequest::ReviewStart { request_id, params } => {
+                self.review_start(request_id, params).await;
             }
             ClientRequest::NewConversation { request_id, params } => {
                 // Do not tokio::spawn() to process new_conversation()
@@ -2356,6 +2437,60 @@ impl CodexMessageProcessor {
         }
     }
 
+    async fn review_start(&self, request_id: RequestId, params: ReviewStartParams) {
+        let ReviewStartParams { thread_id, target } = params;
+        let (_, conversation) = match self.conversation_from_thread_id(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let (review_request, display_text) = match Self::review_request_from_target(target) {
+            Ok(value) => value,
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+                return;
+            }
+        };
+
+        let turn_id = conversation.submit(Op::Review { review_request }).await;
+
+        match turn_id {
+            Ok(turn_id) => {
+                let mut items = Vec::new();
+                if !display_text.is_empty() {
+                    items.push(ThreadItem::UserMessage {
+                        id: turn_id.clone(),
+                        content: vec![V2UserInput::Text { text: display_text }],
+                    });
+                }
+                let turn = Turn {
+                    id: turn_id.clone(),
+                    items,
+                    status: TurnStatus::InProgress,
+                    error: None,
+                };
+                let response = TurnStartResponse { turn: turn.clone() };
+                self.outgoing.send_response(request_id, response).await;
+
+                let notif = TurnStartedNotification { turn };
+                self.outgoing
+                    .send_server_notification(ServerNotification::TurnStarted(notif))
+                    .await;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to start review: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
     async fn turn_interrupt(&mut self, request_id: RequestId, params: TurnInterruptParams) {
         let TurnInterruptParams { thread_id, .. } = params;
 
@@ -2732,6 +2867,21 @@ async fn apply_bespoke_event_handling(
                 .send_server_notification(ServerNotification::ItemCompleted(notification))
                 .await;
         }
+        EventMsg::ExitedReviewMode(review_event) => {
+            let review_text = match review_event.review_output {
+                Some(output) => render_review_output_text(&output),
+                None => REVIEW_FALLBACK_MESSAGE.to_string(),
+            };
+            let notification = ItemCompletedNotification {
+                item: ThreadItem::CodeReview {
+                    id: event_id,
+                    review: review_text,
+                },
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemCompleted(notification))
+                .await;
+        }
         // If this is a TurnAborted, reply to any pending interrupt requests.
         EventMsg::TurnAborted(turn_aborted_event) => {
             let pending = {
@@ -2757,6 +2907,28 @@ async fn apply_bespoke_event_handling(
         }
 
         _ => {}
+    }
+}
+
+const REVIEW_FALLBACK_MESSAGE: &str = "Reviewer failed to output a response.";
+
+fn render_review_output_text(output: &ReviewOutputEvent) -> String {
+    let mut sections = Vec::new();
+    let explanation = output.overall_explanation.trim();
+    if !explanation.is_empty() {
+        sections.push(explanation.to_string());
+    }
+    if !output.findings.is_empty() {
+        let findings = format_review_findings_block(&output.findings, None);
+        let trimmed = findings.trim();
+        if !trimmed.is_empty() {
+            sections.push(trimmed.to_string());
+        }
+    }
+    if sections.is_empty() {
+        REVIEW_FALLBACK_MESSAGE.to_string()
+    } else {
+        sections.join("\n\n")
     }
 }
 
