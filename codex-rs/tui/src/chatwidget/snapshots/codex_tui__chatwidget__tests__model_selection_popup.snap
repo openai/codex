@@ -3,7 +3,7 @@ source: tui/src/chatwidget/tests.rs
 expression: popup
 ---
   Select Model and Effort
-  Switch the model for this and future Codex CLI sessions
+  Access legacy models via -m or in your config.toml
 
 › 1. gpt-5-codex (current)  Optimized for codex.
   2. gpt-5                  Broad world knowledge with strong general
