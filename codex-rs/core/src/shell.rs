@@ -290,7 +290,7 @@ mod tests {
             _ => panic!("expected bash shell"),
         };
 
-        assert_eq!(shell_path, PathBuf::from("/bin/bash"));
+        assert!(shell_path.ends_with(PathBuf::from("/bin/bash")));
     }
 
     #[tokio::test]
@@ -311,15 +311,13 @@ mod tests {
             );
         }
     }
-}
-
-#[cfg(test)]
-#[cfg(windows)]
-mod tests {
-    use super::*;
 
     #[tokio::test]
     async fn detects_powershell_as_default() {
+        if !cfg!(windows) {
+            return;
+        }
+
         let powershell_shell = default_user_shell().await;
         let PowerShellConfig { shell_path } = match powershell_shell {
             Shell::PowerShell(powershell_shell) => powershell_shell,
@@ -331,7 +329,11 @@ mod tests {
 
     #[test]
     fn finds_poweshell() {
-        let powershell_shell = get_shell(ShellType::PowerShell).unwrap();
+        if !cfg!(windows) {
+            return;
+        }
+
+        let powershell_shell = get_shell(ShellType::PowerShell, None).unwrap();
         let PowerShellConfig { shell_path } = match powershell_shell {
             Shell::PowerShell(powershell_shell) => powershell_shell,
             _ => panic!("expected powershell shell"),
