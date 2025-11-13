@@ -374,16 +374,20 @@ describe("Codex", () => {
       if (!commandArgs) {
         throw new Error("Command args missing");
       }
-      const addDirValues: string[] = [];
+
+      // Find the --config flag with sandbox_workspace_write.writable_roots
+      let foundConfig = false;
       for (let i = 0; i < commandArgs.length; i += 1) {
-        if (commandArgs[i] === "--add-dir") {
-          const directory = commandArgs[i + 1];
-          if (typeof directory === "string") {
-            addDirValues.push(directory);
+        if (commandArgs[i] === "--config") {
+          const configValue = commandArgs[i + 1];
+          if (typeof configValue === "string" && configValue.includes("sandbox_workspace_write.writable_roots")) {
+            expect(configValue).toBe('sandbox_workspace_write.writable_roots=["../backend", "/tmp/shared"]');
+            foundConfig = true;
+            break;
           }
         }
       }
-      expect(addDirValues).toEqual(["../backend", "/tmp/shared"]);
+      expect(foundConfig).toBe(true);
     } finally {
       restore();
       await close();
