@@ -115,7 +115,7 @@ describe("AbortSignal support", () => {
 
       // Abort during iteration
       let eventCount = 0;
-      await expect(async () => {
+      await expect((async () => {
         for await (const event of events) {
           void event; // Consume the event
           eventCount++;
@@ -125,7 +125,7 @@ describe("AbortSignal support", () => {
           }
           // Continue iterating - should eventually throw
         }
-      }).rejects.toThrow();
+      })()).rejects.toThrow();
     } finally {
       await close();
     }
@@ -253,12 +253,12 @@ describe("AbortSignal support", () => {
       setTimeout(() => controller.abort("Test timeout"), 200);
 
       // The operation should fail due to abort
-      await expect(async () => {
+      await expect((async () => {
         const { events } = await runPromise;
         for await (const event of events) {
           void event; // Should be interrupted mid-stream
         }
-      }).rejects.toThrow();
+      })()).rejects.toThrow();
 
       const elapsed = Date.now() - startTime;
 
