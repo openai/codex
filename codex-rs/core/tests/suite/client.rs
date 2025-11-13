@@ -295,7 +295,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
             "content": [{ "type": "input_text", "text": "resumed user message" }]
         },
         {
-            "type": "message1",
+            "type": "message",
             "role": "assistant",
             "content": [{ "type": "output_text", "text": "resumed assistant message" }]
         },
