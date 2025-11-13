@@ -3,7 +3,7 @@ source: tui/src/chatwidget/tests.rs
 expression: popup
 ---
   Select Model and Effort
-  Access legacy models by running codex -m <model_name> or in your config
+  Access legacy models by running codex -m <model_name> or in your config.toml
 
 › 1. gpt-5.1-codex       Optimized for codex.
   2. gpt-5.1-codex-mini  Optimized for codex. Cheaper, faster, but less
