@@ -112,16 +112,10 @@ async fn handle_model_migration_prompt_if_needed(
                     config.model_reasoning_effort
                 };
 
+                config.model_reasoning_effort = mapped_effort;
+
                 app_event_tx.send(AppEvent::UpdateModel(target_model.clone()));
                 app_event_tx.send(AppEvent::UpdateReasoningEffort(mapped_effort));
-                app_event_tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                    cwd: None,
-                    approval_policy: None,
-                    sandbox_policy: None,
-                    model: Some(target_model.clone()),
-                    effort: Some(mapped_effort),
-                    summary: None,
-                }));
                 app_event_tx.send(AppEvent::PersistModelSelection {
                     model: target_model.clone(),
                     effort: mapped_effort,

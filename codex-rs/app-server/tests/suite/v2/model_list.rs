@@ -94,10 +94,6 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
             description: "Broad world knowledge with strong general reasoning.".to_string(),
             supported_reasoning_efforts: vec![
                 ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::Minimal,
-                    description: "Fastest responses with little reasoning".to_string(),
-                },
-                ReasoningEffortOption {
                     reasoning_effort: ReasoningEffort::Low,
                     description: "Balances speed with some reasoning; useful for straightforward \
                                    queries and short explanations"
