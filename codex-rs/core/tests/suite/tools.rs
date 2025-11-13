@@ -486,8 +486,7 @@ from pathlib import Path
 proc = subprocess.Popen(["/bin/sh", "-c", "sleep 60"], start_new_session=True)
 Path({pid_path:?}).write_text(str(proc.pid))
 time.sleep(60)
-"#,
-        pid_path = pid_path
+"#
     );
     fs::write(&script_path, script)?;
 
@@ -550,10 +549,10 @@ time.sleep(60)
         "command should return shortly after timeout even with live grandchildren: {elapsed:?}"
     );
 
-    if let Ok(pid_str) = fs::read_to_string(&pid_path) {
-        if let Ok(pid) = pid_str.trim().parse::<libc::pid_t>() {
-            unsafe { libc::kill(pid, libc::SIGKILL) };
-        }
+    if let Ok(pid_str) = fs::read_to_string(&pid_path)
+        && let Ok(pid) = pid_str.trim().parse::<libc::pid_t>()
+    {
+        unsafe { libc::kill(pid, libc::SIGKILL) };
     }
 
     Ok(())
