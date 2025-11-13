@@ -215,7 +215,9 @@ impl ModelClient {
         let input_with_instructions = prompt.get_formatted_input();
 
         let verbosity = if self.config.model_family.support_verbosity {
-            self.config.model_verbosity
+            self.config
+                .model_verbosity
+                .or(self.config.model_family.default_verbosity)
         } else {
             if self.config.model_verbosity.is_some() {
                 warn!(
