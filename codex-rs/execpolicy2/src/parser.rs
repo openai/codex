@@ -41,7 +41,7 @@ impl PolicyParser {
             policy_file_contents.to_string(),
             &dialect,
         )
-        .map_err(|e| Error::Starlark(e.to_string()))?;
+        .map_err(Error::Starlark)?;
         let globals = GlobalsBuilder::standard().with(policy_builtins).build();
         let module = Module::new();
 
@@ -49,8 +49,7 @@ impl PolicyParser {
         {
             let mut eval = Evaluator::new(&module);
             eval.extra = Some(&builder);
-            eval.eval_module(ast, &globals)
-                .map_err(|e| Error::Starlark(e.to_string()))?;
+            eval.eval_module(ast, &globals).map_err(Error::Starlark)?;
         }
         Ok(builder.build())
     }

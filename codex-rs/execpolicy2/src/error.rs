@@ -1,8 +1,9 @@
+use starlark::Error as StarlarkError;
 use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Error)]
 pub enum Error {
     #[error("invalid decision: {0}")]
     InvalidDecision(String),
@@ -21,5 +22,5 @@ pub enum Error {
     #[error("expected example to not match rule `{rule}`: {example}")]
     ExampleDidMatch { rule: String, example: String },
     #[error("starlark error: {0}")]
-    Starlark(String),
+    Starlark(StarlarkError),
 }
