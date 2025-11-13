@@ -1836,11 +1836,12 @@ impl ChatWidget {
                 Some(preset.description.to_string())
             };
             let is_current = preset.model == current_model;
-            let preset_for_action = preset;
-            let single_supported_effort = preset_for_action.supported_reasoning_efforts.len() == 1;
+            let single_supported_effort = preset.supported_reasoning_efforts.len() == 1;
+            let preset_for_action = preset.clone();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                let preset_for_event = preset_for_action.clone();
                 tx.send(AppEvent::OpenReasoningPopup {
-                    model: preset_for_action,
+                    model: preset_for_event,
                 });
             })];
             items.push(SelectionItem {
