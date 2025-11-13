@@ -116,6 +116,7 @@ impl CudaRuntimeImpl {
 
         Ok(DeviceBufferImpl {
             buffer: device_buffer,
+            len: size,
         })
     }
 }
