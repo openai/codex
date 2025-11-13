@@ -166,14 +166,6 @@ fn display_model_name(slug: &str) -> String {
         .join("-")
 }
 
-fn mini_variant(slug: &str) -> String {
-    if slug.ends_with("-mini") {
-        return display_model_name(slug);
-    }
-
-    format!("{}-Mini", display_model_name(slug))
-}
-
 impl WidgetRef for &ModelMigrationScreen {
     fn render_ref(&self, area: ratatui::layout::Rect, buf: &mut ratatui::buffer::Buffer) {
         Clear.render(area, buf);
@@ -181,22 +173,20 @@ impl WidgetRef for &ModelMigrationScreen {
         let mut column = ColumnRenderable::new();
 
         let primary_model = display_model_name(&self.target_model);
-        let mini_model = mini_variant(&self.target_model);
 
         column.push("");
         column.push(Line::from(vec![
             "> ".into(),
             "Introducing ".bold(),
+            "our ".bold(),
             primary_model.bold(),
-            " and ".bold(),
-            mini_model.bold(),
+            " models".bold(),
         ]));
         column.push(Line::from(""));
 
         column.push(
             Paragraph::new(Line::from(
-                "We've upgraded our family of models supported in Codex to GPT-5.1, GPT-5.1-Codex and GPT-5.1-Codex-Mini."
-                    .gray(),
+                "We've upgraded our family of models supported in Codex to GPT-5.1, GPT-5.1-Codex and GPT-5.1-Codex-Mini.",
             ))
             .wrap(Wrap { trim: false })
             .inset(Insets::tlbr(0, 2, 0, 0)),
@@ -204,8 +194,7 @@ impl WidgetRef for &ModelMigrationScreen {
         column.push(Line::from(""));
         column.push(
             Paragraph::new(Line::from(
-                "You can continue using legacy models by specifying them directly with the -m option or in your config.toml."
-                    .gray(),
+                "You can continue using legacy models by specifying them directly with the -m option or in your config.toml.",
             ))
             .wrap(Wrap { trim: false })
             .inset(Insets::tlbr(0, 2, 0, 0)),
@@ -214,7 +203,7 @@ impl WidgetRef for &ModelMigrationScreen {
         column.push(
             Line::from(vec![
                 "Learn more at ".into(),
-                "www.openai.com/index/gpt-5-1".cyan(),
+                "www.openai.com/index/gpt-5-1".cyan().underlined(),
             ])
             .inset(Insets::tlbr(0, 2, 0, 0)),
         );
