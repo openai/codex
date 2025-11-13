@@ -2207,6 +2207,7 @@ impl ChatWidget {
     }
 
     #[cfg(not(target_os = "windows"))]
+    #[allow(dead_code)]
     pub(crate) fn world_writable_warning_details(&self) -> Option<(Vec<String>, usize, bool)> {
         None
     }
@@ -2457,6 +2458,7 @@ impl ChatWidget {
     }
 
     #[cfg(not(target_os = "windows"))]
+    #[allow(dead_code)]
     pub(crate) fn clear_forced_auto_mode_downgrade(&mut self) {}
 
     /// Set the approval policy in the widget's config copy.
