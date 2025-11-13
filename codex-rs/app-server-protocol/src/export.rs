@@ -148,6 +148,7 @@ fn build_schema_bundle(schemas: Vec<GeneratedSchema>) -> Result<Value> {
         "ServerNotification",
         "ServerRequest",
     ];
+    const IGNORED_DEFINITIONS: &[&str] = &["Option<()>"];
 
     let namespaced_types = collect_namespaced_types(&schemas);
     let mut definitions = Map::new();
@@ -160,6 +161,10 @@ fn build_schema_bundle(schemas: Vec<GeneratedSchema>) -> Result<Value> {
             in_v1_dir,
         } = schema;
 
+        if IGNORED_DEFINITIONS.contains(&logical_name.as_str()) {
+            continue;
+        }
+
         if let Some(ref ns) = namespace {
             rewrite_refs_to_namespace(&mut value, ns);
         }
@@ -170,6 +175,9 @@ fn build_schema_bundle(schemas: Vec<GeneratedSchema>) -> Result<Value> {
             && let Value::Object(defs_obj) = defs
         {
             for (def_name, mut def_schema) in defs_obj {
+                if IGNORED_DEFINITIONS.contains(&def_name.as_str()) {
+                    continue;
+                }
                 if SPECIAL_DEFINITIONS.contains(&def_name.as_str()) {
                     continue;
                 }
