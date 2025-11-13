@@ -17,14 +17,14 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+multimap = { workspace = true }
+parking_lot = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+shlex = { workspace = true }
 starlark = { workspace = true }
 thiserror = { workspace = true }
-multimap = { workspace = true }
-clap = { workspace = true, features = ["derive"] }
-parking_lot = { workspace = true }
-shlex = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
