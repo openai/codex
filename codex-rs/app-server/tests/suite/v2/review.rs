@@ -80,7 +80,7 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
                 codex_app_server_protocol::UserInput::Text { .. }
             ));
         }
-        other => panic!("expected user message, got {:?}", other),
+        other => panic!("expected user message, got {other:?}"),
     }
 
     let _started: JSONRPCNotification = timeout(
@@ -104,7 +104,7 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
                 break;
             }
             ThreadItem::UserMessage { .. } => continue,
-            other => panic!("unexpected item/completed payload: {:?}", other),
+            other => panic!("unexpected item/completed payload: {other:?}"),
         }
     }
 
