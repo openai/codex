@@ -1367,23 +1367,6 @@ mod tests {
     }
 
     #[test]
-    fn test_porcupine_defaults() {
-        assert_model_tools(
-            "porcupine",
-            &Features::with_defaults(),
-            &[
-                "exec_command",
-                "write_stdin",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
-                "update_plan",
-                "view_image",
-            ],
-        );
-    }
-
-    #[test]
     fn test_codex_mini_unified_exec_web_search() {
         assert_model_tools(
             "codex-mini-latest",

@@ -127,8 +127,6 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
         model_family!(slug, "gpt-4o", needs_special_apply_patch_instructions: true)
     } else if slug.starts_with("gpt-3.5") {
         model_family!(slug, "gpt-3.5", needs_special_apply_patch_instructions: true)
-    } else if slug.starts_with("porcupine") {
-        model_family!(slug, "porcupine", shell_type: ConfigShellToolType::UnifiedExec)
     } else if slug.starts_with("test-gpt-5-codex") {
         model_family!(
             slug, slug,
