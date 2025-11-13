@@ -27,7 +27,8 @@ pub struct ModelPreset {
     pub supported_reasoning_efforts: &'static [ReasoningEffortPreset],
     /// Whether this is the default model for new users.
     pub is_default: bool,
-    pub is_deprecated: bool,
+    /// recommended upgrade model
+    pub recommended_upgrade_model: Option<&'static str>,
 }
 
 const PRESETS: &[ModelPreset] = &[
@@ -52,7 +53,7 @@ const PRESETS: &[ModelPreset] = &[
             },
         ],
         is_default: true,
-        is_deprecated: true,
+        recommended_upgrade_model: Some("gpt-5.1-codex"),
     },
     ModelPreset {
         id: "gpt-5-codex-mini",
@@ -71,7 +72,7 @@ const PRESETS: &[ModelPreset] = &[
             },
         ],
         is_default: false,
-        is_deprecated: true,
+        recommended_upgrade_model: Some("gpt-5.1-codex-mini"),
     },
     ModelPreset {
         id: "gpt-5",
@@ -98,7 +99,7 @@ const PRESETS: &[ModelPreset] = &[
             },
         ],
         is_default: false,
-        is_deprecated: true,
+        recommended_upgrade_model: Some("gpt-5.1"),
     },
 ];
 

@@ -18,16 +18,6 @@ use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 use tokio_stream::StreamExt;
 
-/// Optional target model slug for the migration prompt.
-pub(crate) fn model_migration_target(current_model: &str) -> String {
-    match current_model {
-        "gpt-5" => "gpt-5.1".to_string(),
-        "gpt-5.1" => "gpt-5.1".to_string(),
-        "gpt-5-codex-mini" => "gpt-5.1-codex-mini".to_string(),
-        _ => "gpt-5.1-codex".to_string(),
-    }
-}
-
 /// Outcome of the migration prompt.
 pub(crate) enum ModelMigrationOutcome {
     Accepted,

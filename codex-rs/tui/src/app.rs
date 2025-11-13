@@ -8,7 +8,6 @@ use crate::exec_command::strip_bash_lc_and_escape;
 use crate::file_search::FileSearchManager;
 use crate::history_cell::HistoryCell;
 use crate::model_migration::ModelMigrationOutcome;
-use crate::model_migration::model_migration_target;
 use crate::model_migration::run_model_migration_prompt;
 use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
@@ -65,7 +64,7 @@ fn should_show_model_migration_prompt(
 
     all_model_presets()
         .iter()
-        .filter(|preset| preset.is_deprecated)
+        .filter(|preset| preset.recommended_upgrade_model.is_some())
         .any(|preset| preset.model == current_model)
 }
 
@@ -74,7 +73,12 @@ async fn handle_model_migration_prompt_if_needed(
     config: &mut Config,
     app_event_tx: &AppEventSender,
 ) -> Option<AppExitInfo> {
-    let target_model = model_migration_target(&config.model);
+    let target_model = all_model_presets()
+        .iter()
+        .find(|preset| preset.model == config.model)
+        .and_then(|preset| preset.recommended_upgrade_model)
+        .unwrap_or(&config.model)
+        .to_string();
     let hide_prompt_flag = config.notices.hide_gpt5_1_migration_prompt;
     if !should_show_model_migration_prompt(&config.model, &target_model, hide_prompt_flag) {
         return None;
