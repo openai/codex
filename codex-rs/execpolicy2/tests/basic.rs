@@ -254,3 +254,53 @@ prefix_rule(
         commit
     );
 }
+
+#[test]
+fn strictest_decision_across_multiple_commands() {
+    let policy_src = r#"
+prefix_rule(
+    pattern = ["git", "status"],
+    decision = "allow",
+)
+prefix_rule(
+    pattern = ["git"],
+    decision = "prompt",
+)
+prefix_rule(
+    pattern = ["git", "commit"],
+    decision = "forbidden",
+)
+    "#;
+    let policy = PolicyParser::parse("test.codexpolicy", policy_src).expect("parse policy");
+
+    let commands = vec![
+        tokens(&["git", "status"]),
+        tokens(&["git", "commit", "-m", "hi"]),
+    ];
+
+    let evaluation = policy.check_multiple(&commands);
+    assert_eq!(
+        Evaluation::Match {
+            decision: Decision::Forbidden,
+            matched_rules: vec![
+                RuleMatch::PrefixRuleMatch {
+                    matched_prefix: tokens(&["git", "status"]),
+                    decision: Decision::Allow,
+                },
+                RuleMatch::PrefixRuleMatch {
+                    matched_prefix: tokens(&["git"]),
+                    decision: Decision::Prompt,
+                },
+                RuleMatch::PrefixRuleMatch {
+                    matched_prefix: tokens(&["git"]),
+                    decision: Decision::Prompt,
+                },
+                RuleMatch::PrefixRuleMatch {
+                    matched_prefix: tokens(&["git", "commit"]),
+                    decision: Decision::Forbidden,
+                },
+            ],
+        },
+        evaluation
+    );
+}
