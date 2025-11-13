@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use tree_sitter::Node;
 use tree_sitter::Parser;
 use tree_sitter::Tree;
@@ -96,7 +98,10 @@ pub fn extract_bash_command(command: &[String]) -> Option<(&str, &str)> {
         return None;
     };
     if !matches!(flag.as_str(), "-lc" | "-c")
-        || !matches!(detect_shell_type(shell), ShellType::Zsh | ShellType::Bash)
+        || !matches!(
+            detect_shell_type(&PathBuf::from(shell)),
+            Some(ShellType::Zsh) | Some(ShellType::Bash)
+        )
     {
         return None;
     }
