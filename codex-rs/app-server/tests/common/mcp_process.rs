@@ -492,7 +492,7 @@ impl McpProcess {
         Ok(())
     }
 
-    async fn read_jsonrpc_message(&mut self) -> anyhow::Result<JSONRPCMessage> {
+    pub async fn read_jsonrpc_message(&mut self) -> anyhow::Result<JSONRPCMessage> {
         let mut line = String::new();
         self.stdout.read_line(&mut line).await?;
         let message = serde_json::from_str::<JSONRPCMessage>(&line)?;

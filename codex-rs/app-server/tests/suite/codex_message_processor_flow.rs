@@ -8,6 +8,7 @@ use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
 use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::InputItem;
+use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::NewConversationParams;
@@ -21,10 +22,12 @@ use codex_app_server_protocol::SendUserTurnParams;
 use codex_app_server_protocol::SendUserTurnResponse;
 use codex_app_server_protocol::ServerRequest;
 use codex_core::protocol::AskForApproval;
+use codex_core::protocol::ReviewDecision;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort;
 use codex_core::protocol_config_types::ReasoningSummary;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_protocol::ConversationId;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::Event;
@@ -125,11 +128,12 @@ async fn test_codex_jsonrpc_conversation_flow() -> Result<()> {
 
     // Verify the task_finished notification is received.
     // Note this also ensures that the final request to the server was made.
-    let task_finished_notification: JSONRPCNotification = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+    let task_finished_notification = wait_for_task_complete_handling_exec_approval(
+        &mut mcp,
+        &conversation_id,
+        &working_directory,
     )
-    .await??;
+    .await?;
     let serde_json::Value::Object(map) = task_finished_notification
         .params
         .expect("notification should have params")
@@ -156,6 +160,53 @@ async fn test_codex_jsonrpc_conversation_flow() -> Result<()> {
     let RemoveConversationSubscriptionResponse {} = to_response(remove_listener_resp)?;
 
     Ok(())
+}
+
+async fn wait_for_task_complete_handling_exec_approval(
+    mcp: &mut McpProcess,
+    conversation_id: &ConversationId,
+    working_directory: &Path,
+) -> Result<JSONRPCNotification> {
+    loop {
+        let message = timeout(DEFAULT_READ_TIMEOUT, mcp.read_jsonrpc_message()).await??;
+        match message {
+            JSONRPCMessage::Notification(notification) => {
+                if notification.method == "codex/event/task_complete" {
+                    return Ok(notification);
+                }
+            }
+            JSONRPCMessage::Request(jsonrpc_request) => {
+                let request: ServerRequest = jsonrpc_request.try_into()?;
+                match request {
+                    ServerRequest::ExecCommandApproval { request_id, params } => {
+                        assert_eq!(params.conversation_id, *conversation_id);
+                        assert_eq!(params.command, vec!["ls".to_string()]);
+                        assert_eq!(params.cwd, working_directory);
+                        mcp.send_response(
+                            request_id,
+                            serde_json::json!({
+                                "decision": ReviewDecision::Approved,
+                            }),
+                        )
+                        .await?;
+                    }
+                    other => {
+                        anyhow::bail!(
+                            "unexpected server request while waiting for task_complete: {other:?}"
+                        );
+                    }
+                }
+            }
+            JSONRPCMessage::Response(response) => {
+                anyhow::bail!(
+                    "unexpected JSONRPC response while waiting for task_complete: {response:?}"
+                );
+            }
+            JSONRPCMessage::Error(err) => {
+                anyhow::bail!("unexpected JSONRPC error while waiting for task_complete: {err:?}");
+            }
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
