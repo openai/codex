@@ -1,10 +1,11 @@
+use std::any::Any;
 use std::sync::Arc;
 
 use codex_execpolicy2::Decision;
 use codex_execpolicy2::Evaluation;
 use codex_execpolicy2::PolicyParser;
-use codex_execpolicy2::Rule;
 use codex_execpolicy2::RuleMatch;
+use codex_execpolicy2::RuleRef;
 use codex_execpolicy2::rule::PatternToken;
 use codex_execpolicy2::rule::PrefixPattern;
 use codex_execpolicy2::rule::PrefixRule;
@@ -12,6 +13,25 @@ use pretty_assertions::assert_eq;
 
 fn tokens(cmd: &[&str]) -> Vec<String> {
     cmd.iter().map(std::string::ToString::to_string).collect()
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum RuleSnapshot {
+    Prefix(PrefixRule),
+}
+
+fn rule_snapshots(rules: &[RuleRef]) -> Vec<RuleSnapshot> {
+    rules
+        .iter()
+        .map(|rule| {
+            let rule_any = rule.as_ref() as &dyn Any;
+            if let Some(prefix_rule) = rule_any.downcast_ref::<PrefixRule>() {
+                RuleSnapshot::Prefix(prefix_rule.clone())
+            } else {
+                panic!("unexpected rule type in RuleRef: {rule:?}");
+            }
+        })
+        .collect()
 }
 
 #[test]
@@ -45,27 +65,27 @@ prefix_rule(
     "#;
     let policy = PolicyParser::parse("test.codexpolicy", policy_src).expect("parse policy");
 
-    let bash_rules = policy.rules().get_vec("bash").expect("bash rules");
-    let sh_rules = policy.rules().get_vec("sh").expect("sh rules");
+    let bash_rules = rule_snapshots(policy.rules().get_vec("bash").expect("bash rules"));
+    let sh_rules = rule_snapshots(policy.rules().get_vec("sh").expect("sh rules"));
     assert_eq!(
-        vec![Rule::Prefix(PrefixRule {
+        vec![RuleSnapshot::Prefix(PrefixRule {
             pattern: PrefixPattern {
                 first: Arc::from("bash"),
                 rest: vec![PatternToken::Alts(vec!["-c".to_string(), "-l".to_string()])].into(),
             },
             decision: Decision::Allow,
         })],
-        bash_rules.clone()
+        bash_rules
     );
     assert_eq!(
-        vec![Rule::Prefix(PrefixRule {
+        vec![RuleSnapshot::Prefix(PrefixRule {
             pattern: PrefixPattern {
                 first: Arc::from("sh"),
                 rest: vec![PatternToken::Alts(vec!["-c".to_string(), "-l".to_string()])].into(),
             },
             decision: Decision::Allow,
         })],
-        sh_rules.clone()
+        sh_rules
     );
 
     let bash_eval = policy.check(&tokens(&["bash", "-c", "echo", "hi"]));
@@ -102,23 +122,23 @@ prefix_rule(
     "#;
     let policy = PolicyParser::parse("test.codexpolicy", policy_src).expect("parse policy");
 
-    let rules = policy.rules().get_vec("npm").expect("npm rules");
+    let rules = rule_snapshots(policy.rules().get_vec("npm").expect("npm rules"));
     assert_eq!(
-        vec![Rule::Prefix(PrefixRule {
+        vec![RuleSnapshot::Prefix(PrefixRule {
             pattern: PrefixPattern {
                 first: Arc::from("npm"),
                 rest: vec![
                     PatternToken::Alts(vec!["i".to_string(), "install".to_string()]),
                     PatternToken::Alts(vec![
                         "--legacy-peer-deps".to_string(),
-                        "--no-save".to_string()
+                        "--no-save".to_string(),
                     ]),
                 ]
                 .into(),
             },
             decision: Decision::Allow,
         })],
-        rules.clone()
+        rules
     );
 
     let npm_i = policy.check(&tokens(&["npm", "i", "--legacy-peer-deps"]));

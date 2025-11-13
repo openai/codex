@@ -21,7 +21,7 @@ use crate::policy::validate_match_examples;
 use crate::rule::PatternToken;
 use crate::rule::PrefixPattern;
 use crate::rule::PrefixRule;
-use crate::rule::Rule;
+use crate::rule::RuleRef;
 
 // todo: support parsing multiple policies
 pub struct PolicyParser;
@@ -48,7 +48,7 @@ impl PolicyParser {
 
 #[derive(Debug, ProvidesStaticType)]
 struct PolicyBuilder {
-    rules_by_program: Mutex<MultiMap<String, Rule>>,
+    rules_by_program: Mutex<MultiMap<String, RuleRef>>,
 }
 
 impl PolicyBuilder {
@@ -58,7 +58,7 @@ impl PolicyBuilder {
         }
     }
 
-    fn add_rule(&self, rule: Rule) {
+    fn add_rule(&self, rule: RuleRef) {
         self.rules_by_program
             .lock()
             .insert(rule.program().to_string(), rule);
@@ -214,17 +214,17 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
 
         let rest: Arc<[PatternToken]> = remaining_tokens.to_vec().into();
 
-        let rules: Vec<Rule> = first_token
+        let rules: Vec<RuleRef> = first_token
             .alternatives()
             .iter()
             .map(|head| {
-                Rule::Prefix(PrefixRule {
+                Arc::new(PrefixRule {
                     pattern: PrefixPattern {
                         first: Arc::from(head.as_str()),
                         rest: rest.clone(),
                     },
                     decision,
-                })
+                }) as RuleRef
             })
             .collect();
 
