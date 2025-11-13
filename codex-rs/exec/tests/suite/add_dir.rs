@@ -6,7 +6,7 @@ use core_test_support::test_codex_exec::test_codex_exec;
 
 /// Verify that the --add-dir flag is accepted and the command runs successfully.
 /// This test confirms the CLI argument is properly wired up.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn accepts_add_dir_flag() -> anyhow::Result<()> {
     let test = test_codex_exec();
 
@@ -38,7 +38,7 @@ async fn accepts_add_dir_flag() -> anyhow::Result<()> {
 }
 
 /// Verify that multiple --add-dir flags can be specified.
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn accepts_multiple_add_dir_flags() -> anyhow::Result<()> {
     let test = test_codex_exec();
 
