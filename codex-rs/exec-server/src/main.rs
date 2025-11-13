@@ -1,6 +1,5 @@
 use anyhow::Context as _;
 use anyhow::Result;
-use anyhow::anyhow;
 use anyhow::bail;
 use clap::Parser;
 use clap::Subcommand;
@@ -33,7 +32,6 @@ use socket2::Type;
 use std::collections::HashMap;
 use std::io;
 use std::io::IoSlice;
-use std::io::stdin;
 use std::mem::MaybeUninit;
 use std::os::fd::AsFd;
 use std::os::fd::AsRawFd;
@@ -48,7 +46,6 @@ use tokio::io::Interest;
 use tokio::io::unix::AsyncFd;
 use tokio::process::Command;
 use tracing_subscriber::EnvFilter;
-use tracing_subscriber::fmt::writer::Tee;
 use tracing_subscriber::{self};
 
 // C->S
@@ -90,209 +87,8 @@ struct ReceivedMessage {
     fds: Vec<OwnedFd>,
 }
 
-#[derive(Debug)]
-// TODO: just make this arguments to send_message
-struct SentMessage<'a> {
-    data: Vec<u8>,
-    fds: Vec<BorrowedFd<'a>>,
-}
-
-/*
-
-#[derive(Clone)]
-struct DgramSocket {
-    pub fd: RawFd,
-}
-impl DgramSocket {
-    fn new(fd: RawFd) -> Self {
-        Self { fd }
-    }
-
-    async fn recv_message(&self) -> anyhow::Result<ReceivedMessage> {
-        use tokio::io::unix::AsyncFd;
-
-        const MAX_MESSAGE_SIZE: usize = 64 * 1024;
-        const MAX_FDS_PER_MESSAGE: usize = 16;
-        let async_fd = AsyncFd::new(self.fd)?;
-        let mut buffer = vec![0u8; MAX_MESSAGE_SIZE];
-        let control_capacity = unsafe {
-            libc::CMSG_SPACE((MAX_FDS_PER_MESSAGE * std::mem::size_of::<RawFd>()) as _) as usize
-        };
-
-        let (received, fds) = async_fd
-            .async_io(Interest::READABLE, |fd| {
-                let mut iov = libc::iovec {
-                    iov_base: buffer.as_mut_ptr() as *mut libc::c_void,
-                    iov_len: buffer.len(),
-                };
-                let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
-                msg.msg_iov = &mut iov;
-                msg.msg_iovlen = 1;
-                let mut control = vec![0u8; control_capacity];
-                msg.msg_control = control.as_mut_ptr() as *mut libc::c_void;
-                msg.msg_controllen = control.len() as _;
-
-                let received = unsafe { libc::recvmsg(*fd, &mut msg, 0) };
-                if received < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-
-                let mut received_fds = Vec::new();
-                let mut cmsg = unsafe { libc::CMSG_FIRSTHDR(&msg) };
-                while !cmsg.is_null() {
-                    unsafe {
-                        if (*cmsg).cmsg_level == libc::SOL_SOCKET
-                            && (*cmsg).cmsg_type == libc::SCM_RIGHTS
-                        {
-                            let data_ptr = libc::CMSG_DATA(cmsg) as *const RawFd;
-                            let payload_len = ((*cmsg).cmsg_len as usize)
-                                .saturating_sub(libc::CMSG_LEN(0) as usize);
-                            let fd_count = payload_len / std::mem::size_of::<RawFd>();
-                            let fd_slice = std::slice::from_raw_parts(data_ptr, fd_count);
-                            received_fds.extend_from_slice(fd_slice);
-                        }
-                        cmsg = libc::CMSG_NXTHDR(&msg, cmsg);
-                    }
-                }
-
-                if msg.msg_flags & libc::MSG_TRUNC != 0 {
-                    for fd in &received_fds {
-                        unsafe {
-                            libc::close(*fd);
-                        }
-                    }
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "truncated datagram on escalate socket",
-                    ));
-                }
-                if msg.msg_flags & libc::MSG_CTRUNC != 0 {
-                    for fd in &received_fds {
-                        unsafe {
-                            libc::close(*fd);
-                        }
-                    }
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "truncated control message on escalate socket",
-                    ));
-                }
-
-                Ok((received as usize, received_fds))
-            })
-            .await?;
-        buffer.truncate(received);
-        let fds = fds
-            .into_iter()
-            .map(|fd| unsafe { OwnedFd::from_raw_fd(fd) })
-            .collect();
-        Ok(ReceivedMessage { data: buffer, fds })
-    }
-
-    async fn send_message(&self, data: &[u8]) -> anyhow::Result<()> {
-        use std::os::unix::io::RawFd;
-        use tokio::io::unix::AsyncFd;
-        let fd = self.fd as RawFd;
-        let async_fd = AsyncFd::new(fd)?;
-        async_fd
-            .async_io(Interest::WRITABLE, |fd| {
-                let mut iov = libc::iovec {
-                    iov_base: data.as_ptr() as *mut libc::c_void,
-                    iov_len: data.len(),
-                };
-                let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
-                msg.msg_iov = &mut iov;
-                msg.msg_iovlen = 1;
-
-                let written = unsafe { libc::sendmsg(*fd, &msg, 0) };
-                if written < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                if written as usize != data.len() {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::WriteZero,
-                        "partial datagram send on escalate socket",
-                    ));
-                }
-                Ok(())
-            })
-            .await?;
-        Ok(())
-    }
-
-    async fn send_message_with_fds(&self, data: &[u8], fds: &[RawFd]) -> anyhow::Result<()> {
-        use tokio::io::unix::AsyncFd;
-
-        if fds.is_empty() {
-            return self.send_message(data).await;
-        }
-
-        let fd = self.fd;
-        let async_fd = AsyncFd::new(fd)?;
-        async_fd
-            .async_io(Interest::WRITABLE, |fd| {
-                let mut iov = libc::iovec {
-                    iov_base: data.as_ptr() as *mut libc::c_void,
-                    iov_len: data.len(),
-                };
-                let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
-                msg.msg_iov = &mut iov;
-                msg.msg_iovlen = 1;
-
-                let fd_bytes = std::mem::size_of_val(fds);
-                let control_len = unsafe { libc::CMSG_SPACE(fd_bytes as _) as usize };
-                let mut control = vec![0u8; control_len];
-                msg.msg_control = control.as_mut_ptr() as *mut libc::c_void;
-                msg.msg_controllen = control_len as _;
-
-                let cmsg = unsafe { libc::CMSG_FIRSTHDR(&msg) };
-                if cmsg.is_null() {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "failed to build control message",
-                    ));
-                }
-
-                unsafe {
-                    (*cmsg).cmsg_level = libc::SOL_SOCKET;
-                    (*cmsg).cmsg_type = libc::SCM_RIGHTS;
-                    (*cmsg).cmsg_len = libc::CMSG_LEN(fd_bytes as _) as _;
-                    let data_ptr = libc::CMSG_DATA(cmsg) as *mut RawFd;
-                    std::ptr::copy_nonoverlapping(fds.as_ptr(), data_ptr, fds.len());
-                }
-
-                let written = unsafe { libc::sendmsg(*fd, &msg, 0) };
-                if written < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                if written as usize != data.len() {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::WriteZero,
-                        "partial datagram send on escalate socket",
-                    ));
-                }
-                Ok(())
-            })
-            .await?;
-        Ok(())
-    }
-}
-
-impl Drop for DgramSocket {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = libc::close(self.fd);
-        }
-    }
-}
-*/
-
 fn assume_init(buf: &[MaybeUninit<u8>]) -> &[u8] {
     unsafe { std::slice::from_raw_parts(buf.as_ptr().cast(), buf.len()) }
-}
-fn bytes_to_string(buf: &[MaybeUninit<u8>]) -> String {
-    let bytes = assume_init(buf);
-    String::from_utf8_lossy(bytes).to_string()
 }
 fn control_space_for_fds(count: usize) -> usize {
     unsafe { libc::CMSG_SPACE((count * size_of::<RawFd>()) as _) as usize }
@@ -344,10 +140,14 @@ fn receive_message(socket: &Socket) -> std::io::Result<ReceivedMessage> {
     let fds = extract_fds(&mut control, control_len)?;
     Ok(ReceivedMessage { data: message, fds })
 }
-fn send_message(
+fn receive_json_message<T: for<'de> Deserialize<'de>>(
     socket: &Socket,
-    SentMessage { data, fds }: SentMessage<'_>,
-) -> std::io::Result<()> {
+) -> std::io::Result<(T, Vec<OwnedFd>)> {
+    let ReceivedMessage { data, fds } = receive_message(socket)?;
+    let message: T = serde_json::from_slice(&data)?;
+    Ok((message, fds))
+}
+fn send_message_bytes(socket: &Socket, data: &[u8], fds: &[BorrowedFd<'_>]) -> std::io::Result<()> {
     if fds.len() > MAX_FDS_PER_MESSAGE {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -366,10 +166,19 @@ fn send_message(
         }
     }
 
-    let payload = [IoSlice::new(&data)];
+    let payload = [IoSlice::new(data)];
     let msg = MsgHdr::new().with_buffers(&payload).with_control(&control);
     socket.sendmsg(&msg, 0)?;
     Ok(())
+}
+
+fn send_json_message<T: ?Sized + Serialize>(
+    socket: &Socket,
+    msg: &T,
+    fds: &[BorrowedFd<'_>],
+) -> std::io::Result<()> {
+    let data = serde_json::to_vec(msg)?;
+    send_message_bytes(socket, &data, fds)
 }
 
 struct EscalateSocket {
@@ -403,7 +212,7 @@ pub struct ExecResult {
     pub timed_out: bool,
 }
 
-fn decide_escalate(file: &str, argv: &[String], workdir: &str) -> EscalateAction {
+fn decide_escalate(file: &str, _argv: &[String], _workdir: &str) -> EscalateAction {
     if file == "/bin/echo" {
         EscalateAction::Escalate
     } else {
@@ -419,18 +228,18 @@ async fn super_exec_task(
 ) -> anyhow::Result<()> {
     socket.set_nonblocking(true)?;
     let server_async_fd = AsyncFd::new(socket)?;
-    let msg = server_async_fd
-        .async_io(Interest::READABLE, receive_message)
+    let (msg, fds) = server_async_fd
+        .async_io(Interest::READABLE, |socket| {
+            receive_json_message::<SuperExecMessage>(socket)
+        })
         .await
         .context("failed to receive message")?;
-    let message: SuperExecMessage = serde_json::from_slice(&msg.data)?;
-    assert_eq!(msg.fds.len(), message.fds.len());
+    assert_eq!(fds.len(), msg.fds.len());
 
     assert!(
-        message
-            .fds
+        msg.fds
             .iter()
-            .all(|src_fd| !msg.fds.iter().any(|dst_fd| dst_fd.as_raw_fd() == *src_fd)),
+            .all(|src_fd| !fds.iter().any(|dst_fd| dst_fd.as_raw_fd() == *src_fd)),
         "TODO: handle overlapping fds"
     );
 
@@ -443,7 +252,7 @@ async fn super_exec_task(
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .pre_exec(move || {
-                for (dst_fd, src_fd) in message.fds.iter().zip(&msg.fds) {
+                for (dst_fd, src_fd) in msg.fds.iter().zip(&fds) {
                     libc::dup2(src_fd.as_raw_fd(), *dst_fd);
                 }
                 Ok(())
@@ -458,13 +267,7 @@ async fn super_exec_task(
     };
     server_async_fd
         .async_io(Interest::WRITABLE, |server| {
-            send_message(
-                server,
-                SentMessage {
-                    data: serde_json::to_vec(&result)?,
-                    fds: vec![],
-                },
-            )
+            send_json_message(server, &result, &[])
         })
         .await
         .context("failed to receive message")?;
@@ -476,17 +279,18 @@ async fn escalate_task(socket: Socket) -> anyhow::Result<()> {
     socket.set_nonblocking(true)?;
     let server_async_fd = AsyncFd::new(socket)?;
     loop {
-        let msg = server_async_fd
-            .async_io(Interest::READABLE, receive_message)
+        let (msg, _) = server_async_fd
+            .async_io(Interest::READABLE, |socket| {
+                receive_json_message::<ClientMessage>(socket)
+            })
             .await
             .context("failed to receive message")?;
 
-        let message: ClientMessage = serde_json::from_slice(&msg.data)?;
         let ClientMessage::EscalateRequest {
             file,
             argv,
             workdir,
-        } = message;
+        } = msg;
         /*
         let response = context
             .peer
@@ -549,15 +353,10 @@ async fn escalate_task(socket: Socket) -> anyhow::Result<()> {
                 tokio::spawn(super_exec_task(super_exec_server, file, argv, workdir));
                 server_async_fd
                     .async_io(Interest::WRITABLE, |server| {
-                        let data = serde_json::to_vec(&ServerMessage::EscalateResponse(
-                            EscalateAction::Escalate,
-                        ))?;
-                        send_message(
+                        send_json_message(
                             server,
-                            SentMessage {
-                                data,
-                                fds: vec![super_exec_client.as_fd()],
-                            },
+                            &ServerMessage::EscalateResponse(EscalateAction::Escalate),
+                            &[super_exec_client.as_fd()],
                         )
                     })
                     .await
@@ -641,7 +440,7 @@ impl ExecTool {
     #[tool(description = "Runs a shell command and returns its output.")]
     async fn shell(
         &self,
-        context: RequestContext<RoleServer>,
+        _context: RequestContext<RoleServer>,
         Parameters(ExecParams {
             command,
             workdir,
@@ -768,28 +567,25 @@ async fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .with_ansi(false)
         .init();
-    #[allow(clippy::expect_used)]
+
     if let Some(subcommand) = cli.subcommand {
         match subcommand {
             Commands::Escalate(args) => {
                 let client_fd = std::env::var("CODEX_ESCALATE_SOCKET")
-                    .expect("CODEX_ESCALATE_SOCKET is not set")
+                    .context("CODEX_ESCALATE_SOCKET is not set")?
                     .parse::<i32>()
-                    .expect("CODEX_ESCALATE_SOCKET is not a valid integer");
+                    .context("CODEX_ESCALATE_SOCKET is not a valid integer")?;
                 let client = unsafe { Socket::from_raw_fd(client_fd) };
                 let message = ClientMessage::EscalateRequest {
                     file: args.file.clone(),
                     argv: args.argv.clone(),
                     workdir: std::env::current_dir()
-                        .expect("failed to get current directory")
+                        .context("failed to get current directory")?
                         .to_string_lossy()
                         .to_string(),
                 };
-                let message = serde_json::to_vec(&message).expect("failed to serialize message");
-                client.send(&message)?;
-                let ReceivedMessage { data, mut fds } = receive_message(&client)?;
-                let message: ServerMessage =
-                    serde_json::from_slice(&data).expect("failed to deserialize message");
+                send_json_message(&client, &message, &[])?;
+                let (message, mut fds) = receive_json_message::<ServerMessage>(&client)?;
                 let ServerMessage::EscalateResponse(action) = message;
                 match action {
                     EscalateAction::Escalate => {
@@ -812,23 +608,21 @@ async fn main() -> anyhow::Result<()> {
                         let message = SuperExecMessage {
                             fds: fds.iter().map(AsRawFd::as_raw_fd).collect(),
                         };
-                        let data = serde_json::to_vec(&message)?;
-                        send_message(&escalate_socket, SentMessage { data, fds })?;
-                        let ReceivedMessage { data, .. } = receive_message(&escalate_socket)?;
-                        let message: SuperExecResult =
-                            serde_json::from_slice(&data).expect("failed to deserialize message");
+                        send_json_message(&escalate_socket, &message, &fds)?;
+                        let (message, _) =
+                            receive_json_message::<SuperExecResult>(&escalate_socket)?;
                         let SuperExecResult { exit_code } = message;
                         std::process::exit(exit_code);
                     }
                     EscalateAction::RunInSandbox => {
                         use std::ffi::CString;
-                        let file = CString::new(args.file.as_str()).expect("NUL in file");
+                        let file = CString::new(args.file.as_str()).context("NUL in file")?;
 
                         let argv_cstrs: Vec<CString> = args
                             .argv
                             .iter()
-                            .map(|s| CString::new(s.as_str()).expect("NUL in argv"))
-                            .collect();
+                            .map(|s| CString::new(s.as_str()).context("NUL in argv"))
+                            .collect::<Result<Vec<_>, _>>()?;
 
                         let mut argv: Vec<*const libc::c_char> =
                             argv_cstrs.iter().map(|s| s.as_ptr()).collect();
@@ -847,7 +641,7 @@ async fn main() -> anyhow::Result<()> {
                 let result = shell_exec(ExecParams {
                     command: args.command.clone(),
                     workdir: std::env::current_dir()
-                        .expect("failed to get current directory")
+                        .context("failed to get current directory")?
                         .to_string_lossy()
                         .to_string(),
                     timeout_ms: None,
