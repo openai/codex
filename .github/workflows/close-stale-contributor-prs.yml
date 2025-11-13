@@ -102,4 +102,5 @@ jobs:
               });
 
               core.info(`Closed contributor PR #${issue_number} from ${pr.user.login}`);
+              return;
             }
