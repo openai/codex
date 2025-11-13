@@ -17,12 +17,12 @@ use std::sync::Arc;
 use crate::decision::Decision;
 use crate::error::Error;
 use crate::error::Result;
-use crate::policy::validate_match_examples;
-use crate::policy::validate_not_match_examples;
 use crate::rule::PatternToken;
 use crate::rule::PrefixPattern;
 use crate::rule::PrefixRule;
 use crate::rule::RuleRef;
+use crate::rule::validate_match_examples;
+use crate::rule::validate_not_match_examples;
 
 // todo: support parsing multiple policies
 pub struct PolicyParser;
