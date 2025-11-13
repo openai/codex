@@ -20,10 +20,8 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
 use eventsource_stream::Eventsource;
 use futures::Stream;
-use futures::StreamExt;
 use futures::TryStreamExt;
 use reqwest::StatusCode;
 use serde_json::json;
@@ -31,7 +29,6 @@ use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
 use tokio::sync::mpsc;
-use tokio::time::timeout;
 use tracing::trace;
 
 /// Implementation for the classic Chat Completions API.
@@ -357,14 +354,7 @@ pub(crate) async fn stream_chat_completions(
     }
 
     if let SessionSource::SubAgent(sub) = session_source {
-        let subagent = if let SubAgentSource::Other(label) = sub {
-            label.clone()
-        } else {
-            serde_json::to_value(sub)
-                .ok()
-                .and_then(|v| v.as_str().map(std::string::ToString::to_string))
-                .unwrap_or_else(|| "other".to_string())
-        };
+        let subagent = crate::client::types::subagent_label(sub);
         body["metadata"] = json!({
             "x-openai-subagent": subagent,
         });
@@ -557,21 +547,15 @@ async fn process_chat_sse<S>(
     let mut reasoning_item: Option<ResponseItem> = None;
 
     loop {
-        let start = std::time::Instant::now();
-        let response = timeout(idle_timeout, stream.next()).await;
-        let duration = start.elapsed();
-        otel_event_manager.log_sse_event(&response, duration);
-
-        let sse = match response {
-            Ok(Some(Ok(ev))) => ev,
-            Ok(Some(Err(e))) => {
-                let _ = tx_event
-                    .send(Err(CodexErr::Stream(e.to_string(), None)))
-                    .await;
-                return;
-            }
-            Ok(None) => {
-                // Stream closed gracefully – emit Completed with dummy id.
+        let sse = match crate::client::sse::next_sse_event(
+            &mut stream,
+            idle_timeout,
+            &otel_event_manager,
+        )
+        .await
+        {
+            crate::client::sse::SseNext::Event(ev) => ev,
+            crate::client::sse::SseNext::Eof => {
                 let _ = tx_event
                     .send(Ok(ResponseEvent::Completed {
                         response_id: String::new(),
@@ -580,7 +564,11 @@ async fn process_chat_sse<S>(
                     .await;
                 return;
             }
-            Err(_) => {
+            crate::client::sse::SseNext::StreamError(message) => {
+                let _ = tx_event.send(Err(CodexErr::Stream(message, None))).await;
+                return;
+            }
+            crate::client::sse::SseNext::Timeout => {
                 let _ = tx_event
                     .send(Err(CodexErr::Stream(
                         "idle timeout waiting for SSE".into(),

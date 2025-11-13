@@ -1,6 +1,7 @@
 mod chat_completions;
 pub mod http;
 mod responses;
+mod sse;
 pub mod types;
 
 pub(crate) use chat_completions::AggregateStreamExt;

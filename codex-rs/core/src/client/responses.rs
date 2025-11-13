@@ -20,7 +20,6 @@ use reqwest::header::HeaderMap;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::mpsc;
-use tokio::time::timeout;
 use tracing::debug;
 use tracing::trace;
 use tracing::warn;
@@ -311,14 +310,7 @@ impl ModelClient {
 
         // Include subagent header only for subagent sessions.
         if let SessionSource::SubAgent(sub) = &self.session_source {
-            let subagent = if let crate::protocol::SubAgentSource::Other(label) = sub {
-                label.clone()
-            } else {
-                serde_json::to_value(sub)
-                    .ok()
-                    .and_then(|v| v.as_str().map(std::string::ToString::to_string))
-                    .unwrap_or_else(|| "other".to_string())
-            };
+            let subagent = crate::client::types::subagent_label(sub);
             req_builder = req_builder.header("x-openai-subagent", subagent);
         }
 
@@ -700,13 +692,10 @@ async fn process_sse(
     let mut response_error: Option<CodexErr> = None;
 
     loop {
-        let start = tokio::time::Instant::now();
-        let next_event = timeout(idle_timeout, stream.next()).await;
-        let duration = start.elapsed();
-        otel_event_manager.log_sse_event(&next_event, duration);
-
-        match next_event {
-            Ok(Some(Ok(ev))) => {
+        match crate::client::sse::next_sse_event(&mut stream, idle_timeout, &otel_event_manager)
+            .await
+        {
+            crate::client::sse::SseNext::Event(ev) => {
                 if let Err(e) =
                     handle_sse_event(ev, &mut response_completed, &mut response_error, &tx_event)
                         .await
@@ -715,16 +704,14 @@ async fn process_sse(
                     break;
                 }
             }
-            Ok(Some(Err(e))) => {
-                let _ = tx_event
-                    .send(Err(CodexErr::Stream(e.to_string(), None)))
-                    .await;
-                return;
-            }
-            Ok(None) => {
+            crate::client::sse::SseNext::Eof => {
                 break;
             }
-            Err(_) => {
+            crate::client::sse::SseNext::StreamError(message) => {
+                let _ = tx_event.send(Err(CodexErr::Stream(message, None))).await;
+                return;
+            }
+            crate::client::sse::SseNext::Timeout => {
                 let _ = tx_event
                     .send(Err(CodexErr::Stream(
                         "idle timeout waiting for SSE".to_string(),

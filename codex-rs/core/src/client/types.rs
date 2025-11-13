@@ -1,5 +1,6 @@
 use crate::error::Result;
 use crate::protocol::RateLimitSnapshot;
+use crate::protocol::SubAgentSource;
 use crate::protocol::TokenUsage;
 use crate::tools::spec::JsonSchema;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
@@ -28,6 +29,17 @@ pub enum ResponseEvent {
     ReasoningContentDelta(String),
     ReasoningSummaryPartAdded,
     RateLimits(RateLimitSnapshot),
+}
+
+pub(crate) fn subagent_label(sub: &SubAgentSource) -> String {
+    if let SubAgentSource::Other(label) = sub {
+        label.clone()
+    } else {
+        serde_json::to_value(sub)
+            .ok()
+            .and_then(|v| v.as_str().map(std::string::ToString::to_string))
+            .unwrap_or_else(|| "other".to_string())
+    }
 }
 
 #[derive(Debug, Serialize)]
