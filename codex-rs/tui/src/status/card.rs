@@ -215,9 +215,10 @@ impl StatusHistoryCell {
         let mut lines = Vec::with_capacity(rows.len().saturating_mul(2));
 
         for row in rows {
-            let percent_remaining = (100.0 - row.percent_used).clamp(0.0, 100.0);
+            let percent_used = row.percent_used.clamp(0.0, 100.0);
+            let percent_remaining = (100.0 - percent_used).clamp(0.0, 100.0);
             let value_spans = vec![
-                Span::from(render_status_limit_progress_bar(percent_remaining)),
+                Span::from(render_status_limit_progress_bar(percent_used)),
                 Span::from(" "),
                 Span::from(format_status_limit_summary(percent_remaining)),
             ];
