@@ -485,7 +485,10 @@ pub enum ThreadItem {
     },
     Reasoning {
         id: String,
-        text: String,
+        #[serde(default)]
+        summary: Vec<String>,
+        #[serde(default)]
+        content: Vec<String>,
     },
     CommandExecution {
         id: String,
@@ -544,17 +547,11 @@ impl From<CoreTurnItem> for ThreadItem {
                     .collect::<String>();
                 ThreadItem::AgentMessage { id: agent.id, text }
             }
-            CoreTurnItem::Reasoning(reasoning) => {
-                let text = if !reasoning.summary_text.is_empty() {
-                    reasoning.summary_text.join("\n")
-                } else {
-                    reasoning.raw_content.join("\n")
-                };
-                ThreadItem::Reasoning {
-                    id: reasoning.id,
-                    text,
-                }
-            }
+            CoreTurnItem::Reasoning(reasoning) => ThreadItem::Reasoning {
+                id: reasoning.id,
+                summary: reasoning.summary_text,
+                content: reasoning.raw_content,
+            },
             CoreTurnItem::WebSearch(search) => ThreadItem::WebSearch {
                 id: search.id,
                 query: search.query,
@@ -691,9 +688,10 @@ pub struct AgentMessageDeltaNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ReasoningDeltaNotification {
+pub struct ReasoningSummaryTextDeltaNotification {
     pub item_id: String,
     pub delta: String,
+    pub summary_index: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -701,6 +699,16 @@ pub struct ReasoningDeltaNotification {
 #[ts(export_to = "v2/")]
 pub struct ReasoningSummaryPartAddedNotification {
     pub item_id: String,
+    pub summary_index: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ReasoningTextDeltaNotification {
+    pub item_id: String,
+    pub delta: String,
+    pub content_index: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -851,7 +859,8 @@ mod tests {
             ThreadItem::from(reasoning_item),
             ThreadItem::Reasoning {
                 id: "reasoning-1".to_string(),
-                text: "line one\nline two".to_string(),
+                summary: vec!["line one".to_string(), "line two".to_string()],
+                content: vec![],
             }
         );
 

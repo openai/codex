@@ -63,8 +63,9 @@ use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::NewConversationResponse;
-use codex_app_server_protocol::ReasoningDeltaNotification;
 use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
+use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
+use codex_app_server_protocol::ReasoningTextDeltaNotification;
 use codex_app_server_protocol::RemoveConversationListenerParams;
 use codex_app_server_protocol::RemoveConversationSubscriptionResponse;
 use codex_app_server_protocol::RequestId;
@@ -131,8 +132,6 @@ use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::Op;
-use codex_core::protocol::ReasoningContentDeltaEvent;
-use codex_core::protocol::ReasoningRawContentDeltaEvent;
 use codex_core::protocol::ReviewDecision;
 use codex_core::read_head_for_summary;
 use codex_feedback::CodexFeedback;
@@ -2588,22 +2587,32 @@ async fn apply_bespoke_event_handling(
                 .send_server_notification(ServerNotification::AgentMessageDelta(notification))
                 .await;
         }
-        // The logic of whether to emit reasoning summary or reasoning raw content delta is handled in the core.
-        // The client just receives ReasoningDelta notifications and handles both cases the same way.
-        EventMsg::ReasoningContentDelta(ReasoningContentDeltaEvent { item_id, delta, .. })
-        | EventMsg::ReasoningRawContentDelta(ReasoningRawContentDeltaEvent {
-            item_id,
-            delta,
-            ..
-        }) => {
-            let notification = ReasoningDeltaNotification { item_id, delta };
+        EventMsg::ReasoningContentDelta(event) => {
+            let notification = ReasoningSummaryTextDeltaNotification {
+                item_id: event.item_id,
+                delta: event.delta,
+                summary_index: event.summary_index,
+            };
             outgoing
-                .send_server_notification(ServerNotification::ReasoningDelta(notification))
+                .send_server_notification(ServerNotification::ReasoningSummaryTextDelta(
+                    notification,
+                ))
+                .await;
+        }
+        EventMsg::ReasoningRawContentDelta(event) => {
+            let notification = ReasoningTextDeltaNotification {
+                item_id: event.item_id,
+                delta: event.delta,
+                content_index: event.content_index,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ReasoningTextDelta(notification))
                 .await;
         }
         EventMsg::AgentReasoningSectionBreak(event) => {
             let notification = ReasoningSummaryPartAddedNotification {
                 item_id: event.item_id,
+                summary_index: event.summary_index,
             };
             outgoing
                 .send_server_notification(ServerNotification::ReasoningSummaryPartAdded(
