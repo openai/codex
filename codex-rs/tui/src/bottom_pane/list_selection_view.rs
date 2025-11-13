@@ -559,7 +559,7 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let items = vec![
             SelectionItem {
-                name: "gpt-5.1-codex (current)".to_string(),
+                name: "gpt-5.1-codex".to_string(),
                 description: Some(
                     "Optimized for Codex. Balance of reasoning quality and coding ability."
                         .to_string(),
@@ -632,6 +632,80 @@ mod tests {
         assert!(
             rendered.contains("3."),
             "third option missing for width 24:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn snapshot_model_picker_width_80() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let items = vec![
+            SelectionItem {
+                name: "gpt-5.1-codex".to_string(),
+                description: Some(
+                    "Optimized for Codex. Balance of reasoning quality and coding ability."
+                        .to_string(),
+                ),
+                is_current: true,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "gpt-5.1-codex-mini".to_string(),
+                description: Some(
+                    "Optimized for Codex. Cheaper, faster, but less capable.".to_string(),
+                ),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "gpt-4.1-codex".to_string(),
+                description: Some(
+                    "Legacy model. Use when you need compatibility with older automations."
+                        .to_string(),
+                ),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+        let view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Select Model and Effort".to_string()),
+                items,
+                ..Default::default()
+            },
+            tx,
+        );
+        assert_snapshot!(
+            "list_selection_model_picker_width_80",
+            render_lines_with_width(&view, 80)
+        );
+    }
+
+    #[test]
+    fn snapshot_narrow_width_preserves_third_option() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let desc = "x".repeat(10);
+        let items: Vec<SelectionItem> = (1..=3)
+            .map(|idx| SelectionItem {
+                name: format!("Item {idx}"),
+                description: Some(desc.clone()),
+                dismiss_on_select: true,
+                ..Default::default()
+            })
+            .collect();
+        let view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Debug".to_string()),
+                items,
+                ..Default::default()
+            },
+            tx,
+        );
+        assert_snapshot!(
+            "list_selection_narrow_width_preserves_rows",
+            render_lines_with_width(&view, 24)
         );
     }
 }
