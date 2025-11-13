@@ -1153,7 +1153,6 @@ dependencies = [
  "serde",
  "serde_json",
  "shlex",
- "socket2 0.6.0",
  "supports-color",
  "tempfile",
  "tokio",
