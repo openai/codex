@@ -37,7 +37,7 @@ jobs:
             });
 
             for (const pr of prs) {
-              core.info(`PR: ${pr}`);
+              core.info(`PR: ${JSON.stringify(pr)}`);
               const lastUpdated = new Date(pr.updated_at);
               if (lastUpdated > cutoff) {
                 continue;
