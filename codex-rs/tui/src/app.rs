@@ -23,8 +23,10 @@ use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
+use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::FinalOutput;
+use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
@@ -534,8 +536,59 @@ impl App {
             AppEvent::OpenFeedbackConsent { category } => {
                 self.chat_widget.open_feedback_consent(category);
             }
-            AppEvent::ShowWindowsAutoModeInstructions => {
-                self.chat_widget.open_windows_auto_mode_instructions();
+            AppEvent::OpenWindowsSandboxEnablePrompt { preset } => {
+                self.chat_widget.open_windows_sandbox_enable_prompt(preset);
+            }
+            AppEvent::EnableWindowsSandboxForAuto { preset } => {
+                #[cfg(target_os = "windows")]
+                {
+                    let profile = self.active_profile.as_deref();
+                    let feature_key = Feature::WindowsSandbox.key();
+                    match ConfigEditsBuilder::new(&self.config.codex_home)
+                        .with_profile(profile)
+                        .set_feature_enabled(feature_key, true)
+                        .apply()
+                        .await
+                    {
+                        Ok(()) => {
+                            codex_core::set_windows_sandbox_enabled(true);
+                            self.config.features.enable(Feature::WindowsSandbox);
+                            self.config.forced_auto_mode_downgraded_on_windows = false;
+                            self.chat_widget.clear_forced_auto_mode_downgrade();
+                            self.app_event_tx
+                                .send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                                    cwd: None,
+                                    approval_policy: Some(preset.approval),
+                                    sandbox_policy: Some(preset.sandbox.clone()),
+                                    model: None,
+                                    effort: None,
+                                    summary: None,
+                                }));
+                            self.app_event_tx
+                                .send(AppEvent::UpdateAskForApprovalPolicy(preset.approval));
+                            self.app_event_tx
+                                .send(AppEvent::UpdateSandboxPolicy(preset.sandbox.clone()));
+                            self.chat_widget.add_info_message(
+                                "Enabled the Windows sandbox feature and switched to Auto mode."
+                                    .to_string(),
+                                None,
+                            );
+                        }
+                        Err(err) => {
+                            tracing::error!(
+                                error = %err,
+                                "failed to enable Windows sandbox feature"
+                            );
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to enable the Windows sandbox feature: {err}"
+                            ));
+                        }
+                    }
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = preset;
+                }
             }
             AppEvent::PersistModelSelection { model, effort } => {
                 let profile = self.active_profile.as_deref();
@@ -590,6 +643,13 @@ impl App {
                         | codex_core::protocol::SandboxPolicy::ReadOnly
                 );
 
+                self.config.sandbox_policy = policy.clone();
+                #[cfg(target_os = "windows")]
+                if !matches!(policy, codex_core::protocol::SandboxPolicy::ReadOnly)
+                    || codex_core::get_platform_sandbox().is_some()
+                {
+                    self.config.forced_auto_mode_downgraded_on_windows = false;
+                }
                 self.chat_widget.set_sandbox_policy(policy);
 
                 // If sandbox policy becomes workspace-write or read-only, run the Windows world-writable scan.

@@ -83,7 +83,6 @@ mod wrapping;
 pub mod test_backend;
 
 use crate::onboarding::TrustDirectorySelection;
-use crate::onboarding::WSL_INSTRUCTIONS;
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;
 use crate::tui::Tui;
@@ -333,20 +332,13 @@ async fn run_ratatui_app(
     );
     let login_status = get_login_status(&initial_config);
     let should_show_trust_screen = should_show_trust_screen(&initial_config);
-    let should_show_windows_wsl_screen =
-        cfg!(target_os = "windows") && !initial_config.windows_wsl_setup_acknowledged;
-    let should_show_onboarding = should_show_onboarding(
-        login_status,
-        &initial_config,
-        should_show_trust_screen,
-        should_show_windows_wsl_screen,
-    );
+    let should_show_onboarding =
+        should_show_onboarding(login_status, &initial_config, should_show_trust_screen);
 
     let config = if should_show_onboarding {
         let onboarding_result = run_onboarding_app(
             OnboardingScreenArgs {
                 show_login_screen: should_show_login_screen(login_status, &initial_config),
-                show_windows_wsl_screen: should_show_windows_wsl_screen,
                 show_trust_screen: should_show_trust_screen,
                 login_status,
                 auth_manager: auth_manager.clone(),
@@ -365,25 +357,11 @@ async fn run_ratatui_app(
                 update_action: None,
             });
         }
-        if onboarding_result.windows_install_selected {
-            restore();
-            session_log::log_session_end();
-            let _ = tui.terminal.clear();
-            if let Err(err) = writeln!(std::io::stdout(), "{WSL_INSTRUCTIONS}") {
-                tracing::error!("Failed to write WSL instructions: {err}");
-            }
-            return Ok(AppExitInfo {
-                token_usage: codex_core::protocol::TokenUsage::default(),
-                conversation_id: None,
-                update_action: None,
-            });
-        }
         // if the user acknowledged windows or made an explicit decision ato trust the directory, reload the config accordingly
-        if should_show_windows_wsl_screen
-            || onboarding_result
-                .directory_trust_decision
-                .map(|d| d == TrustDirectorySelection::Trust)
-                .unwrap_or(false)
+        if onboarding_result
+            .directory_trust_decision
+            .map(|d| d == TrustDirectorySelection::Trust)
+            .unwrap_or(false)
         {
             load_config_or_exit(cli_kv_overrides, overrides).await
         } else {
@@ -533,7 +511,7 @@ async fn load_config_or_exit(
 /// show the trust screen.
 fn should_show_trust_screen(config: &Config) -> bool {
     if cfg!(target_os = "windows") && get_platform_sandbox().is_none() {
-        // If the experimental sandbox is not enabled, Native Windows cannot enforce sandboxed write access without WSL; skip the trust prompt entirely.
+        // If the experimental sandbox is not enabled, Native Windows cannot enforce sandboxed write access; skip the trust prompt entirely.
         return false;
     }
     if config.did_user_set_custom_approval_policy_or_sandbox_mode {
@@ -548,12 +526,7 @@ fn should_show_onboarding(
     login_status: LoginStatus,
     config: &Config,
     show_trust_screen: bool,
-    show_windows_wsl_screen: bool,
 ) -> bool {
-    if show_windows_wsl_screen {
-        return true;
-    }
-
     if show_trust_screen {
         return true;
     }

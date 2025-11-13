@@ -43,6 +43,8 @@ use codex_core::protocol::UndoCompletedEvent;
 use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
+#[cfg(target_os = "windows")]
+use codex_core::set_windows_sandbox_enabled;
 use codex_protocol::ConversationId;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg;
@@ -1526,25 +1528,50 @@ fn approvals_selection_popup_snapshot() {
 }
 
 #[test]
-fn approvals_popup_includes_wsl_note_for_auto_mode() {
+fn approvals_popup_includes_windows_sandbox_note_for_auto_mode() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
     if cfg!(target_os = "windows") {
+        set_windows_sandbox_enabled(false);
         chat.config.forced_auto_mode_downgraded_on_windows = true;
     }
     chat.open_approvals_popup();
 
     let popup = render_bottom_popup(&chat, 80);
     assert_eq!(
-        popup.contains("Requires Windows Subsystem for Linux (WSL)"),
+        popup.contains("experimental Windows sandbox feature"),
         cfg!(target_os = "windows"),
-        "expected auto preset description to mention WSL requirement only on Windows, popup: {popup}"
+        "expected auto preset description to mention Windows sandbox requirement only on Windows, popup: {popup}"
     );
+    let downgrade_notice =
+        "Codex forced your settings back to Read Only because the Windows sandbox";
+    let downgrade_notice_present = popup.contains(downgrade_notice);
+    let expected_downgrade_notice = cfg!(target_os = "windows")
+        && chat.config.forced_auto_mode_downgraded_on_windows
+        && codex_core::get_platform_sandbox().is_none();
     assert_eq!(
-        popup.contains("Codex forced your settings back to Read Only on this Windows machine."),
-        cfg!(target_os = "windows") && chat.config.forced_auto_mode_downgraded_on_windows,
+        downgrade_notice_present, expected_downgrade_notice,
         "expected downgrade notice only when auto mode is forced off on Windows, popup: {popup}"
     );
+    if cfg!(target_os = "windows") {
+        set_windows_sandbox_enabled(true);
+        chat.open_approvals_popup();
+        let popup_with_sandbox = render_bottom_popup(&chat, 80);
+        assert!(
+            !popup_with_sandbox.contains(downgrade_notice),
+            "expected downgrade notice to disappear once the Windows sandbox is available, popup: {popup_with_sandbox}"
+        );
+
+        set_windows_sandbox_enabled(false);
+        chat.config.forced_auto_mode_downgraded_on_windows = true;
+        chat.set_sandbox_policy(codex_core::protocol::SandboxPolicy::DangerFullAccess);
+        chat.open_approvals_popup();
+        let popup_with_full_access = render_bottom_popup(&chat, 80);
+        assert!(
+            !popup_with_full_access.contains(downgrade_notice),
+            "expected downgrade notice to be cleared when switching to Full Access, popup: {popup_with_full_access}"
+        );
+    }
 }
 
 #[test]
@@ -1563,15 +1590,19 @@ fn full_access_confirmation_popup_snapshot() {
 
 #[cfg(target_os = "windows")]
 #[test]
-fn windows_auto_mode_instructions_popup_lists_install_steps() {
+fn windows_auto_mode_prompt_requests_enabling_sandbox_feature() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
-    chat.open_windows_auto_mode_instructions();
+    let preset = builtin_approval_presets()
+        .into_iter()
+        .find(|preset| preset.id == "auto")
+        .expect("auto preset");
+    chat.open_windows_sandbox_enable_prompt(preset);
 
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        popup.contains("wsl --install"),
-        "expected WSL instructions popup to include install command, popup: {popup}"
+        popup.contains("experimental Windows sandbox"),
+        "expected auto mode prompt to mention enabling the sandbox feature, popup: {popup}"
     );
 }
 

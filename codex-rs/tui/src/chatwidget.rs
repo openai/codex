@@ -88,8 +88,6 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PlainHistoryCell;
 use crate::markdown::append_markdown;
-#[cfg(target_os = "windows")]
-use crate::onboarding::WSL_INSTRUCTIONS;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::FlexRenderable;
@@ -2051,15 +2049,18 @@ impl ChatWidget {
         let header_renderable: Box<dyn Renderable> = if self
             .config
             .forced_auto_mode_downgraded_on_windows
+            && codex_core::get_platform_sandbox().is_none()
         {
             use ratatui_macros::line;
 
             let mut header = ColumnRenderable::new();
             header.push(line![
-                "Codex forced your settings back to Read Only on this Windows machine.".bold()
+                "Codex forced your settings back to Read Only because the Windows sandbox is off."
+                    .bold()
             ]);
             header.push(line![
-                "To re-enable Auto mode, run Codex inside Windows Subsystem for Linux (WSL) or enable Full Access manually.".dim()
+                "Enable the experimental Windows sandbox to re-enable Auto mode, or switch to Full Access manually."
+                    .dim()
                 ]);
             Box::new(header)
         } else {
@@ -2077,7 +2078,7 @@ impl ChatWidget {
                 && codex_core::get_platform_sandbox().is_none()
             {
                 Some(format!(
-                    "{description_text}\nRequires Windows Subsystem for Linux (WSL). Show installation instructions..."
+                    "{description_text}\nEnable the experimental Windows sandbox feature to use Auto mode."
                 ))
             } else {
                 Some(description_text.to_string())
@@ -2099,8 +2100,11 @@ impl ChatWidget {
                 #[cfg(target_os = "windows")]
                 {
                     if codex_core::get_platform_sandbox().is_none() {
-                        vec![Box::new(|tx| {
-                            tx.send(AppEvent::ShowWindowsAutoModeInstructions);
+                        let preset_clone = preset.clone();
+                        vec![Box::new(move |tx| {
+                            tx.send(AppEvent::OpenWindowsSandboxEnablePrompt {
+                                preset: preset_clone.clone(),
+                            });
                         })]
                     } else if !self
                         .config
@@ -2397,21 +2401,33 @@ impl ChatWidget {
     }
 
     #[cfg(target_os = "windows")]
-    pub(crate) fn open_windows_auto_mode_instructions(&mut self) {
+    pub(crate) fn open_windows_sandbox_enable_prompt(&mut self, preset: ApprovalPreset) {
         use ratatui_macros::line;
 
         let mut header = ColumnRenderable::new();
         header.push(line![
-            "Auto mode requires Windows Subsystem for Linux (WSL2).".bold()
+            "Auto mode requires the experimental Windows sandbox.".bold()
         ]);
-        header.push(line!["Run Codex inside WSL to enable sandboxed commands."]);
-        header.push(line![""]);
-        header.push(Paragraph::new(WSL_INSTRUCTIONS).wrap(Wrap { trim: false }));
+        header.push(line!["Turn it on to enable sandboxed commands on Windows."]);
 
+        let preset_clone = preset.clone();
         let items = vec![SelectionItem {
-            name: "Back".to_string(),
+            name: "Turn on Windows sandbox and use Auto mode".to_string(),
             description: Some(
-                "Return to the approval mode list. Auto mode stays disabled outside WSL."
+                "Adds enable_experimental_windows_sandbox = true to config.toml and switches to Auto mode."
+                    .to_string(),
+            ),
+            actions: vec![Box::new(move |tx| {
+                tx.send(AppEvent::EnableWindowsSandboxForAuto {
+                    preset: preset_clone.clone(),
+                });
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        }, SelectionItem {
+            name: "Go Back".to_string(),
+            description: Some(
+                "Stay on read-only or full access without enabling the sandbox feature."
                     .to_string(),
             ),
             actions: vec![Box::new(|tx| {
@@ -2431,7 +2447,15 @@ impl ChatWidget {
     }
 
     #[cfg(not(target_os = "windows"))]
-    pub(crate) fn open_windows_auto_mode_instructions(&mut self) {}
+    pub(crate) fn open_windows_sandbox_enable_prompt(&mut self, _preset: ApprovalPreset) {}
+
+    #[cfg(target_os = "windows")]
+    pub(crate) fn clear_forced_auto_mode_downgrade(&mut self) {
+        self.config.forced_auto_mode_downgraded_on_windows = false;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub(crate) fn clear_forced_auto_mode_downgrade(&mut self) {}
 
     /// Set the approval policy in the widget's config copy.
     pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
@@ -2440,7 +2464,16 @@ impl ChatWidget {
 
     /// Set the sandbox policy in the widget's config copy.
     pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) {
+        #[cfg(target_os = "windows")]
+        let should_clear_downgrade = !matches!(policy, SandboxPolicy::ReadOnly)
+            || codex_core::get_platform_sandbox().is_some();
+
         self.config.sandbox_policy = policy;
+
+        #[cfg(target_os = "windows")]
+        if should_clear_downgrade {
+            self.config.forced_auto_mode_downgraded_on_windows = false;
+        }
     }
 
     pub(crate) fn set_full_access_warning_acknowledged(&mut self, acknowledged: bool) {
