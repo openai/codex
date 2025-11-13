@@ -134,7 +134,6 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             slug, slug,
             supports_reasoning_summaries: true,
             reasoning_summary_format: ReasoningSummaryFormat::Experimental,
-            default_verbosity: Some(Verbosity::Low),
             base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
             experimental_supported_tools: vec![
                 "grep_files".to_string(),
@@ -152,7 +151,6 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             slug, slug,
             supports_reasoning_summaries: true,
             reasoning_summary_format: ReasoningSummaryFormat::Experimental,
-            default_verbosity: Some(Verbosity::Low),
             base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             experimental_supported_tools: vec![
@@ -192,7 +190,6 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             supports_reasoning_summaries: true,
             needs_special_apply_patch_instructions: true,
             support_verbosity: true,
-            default_verbosity: Some(Verbosity::Low),
         )
     } else {
         None
