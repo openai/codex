@@ -167,7 +167,8 @@ fn get_zsh_shell() -> Option<ZshShell> {
 
     shell_path.map(|shell_path| ZshShell {
         shell_path,
-        zshrc_path: get_user_home().and_then(|home| file_exists(format!("{home}/.zshrc").as_str())),
+        zshrc_path: get_user_home()
+            .and_then(|home| file_exists(&PathBuf::from(format!("{home}/.zshrc")))),
     })
 }
 
@@ -177,7 +178,7 @@ fn get_bash_shell() -> Option<BashShell> {
     shell_path.map(|shell_path| BashShell {
         shell_path,
         bashrc_path: get_user_home()
-            .and_then(|home| file_exists(format!("{home}/.bashrc").as_str())),
+            .and_then(|home| file_exists(&PathBuf::from(format!("{home}/.bashrc")))),
     })
 }
 
