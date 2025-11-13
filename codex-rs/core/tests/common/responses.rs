@@ -446,12 +446,6 @@ pub async fn mount_sse_once(server: &MockServer, body: String) -> ResponseMock {
     response_mock
 }
 
-pub async fn mount_sse(server: &MockServer, body: String) -> ResponseMock {
-    let (mock, response_mock) = base_mock();
-    mock.respond_with(sse_response(body)).mount(server).await;
-    response_mock
-}
-
 pub async fn start_mock_server() -> MockServer {
     MockServer::builder()
         .body_print_limit(BodyPrintLimit::Limited(80_000))
