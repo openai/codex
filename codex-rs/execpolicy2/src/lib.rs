@@ -12,3 +12,4 @@ pub use policy::Evaluation;
 pub use policy::Policy;
 pub use rule::Rule;
 pub use rule::RuleMatch;
+pub use rule::RuleRef;

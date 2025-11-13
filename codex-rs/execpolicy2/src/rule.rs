@@ -4,6 +4,8 @@ use crate::error::Result;
 use serde::Deserialize;
 use serde::Serialize;
 use shlex::try_join;
+use std::any::Any;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 /// Matches a single command token, either a fixed string or one of several allowed alternatives.
@@ -77,24 +79,20 @@ pub struct PrefixRule {
     pub decision: Decision,
 }
 
-impl PrefixRule {
-    pub fn matches(&self, cmd: &[String]) -> Option<RuleMatch> {
-        self.pattern
-            .matches_prefix(cmd)
-            .map(|matched_prefix| RuleMatch::PrefixRuleMatch {
-                matched_prefix,
-                decision: self.decision,
-            })
-    }
+pub trait Rule: Any + Debug + Send + Sync {
+    fn program(&self) -> &str;
 
-    pub fn validate_matches(&self, matches: &[Vec<String>]) -> Vec<bool> {
+    fn matches(&self, cmd: &[String]) -> Option<RuleMatch>;
+
+    /// Return a boolean for each example indicating whether this rule matches it.
+    fn validate_matches(&self, matches: &[Vec<String>]) -> Vec<bool> {
         matches
             .iter()
             .map(|example| self.matches(example).is_some())
             .collect()
     }
 
-    pub fn validate_not_matches(&self, not_matches: &[Vec<String>]) -> Result<()> {
+    fn validate_not_matches(&self, not_matches: &[Vec<String>]) -> Result<()> {
         for example in not_matches {
             if self.matches(example).is_some() {
                 return Err(Error::ExampleDidMatch {
@@ -108,34 +106,19 @@ impl PrefixRule {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Rule {
-    Prefix(PrefixRule),
-}
+pub type RuleRef = Arc<dyn Rule>;
 
-impl Rule {
-    pub fn program(&self) -> &str {
-        match self {
-            Self::Prefix(rule) => rule.pattern.first.as_ref(),
-        }
+impl Rule for PrefixRule {
+    fn program(&self) -> &str {
+        self.pattern.first.as_ref()
     }
 
-    pub fn matches(&self, cmd: &[String]) -> Option<RuleMatch> {
-        match self {
-            Self::Prefix(rule) => rule.matches(cmd),
-        }
-    }
-
-    /// Return a boolean for each example indicating whether this rule matches it.
-    pub fn validate_matches(&self, matches: &[Vec<String>]) -> Vec<bool> {
-        match self {
-            Self::Prefix(rule) => rule.validate_matches(matches),
-        }
-    }
-
-    pub fn validate_not_matches(&self, not_matches: &[Vec<String>]) -> Result<()> {
-        match self {
-            Self::Prefix(rule) => rule.validate_not_matches(not_matches),
-        }
+    fn matches(&self, cmd: &[String]) -> Option<RuleMatch> {
+        self.pattern
+            .matches_prefix(cmd)
+            .map(|matched_prefix| RuleMatch::PrefixRuleMatch {
+                matched_prefix,
+                decision: self.decision,
+            })
     }
 }

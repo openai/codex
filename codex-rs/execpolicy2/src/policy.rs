@@ -1,8 +1,8 @@
 use crate::decision::Decision;
 use crate::error::Error;
 use crate::error::Result;
-use crate::rule::Rule;
 use crate::rule::RuleMatch;
+use crate::rule::RuleRef;
 use multimap::MultiMap;
 use serde::Deserialize;
 use serde::Serialize;
@@ -10,15 +10,15 @@ use shlex::try_join;
 
 #[derive(Clone, Debug)]
 pub struct Policy {
-    rules_by_program: MultiMap<String, Rule>,
+    rules_by_program: MultiMap<String, RuleRef>,
 }
 
 impl Policy {
-    pub fn new(rules_by_program: MultiMap<String, Rule>) -> Self {
+    pub fn new(rules_by_program: MultiMap<String, RuleRef>) -> Self {
         Self { rules_by_program }
     }
 
-    pub fn rules(&self) -> &MultiMap<String, Rule> {
+    pub fn rules(&self) -> &MultiMap<String, RuleRef> {
         &self.rules_by_program
     }
 
@@ -60,7 +60,7 @@ impl Evaluation {
 }
 
 /// Count how many rules match each provided example and error if any example is unmatched.
-pub(crate) fn validate_match_examples(rules: &[Rule], matches: &[Vec<String>]) -> Result<()> {
+pub(crate) fn validate_match_examples(rules: &[RuleRef], matches: &[Vec<String>]) -> Result<()> {
     let match_counts = rules.iter().fold(vec![0; matches.len()], |counts, rule| {
         counts
             .iter()
