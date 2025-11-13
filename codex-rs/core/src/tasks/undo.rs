@@ -8,7 +8,7 @@ use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
 use async_trait::async_trait;
-use codex_git_tooling::restore_ghost_commit;
+use codex_git::restore_ghost_commit;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;

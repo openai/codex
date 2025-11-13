@@ -31,6 +31,9 @@ use super::rate_limits::StatusRateLimitRow;
 use super::rate_limits::compose_rate_limit_data;
 use super::rate_limits::format_status_limit_summary;
 use super::rate_limits::render_status_limit_progress_bar;
+use crate::wrapping::RtOptions;
+use crate::wrapping::word_wrap_lines;
+use codex_core::AuthManager;
 
 #[derive(Debug, Clone)]
 struct StatusContextWindowData {
@@ -63,6 +66,7 @@ struct StatusHistoryCell {
 
 pub(crate) fn new_status_output(
     config: &Config,
+    auth_manager: &AuthManager,
     total_usage: &TokenUsage,
     context_usage: Option<&TokenUsage>,
     session_id: &Option<ConversationId>,
@@ -72,6 +76,7 @@ pub(crate) fn new_status_output(
     let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
     let card = StatusHistoryCell::new(
         config,
+        auth_manager,
         total_usage,
         context_usage,
         session_id,
@@ -85,6 +90,7 @@ pub(crate) fn new_status_output(
 impl StatusHistoryCell {
     fn new(
         config: &Config,
+        auth_manager: &AuthManager,
         total_usage: &TokenUsage,
         context_usage: Option<&TokenUsage>,
         session_id: &Option<ConversationId>,
@@ -104,7 +110,7 @@ impl StatusHistoryCell {
             SandboxPolicy::WorkspaceWrite { .. } => "workspace-write".to_string(),
         };
         let agents_summary = compose_agents_summary(config);
-        let account = compose_account_display(config);
+        let account = compose_account_display(auth_manager);
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
         let context_window = config.model_context_window.and_then(|window| {
             context_usage.map(|usage| StatusContextWindowData {
@@ -195,13 +201,7 @@ impl StatusHistoryCell {
                 lines
             }
             StatusRateLimitData::Missing => {
-                vec![formatter.line(
-                    "Limits",
-                    vec![
-                        Span::from("visit ").dim(),
-                        "chatgpt.com/codex/settings/usage".cyan().underlined(),
-                    ],
-                )]
+                vec![formatter.line("Limits", vec![Span::from("data not available yet").dim()])]
             }
         }
     }
@@ -215,10 +215,11 @@ impl StatusHistoryCell {
         let mut lines = Vec::with_capacity(rows.len().saturating_mul(2));
 
         for row in rows {
+            let percent_remaining = (100.0 - row.percent_used).clamp(0.0, 100.0);
             let value_spans = vec![
-                Span::from(render_status_limit_progress_bar(row.percent_used)),
+                Span::from(render_status_limit_progress_bar(percent_remaining)),
                 Span::from(" "),
-                Span::from(format_status_limit_summary(row.percent_used)),
+                Span::from(format_status_limit_summary(percent_remaining)),
             ];
             let base_spans = formatter.full_spans(row.label.as_str(), value_spans);
             let base_line = Line::from(base_spans.clone());
@@ -314,6 +315,23 @@ impl HistoryCell for StatusHistoryCell {
 
         let formatter = FieldFormatter::from_labels(labels.iter().map(String::as_str));
         let value_width = formatter.value_width(available_inner_width);
+
+        let note_first_line = Line::from(vec![
+            Span::from("Visit ").cyan(),
+            "https://chatgpt.com/codex/settings/usage"
+                .cyan()
+                .underlined(),
+            Span::from(" for up-to-date").cyan(),
+        ]);
+        let note_second_line = Line::from(vec![
+            Span::from("information on rate limits and credits").cyan(),
+        ]);
+        let note_lines = word_wrap_lines(
+            [note_first_line, note_second_line],
+            RtOptions::new(available_inner_width),
+        );
+        lines.extend(note_lines);
+        lines.push(Line::from(Vec::<Span<'static>>::new()));
 
         let mut model_spans = vec![Span::from(self.model_name.clone())];
         if !self.model_details.is_empty() {

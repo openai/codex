@@ -1,6 +1,11 @@
 #![cfg(not(target_os = "windows"))]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::fs;
+use std::time::Duration;
+use std::time::Instant;
+
+use anyhow::Context;
 use anyhow::Result;
 use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
@@ -227,6 +232,103 @@ async fn shell_escalated_permissions_rejected_then_ok() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sandbox_denied_shell_returns_original_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config.model = "gpt-5-codex".to_string();
+        config.model_family =
+            find_family_for_model("gpt-5-codex").expect("gpt-5-codex model family");
+    });
+    let fixture = builder.build(&server).await?;
+
+    let call_id = "sandbox-denied-shell";
+    let target_path = fixture.workspace_path("sandbox-denied.txt");
+    let sentinel = "sandbox-denied sentinel output";
+    let command = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        format!(
+            "printf {sentinel:?}; printf {content:?} > {path:?}",
+            sentinel = format!("{sentinel}\n"),
+            content = "sandbox denied",
+            path = &target_path
+        ),
+    ];
+    let args = json!({
+        "command": command,
+        "timeout_ms": 1_000,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    let mock = mount_sse_sequence(&server, responses).await;
+
+    fixture
+        .submit_turn_with_policy(
+            "run a command that should be denied by the read-only sandbox",
+            SandboxPolicy::ReadOnly,
+        )
+        .await?;
+
+    let output_text = mock
+        .function_call_output_text(call_id)
+        .context("shell output present")?;
+    let exit_code_line = output_text
+        .lines()
+        .next()
+        .context("exit code line present")?;
+    let exit_code = exit_code_line
+        .strip_prefix("Exit code: ")
+        .context("exit code prefix present")?
+        .trim()
+        .parse::<i32>()
+        .context("exit code is integer")?;
+    let body = output_text;
+
+    let body_lower = body.to_lowercase();
+    // Required for multi-OS.
+    let has_denial = body_lower.contains("permission denied")
+        || body_lower.contains("operation not permitted")
+        || body_lower.contains("read-only file system");
+    assert!(
+        has_denial,
+        "expected sandbox denial details in tool output: {body}"
+    );
+    assert!(
+        body.contains(sentinel),
+        "expected sentinel output from command to reach the model: {body}"
+    );
+    let target_path_str = target_path
+        .to_str()
+        .context("target path string representation")?;
+    assert!(
+        body.contains(target_path_str),
+        "expected sandbox error to mention denied path: {body}"
+    );
+    assert!(
+        !body_lower.contains("failed in sandbox"),
+        "expected original tool output, found fallback message: {body}"
+    );
+    assert_ne!(
+        exit_code, 0,
+        "sandbox denial should surface a non-zero exit code"
+    );
+
+    Ok(())
+}
+
 async fn collect_tools(use_unified_exec: bool) -> Result<Vec<String>> {
     let server = start_mock_server().await;
 
@@ -355,6 +457,102 @@ async fn shell_timeout_includes_timeout_prefix_and_metadata() -> Result<()> {
         // Fallback: accept the signal classification path to deflake the test.
         let signal_pattern = r"(?is)^execution error:.*signal.*$";
         assert_regex_match(signal_pattern, output_str);
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_timeout_handles_background_grandchild_stdout() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config.model = "gpt-5".to_string();
+        config.model_family = find_family_for_model("gpt-5").expect("gpt-5 is a valid model");
+        config.sandbox_policy = SandboxPolicy::DangerFullAccess;
+    });
+    let test = builder.build(&server).await?;
+
+    let call_id = "shell-grandchild-timeout";
+    let pid_path = test.cwd.path().join("grandchild_pid.txt");
+    let script_path = test.cwd.path().join("spawn_detached.py");
+    let script = format!(
+        r#"import subprocess
+import time
+from pathlib import Path
+
+# Spawn a detached grandchild that inherits stdout/stderr so the pipe stays open.
+proc = subprocess.Popen(["/bin/sh", "-c", "sleep 60"], start_new_session=True)
+Path({pid_path:?}).write_text(str(proc.pid))
+time.sleep(60)
+"#
+    );
+    fs::write(&script_path, script)?;
+
+    let args = json!({
+        "command": ["python3", script_path.to_string_lossy()],
+        "timeout_ms": 200,
+    });
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let second_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    let start = Instant::now();
+    let output_str = tokio::time::timeout(Duration::from_secs(10), async {
+        submit_turn(
+            &test,
+            "run a command with a detached grandchild",
+            AskForApproval::Never,
+            SandboxPolicy::DangerFullAccess,
+        )
+        .await?;
+        let timeout_item = second_mock.single_request().function_call_output(call_id);
+        timeout_item
+            .get("output")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .context("timeout output string")
+    })
+    .await
+    .context("exec call should not hang waiting for grandchild pipes to close")??;
+    let elapsed = start.elapsed();
+
+    if let Ok(output_json) = serde_json::from_str::<Value>(&output_str) {
+        assert_eq!(
+            output_json["metadata"]["exit_code"].as_i64(),
+            Some(124),
+            "expected timeout exit code 124",
+        );
+    } else {
+        let timeout_pattern = r"(?is)command timed out|timeout";
+        assert_regex_match(timeout_pattern, &output_str);
+    }
+
+    assert!(
+        elapsed < Duration::from_secs(9),
+        "command should return shortly after timeout even with live grandchildren: {elapsed:?}"
+    );
+
+    if let Ok(pid_str) = fs::read_to_string(&pid_path)
+        && let Ok(pid) = pid_str.trim().parse::<libc::pid_t>()
+    {
+        unsafe { libc::kill(pid, libc::SIGKILL) };
     }
 
     Ok(())

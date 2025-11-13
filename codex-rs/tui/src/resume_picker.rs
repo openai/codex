@@ -989,7 +989,7 @@ mod tests {
                 "type": "message",
                 "role": "user",
                 "content": [
-                    { "type": "input_text", "text": "<user_instructions>hi</user_instructions>" },
+                    { "type": "input_text", "text": "# AGENTS.md instructions for project\n\n<INSTRUCTIONS>\nhi\n</INSTRUCTIONS>" },
                 ]
             }),
             json!({

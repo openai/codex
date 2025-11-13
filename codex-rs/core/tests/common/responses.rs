@@ -61,6 +61,18 @@ impl ResponsesRequest {
         self.0.body_json().unwrap()
     }
 
+    /// Returns all `input_text` spans from `message` inputs for the provided role.
+    pub fn message_input_texts(&self, role: &str) -> Vec<String> {
+        self.inputs_of_type("message")
+            .into_iter()
+            .filter(|item| item.get("role").and_then(Value::as_str) == Some(role))
+            .filter_map(|item| item.get("content").and_then(Value::as_array).cloned())
+            .flatten()
+            .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_text"))
+            .filter_map(|span| span.get("text").and_then(Value::as_str).map(str::to_owned))
+            .collect()
+    }
+
     pub fn input(&self) -> Vec<Value> {
         self.0.body_json::<Value>().unwrap()["input"]
             .as_array()
@@ -217,6 +229,25 @@ pub fn ev_assistant_message(id: &str, text: &str) -> Value {
     })
 }
 
+pub fn ev_message_item_added(id: &str, text: &str) -> Value {
+    serde_json::json!({
+        "type": "response.output_item.added",
+        "item": {
+            "type": "message",
+            "role": "assistant",
+            "id": id,
+            "content": [{"type": "output_text", "text": text}]
+        }
+    })
+}
+
+pub fn ev_output_text_delta(delta: &str) -> Value {
+    serde_json::json!({
+        "type": "response.output_text.delta",
+        "delta": delta,
+    })
+}
+
 pub fn ev_reasoning_item(id: &str, summary: &[&str], raw_content: &[&str]) -> Value {
     let summary_entries: Vec<Value> = summary
         .iter()
@@ -241,6 +272,36 @@ pub fn ev_reasoning_item(id: &str, summary: &[&str], raw_content: &[&str]) -> Va
     }
 
     event
+}
+
+pub fn ev_reasoning_item_added(id: &str, summary: &[&str]) -> Value {
+    let summary_entries: Vec<Value> = summary
+        .iter()
+        .map(|text| serde_json::json!({"type": "summary_text", "text": text}))
+        .collect();
+
+    serde_json::json!({
+        "type": "response.output_item.added",
+        "item": {
+            "type": "reasoning",
+            "id": id,
+            "summary": summary_entries,
+        }
+    })
+}
+
+pub fn ev_reasoning_summary_text_delta(delta: &str) -> Value {
+    serde_json::json!({
+        "type": "response.reasoning_summary_text.delta",
+        "delta": delta,
+    })
+}
+
+pub fn ev_reasoning_text_delta(delta: &str) -> Value {
+    serde_json::json!({
+        "type": "response.reasoning_text.delta",
+        "delta": delta,
+    })
 }
 
 pub fn ev_web_search_call_added(id: &str, status: &str, query: &str) -> Value {
@@ -385,12 +446,6 @@ pub async fn mount_sse_once(server: &MockServer, body: String) -> ResponseMock {
     response_mock
 }
 
-pub async fn mount_sse(server: &MockServer, body: String) -> ResponseMock {
-    let (mock, response_mock) = base_mock();
-    mock.respond_with(sse_response(body)).mount(server).await;
-    response_mock
-}
-
 pub async fn start_mock_server() -> MockServer {
     MockServer::builder()
         .body_print_limit(BodyPrintLimit::Limited(80_000))
@@ -430,6 +485,7 @@ pub async fn mount_sse_sequence(server: &MockServer, bodies: Vec<String>) -> Res
 
     let (mock, response_mock) = base_mock();
     mock.respond_with(responder)
+        .up_to_n_times(num_calls as u64)
         .expect(num_calls as u64)
         .mount(server)
         .await;

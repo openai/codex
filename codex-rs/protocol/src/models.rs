@@ -11,7 +11,7 @@ use serde::ser::Serializer;
 use ts_rs::TS;
 
 use crate::user_input::UserInput;
-use codex_git_tooling::GhostCommit;
+use codex_git::GhostCommit;
 use codex_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;
 
@@ -48,22 +48,26 @@ pub enum ContentItem {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseItem {
     Message {
-        #[serde(skip_serializing)]
+        #[serde(default, skip_serializing)]
+        #[ts(skip)]
         id: Option<String>,
         role: String,
         content: Vec<ContentItem>,
     },
     Reasoning {
         #[serde(default, skip_serializing)]
+        #[ts(skip)]
         id: String,
         summary: Vec<ReasoningItemReasoningSummary>,
         #[serde(default, skip_serializing_if = "should_serialize_reasoning_content")]
+        #[ts(optional)]
         content: Option<Vec<ReasoningItemContent>>,
         encrypted_content: Option<String>,
     },
     LocalShellCall {
         /// Set when using the chat completions API.
-        #[serde(skip_serializing)]
+        #[serde(default, skip_serializing)]
+        #[ts(skip)]
         id: Option<String>,
         /// Set when using the Responses API.
         call_id: Option<String>,
@@ -71,7 +75,8 @@ pub enum ResponseItem {
         action: LocalShellAction,
     },
     FunctionCall {
-        #[serde(skip_serializing)]
+        #[serde(default, skip_serializing)]
+        #[ts(skip)]
         id: Option<String>,
         name: String,
         // The Responses API returns the function call arguments as a *string* that contains
@@ -91,9 +96,11 @@ pub enum ResponseItem {
         output: FunctionCallOutputPayload,
     },
     CustomToolCall {
-        #[serde(skip_serializing)]
+        #[serde(default, skip_serializing)]
+        #[ts(skip)]
         id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         status: Option<String>,
 
         call_id: String,
@@ -113,9 +120,11 @@ pub enum ResponseItem {
     //   "action": {"type":"search","query":"weather: San Francisco, CA"}
     // }
     WebSearchCall {
-        #[serde(skip_serializing)]
+        #[serde(default, skip_serializing)]
+        #[ts(skip)]
         id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         status: Option<String>,
         action: WebSearchAction,
     },
@@ -283,10 +292,26 @@ impl From<Vec<UserInput>> for ResponseInputItem {
 }
 
 /// If the `name` of a `ResponseItem::FunctionCall` is either `container.exec`
-/// or shell`, the `arguments` field should deserialize to this struct.
+/// or `shell`, the `arguments` field should deserialize to this struct.
 #[derive(Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 pub struct ShellToolCallParams {
     pub command: Vec<String>,
+    pub workdir: Option<String>,
+
+    /// This is the maximum time in milliseconds that the command is allowed to run.
+    #[serde(alias = "timeout")]
+    pub timeout_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub with_escalated_permissions: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub justification: Option<String>,
+}
+
+/// If the `name` of a `ResponseItem::FunctionCall` is `shell_command`, the
+/// `arguments` field should deserialize to this struct.
+#[derive(Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+pub struct ShellCommandToolCallParams {
+    pub command: String,
     pub workdir: Option<String>,
 
     /// This is the maximum time in milliseconds that the command is allowed to run.

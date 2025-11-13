@@ -23,6 +23,11 @@ use tokio::sync::mpsc;
 /// Review thread system prompt. Edit `core/src/review_prompt.md` to customize.
 pub const REVIEW_PROMPT: &str = include_str!("../review_prompt.md");
 
+// Centralized templates for review-related user messages
+pub const REVIEW_EXIT_SUCCESS_TMPL: &str = include_str!("../templates/review/exit_success.xml");
+pub const REVIEW_EXIT_INTERRUPTED_TMPL: &str =
+    include_str!("../templates/review/exit_interrupted.xml");
+
 /// API request payload for a single model turn
 #[derive(Default, Debug, Clone)]
 pub struct Prompt {
@@ -192,6 +197,7 @@ fn strip_total_output_header(output: &str) -> Option<&str> {
 pub enum ResponseEvent {
     Created,
     OutputItemDone(ResponseItem),
+    OutputItemAdded(ResponseItem),
     Completed {
         response_id: String,
         token_usage: Option<TokenUsage>,
@@ -200,9 +206,6 @@ pub enum ResponseEvent {
     ReasoningSummaryDelta(String),
     ReasoningContentDelta(String),
     ReasoningSummaryPartAdded,
-    WebSearchCallBegin {
-        call_id: String,
-    },
     RateLimits(RateLimitSnapshot),
 }
 
@@ -339,21 +342,6 @@ pub(crate) mod tools {
     }
 }
 
-pub(crate) fn create_reasoning_param_for_request(
-    model_family: &ModelFamily,
-    effort: Option<ReasoningEffortConfig>,
-    summary: ReasoningSummaryConfig,
-) -> Option<Reasoning> {
-    if !model_family.supports_reasoning_summaries {
-        return None;
-    }
-
-    Some(Reasoning {
-        effort,
-        summary: Some(summary),
-    })
-}
-
 pub(crate) fn create_text_param_for_request(
     verbosity: Option<VerbosityConfig>,
     output_schema: &Option<Value>,
@@ -419,6 +407,10 @@ mod tests {
                 expects_apply_patch_instructions: true,
             },
             InstructionsTestCase {
+                slug: "gpt-5.1",
+                expects_apply_patch_instructions: false,
+            },
+            InstructionsTestCase {
                 slug: "codex-mini-latest",
                 expects_apply_patch_instructions: true,
             },
@@ -428,6 +420,10 @@ mod tests {
             },
             InstructionsTestCase {
                 slug: "gpt-5-codex",
+                expects_apply_patch_instructions: false,
+            },
+            InstructionsTestCase {
+                slug: "gpt-5.1-codex",
                 expects_apply_patch_instructions: false,
             },
         ];

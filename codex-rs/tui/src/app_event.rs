@@ -72,7 +72,23 @@ pub(crate) enum AppEvent {
         preset: ApprovalPreset,
     },
 
+    /// Open the Windows world-writable directories warning.
+    /// If `preset` is `Some`, the confirmation will apply the provided
+    /// approval/sandbox configuration on Continue; if `None`, it performs no
+    /// policy change and only acknowledges/dismisses the warning.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    OpenWorldWritableWarningConfirmation {
+        preset: Option<ApprovalPreset>,
+        /// Up to 3 sample world-writable directories to display in the warning.
+        sample_paths: Vec<String>,
+        /// If there are more than `sample_paths`, this carries the remaining count.
+        extra_count: usize,
+        /// True when the scan failed (e.g. ACL query error) and protections could not be verified.
+        failed_scan: bool,
+    },
+
     /// Show Windows Subsystem for Linux setup instructions for auto mode.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     ShowWindowsAutoModeInstructions,
 
     /// Update the current approval policy in the running app and widget.
@@ -84,8 +100,31 @@ pub(crate) enum AppEvent {
     /// Update whether the full access warning prompt has been acknowledged.
     UpdateFullAccessWarningAcknowledged(bool),
 
+    /// Update whether the world-writable directories warning has been acknowledged.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    UpdateWorldWritableWarningAcknowledged(bool),
+
+    /// Update whether the rate limit switch prompt has been acknowledged for the session.
+    UpdateRateLimitSwitchPromptHidden(bool),
+
     /// Persist the acknowledgement flag for the full access warning prompt.
     PersistFullAccessWarningAcknowledged,
+
+    /// Persist the acknowledgement flag for the world-writable directories warning.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    PersistWorldWritableWarningAcknowledged,
+
+    /// Persist the acknowledgement flag for the rate limit switch prompt.
+    PersistRateLimitSwitchPromptHidden,
+
+    /// Persist the acknowledgement flag for the model migration prompt.
+    PersistModelMigrationPromptAcknowledged {
+        migration_config: String,
+    },
+
+    /// Skip the next world-writable scan (one-shot) after a user-confirmed continue.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    SkipNextWorldWritableScan,
 
     /// Re-open the approval presets popup.
     OpenApprovalsPopup,

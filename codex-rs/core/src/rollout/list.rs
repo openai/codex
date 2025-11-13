@@ -273,7 +273,7 @@ async fn traverse_directories_for_paths(
 /// Pagination cursor token format: "<file_ts>|<uuid>" where `file_ts` matches the
 /// filename timestamp portion (YYYY-MM-DDThh-mm-ss) used in rollout filenames.
 /// The cursor orders files by timestamp desc, then UUID desc.
-fn parse_cursor(token: &str) -> Option<Cursor> {
+pub fn parse_cursor(token: &str) -> Option<Cursor> {
     let (file_ts, uuid_str) = token.split_once('|')?;
 
     let Ok(uuid) = Uuid::parse_str(uuid_str) else {
@@ -409,7 +409,7 @@ async fn read_head_and_tail(
 
         match rollout_line.item {
             RolloutItem::SessionMeta(session_meta_line) => {
-                summary.source = Some(session_meta_line.meta.source);
+                summary.source = Some(session_meta_line.meta.source.clone());
                 summary.model_provider = session_meta_line.meta.model_provider.clone();
                 summary.created_at = summary
                     .created_at

@@ -1,0 +1,26 @@
+[package]
+edition.workspace = true
+name = "codex-git"
+readme = "README.md"
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+once_cell = { workspace = true }
+regex = "1"
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+ts-rs = { workspace = true, features = [
+    "uuid-impl",
+    "serde-json-impl",
+    "no-serde-warnings",
+] }
+walkdir = { workspace = true }
+
+[dev-dependencies]
+assert_matches = { workspace = true }
+pretty_assertions = { workspace = true }
