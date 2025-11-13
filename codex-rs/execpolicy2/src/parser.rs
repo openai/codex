@@ -154,7 +154,12 @@ fn parse_list_example(list: &ListRef) -> Result<Vec<String>> {
         .map(|value| {
             value
                 .unpack_str()
-                .ok_or_else(|| Error::InvalidExample("example tokens must be strings".to_string()))
+                .ok_or_else(|| {
+                    Error::InvalidExample(format!(
+                        "example tokens must be strings (got {})",
+                        value.get_type()
+                    ))
+                })
                 .map(str::to_string)
         })
         .collect::<Result<_>>()?;
