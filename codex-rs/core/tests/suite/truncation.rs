@@ -180,6 +180,130 @@ $"#;
     Ok(())
 }
 
+// Ensures shell tool outputs that exceed the line limit are truncated only once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_call_output_truncated_only_once() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.model = "gpt-5-codex".to_string();
+        config.model_family =
+            find_family_for_model("gpt-5-codex").expect("gpt-5-codex is a model family");
+    });
+    let fixture = builder.build(&server).await?;
+    let call_id = "shell-single-truncation";
+    let args = serde_json::json!({
+        "command": [
+            "/bin/sh",
+            "-c",
+            "awk 'BEGIN{for(i=1;i<=2000;i++){for(j=0;j<100;j++) printf \"A\"; print \"\"}}'"
+        ],
+        "timeout_ms": 5_000,
+    });
+
+    mount_sse_once_match(
+        &server,
+        any(),
+        sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let mock2 = mount_sse_once_match(
+        &server,
+        any(),
+        sse(vec![
+            responses::ev_assistant_message("msg-1", "done"),
+            responses::ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    fixture
+        .submit_turn_with_policy("trigger big shell output", SandboxPolicy::DangerFullAccess)
+        .await?;
+
+    let output = mock2
+        .single_request()
+        .function_call_output_text(call_id)
+        .context("function_call_output present for shell call")?;
+
+    let total_line_headers = output.matches("Total output lines:").count();
+
+    assert_eq!(
+        total_line_headers, 1,
+        "shell output should carry only one truncation header: {output}"
+    );
+
+    Ok(())
+}
+
+// The JSON wrapper we send for exec tools should stay valid after truncation.
+// Today it is prefixed with another truncation header, so parsing fails.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_call_output_json_stays_valid() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.model = "gpt-5-codex".to_string();
+        config.model_family =
+            find_family_for_model("gpt-5-codex").expect("gpt-5-codex is a model family");
+    });
+    let fixture = builder.build(&server).await?;
+
+    let call_id = "shell-json-valid";
+    let args = serde_json::json!({
+        "command": [
+            "/bin/sh",
+            "-c",
+            "awk 'BEGIN{for(i=1;i<=2000;i++){for(j=0;j<100;j++) printf \"A\"; print \"\"}}'"
+        ],
+        "timeout_ms": 5_000,
+    });
+
+    mount_sse_once_match(
+        &server,
+        any(),
+        sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let mock2 = mount_sse_once_match(
+        &server,
+        any(),
+        sse(vec![
+            responses::ev_assistant_message("msg-1", "done"),
+            responses::ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    fixture
+        .submit_turn_with_policy("trigger big shell output", SandboxPolicy::DangerFullAccess)
+        .await?;
+
+    let output = mock2
+        .single_request()
+        .function_call_output_text(call_id)
+        .context("function_call_output present for shell call")?;
+
+    assert!(
+        serde_json::from_str::<Value>(&output).is_ok(),
+        "shell tool output should stay valid JSON after truncation, got: {output}"
+    );
+
+    Ok(())
+}
+
 // Verifies that an MCP tool call result exceeding the model formatting limits
 // is truncated before being sent back to the model.
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
