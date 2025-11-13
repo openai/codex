@@ -557,24 +557,38 @@ impl App {
                             self.config.features.enable(Feature::WindowsSandbox);
                             self.config.forced_auto_mode_downgraded_on_windows = false;
                             self.chat_widget.clear_forced_auto_mode_downgrade();
-                            self.app_event_tx
-                                .send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                                    cwd: None,
-                                    approval_policy: Some(preset.approval),
-                                    sandbox_policy: Some(preset.sandbox.clone()),
-                                    model: None,
-                                    effort: None,
-                                    summary: None,
-                                }));
-                            self.app_event_tx
-                                .send(AppEvent::UpdateAskForApprovalPolicy(preset.approval));
-                            self.app_event_tx
-                                .send(AppEvent::UpdateSandboxPolicy(preset.sandbox.clone()));
-                            self.chat_widget.add_info_message(
-                                "Enabled the Windows sandbox feature and switched to Auto mode."
-                                    .to_string(),
-                                None,
-                            );
+                            if let Some((sample_paths, extra_count, failed_scan)) =
+                                self.chat_widget.world_writable_warning_details()
+                            {
+                                self.app_event_tx.send(
+                                    AppEvent::OpenWorldWritableWarningConfirmation {
+                                        preset: Some(preset.clone()),
+                                        sample_paths,
+                                        extra_count,
+                                        failed_scan,
+                                    },
+                                );
+                            } else {
+                                self.app_event_tx.send(AppEvent::CodexOp(
+                                    Op::OverrideTurnContext {
+                                        cwd: None,
+                                        approval_policy: Some(preset.approval),
+                                        sandbox_policy: Some(preset.sandbox.clone()),
+                                        model: None,
+                                        effort: None,
+                                        summary: None,
+                                    },
+                                ));
+                                self.app_event_tx
+                                    .send(AppEvent::UpdateAskForApprovalPolicy(preset.approval));
+                                self.app_event_tx
+                                    .send(AppEvent::UpdateSandboxPolicy(preset.sandbox.clone()));
+                                self.chat_widget.add_info_message(
+                                    "Enabled the Windows sandbox feature and switched to Auto mode."
+                                        .to_string(),
+                                    None,
+                                );
+                            }
                         }
                         Err(err) => {
                             tracing::error!(
@@ -927,7 +941,6 @@ mod tests {
     fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender();
         let config = chat_widget.config_ref().clone();
-
         let server = Arc::new(ConversationManager::with_auth(CodexAuth::from_api_key(
             "Test API Key",
         )));

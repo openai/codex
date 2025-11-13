@@ -2106,50 +2106,10 @@ impl ChatWidget {
                                 preset: preset_clone.clone(),
                             });
                         })]
-                    } else if !self
-                        .config
-                        .notices
-                        .hide_world_writable_warning
-                        .unwrap_or(false)
-                        && self.windows_world_writable_flagged()
+                    } else if let Some((sample_paths, extra_count, failed_scan)) =
+                        self.world_writable_warning_details()
                     {
                         let preset_clone = preset.clone();
-                        // Compute sample paths for the warning popup.
-                        let mut env_map: std::collections::HashMap<String, String> =
-                            std::collections::HashMap::new();
-                        for (k, v) in std::env::vars() {
-                            env_map.insert(k, v);
-                        }
-                        let (sample_paths, extra_count, failed_scan) =
-                            match codex_windows_sandbox::preflight_audit_everyone_writable(
-                                &self.config.cwd,
-                                &env_map,
-                                Some(self.config.codex_home.as_path()),
-                            ) {
-                                Ok(paths) if !paths.is_empty() => {
-                                    fn normalize_windows_path_for_display(
-                                        p: &std::path::Path,
-                                    ) -> String {
-                                        let canon = dunce::canonicalize(p)
-                                            .unwrap_or_else(|_| p.to_path_buf());
-                                        canon.display().to_string().replace('/', "\\")
-                                    }
-                                    let as_strings: Vec<String> = paths
-                                        .iter()
-                                        .map(|p| normalize_windows_path_for_display(p))
-                                        .collect();
-                                    let samples: Vec<String> =
-                                        as_strings.iter().take(3).cloned().collect();
-                                    let extra = if as_strings.len() > samples.len() {
-                                        as_strings.len() - samples.len()
-                                    } else {
-                                        0
-                                    };
-                                    (samples, extra, false)
-                                }
-                                Err(_) => (Vec::new(), 0, true),
-                                _ => (Vec::new(), 0, false),
-                            };
                         vec![Box::new(move |tx| {
                             tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
                                 preset: Some(preset_clone.clone()),
@@ -2208,8 +2168,17 @@ impl ChatWidget {
     }
 
     #[cfg(target_os = "windows")]
-    fn windows_world_writable_flagged(&self) -> bool {
+    pub(crate) fn world_writable_warning_details(&self) -> Option<(Vec<String>, usize, bool)> {
         use std::collections::HashMap;
+        if self
+            .config
+            .notices
+            .hide_world_writable_warning
+            .unwrap_or(false)
+        {
+            return None;
+        }
+
         let mut env_map: HashMap<String, String> = HashMap::new();
         for (k, v) in std::env::vars() {
             env_map.insert(k, v);
@@ -2219,9 +2188,27 @@ impl ChatWidget {
             &env_map,
             Some(self.config.codex_home.as_path()),
         ) {
-            Ok(paths) => !paths.is_empty(),
-            Err(_) => true,
+            Ok(paths) if paths.is_empty() => None,
+            Ok(paths) => {
+                fn normalize_windows_path_for_display(p: &Path) -> String {
+                    let canon = dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+                    canon.display().to_string().replace('/', "\\")
+                }
+                let as_strings: Vec<String> = paths
+                    .iter()
+                    .map(|p| normalize_windows_path_for_display(p))
+                    .collect();
+                let sample_paths: Vec<String> = as_strings.iter().take(3).cloned().collect();
+                let extra_count = as_strings.len().saturating_sub(sample_paths.len());
+                Some((sample_paths, extra_count, false))
+            }
+            Err(_) => Some((Vec::new(), 0, true)),
         }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub(crate) fn world_writable_warning_details(&self) -> Option<(Vec<String>, usize, bool)> {
+        None
     }
 
     pub(crate) fn open_full_access_confirmation(&mut self, preset: ApprovalPreset) {
