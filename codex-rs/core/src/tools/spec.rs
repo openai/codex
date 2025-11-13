@@ -1333,6 +1333,42 @@ mod tests {
     }
 
     #[test]
+    fn test_codex_5_1_mini_defaults() {
+        assert_model_tools(
+            "gpt-5.1-codex-mini",
+            &Features::with_defaults(),
+            &[
+                "exec_command",
+                "write_stdin",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "apply_patch",
+                "web_search",
+                "view_image",
+            ],
+        );
+    }
+
+    #[test]
+    fn test_gpt_5_1_defaults() {
+        assert_model_tools(
+            "gpt-5.1",
+            &Features::with_defaults(),
+            &[
+                "exec_command",
+                "write_stdin",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "view_image",
+            ],
+        );
+    }
+
+    #[test]
     fn test_porcupine_defaults() {
         assert_model_tools(
             "porcupine",
