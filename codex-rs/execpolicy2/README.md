@@ -24,10 +24,10 @@ prefix_rule(
 {
   "match": {
     "decision": "allow|prompt|forbidden",
-    "matched_rules": [
+    "matchedRules": [
       {
         "prefixRuleMatch": {
-          "matched_prefix": ["<token>", "..."],
+          "matchedPrefix": ["<token>", "..."],
           "decision": "allow|prompt|forbidden"
         }
       }
@@ -41,7 +41,7 @@ prefix_rule(
 "noMatch"
 ```
 
-- `matched_rules` lists every rule whose prefix matched the command; `matched_prefix` is the exact prefix that matched.
+- `matchedRules` lists every rule whose prefix matched the command; `matchedPrefix` is the exact prefix that matched.
 - The effective `decision` is the strictest severity across all matches (`forbidden` > `prompt` > `allow`).
 
 ## CLI

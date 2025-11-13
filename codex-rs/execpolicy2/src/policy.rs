@@ -46,6 +46,7 @@ pub enum Evaluation {
     NoMatch,
     Match {
         decision: Decision,
+        #[serde(rename = "matchedRules")]
         matched_rules: Vec<RuleMatch>,
     },
 }
