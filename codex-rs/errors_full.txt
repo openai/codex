@@ -1,0 +1,321 @@
+﻿cargo :     Checking codex-cuda-runtime v2.1.0 (C:\Users\downl\Desktop\codex-ma
+in\codex-main\codex-rs\cuda-runtime)
+発生場所 行:1 文字:25
++ ... -main\codex-rs; cargo check --all-targets --all-features 2>&1 | Out-F ...
++                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Checking co...s\cuda-runtime) 
+   :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+    Checking codex-windows-ai v2.1.0 (C:\Users\downl\Desktop\codex-main\codex-m
+ain\codex-rs\windows-ai)
+    Checking codex-windows-sandbox v2.1.0 (C:\Users\downl\Desktop\codex-main\co
+dex-main\codex-rs\windows-sandbox-rs)
+   Compiling eyre v0.6.12
+   Compiling unic-common v0.9.0
+   Compiling matches v0.1.10
+   Compiling unic-char-range v0.9.0
+    Checking simdutf8 v0.1.5
+   Compiling camino v1.2.1
+   Compiling nodrop v0.1.14
+   Compiling color-spantrace v0.3.0
+   Compiling derive_more v0.99.20
+error[E0583]: file not found for module `kernel_driver`
+ --> windows-ai\src\windows_impl.rs:8:1
+  |
+8 | pub mod kernel_driver;
+  | ^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = help: to create the module `kernel_driver`, create file "windows-ai\src\win
+dows_impl\kernel_driver.rs" or "windows-ai\src\windows_impl\kernel_driver\mod.r
+s"
+  = note: if there is a `mod kernel_driver` elsewhere in the crate already, imp
+ort it with `use crate::...` instead
+
+error[E0782]: expected a type, found a trait
+  --> cuda-runtime\src\cuda_impl.rs:13:15
+   |
+13 |     _context: Context,
+   |               ^^^^^^^
+   |
+help: you might be missing a type parameter
+   |
+12 ~ pub struct CudaRuntimeImpl<T: Context> {
+13 ~     _context: T,
+   |
+
+error[E0277]: the trait bound `T: DeviceCopy` is not satisfied
+   --> cuda-runtime\src\cuda_impl.rs:118:13
+    |
+118 |     buffer: DeviceBuffer<T>,
+    |             ^^^^^^^^^^^^^^^ the trait `DeviceCopy` is not implemented for
+ `T`
+    |
+note: required by a bound in `cust::memory::DeviceBuffer`
+   --> C:\Users\downl\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cust
+-0.3.2\src\memory\device\device_buffer.rs:18:28
+    |
+ 18 | pub struct DeviceBuffer<T: DeviceCopy> {
+    |                            ^^^^^^^^^^ required by this bound in `DeviceBu
+ffer`
+help: consider restricting type parameter `T` with trait `DeviceCopy`
+    |
+117 | pub struct DeviceBufferImpl<T: cust::memory::DeviceCopy> {
+    |                              ++++++++++++++++++++++++++
+
+error[E0433]: failed to resolve: use of undeclared type `HKEY`
+  --> windows-ai\src\windows_impl.rs:36:24
+   |
+36 |         let mut hkey = HKEY::default();
+   |                        ^^^^ use of undeclared type `HKEY`
+
+error[E0425]: cannot find function, tuple struct or tuple variant `RegOpenKeyEx
+W` in this scope
+  --> windows-ai\src\windows_impl.rs:37:22
+   |
+37 |         let result = RegOpenKeyExW(
+   |                      ^^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find value `HKEY_LOCAL_MACHINE` in this scope
+  --> windows-ai\src\windows_impl.rs:38:13
+   |
+38 |             HKEY_LOCAL_MACHINE,
+   |             ^^^^^^^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find value `KEY_READ` in this scope
+  --> windows-ai\src\windows_impl.rs:43:13
+   |
+43 |             KEY_READ,
+   |             ^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function, tuple struct or tuple variant `RegCloseKey`
+ in this scope
+  --> windows-ai\src\windows_impl.rs:55:9
+   |
+55 |         RegCloseKey(hkey);
+   |         ^^^^^^^^^^^ not found in this scope
+
+warning: unused import: `crate::windows_impl::kernel_driver::*`
+   --> windows-ai\src\lib.rs:100:13
+    |
+100 |     pub use crate::windows_impl::kernel_driver::*;
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` on by default
+
+   Compiling alloc-stdlib v0.2.2
+error[E0782]: expected a type, found a trait
+  --> cuda-runtime\src\cuda_impl.rs:32:13
+   |
+32 |             Context::create_and_push(ContextFlags::MAP_HOST | ContextFlags
+::SCHED_AUTO, device)
+   |             ^^^^^^^
+   |
+help: you can add the `dyn` keyword if you want a trait object
+   |
+32 |             <dyn Context>::create_and_push(ContextFlags::MAP_HOST | Contex
+tFlags::SCHED_AUTO, device)
+   |             ++++        +
+
+   Compiling unic-ucd-version v0.9.0
+error[E0599]: no method named `compute_capability` found for struct `cust::devi
+ce::Device` in the current scope
+  --> cuda-runtime\src\cuda_impl.rs:54:14
+   |
+52 |           let (major, minor) = self
+   |  ______________________________-
+53 | |             .device
+54 | |             .compute_capability()
+   | |             -^^^^^^^^^^^^^^^^^^ method not found in `cust::device::Devic
+e`
+   | |_____________|
+   |
+
+error[E0599]: no method named `num_multiprocessors` found for struct `cust::dev
+ice::Device` in the current scope
+  --> cuda-runtime\src\cuda_impl.rs:64:14
+   |
+62 |           let multiprocessor_count = self
+   |  ____________________________________-
+63 | |             .device
+64 | |             .num_multiprocessors()
+   | |             -^^^^^^^^^^^^^^^^^^^ method not found in `cust::device::Devi
+ce`
+   | |_____________|
+   |
+
+error[E0277]: the trait bound `T: Zeroable` is not satisfied
+   --> cuda-runtime\src\cuda_impl.rs:108:13
+    |
+108 |             DeviceBuffer::zeroed(size).context("Failed to allocate device
+ memory")?;
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Zeroable` is not implem
+ented for `T`
+    |
+note: required by a bound in `cust::memory::DeviceBuffer::<T>::zeroed`
+   --> C:\Users\downl\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cust
+-0.3.2\src\memory\device\device_buffer.rs:213:22
+    |
+213 | impl<T: DeviceCopy + Zeroable> DeviceBuffer<T> {
+    |                      ^^^^^^^^ required by this bound in `DeviceBuffer::<T
+>::zeroed`
+...
+229 |     pub fn zeroed(size: usize) -> CudaResult<Self> {
+    |            ------ required by a bound in this associated function
+help: consider further restricting type parameter `T` with trait `Zeroable`
+    |
+104 |     pub fn allocate<T: DeviceCopy + cust::memory::bytemuck::Zeroable>(&se
+lf, size: usize) -> Result<DeviceBufferImpl<T>> {
+    |                                   ++++++++++++++++++++++++++++++++++
+
+   Compiling selectors v0.24.0
+Some errors have detailed explanations: E0425, E0433, E0583.
+For more information about an error, try `rustc --explain E0425`.
+error[E0599]: no method named `len` found for struct `cust::memory::DeviceBuffe
+r` in the current scope
+   --> cuda-runtime\src\cuda_impl.rs:123:21
+    |
+123 |         self.buffer.len()
+    |                     ^^^ private field, not a method
+
+warning: `codex-windows-ai` (lib) generated 1 warning
+error: could not compile `codex-windows-ai` (lib) due to 6 previous errors; 1 w
+arning emitted
+warning: build failed, waiting for other jobs to finish...
+error[E0599]: no method named `len` found for struct `cust::memory::DeviceBuffe
+r` in the current scope
+   --> cuda-runtime\src\cuda_impl.rs:127:21
+    |
+127 |         self.buffer.len() == 0
+    |                     ^^^ private field, not a method
+
+error[E0277]: the trait bound `T: DeviceCopy` is not satisfied
+   --> cuda-runtime\src\lib.rs:121:39
+    |
+121 |             self.inner.copy_to_device(_data)
+    |                        -------------- ^^^^^ the trait `DeviceCopy` is not
+ implemented for `T`
+    |                        |
+    |                        required by a bound introduced by this call
+    |
+note: required by a bound in `CudaRuntimeImpl::copy_to_device`
+   --> cuda-runtime\src\cuda_impl.rs:76:30
+    |
+ 76 |     pub fn copy_to_device<T: DeviceCopy>(&self, data: &[T]) -> Result<Dev
+iceBufferImpl<T>> {
+    |                              ^^^^^^^^^^ required by this bound in `CudaRu
+ntimeImpl::copy_to_device`
+help: consider further restricting type parameter `T` with trait `DeviceCopy`
+    |
+118 |     pub fn copy_to_device<T: Clone + cust::memory::DeviceCopy>(&self, _da
+ta: &[T]) -> Result<DeviceBuffer<T>> {
+    |                                    ++++++++++++++++++++++++++
+
+error[E0308]: mismatched types
+   --> cuda-runtime\src\lib.rs:121:13
+    |
+118 |     pub fn copy_to_device<T: Clone>(&self, _data: &[T]) -> Result<DeviceB
+uffer<T>> {
+    |                                                            --------------
+--------- expected `Result<DeviceBuffer<T>, anyhow::Error>` because of return t
+ype
+...
+121 |             self.inner.copy_to_device(_data)
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<DeviceBuffe
+r<T>, Error>`, found `Result<DeviceBufferImpl<T>, Error>`
+    |
+    = note: expected enum `Result<DeviceBuffer<T>, _>`
+               found enum `Result<DeviceBufferImpl<T>, _>`
+
+error[E0308]: mismatched types
+   --> cuda-runtime\src\lib.rs:134:41
+    |
+134 |             self.inner.copy_from_device(_buffer)
+    |                        ---------------- ^^^^^^^ expected `&DeviceBufferIm
+pl<T>`, found `&DeviceBuffer<T>`
+    |                        |
+    |                        arguments to this method are incorrect
+    |
+    = note: expected reference `&DeviceBufferImpl<T>`
+               found reference `&DeviceBuffer<T>`
+note: method defined here
+   --> cuda-runtime\src\cuda_impl.rs:88:12
+    |
+ 88 |     pub fn copy_from_device<T: DeviceCopy + Clone + Default>(
+    |            ^^^^^^^^^^^^^^^^
+ 89 |         &self,
+ 90 |         buffer: &DeviceBufferImpl<T>,
+    |         ----------------------------
+
+error[E0277]: the trait bound `T: DeviceCopy` is not satisfied
+   --> cuda-runtime\src\lib.rs:134:41
+    |
+134 |             self.inner.copy_from_device(_buffer)
+    |                        ---------------- ^^^^^^^ the trait `DeviceCopy` is
+ not implemented for `T`
+    |                        |
+    |                        required by a bound introduced by this call
+    |
+note: required by a bound in `CudaRuntimeImpl::copy_from_device`
+   --> cuda-runtime\src\cuda_impl.rs:88:32
+    |
+ 88 |     pub fn copy_from_device<T: DeviceCopy + Clone + Default>(
+    |                                ^^^^^^^^^^ required by this bound in `Cuda
+RuntimeImpl::copy_from_device`
+help: consider further restricting type parameter `T` with trait `DeviceCopy`
+    |
+131 |     pub fn copy_from_device<T: Clone + cust::memory::DeviceCopy>(&self, _
+buffer: &DeviceBuffer<T>) -> Result<Vec<T>> {
+    |                                      ++++++++++++++++++++++++++
+
+error[E0277]: the trait bound `T: Default` is not satisfied
+   --> cuda-runtime\src\lib.rs:134:41
+    |
+134 |             self.inner.copy_from_device(_buffer)
+    |                        ---------------- ^^^^^^^ the trait `Default` is no
+t implemented for `T`
+    |                        |
+    |                        required by a bound introduced by this call
+    |
+note: required by a bound in `CudaRuntimeImpl::copy_from_device`
+   --> cuda-runtime\src\cuda_impl.rs:88:53
+    |
+ 88 |     pub fn copy_from_device<T: DeviceCopy + Clone + Default>(
+    |                                                     ^^^^^^^ required by t
+his bound in `CudaRuntimeImpl::copy_from_device`
+help: consider further restricting type parameter `T` with trait `Default`
+    |
+131 |     pub fn copy_from_device<T: Clone + std::default::Default>(&self, _buf
+fer: &DeviceBuffer<T>) -> Result<Vec<T>> {
+    |                                      +++++++++++++++++++++++
+
+error[E0308]: mismatched types
+   --> cuda-runtime\src\lib.rs:147:13
+    |
+144 |     pub fn allocate<T: Clone>(&self, _size: usize) -> Result<DeviceBuffer
+<T>> {
+    |                                                       -------------------
+---- expected `Result<DeviceBuffer<T>, anyhow::Error>` because of return type
+...
+147 |             self.inner.allocate(_size)
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<DeviceBuffer<T>, 
+Error>`, found `Result<DeviceBufferImpl<_>, Error>`
+    |
+    = note: expected enum `Result<DeviceBuffer<T>, _>`
+               found enum `Result<DeviceBufferImpl<_>, _>`
+
+warning: variable does not need to be mutable
+  --> cuda-runtime\src\cuda_impl.rs:79:13
+   |
+79 |         let mut device_buffer =
+   |             ----^^^^^^^^^^^^^
+   |             |
+   |             help: remove this `mut`
+   |
+   = note: `#[warn(unused_mut)]` on by default
+
+Some errors have detailed explanations: E0277, E0308, E0599, E0782.
+For more information about an error, try `rustc --explain E0277`.
+warning: `codex-cuda-runtime` (lib) generated 1 warning
+error: could not compile `codex-cuda-runtime` (lib) due to 14 previous errors; 
+1 warning emitted

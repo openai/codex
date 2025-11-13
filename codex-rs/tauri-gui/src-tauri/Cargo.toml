@@ -3,7 +3,7 @@ authors = ["zapabob"]
 description = "Codex AI-Native OS Resident GUI Client"
 edition = "2024"
 name = "codex-tauri-gui"
-version = "2.0.0"
+version = { workspace = true }
 
 [build-dependencies]
 tauri-build = { version = "2.0", features = [] }

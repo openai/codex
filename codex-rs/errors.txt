@@ -1,0 +1,140 @@
+﻿cargo :     Checking hyper v1.7.0
+発生場所 行:1 文字:14
++ cd codex-rs; cargo check --all-targets --all-features 2>&1 | Out-File ...
++              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Checking hyper v1.7.0:String) 
+    [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+   Compiling aws-lc-sys v0.32.3
+    Checking codex-utils-cache v2.1.0 (C:\Users\downl\Desktop\codex-main\codex-
+main\codex-rs\utils\cache)
+    Checking windows v0.61.3
+    Checking opentelemetry_sdk v0.30.0
+    Checking asn1-rs v0.6.2
+    Checking windows v0.58.0
+    Checking codex-apply-patch v2.1.0 (C:\Users\downl\Desktop\codex-main\codex-
+main\codex-rs\apply-patch)
+    Checking codex-file-search v2.1.0 (C:\Users\downl\Desktop\codex-main\codex-
+main\codex-rs\file-search)
+    Checking codex-cuda-runtime v2.1.0 (C:\Users\downl\Desktop\codex-main\codex
+-main\codex-rs\cuda-runtime)
+   Compiling askama_derive v0.12.5
+    Checking windows v0.57.0
+error[E0405]: cannot find trait `DeviceCopy` in this scope
+  --> cuda-runtime\src\cuda_impl.rs:76:30
+   |
+76 |     pub fn copy_to_device<T: DeviceCopy>(&self, data: &[T]) -> Result<Devi
+ceBufferImpl<T>> {
+   |                              ^^^^^^^^^^
+   |
+  ::: C:\Users\downl\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cust-
+0.3.2\src\util.rs:12:1
+   |
+12 | pub trait DeviceCopyExt: DeviceCopy {
+   | ----------------------------------- similarly named trait `DeviceCopyExt` 
+defined here
+   |
+help: a trait with a similar name exists
+   |
+76 |     pub fn copy_to_device<T: DeviceCopyExt>(&self, data: &[T]) -> Result<D
+eviceBufferImpl<T>> {
+   |                                        +++
+help: consider importing this trait
+   |
+ 4 + use cust::memory::DeviceCopy;
+   |
+
+error[E0405]: cannot find trait `DeviceCopy` in this scope
+  --> cuda-runtime\src\cuda_impl.rs:88:32
+   |
+88 |     pub fn copy_from_device<T: DeviceCopy + Clone>(
+   |                                ^^^^^^^^^^
+   |
+  ::: C:\Users\downl\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cust-
+0.3.2\src\util.rs:12:1
+   |
+12 | pub trait DeviceCopyExt: DeviceCopy {
+   | ----------------------------------- similarly named trait `DeviceCopyExt` 
+defined here
+   |
+help: a trait with a similar name exists
+   |
+88 |     pub fn copy_from_device<T: DeviceCopyExt + Clone>(
+   |                                          +++
+help: consider importing this trait
+   |
+ 4 + use cust::memory::DeviceCopy;
+   |
+
+error[E0405]: cannot find trait `DeviceCopy` in this scope
+   --> cuda-runtime\src\cuda_impl.rs:104:24
+    |
+104 |     pub fn allocate<T: DeviceCopy>(&self, size: usize) -> Result<DeviceBu
+fferImpl<T>> {
+    |                        ^^^^^^^^^^
+    |
+   ::: C:\Users\downl\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cust
+-0.3.2\src\util.rs:12:1
+    |
+ 12 | pub trait DeviceCopyExt: DeviceCopy {
+    | ----------------------------------- similarly named trait `DeviceCopyExt`
+ defined here
+    |
+help: a trait with a similar name exists
+    |
+104 |     pub fn allocate<T: DeviceCopyExt>(&self, size: usize) -> Result<Devic
+eBufferImpl<T>> {
+    |                                  +++
+help: consider importing this trait
+    |
+  4 + use cust::memory::DeviceCopy;
+    |
+
+warning: unused import: `std::rc::Rc`
+ --> cuda-runtime\src\cuda_impl.rs:6:5
+  |
+6 | use std::rc::Rc;
+  |     ^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+error[E0782]: expected a type, found a trait
+  --> cuda-runtime\src\cuda_impl.rs:13:15
+   |
+13 |     _context: Context,
+   |               ^^^^^^^
+   |
+help: you might be missing a type parameter
+   |
+12 ~ pub struct CudaRuntimeImpl<T: Context> {
+13 ~     _context: T,
+   |
+
+error[E0277]: the trait bound `T: DeviceCopy` is not satisfied
+   --> cuda-runtime\src\cuda_impl.rs:118:13
+    |
+118 |     buffer: DeviceBuffer<T>,
+    |             ^^^^^^^^^^^^^^^ the trait `DeviceCopy` is not implemented for
+ `T`
+    |
+note: required by a bound in `cust::memory::DeviceBuffer`
+   --> C:\Users\downl\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cust
+-0.3.2\src\memory\device\device_buffer.rs:18:28
+    |
+ 18 | pub struct DeviceBuffer<T: DeviceCopy> {
+    |                            ^^^^^^^^^^ required by this bound in `DeviceBu
+ffer`
+help: consider restricting type parameter `T` with trait `DeviceCopy`
+    |
+117 | pub struct DeviceBufferImpl<T: cust::memory::DeviceCopy> {
+    |                              ++++++++++++++++++++++++++
+
+Some errors have detailed explanations: E0277, E0405, E0782.
+For more information about an error, try `rustc --explain E0277`.
+    Checking codex-utils-image v2.1.0 (C:\Users\downl\Desktop\codex-main\codex-
+main\codex-rs\utils\image)
+warning: `codex-cuda-runtime` (lib) generated 1 warning
+error: could not compile `codex-cuda-runtime` (lib) due to 5 previous errors; 1
+ warning emitted
+warning: build failed, waiting for other jobs to finish...

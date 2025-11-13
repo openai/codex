@@ -36,7 +36,9 @@ fn check_npu_via_registry() -> Result<bool> {
         let mut hkey = HKEY::default();
         let result = RegOpenKeyExW(
             HKEY_LOCAL_MACHINE,
-            &windows::core::w!("SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e97d-e325-11ce-bfc1-08002be10318}"),
+            &windows::core::w!(
+                "SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e97d-e325-11ce-bfc1-08002be10318}"
+            ),
             0,
             KEY_READ,
             &mut hkey,
@@ -49,7 +51,7 @@ fn check_npu_via_registry() -> Result<bool> {
         // Check for NPU device class
         // TODO: Implement actual NPU device enumeration
         // For now, return false as specific registry keys need to be identified
-        
+
         RegCloseKey(hkey);
         Ok(false)
     }
@@ -58,7 +60,7 @@ fn check_npu_via_registry() -> Result<bool> {
 /// Get DirectML version info
 pub fn get_directml_version() -> Result<DirectMlVersion> {
     let build = get_windows_build_number()?;
-    
+
     // Windows 11 25H2 (Build 26100+) includes DirectML 1.13/1.14
     if build >= 26100 {
         Ok(DirectMlVersion {

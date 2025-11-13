@@ -1,0 +1,207 @@
+﻿cargo :     Checking hyper-util v0.1.17
+発生場所 行:1 文字:14
++ cd codex-rs; cargo clippy --all-targets --all-features 2>&1 | Out-Fil ...
++              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Checking hyper-util v0.1.17:S 
+   tring) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+   Compiling aws-lc-rs v1.14.1
+    Checking aws-lc-sys v0.32.3
+    Checking codex-protocol v2.1.0 (C:\Users\downl\Desktop\codex-main\codex-mai
+n\codex-rs\protocol)
+    Checking process-wrap v8.2.1
+   Compiling rustls v0.23.35
+    Checking codex-cuda-runtime v2.1.0 (C:\Users\downl\Desktop\codex-main\codex
+-main\codex-rs\cuda-runtime)
+    Checking codex-file-search v2.1.0 (C:\Users\downl\Desktop\codex-main\codex-
+main\codex-rs\file-search)
+    Checking oid-registry v0.7.1
+    Checking der-parser v9.0.0
+    Checking codex-windows-ai v2.1.0 (C:\Users\downl\Desktop\codex-main\codex-m
+ain\codex-rs\windows-ai)
+    Checking serde_yaml v0.9.34+deprecated
+    Checking askama v0.12.1
+    Checking sysinfo v0.31.4
+error[E0583]: file not found for module `kernel_driver`
+ --> windows-ai\src\windows_impl.rs:8:1
+  |
+8 | pub mod kernel_driver;
+  | ^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = help: to create the module `kernel_driver`, create file "windows-ai\src\win
+dows_impl\kernel_driver.rs" or "windows-ai\src\windows_impl\kernel_driver\mod.r
+s"
+  = note: if there is a `mod kernel_driver` elsewhere in the crate already, imp
+ort it with `use crate::...` instead
+
+error[E0405]: cannot find trait `DeviceCopy` in this scope
+  --> cuda-runtime\src\cuda_impl.rs:76:30
+   |
+76 |     pub fn copy_to_device<T: DeviceCopy>(&self, data: &[T]) -> Result<Devi
+ceBufferImpl<T>> {
+   |                              ^^^^^^^^^^
+   |
+  ::: C:\Users\downl\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cust-
+0.3.2\src\util.rs:12:1
+   |
+12 | pub trait DeviceCopyExt: DeviceCopy {
+   | ----------------------------------- similarly named trait `DeviceCopyExt` 
+defined here
+   |
+help: a trait with a similar name exists
+   |
+76 |     pub fn copy_to_device<T: DeviceCopyExt>(&self, data: &[T]) -> Result<D
+eviceBufferImpl<T>> {
+   |                                        +++
+help: consider importing this trait
+   |
+ 4 + use cust::memory::DeviceCopy;
+   |
+
+error[E0405]: cannot find trait `DeviceCopy` in this scope
+  --> cuda-runtime\src\cuda_impl.rs:88:32
+   |
+88 |     pub fn copy_from_device<T: DeviceCopy + Clone>(
+   |                                ^^^^^^^^^^
+   |
+  ::: C:\Users\downl\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cust-
+0.3.2\src\util.rs:12:1
+   |
+12 | pub trait DeviceCopyExt: DeviceCopy {
+   | ----------------------------------- similarly named trait `DeviceCopyExt` 
+defined here
+   |
+help: a trait with a similar name exists
+   |
+88 |     pub fn copy_from_device<T: DeviceCopyExt + Clone>(
+   |                                          +++
+help: consider importing this trait
+   |
+ 4 + use cust::memory::DeviceCopy;
+   |
+
+error[E0405]: cannot find trait `DeviceCopy` in this scope
+   --> cuda-runtime\src\cuda_impl.rs:104:24
+    |
+104 |     pub fn allocate<T: DeviceCopy>(&self, size: usize) -> Result<DeviceBu
+fferImpl<T>> {
+    |                        ^^^^^^^^^^
+    |
+   ::: C:\Users\downl\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cust
+-0.3.2\src\util.rs:12:1
+    |
+ 12 | pub trait DeviceCopyExt: DeviceCopy {
+    | ----------------------------------- similarly named trait `DeviceCopyExt`
+ defined here
+    |
+help: a trait with a similar name exists
+    |
+104 |     pub fn allocate<T: DeviceCopyExt>(&self, size: usize) -> Result<Devic
+eBufferImpl<T>> {
+    |                                  +++
+help: consider importing this trait
+    |
+  4 + use cust::memory::DeviceCopy;
+    |
+
+warning: unused import: `std::rc::Rc`
+ --> cuda-runtime\src\cuda_impl.rs:6:5
+  |
+6 | use std::rc::Rc;
+  |     ^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+error[E0433]: failed to resolve: use of undeclared type `HKEY`
+  --> windows-ai\src\windows_impl.rs:36:24
+   |
+36 |         let mut hkey = HKEY::default();
+   |                        ^^^^ use of undeclared type `HKEY`
+
+error[E0782]: expected a type, found a trait
+  --> cuda-runtime\src\cuda_impl.rs:13:15
+   |
+13 |     _context: Context,
+   |               ^^^^^^^
+   |
+help: you might be missing a type parameter
+   |
+12 ~ pub struct CudaRuntimeImpl<T: Context> {
+13 ~     _context: T,
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `RegOpenKeyEx
+W` in this scope
+  --> windows-ai\src\windows_impl.rs:37:22
+   |
+37 |         let result = RegOpenKeyExW(
+   |                      ^^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find value `HKEY_LOCAL_MACHINE` in this scope
+  --> windows-ai\src\windows_impl.rs:38:13
+   |
+38 |             HKEY_LOCAL_MACHINE,
+   |             ^^^^^^^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find value `KEY_READ` in this scope
+  --> windows-ai\src\windows_impl.rs:41:13
+   |
+41 |             KEY_READ,
+   |             ^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function, tuple struct or tuple variant `RegCloseKey`
+ in this scope
+  --> windows-ai\src\windows_impl.rs:53:9
+   |
+53 |         RegCloseKey(hkey);
+   |         ^^^^^^^^^^^ not found in this scope
+
+warning: redundant field names in struct initialization
+  --> windows-ai\src\windows_impl.rs:67:13
+   |
+67 |             build: build,
+   |             ^^^^^^^^^^^^ help: replace it with: `build`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clipp
+y/master/index.html#redundant_field_names
+   = note: `#[warn(clippy::redundant_field_names)]` on by default
+
+warning: unused import: `crate::windows_impl::kernel_driver::*`
+   --> windows-ai\src\lib.rs:100:13
+    |
+100 |     pub use crate::windows_impl::kernel_driver::*;
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` on by default
+
+error[E0277]: the trait bound `T: cust::memory::DeviceCopy` is not satisfied
+   --> cuda-runtime\src\cuda_impl.rs:118:13
+    |
+118 |     buffer: DeviceBuffer<T>,
+    |             ^^^^^^^^^^^^^^^ the trait `cust::memory::DeviceCopy` is not i
+mplemented for `T`
+    |
+note: required by a bound in `cust::memory::DeviceBuffer`
+   --> C:\Users\downl\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cust
+-0.3.2\src\memory\device\device_buffer.rs:18:28
+    |
+ 18 | pub struct DeviceBuffer<T: DeviceCopy> {
+    |                            ^^^^^^^^^^ required by this bound in `DeviceBu
+ffer`
+help: consider restricting type parameter `T` with trait `DeviceCopy`
+    |
+117 | pub struct DeviceBufferImpl<T: cust::memory::DeviceCopy> {
+    |                              ++++++++++++++++++++++++++
+
+Some errors have detailed explanations: E0277, E0405, E0782.
+For more information about an error, try `rustc --explain E0277`.
+warning: `codex-cuda-runtime` (lib) generated 1 warning
+error: could not compile `codex-cuda-runtime` (lib) due to 5 previous errors; 1
+ warning emitted
+warning: build failed, waiting for other jobs to finish...
+Some errors have detailed explanations: E0425, E0433, E0583.
+For more information about an error, try `rustc --explain E0425`.
+warning: `codex-windows-ai` (lib) generated 2 warnings
+error: could not compile `codex-windows-ai` (lib) due to 6 previous errors; 2 w
+arnings emitted

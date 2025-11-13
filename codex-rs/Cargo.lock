@@ -1312,7 +1312,7 @@ dependencies = [
 
 [[package]]
 name = "codex-backend-client"
-version = "0.0.0"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "codex-backend-openapi-models",
@@ -1550,7 +1550,7 @@ dependencies = [
 
 [[package]]
 name = "codex-cuda-runtime"
-version = "0.1.0"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "criterion 0.5.1",
@@ -1699,7 +1699,7 @@ dependencies = [
 
 [[package]]
 name = "codex-gui"
-version = "0.1.0"
+version = "2.1.0"
 dependencies = [
  "axum",
  "chrono",
@@ -1969,7 +1969,7 @@ dependencies = [
 
 [[package]]
 name = "codex-tauri-gui"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2136,7 +2136,7 @@ dependencies = [
 
 [[package]]
 name = "codex-windows-sandbox"
-version = "0.1.0"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "dirs-next",

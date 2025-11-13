@@ -4,7 +4,7 @@ description = "CUDA Runtime integration for Codex - GPU acceleration for AI infe
 edition = "2024"
 license = "Apache-2.0"
 name = "codex-cuda-runtime"
-version = "0.1.0"
+version = { workspace = true }
 
 [dependencies]
 # Rust-CUDA ecosystem (https://github.com/Rust-GPU/Rust-CUDA)

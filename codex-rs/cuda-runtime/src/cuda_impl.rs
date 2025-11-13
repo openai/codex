@@ -2,8 +2,8 @@
 //! https://github.com/Rust-GPU/Rust-CUDA
 
 use anyhow::{Context, Result};
+use cust::memory::DeviceCopy;
 use cust::prelude::*;
-use std::rc::Rc;
 use tracing::{debug, info};
 
 use crate::CudaDeviceInfo;
@@ -85,7 +85,7 @@ impl CudaRuntimeImpl {
     }
 
     /// Copy data from device
-    pub fn copy_from_device<T: DeviceCopy + Clone>(
+    pub fn copy_from_device<T: DeviceCopy + Clone + Default>(
         &self,
         buffer: &DeviceBufferImpl<T>,
     ) -> Result<Vec<T>> {

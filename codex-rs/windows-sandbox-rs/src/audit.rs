@@ -282,22 +282,24 @@ unsafe fn dacl_quick_world_write_mask_allows(p_dacl: *mut ACL, psid_world: *mut 
         return false;
     }
     const INHERIT_ONLY_ACE: u8 = 0x08;
-    let mut info: ACL_SIZE_INFORMATION = std::mem::zeroed();
-    let ok = GetAclInformation(
-        p_dacl as *const ACL,
-        &mut info as *mut _ as *mut c_void,
-        std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
-        AclSizeInformation,
-    );
+    let mut info: ACL_SIZE_INFORMATION = unsafe { std::mem::zeroed() };
+    let ok = unsafe {
+        GetAclInformation(
+            p_dacl as *const ACL,
+            &mut info as *mut _ as *mut c_void,
+            std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
+            AclSizeInformation,
+        )
+    };
     if ok == 0 {
         return false;
     }
     for i in 0..(info.AceCount as usize) {
         let mut p_ace: *mut c_void = std::ptr::null_mut();
-        if GetAce(p_dacl as *const ACL, i as u32, &mut p_ace) == 0 {
+        if unsafe { GetAce(p_dacl as *const ACL, i as u32, &mut p_ace) } == 0 {
             continue;
         }
-        let hdr = &*(p_ace as *const ACE_HEADER);
+        let hdr = unsafe { &*(p_ace as *const ACE_HEADER) };
         if hdr.AceType != 0 { // ACCESS_ALLOWED_ACE_TYPE
             continue;
         }
@@ -308,8 +310,8 @@ unsafe fn dacl_quick_world_write_mask_allows(p_dacl: *mut ACL, psid_world: *mut 
         let sid_ptr = (base
             + std::mem::size_of::<ACE_HEADER>()
             + std::mem::size_of::<u32>()) as *mut c_void; // skip header + mask
-        if EqualSid(sid_ptr, psid_world) != 0 {
-            let ace = &*(p_ace as *const ACCESS_ALLOWED_ACE);
+        if unsafe { EqualSid(sid_ptr, psid_world) } != 0 {
+            let ace = unsafe { &*(p_ace as *const ACCESS_ALLOWED_ACE) };
             let mask = ace.Mask;
             let writey = FILE_GENERIC_WRITE
                 | FILE_WRITE_DATA
