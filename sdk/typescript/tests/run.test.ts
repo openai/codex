@@ -347,7 +347,7 @@ describe("Codex", () => {
     }
   });
 
-  it("passes additionalDirectories as repeated flags", async () => {
+  it("passes writeableRoots as repeated flags", async () => {
     const { url, close } = await startResponsesTestProxy({
       statusCode: 200,
       responseBodies: [
@@ -365,7 +365,7 @@ describe("Codex", () => {
       const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
 
       const thread = client.startThread({
-        additionalDirectories: ["../backend", "/tmp/shared"],
+        writeableRoots: ["../backend", "/tmp/shared"],
       });
       await thread.run("test additional dirs");
 

@@ -18,8 +18,8 @@ export type CodexExecArgs = {
   sandboxMode?: SandboxMode;
   // --cd
   workingDirectory?: string;
-  // --add-dir 
-  additionalDirectories?: string[];
+  // --config sandbox_workspace_write.writable_roots
+  writeableRoots?: string[];
   // --skip-git-repo-check
   skipGitRepoCheck?: boolean;
   // --output-schema
@@ -58,8 +58,8 @@ export class CodexExec {
       commandArgs.push("--cd", args.workingDirectory);
     }
 
-    if (args.additionalDirectories?.length) {
-      const writableRootsArray = args.additionalDirectories.map((dir) => `"${dir}"`).join(", ");
+    if (args.writeableRoots?.length) {
+      const writableRootsArray = args.writeableRoots.map((dir) => `"${dir}"`).join(", ");
       commandArgs.push("--config", `sandbox_workspace_write.writable_roots=[${writableRootsArray}]`);
     }
 
