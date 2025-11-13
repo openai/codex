@@ -114,12 +114,17 @@ fn file_exists(path: &PathBuf) -> Option<PathBuf> {
 
 fn get_shell_path(
     shell_type: ShellType,
+    provided_path: Option<&PathBuf>,
     binary_name: &str,
     fallback_paths: Vec<&str>,
 ) -> Option<PathBuf> {
+    // If exact provided path exists, use it
+    if provided_path.and_then(file_exists).is_some() {
+        return provided_path.cloned();
+    }
+
     // Check if the shell we are trying to load is user's default shell
     // if just use it
-
     let default_shell_path = get_user_shell_path();
     if let Some(default_shell_path) = default_shell_path
         && detect_shell_type(&default_shell_path) == Some(shell_type)
@@ -141,36 +146,41 @@ fn get_shell_path(
     None
 }
 
-fn get_zsh_shell() -> Option<ZshShell> {
-    let shell_path = get_shell_path(ShellType::Zsh, "zsh", vec!["/bin/zsh"]);
+fn get_zsh_shell(path: Option<&PathBuf>) -> Option<ZshShell> {
+    let shell_path = get_shell_path(ShellType::Zsh, path, "zsh", vec!["/bin/zsh"]);
 
     shell_path.map(|shell_path| ZshShell { shell_path })
 }
 
-fn get_bash_shell() -> Option<BashShell> {
-    let shell_path = get_shell_path(ShellType::Bash, "bash", vec!["/bin/bash"]);
+fn get_bash_shell(path: Option<&PathBuf>) -> Option<BashShell> {
+    let shell_path = get_shell_path(ShellType::Bash, path, "bash", vec!["/bin/bash"]);
 
     shell_path.map(|shell_path| BashShell { shell_path })
 }
 
-fn get_powershell_shell() -> Option<PowerShellConfig> {
-    let shell_path = get_shell_path(ShellType::PowerShell, "pwsh", vec!["/usr/local/bin/pwsh"])
-        .or_else(|| get_shell_path(ShellType::PowerShell, "powershell", vec![]));
+fn get_powershell_shell(path: Option<&PathBuf>) -> Option<PowerShellConfig> {
+    let shell_path = get_shell_path(
+        ShellType::PowerShell,
+        path,
+        "pwsh",
+        vec!["/usr/local/bin/pwsh"],
+    )
+    .or_else(|| get_shell_path(ShellType::PowerShell, path, "powershell", vec![]));
 
     shell_path.map(|shell_path| PowerShellConfig { shell_path })
 }
 
 pub fn get_shell_by_model_provided_path(shell_path: &PathBuf) -> Shell {
     detect_shell_type(shell_path)
-        .and_then(get_shell)
+        .and_then(|shell_type| get_shell(shell_type, Some(shell_path)))
         .unwrap_or(Shell::Unknown)
 }
 
-pub fn get_shell(shell_type: ShellType) -> Option<Shell> {
+pub fn get_shell(shell_type: ShellType, path: Option<&PathBuf>) -> Option<Shell> {
     match shell_type {
-        ShellType::Zsh => get_zsh_shell().map(Shell::Zsh),
-        ShellType::Bash => get_bash_shell().map(Shell::Bash),
-        ShellType::PowerShell => get_powershell_shell().map(Shell::PowerShell),
+        ShellType::Zsh => get_zsh_shell(path).map(Shell::Zsh),
+        ShellType::Bash => get_bash_shell(path).map(Shell::Bash),
+        ShellType::PowerShell => get_powershell_shell(path).map(Shell::PowerShell),
     }
 }
 
@@ -196,11 +206,11 @@ pub fn detect_shell_type(shell_path: &PathBuf) -> Option<ShellType> {
 
 pub async fn default_user_shell() -> Shell {
     if cfg!(windows) {
-        get_shell(ShellType::PowerShell).unwrap_or(Shell::Unknown)
+        get_shell(ShellType::PowerShell, None).unwrap_or(Shell::Unknown)
     } else {
         get_user_shell_path()
             .and_then(|shell| detect_shell_type(&shell))
-            .and_then(get_shell)
+            .and_then(|shell_type| get_shell(shell_type, None))
             .unwrap_or(Shell::Unknown)
     }
 }
@@ -262,7 +272,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn detects_zsh() {
-        let zsh_shell = get_shell(ShellType::Zsh).unwrap();
+        let zsh_shell = get_shell(ShellType::Zsh, None).unwrap();
 
         let ZshShell { shell_path } = match zsh_shell {
             Shell::Zsh(zsh_shell) => zsh_shell,
@@ -274,7 +284,7 @@ mod tests {
 
     #[test]
     fn detects_bash() {
-        let bash_shell = get_shell(ShellType::Bash).unwrap();
+        let bash_shell = get_shell(ShellType::Bash, None).unwrap();
         let BashShell { shell_path } = match bash_shell {
             Shell::Bash(bash_shell) => bash_shell,
             _ => panic!("expected bash shell"),
