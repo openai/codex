@@ -4,6 +4,7 @@ use crate::ModelProviderInfo;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
+use crate::config::Config;
 use crate::default_client::CodexHttpClient;
 use crate::error::CodexErr;
 use crate::error::ConnectionFailedError;
@@ -11,7 +12,6 @@ use crate::error::ResponseStreamFailed;
 use crate::error::Result;
 use crate::error::RetryLimitReachedError;
 use crate::error::UnexpectedResponseError;
-use crate::model_family::ModelFamily;
 use crate::tools::spec::create_tools_json_for_chat_completions_api;
 use crate::util::backoff;
 use bytes::Bytes;
@@ -39,7 +39,7 @@ use tracing::trace;
 /// Implementation for the classic Chat Completions API.
 pub(crate) async fn stream_chat_completions(
     prompt: &Prompt,
-    model_family: &ModelFamily,
+    config: &Config,
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     otel_event_manager: &OtelEventManager,
@@ -54,7 +54,7 @@ pub(crate) async fn stream_chat_completions(
     // Build messages array
     let mut messages = Vec::<serde_json::Value>::new();
 
-    let full_instructions = prompt.get_full_instructions(model_family);
+    let full_instructions = prompt.get_full_instructions(&config.model_family);
     messages.push(json!({"role": "system", "content": full_instructions}));
 
     let input = prompt.get_formatted_input();
@@ -328,12 +328,20 @@ pub(crate) async fn stream_chat_completions(
     }
 
     let tools_json = create_tools_json_for_chat_completions_api(&prompt.tools)?;
-    let payload = json!({
-        "model": model_family.slug,
+    let mut payload = json!({
+        "model": config.model_family.slug,
         "messages": messages,
         "stream": true,
         "tools": tools_json,
+        "tool_choice": "auto",
+        // Same store setting with Responses API
+        "store": provider.is_azure_responses_endpoint(),
     });
+    // Add max_completion_tokens if specified
+    if let Some(max_output_tokens) = config.model_max_output_tokens {
+        payload["max_completion_tokens"] = json!(max_output_tokens);
+    }
+    let payload = payload;
 
     debug!(
         "POST to {}: {}",

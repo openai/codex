@@ -1021,27 +1021,17 @@ impl Config {
         let mut model_family =
             find_family_for_model(&model).unwrap_or_else(|| derive_default_model_family(&model));
 
-        if let Some(supports_reasoning_summaries) = cfg.model_supports_reasoning_summaries {
-            model_family.supports_reasoning_summaries = supports_reasoning_summaries;
-        }
-        if let Some(model_reasoning_summary_format) = cfg.model_reasoning_summary_format {
-            model_family.reasoning_summary_format = model_reasoning_summary_format;
-        }
+        model_family.supports_reasoning_summaries = config_profile
+            .model_supports_reasoning_summaries
+            .or(cfg.model_supports_reasoning_summaries)
+            .unwrap_or(model_family.supports_reasoning_summaries);
+        model_family.reasoning_summary_format = config_profile
+            .model_reasoning_summary_format
+            .or(cfg.model_reasoning_summary_format)
+            .unwrap_or(model_family.reasoning_summary_format);
 
-        let openai_model_info = get_model_info(&model_family);
-        let model_context_window = cfg
-            .model_context_window
-            .or_else(|| openai_model_info.as_ref().map(|info| info.context_window));
-        let model_max_output_tokens = cfg.model_max_output_tokens.or_else(|| {
-            openai_model_info
-                .as_ref()
-                .map(|info| info.max_output_tokens)
-        });
-        let model_auto_compact_token_limit = cfg.model_auto_compact_token_limit.or_else(|| {
-            openai_model_info
-                .as_ref()
-                .and_then(|info| info.auto_compact_token_limit)
-        });
+        let model_info = get_model_info(&model_family);
+        let model_info = model_info.as_ref();
 
         let compact_prompt = compact_prompt.or(cfg.compact_prompt).and_then(|value| {
             let trimmed = value.trim();
@@ -1087,9 +1077,18 @@ impl Config {
             model,
             review_model,
             model_family,
-            model_context_window,
-            model_max_output_tokens,
-            model_auto_compact_token_limit,
+            model_auto_compact_token_limit: config_profile
+                .model_auto_compact_token_limit
+                .or(cfg.model_auto_compact_token_limit)
+                .or_else(|| model_info.and_then(|info| info.auto_compact_token_limit)),
+            model_max_output_tokens: config_profile
+                .model_max_output_tokens
+                .or(cfg.model_max_output_tokens)
+                .or_else(|| model_info.map(|info| info.max_output_tokens)),
+            model_context_window: config_profile
+                .model_context_window
+                .or(cfg.model_context_window)
+                .or_else(|| model_info.map(|info| info.context_window)),
             model_provider_id,
             model_provider,
             cwd: resolved_cwd,
