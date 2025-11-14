@@ -510,7 +510,7 @@ impl Session {
             mcp_fut,
             default_shell_fut,
             history_meta_fut,
-            auth_statuses_fut,
+            auth_statuses_fut
         );
 
         let rollout_recorder = rollout_recorder.map_err(|e| {
