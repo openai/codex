@@ -361,6 +361,13 @@ impl SessionConfiguration {
         if let Some(cwd) = updates.cwd.clone() {
             next_configuration.cwd = cwd;
         }
+        if let Some(experimental_windows_sandbox) = updates.experimental_windows_sandbox {
+            if experimental_windows_sandbox {
+                next_configuration.features.enable(Feature::WindowsSandbox);
+            } else {
+                next_configuration.features.disable(Feature::WindowsSandbox);
+            }
+        }
         next_configuration
     }
 }
@@ -374,6 +381,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) reasoning_effort: Option<Option<ReasoningEffortConfig>>,
     pub(crate) reasoning_summary: Option<ReasoningSummaryConfig>,
     pub(crate) final_output_json_schema: Option<Option<Value>>,
+    pub(crate) experimental_windows_sandbox: Option<bool>,
 }
 
 impl Session {
@@ -698,7 +706,36 @@ impl Session {
     pub(crate) async fn update_settings(&self, updates: SessionSettingsUpdate) {
         let mut state = self.state.lock().await;
 
-        state.session_configuration = state.session_configuration.apply(&updates);
+        let new_configuration = state.session_configuration.apply(&updates);
+
+        // on Windows, when we enable Windows sandbox, we need to warn the user about world writable roots
+        #[cfg(windows)]
+        {
+            if new_configuration.features.enabled(Feature::WindowsSandbox)
+                && !state
+                    .session_configuration
+                    .features
+                    .enabled(Feature::WindowsSandbox)
+            {
+                if let Some((sample_paths, extra_count, failed_scan)) =
+                    codex_windows_sandbox::world_writable_warning_details(
+                        new_configuration.codex_home.as_path(),
+                    )
+                {
+                    self.send_event(
+                        &turn_context,
+                        EventMsg::WindowsWorldWritableWarning(WindowsWorldWritableWarningEvent {
+                            sample_paths,
+                            extra_count,
+                            failed_scan,
+                        }),
+                    )
+                    .await;
+                }
+            }
+        }
+
+        state.session_configuration = new_configuration;
     }
 
     pub(crate) async fn new_turn(&self, updates: SessionSettingsUpdate) -> Arc<TurnContext> {
@@ -1455,6 +1492,7 @@ mod handlers {
                 cwd,
                 approval_policy,
                 sandbox_policy,
+                experimental_windows_sandbox,
                 model,
                 effort,
                 summary,
@@ -1470,6 +1508,7 @@ mod handlers {
                     reasoning_effort: Some(effort),
                     reasoning_summary: Some(summary),
                     final_output_json_schema: Some(final_output_json_schema),
+                    experimental_windows_sandbox,
                 },
             ),
             Op::UserInput { items } => (items, SessionSettingsUpdate::default()),

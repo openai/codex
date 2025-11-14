@@ -93,6 +93,7 @@ pub struct FeatureOverrides {
     pub include_apply_patch_tool: Option<bool>,
     pub web_search_request: Option<bool>,
     pub experimental_sandbox_command_assessment: Option<bool>,
+    pub experimental_windows_sandbox: Option<bool>,
 }
 
 impl FeatureOverrides {

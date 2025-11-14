@@ -513,6 +513,7 @@ async fn submit_turn(
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            experimental_windows_sandbox: None,
         })
         .await?;
 

@@ -88,6 +88,10 @@ pub enum Op {
         /// Policy to use for tool calls such as `local_shell`.
         sandbox_policy: SandboxPolicy,
 
+        /// Whether to enable the experimental Windows sandbox.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        experimental_windows_sandbox: Option<bool>,
+
         /// Must be a valid model slug for the [`crate::client::ModelClient`]
         /// associated with this conversation.
         model: String,
@@ -560,6 +564,16 @@ pub enum EventMsg {
     AgentMessageContentDelta(AgentMessageContentDeltaEvent),
     ReasoningContentDelta(ReasoningContentDeltaEvent),
     ReasoningRawContentDelta(ReasoningRawContentDeltaEvent),
+
+    /// Windows world-writable directories warning.
+    WindowsWorldWritableWarning(WindowsWorldWritableWarningEvent),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+pub struct WindowsWorldWritableWarningEvent {
+    pub sample_paths: Vec<String>,
+    pub extra_count: usize,
+    pub failed_scan: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]

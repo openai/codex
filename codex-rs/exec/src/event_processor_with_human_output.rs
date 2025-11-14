@@ -570,7 +570,8 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
             | EventMsg::UndoCompleted(_)
-            | EventMsg::UndoStarted(_) => {}
+            | EventMsg::UndoStarted(_)
+            | EventMsg::WindowsWorldWritableWarning(_) => {}
         }
         CodexStatus::Running
     }

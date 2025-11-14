@@ -40,6 +40,7 @@ async fn run_turn(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            experimental_windows_sandbox: None,
         })
         .await?;
 

@@ -462,6 +462,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
             },
+            experimental_windows_sandbox: None,
             model: "o3".to_string(),
             effort: Some(ReasoningEffort::High),
             summary: ReasoningSummary::Detailed,
@@ -551,6 +552,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
             effort: default_effort,
             summary: default_summary,
             final_output_json_schema: None,
+            experimental_windows_sandbox: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
@@ -567,6 +569,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
             effort: default_effort,
             summary: default_summary,
             final_output_json_schema: None,
+            experimental_windows_sandbox: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
@@ -638,6 +641,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
             effort: default_effort,
             summary: default_summary,
             final_output_json_schema: None,
+            experimental_windows_sandbox: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
@@ -654,6 +658,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
             effort: Some(ReasoningEffort::High),
             summary: ReasoningSummary::Detailed,
             final_output_json_schema: None,
+            experimental_windows_sandbox: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;

@@ -206,6 +206,7 @@ impl TestCodex {
                 cwd: self.cwd.path().to_path_buf(),
                 approval_policy,
                 sandbox_policy,
+                experimental_windows_sandbox: None,
                 model: session_model,
                 effort: None,
                 summary: ReasoningSummary::Auto,

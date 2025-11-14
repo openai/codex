@@ -230,6 +230,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         show_raw_agent_reasoning: oss.then_some(true),
         tools_web_search_request: None,
         experimental_sandbox_command_assessment: None,
+        experimental_windows_sandbox: None,
         additional_writable_roots: add_dir,
     };
 
@@ -296,6 +297,9 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     let default_model = config.model.clone();
     let default_effort = config.model_reasoning_effort;
     let default_summary = config.model_reasoning_summary;
+    let default_experimental_windows_sandbox = config
+        .features
+        .enabled(codex_core::features::Feature::WindowsSandbox);
 
     if !skip_git_repo_check && get_git_repo_root(&default_cwd).is_none() {
         eprintln!("Not inside a trusted directory and --skip-git-repo-check was not specified.");
@@ -392,6 +396,11 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             effort: default_effort,
             summary: default_summary,
             final_output_json_schema: output_schema,
+            experimental_windows_sandbox: if cfg!(windows) {
+                Some(default_experimental_windows_sandbox)
+            } else {
+                None
+            },
         })
         .await?;
     info!("Sent prompt with event ID: {initial_prompt_task_id}");

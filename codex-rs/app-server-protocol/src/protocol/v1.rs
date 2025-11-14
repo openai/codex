@@ -63,6 +63,7 @@ pub struct NewConversationParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compact_prompt: Option<String>,
     pub include_apply_patch_tool: Option<bool>,
+    pub experimental_windows_sandbox: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -385,6 +386,7 @@ pub struct SendUserTurnParams {
     pub model: String,
     pub effort: Option<ReasoningEffort>,
     pub summary: ReasoningSummary,
+    pub experimental_windows_sandbox: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

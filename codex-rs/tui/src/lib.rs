@@ -217,6 +217,7 @@ pub async fn run_main(
         show_raw_agent_reasoning: cli.oss.then_some(true),
         tools_web_search_request: None,
         experimental_sandbox_command_assessment: None,
+        experimental_windows_sandbox: None,
         additional_writable_roots: additional_dirs,
     };
 

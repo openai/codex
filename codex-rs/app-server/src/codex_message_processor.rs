@@ -111,6 +111,7 @@ use codex_core::config_loader::load_config_as_toml;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
+use codex_core::features::Feature;
 use codex_core::find_conversation_path_by_id_str;
 use codex_core::get_platform_sandbox;
 use codex_core::git_info::git_diff_to_remote;
@@ -118,6 +119,7 @@ use codex_core::parse_cursor;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewRequest;
+use codex_core::protocol::WindowsWorldWritableWarningEvent;
 use codex_core::read_head_for_summary;
 use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
@@ -1221,6 +1223,7 @@ impl CodexMessageProcessor {
             developer_instructions,
             compact_prompt,
             include_apply_patch_tool,
+            experimental_windows_sandbox,
         } = params;
 
         let overrides = ConfigOverrides {
@@ -1235,10 +1238,11 @@ impl CodexMessageProcessor {
             developer_instructions,
             compact_prompt,
             include_apply_patch_tool,
+            experimental_windows_sandbox,
             ..Default::default()
         };
 
-        let config = match derive_config_from_params(overrides, cli_overrides).await {
+        let mut config = match derive_config_from_params(overrides, cli_overrides).await {
             Ok(config) => config,
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -1250,6 +1254,10 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        if let Some(experimental_windows_sandbox) = experimental_windows_sandbox {
+            self.handle_windows_sandbox(experimental_windows_sandbox, &mut config)
+                .await;
+        }
 
         match self.conversation_manager.new_conversation(config).await {
             Ok(conversation_id) => {
@@ -1878,7 +1886,7 @@ impl CodexMessageProcessor {
         } = params;
 
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
-        let config = match overrides {
+        let config = match overrides.clone() {
             Some(overrides) => {
                 let NewConversationParams {
                     model,
@@ -1892,6 +1900,7 @@ impl CodexMessageProcessor {
                     developer_instructions,
                     compact_prompt,
                     include_apply_patch_tool,
+                    experimental_windows_sandbox,
                 } = overrides;
 
                 let overrides = ConfigOverrides {
@@ -1906,6 +1915,7 @@ impl CodexMessageProcessor {
                     developer_instructions,
                     compact_prompt,
                     include_apply_patch_tool,
+                    experimental_windows_sandbox,
                     ..Default::default()
                 };
 
@@ -1913,7 +1923,7 @@ impl CodexMessageProcessor {
             }
             None => Ok(self.config.as_ref().clone()),
         };
-        let config = match config {
+        let mut config = match config {
             Ok(cfg) => cfg,
             Err(err) => {
                 self.send_invalid_request_error(
@@ -1924,6 +1934,12 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        if let Some(experimental_windows_sandbox) =
+            overrides.and_then(|o| o.experimental_windows_sandbox)
+        {
+            self.handle_windows_sandbox(experimental_windows_sandbox, &mut config)
+                .await;
+        }
 
         let conversation_history = if let Some(path) = path {
             match RolloutRecorder::get_rollout_history(&path).await {
@@ -2269,13 +2285,14 @@ impl CodexMessageProcessor {
             .await;
     }
 
-    async fn send_user_turn(&self, request_id: RequestId, params: SendUserTurnParams) {
+    async fn send_user_turn(&mut self, request_id: RequestId, params: SendUserTurnParams) {
         let SendUserTurnParams {
             conversation_id,
             items,
             cwd,
             approval_policy,
             sandbox_policy,
+            experimental_windows_sandbox,
             model,
             effort,
             summary,
@@ -2303,6 +2320,11 @@ impl CodexMessageProcessor {
                 WireInputItem::LocalImage { path } => CoreInputItem::LocalImage { path },
             })
             .collect();
+        let mut config = self.config.as_ref().clone();
+        if let Some(experimental_windows_sandbox) = experimental_windows_sandbox {
+            self.handle_windows_sandbox(experimental_windows_sandbox, &mut config)
+                .await;
+        }
 
         let _ = conversation
             .submit(Op::UserTurn {
@@ -2310,6 +2332,7 @@ impl CodexMessageProcessor {
                 cwd,
                 approval_policy,
                 sandbox_policy,
+                experimental_windows_sandbox,
                 model,
                 effort,
                 summary,
@@ -2786,6 +2809,47 @@ impl CodexMessageProcessor {
         {
             Ok(conv) => Some(conv.rollout_path()),
             Err(_) => None,
+        }
+    }
+
+    async fn handle_windows_sandbox(
+        &self,
+        experimental_windows_sandbox: bool,
+        config: &mut Config,
+    ) {
+        if !cfg!(windows) {
+            return;
+        }
+        let previous = config.features.enabled(Feature::WindowsSandbox);
+
+        config.set_windows_sandbox_globally(experimental_windows_sandbox);
+        let should_skip_world_writable_warning = self
+            .config
+            .notices
+            .hide_world_writable_warning
+            .unwrap_or(false);
+
+        if !should_skip_world_writable_warning
+            && !previous
+            && experimental_windows_sandbox
+            && let Some((sample_paths, extra_count, failed_scan)) =
+                codex_windows_sandbox::world_writable_warning_details(
+                    self.config.codex_home.as_path(),
+                )
+        {
+            self.outgoing
+                .send_notification(OutgoingNotification {
+                    method: "codex/event/WindowsWorldWritableWarning".to_string(),
+                    params: Some(
+                        serde_json::to_value(WindowsWorldWritableWarningEvent {
+                            sample_paths,
+                            extra_count,
+                            failed_scan,
+                        })
+                        .unwrap(),
+                    ),
+                })
+                .await;
         }
     }
 }

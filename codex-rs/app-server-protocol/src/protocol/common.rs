@@ -539,6 +539,7 @@ mod tests {
                 developer_instructions: None,
                 compact_prompt: None,
                 include_apply_patch_tool: None,
+                experimental_windows_sandbox: None,
             },
         };
         assert_eq!(

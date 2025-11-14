@@ -899,6 +899,7 @@ pub struct ConfigOverrides {
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
     pub experimental_sandbox_command_assessment: Option<bool>,
+    pub experimental_windows_sandbox: Option<bool>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
 }
@@ -959,6 +960,7 @@ impl Config {
             tools_web_search_request: override_tools_web_search_request,
             experimental_sandbox_command_assessment: sandbox_command_assessment_override,
             additional_writable_roots,
+            experimental_windows_sandbox: experimental_windows_sandbox_override,
         } = overrides;
 
         let active_profile_name = config_profile_key
@@ -983,6 +985,7 @@ impl Config {
             include_apply_patch_tool: include_apply_patch_tool_override,
             web_search_request: override_tools_web_search_request,
             experimental_sandbox_command_assessment: sandbox_command_assessment_override,
+            experimental_windows_sandbox: experimental_windows_sandbox_override,
         };
 
         let features = Features::from_config(&cfg, &config_profile, feature_overrides);

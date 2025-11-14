@@ -435,6 +435,7 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            experimental_windows_sandbox: None,
         })
         .await?;
 
