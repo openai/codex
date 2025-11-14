@@ -18,8 +18,6 @@ mod abort_tasks;
 #[cfg(not(target_os = "windows"))]
 mod apply_patch_cli;
 #[cfg(not(target_os = "windows"))]
-mod apply_patch_freeform;
-#[cfg(not(target_os = "windows"))]
 mod approvals;
 mod auth_refresh;
 mod cli_stream;

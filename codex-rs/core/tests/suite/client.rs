@@ -238,9 +238,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
 
     // Mock server that will receive the resumed request
     let server = MockServer::start().await;
-    let resp_mock =
-        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
-            .await;
+    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
 
     // Configure Codex to resume from our file
     let model_provider = ModelProviderInfo {
@@ -381,9 +379,7 @@ async fn includes_base_instructions_override_in_request() {
     skip_if_no_network!();
     // Mock server
     let server = MockServer::start().await;
-    let resp_mock =
-        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
-            .await;
+    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
@@ -571,9 +567,7 @@ async fn includes_user_instructions_message_in_request() {
     skip_if_no_network!();
     let server = MockServer::start().await;
 
-    let resp_mock =
-        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
-            .await;
+    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
@@ -631,9 +625,7 @@ async fn includes_configured_effort_in_request() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
-    let resp_mock =
-        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
-            .await;
+    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
     let TestCodex { codex, .. } = test_codex()
         .with_model("gpt-5.1-codex")
         .with_config(|config| {
@@ -672,9 +664,7 @@ async fn includes_no_effort_in_request() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
-    let resp_mock =
-        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
-            .await;
+    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
     let TestCodex { codex, .. } = test_codex()
         .with_model("gpt-5.1-codex")
         .build(&server)
@@ -711,9 +701,7 @@ async fn includes_default_reasoning_effort_in_request_when_defined_by_model_fami
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
-    let resp_mock =
-        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
-            .await;
+    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
     let TestCodex { codex, .. } = test_codex().with_model("gpt-5.1").build(&server).await?;
 
     codex
@@ -746,9 +734,7 @@ async fn includes_default_verbosity_in_request() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
-    let resp_mock =
-        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
-            .await;
+    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
     let TestCodex { codex, .. } = test_codex().with_model("gpt-5.1").build(&server).await?;
 
     codex
@@ -781,9 +767,7 @@ async fn configured_verbosity_not_sent_for_models_without_support() -> anyhow::R
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
-    let resp_mock =
-        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
-            .await;
+    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
     let TestCodex { codex, .. } = test_codex()
         .with_model("gpt-5-codex")
         .with_config(|config| {
@@ -821,9 +805,7 @@ async fn configured_verbosity_is_sent() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
-    let resp_mock =
-        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
-            .await;
+    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
     let TestCodex { codex, .. } = test_codex()
         .with_model("gpt-5")
         .with_config(|config| {
@@ -862,9 +844,7 @@ async fn includes_developer_instructions_message_in_request() {
     skip_if_no_network!();
     let server = MockServer::start().await;
 
-    let resp_mock =
-        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
-            .await;
+    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),

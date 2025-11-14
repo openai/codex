@@ -60,6 +60,7 @@ shlex = { workspace = true }
 similar = { workspace = true }
 strum_macros = { workspace = true }
 tempfile = { workspace = true }
+test-case = "3.3.1"
 test-log = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true, features = [

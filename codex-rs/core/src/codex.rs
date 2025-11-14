@@ -96,6 +96,7 @@ use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
+use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnDiffEvent;
 use crate::protocol::WarningEvent;
 use crate::rollout::RolloutRecorder;
@@ -1078,6 +1079,36 @@ impl Session {
                     turn_context.client.get_model_context_window(),
                 );
             }
+        }
+        self.send_token_count_event(turn_context).await;
+    }
+
+    pub(crate) async fn override_last_token_usage_estimate(
+        &self,
+        turn_context: &TurnContext,
+        estimated_total_tokens: i64,
+    ) {
+        {
+            let mut state = self.state.lock().await;
+            let mut info = state.token_info().unwrap_or(TokenUsageInfo {
+                total_token_usage: TokenUsage::default(),
+                last_token_usage: TokenUsage::default(),
+                model_context_window: None,
+            });
+
+            info.last_token_usage = TokenUsage {
+                input_tokens: 0,
+                cached_input_tokens: 0,
+                output_tokens: 0,
+                reasoning_output_tokens: 0,
+                total_tokens: estimated_total_tokens.max(0),
+            };
+
+            if info.model_context_window.is_none() {
+                info.model_context_window = turn_context.client.get_model_context_window();
+            }
+
+            state.set_token_info(Some(info));
         }
         self.send_token_count_event(turn_context).await;
     }
@@ -2201,13 +2232,17 @@ async fn try_run_turn(
                     error_or_panic("ReasoningSummaryDelta without active item".to_string());
                 }
             }
-            ResponseEvent::ReasoningSummaryDelta(delta) => {
+            ResponseEvent::ReasoningSummaryDelta {
+                delta,
+                summary_index,
+            } => {
                 if let Some(active) = active_item.as_ref() {
                     let event = ReasoningContentDeltaEvent {
                         thread_id: sess.conversation_id.to_string(),
                         turn_id: turn_context.sub_id.clone(),
                         item_id: active.id(),
-                        delta: delta.clone(),
+                        delta,
+                        summary_index,
                     };
                     sess.send_event(&turn_context, EventMsg::ReasoningContentDelta(event))
                         .await;
@@ -2215,18 +2250,29 @@ async fn try_run_turn(
                     error_or_panic("ReasoningSummaryDelta without active item".to_string());
                 }
             }
-            ResponseEvent::ReasoningSummaryPartAdded => {
-                let event =
-                    EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {});
-                sess.send_event(&turn_context, event).await;
+            ResponseEvent::ReasoningSummaryPartAdded { summary_index } => {
+                if let Some(active) = active_item.as_ref() {
+                    let event =
+                        EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {
+                            item_id: active.id(),
+                            summary_index,
+                        });
+                    sess.send_event(&turn_context, event).await;
+                } else {
+                    error_or_panic("ReasoningSummaryPartAdded without active item".to_string());
+                }
             }
-            ResponseEvent::ReasoningContentDelta(delta) => {
+            ResponseEvent::ReasoningContentDelta {
+                delta,
+                content_index,
+            } => {
                 if let Some(active) = active_item.as_ref() {
                     let event = ReasoningRawContentDeltaEvent {
                         thread_id: sess.conversation_id.to_string(),
                         turn_id: turn_context.sub_id.clone(),
                         item_id: active.id(),
-                        delta: delta.clone(),
+                        delta,
+                        content_index,
                     };
                     sess.send_event(&turn_context, EventMsg::ReasoningRawContentDelta(event))
                         .await;

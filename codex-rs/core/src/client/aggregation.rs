@@ -175,16 +175,22 @@ where
                         return Poll::Ready(Some(Ok(ResponseEvent::OutputTextDelta(delta))));
                     }
                 }
-                Poll::Ready(Some(Ok(ResponseEvent::ReasoningContentDelta(delta)))) => {
+                Poll::Ready(Some(Ok(ResponseEvent::ReasoningContentDelta {
+                    delta,
+                    content_index,
+                }))) => {
                     // Always accumulate reasoning deltas so we can emit a final Reasoning item at Completed.
                     this.cumulative_reasoning.push_str(&delta);
                     if matches!(this.mode, AggregateMode::Streaming) {
                         // In streaming mode, also forward the delta immediately.
-                        return Poll::Ready(Some(Ok(ResponseEvent::ReasoningContentDelta(delta))));
+                        return Poll::Ready(Some(Ok(ResponseEvent::ReasoningContentDelta {
+                            delta,
+                            content_index,
+                        })));
                     }
                 }
-                Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryDelta(_)))) => {}
-                Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryPartAdded))) => {}
+                Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryDelta { .. }))) => {}
+                Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryPartAdded { .. }))) => {}
                 Poll::Ready(Some(Ok(ResponseEvent::OutputItemAdded(item)))) => {
                     return Poll::Ready(Some(Ok(ResponseEvent::OutputItemAdded(item))));
                 }

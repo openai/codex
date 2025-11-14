@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use anyhow::Result;
 use serde_json::Value;
 use wiremock::BodyPrintLimit;
 use wiremock::Match;
@@ -11,6 +12,8 @@ use wiremock::Respond;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path_regex;
+
+use crate::test_codex::ApplyPatchModelOutput;
 
 #[derive(Debug, Clone)]
 pub struct ResponseMock {
@@ -34,6 +37,10 @@ impl ResponseMock {
 
     pub fn requests(&self) -> Vec<ResponsesRequest> {
         self.requests.lock().unwrap().clone()
+    }
+
+    pub fn last_request(&self) -> Option<ResponsesRequest> {
+        self.requests.lock().unwrap().last().cloned()
     }
 
     /// Returns true if any captured request contains a `function_call` with the
@@ -126,6 +133,42 @@ impl ResponsesRequest {
         item.get("output")
             .and_then(Value::as_str)
             .map(str::to_string)
+    }
+
+    pub fn function_call_output_content_and_success(
+        &self,
+        call_id: &str,
+    ) -> Option<(Option<String>, Option<bool>)> {
+        self.call_output_content_and_success(call_id, "function_call_output")
+    }
+
+    pub fn custom_tool_call_output_content_and_success(
+        &self,
+        call_id: &str,
+    ) -> Option<(Option<String>, Option<bool>)> {
+        self.call_output_content_and_success(call_id, "custom_tool_call_output")
+    }
+
+    fn call_output_content_and_success(
+        &self,
+        call_id: &str,
+        call_type: &str,
+    ) -> Option<(Option<String>, Option<bool>)> {
+        let output = self
+            .call_output(call_id, call_type)
+            .get("output")
+            .cloned()
+            .unwrap_or(Value::Null);
+        match output {
+            Value::String(text) => Some((Some(text), None)),
+            Value::Object(obj) => Some((
+                obj.get("content")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                obj.get("success").and_then(Value::as_bool),
+            )),
+            _ => Some((None, None)),
+        }
     }
 
     pub fn header(&self, name: &str) -> Option<String> {
@@ -294,6 +337,7 @@ pub fn ev_reasoning_summary_text_delta(delta: &str) -> Value {
     serde_json::json!({
         "type": "response.reasoning_summary_text.delta",
         "delta": delta,
+        "summary_index": 0,
     })
 }
 
@@ -301,6 +345,7 @@ pub fn ev_reasoning_text_delta(delta: &str) -> Value {
     serde_json::json!({
         "type": "response.reasoning_text.delta",
         "delta": delta,
+        "content_index": 0,
     })
 }
 
@@ -367,6 +412,21 @@ pub fn ev_local_shell_call(call_id: &str, status: &str, command: Vec<&str>) -> V
     })
 }
 
+pub fn ev_apply_patch_call(
+    call_id: &str,
+    patch: &str,
+    output_type: ApplyPatchModelOutput,
+) -> Value {
+    match output_type {
+        ApplyPatchModelOutput::Freeform => ev_apply_patch_custom_tool_call(call_id, patch),
+        ApplyPatchModelOutput::Function => ev_apply_patch_function_call(call_id, patch),
+        ApplyPatchModelOutput::Shell => ev_apply_patch_shell_call(call_id, patch),
+        ApplyPatchModelOutput::ShellViaHeredoc => {
+            ev_apply_patch_shell_call_via_heredoc(call_id, patch)
+        }
+    }
+}
+
 /// Convenience: SSE event for an `apply_patch` custom tool call with raw patch
 /// text. This mirrors the payload produced by the Responses API when the model
 /// invokes `apply_patch` directly (before we convert it to a function call).
@@ -398,6 +458,21 @@ pub fn ev_apply_patch_function_call(call_id: &str, patch: &str) -> Value {
             "call_id": call_id
         }
     })
+}
+
+pub fn ev_apply_patch_shell_call(call_id: &str, patch: &str) -> Value {
+    let args = serde_json::json!({ "command": ["apply_patch", patch] });
+    let arguments = serde_json::to_string(&args).expect("serialize apply_patch arguments");
+
+    ev_function_call(call_id, "shell", &arguments)
+}
+
+pub fn ev_apply_patch_shell_call_via_heredoc(call_id: &str, patch: &str) -> Value {
+    let script = format!("apply_patch <<'EOF'\n{patch}\nEOF\n");
+    let args = serde_json::json!({ "command": ["bash", "-lc", script] });
+    let arguments = serde_json::to_string(&args).expect("serialize apply_patch arguments");
+
+    ev_function_call(call_id, "shell", &arguments)
 }
 
 pub fn sse_failed(id: &str, code: &str, message: &str) -> String {
@@ -451,6 +526,37 @@ pub async fn start_mock_server() -> MockServer {
         .body_print_limit(BodyPrintLimit::Limited(80_000))
         .start()
         .await
+}
+
+#[derive(Clone)]
+pub struct FunctionCallResponseMocks {
+    pub function_call: ResponseMock,
+    pub completion: ResponseMock,
+}
+
+pub async fn mount_function_call_agent_response(
+    server: &MockServer,
+    call_id: &str,
+    arguments: &str,
+    tool_name: &str,
+) -> FunctionCallResponseMocks {
+    let first_response = sse(vec![
+        ev_response_created("resp-1"),
+        ev_function_call(call_id, tool_name, arguments),
+        ev_completed("resp-1"),
+    ]);
+    let function_call = mount_sse_once(server, first_response).await;
+
+    let second_response = sse(vec![
+        ev_assistant_message("msg-1", "done"),
+        ev_completed("resp-2"),
+    ]);
+    let completion = mount_sse_once(server, second_response).await;
+
+    FunctionCallResponseMocks {
+        function_call,
+        completion,
+    }
 }
 
 /// Mounts a sequence of SSE response bodies and serves them in order for each

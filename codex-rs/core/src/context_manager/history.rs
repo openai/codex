@@ -1,12 +1,20 @@
+use crate::codex::TurnContext;
+use crate::context_manager::normalize;
+use crate::context_manager::truncate;
+use crate::context_manager::truncate::format_output_for_model_body;
+use crate::context_manager::truncate::globally_truncate_function_output_items;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_utils_tokenizer::Tokenizer;
 use std::ops::Deref;
 
-use crate::context_manager::normalize;
-use crate::context_manager::truncate::format_output_for_model_body;
-use crate::context_manager::truncate::globally_truncate_function_output_items;
+const CONTEXT_WINDOW_HARD_LIMIT_FACTOR: f64 = 1.1;
+const CONTEXT_WINDOW_HARD_LIMIT_BYTES: usize =
+    (truncate::MODEL_FORMAT_MAX_BYTES as f64 * CONTEXT_WINDOW_HARD_LIMIT_FACTOR) as usize;
+const CONTEXT_WINDOW_HARD_LIMIT_LINES: usize =
+    (truncate::MODEL_FORMAT_MAX_LINES as f64 * CONTEXT_WINDOW_HARD_LIMIT_FACTOR) as usize;
 
 /// Transcript of conversation history
 #[derive(Debug, Clone, Default)]
@@ -26,6 +34,10 @@ impl ContextManager {
 
     pub(crate) fn token_info(&self) -> Option<TokenUsageInfo> {
         self.token_info.clone()
+    }
+
+    pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
+        self.token_info = info;
     }
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
@@ -66,6 +78,28 @@ impl ContextManager {
         let mut history = self.get_history();
         Self::remove_ghost_snapshots(&mut history);
         history
+    }
+
+    // Estimate the number of tokens in the history. Return None if no tokenizer
+    // is available. This does not consider the reasoning traces.
+    // /!\ The value is a lower bound estimate and does not represent the exact
+    // context length.
+    pub(crate) fn estimate_token_count(&self, turn_context: &TurnContext) -> Option<i64> {
+        let model = turn_context.client.get_model();
+        let tokenizer = Tokenizer::for_model(model.as_str()).ok()?;
+        let model_family = turn_context.client.get_model_family();
+
+        Some(
+            self.items
+                .iter()
+                .map(|item| {
+                    serde_json::to_string(&item)
+                        .map(|item| tokenizer.count(&item))
+                        .unwrap_or_default()
+                })
+                .sum::<i64>()
+                + tokenizer.count(model_family.base_instructions.as_str()),
+        )
     }
 
     pub(crate) fn remove_first_item(&mut self) {
@@ -119,7 +153,11 @@ impl ContextManager {
     fn process_item(item: &ResponseItem) -> ResponseItem {
         match item {
             ResponseItem::FunctionCallOutput { call_id, output } => {
-                let truncated = format_output_for_model_body(output.content.as_str());
+                let truncated = format_output_for_model_body(
+                    output.content.as_str(),
+                    CONTEXT_WINDOW_HARD_LIMIT_BYTES,
+                    CONTEXT_WINDOW_HARD_LIMIT_LINES,
+                );
                 let truncated_items = output
                     .content_items
                     .as_ref()
@@ -134,7 +172,11 @@ impl ContextManager {
                 }
             }
             ResponseItem::CustomToolCallOutput { call_id, output } => {
-                let truncated = format_output_for_model_body(output);
+                let truncated = format_output_for_model_body(
+                    output,
+                    CONTEXT_WINDOW_HARD_LIMIT_BYTES,
+                    CONTEXT_WINDOW_HARD_LIMIT_LINES,
+                );
                 ResponseItem::CustomToolCallOutput {
                     call_id: call_id.clone(),
                     output: truncated,

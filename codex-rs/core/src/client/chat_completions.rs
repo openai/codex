@@ -513,10 +513,14 @@ async fn append_reasoning_text(
         ..
     }) = reasoning_item
     {
+        let content_index = content.len() as i64;
         content.push(ReasoningItemContent::ReasoningText { text: text.clone() });
 
         let _ = tx_event
-            .send(Ok(ResponseEvent::ReasoningContentDelta(text.clone())))
+            .send(Ok(ResponseEvent::ReasoningContentDelta {
+                delta: text.clone(),
+                content_index,
+            }))
             .await;
     }
 }
