@@ -3,7 +3,6 @@ use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::OnceLock;
 
 use codex_execpolicy2::Decision;
 use codex_execpolicy2::Evaluation;
@@ -41,14 +40,6 @@ pub enum ExecPolicyError {
     },
 }
 
-#[derive(Debug)]
-struct ExecPolicyState {
-    cwd: PathBuf,
-    policy: Arc<Policy>,
-}
-
-static EXEC_POLICY: OnceLock<Option<ExecPolicyState>> = OnceLock::new();
-
 pub(crate) fn exec_policy_for(
     features: &Features,
     cwd: &Path,
@@ -57,32 +48,7 @@ pub(crate) fn exec_policy_for(
         return Ok(None);
     }
 
-    if let Some(state) = EXEC_POLICY.get() {
-        return Ok(state.as_ref().map(|state| {
-            if state.cwd != cwd {
-                tracing::warn!(
-                    "exec_policy_v2 loaded from {}, reusing for cwd {}",
-                    state.cwd.display(),
-                    cwd.display()
-                );
-            }
-            Arc::clone(&state.policy)
-        }));
-    }
-
-    let loaded = load_policy(cwd)?;
-    let state = EXEC_POLICY.get_or_init(|| loaded);
-
-    Ok(state.as_ref().map(|state| {
-        if state.cwd != cwd {
-            tracing::warn!(
-                "exec_policy_v2 loaded from {}, reusing for cwd {}",
-                state.cwd.display(),
-                cwd.display()
-            );
-        }
-        Arc::clone(&state.policy)
-    }))
+    load_policy(cwd)
 }
 
 pub(crate) fn commands_for_policy(command: &[String]) -> Vec<Vec<String>> {
@@ -128,7 +94,7 @@ pub(crate) fn evaluate_with_policy(
     }
 }
 
-fn load_policy(cwd: &Path) -> Result<Option<ExecPolicyState>, ExecPolicyError> {
+fn load_policy(cwd: &Path) -> Result<Option<Arc<Policy>>, ExecPolicyError> {
     let codex_dir = cwd.join(".codex");
     let entries = match fs::read_dir(&codex_dir) {
         Ok(entries) => entries,
@@ -187,10 +153,7 @@ fn load_policy(cwd: &Path) -> Result<Option<ExecPolicyState>, ExecPolicyError> {
         codex_dir.display()
     );
 
-    Ok(Some(ExecPolicyState {
-        cwd: cwd.to_path_buf(),
-        policy,
-    }))
+    Ok(Some(policy))
 }
 
 #[cfg(test)]
