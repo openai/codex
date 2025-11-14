@@ -24,7 +24,6 @@ use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginAccountResponse;
 use codex_app_server_protocol::CancelLoginChatGptResponse;
 use codex_app_server_protocol::ClientRequest;
-use codex_app_server_protocol::CommandExecutionMetadata;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
@@ -36,8 +35,6 @@ use codex_app_server_protocol::ExecOneOffCommandParams;
 use codex_app_server_protocol::ExecOneOffCommandResponse;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FeedbackUploadResponse;
-use codex_app_server_protocol::FileChange as V2FileChange;
-use codex_app_server_protocol::FileChangeRequest;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::FuzzyFileSearchParams;
@@ -2715,20 +2712,13 @@ async fn apply_bespoke_event_handling(
                 // Until we migrate the core to be aware of a first class FileChangeItem
                 // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
                 let item_id = call_id.clone();
-                let request = FileChangeRequest {
-                    file_changes: changes
-                        .into_iter()
-                        .map(|(path, change)| (path, V2FileChange::from(change)))
-                        .collect(),
-                    reason,
-                    grant_root,
-                };
                 let params = FileChangeRequestApprovalParams {
                     thread_id: conversation_id.to_string(),
                     // TODO: use the actual IDs once we have them
                     turn_id: "placeholder_turn_id".to_string(),
                     item_id,
-                    request,
+                    reason,
+                    grant_root,
                 };
                 let rx = outgoing
                     .send_request(ServerRequestPayload::FileChangeRequestApproval(params))
@@ -2807,18 +2797,15 @@ async fn apply_bespoke_event_handling(
                 });
             }
             ApiVersion::V2 => {
-                let metadata = CommandExecutionMetadata {
-                    reason,
-                    risk: risk.map(V2SandboxCommandAssessment::from),
-                    parsed_cmd: parsed_cmd.into_iter().map(V2ParsedCommand::from).collect(),
-                };
                 let params = CommandExecutionRequestApprovalParams {
                     thread_id: conversation_id.to_string(),
                     turn_id: turn_id.clone(),
                     // Until we migrate the core to be aware of a first class CommandExecutionItem
                     // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
                     item_id: call_id.clone(),
-                    metadata,
+                    reason,
+                    risk: risk.map(V2SandboxCommandAssessment::from),
+                    parsed_cmd: parsed_cmd.into_iter().map(V2ParsedCommand::from).collect(),
                 };
                 let rx = outgoing
                     .send_request(ServerRequestPayload::CommandExecutionRequestApproval(

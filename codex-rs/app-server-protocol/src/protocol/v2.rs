@@ -920,7 +920,12 @@ pub struct CommandExecutionRequestApprovalParams {
     pub thread_id: String,
     pub turn_id: String,
     pub item_id: String,
-    pub metadata: CommandExecutionMetadata,
+    /// Optional explanatory reason (e.g. request for network access).
+    pub reason: Option<String>,
+    /// Optional model-provided risk assessment describing the blocked command.
+    pub risk: Option<SandboxCommandAssessment>,
+    /// A best-effort parsing of the command to identify the type of command and its arguments.
+    pub parsed_cmd: Vec<ParsedCommand>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -936,35 +941,17 @@ pub struct FileChangeRequestApprovalParams {
     pub thread_id: String,
     pub turn_id: String,
     pub item_id: String,
-    pub request: FileChangeRequest,
+    /// Optional explanatory reason (e.g. request for extra write access).
+    pub reason: Option<String>,
+    /// When set, the agent is asking the user to allow writes under this root
+    /// for the remainder of the session (unclear if this is honored today).
+    pub grant_root: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[ts(export_to = "v2/")]
 pub struct FileChangeRequestApprovalResponse {
     pub decision: ReviewDecision,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct CommandExecutionMetadata {
-    /// Optional explanatory reason (e.g. request for network access).
-    pub reason: Option<String>,
-    /// Optional model-provided risk assessment describing the blocked command.
-    pub risk: Option<SandboxCommandAssessment>,
-    /// A best-effort parsing of the command to identify the type of command and its arguments.
-    pub parsed_cmd: Vec<ParsedCommand>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct FileChangeRequest {
-    pub file_changes: HashMap<PathBuf, FileChange>,
-    /// Optional explanatory reason (e.g. request for extra write access).
-    pub reason: Option<String>,
-    pub grant_root: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
