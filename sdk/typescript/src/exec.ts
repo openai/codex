@@ -106,10 +106,16 @@ export class CodexExec {
       commandArgs.push("resume", args.threadId);
     }
 
-    const envSource = this.envOverride ?? process.env;
-    const env: Record<string, string> = {
-      ...envSource,
-    };
+    const env: Record<string, string> = {};
+    if (this.envOverride) {
+      Object.assign(env, this.envOverride);
+    } else {
+      for (const [key, value] of Object.entries(process.env)) {
+        if (value !== undefined) {
+          env[key] = value;
+        }
+      }
+    }
     if (!env[INTERNAL_ORIGINATOR_ENV]) {
       env[INTERNAL_ORIGINATOR_ENV] = TYPESCRIPT_SDK_ORIGINATOR;
     }
