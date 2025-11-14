@@ -38,8 +38,6 @@ use super::session::OutputBuffer;
 use super::session::UnifiedExecSession;
 use super::truncate_output_to_tokens;
 
-const MAX_INTERACTION_PREVIEW_CHARS: usize = 80;
-
 impl UnifiedExecSessionManager {
     pub(crate) async fn exec_command(
         &self,
@@ -95,11 +93,11 @@ impl UnifiedExecSessionManager {
             session_id,
             exit_code: exit_code.flatten(),
             original_token_count,
-            session_command: Some(request.command.to_string()),
+            session_command: Some(request.command.clone()),
         };
 
         if response.session_id.is_some() {
-            Self::emit_waiting_status(&context.session, &context.turn, request.command).await;
+            Self::emit_waiting_status(&context.session, &context.turn, &request.command).await;
         }
 
         // If the command completed during this call, emit an ExecCommandEnd via the emitter.
@@ -135,11 +133,11 @@ impl UnifiedExecSessionManager {
             session_cwd,
         ) = self.prepare_session_handles(session_id).await?;
 
-        let interaction_command = Self::format_interaction_command(&session_command, request.input);
         let interaction_emitter = ToolEmitter::unified_exec(
-            interaction_command,
+            &session_command,
             session_cwd.clone(),
             ExecCommandSource::UnifiedExecInteraction,
+            (!request.input.is_empty()).then(|| request.input.to_string()),
         );
         let make_event_ctx = || {
             ToolEventCtx::new(
@@ -267,7 +265,7 @@ impl UnifiedExecSessionManager {
             Arc<Notify>,
             Arc<Session>,
             Arc<TurnContext>,
-            String,
+            Vec<String>,
             PathBuf,
         ),
         UnifiedExecError,
@@ -358,6 +356,7 @@ impl UnifiedExecSessionManager {
             &entry.command,
             entry.cwd,
             ExecCommandSource::UnifiedExecStartup,
+            None,
         );
         emitter
             .emit(event_ctx, ToolEventStage::Success(output))
@@ -387,44 +386,25 @@ impl UnifiedExecSessionManager {
             None,
         );
         let emitter =
-            ToolEmitter::unified_exec(command, cwd, ExecCommandSource::UnifiedExecStartup);
+            ToolEmitter::unified_exec(command, cwd, ExecCommandSource::UnifiedExecStartup, None);
         emitter
             .emit(event_ctx, ToolEventStage::Success(output))
             .await;
     }
 
-    async fn emit_waiting_status(session: &Arc<Session>, turn: &Arc<TurnContext>, command: &str) {
-        let message = format!("Waiting for `{command}`");
+    async fn emit_waiting_status(
+        session: &Arc<Session>,
+        turn: &Arc<TurnContext>,
+        command: &[String],
+    ) {
+        let command_display = command.join(" ");
+        let message = format!("Waiting for `{command_display}`");
         session
             .send_event(
                 turn.as_ref(),
                 EventMsg::BackgroundEvent(BackgroundEventEvent { message }),
             )
             .await;
-    }
-
-    fn format_interaction_command(command: &str, input: &str) -> String {
-        if input.is_empty() {
-            return format!("Waited for `{command}`");
-        }
-
-        let preview = Self::summarize_interaction_input(input);
-        format!("Interacted with `{command}`, sent `{preview}`")
-    }
-
-    fn summarize_interaction_input(input: &str) -> String {
-        let single_line = input.replace('\n', "\\n");
-        let sanitized = single_line.replace('`', "\\`");
-        if sanitized.chars().count() <= MAX_INTERACTION_PREVIEW_CHARS {
-            return sanitized;
-        }
-
-        let mut preview = String::new();
-        for ch in sanitized.chars().take(MAX_INTERACTION_PREVIEW_CHARS) {
-            preview.push(ch);
-        }
-        preview.push_str("...");
-        preview
     }
 
     pub(crate) async fn open_session_with_exec_env(

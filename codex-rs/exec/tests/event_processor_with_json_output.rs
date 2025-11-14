@@ -628,6 +628,7 @@ fn exec_command_end_success_produces_completed_command_item() {
             cwd: std::env::current_dir().unwrap(),
             parsed_cmd: Vec::new(),
             source: ExecCommandSource::Agent,
+            interaction_input: None,
         }),
     );
     let out_begin = ep.collect_thread_events(&begin);
@@ -689,6 +690,7 @@ fn exec_command_end_failure_produces_failed_command_item() {
             cwd: std::env::current_dir().unwrap(),
             parsed_cmd: Vec::new(),
             source: ExecCommandSource::Agent,
+            interaction_input: None,
         }),
     );
     assert_eq!(

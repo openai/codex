@@ -680,6 +680,7 @@ fn begin_exec_with_source(
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             parsed_cmd,
             source,
+            interaction_input: None,
         }),
     });
 }
@@ -1788,6 +1789,7 @@ async fn binary_size_transcript_snapshot() {
                                     cwd: e.cwd,
                                     parsed_cmd,
                                     source: ExecCommandSource::Agent,
+                                    interaction_input: e.interaction_input.clone(),
                                 }),
                             }
                         }
@@ -2875,6 +2877,7 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
                 },
             ],
             source: ExecCommandSource::Agent,
+            interaction_input: None,
         }),
     });
     chat.handle_codex_event(Event {

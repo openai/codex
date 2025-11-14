@@ -25,6 +25,7 @@ use unicode_width::UnicodeWidthStr;
 
 pub(crate) const TOOL_CALL_MAX_LINES: usize = 5;
 const USER_SHELL_TOOL_CALL_MAX_LINES: usize = 50;
+const MAX_INTERACTION_PREVIEW_CHARS: usize = 80;
 
 pub(crate) struct OutputLinesParams {
     pub(crate) line_limit: usize,
@@ -38,6 +39,7 @@ pub(crate) fn new_active_exec_command(
     command: Vec<String>,
     parsed: Vec<ParsedCommand>,
     source: ExecCommandSource,
+    interaction_input: Option<String>,
 ) -> ExecCell {
     ExecCell::new(ExecCall {
         call_id,
@@ -47,7 +49,34 @@ pub(crate) fn new_active_exec_command(
         source,
         start_time: Some(Instant::now()),
         duration: None,
+        interaction_input,
     })
+}
+
+fn format_unified_exec_interaction(command: &[String], input: Option<&str>) -> String {
+    let command_display = command.join(" ");
+    match input {
+        Some(data) if !data.is_empty() => {
+            let preview = summarize_interaction_input(data);
+            format!("Interacted with `{command_display}`, sent `{preview}`")
+        }
+        _ => format!("Waited for `{command_display}`"),
+    }
+}
+
+fn summarize_interaction_input(input: &str) -> String {
+    let single_line = input.replace('\n', "\\n");
+    let sanitized = single_line.replace('`', "\\`");
+    if sanitized.chars().count() <= MAX_INTERACTION_PREVIEW_CHARS {
+        return sanitized;
+    }
+
+    let mut preview = String::new();
+    for ch in sanitized.chars().take(MAX_INTERACTION_PREVIEW_CHARS) {
+        preview.push(ch);
+    }
+    preview.push_str("...");
+    preview
 }
 
 #[derive(Clone)]
@@ -339,7 +368,7 @@ impl ExecCell {
         let header_prefix_width = header_line.width();
 
         let cmd_display = if call.is_unified_exec_interaction() {
-            call.command.join(" ")
+            format_unified_exec_interaction(&call.command, call.interaction_input.as_deref())
         } else {
             strip_bash_lc_and_escape(&call.command)
         };

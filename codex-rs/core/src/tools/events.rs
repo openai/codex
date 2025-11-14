@@ -62,6 +62,7 @@ pub(crate) async fn emit_exec_command_begin(
     command: &[String],
     cwd: &Path,
     source: ExecCommandSource,
+    interaction_input: Option<String>,
 ) {
     ctx.session
         .send_event(
@@ -72,6 +73,7 @@ pub(crate) async fn emit_exec_command_begin(
                 cwd: cwd.to_path_buf(),
                 parsed_cmd: parse_command(command),
                 source,
+                interaction_input,
             }),
         )
         .await;
@@ -91,6 +93,7 @@ pub(crate) enum ToolEmitter {
         command: Vec<String>,
         cwd: PathBuf,
         source: ExecCommandSource,
+        interaction_input: Option<String>,
     },
 }
 
@@ -110,11 +113,17 @@ impl ToolEmitter {
         }
     }
 
-    pub fn unified_exec(command: &[String], cwd: PathBuf, source: ExecCommandSource) -> Self {
+    pub fn unified_exec(
+        command: &[String],
+        cwd: PathBuf,
+        source: ExecCommandSource,
+        interaction_input: Option<String>,
+    ) -> Self {
         Self::UnifiedExec {
             command: command.to_vec(),
             cwd,
             source,
+            interaction_input,
         }
     }
 
@@ -128,7 +137,7 @@ impl ToolEmitter {
                 },
                 ToolEventStage::Begin,
             ) => {
-                emit_exec_command_begin(ctx, command, cwd.as_path(), *source).await;
+                emit_exec_command_begin(ctx, command, cwd.as_path(), *source, None).await;
             }
             (Self::Shell { .. }, ToolEventStage::Success(output)) => {
                 emit_exec_end(
@@ -221,10 +230,18 @@ impl ToolEmitter {
                     command,
                     cwd,
                     source,
+                    interaction_input,
                 },
                 ToolEventStage::Begin,
             ) => {
-                emit_exec_command_begin(ctx, command, cwd.as_path(), *source).await;
+                emit_exec_command_begin(
+                    ctx,
+                    command,
+                    cwd.as_path(),
+                    *source,
+                    interaction_input.clone(),
+                )
+                .await;
             }
             (Self::UnifiedExec { .. }, ToolEventStage::Success(output)) => {
                 emit_exec_end(

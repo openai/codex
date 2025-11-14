@@ -90,7 +90,7 @@ pub(crate) struct UnifiedExecResponse {
     pub session_id: Option<i32>,
     pub exit_code: Option<i32>,
     pub original_token_count: Option<usize>,
-    pub session_command: Option<String>,
+    pub session_command: Option<Vec<String>>,
 }
 
 #[derive(Default)]

@@ -859,6 +859,7 @@ impl ChatWidget {
                 command,
                 parsed,
                 source,
+                None,
             )));
         }
 
@@ -945,6 +946,7 @@ impl ChatWidget {
                 source: ev.source,
             },
         );
+        let interaction_input = ev.interaction_input.clone();
         if let Some(cell) = self
             .active_cell
             .as_mut()
@@ -954,6 +956,7 @@ impl ChatWidget {
                 ev.command.clone(),
                 ev.parsed_cmd.clone(),
                 ev.source,
+                interaction_input.clone(),
             )
         {
             *cell = new_exec;
@@ -965,6 +968,7 @@ impl ChatWidget {
                 ev.command.clone(),
                 ev.parsed_cmd,
                 ev.source,
+                interaction_input,
             )));
         }
 

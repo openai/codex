@@ -167,6 +167,7 @@ impl ToolHandler for UnifiedExecHandler {
                     &command,
                     cwd.clone(),
                     ExecCommandSource::UnifiedExecStartup,
+                    None,
                 );
                 emitter.emit(event_ctx, ToolEventStage::Begin).await;
 

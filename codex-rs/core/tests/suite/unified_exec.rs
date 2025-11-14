@@ -650,8 +650,16 @@ async fn unified_exec_emits_begin_for_write_stdin() -> Result<()> {
     .await;
 
     assert_eq!(
-        begin_event.command[0],
-        "Interacted with `/bin/sh -c echo ready`, sent `echo hello`"
+        begin_event.command,
+        vec![
+            "/bin/bash".to_string(),
+            "-lc".to_string(),
+            "/bin/sh -c echo ready".to_string()
+        ]
+    );
+    assert_eq!(
+        begin_event.interaction_input,
+        Some("echo hello".to_string())
     );
     assert_eq!(
         begin_event.source,
@@ -757,23 +765,36 @@ async fn unified_exec_emits_begin_event_for_write_stdin_requests() -> Result<()>
         .iter()
         .find(|ev| ev.call_id == open_call_id)
         .expect("missing exec_command begin");
-    assert_eq!(open_event.command[0], "/bin/sh -c echo ready");
+    assert_eq!(
+        open_event.command,
+        vec![
+            "/bin/bash".to_string(),
+            "-lc".to_string(),
+            "/bin/sh -c echo ready".to_string()
+        ]
+    );
+    assert!(
+        open_event.interaction_input.is_none(),
+        "startup begin events should not include interaction input"
+    );
     assert_eq!(open_event.source, ExecCommandSource::UnifiedExecStartup);
-
-    // assert_eq!(
-    //     begin_events[0].command,
-    //     vec![
-    //         "/bin/bash".to_string(),
-    //         "-lc".to_string(),
-    //         "/bin/sh -c echo ready".to_string()
-    //     ]
-    // );
 
     let poll_event = begin_events
         .iter()
         .find(|ev| ev.call_id == poll_call_id)
         .expect("missing write_stdin begin");
-    assert_eq!(poll_event.command[0], "Waited for `/bin/sh -c echo ready`");
+    assert_eq!(
+        poll_event.command,
+        vec![
+            "/bin/bash".to_string(),
+            "-lc".to_string(),
+            "/bin/sh -c echo ready".to_string()
+        ]
+    );
+    assert!(
+        poll_event.interaction_input.is_none(),
+        "poll begin events should omit interaction input"
+    );
     assert_eq!(poll_event.source, ExecCommandSource::UnifiedExecInteraction);
 
     Ok(())

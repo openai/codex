@@ -1882,6 +1882,7 @@ mod tests {
             source: ExecCommandSource::Agent,
             start_time: Some(Instant::now()),
             duration: None,
+            interaction_input: None,
         });
         // Mark call complete so markers are ✓
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
@@ -1905,6 +1906,7 @@ mod tests {
             source: ExecCommandSource::Agent,
             start_time: Some(Instant::now()),
             duration: None,
+            interaction_input: None,
         });
         // Call 1: Search only
         cell.complete_call("c1", CommandOutput::default(), Duration::from_millis(1));
@@ -1919,6 +1921,7 @@ mod tests {
                     path: "shimmer.rs".into(),
                 }],
                 ExecCommandSource::Agent,
+                None,
             )
             .unwrap();
         cell.complete_call("c2", CommandOutput::default(), Duration::from_millis(1));
@@ -1933,6 +1936,7 @@ mod tests {
                     path: "status_indicator_widget.rs".into(),
                 }],
                 ExecCommandSource::Agent,
+                None,
             )
             .unwrap();
         cell.complete_call("c3", CommandOutput::default(), Duration::from_millis(1));
@@ -1968,6 +1972,7 @@ mod tests {
             source: ExecCommandSource::Agent,
             start_time: Some(Instant::now()),
             duration: None,
+            interaction_input: None,
         });
         cell.complete_call("c1", CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(80);
@@ -1988,6 +1993,7 @@ mod tests {
             source: ExecCommandSource::Agent,
             start_time: Some(Instant::now()),
             duration: None,
+            interaction_input: None,
         });
         // Mark call complete so it renders as "Ran"
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
@@ -2010,6 +2016,7 @@ mod tests {
             source: ExecCommandSource::Agent,
             start_time: Some(Instant::now()),
             duration: None,
+            interaction_input: None,
         });
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         // Wide enough that it fits inline
@@ -2030,6 +2037,7 @@ mod tests {
             source: ExecCommandSource::Agent,
             start_time: Some(Instant::now()),
             duration: None,
+            interaction_input: None,
         });
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(24);
@@ -2049,6 +2057,7 @@ mod tests {
             source: ExecCommandSource::Agent,
             start_time: Some(Instant::now()),
             duration: None,
+            interaction_input: None,
         });
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(80);
@@ -2069,6 +2078,7 @@ mod tests {
             source: ExecCommandSource::Agent,
             start_time: Some(Instant::now()),
             duration: None,
+            interaction_input: None,
         });
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(28);
@@ -2089,6 +2099,7 @@ mod tests {
             source: ExecCommandSource::Agent,
             start_time: Some(Instant::now()),
             duration: None,
+            interaction_input: None,
         });
         let stderr: String = (1..=10)
             .map(|n| n.to_string())
@@ -2135,6 +2146,7 @@ mod tests {
             source: ExecCommandSource::Agent,
             start_time: Some(Instant::now()),
             duration: None,
+            interaction_input: None,
         });
 
         let stderr = "error: first line on stderr\nerror: second line on stderr".to_string();
