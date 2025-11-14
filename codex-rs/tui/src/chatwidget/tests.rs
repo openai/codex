@@ -458,7 +458,7 @@ fn rate_limit_switch_prompt_skips_when_on_lower_cost_model() {
 fn rate_limit_switch_prompt_shows_once_per_session() {
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let (mut chat, _, _) = make_chatwidget_manual();
-    chat.config.model = "gpt-5".to_string();
+    chat.config.model = "gpt-5.1".to_string();
     chat.auth_manager = AuthManager::from_auth_for_testing(auth);
 
     chat.on_rate_limit_snapshot(Some(snapshot(90.0)));
@@ -483,7 +483,7 @@ fn rate_limit_switch_prompt_shows_once_per_session() {
 fn rate_limit_switch_prompt_respects_hidden_notice() {
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let (mut chat, _, _) = make_chatwidget_manual();
-    chat.config.model = "gpt-5".to_string();
+    chat.config.model = "gpt-5.1".to_string();
     chat.auth_manager = AuthManager::from_auth_for_testing(auth);
     chat.config.notices.hide_rate_limit_model_nudge = Some(true);
 
@@ -499,7 +499,7 @@ fn rate_limit_switch_prompt_respects_hidden_notice() {
 fn rate_limit_switch_prompt_defers_until_task_complete() {
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let (mut chat, _, _) = make_chatwidget_manual();
-    chat.config.model = "gpt-5".to_string();
+    chat.config.model = "gpt-5.1".to_string();
     chat.auth_manager = AuthManager::from_auth_for_testing(auth);
 
     chat.bottom_pane.set_task_running(true);
@@ -522,7 +522,7 @@ fn rate_limit_switch_prompt_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
     chat.auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    chat.config.model = "gpt-5".to_string();
+    chat.config.model = "gpt-5.1".to_string();
 
     chat.on_rate_limit_snapshot(Some(snapshot(92.0)));
     chat.maybe_show_pending_rate_limit_prompt();
@@ -1458,7 +1458,7 @@ fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
 fn model_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
-    chat.config.model = "gpt-5-codex".to_string();
+    chat.config.model = "gpt-5.1-codex".to_string();
     chat.open_model_popup();
 
     let popup = render_bottom_popup(&chat, 80);
@@ -1684,9 +1684,9 @@ fn disabled_slash_command_while_task_running_snapshot() {
 
 #[tokio::test]
 async fn binary_size_transcript_snapshot() {
-    // the snapshot in this test depends on gpt-5-codex. Skip for now. We will consider
+    // the snapshot in this test depends on gpt-5.1-codex. Skip for now. We will consider
     // creating snapshots for other models in the future.
-    if OPENAI_DEFAULT_MODEL != "gpt-5-codex" {
+    if OPENAI_DEFAULT_MODEL != "gpt-5.1-codex" {
         return;
     }
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
