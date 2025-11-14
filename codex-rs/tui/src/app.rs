@@ -1014,10 +1014,12 @@ mod tests {
 
     #[test]
     fn session_summary_includes_resume_hint() {
-        let mut usage = TokenUsage::default();
-        usage.input_tokens = 10;
-        usage.output_tokens = 2;
-        usage.total_tokens = 12;
+        let usage = TokenUsage {
+            input_tokens: 10,
+            output_tokens: 2,
+            total_tokens: 12,
+            ..Default::default()
+        };
         let conversation =
             ConversationId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
 
