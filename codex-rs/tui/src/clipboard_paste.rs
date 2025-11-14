@@ -207,6 +207,23 @@ pub fn pasted_image_format(path: &Path) -> EncodedImageFormat {
     }
 }
 
+/// Paste text from the system clipboard.
+///
+/// Used to support Ctrl+V paste when keyboard enhancement is enabled.
+#[cfg(not(target_os = "android"))]
+pub fn paste_text_from_clipboard() -> Result<String, Box<dyn std::error::Error>> {
+    let mut cb = arboard::Clipboard::new()?;
+    let text = cb.get_text()?;
+    Ok(text)
+}
+
+/// Android/Termux does not support arboard; do nothing.
+#[cfg(target_os = "android")]
+pub fn paste_text_from_clipboard() -> Result<String, Box<dyn std::error::Error>> {
+    tracing::debug!("clipboard paste not supported on Android/Termux");
+    Ok(String::new())
+}
+
 #[cfg(test)]
 mod pasted_paths_tests {
     use super::*;

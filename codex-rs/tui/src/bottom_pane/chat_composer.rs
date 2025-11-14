@@ -88,6 +88,18 @@ enum PromptSelectionAction {
     Submit { text: String },
 }
 
+/// Normalize pasted text by converting CR to LF.
+///
+/// Many terminals (e.g., iTerm2) and clipboard sources (Windows apps) convert newlines
+/// to \r when pasting, but tui-textarea expects \n. This ensures consistent behavior
+/// across all paste mechanisms.
+///
+/// [tui-textarea]: https://github.com/rhysd/tui-textarea/blob/4d18622eeac13b309e0ff6a55a46ac6706da68cf/src/textarea.rs#L782-L783
+/// [iTerm2]: https://github.com/gnachman/iTerm2/blob/5d0c0d9f68523cbd0494dad5422998964a2ecd8d/sources/iTermPasteHelper.m#L206-L216
+pub(crate) fn normalize_paste_text(text: String) -> String {
+    text.replace("\r", "\n")
+}
+
 pub(crate) struct ChatComposer {
     textarea: TextArea,
     textarea_state: RefCell<TextAreaState>,
@@ -367,6 +379,10 @@ impl ChatComposer {
 
     /// Handle a key event coming from the main UI.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
+        if let Some(result) = self.handle_ctrl_v_paste(key_event) {
+            return result;
+        }
+
         let result = match &mut self.active_popup {
             ActivePopup::Command(_) => self.handle_key_event_with_slash_popup(key_event),
             ActivePopup::File(_) => self.handle_key_event_with_file_popup(key_event),
@@ -387,6 +403,37 @@ impl ChatComposer {
     /// Return true if either the slash-command popup or the file-search popup is active.
     pub(crate) fn popup_active(&self) -> bool {
         !matches!(self.active_popup, ActivePopup::None)
+    }
+
+    /// Handle Ctrl+V paste from system clipboard when keyboard enhancement is enabled.
+    ///
+    /// When keyboard enhancement is enabled, terminals send Ctrl+V as a KeyEvent with only
+    /// the control modifier. We match this exactly to avoid handling Ctrl+Shift+V, which
+    /// terminals send as Event::Paste (bracketed paste) and is already handled elsewhere.
+    ///
+    /// https://github.com/openai/codex/issues/5054
+    fn handle_ctrl_v_paste(&mut self, key_event: KeyEvent) -> Option<(InputResult, bool)> {
+        // Match ONLY CONTROL, not CONTROL | SHIFT or other combinations.
+        // Ctrl+Shift+V generates Event::Paste, not a KeyEvent, so it's handled separately.
+        if let KeyEvent {
+            code: KeyCode::Char('v'),
+            modifiers: KeyModifiers::CONTROL,
+            kind: KeyEventKind::Press,
+            ..
+        } = key_event
+        {
+            match crate::clipboard_paste::paste_text_from_clipboard() {
+                Ok(text) => {
+                    let text = normalize_paste_text(text);
+                    self.handle_paste(text);
+                    return Some((InputResult::None, true));
+                }
+                Err(e) => {
+                    tracing::debug!("Failed to paste from clipboard with Ctrl+V: {}", e);
+                }
+            }
+        }
+        None
     }
 
     /// Handle key event when the slash-command popup is visible.
@@ -1697,6 +1744,30 @@ mod tests {
     use crate::bottom_pane::prompt_args::extract_positional_args_for_prompt_line;
     use crate::bottom_pane::textarea::TextArea;
     use tokio::sync::mpsc::unbounded_channel;
+
+    #[test]
+    fn test_normalize_paste_text_converts_cr_to_lf() {
+        assert_eq!(normalize_paste_text("hello\rworld".into()), "hello\nworld");
+        assert_eq!(normalize_paste_text("line1\rline2\rline3".into()), "line1\nline2\nline3");
+    }
+
+    #[test]
+    fn test_normalize_paste_text_converts_crlf_to_lf() {
+        assert_eq!(normalize_paste_text("hello\r\nworld".into()), "hello\n\nworld");
+        assert_eq!(normalize_paste_text("line1\r\nline2".into()), "line1\n\nline2");
+    }
+
+    #[test]
+    fn test_normalize_paste_text_preserves_lf() {
+        assert_eq!(normalize_paste_text("hello\nworld".into()), "hello\nworld");
+        assert_eq!(normalize_paste_text("already\nnormalized".into()), "already\nnormalized");
+    }
+
+    #[test]
+    fn test_normalize_paste_text_empty_and_no_newlines() {
+        assert_eq!(normalize_paste_text("".into()), "");
+        assert_eq!(normalize_paste_text("no newlines here".into()), "no newlines here");
+    }
 
     #[test]
     fn footer_hint_row_is_separated_from_composer() {
