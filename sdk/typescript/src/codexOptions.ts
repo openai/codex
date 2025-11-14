@@ -6,5 +6,5 @@ export type CodexOptions = {
    * Environment variables passed to the Codex CLI process. When provided, the SDK
    * will not inherit variables from `process.env`.
    */
-  env?: NodeJS.ProcessEnv;
+  env?: Record<string, string>;
 };
