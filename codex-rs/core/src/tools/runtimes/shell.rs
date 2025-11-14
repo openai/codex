@@ -71,24 +71,6 @@ impl ShellRuntime {
             tx_event: ctx.session.get_tx_event(),
         })
     }
-
-    fn base_approval_requirement(
-        &self,
-        req: &ShellRequest,
-        policy: AskForApproval,
-        sandbox_policy: &SandboxPolicy,
-    ) -> ApprovalRequirement {
-        if requires_initial_appoval(
-            policy,
-            sandbox_policy,
-            &req.command,
-            req.with_escalated_permissions.unwrap_or(false),
-        ) {
-            ApprovalRequirement::NeedsApproval { reason: None }
-        } else {
-            ApprovalRequirement::Skip
-        }
-    }
 }
 
 impl Sandboxable for ShellRuntime {
@@ -146,10 +128,17 @@ impl Approvable<ShellRequest> for ShellRuntime {
         if let Some(exec_policy) = &req.exec_policy
             && let Some(requirement) = evaluate_with_policy(exec_policy, &req.command, policy)
         {
-            return requirement;
+            requirement
+        } else if requires_initial_appoval(
+            policy,
+            sandbox_policy,
+            &req.command,
+            req.with_escalated_permissions.unwrap_or(false),
+        ) {
+            ApprovalRequirement::NeedsApproval { reason: None }
+        } else {
+            ApprovalRequirement::Skip
         }
-
-        self.base_approval_requirement(req, policy, sandbox_policy)
     }
 
     fn wants_escalated_first_attempt(&self, req: &ShellRequest) -> bool {

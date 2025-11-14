@@ -87,19 +87,6 @@ impl<'a> UnifiedExecRuntime<'a> {
     pub fn new(manager: &'a UnifiedExecSessionManager) -> Self {
         Self { manager }
     }
-
-    fn base_approval_requirement(
-        &self,
-        req: &UnifiedExecRequest,
-        policy: AskForApproval,
-        sandbox_policy: &SandboxPolicy,
-    ) -> ApprovalRequirement {
-        if requires_initial_appoval(policy, sandbox_policy, &req.command, false) {
-            ApprovalRequirement::NeedsApproval { reason: None }
-        } else {
-            ApprovalRequirement::Skip
-        }
-    }
 }
 
 impl Sandboxable for UnifiedExecRuntime<'_> {
@@ -158,10 +145,12 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         if let Some(exec_policy) = &req.exec_policy
             && let Some(requirement) = evaluate_with_policy(exec_policy, &req.command, policy)
         {
-            return requirement;
+            requirement
+        } else if requires_initial_appoval(policy, sandbox_policy, &req.command, false) {
+            ApprovalRequirement::NeedsApproval { reason: None }
+        } else {
+            ApprovalRequirement::Skip
         }
-
-        self.base_approval_requirement(req, policy, sandbox_policy)
     }
 
     fn wants_escalated_first_attempt(&self, req: &UnifiedExecRequest) -> bool {
