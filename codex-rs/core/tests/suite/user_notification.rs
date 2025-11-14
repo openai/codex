@@ -44,11 +44,18 @@ async fn summarize_context_three_requests_and_instructions() -> anyhow::Result<(
         &notify_script,
         r#"#!/bin/bash
 set -e
-echo -n "${@: -1}" > $(dirname "${0}")/notify.txt"#,
+payload="${@: -1}"
+notify_dir=$(dirname "${0}")
+if [[ "${payload}" == *"agent-turn-start"* ]]; then
+  echo -n "${payload}" > "${notify_dir}/notify-start.txt"
+else
+  echo -n "${payload}" > "${notify_dir}/notify-complete.txt"
+fi"#,
     )?;
     std::fs::set_permissions(&notify_script, std::fs::Permissions::from_mode(0o755))?;
 
-    let notify_file = notify_dir.path().join("notify.txt");
+    let notify_start_file = notify_dir.path().join("notify-start.txt");
+    let notify_complete_file = notify_dir.path().join("notify-complete.txt");
     let notify_script_str = notify_script.to_str().unwrap().to_string();
 
     let TestCodex { codex, .. } = test_codex()
@@ -67,10 +74,15 @@ echo -n "${@: -1}" > $(dirname "${0}")/notify.txt"#,
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // We fork the notify script, so we need to wait for it to write to the file.
-    fs_wait::wait_for_path_exists(&notify_file, Duration::from_secs(5)).await?;
-    let notify_payload_raw = tokio::fs::read_to_string(&notify_file).await?;
-    let payload: Value = serde_json::from_str(&notify_payload_raw)?;
+    fs_wait::wait_for_path_exists(&notify_start_file, Duration::from_secs(5)).await?;
+    fs_wait::wait_for_path_exists(&notify_complete_file, Duration::from_secs(5)).await?;
+    let start_payload_raw = tokio::fs::read_to_string(&notify_start_file).await?;
+    let start_payload: Value = serde_json::from_str(&start_payload_raw)?;
+    assert_eq!(start_payload["type"], json!("agent-turn-start"));
+    assert_eq!(start_payload["input-messages"], json!(["hello world"]));
 
+    let notify_payload_raw = tokio::fs::read_to_string(&notify_complete_file).await?;
+    let payload: Value = serde_json::from_str(&notify_payload_raw)?;
     assert_eq!(payload["type"], json!("agent-turn-complete"));
     assert_eq!(payload["input-messages"], json!(["hello world"]));
     assert_eq!(payload["last-assistant-message"], json!("Done"));

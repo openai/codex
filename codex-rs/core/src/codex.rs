@@ -1816,6 +1816,7 @@ pub(crate) async fn run_task(
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let mut auto_compact_recently_attempted = false;
+    let mut turn_start_notified = false;
 
     loop {
         // Note that pending_input would be something like a message the user
@@ -1843,6 +1844,15 @@ pub(crate) async fn run_task(
             })
             .map(|user_message| user_message.message())
             .collect::<Vec<String>>();
+        if !turn_start_notified {
+            sess.notifier().notify(&UserNotification::AgentTurnStart {
+                thread_id: sess.conversation_id.to_string(),
+                turn_id: turn_context.sub_id.clone(),
+                cwd: turn_context.cwd.display().to_string(),
+                input_messages: turn_input_messages.clone(),
+            });
+            turn_start_notified = true;
+        }
         match run_turn(
             Arc::clone(&sess),
             Arc::clone(&turn_context),

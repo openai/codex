@@ -48,6 +48,15 @@ impl UserNotifier {
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub(crate) enum UserNotification {
     #[serde(rename_all = "kebab-case")]
+    AgentTurnStart {
+        thread_id: String,
+        turn_id: String,
+        cwd: String,
+
+        /// Messages that the user sent to the agent to initiate the turn.
+        input_messages: Vec<String>,
+    },
+    #[serde(rename_all = "kebab-case")]
     AgentTurnComplete {
         thread_id: String,
         turn_id: String,
@@ -68,6 +77,18 @@ mod tests {
 
     #[test]
     fn test_user_notification() -> Result<()> {
+        let start_notification = UserNotification::AgentTurnStart {
+            thread_id: "b5f6c1c2-1111-2222-3333-444455556666".to_string(),
+            turn_id: "12345".to_string(),
+            cwd: "/Users/example/project".to_string(),
+            input_messages: vec!["Rename `foo` to `bar` and update the callsites.".to_string()],
+        };
+        let start_serialized = serde_json::to_string(&start_notification)?;
+        assert_eq!(
+            start_serialized,
+            r#"{"type":"agent-turn-start","thread-id":"b5f6c1c2-1111-2222-3333-444455556666","turn-id":"12345","cwd":"/Users/example/project","input-messages":["Rename `foo` to `bar` and update the callsites."]}"#
+        );
+
         let notification = UserNotification::AgentTurnComplete {
             thread_id: "b5f6c1c2-1111-2222-3333-444455556666".to_string(),
             turn_id: "12345".to_string(),

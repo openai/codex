@@ -6,6 +6,7 @@ ENV TZ="$TZ"
 # Install basic development tools, ca-certificates, and iptables/ipset, then clean up apt cache to reduce image size
 RUN apt-get update && apt-get install -y --no-install-recommends \
   aggregate \
+  build-essential \
   ca-certificates \
   curl \
   dnsutils \
@@ -13,12 +14,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   gh \
   git \
   gnupg2 \
+  just \
   iproute2 \
   ipset \
   iptables \
   jq \
   less \
+  libssl-dev \
   man-db \
+  pkg-config \
   procps \
   unzip \
   ripgrep \
@@ -28,6 +32,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Ensure default node user has access to /usr/local/share
 RUN mkdir -p /usr/local/share/npm-global && \
   chown -R node:node /usr/local/share
+
+ENV CARGO_HOME=/usr/local/cargo
+ENV RUSTUP_HOME=/usr/local/rustup
+ENV PATH="${CARGO_HOME}/bin:${PATH}"
+
+RUN mkdir -p "$CARGO_HOME" "$RUSTUP_HOME" && \
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal && \
+  "$CARGO_HOME/bin/rustup" component add clippy rustfmt && \
+  chown -R node:node "$CARGO_HOME" "$RUSTUP_HOME"
 
 ARG USERNAME=node
 

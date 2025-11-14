@@ -652,6 +652,18 @@ Specify a program that will be executed to get notified about events generated b
 
 ```json
 {
+  "type": "agent-turn-start",
+  "thread-id": "b5f6c1c2-1111-2222-3333-444455556666",
+  "turn-id": "12345",
+  "cwd": "/Users/alice/projects/example",
+  "input-messages": ["Rename `foo` to `bar` and update the callsites."]
+}
+```
+
+When the agent finishes processing the turn, you'll receive another payload:
+
+```json
+{
   "type": "agent-turn-complete",
   "thread-id": "b5f6c1c2-1111-2222-3333-444455556666",
   "turn-id": "12345",
@@ -661,7 +673,7 @@ Specify a program that will be executed to get notified about events generated b
 }
 ```
 
-The `"type"` property will always be set. Currently, `"agent-turn-complete"` is the only notification type that is supported.
+The `"type"` property will always be set. Currently, `"agent-turn-start"` is emitted when a user submission begins processing and `"agent-turn-complete"` fires when the agent finishes responding.
 
 `"thread-id"` contains a string that identifies the Codex session that produced the notification; you can use it to correlate multiple turns that belong to the same task.
 
@@ -688,6 +700,11 @@ def main() -> int:
         return 1
 
     match notification_type := notification.get("type"):
+        case "agent-turn-start":
+            title = "Codex: Turn Started "
+            input_messages = notification.get("input-messages", [])
+            message = " ".join(input_messages)
+            title += message
         case "agent-turn-complete":
             assistant_message = notification.get("last-assistant-message")
             if assistant_message:
@@ -732,7 +749,7 @@ notify = ["python3", "/Users/mbolin/.codex/notify.py"]
 ```
 
 > [!NOTE]
-> Use `notify` for automation and integrations: Codex invokes your external program with a single JSON argument for each event, independent of the TUI. If you only want lightweight desktop notifications while using the TUI, prefer `tui.notifications`, which uses terminal escape codes and requires no external program. You can enable both; `tui.notifications` covers in‑TUI alerts (e.g., approval prompts), while `notify` is best for system‑level hooks or custom notifiers. Currently, `notify` emits only `agent-turn-complete`, whereas `tui.notifications` supports `agent-turn-complete` and `approval-requested` with optional filtering.
+> Use `notify` for automation and integrations: Codex invokes your external program with a single JSON argument for each event, independent of the TUI. If you only want lightweight desktop notifications while using the TUI, prefer `tui.notifications`, which uses terminal escape codes and requires no external program. You can enable both; `tui.notifications` covers in‑TUI alerts (e.g., approval prompts), while `notify` is best for system‑level hooks or custom notifiers. `notify` emits `agent-turn-start` and `agent-turn-complete`, whereas `tui.notifications` supports `agent-turn-complete` and `approval-requested` with optional filtering.
 
 ### hide_agent_reasoning
 
