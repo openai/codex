@@ -341,9 +341,21 @@ fn create_shell_command_tool() -> ToolSpec {
         },
     );
 
+    #[cfg(not(target_os = "windows"))]
+    let description = "Runs a shell command and returns its output.".to_string();
+    #[cfg(target_os = "windows")]
+    let description = r#"Runs a PowerShell command. Examples of valid command strings:
+
+- ls -a (show hidden): "Get-ChildItem -Force"
+- recursive find by name: "Get-ChildItem -Recurse -Filter *.py"
+- recursive grep: "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"
+- ps aux | grep python: "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"
+- setting an env var: "$env:FOO='bar'; echo $env:FOO"
+- running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -""#.to_string();
+
     ToolSpec::Function(ResponsesApiTool {
         name: "shell_command".to_string(),
-        description: "Runs a shell command string and returns its output.".to_string(),
+        description,
         strict: false,
         parameters: JsonSchema::Object {
             properties,
