@@ -1458,7 +1458,7 @@ fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
 fn model_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
-    chat.config.model = "gpt-5-codex".to_string();
+    chat.config.model = "gpt-5.1-codex".to_string();
     chat.open_model_popup();
 
     let popup = render_bottom_popup(&chat, 80);
@@ -1684,9 +1684,9 @@ fn disabled_slash_command_while_task_running_snapshot() {
 
 #[tokio::test]
 async fn binary_size_transcript_snapshot() {
-    // the snapshot in this test depends on gpt-5-codex. Skip for now. We will consider
+    // the snapshot in this test depends on gpt-5.1-codex. Skip for now. We will consider
     // creating snapshots for other models in the future.
-    if OPENAI_DEFAULT_MODEL != "gpt-5-codex" {
+    if OPENAI_DEFAULT_MODEL != "gpt-5.1-codex" {
         return;
     }
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();

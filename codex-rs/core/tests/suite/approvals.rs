@@ -819,7 +819,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
             with_escalated_permissions: false,
             features: vec![],
-            model_override: Some("gpt-5-codex"),
+            model_override: Some("gpt-5.1-codex"),
             outcome: Outcome::Auto,
             expectation: Expectation::PatchApplied {
                 target: TargetPath::Workspace("apply_patch_function.txt"),
@@ -836,7 +836,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
             with_escalated_permissions: false,
             features: vec![Feature::ApplyPatchFreeform],
-            model_override: Some("gpt-5-codex"),
+            model_override: Some("gpt-5.1-codex"),
             outcome: Outcome::Auto,
             expectation: Expectation::PatchApplied {
                 target: TargetPath::OutsideWorkspace("apply_patch_function_danger.txt"),
@@ -853,7 +853,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
             with_escalated_permissions: false,
             features: vec![],
-            model_override: Some("gpt-5-codex"),
+            model_override: Some("gpt-5.1-codex"),
             outcome: Outcome::PatchApproval {
                 decision: ReviewDecision::Approved,
                 expected_reason: None,
@@ -873,7 +873,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
             with_escalated_permissions: false,
             features: vec![],
-            model_override: Some("gpt-5-codex"),
+            model_override: Some("gpt-5.1-codex"),
             outcome: Outcome::PatchApproval {
                 decision: ReviewDecision::Denied,
                 expected_reason: None,
@@ -913,7 +913,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
             with_escalated_permissions: false,
             features: vec![],
-            model_override: Some("gpt-5-codex"),
+            model_override: Some("gpt-5.1-codex"),
             outcome: Outcome::PatchApproval {
                 decision: ReviewDecision::Approved,
                 expected_reason: None,
@@ -933,7 +933,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
             with_escalated_permissions: false,
             features: vec![],
-            model_override: Some("gpt-5-codex"),
+            model_override: Some("gpt-5.1-codex"),
             outcome: Outcome::Auto,
             expectation: Expectation::FileNotCreated {
                 target: TargetPath::OutsideWorkspace("apply_patch_function_never.txt"),
@@ -1208,7 +1208,7 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
     let mut builder = test_codex().with_config(move |config| {
         config.approval_policy = approval_policy;
         config.sandbox_policy = sandbox_policy.clone();
-        let model = model_override.unwrap_or("gpt-5");
+        let model = model_override.unwrap_or("gpt-5.1");
         config.model = model.to_string();
         config.model_family =
             find_family_for_model(model).expect("model should map to a known family");

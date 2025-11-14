@@ -24,7 +24,7 @@ pub struct ModelUpgrade {
 pub struct ModelPreset {
     /// Stable identifier for the preset.
     pub id: &'static str,
-    /// Model slug (e.g., "gpt-5").
+    /// Model slug (e.g., "gpt-5.1").
     pub model: &'static str,
     /// Display name shown in UIs.
     pub display_name: &'static str,

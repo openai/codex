@@ -46,7 +46,7 @@ jobs:
         with:
           openai-api-key: ${{ secrets.CODEX_OPENAI_API_KEY }}
           allow-users: "*"
-          model: gpt-5
+          model: gpt-5.1
           prompt: |
             You are an assistant that triages new GitHub issues by identifying potential duplicates.
 
