@@ -411,7 +411,7 @@ mod tests {
                 expects_apply_patch_instructions: true,
             },
             InstructionsTestCase {
-                slug: "gpt-5.1",
+                slug: "gpt-5",
                 expects_apply_patch_instructions: true,
             },
             InstructionsTestCase {
