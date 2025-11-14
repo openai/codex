@@ -43,19 +43,12 @@ fn cmd_check(policies: Vec<PathBuf>, args: Vec<String>) -> Result<()> {
 }
 
 fn load_policies(policy_paths: &[PathBuf]) -> Result<codex_execpolicy2::Policy> {
-    let loaded_policies: Vec<(String, String)> = policy_paths
-        .iter()
-        .map(|policy_path| {
-            let policy_file_contents = fs::read_to_string(policy_path)
-                .with_context(|| format!("failed to read policy at {}", policy_path.display()))?;
-            let policy_identifier = policy_path.to_string_lossy().to_string();
-            Ok((policy_identifier, policy_file_contents))
-        })
-        .collect::<Result<_>>()
-        .context("failed to load policy files")?;
     let mut parser = PolicyParser::new();
-    for (policy_identifier, policy_file_contents) in &loaded_policies {
-        parser.parse(policy_identifier, policy_file_contents)?;
+    for policy_path in policy_paths {
+        let policy_file_contents = fs::read_to_string(policy_path)
+            .with_context(|| format!("failed to read policy at {}", policy_path.display()))?;
+        let policy_identifier = policy_path.to_string_lossy().to_string();
+        parser.parse(&policy_identifier, &policy_file_contents)?;
     }
     Ok(parser.build())
 }
