@@ -665,11 +665,20 @@ pub enum ThreadItem {
     },
     CommandExecution {
         id: String,
+        /// The command to be executed.
         command: String,
+        /// The command's working directory if not the default cwd for the agent.
+        cwd: PathBuf,
         status: CommandExecutionStatus,
+        /// A best-effort parsing of the command to identify the type of command and its arguments.
+        parsed_cmd: Vec<ParsedCommand>,
+        /// True when this exec was initiated directly by the user (e.g. bang command),
+        /// not by the agent/model.
         is_user_shell_command: bool,
         aggregated_output: Option<String>,
+        /// The command's exit code.
         exit_code: Option<i32>,
+        /// The duration of the command execution in milliseconds.
         duration_ms: Option<i64>,
     },
     FileChange {
@@ -888,7 +897,7 @@ pub struct CommandExecutionRequestApprovalParams {
     pub thread_id: String,
     pub turn_id: String,
     pub item_id: String,
-    pub request: CommandExecutionRequest,
+    pub metadata: CommandExecutionMetadata,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -916,12 +925,12 @@ pub struct FileChangeRequestApprovalResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct CommandExecutionRequest {
-    pub command: Vec<String>,
-    pub cwd: PathBuf,
+pub struct CommandExecutionMetadata {
     /// Optional explanatory reason (e.g. request for network access).
     pub reason: Option<String>,
+    /// Optional model-provided risk assessment describing the blocked command.
     pub risk: Option<SandboxCommandAssessment>,
+    /// A best-effort parsing of the command to identify the type of command and its arguments.
     pub parsed_cmd: Vec<ParsedCommand>,
 }
 

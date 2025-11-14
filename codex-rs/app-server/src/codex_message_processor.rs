@@ -23,7 +23,7 @@ use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginAccountResponse;
 use codex_app_server_protocol::CancelLoginChatGptResponse;
 use codex_app_server_protocol::ClientRequest;
-use codex_app_server_protocol::CommandExecutionRequest;
+use codex_app_server_protocol::CommandExecutionMetadata;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::ConversationGitInfo;
@@ -2696,7 +2696,7 @@ async fn apply_bespoke_event_handling(
                 });
             }
             ApiVersion::V2 => {
-                // TODO: Until we migrate the core to be aware of a first class FileChangeItem
+                // Until we migrate the core to be aware of a first class FileChangeItem
                 // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
                 let item_id = call_id.clone();
                 let request = FileChangeRequest {
@@ -2749,9 +2749,7 @@ async fn apply_bespoke_event_handling(
                 });
             }
             ApiVersion::V2 => {
-                let request = CommandExecutionRequest {
-                    command,
-                    cwd,
+                let metadata = CommandExecutionMetadata {
                     reason,
                     risk: risk.map(V2SandboxCommandAssessment::from),
                     parsed_cmd: parsed_cmd.into_iter().map(V2ParsedCommand::from).collect(),
@@ -2759,10 +2757,10 @@ async fn apply_bespoke_event_handling(
                 let params = CommandExecutionRequestApprovalParams {
                     thread_id: conversation_id.to_string(),
                     turn_id: turn_id.clone(),
-                    // TODO: Until we migrate the core to be aware of a first class CommandExecutionItem
+                    // Until we migrate the core to be aware of a first class CommandExecutionItem
                     // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
                     item_id: call_id.clone(),
-                    request,
+                    metadata,
                 };
                 let rx = outgoing
                     .send_request(ServerRequestPayload::CommandExecutionRequestApproval(
