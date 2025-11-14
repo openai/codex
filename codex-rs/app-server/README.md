@@ -5,6 +5,7 @@
 ## Table of Contents
 - [Protocol](#protocol)
 - [Message Schema](#message-schema)
+- [Lifecycle Overview](#lifecycle-overview)
 - [Initialization](#initialization)
 - [Core primitives](#core-primitives)
 - [Thread & turn endpoints](#thread--turn-endpoints)
@@ -23,6 +24,14 @@ Currently, you can dump a TypeScript version of the schema using `codex app-serv
 codex app-server generate-ts --out DIR
 codex app-server generate-json-schema --out DIR
 ```
+
+## Lifecycle Overview
+
+- Initialize once: Immediately after launching the codex app-server process, send an `initialize` request with your client metadata, then emit an `initialized` notification. Any other request before this handshake gets rejected.
+- Start (or resume) a thread: Call `thread/start` to open a fresh conversation. The response returns the thread object and you’ll also get a `thread/started` notification. If you’re continuing an existing conversation, call `thread/resume` with its ID instead.
+- Begin a turn: To send user input, call `turn/start` with the target `threadId` and the user's input. Optional fields let you override model, cwd, sandbox policy, etc. This immediately returns the new turn object and triggers a `turn/started` notification.
+- Stream events: After `turn/start`, keep reading JSON-RPC notifications on stdout. You’ll see `item/started`, `item/completed`, deltas like `item/agentMessage/delta`, tool progress, etc. These represent streaming model output plus any side effects (commands, tool calls, reasoning notes).
+- Finish the turn: When the model is done (or the turn is interrupted via making the `turn/interrupt` call), the server sends `turn/completed` with the final turn state and token usage.
 
 ## Initialization
 
