@@ -241,6 +241,9 @@ async fn unified_exec_respects_workdir_override() -> Result<()> {
     let mut builder = test_codex().with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
         config.features.enable(Feature::UnifiedExec);
+        config.model = "gpt-5".to_string();
+        config.model_family =
+            find_family_for_model("gpt-5").expect("gpt-5 is a valid model family");
     });
     let TestCodex {
         codex,
@@ -290,27 +293,18 @@ async fn unified_exec_respects_workdir_override() -> Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    let begin_event = wait_for_event_match(&codex, |msg| match msg {
+        EventMsg::ExecCommandBegin(event) if event.call_id == call_id => Some(event.clone()),
+        _ => None,
+    })
+    .await;
 
-    let requests = server.received_requests().await.expect("recorded requests");
-    assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let bodies = requests
-        .iter()
-        .map(|req| req.body_json::<Value>().expect("request json"))
-        .collect::<Vec<_>>();
-
-    let outputs = collect_tool_outputs(&bodies)?;
-    let output = outputs
-        .get(call_id)
-        .expect("missing exec_command workdir output");
-    let output_text = output.output.trim();
-    let output_canonical = std::fs::canonicalize(output_text)?;
-    let expected_canonical = std::fs::canonicalize(&workdir)?;
     assert_eq!(
-        output_canonical, expected_canonical,
-        "pwd should reflect the requested workdir override"
+        begin_event.cwd, workdir,
+        "exec_command cwd should reflect the requested workdir override"
     );
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 
     Ok(())
 }
@@ -377,27 +371,18 @@ async fn unified_exec_respects_workdir_override_gpt_5_1() -> Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    let begin_event = wait_for_event_match(&codex, |msg| match msg {
+        EventMsg::ExecCommandBegin(event) if event.call_id == call_id => Some(event.clone()),
+        _ => None,
+    })
+    .await;
 
-    let requests = server.received_requests().await.expect("recorded requests");
-    assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let bodies = requests
-        .iter()
-        .map(|req| req.body_json::<Value>().expect("request json"))
-        .collect::<Vec<_>>();
-
-    let outputs = collect_tool_outputs(&bodies)?;
-    let output = outputs
-        .get(call_id)
-        .expect("missing exec_command workdir output");
-    let output_text = output.output.trim();
-
-    let workdir_str = workdir.to_string_lossy();
-    assert!(
-        output_text.contains(&*workdir_str),
-        "expected pwd output to contain workdir {workdir_str}, got {output_text}"
+    assert_eq!(
+        begin_event.cwd, workdir,
+        "exec_command cwd should reflect the requested workdir override for gpt-5.1"
     );
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 
     Ok(())
 }
