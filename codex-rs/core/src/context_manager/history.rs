@@ -6,7 +6,7 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
-use codex_utils_tokenizer::Tokenizer;
+use codex_utils_tokenizer::shared_default_tokenizer;
 use std::ops::Deref;
 
 /// Transcript of conversation history
@@ -78,8 +78,7 @@ impl ContextManager {
     // /!\ The value is a lower bound estimate and does not represent the exact
     // context length.
     pub(crate) fn estimate_token_count(&self, turn_context: &TurnContext) -> Option<i64> {
-        let model = turn_context.client.get_model();
-        let tokenizer = Tokenizer::for_model(model.as_str()).ok()?;
+        let tokenizer = shared_default_tokenizer()?;
         let model_family = turn_context.client.get_model_family();
 
         Some(

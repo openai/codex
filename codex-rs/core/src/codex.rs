@@ -133,6 +133,7 @@ use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
+use codex_utils_tokenizer::shared_default_tokenizer;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -245,6 +246,10 @@ impl Codex {
             .map_err(|_| CodexErr::InternalAgentDied)?;
         Ok(event)
     }
+}
+
+async fn warm_up_tokenizer() {
+    let _ = tokio::task::spawn_blocking(shared_default_tokenizer).await;
 }
 
 /// Context for an initialized model agent
@@ -484,6 +489,7 @@ impl Session {
         // - spin up MCP connection manager
         // - perform default shell discovery
         // - load history metadata
+        // - warm up the shared tokenizer
         let rollout_fut = RolloutRecorder::new(&config, rollout_params);
 
         let mcp_fut = McpConnectionManager::new(
@@ -496,6 +502,7 @@ impl Session {
             config.mcp_servers.iter(),
             config.mcp_oauth_credentials_store_mode,
         );
+        let tokenizer_warmup_fut = warm_up_tokenizer();
 
         // Join all independent futures.
         let (
@@ -509,7 +516,8 @@ impl Session {
             mcp_fut,
             default_shell_fut,
             history_meta_fut,
-            auth_statuses_fut
+            auth_statuses_fut,
+            tokenizer_warmup_fut
         );
 
         let rollout_recorder = rollout_recorder.map_err(|e| {

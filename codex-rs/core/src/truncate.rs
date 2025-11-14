@@ -1,7 +1,7 @@
 //! Utilities for truncating large chunks of output while preserving a prefix
 //! and suffix on UTF-8 boundaries.
 
-use codex_utils_tokenizer::Tokenizer;
+use codex_utils_tokenizer::shared_default_tokenizer;
 
 /// Truncate the middle of a UTF-8 string to at most `max_bytes` bytes,
 /// preserving the beginning and the end. Returns the possibly truncated
@@ -15,7 +15,7 @@ pub(crate) fn truncate_middle(s: &str, max_bytes: usize) -> (String, Option<u64>
 
     // Build a tokenizer for counting (default to o200k_base; fall back to cl100k_base).
     // If both fail, fall back to a 4-bytes-per-token estimate.
-    let tok = Tokenizer::try_default().ok();
+    let tok = shared_default_tokenizer();
     let token_count = |text: &str| -> u64 {
         if let Some(ref t) = tok {
             t.count(text) as u64

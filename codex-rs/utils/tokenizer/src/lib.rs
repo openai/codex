@@ -1,4 +1,6 @@
 use std::fmt;
+use std::sync::Arc;
+use std::sync::OnceLock;
 
 use anyhow::Context;
 use anyhow::Error as AnyhowError;
@@ -107,6 +109,19 @@ impl Tokenizer {
     }
 }
 
+static DEFAULT_TOKENIZER: OnceLock<Result<Arc<Tokenizer>, TokenizerError>> = OnceLock::new();
+
+/// Return a shared default tokenizer (`O200kBase`), loading it once per process.
+/// Returns `None` if initialization fails.
+#[must_use]
+pub fn shared_default_tokenizer() -> Option<Arc<Tokenizer>> {
+    DEFAULT_TOKENIZER
+        .get_or_init(|| Tokenizer::try_default().map(Arc::new))
+        .as_ref()
+        .ok()
+        .cloned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,5 +172,15 @@ mod tests {
         let text = "fallback please";
         assert_eq!(tok.encode(text, false), fallback.encode(text, false));
         Ok(())
+    }
+
+    #[test]
+    fn shared_default_tokenizer_is_cached() {
+        let first = shared_default_tokenizer().expect("default tokenizer");
+        let second = shared_default_tokenizer().expect("default tokenizer reused");
+
+        let ptr1 = Arc::as_ptr(&first);
+        let ptr2 = Arc::as_ptr(&second);
+        assert_eq!(ptr1, ptr2);
     }
 }
