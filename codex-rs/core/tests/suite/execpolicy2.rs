@@ -3,7 +3,12 @@
 
 use anyhow::Result;
 use codex_core::features::Feature;
+use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
+use codex_core::protocol::Op;
+use codex_core::protocol::SandboxPolicy;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -56,7 +61,21 @@ async fn execpolicy2_blocks_shell_invocation() -> Result<()> {
     )
     .await;
 
-    test.submit_turn("run shell command").await?;
+    let session_model = test.session_configured.model.clone();
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "run shell command".into(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
 
     let EventMsg::ExecCommandEnd(end) = wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::ExecCommandEnd(_))
@@ -65,6 +84,10 @@ async fn execpolicy2_blocks_shell_invocation() -> Result<()> {
     else {
         unreachable!()
     };
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TaskComplete(_))
+    })
+    .await;
 
     assert_eq!(end.exit_code, -1);
     assert!(
