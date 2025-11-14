@@ -8,6 +8,7 @@ use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::user_input::UserInput as CoreUserInput;
@@ -56,8 +57,8 @@ v2_enum_from_core!(
 );
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(tag = "mode", rename_all = "camelCase")]
-#[ts(tag = "mode")]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum SandboxPolicy {
     DangerFullAccess,
@@ -290,11 +291,39 @@ pub struct ThreadStartResponse {
     pub thread: Thread,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+/// There are three ways to resume a thread:
+/// 1. By thread_id: load the thread from disk by thread_id and resume it.
+/// 2. By history: instantiate the thread from memory and resume it.
+/// 3. By path: load the thread from disk by path and resume it.
+///
+/// The precedence is: history > path > thread_id.
+/// If using history or path, the thread_id param will be ignored.
+///
+/// Prefer using thread_id whenever possible.
 pub struct ThreadResumeParams {
     pub thread_id: String,
+
+    /// [UNSTABLE] FOR CODEX CLOUD - DO NOT USE.
+    /// If specified, the thread will be resumed with the provided history
+    /// instead of loaded from disk.
+    pub history: Option<Vec<ResponseItem>>,
+
+    /// [UNSTABLE] Specify the rollout path to resume from.
+    /// If specified, the thread_id param will be ignored.
+    pub path: Option<PathBuf>,
+
+    /// Configuration overrides for the resumed thread, if any.
+    pub model: Option<String>,
+    pub model_provider: Option<String>,
+    pub cwd: Option<String>,
+    pub approval_policy: Option<AskForApproval>,
+    pub sandbox: Option<SandboxMode>,
+    pub config: Option<HashMap<String, serde_json::Value>>,
+    pub base_instructions: Option<String>,
+    pub developer_instructions: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -361,6 +390,8 @@ pub struct Thread {
     pub model_provider: String,
     /// Unix timestamp (in seconds) when the thread was created.
     pub created_at: i64,
+    /// [UNSTABLE] Path to the thread on disk.
+    pub path: PathBuf,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -485,7 +516,10 @@ pub enum ThreadItem {
     },
     Reasoning {
         id: String,
-        text: String,
+        #[serde(default)]
+        summary: Vec<String>,
+        #[serde(default)]
+        content: Vec<String>,
     },
     CommandExecution {
         id: String,
@@ -544,17 +578,11 @@ impl From<CoreTurnItem> for ThreadItem {
                     .collect::<String>();
                 ThreadItem::AgentMessage { id: agent.id, text }
             }
-            CoreTurnItem::Reasoning(reasoning) => {
-                let text = if !reasoning.summary_text.is_empty() {
-                    reasoning.summary_text.join("\n")
-                } else {
-                    reasoning.raw_content.join("\n")
-                };
-                ThreadItem::Reasoning {
-                    id: reasoning.id,
-                    text,
-                }
-            }
+            CoreTurnItem::Reasoning(reasoning) => ThreadItem::Reasoning {
+                id: reasoning.id,
+                summary: reasoning.summary_text,
+                content: reasoning.raw_content,
+            },
             CoreTurnItem::WebSearch(search) => ThreadItem::WebSearch {
                 id: search.id,
                 query: search.query,
@@ -686,6 +714,32 @@ pub struct ItemCompletedNotification {
 pub struct AgentMessageDeltaNotification {
     pub item_id: String,
     pub delta: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ReasoningSummaryTextDeltaNotification {
+    pub item_id: String,
+    pub delta: String,
+    pub summary_index: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ReasoningSummaryPartAddedNotification {
+    pub item_id: String,
+    pub summary_index: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ReasoningTextDeltaNotification {
+    pub item_id: String,
+    pub delta: String,
+    pub content_index: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -836,7 +890,8 @@ mod tests {
             ThreadItem::from(reasoning_item),
             ThreadItem::Reasoning {
                 id: "reasoning-1".to_string(),
-                text: "line one\nline two".to_string(),
+                summary: vec!["line one".to_string(), "line two".to_string()],
+                content: vec![],
             }
         );
 

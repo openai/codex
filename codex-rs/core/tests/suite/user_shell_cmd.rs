@@ -1,13 +1,25 @@
+use anyhow::Context;
 use codex_core::ConversationManager;
 use codex_core::NewConversation;
+use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExecOutputStream;
 use codex_core::protocol::Op;
+use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TurnAbortReason;
 use core_test_support::assert_regex_match;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses;
+use core_test_support::responses::ev_assistant_message;
+use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::sse;
+use core_test_support::responses::start_mock_server;
+use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use regex_lite::escape;
@@ -246,6 +258,73 @@ async fn user_shell_command_output_is_truncated_in_history() -> anyhow::Result<(
         r"(?m)\A<user_shell_command>\n<command>\n{escaped_command}\n</command>\n<result>\nExit code: 0\nDuration: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\n{escaped_truncated_body}\n</result>\n</user_shell_command>\z"
     );
     assert_regex_match(&expected_pattern, &command_message);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_shell_command_is_truncated_only_once() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.model = "gpt-5-codex".to_string();
+        config.model_family =
+            find_family_for_model("gpt-5-codex").expect("gpt-5-codex is a model family");
+    });
+    let fixture = builder.build(&server).await?;
+
+    let call_id = "user-shell-double-truncation";
+    let args = if cfg!(windows) {
+        serde_json::json!({
+            "command": [
+                "powershell",
+                "-Command",
+                "for ($i=1; $i -le 2000; $i++) { Write-Output $i }"
+            ],
+            "timeout_ms": 5_000,
+        })
+    } else {
+        serde_json::json!({
+            "command": ["/bin/sh", "-c", "seq 1 2000"],
+            "timeout_ms": 5_000,
+        })
+    };
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let mock2 = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    fixture
+        .submit_turn_with_policy("trigger big shell output", SandboxPolicy::DangerFullAccess)
+        .await?;
+
+    let output = mock2
+        .single_request()
+        .function_call_output_text(call_id)
+        .context("function_call_output present for shell call")?;
+
+    let truncation_headers = output.matches("Total output lines:").count();
+
+    assert_eq!(
+        truncation_headers, 1,
+        "shell output should carry only one truncation header: {output}"
+    );
 
     Ok(())
 }

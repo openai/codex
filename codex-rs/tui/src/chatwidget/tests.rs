@@ -100,6 +100,37 @@ fn upgrade_event_payload_for_tests(mut payload: serde_json::Value) -> serde_json
                     serde_json::Value::String(aggregated),
                 );
             }
+        } else if ty == "patch_apply_begin"
+            && let Some(changes) = m.get_mut("changes").and_then(|v| v.as_object_mut())
+        {
+            for change in changes.values_mut() {
+                if change.get("type").is_some() {
+                    continue;
+                }
+                if let Some(change_obj) = change.as_object_mut()
+                    && change_obj.len() == 1
+                    && let Some((legacy_kind, legacy_value)) = change_obj
+                        .iter()
+                        .next()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                {
+                    change_obj.clear();
+                    change_obj.insert(
+                        "type".to_string(),
+                        serde_json::Value::String(legacy_kind.clone()),
+                    );
+                    match legacy_value {
+                        serde_json::Value::Object(payload) => {
+                            for (k, v) in payload {
+                                change_obj.insert(k, v);
+                            }
+                        }
+                        other => {
+                            change_obj.insert("content".to_string(), other);
+                        }
+                    }
+                }
+            }
         }
     }
     payload
@@ -1504,13 +1535,13 @@ fn windows_auto_mode_instructions_popup_lists_install_steps() {
 fn model_reasoning_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
-    chat.config.model = "gpt-5-codex".to_string();
+    chat.config.model = "gpt-5.1-codex".to_string();
     chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::High);
 
     let preset = builtin_model_presets(None)
         .into_iter()
-        .find(|preset| preset.model == "gpt-5-codex")
-        .expect("gpt-5-codex preset");
+        .find(|preset| preset.model == "gpt-5.1-codex")
+        .expect("gpt-5.1-codex preset");
     chat.open_reasoning_popup(preset);
 
     let popup = render_bottom_popup(&chat, 80);
@@ -1533,6 +1564,7 @@ fn single_reasoning_option_skips_selection() {
         default_reasoning_effort: ReasoningEffortConfig::High,
         supported_reasoning_efforts: &SINGLE_EFFORT,
         is_default: false,
+        upgrade: None,
     };
     chat.open_reasoning_popup(preset);
 
@@ -1581,13 +1613,13 @@ fn feedback_upload_consent_popup_snapshot() {
 fn reasoning_popup_escape_returns_to_model_popup() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
-    chat.config.model = "gpt-5".to_string();
+    chat.config.model = "gpt-5.1".to_string();
     chat.open_model_popup();
 
     let presets = builtin_model_presets(None)
         .into_iter()
-        .find(|preset| preset.model == "gpt-5-codex")
-        .expect("gpt-5-codex preset");
+        .find(|preset| preset.model == "gpt-5.1-codex")
+        .expect("gpt-5.1-codex preset");
     chat.open_reasoning_popup(presets);
 
     let before_escape = render_bottom_popup(&chat, 80);
