@@ -142,6 +142,7 @@ use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
+use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
 use codex_core::read_head_for_summary;
@@ -2472,6 +2473,14 @@ impl CodexMessageProcessor {
         let pending_interrupts = self.pending_interrupts.clone();
         let api_version_for_task = api_version;
         tokio::spawn(async move {
+            // This is a temporary solution to track the current "virtual" ThreadItem for this conversation.
+            //
+            // This is necessary because we don't have all the items defined in core yet, so as a shortcut
+            // we are mapping some of the existing EventMsg payloads and constructing a ThreadItem on the fly.
+            //
+            // As an example, EventMsg::ExecCommandBegin and EventMsg::ExecCommandEnd are mapped to
+            // a single ThreadItem::CommandExecution that gets mutated as the command execution progresses.
+            let mut current_virtual_item: Option<ThreadItem> = None;
             loop {
                 tokio::select! {
                     _ = &mut cancel_rx => {
@@ -2527,6 +2536,7 @@ impl CodexMessageProcessor {
                             outgoing_for_task.clone(),
                             pending_interrupts.clone(),
                             api_version_for_task,
+                            &mut current_virtual_item,
                         )
                         .await;
                     }
@@ -2676,6 +2686,7 @@ async fn apply_bespoke_event_handling(
     outgoing: Arc<OutgoingMessageSender>,
     pending_interrupts: PendingInterrupts,
     api_version: ApiVersion,
+    current_virtual_item: &mut Option<ThreadItem>,
 ) {
     let Event { id: event_id, msg } = event;
     match msg {
@@ -2861,17 +2872,75 @@ async fn apply_bespoke_event_handling(
                 exit_code: None,
                 duration_ms: None,
             };
+            *current_virtual_item = Some(item.clone());
             let notification = ItemStartedNotification { item };
             outgoing
                 .send_server_notification(ServerNotification::ItemStarted(notification))
                 .await;
         }
-        EventMsg::ExecCommandOutputDelta(exec_command_output_delta_event) => {
+        EventMsg::ExecCommandOutputDelta(_exec_command_output_delta_event) => {
             // TODO: implement
         }
         EventMsg::ExecCommandEnd(exec_command_end_event) => {
-            // TODO: update the item to include the exit code and duration
-            // outgoing.send_server_notification(ServerNotification::ItemCompleted(notification)).await;
+            let ExecCommandEndEvent {
+                call_id,
+                aggregated_output,
+                exit_code,
+                duration,
+                ..
+            } = exec_command_end_event;
+
+            let Some(mut item) = current_virtual_item.take() else {
+                error!(
+                    "ExecCommandEnd received but current_virtual_item is None; expecting a CommandExecution item with id={call_id}"
+                );
+                return;
+            };
+
+            match &mut item {
+                ThreadItem::CommandExecution {
+                    id,
+                    status,
+                    aggregated_output: stored_aggregated_output,
+                    exit_code: stored_exit_code,
+                    duration_ms,
+                    ..
+                } => {
+                    if *id != call_id {
+                        error!(
+                            "ExecCommandEnd call_id={call_id} did not match current_virtual_item id={id}"
+                        );
+                    }
+                    *status = if exit_code == 0 {
+                        CommandExecutionStatus::Completed
+                    } else {
+                        CommandExecutionStatus::Failed
+                    };
+                    *stored_aggregated_output = Some(aggregated_output);
+                    *stored_exit_code = Some(exit_code);
+                    let duration_ms_value = match i64::try_from(duration.as_millis()) {
+                        Ok(value) => value,
+                        Err(_) => {
+                            warn!(
+                                "duration {}ms exceeded i64::MAX; clamping value",
+                                duration.as_millis()
+                            );
+                            i64::MAX
+                        }
+                    };
+                    *duration_ms = Some(duration_ms_value);
+                    let notification = ItemCompletedNotification { item };
+                    outgoing
+                        .send_server_notification(ServerNotification::ItemCompleted(notification))
+                        .await;
+                    *current_virtual_item = None;
+                }
+                other => {
+                    error!(
+                        "current_virtual_item is {other:?} when ExecCommandEnd call_id={call_id} arrived; expected a CommandExecution item"
+                    );
+                }
+            }
         }
         // If this is a TurnAborted, reply to any pending interrupt requests.
         EventMsg::TurnAborted(turn_aborted_event) => {
