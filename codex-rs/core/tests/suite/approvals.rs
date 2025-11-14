@@ -255,6 +255,9 @@ enum Expectation {
     NetworkSuccess {
         body_contains: &'static str,
     },
+    NetworkSuccessNoExitCode {
+        body_contains: &'static str,
+    },
     NetworkFailure {
         expect_tag: &'static str,
     },
@@ -365,6 +368,23 @@ impl Expectation {
                     result.exit_code,
                     Some(0),
                     "expected successful network exit: {}",
+                    result.stdout
+                );
+                assert!(
+                    result.stdout.contains("OK:"),
+                    "stdout missing OK prefix: {}",
+                    result.stdout
+                );
+                assert!(
+                    result.stdout.contains(body_contains),
+                    "stdout missing body text {body_contains:?}: {}",
+                    result.stdout
+                );
+            }
+            Expectation::NetworkSuccessNoExitCode { body_contains } => {
+                assert_eq!(
+                    result.exit_code, None,
+                    "expected no exit code for successful network call: {}",
                     result.stdout
                 );
                 assert!(
@@ -640,9 +660,25 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
             with_escalated_permissions: false,
             features: vec![],
-            model_override: None,
+            model_override: Some("gpt-5"),
             outcome: Outcome::Auto,
             expectation: Expectation::NetworkSuccess {
+                body_contains: "danger-network-ok",
+            },
+        },
+        ScenarioSpec {
+            name: "danger_full_access_on_request_allows_network_gpt_5_1_no_exit",
+            approval_policy: OnRequest,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            action: ActionKind::FetchUrl {
+                endpoint: "/dfa/network",
+                response_body: "danger-network-ok",
+            },
+            with_escalated_permissions: false,
+            features: vec![],
+            model_override: Some("gpt-5.1"),
+            outcome: Outcome::Auto,
+            expectation: Expectation::NetworkSuccessNoExitCode {
                 body_contains: "danger-network-ok",
             },
         },
