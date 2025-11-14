@@ -343,8 +343,7 @@ mod tests {
         let escaped_line = regex_lite::escape(line);
         if omitted == 0 {
             return format!(
-                r"(?s)^Total output lines: {total_lines}\n\n(?P<body>{escaped_line}.*\n\[\.{{3}} output truncated to fit {max_bytes} bytes \.{{3}}]\n\n.*)$",
-                max_bytes = MODEL_FORMAT_MAX_BYTES,
+                r"(?s)^Total output lines: {total_lines}\n\n(?P<body>{escaped_line}.*\n\[\.{{3}} output truncated to fit {MODEL_FORMAT_MAX_BYTES} bytes \.{{3}}]\n\n.*)$",
             );
         }
         format!(
@@ -479,8 +478,7 @@ mod tests {
 
         assert_ne!(truncated, long_line);
         let marker_line = format!(
-            "[... output truncated to fit {} bytes ...]",
-            MODEL_FORMAT_MAX_BYTES
+            "[... output truncated to fit {MODEL_FORMAT_MAX_BYTES} bytes ...]"
         );
         assert!(
             truncated.contains(&marker_line),
