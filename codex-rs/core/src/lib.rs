@@ -36,6 +36,7 @@ mod model_provider_info;
 pub mod parse_command;
 mod response_processing;
 pub mod sandboxing;
+mod text_encoding;
 pub mod token_data;
 mod truncate;
 mod unified_exec;
