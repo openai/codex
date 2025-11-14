@@ -1,5 +1,4 @@
 use std::fs;
-use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -98,7 +97,6 @@ fn load_policy(cwd: &Path) -> Result<Arc<Policy>, ExecPolicyError> {
     let codex_dir = cwd.join(".codex");
     let entries = match fs::read_dir(&codex_dir) {
         Ok(entries) => entries,
-        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
         Err(source) => {
             return Err(ExecPolicyError::ReadDir {
                 dir: codex_dir,
