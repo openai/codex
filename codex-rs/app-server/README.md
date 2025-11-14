@@ -2,6 +2,15 @@
 
 `codex app-server` is the interface Codex uses to power rich interfaces such as the [Codex VS Code extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt). The message schema is currently unstable, but those who wish to build experimental UIs on top of Codex may find it valuable.
 
+## Table of Contents
+- [Protocol](#protocol)
+- [Message Schema](#message-schema)
+- [Initialization](#initialization)
+- [Core primitives](#core-primitives)
+- [Thread & turn endpoints](#thread--turn-endpoints)
+- [Auth endpoints](#auth-endpoints)
+- [Events (work-in-progress)](#v2-streaming-events-work-in-progress)
+
 ## Protocol
 
 Similar to [MCP](https://modelcontextprotocol.io/), `codex app-server` supports bidirectional communication, streaming JSONL over stdio. The protocol is JSON-RPC 2.0, though the `"jsonrpc":"2.0"` header is omitted.
@@ -260,9 +269,9 @@ Field notes:
 - See [“Authentication and authorization” in the config docs](../../docs/config.md#authentication-and-authorization) for configuration knobs.
 
 
-## V2 streaming events (Work-in-progress)
+## Events (work-in-progress)
 
-V2 notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `turn/*`, and `item/*` notifications.
+Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `turn/*`, and `item/*` notifications.
 
 ### Turn events
 
@@ -288,4 +297,3 @@ There are additional item-specific events:
 - `item/reasoning/summaryTextDelta` — streams readable reasoning summaries; `summaryIndex` increments when a new summary section opens.
 - `item/reasoning/summaryPartAdded` — marks the boundary between reasoning summary sections for an `itemId`; subsequent `summaryTextDelta` entries share the same `summaryIndex`.
 - `item/reasoning/textDelta` — streams raw reasoning text (only applicable for e.g. open source models); use `contentIndex` to group deltas that belong together before showing them in the UI.
-
