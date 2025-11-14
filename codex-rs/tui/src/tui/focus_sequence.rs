@@ -19,6 +19,7 @@ pub(super) enum FocusSequenceState {
     EscBracket(KeyEvent, KeyEvent),
 }
 
+/// Coalesces split focus change escape sequences so they cannot masquerade as key input.
 #[derive(Debug)]
 pub(super) struct FocusSequenceBuffer {
     state: FocusSequenceState,
