@@ -11,7 +11,7 @@ expression: sanitized
 │ usage for up-to-date                       │
 │ information on rate limits and credits     │
 │                                            │
-│  Model:            gpt-5-codex (reasoning  │
+│  Model:            gpt-5.1-codex (reasoning  │
 │  Directory: [[workspace]]                  │
 │  Approval:         on-request              │
 │  Sandbox:          read-only               │

@@ -761,9 +761,9 @@ mod tests {
 
     #[test]
     fn resume_model_flag_applies_when_no_root_flags() {
-        let interactive = finalize_from_args(["codex", "resume", "-m", "gpt-5-test"].as_ref());
+        let interactive = finalize_from_args(["codex", "resume", "-m", "gpt-5.1-test"].as_ref());
 
-        assert_eq!(interactive.model.as_deref(), Some("gpt-5-test"));
+        assert_eq!(interactive.model.as_deref(), Some("gpt-5.1-test"));
         assert!(interactive.resume_picker);
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
@@ -808,7 +808,7 @@ mod tests {
                 "--ask-for-approval",
                 "on-request",
                 "-m",
-                "gpt-5-test",
+                "gpt-5.1-test",
                 "-p",
                 "my-profile",
                 "-C",
@@ -819,7 +819,7 @@ mod tests {
             .as_ref(),
         );
 
-        assert_eq!(interactive.model.as_deref(), Some("gpt-5-test"));
+        assert_eq!(interactive.model.as_deref(), Some("gpt-5.1-test"));
         assert!(interactive.oss);
         assert_eq!(interactive.config_profile.as_deref(), Some("my-profile"));
         assert_matches!(

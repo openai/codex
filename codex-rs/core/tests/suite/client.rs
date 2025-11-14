@@ -769,7 +769,7 @@ async fn configured_verbosity_not_sent_for_models_without_support() -> anyhow::R
 
     let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
     let TestCodex { codex, .. } = test_codex()
-        .with_model("gpt-5-codex")
+        .with_model("gpt-5.1-codex")
         .with_config(|config| {
             config.model_verbosity = Some(Verbosity::High);
         })
@@ -807,7 +807,7 @@ async fn configured_verbosity_is_sent() -> anyhow::Result<()> {
 
     let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
     let TestCodex { codex, .. } = test_codex()
-        .with_model("gpt-5")
+        .with_model("gpt-5.1")
         .with_config(|config| {
             config.model_verbosity = Some(Verbosity::High);
         })
@@ -1155,7 +1155,7 @@ async fn token_count_includes_rate_limits_snapshot() {
                     "reasoning_output_tokens": 0,
                     "total_tokens": 123
                 },
-                // Default model is gpt-5-codex in tests → 95% usable context window
+                // Default model is gpt-5.1-codex in tests → 95% usable context window
                 "model_context_window": 258400
             },
             "rate_limits": {
@@ -1304,8 +1304,9 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
-            config.model = "gpt-5".to_string();
-            config.model_family = find_family_for_model("gpt-5").expect("known gpt-5 model family");
+            config.model = "gpt-5.1".to_string();
+            config.model_family =
+                find_family_for_model("gpt-5.1").expect("known gpt-5.1 model family");
             config.model_context_window = Some(272_000);
         })
         .build(&server)

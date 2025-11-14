@@ -115,7 +115,7 @@ async fn model_selects_expected_tools() {
         "o3 should expose the generic shell tool",
     );
 
-    let gpt5_codex_tools = collect_tool_identifiers_for_model("gpt-5-codex").await;
+    let gpt5_codex_tools = collect_tool_identifiers_for_model("gpt-5.1-codex").await;
     assert_eq!(
         gpt5_codex_tools,
         vec![
@@ -126,7 +126,7 @@ async fn model_selects_expected_tools() {
             "update_plan".to_string(),
             "apply_patch".to_string()
         ],
-        "gpt-5-codex should expose the apply_patch tool",
+        "gpt-5.1-codex should expose the apply_patch tool",
     );
 
     let gpt51_codex_tools = collect_tool_identifiers_for_model("gpt-5.1-codex").await;
