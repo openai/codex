@@ -270,7 +270,7 @@ fn status_snapshot_truncates_in_narrow_terminal() {
         Some(&rate_display),
         captured_at,
     );
-    let mut rendered_lines = render_lines(&composite.display_lines(46));
+    let mut rendered_lines = render_lines(&composite.display_lines(60));
     if cfg!(windows) {
         for line in &mut rendered_lines {
             *line = line.replace('\\', "/");
