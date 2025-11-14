@@ -54,6 +54,7 @@ pub mod live_wrap;
 mod markdown;
 mod markdown_render;
 mod markdown_stream;
+mod model_migration;
 pub mod onboarding;
 mod pager_overlay;
 pub mod public_widgets;
@@ -71,8 +72,9 @@ mod terminal_palette;
 mod text_formatting;
 mod tui;
 mod ui_consts;
+pub mod update_action;
 mod update_prompt;
-pub mod updates;
+mod updates;
 mod version;
 
 mod wrapping;
@@ -352,6 +354,16 @@ async fn run_ratatui_app(
             &mut tui,
         )
         .await?;
+        if onboarding_result.should_exit {
+            restore();
+            session_log::log_session_end();
+            let _ = tui.terminal.clear();
+            return Ok(AppExitInfo {
+                token_usage: codex_core::protocol::TokenUsage::default(),
+                conversation_id: None,
+                update_action: None,
+            });
+        }
         if onboarding_result.windows_install_selected {
             restore();
             session_log::log_session_end();

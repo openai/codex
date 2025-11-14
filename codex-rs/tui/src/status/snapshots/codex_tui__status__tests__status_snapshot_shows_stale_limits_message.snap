@@ -18,7 +18,7 @@ expression: sanitized
 │                                                                     │
 │  Token usage:      1.9K total  (1K input + 900 output)              │
 │  Context window:   100% left (2.25K used / 272K)                    │
-│  5h limit:         [███████████████░░░░░] 72% used (resets 03:14)   │
-│  Weekly limit:     [████████░░░░░░░░░░░░] 40% used (resets 03:34)   │
+│  5h limit:         [██████░░░░░░░░░░░░░░] 28% left (resets 03:14)   │
+│  Weekly limit:     [████████████░░░░░░░░] 60% left (resets 03:34)   │
 │  Warning:          limits may be stale - start new turn to refresh. │
 ╰─────────────────────────────────────────────────────────────────────╯
