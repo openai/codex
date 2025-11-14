@@ -7,6 +7,9 @@ use anyhow::Context;
 use anyhow::Error as AnyhowError;
 use thiserror::Error;
 use tiktoken_rs::CoreBPE;
+use tracing::error;
+
+static DEFAULT_TOKENIZER: OnceLock<Result<Arc<Tokenizer>, TokenizerError>> = OnceLock::new();
 
 /// Supported local encodings.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -110,8 +113,6 @@ impl Tokenizer {
     }
 }
 
-static DEFAULT_TOKENIZER: OnceLock<Result<Arc<Tokenizer>, TokenizerError>> = OnceLock::new();
-
 pub fn warm_up_default_tokenizer() {
     tokio::spawn(tokio::time::timeout(Duration::from_secs(5), async {
         let _ = shared_default_tokenizer();
@@ -123,10 +124,18 @@ pub fn warm_up_default_tokenizer() {
 #[must_use]
 pub fn shared_default_tokenizer() -> Option<Arc<Tokenizer>> {
     DEFAULT_TOKENIZER
-        .get_or_init(|| Tokenizer::try_default().map(Arc::new))
+        .get_or_init(init_default_tokenizer)
         .as_ref()
         .ok()
         .cloned()
+}
+
+fn init_default_tokenizer() -> Result<Arc<Tokenizer>, TokenizerError> {
+    let result = Tokenizer::try_default().map(Arc::new);
+    if let Err(ref error) = result {
+        error!("failed to initialize default tokenizer: {error}");
+    }
+    result
 }
 
 #[cfg(test)]

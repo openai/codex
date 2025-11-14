@@ -1553,6 +1553,7 @@ dependencies = [
  "thiserror 2.0.17",
  "tiktoken-rs",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
