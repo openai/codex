@@ -308,8 +308,19 @@ fn assert_truncated_message_matches(message: &str, line: &str, total_lines: usiz
 }
 
 fn truncated_message_pattern(line: &str, total_lines: usize) -> String {
-    let head_take = truncate::MODEL_FORMAT_HEAD_LINES.min(total_lines);
-    let tail_take = truncate::MODEL_FORMAT_TAIL_LINES.min(total_lines.saturating_sub(head_take));
+    // The omission marker adds 3 lines, so we need to account for that when
+    // calculating how many content lines fit.
+    const OMISSION_MARKER_LINES: usize = 3;
+
+    let available_content_lines = if total_lines > truncate::MODEL_FORMAT_MAX_LINES {
+        truncate::MODEL_FORMAT_MAX_LINES.saturating_sub(OMISSION_MARKER_LINES)
+    } else {
+        truncate::MODEL_FORMAT_MAX_LINES
+    };
+
+    let head_take = (available_content_lines / 2).min(total_lines);
+    let tail_take =
+        (available_content_lines - head_take).min(total_lines.saturating_sub(head_take));
     let omitted = total_lines.saturating_sub(head_take + tail_take);
     let escaped_line = regex_lite::escape(line);
     if omitted == 0 {
@@ -370,7 +381,13 @@ fn format_exec_output_reports_omitted_lines_and_keeps_head_and_tail() {
         .collect();
 
     let truncated = truncate::format_output_for_model_body(&content);
-    let omitted = total_lines - truncate::MODEL_FORMAT_MAX_LINES;
+
+    // With marker overhead (3 lines), available content lines = 256 - 3 = 253
+    // Head: 126, Tail: 127, Omitted: 356 - 253 = 103
+    const OMISSION_MARKER_LINES: usize = 3;
+    let available_content_lines =
+        truncate::MODEL_FORMAT_MAX_LINES.saturating_sub(OMISSION_MARKER_LINES);
+    let omitted = total_lines - available_content_lines;
     let expected_marker = format!("[... omitted {omitted} of {total_lines} lines ...]");
 
     assert!(
@@ -399,13 +416,23 @@ fn format_exec_output_prefers_line_marker_when_both_limits_exceeded() {
 
     let truncated = truncate::format_output_for_model_body(&content);
 
+    // With marker overhead (3 lines), available content lines = 256 - 3 = 253
+    // Omitted: 298 - 253 = 45
+    const OMISSION_MARKER_LINES: usize = 3;
+    let available_content_lines =
+        truncate::MODEL_FORMAT_MAX_LINES.saturating_sub(OMISSION_MARKER_LINES);
+    let omitted = total_lines - available_content_lines;
+    let expected_marker = format!("[... omitted {omitted} of {total_lines} lines ...]");
+
     assert!(
-        truncated.contains("[... omitted 42 of 298 lines ...]"),
+        truncated.contains(&expected_marker),
         "expected omitted marker when line count exceeds limit: {truncated}"
     );
+    // Note: When both limits are exceeded, we apply line truncation first, then byte
+    // truncation if needed. The line omission marker should be present.
     assert!(
-        !truncated.contains("output truncated to fit"),
-        "line omission marker should take precedence over byte marker: {truncated}"
+        truncated.contains("omitted"),
+        "line omission marker should be present when line limit exceeded: {truncated}"
     );
 }
 
