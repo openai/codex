@@ -3,7 +3,7 @@ name: Close stale contributor PRs
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 9 * * *"
+    - cron: "0 6 * * *"
 
 permissions:
   contents: read
@@ -22,7 +22,7 @@ jobs:
             const DAYS_INACTIVE = 14;
             const cutoff = new Date(Date.now() - DAYS_INACTIVE * 24 * 60 * 60 * 1000);
             const { owner, repo } = context.repo;
-            const dryRun = true;
+            const dryRun = false;
             const stalePrs = [];
 
             core.info(`Dry run mode: ${dryRun}`);
@@ -39,10 +39,12 @@ jobs:
             for (const pr of prs) {
               const lastUpdated = new Date(pr.updated_at);
               if (lastUpdated > cutoff) {
+                core.info(`PR ${pr.number} is fresh`);
                 continue;
               }
 
               if (!pr.user || pr.user.type !== "User") {
+                core.info(`PR ${pr.number} wasn't created by a user`);
                 continue;
               }
 

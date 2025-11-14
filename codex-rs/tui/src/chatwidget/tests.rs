@@ -100,6 +100,37 @@ fn upgrade_event_payload_for_tests(mut payload: serde_json::Value) -> serde_json
                     serde_json::Value::String(aggregated),
                 );
             }
+        } else if ty == "patch_apply_begin"
+            && let Some(changes) = m.get_mut("changes").and_then(|v| v.as_object_mut())
+        {
+            for change in changes.values_mut() {
+                if change.get("type").is_some() {
+                    continue;
+                }
+                if let Some(change_obj) = change.as_object_mut()
+                    && change_obj.len() == 1
+                    && let Some((legacy_kind, legacy_value)) = change_obj
+                        .iter()
+                        .next()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                {
+                    change_obj.clear();
+                    change_obj.insert(
+                        "type".to_string(),
+                        serde_json::Value::String(legacy_kind.clone()),
+                    );
+                    match legacy_value {
+                        serde_json::Value::Object(payload) => {
+                            for (k, v) in payload {
+                                change_obj.insert(k, v);
+                            }
+                        }
+                        other => {
+                            change_obj.insert("content".to_string(), other);
+                        }
+                    }
+                }
+            }
         }
     }
     payload

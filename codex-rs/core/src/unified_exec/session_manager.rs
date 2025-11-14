@@ -35,23 +35,17 @@ use super::truncate_output_to_tokens;
 impl UnifiedExecSessionManager {
     pub(crate) async fn exec_command(
         &self,
-        request: ExecCommandRequest<'_>,
+        request: ExecCommandRequest,
         context: &UnifiedExecContext,
     ) -> Result<UnifiedExecResponse, UnifiedExecError> {
         let cwd = request
             .workdir
             .clone()
             .unwrap_or_else(|| context.turn.cwd.clone());
-        let shell_flag = if request.login { "-lc" } else { "-c" };
-        let command = vec![
-            request.shell.to_string(),
-            shell_flag.to_string(),
-            request.command.to_string(),
-        ];
 
         let session = self
             .open_session_with_sandbox(
-                command,
+                &request.command,
                 cwd.clone(),
                 request.with_escalated_permissions,
                 request.justification,
@@ -77,7 +71,7 @@ impl UnifiedExecSessionManager {
             None
         } else {
             Some(
-                self.store_session(session, context, request.command, cwd.clone(), start)
+                self.store_session(session, context, &request.command, cwd.clone(), start)
                     .await,
             )
         };
@@ -97,7 +91,7 @@ impl UnifiedExecSessionManager {
             let exit = response.exit_code.unwrap_or(-1);
             Self::emit_exec_end_from_context(
                 context,
-                request.command.to_string(),
+                &request.command,
                 cwd,
                 response.output.clone(),
                 exit,
@@ -222,7 +216,7 @@ impl UnifiedExecSessionManager {
         &self,
         session: UnifiedExecSession,
         context: &UnifiedExecContext,
-        command: &str,
+        command: &[String],
         cwd: PathBuf,
         started_at: Instant,
     ) -> i32 {
@@ -234,7 +228,7 @@ impl UnifiedExecSessionManager {
             session_ref: Arc::clone(&context.session),
             turn_ref: Arc::clone(&context.turn),
             call_id: context.call_id.clone(),
-            command: command.to_string(),
+            command: command.to_vec(),
             cwd,
             started_at,
         };
@@ -262,7 +256,7 @@ impl UnifiedExecSessionManager {
             &entry.call_id,
             None,
         );
-        let emitter = ToolEmitter::unified_exec(entry.command, entry.cwd, true);
+        let emitter = ToolEmitter::unified_exec(&entry.command, entry.cwd, true);
         emitter
             .emit(event_ctx, ToolEventStage::Success(output))
             .await;
@@ -270,7 +264,7 @@ impl UnifiedExecSessionManager {
 
     async fn emit_exec_end_from_context(
         context: &UnifiedExecContext,
-        command: String,
+        command: &[String],
         cwd: PathBuf,
         aggregated_output: String,
         exit_code: i32,
@@ -319,7 +313,7 @@ impl UnifiedExecSessionManager {
 
     pub(super) async fn open_session_with_sandbox(
         &self,
-        command: Vec<String>,
+        command: &[String],
         cwd: PathBuf,
         with_escalated_permissions: Option<bool>,
         justification: Option<String>,
@@ -328,7 +322,7 @@ impl UnifiedExecSessionManager {
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);
         let req = UnifiedExecToolRequest::new(
-            command,
+            command.to_vec(),
             cwd,
             create_env(&context.turn.shell_environment_policy),
             with_escalated_permissions,

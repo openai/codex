@@ -19,6 +19,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
@@ -86,7 +87,7 @@ async fn truncate_function_error_trims_respond_to_model() -> Result<()> {
         serde_json::from_str::<serde_json::Value>(&output).is_err(),
         "expected error output to be plain text",
     );
-    let truncated_pattern = r#"(?s)^Total output lines: 1\s+.*\[\.\.\. output truncated to fit 10240 bytes \.\.\.\]\s*$"#;
+    let truncated_pattern = r#"(?s)^Total output lines: 1\s+.*\[\.\.\. output truncated to fit 11264 bytes \.\.\.\]\s*$"#;
     assert_regex_match(truncated_pattern, &output);
     assert!(
         !output.contains("omitted"),
@@ -113,15 +114,25 @@ async fn tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> {
     let fixture = builder.build(&server).await?;
 
     let call_id = "shell-too-large";
-    let args = serde_json::json!({
-        "command": ["/bin/sh", "-c", "seq 1 400"],
-        "timeout_ms": 5_000,
-    });
+    let args = if cfg!(windows) {
+        serde_json::json!({
+            "command": [
+                "powershell",
+                "-Command",
+                "for ($i=1; $i -le 400; $i++) { Write-Output $i }"
+            ],
+            "timeout_ms": 5_000,
+        })
+    } else {
+        serde_json::json!({
+            "command": ["/bin/sh", "-c", "seq 1 400"],
+            "timeout_ms": 5_000,
+        })
+    };
 
     // First response: model tells us to run the tool; second: complete the turn.
-    mount_sse_once_match(
+    mount_sse_once(
         &server,
-        any(),
         sse(vec![
             responses::ev_response_created("resp-1"),
             responses::ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
@@ -149,6 +160,7 @@ async fn tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> {
         .single_request()
         .function_call_output_text(call_id)
         .context("function_call_output present for shell call")?;
+    let output = output.replace("\r\n", "\n");
 
     // Expect plain text (not JSON) with truncation markers and line elision.
     assert!(
@@ -176,6 +188,75 @@ Output:
 400
 $"#;
     assert_regex_match(truncated_pattern, &output);
+
+    Ok(())
+}
+
+// Ensures shell tool outputs that exceed the line limit are truncated only once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_call_output_truncated_only_once() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.model = "gpt-5-codex".to_string();
+        config.model_family =
+            find_family_for_model("gpt-5-codex").expect("gpt-5-codex is a model family");
+    });
+    let fixture = builder.build(&server).await?;
+    let call_id = "shell-single-truncation";
+    let args = if cfg!(windows) {
+        serde_json::json!({
+            "command": [
+                "powershell",
+                "-Command",
+                "for ($i=1; $i -le 2000; $i++) { Write-Output $i }"
+            ],
+            "timeout_ms": 5_000,
+        })
+    } else {
+        serde_json::json!({
+            "command": ["/bin/sh", "-c", "seq 1 2000"],
+            "timeout_ms": 5_000,
+        })
+    };
+
+    mount_sse_once_match(
+        &server,
+        any(),
+        sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let mock2 = mount_sse_once_match(
+        &server,
+        any(),
+        sse(vec![
+            responses::ev_assistant_message("msg-1", "done"),
+            responses::ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    fixture
+        .submit_turn_with_policy("trigger big shell output", SandboxPolicy::DangerFullAccess)
+        .await?;
+
+    let output = mock2
+        .single_request()
+        .function_call_output_text(call_id)
+        .context("function_call_output present for shell call")?;
+
+    let total_line_headers = output.matches("Total output lines:").count();
+
+    assert_eq!(
+        total_line_headers, 1,
+        "shell output should carry only one truncation header: {output}"
+    );
 
     Ok(())
 }
@@ -269,7 +350,8 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
         output.starts_with("Total output lines: 1\n\n{"),
         "expected total line header and JSON head, got: {output}"
     );
-    let byte_marker = Regex::new(r"\[\.\.\. output truncated to fit 10240 bytes \.\.\.\]")
+
+    let byte_marker = Regex::new(r"\[\.\.\. output truncated to fit 11264 bytes \.\.\.\]")
         .expect("compile regex");
     assert!(
         byte_marker.is_match(&output),
