@@ -1,0 +1,47 @@
+name: Winget Submit
+description: Template + validate + submission of WinGet manifests for Codex
+inputs:
+  version:
+    description: Release version (e.g., 0.58.0)
+    required: true
+  windows_x64_sha256:
+    description: Windows x64 SHA256 for codex-x86_64-pc-windows-msvc.exe
+    required: true
+  windows_arm64_sha256:
+    description: Windows arm64 SHA256 for codex-aarch64-pc-windows-msvc.exe
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Build manifest directory
+      shell: bash
+      continue-on-error: true
+      run: |
+        set -euo pipefail
+        # Mirror the winget-pkgs repo layout so validation matches what
+        # we will submit:
+        # manifests/<first-letter-lowercase>/<Publisher>/<PackageName>/<Version>/
+        # For OpenAI.Codex vX.Y.Z → manifests/o/OpenAI/Codex/X.Y.Z
+        VERSION="${{ inputs.version }}"
+        X64_SHA="${{ inputs.windows_x64_sha256 }}"
+        ARM_SHA="${{ inputs.windows_arm64_sha256 }}"
+        root="manifests/o/OpenAI/Codex/$VERSION"
+        tpl=".github/winget_templates"
+        mkdir -p "$root"
+        for f in OpenAI.Codex.yaml OpenAI.Codex.locale.en-US.yaml OpenAI.Codex.installer.yaml; do
+          sed -e "s/{{VERSION}}/$VERSION/g" \
+              -e "s/{{X64_SHA256}}/$X64_SHA/g" \
+              -e "s/{{ARM64_SHA256}}/$ARM_SHA/g" \
+              "$tpl/$f" > "$root/$f"
+        done
+        echo "Manifest staged at $root"
+
+    - name: Install WinGet Create
+      shell: bash
+      continue-on-error: true
+      run: winget install --id Microsoft.WingetCreate -e --accept-package-agreements --accept-source-agreements
+
+    - name: Validate manifests
+      shell: bash
+      continue-on-error: true
+      run: winget validate "manifests/o/OpenAI/Codex/${{ inputs.version }}"

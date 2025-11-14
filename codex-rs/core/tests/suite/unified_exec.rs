@@ -7,6 +7,7 @@ use anyhow::Result;
 use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
+use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
@@ -568,7 +569,109 @@ async fn unified_exec_emits_output_delta_for_write_stdin() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn unified_exec_skips_begin_event_for_empty_input() -> Result<()> {
+async fn unified_exec_emits_begin_for_write_stdin() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config.features.enable(Feature::UnifiedExec);
+    });
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let open_call_id = "uexec-open-for-begin";
+    let open_args = json!({
+        "cmd": "/bin/sh -c echo ready".to_string(),
+        "yield_time_ms": 200,
+    });
+
+    let stdin_call_id = "uexec-stdin-begin";
+    let stdin_args = json!({
+        "chars": "echo hello",
+        "session_id": 0,
+        "yield_time_ms": 400,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(
+                open_call_id,
+                "exec_command",
+                &serde_json::to_string(&open_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_function_call(
+                stdin_call_id,
+                "write_stdin",
+                &serde_json::to_string(&stdin_args)?,
+            ),
+            ev_completed("resp-2"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-3"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-3"),
+        ]),
+    ];
+    mount_sse_sequence(&server, responses).await;
+
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "begin events for stdin".into(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    let begin_event = wait_for_event_match(&codex, |msg| match msg {
+        EventMsg::ExecCommandBegin(ev) if ev.call_id == stdin_call_id => Some(ev.clone()),
+        _ => None,
+    })
+    .await;
+
+    assert_eq!(
+        begin_event.command,
+        vec![
+            "/bin/bash".to_string(),
+            "-lc".to_string(),
+            "/bin/sh -c echo ready".to_string()
+        ]
+    );
+    assert_eq!(
+        begin_event.interaction_input,
+        Some("echo hello".to_string())
+    );
+    assert_eq!(
+        begin_event.source,
+        ExecCommandSource::UnifiedExecInteraction
+    );
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_emits_begin_event_for_write_stdin_requests() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
@@ -593,9 +696,9 @@ async fn unified_exec_skips_begin_event_for_empty_input() -> Result<()> {
 
     let poll_call_id = "uexec-poll-empty";
     let poll_args = json!({
-        "input": Vec::<String>::new(),
-        "session_id": "0",
-        "timeout_ms": 150,
+        "chars": "",
+        "session_id": 0,
+        "yield_time_ms": 150,
     });
 
     let responses = vec![
@@ -654,18 +757,45 @@ async fn unified_exec_skips_begin_event_for_empty_input() -> Result<()> {
 
     assert_eq!(
         begin_events.len(),
-        1,
-        "expected only the initial command to emit begin event"
+        2,
+        "expected begin events for the startup command and the write_stdin call"
     );
-    assert_eq!(begin_events[0].call_id, open_call_id);
+
+    let open_event = begin_events
+        .iter()
+        .find(|ev| ev.call_id == open_call_id)
+        .expect("missing exec_command begin");
     assert_eq!(
-        begin_events[0].command,
+        open_event.command,
         vec![
             "/bin/bash".to_string(),
             "-lc".to_string(),
             "/bin/sh -c echo ready".to_string()
         ]
     );
+    assert!(
+        open_event.interaction_input.is_none(),
+        "startup begin events should not include interaction input"
+    );
+    assert_eq!(open_event.source, ExecCommandSource::UnifiedExecStartup);
+
+    let poll_event = begin_events
+        .iter()
+        .find(|ev| ev.call_id == poll_call_id)
+        .expect("missing write_stdin begin");
+    assert_eq!(
+        poll_event.command,
+        vec![
+            "/bin/bash".to_string(),
+            "-lc".to_string(),
+            "/bin/sh -c echo ready".to_string()
+        ]
+    );
+    assert!(
+        poll_event.interaction_input.is_none(),
+        "poll begin events should omit interaction input"
+    );
+    assert_eq!(poll_event.source, ExecCommandSource::UnifiedExecInteraction);
 
     Ok(())
 }
