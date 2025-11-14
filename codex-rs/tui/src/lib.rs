@@ -55,6 +55,7 @@ mod markdown;
 mod markdown_render;
 mod markdown_stream;
 mod model_migration;
+mod notifications;
 pub mod onboarding;
 mod pager_overlay;
 pub mod public_widgets;

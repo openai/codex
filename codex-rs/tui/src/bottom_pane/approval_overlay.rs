@@ -32,6 +32,8 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
+use crate::notifications::post_notification;
+use crate::tui::TuiEvent::Paste;
 
 /// Request coming from the agent that needs user approval.
 #[derive(Clone, Debug)]
@@ -74,7 +76,9 @@ impl ApprovalOverlay {
             current_complete: false,
             done: false,
         };
-        view.set_current(request);
+        if cfg!(not(test)) {
+            post_notification("Hey, codex needs you");view.set_current(request);
+        }
         view
     }
 
