@@ -80,6 +80,16 @@ impl Tokenizer {
         Ok(Self { inner })
     }
 
+    /// Fire-and-forget function used to pre-warm model tokenizer loading. This is done
+    /// on a best-effort basis, without any guarantee about the state of the cache
+    /// before or after.
+    pub fn warm_model_cache(model: &str) {
+        let model = model.to_string();
+        tokio::spawn(async move {
+            let _ = Tokenizer::for_model(&model);
+        });
+    }
+
     /// Encode text to token IDs. If `with_special_tokens` is true, special
     /// tokens are allowed and may appear in the result.
     #[must_use]
