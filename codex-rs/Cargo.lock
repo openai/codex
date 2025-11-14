@@ -1552,6 +1552,7 @@ dependencies = [
  "pretty_assertions",
  "thiserror 2.0.17",
  "tiktoken-rs",
+ "tokio",
 ]
 
 [[package]]

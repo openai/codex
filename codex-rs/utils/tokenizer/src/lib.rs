@@ -1,6 +1,7 @@
 use std::fmt;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Error as AnyhowError;
@@ -110,6 +111,12 @@ impl Tokenizer {
 }
 
 static DEFAULT_TOKENIZER: OnceLock<Result<Arc<Tokenizer>, TokenizerError>> = OnceLock::new();
+
+pub fn warm_up_default_tokenizer() {
+    tokio::spawn(tokio::time::timeout(Duration::from_secs(5), async {
+        let _ = shared_default_tokenizer();
+    }));
+}
 
 /// Return a shared default tokenizer (`O200kBase`), loading it once per process.
 /// Returns `None` if initialization fails.

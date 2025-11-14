@@ -17,9 +17,13 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
+use codex_utils_tokenizer::shared_default_tokenizer;
+use codex_utils_tokenizer::warm_up_default_tokenizer;
+use codex_utils_tokenizer::warm_up_tokenizer;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 
 /// Represents a newly created Codex conversation, including the first event
@@ -40,6 +44,7 @@ pub struct ConversationManager {
 
 impl ConversationManager {
     pub fn new(auth_manager: Arc<AuthManager>, session_source: SessionSource) -> Self {
+        warm_up_default_tokenizer();
         Self {
             conversations: Arc::new(RwLock::new(HashMap::new())),
             auth_manager,

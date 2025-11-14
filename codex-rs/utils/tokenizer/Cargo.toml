@@ -10,6 +10,7 @@ workspace = true
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 tiktoken-rs = "0.7"
+tokio.workspace = true
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
