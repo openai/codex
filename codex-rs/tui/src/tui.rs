@@ -2,6 +2,7 @@ use std::fmt;
 use std::io::IsTerminal;
 use std::io::Result;
 use std::io::Stdout;
+use std::io::stdin;
 use std::io::stdout;
 use std::panic;
 use std::pin::Pin;
@@ -127,6 +128,9 @@ pub fn restore() -> Result<()> {
 
 /// Initialize the terminal (inline viewport; history stays in normal scrollback)
 pub fn init() -> Result<Terminal> {
+    if !stdin().is_terminal() {
+        return Err(std::io::Error::other("stdin is not a terminal"));
+    }
     if !stdout().is_terminal() {
         return Err(std::io::Error::other("stdout is not a terminal"));
     }
