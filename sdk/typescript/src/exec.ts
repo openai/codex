@@ -107,7 +107,7 @@ export class CodexExec {
     }
 
     const envSource = this.envOverride ?? process.env;
-    const env: NodeJS.ProcessEnv = {
+    const env: Record<string, string> = {
       ...envSource,
     };
     if (!env[INTERNAL_ORIGINATOR_ENV]) {
