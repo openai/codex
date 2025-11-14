@@ -41,8 +41,11 @@ const TYPESCRIPT_SDK_ORIGINATOR = "codex_sdk_ts";
 
 export class CodexExec {
   private executablePath: string;
-  constructor(executablePath: string | null = null) {
+  private envOverride?: Record<string, string>;
+
+  constructor(executablePath: string | null = null, env?: Record<string, string>) {
     this.executablePath = executablePath || findCodexPath();
+    this.envOverride = env;
   }
 
   async *run(args: CodexExecArgs): AsyncGenerator<string> {
@@ -103,9 +106,16 @@ export class CodexExec {
       commandArgs.push("resume", args.threadId);
     }
 
-    const env = {
-      ...process.env,
-    };
+    const env: Record<string, string> = {};
+    if (this.envOverride) {
+      Object.assign(env, this.envOverride);
+    } else {
+      for (const [key, value] of Object.entries(process.env)) {
+        if (value !== undefined) {
+          env[key] = value;
+        }
+      }
+    }
     if (!env[INTERNAL_ORIGINATOR_ENV]) {
       env[INTERNAL_ORIGINATOR_ENV] = TYPESCRIPT_SDK_ORIGINATOR;
     }
