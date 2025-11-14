@@ -146,7 +146,12 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
             && let Some(requirement) = evaluate_with_policy(exec_policy, &req.command, policy)
         {
             requirement
-        } else if requires_initial_appoval(policy, sandbox_policy, &req.command, false) {
+        } else if requires_initial_appoval(
+            policy,
+            sandbox_policy,
+            &req.command,
+            req.with_escalated_permissions.unwrap_or(false),
+        ) {
             ApprovalRequirement::NeedsApproval { reason: None }
         } else {
             ApprovalRequirement::Skip
