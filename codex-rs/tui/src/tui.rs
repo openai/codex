@@ -12,6 +12,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crossterm::Command;
+use crossterm::ExecutableCommand;
 use crossterm::SynchronizedUpdate;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::DisableFocusChange;
@@ -31,6 +32,7 @@ use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::disable_raw_mode;
 use ratatui::crossterm::terminal::enable_raw_mode;
 use ratatui::layout::Offset;
+use ratatui::layout::Size;
 use ratatui::text::Line;
 use tokio::select;
 use tokio_stream::Stream;
@@ -152,6 +154,7 @@ pub enum TuiEvent {
     Key(KeyEvent),
     Paste(String),
     Draw,
+    Resize(Size),
 }
 
 pub struct Tui {
@@ -270,8 +273,8 @@ impl Tui {
                                 }
                                 yield TuiEvent::Key(key_event);
                             }
-                            Event::Resize(_, _) => {
-                                yield TuiEvent::Draw;
+                            Event::Resize(columns, rows) => {
+                                yield TuiEvent::Resize(Size::new(columns, rows));
                             }
                             Event::Paste(pasted) => {
                                 yield TuiEvent::Paste(pasted);
@@ -435,6 +438,47 @@ impl Tui {
                 draw_fn(frame);
             })
         })?
+    }
+
+    pub(crate) fn clear_scrollback(&mut self) -> Result<()> {
+        self.terminal.backend_mut().execute(ClearScrollback)?;
+        Ok(())
+    }
+}
+
+/// Command that emits an OSC 1337 ClearScrollback sequence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ClearScrollback;
+
+impl Command for ClearScrollback {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        // This sequence clears the scrollback and the screen. It aligns to the standard that the clear command currently outputs.
+        // - ESC[3J clears the scrollback buffer
+        // - ESC[H moves the cursor to the home position
+        // - ESC[2J clears the screen
+        //
+        // works on ghostty, wezterm, kitty
+        // does not work on alacritty, iterm
+        // sort of works on terminal.app (leftover content above the viewport)
+        write!(f, "\x1b[3J\x1b[H\x1b[2J")?;
+
+        // iterm specific sequence to clear scrollback
+        // see https://iterm2.com/documentation-escape-codes.html
+        write!(f, "\x1b]1337;ClearScrollback=yes\x07")?;
+
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> Result<()> {
+        Err(std::io::Error::other(
+            "tried to execute ClearScrollback using WinAPI; use ANSI instead",
+        ))
+    }
+
+    #[cfg(windows)]
+    fn is_ansi_code_supported(&self) -> bool {
+        true
     }
 }
 
