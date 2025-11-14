@@ -2,6 +2,8 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_utils_string::take_bytes_at_char_boundary;
 use codex_utils_string::take_last_bytes_at_char_boundary;
 
+use crate::util::error_or_panic;
+
 // Model-formatting limits: clients get full streams; only content sent to the model is truncated.
 pub const MODEL_FORMAT_MAX_BYTES: usize = 10 * 1024; // 10 KiB
 pub const MODEL_FORMAT_MAX_LINES: usize = 256; // lines
@@ -139,14 +141,8 @@ fn truncate_formatted_exec_output(
 
 fn debug_panic_on_double_truncation(content: &str) {
     if content.contains("Total output lines:") && content.contains("omitted") {
-        if cfg!(debug_assertions) {
-            panic!(
-                "FunctionCallOutput content was already truncated before ContextManager::record_items; this would cause double truncation"
-            );
-        } else {
-            tracing::error!(
-                "FunctionCallOutput content was already truncated before ContextManager::record_items; this would cause double truncatio {content}"
-            );
-        }
+        error_or_panic(format!(
+            "FunctionCallOutput content was already truncated before ContextManager::record_items; this would cause double truncation {content}"
+        ));
     }
 }
