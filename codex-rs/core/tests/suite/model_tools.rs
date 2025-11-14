@@ -42,7 +42,7 @@ async fn collect_tool_identifiers_for_model(model: &str) -> Vec<String> {
     let server = MockServer::start().await;
 
     let sse = sse_completed(model);
-    let resp_mock = responses::mount_sse_once_match(&server, wiremock::matchers::any(), sse).await;
+    let resp_mock = responses::mount_sse_once(&server, sse).await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),

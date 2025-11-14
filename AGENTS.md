@@ -85,6 +85,7 @@ If you don’t have the tool:
 - `ResponsesRequest` exposes helpers (`body_json`, `input`, `function_call_output`, `custom_tool_call_output`, `call_output`, `header`, `path`, `query_param`) so assertions can target structured payloads instead of manual JSON digging.
 - Build SSE payloads with the provided `ev_*` constructors and the `sse(...)`.
 - Prefer `wait_for_event` over `wait_for_event_with_timeout`.
+- Prefer `mount_sse_once` over `mount_sse_once_match` or `mount_sse_sequence`
 
 - Typical pattern:
 

@@ -10,7 +10,6 @@ use wiremock::MockBuilder;
 use wiremock::MockServer;
 use wiremock::Respond;
 use wiremock::ResponseTemplate;
-use wiremock::matchers::any;
 use wiremock::matchers::method;
 use wiremock::matchers::path_regex;
 
@@ -546,13 +545,13 @@ pub async fn mount_function_call_agent_response(
         ev_function_call(call_id, tool_name, arguments),
         ev_completed("resp-1"),
     ]);
-    let function_call = mount_sse_once_match(server, any(), first_response).await;
+    let function_call = mount_sse_once(server, first_response).await;
 
     let second_response = sse(vec![
         ev_assistant_message("msg-1", "done"),
         ev_completed("resp-2"),
     ]);
-    let completion = mount_sse_once_match(server, any(), second_response).await;
+    let completion = mount_sse_once(server, second_response).await;
 
     FunctionCallResponseMocks {
         function_call,

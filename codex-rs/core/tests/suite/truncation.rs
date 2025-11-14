@@ -20,7 +20,6 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
-use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -33,7 +32,6 @@ use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
 use std::time::Duration;
-use wiremock::matchers::any;
 
 // Verifies byte-truncation formatting for function error output (RespondToModel errors)
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -140,9 +138,8 @@ async fn tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> {
         ]),
     )
     .await;
-    let mock2 = mount_sse_once_match(
+    let mock2 = mount_sse_once(
         &server,
-        any(),
         sse(vec![
             responses::ev_assistant_message("msg-1", "done"),
             responses::ev_completed("resp-2"),
@@ -222,9 +219,8 @@ async fn tool_call_output_truncated_only_once() -> Result<()> {
         })
     };
 
-    mount_sse_once_match(
+    mount_sse_once(
         &server,
-        any(),
         sse(vec![
             responses::ev_response_created("resp-1"),
             responses::ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
@@ -232,9 +228,8 @@ async fn tool_call_output_truncated_only_once() -> Result<()> {
         ]),
     )
     .await;
-    let mock2 = mount_sse_once_match(
+    let mock2 = mount_sse_once(
         &server,
-        any(),
         sse(vec![
             responses::ev_assistant_message("msg-1", "done"),
             responses::ev_completed("resp-2"),
@@ -277,9 +272,8 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
     let large_msg = "long-message-with-newlines-".repeat(600);
     let args_json = serde_json::json!({ "message": large_msg });
 
-    mount_sse_once_match(
+    mount_sse_once(
         &server,
-        any(),
         sse(vec![
             responses::ev_response_created("resp-1"),
             responses::ev_function_call(call_id, &tool_name, &args_json.to_string()),
@@ -287,9 +281,8 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
         ]),
     )
     .await;
-    let mock2 = mount_sse_once_match(
+    let mock2 = mount_sse_once(
         &server,
-        any(),
         sse(vec![
             responses::ev_assistant_message("msg-1", "rmcp echo tool completed."),
             responses::ev_completed("resp-2"),
@@ -373,9 +366,8 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
     let server_name = "rmcp";
     let tool_name = format!("mcp__{server_name}__image");
 
-    mount_sse_once_match(
+    mount_sse_once(
         &server,
-        any(),
         sse(vec![
             ev_response_created("resp-1"),
             ev_function_call(call_id, &tool_name, "{}"),
@@ -383,9 +375,8 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
         ]),
     )
     .await;
-    let final_mock = mount_sse_once_match(
+    let final_mock = mount_sse_once(
         &server,
-        any(),
         sse(vec![
             ev_assistant_message("msg-1", "done"),
             ev_completed("resp-2"),

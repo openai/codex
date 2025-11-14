@@ -24,7 +24,6 @@ use image::ImageBuffer;
 use image::Rgba;
 use image::load_from_memory;
 use serde_json::Value;
-use wiremock::matchers::any;
 
 fn find_image_message(body: &Value) -> Option<&Value> {
     body.get("input")
@@ -71,7 +70,7 @@ async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
         ev_assistant_message("msg-1", "done"),
         ev_completed("resp-1"),
     ]);
-    let mock = responses::mount_sse_once_match(&server, any(), response).await;
+    let mock = responses::mount_sse_once(&server, response).await;
 
     let session_model = session_configured.model.clone();
 
@@ -156,13 +155,13 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
         ev_function_call(call_id, "view_image", &arguments),
         ev_completed("resp-1"),
     ]);
-    responses::mount_sse_once_match(&server, any(), first_response).await;
+    responses::mount_sse_once(&server, first_response).await;
 
     let second_response = sse(vec![
         ev_assistant_message("msg-1", "done"),
         ev_completed("resp-2"),
     ]);
-    let mock = responses::mount_sse_once_match(&server, any(), second_response).await;
+    let mock = responses::mount_sse_once(&server, second_response).await;
 
     let session_model = session_configured.model.clone();
 
@@ -266,13 +265,13 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
         ev_function_call(call_id, "view_image", &arguments),
         ev_completed("resp-1"),
     ]);
-    responses::mount_sse_once_match(&server, any(), first_response).await;
+    responses::mount_sse_once(&server, first_response).await;
 
     let second_response = sse(vec![
         ev_assistant_message("msg-1", "done"),
         ev_completed("resp-2"),
     ]);
-    let mock = responses::mount_sse_once_match(&server, any(), second_response).await;
+    let mock = responses::mount_sse_once(&server, second_response).await;
 
     let session_model = session_configured.model.clone();
 
@@ -338,13 +337,13 @@ async fn view_image_tool_placeholder_for_non_image_files() -> anyhow::Result<()>
         ev_function_call(call_id, "view_image", &arguments),
         ev_completed("resp-1"),
     ]);
-    responses::mount_sse_once_match(&server, any(), first_response).await;
+    responses::mount_sse_once(&server, first_response).await;
 
     let second_response = sse(vec![
         ev_assistant_message("msg-1", "done"),
         ev_completed("resp-2"),
     ]);
-    let mock = responses::mount_sse_once_match(&server, any(), second_response).await;
+    let mock = responses::mount_sse_once(&server, second_response).await;
 
     let session_model = session_configured.model.clone();
 
@@ -429,13 +428,13 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
         ev_function_call(call_id, "view_image", &arguments),
         ev_completed("resp-1"),
     ]);
-    responses::mount_sse_once_match(&server, any(), first_response).await;
+    responses::mount_sse_once(&server, first_response).await;
 
     let second_response = sse(vec![
         ev_assistant_message("msg-1", "done"),
         ev_completed("resp-2"),
     ]);
-    let mock = responses::mount_sse_once_match(&server, any(), second_response).await;
+    let mock = responses::mount_sse_once(&server, second_response).await;
 
     let session_model = session_configured.model.clone();
 

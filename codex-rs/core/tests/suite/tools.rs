@@ -472,8 +472,7 @@ time.sleep(60)
 
     let start = Instant::now();
     let output_str = tokio::time::timeout(Duration::from_secs(10), async {
-        submit_turn(
-            &test,
+        test.submit_turn_with_policies(
             "run a command with a detached grandchild",
             AskForApproval::Never,
             SandboxPolicy::DangerFullAccess,
