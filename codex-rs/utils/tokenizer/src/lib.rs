@@ -45,6 +45,20 @@ fn model_cache() -> &'static BlockingLruCache<String, CoreBPE> {
         .get_or_init(|| BlockingLruCache::new(NonZeroUsize::new(64).unwrap_or(NonZeroUsize::MIN)))
 }
 
+/// Fire-and-forget function used to pre-warm model tokenizer loading. This is done
+/// on a best-effort basis, without any guarantee about the state of the cache
+/// before or after.
+/// Only working in Tokio runtimes
+pub fn warm_model_cache(model: &str) {
+    if tokio::runtime::Handle::try_current().is_err() {
+        return;
+    }
+    let model = model.to_string();
+    tokio::spawn(async move {
+        let _ = Tokenizer::for_model(&model);
+    });
+}
+
 /// Thin wrapper around a `tiktoken_rs::CoreBPE` tokenizer.
 #[derive(Clone)]
 pub struct Tokenizer {
@@ -78,16 +92,6 @@ impl Tokenizer {
             }
         })?;
         Ok(Self { inner })
-    }
-
-    /// Fire-and-forget function used to pre-warm model tokenizer loading. This is done
-    /// on a best-effort basis, without any guarantee about the state of the cache
-    /// before or after.
-    pub fn warm_model_cache(model: &str) {
-        let model = model.to_string();
-        tokio::spawn(async move {
-            let _ = Tokenizer::for_model(&model);
-        });
     }
 
     /// Encode text to token IDs. If `with_special_tokens` is true, special
@@ -168,5 +172,10 @@ mod tests {
         let text = "fallback please";
         assert_eq!(tok.encode(text, false), fallback.encode(text, false));
         Ok(())
+    }
+
+    #[test]
+    fn warm_model_cache_without_runtime_is_noop() {
+        warm_model_cache("gpt-5");
     }
 }

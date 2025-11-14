@@ -3,7 +3,7 @@ use crate::config::types::McpServerConfig;
 use crate::config::types::Notice;
 use anyhow::Context;
 use codex_protocol::config_types::ReasoningEffort;
-use codex_utils_tokenizer::Tokenizer;
+use codex_utils_tokenizer::warm_model_cache;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -231,7 +231,7 @@ impl ConfigDocument {
         match edit {
             ConfigEdit::SetModel { model, effort } => Ok({
                 if let Some(model) = &model {
-                    Tokenizer::warm_model_cache(model)
+                    warm_model_cache(model)
                 }
                 let mut mutated = false;
                 mutated |= self.write_profile_value(
