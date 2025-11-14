@@ -16,6 +16,8 @@ pub struct Cli {
 pub enum Command {
     /// Submit a new Codex Cloud task without launching the TUI.
     Exec(ExecCommand),
+    /// List recent Codex Cloud tasks in the terminal.
+    Tasks(TasksCommand),
 }
 
 #[derive(Debug, Args)]
@@ -37,6 +39,21 @@ pub struct ExecCommand {
     pub attempts: usize,
 }
 
+#[derive(Debug, Args)]
+pub struct TasksCommand {
+    /// Maximum number of tasks to display (1-20).
+    #[arg(short = 'l', long = "limit", default_value_t = 10i64, value_parser = parse_limit)]
+    pub limit: i64,
+
+    /// Filter by environment id/label/repo (e.g., "openai/codex").
+    #[arg(short = 'e', long = "env", value_name = "ENV")]
+    pub environment: Option<String>,
+
+    /// Output as JSON instead of a table.
+    #[arg(long = "json")]
+    pub json: bool,
+}
+
 fn parse_attempts(input: &str) -> Result<usize, String> {
     let value: usize = input
         .parse()
@@ -45,5 +62,16 @@ fn parse_attempts(input: &str) -> Result<usize, String> {
         Ok(value)
     } else {
         Err("attempts must be between 1 and 4".to_string())
+    }
+}
+
+fn parse_limit(input: &str) -> Result<i64, String> {
+    let value: i64 = input
+        .parse()
+        .map_err(|_| "limit must be a positive integer".to_string())?;
+    if value >= 1 {
+        Ok(value)
+    } else {
+        Err("limit must be at least 1".to_string())
     }
 }

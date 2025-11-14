@@ -171,6 +171,7 @@ impl Client {
         limit: Option<i32>,
         task_filter: Option<&str>,
         environment_id: Option<&str>,
+        cursor: Option<&str>,
     ) -> Result<PaginatedListTaskListItem> {
         let url = match self.path_style {
             PathStyle::CodexApi => format!("{}/api/codex/tasks/list", self.base_url),
@@ -189,6 +190,11 @@ impl Client {
         };
         let req = if let Some(id) = environment_id {
             req.query(&[("environment_id", id)])
+        } else {
+            req
+        };
+        let req = if let Some(c) = cursor {
+            req.query(&[("cursor", c)])
         } else {
             req
         };

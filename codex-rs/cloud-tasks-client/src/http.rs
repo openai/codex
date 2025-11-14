@@ -60,7 +60,17 @@ impl HttpClient {
 #[async_trait::async_trait]
 impl CloudBackend for HttpClient {
     async fn list_tasks(&self, env: Option<&str>) -> Result<Vec<TaskSummary>> {
-        self.tasks_api().list(env).await
+        let (tasks, _cursor) = self.tasks_api().list_page(env, None, 20).await?;
+        Ok(tasks)
+    }
+
+    async fn list_tasks_page(
+        &self,
+        cursor: Option<&str>,
+        limit: usize,
+        env: Option<&str>,
+    ) -> Result<(Vec<TaskSummary>, Option<String>)> {
+        self.tasks_api().list_page(env, cursor, limit).await
     }
 
     async fn get_task_diff(&self, id: TaskId) -> Result<Option<String>> {
@@ -128,10 +138,15 @@ mod api {
             }
         }
 
-        pub(crate) async fn list(&self, env: Option<&str>) -> Result<Vec<TaskSummary>> {
+        pub(crate) async fn list_page(
+            &self,
+            env: Option<&str>,
+            cursor: Option<&str>,
+            limit: usize,
+        ) -> Result<(Vec<TaskSummary>, Option<String>)> {
             let resp = self
                 .backend
-                .list_tasks(Some(20), Some("current"), env)
+                .list_tasks(Some(limit as i32), Some("current"), env, cursor)
                 .await
                 .map_err(|e| CloudTaskError::Http(format!("list_tasks failed: {e}")))?;
 
@@ -142,11 +157,12 @@ mod api {
                 .collect();
 
             append_error_log(&format!(
-                "http.list_tasks: env={} items={}",
+                "http.list_tasks: env={} items={} cursor={}",
                 env.unwrap_or("<all>"),
-                tasks.len()
+                tasks.len(),
+                resp.cursor.as_deref().unwrap_or("<none>")
             ));
-            Ok(tasks)
+            Ok((tasks, resp.cursor))
         }
 
         pub(crate) async fn diff(&self, id: TaskId) -> Result<Option<String>> {

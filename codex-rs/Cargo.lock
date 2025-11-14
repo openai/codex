@@ -1014,6 +1014,7 @@ dependencies = [
  "codex-login",
  "codex-tui",
  "crossterm",
+ "pretty_assertions",
  "ratatui",
  "reqwest",
  "serde",
