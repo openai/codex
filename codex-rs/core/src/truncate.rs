@@ -477,9 +477,8 @@ mod tests {
         );
 
         assert_ne!(truncated, long_line);
-        let marker_line = format!(
-            "[... output truncated to fit {MODEL_FORMAT_MAX_BYTES} bytes ...]"
-        );
+        let marker_line =
+            format!("[... output truncated to fit {MODEL_FORMAT_MAX_BYTES} bytes ...]");
         assert!(
             truncated.contains(&marker_line),
             "missing byte truncation marker: {truncated}"
