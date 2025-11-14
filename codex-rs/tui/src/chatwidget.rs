@@ -85,6 +85,7 @@ use crate::history_cell;
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
+use crate::history_cell::PlainHistoryCell;
 use crate::markdown::append_markdown;
 #[cfg(target_os = "windows")]
 use crate::onboarding::WSL_INSTRUCTIONS;
@@ -2459,6 +2460,11 @@ impl ChatWidget {
 
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
         self.add_to_history(history_cell::new_info_event(message, hint));
+        self.request_redraw();
+    }
+
+    pub(crate) fn add_plain_history_lines(&mut self, lines: Vec<Line<'static>>) {
+        self.add_boxed_history(Box::new(PlainHistoryCell::new(lines)));
         self.request_redraw();
     }
 

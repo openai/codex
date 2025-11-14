@@ -55,21 +55,27 @@ pub struct AppExitInfo {
     pub update_action: Option<UpdateAction>,
 }
 
-fn session_summary_lines(
+fn session_summary(
     token_usage: TokenUsage,
     conversation_id: Option<ConversationId>,
-) -> Option<Vec<String>> {
+) -> Option<SessionSummary> {
     if token_usage.is_zero() {
         return None;
     }
 
-    let mut lines = vec![FinalOutput::from(token_usage).to_string()];
-    if let Some(conversation_id) = conversation_id {
-        lines.push(format!(
-            "To continue this session, run codex resume {conversation_id}"
-        ));
-    }
-    Some(lines)
+    let usage_line = FinalOutput::from(token_usage).to_string();
+    let resume_command =
+        conversation_id.map(|conversation_id| format!("codex resume {conversation_id}"));
+    Some(SessionSummary {
+        usage_line,
+        resume_command,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SessionSummary {
+    usage_line: String,
+    resume_command: Option<String>,
 }
 
 fn should_show_model_migration_prompt(
@@ -383,7 +389,7 @@ impl App {
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
         match event {
             AppEvent::NewSession => {
-                let summary_lines = session_summary_lines(
+                let summary = session_summary(
                     self.chat_widget.token_usage(),
                     self.chat_widget.conversation_id(),
                 );
@@ -398,10 +404,13 @@ impl App {
                     feedback: self.feedback.clone(),
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
-                if let Some(lines) = summary_lines {
-                    for line in lines {
-                        self.chat_widget.add_info_message(line, None);
+                if let Some(summary) = summary {
+                    let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
+                    if let Some(command) = summary.resume_command {
+                        let spans = vec!["To continue this session, run ".into(), command.cyan()];
+                        lines.push(spans.into());
                     }
+                    self.chat_widget.add_plain_history_lines(lines);
                 }
                 tui.frame_requester().schedule_frame();
             }
@@ -999,12 +1008,12 @@ mod tests {
     }
 
     #[test]
-    fn session_summary_lines_skip_zero_usage() {
-        assert!(session_summary_lines(TokenUsage::default(), None).is_none());
+    fn session_summary_skip_zero_usage() {
+        assert!(session_summary(TokenUsage::default(), None).is_none());
     }
 
     #[test]
-    fn session_summary_lines_include_resume_hint() {
+    fn session_summary_includes_resume_hint() {
         let mut usage = TokenUsage::default();
         usage.input_tokens = 10;
         usage.output_tokens = 2;
@@ -1012,14 +1021,14 @@ mod tests {
         let conversation =
             ConversationId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
 
-        let lines = session_summary_lines(usage, Some(conversation)).expect("lines");
+        let summary = session_summary(usage, Some(conversation)).expect("summary");
         assert_eq!(
-            lines,
-            vec![
-                "Token usage: total=12 input=10 output=2".to_string(),
-                "To continue this session, run codex resume 123e4567-e89b-12d3-a456-426614174000"
-                    .to_string()
-            ]
+            summary.usage_line,
+            "Token usage: total=12 input=10 output=2"
+        );
+        assert_eq!(
+            summary.resume_command,
+            Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
         );
     }
 }
