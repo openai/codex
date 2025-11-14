@@ -11,18 +11,18 @@ const spawnMock = child_process.spawn as jest.MockedFunction<typeof actualChildP
 
 export function codexExecSpy(): {
   args: string[][];
-  envs: (NodeJS.ProcessEnv | undefined)[];
+  envs: (Record<string, string> | undefined)[];
   restore: () => void;
 } {
   const previousImplementation = spawnMock.getMockImplementation() ?? actualChildProcess.spawn;
   const args: string[][] = [];
-  const envs: (NodeJS.ProcessEnv | undefined)[] = [];
+  const envs: (Record<string, string> | undefined)[] = [];
 
   spawnMock.mockImplementation(((...spawnArgs: Parameters<typeof child_process.spawn>) => {
     const commandArgs = spawnArgs[1];
     args.push(Array.isArray(commandArgs) ? [...commandArgs] : []);
     const options = spawnArgs[2] as child_process.SpawnOptions | undefined;
-    envs.push(options?.env as NodeJS.ProcessEnv | undefined);
+    envs.push(options?.env);
     return previousImplementation(...spawnArgs);
   }) as typeof actualChildProcess.spawn);
 
