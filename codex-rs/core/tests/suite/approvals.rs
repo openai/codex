@@ -240,6 +240,10 @@ enum Expectation {
         target: TargetPath,
         content: &'static str,
     },
+    FileCreatedNoExitCode {
+        target: TargetPath,
+        content: &'static str,
+    },
     PatchApplied {
         target: TargetPath,
         content: &'static str,
@@ -270,9 +274,23 @@ impl Expectation {
                 assert_eq!(
                     result.exit_code,
                     Some(0),
-                    "expected successful exit for {:?}",
-                    path
+                    "expected successful exit for {path:?}"
                 );
+                assert!(
+                    result.stdout.contains(content),
+                    "stdout missing {content:?}: {}",
+                    result.stdout
+                );
+                let file_contents = fs::read_to_string(&path)?;
+                assert!(
+                    file_contents.contains(content),
+                    "file contents missing {content:?}: {file_contents}"
+                );
+                let _ = fs::remove_file(path);
+            }
+            Expectation::FileCreatedNoExitCode { target, content } => {
+                let (path, _) = target.resolve_for_patch(test);
+                assert_eq!(result.exit_code, None, "expected no exit code for {path:?}");
                 assert!(
                     result.stdout.contains(content),
                     "stdout missing {content:?}: {}",
@@ -588,10 +606,27 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
             with_escalated_permissions: false,
             features: vec![],
-            model_override: None,
+            model_override: Some("gpt-5"),
             outcome: Outcome::Auto,
             expectation: Expectation::FileCreated {
                 target: TargetPath::OutsideWorkspace("dfa_on_request.txt"),
+                content: "danger-on-request",
+            },
+        },
+        ScenarioSpec {
+            name: "danger_full_access_on_request_allows_outside_write_gpt_5_1_no_exit",
+            approval_policy: OnRequest,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            action: ActionKind::WriteFile {
+                target: TargetPath::OutsideWorkspace("dfa_on_request_5_1.txt"),
+                content: "danger-on-request",
+            },
+            with_escalated_permissions: false,
+            features: vec![],
+            model_override: Some("gpt-5.1"),
+            outcome: Outcome::Auto,
+            expectation: Expectation::FileCreatedNoExitCode {
+                target: TargetPath::OutsideWorkspace("dfa_on_request_5_1.txt"),
                 content: "danger-on-request",
             },
         },
