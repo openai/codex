@@ -27,6 +27,7 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CommandExecutionMetadata;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
+use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ConversationGitInfo;
 use codex_app_server_protocol::ConversationSummary;
 use codex_app_server_protocol::ExecCommandApprovalParams;
@@ -2845,31 +2846,28 @@ async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::ExecCommandBegin(exec_command_begin_event) => {
-            let item: ThreadItem = ThreadItem::CommandExecution {
+            let item = ThreadItem::CommandExecution {
                 id: exec_command_begin_event.call_id.clone(),
-                command: exec_command_begin_event.command,
+                command: exec_command_begin_event.command.join(" "),
                 cwd: exec_command_begin_event.cwd,
                 status: CommandExecutionStatus::InProgress,
-                parsed_cmd: exec_command_begin_event.parsed_cmd,
+                parsed_cmd: exec_command_begin_event
+                    .parsed_cmd
+                    .into_iter()
+                    .map(V2ParsedCommand::from)
+                    .collect(),
                 is_user_shell_command: exec_command_begin_event.is_user_shell_command,
                 aggregated_output: None,
                 exit_code: None,
                 duration_ms: None,
-            }
-            .into();
+            };
             let notification = ItemStartedNotification { item };
             outgoing
                 .send_server_notification(ServerNotification::ItemStarted(notification))
                 .await;
         }
         EventMsg::ExecCommandOutputDelta(exec_command_output_delta_event) => {
-            let notification = ExecCommandOutputDeltaNotification {
-                item_id: exec_command_output_delta_event.item_id,
-                delta: exec_command_output_delta_event.delta,
-            };
-            outgoing
-                .send_server_notification(ServerNotification::ExecCommandOutputDelta(notification))
-                .await;
+            // TODO: implement
         }
         EventMsg::ExecCommandEnd(exec_command_end_event) => {
             // TODO: update the item to include the exit code and duration
