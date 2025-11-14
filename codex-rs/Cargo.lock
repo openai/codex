@@ -850,6 +850,7 @@ dependencies = [
  "codex-protocol",
  "codex-utils-json-to-toml",
  "core_test_support",
+ "mcp-types",
  "opentelemetry-appender-tracing",
  "os_info",
  "pretty_assertions",

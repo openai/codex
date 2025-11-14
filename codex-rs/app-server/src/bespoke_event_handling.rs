@@ -311,10 +311,7 @@ async fn construct_mcp_tool_call_end_notification(
         Ok(value) => (
             Some(McpToolCallResult {
                 content: value.content.clone(),
-                structured_content: value
-                    .structured_content
-                    .clone()
-                    .unwrap_or(JsonRpcResult::Null),
+                structured_content: value.structured_content.clone(),
             }),
             None,
         ),
@@ -339,4 +336,148 @@ async fn construct_mcp_tool_call_end_notification(
         error,
     };
     ItemCompletedNotification { item }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_core::protocol::McpInvocation;
+    use mcp_types::CallToolResult;
+    use mcp_types::ContentBlock;
+    use mcp_types::TextContent;
+    use pretty_assertions::assert_eq;
+    use serde_json::Value as JsonValue;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn test_construct_mcp_tool_call_begin_notification_with_args() {
+        let begin_event = McpToolCallBeginEvent {
+            call_id: "call_123".to_string(),
+            invocation: McpInvocation {
+                server: "codex".to_string(),
+                tool: "list_mcp_resources".to_string(),
+                arguments: Some(serde_json::json!({"server": ""})),
+            },
+        };
+
+        let notification = construct_mcp_tool_call_notification(begin_event.clone()).await;
+
+        let expected = ItemStartedNotification {
+            item: ThreadItem::McpToolCall {
+                id: begin_event.call_id,
+                server: begin_event.invocation.server,
+                tool: begin_event.invocation.tool,
+                status: McpToolCallStatus::InProgress,
+                arguments: serde_json::json!({"server": ""}),
+                result: None,
+                error: None,
+            },
+        };
+
+        assert_eq!(notification, expected);
+    }
+
+    #[tokio::test]
+    async fn test_construct_mcp_tool_call_begin_notification_without_args() {
+        let begin_event = McpToolCallBeginEvent {
+            call_id: "call_456".to_string(),
+            invocation: McpInvocation {
+                server: "codex".to_string(),
+                tool: "list_mcp_resources".to_string(),
+                arguments: None,
+            },
+        };
+
+        let notification = construct_mcp_tool_call_notification(begin_event.clone()).await;
+
+        let expected = ItemStartedNotification {
+            item: ThreadItem::McpToolCall {
+                id: begin_event.call_id,
+                server: begin_event.invocation.server,
+                tool: begin_event.invocation.tool,
+                status: McpToolCallStatus::InProgress,
+                arguments: JsonValue::Null,
+                result: None,
+                error: None,
+            },
+        };
+
+        assert_eq!(notification, expected);
+    }
+
+    #[tokio::test]
+    async fn test_construct_mcp_tool_call_end_notification_success() {
+        let content = vec![ContentBlock::TextContent(TextContent {
+            annotations: None,
+            text: "{\"resources\":[]}".to_string(),
+            r#type: "text".to_string(),
+        })];
+        let result = CallToolResult {
+            content: content.clone(),
+            is_error: Some(false),
+            structured_content: None,
+        };
+
+        let end_event = McpToolCallEndEvent {
+            call_id: "call_789".to_string(),
+            invocation: McpInvocation {
+                server: "codex".to_string(),
+                tool: "list_mcp_resources".to_string(),
+                arguments: Some(serde_json::json!({"server": ""})),
+            },
+            duration: Duration::from_nanos(92708),
+            result: Ok(result),
+        };
+
+        let notification = construct_mcp_tool_call_end_notification(end_event.clone()).await;
+
+        let expected = ItemCompletedNotification {
+            item: ThreadItem::McpToolCall {
+                id: end_event.call_id,
+                server: end_event.invocation.server,
+                tool: end_event.invocation.tool,
+                status: McpToolCallStatus::Completed,
+                arguments: serde_json::json!({"server": ""}),
+                result: Some(McpToolCallResult {
+                    content,
+                    structured_content: None,
+                }),
+                error: None,
+            },
+        };
+
+        assert_eq!(notification, expected);
+    }
+
+    #[tokio::test]
+    async fn test_construct_mcp_tool_call_end_notification_error() {
+        let end_event = McpToolCallEndEvent {
+            call_id: "call_err".to_string(),
+            invocation: McpInvocation {
+                server: "codex".to_string(),
+                tool: "list_mcp_resources".to_string(),
+                arguments: None,
+            },
+            duration: Duration::from_millis(1),
+            result: Err("boom".to_string()),
+        };
+
+        let notification = construct_mcp_tool_call_end_notification(end_event.clone()).await;
+
+        let expected = ItemCompletedNotification {
+            item: ThreadItem::McpToolCall {
+                id: end_event.call_id,
+                server: end_event.invocation.server,
+                tool: end_event.invocation.tool,
+                status: McpToolCallStatus::Failed,
+                arguments: JsonValue::Null,
+                result: None,
+                error: Some(McpToolCallError {
+                    message: "boom".to_string(),
+                }),
+            },
+        };
+
+        assert_eq!(notification, expected);
+    }
 }
