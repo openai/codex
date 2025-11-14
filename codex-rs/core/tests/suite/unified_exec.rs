@@ -214,7 +214,11 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
 
     assert_eq!(
         begin_event.command,
-        vec!["/bin/echo hello unified exec".to_string()]
+        vec![
+            "/bin/bash".to_string(),
+            "-lc".to_string(),
+            "/bin/echo hello unified exec".to_string()
+        ]
     );
     assert_eq!(begin_event.cwd, cwd.path());
 
@@ -654,7 +658,14 @@ async fn unified_exec_skips_begin_event_for_empty_input() -> Result<()> {
         "expected only the initial command to emit begin event"
     );
     assert_eq!(begin_events[0].call_id, open_call_id);
-    assert_eq!(begin_events[0].command[0], "/bin/sh -c echo ready");
+    assert_eq!(
+        begin_events[0].command,
+        vec![
+            "/bin/bash".to_string(),
+            "-lc".to_string(),
+            "/bin/sh -c echo ready".to_string()
+        ]
+    );
 
     Ok(())
 }

@@ -5,6 +5,7 @@ use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandOutputDeltaEvent;
 use crate::protocol::ExecOutputStream;
+use crate::shell::get_shell_by_model_provided_path;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -32,8 +33,8 @@ struct ExecCommandArgs {
     shell: String,
     #[serde(default = "default_login")]
     login: bool,
-    #[serde(default)]
-    yield_time_ms: Option<u64>,
+    #[serde(default = "default_exec_yield_time_ms")]
+    yield_time_ms: u64,
     #[serde(default)]
     max_output_tokens: Option<usize>,
     #[serde(default)]
@@ -47,10 +48,18 @@ struct WriteStdinArgs {
     session_id: i32,
     #[serde(default)]
     chars: String,
-    #[serde(default)]
-    yield_time_ms: Option<u64>,
+    #[serde(default = "default_write_stdin_yield_time_ms")]
+    yield_time_ms: u64,
     #[serde(default)]
     max_output_tokens: Option<usize>,
+}
+
+fn default_exec_yield_time_ms() -> u64 {
+    10000
+}
+
+fn default_write_stdin_yield_time_ms() -> u64 {
+    250
 }
 
 fn default_shell() -> String {
@@ -84,7 +93,8 @@ impl ToolHandler for UnifiedExecHandler {
         let Ok(params) = serde_json::from_str::<ExecCommandArgs>(arguments) else {
             return true;
         };
-        !is_known_safe_command(&["bash".to_string(), "-lc".to_string(), params.cmd])
+        let command = get_command(&params);
+        !is_known_safe_command(&command)
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
@@ -117,15 +127,15 @@ impl ToolHandler for UnifiedExecHandler {
                         "failed to parse exec_command arguments: {err:?}"
                     ))
                 })?;
+
+                let command = get_command(&args);
                 let ExecCommandArgs {
-                    cmd,
                     workdir,
-                    shell,
-                    login,
                     yield_time_ms,
                     max_output_tokens,
                     with_escalated_permissions,
                     justification,
+                    ..
                 } = args;
 
                 if with_escalated_permissions.unwrap_or(false)
@@ -152,15 +162,14 @@ impl ToolHandler for UnifiedExecHandler {
                     &context.call_id,
                     None,
                 );
-                let emitter = ToolEmitter::unified_exec(cmd.clone(), cwd.clone(), true);
+
+                let emitter = ToolEmitter::unified_exec(&command, cwd.clone(), true);
                 emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
                 manager
                     .exec_command(
                         ExecCommandRequest {
-                            command: &cmd,
-                            shell: &shell,
-                            login,
+                            command,
                             yield_time_ms,
                             max_output_tokens,
                             workdir,
@@ -219,6 +228,11 @@ impl ToolHandler for UnifiedExecHandler {
             success: Some(true),
         })
     }
+}
+
+fn get_command(args: &ExecCommandArgs) -> Vec<String> {
+    let shell = get_shell_by_model_provided_path(&PathBuf::from(args.shell.clone()));
+    shell.derive_exec_args(&args.cmd, args.login)
 }
 
 fn format_response(response: &UnifiedExecResponse) -> String {
