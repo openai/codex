@@ -24,7 +24,7 @@ pub struct ModelUpgrade {
 pub struct ModelPreset {
     /// Stable identifier for the preset.
     pub id: &'static str,
-    /// Model slug (e.g., "gpt-5.1").
+    /// Model slug (e.g., "gpt-5").
     pub model: &'static str,
     /// Display name shown in UIs.
     pub display_name: &'static str,
@@ -109,9 +109,9 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
         },
         // Deprecated models.
         ModelPreset {
-            id: "gpt-5.1-codex",
-            model: "gpt-5.1-codex",
-            display_name: "gpt-5.1-codex",
+            id: "gpt-5-codex",
+            model: "gpt-5-codex",
+            display_name: "gpt-5-codex",
             description: "Optimized for codex.",
             default_reasoning_effort: ReasoningEffort::Medium,
             supported_reasoning_efforts: &[
@@ -135,9 +135,9 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             }),
         },
         ModelPreset {
-            id: "gpt-5.1-codex-mini",
-            model: "gpt-5.1-codex-mini",
-            display_name: "gpt-5.1-codex-mini",
+            id: "gpt-5-codex-mini",
+            model: "gpt-5-codex-mini",
+            display_name: "gpt-5-codex-mini",
             description: "Optimized for codex. Cheaper, faster, but less capable.",
             default_reasoning_effort: ReasoningEffort::Medium,
             supported_reasoning_efforts: &[
@@ -157,9 +157,9 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             }),
         },
         ModelPreset {
-            id: "gpt-5.1",
-            model: "gpt-5.1",
-            display_name: "gpt-5.1",
+            id: "gpt-5",
+            model: "gpt-5",
+            display_name: "gpt-5",
             description: "Broad world knowledge with strong general reasoning.",
             default_reasoning_effort: ReasoningEffort::Medium,
             supported_reasoning_efforts: &[
