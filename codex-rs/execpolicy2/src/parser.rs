@@ -25,16 +25,26 @@ use crate::rule::RuleRef;
 use crate::rule::validate_match_examples;
 use crate::rule::validate_not_match_examples;
 
-// todo: support parsing multiple policies
-pub struct PolicyParser;
+pub struct PolicyParser {
+    builder: RefCell<PolicyBuilder>,
+}
+
+impl Default for PolicyParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl PolicyParser {
+    pub fn new() -> Self {
+        Self {
+            builder: RefCell::new(PolicyBuilder::new()),
+        }
+    }
+
     /// Parses a policy, tagging parser errors with `policy_identifier` so failures include the
     /// identifier alongside line numbers.
-    pub fn parse(
-        policy_identifier: &str,
-        policy_file_contents: &str,
-    ) -> Result<crate::policy::Policy> {
+    pub fn parse(&mut self, policy_identifier: &str, policy_file_contents: &str) -> Result<()> {
         let mut dialect = Dialect::Extended.clone();
         dialect.enable_f_strings = true;
         let ast = AstModule::parse(
@@ -45,14 +55,16 @@ impl PolicyParser {
         .map_err(Error::Starlark)?;
         let globals = GlobalsBuilder::standard().with(policy_builtins).build();
         let module = Module::new();
-
-        let builder = RefCell::new(PolicyBuilder::new());
         {
             let mut eval = Evaluator::new(&module);
-            eval.extra = Some(&builder);
+            eval.extra = Some(&self.builder);
             eval.eval_module(ast, &globals).map_err(Error::Starlark)?;
         }
-        Ok(builder.into_inner().build())
+        Ok(())
+    }
+
+    pub fn build(self) -> crate::policy::Policy {
+        self.builder.into_inner().build()
     }
 }
 
