@@ -114,10 +114,21 @@ async fn tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> {
     let fixture = builder.build(&server).await?;
 
     let call_id = "shell-too-large";
-    let args = serde_json::json!({
-        "command": ["/bin/sh", "-c", "seq 1 400"],
-        "timeout_ms": 5_000,
-    });
+    let args = if cfg!(windows) {
+        serde_json::json!({
+            "command": [
+                "powershell",
+                "-Command",
+                "for ($i=1; $i -le 400; $i++) { Write-Output $i }"
+            ],
+            "timeout_ms": 5_000,
+        })
+    } else {
+        serde_json::json!({
+            "command": ["/bin/sh", "-c", "seq 1 400"],
+            "timeout_ms": 5_000,
+        })
+    };
 
     // First response: model tells us to run the tool; second: complete the turn.
     mount_sse_once(
@@ -149,6 +160,7 @@ async fn tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> {
         .single_request()
         .function_call_output_text(call_id)
         .context("function_call_output present for shell call")?;
+    let output = output.replace("\r\n", "\n");
 
     // Expect plain text (not JSON) with truncation markers and line elision.
     assert!(
@@ -194,14 +206,21 @@ async fn tool_call_output_truncated_only_once() -> Result<()> {
     });
     let fixture = builder.build(&server).await?;
     let call_id = "shell-single-truncation";
-    let args = serde_json::json!({
-        "command": [
-            "/bin/sh",
-            "-c",
-            "awk 'BEGIN{for(i=1;i<=2000;i++){for(j=0;j<100;j++) printf \"A\"; print \"\"}}'"
-        ],
-        "timeout_ms": 5_000,
-    });
+    let args = if cfg!(windows) {
+        serde_json::json!({
+            "command": [
+                "powershell",
+                "-Command",
+                "for ($i=1; $i -le 2000; $i++) { Write-Output $i }"
+            ],
+            "timeout_ms": 5_000,
+        })
+    } else {
+        serde_json::json!({
+            "command": ["/bin/sh", "-c", "seq 1 2000"],
+            "timeout_ms": 5_000,
+        })
+    };
 
     mount_sse_once_match(
         &server,

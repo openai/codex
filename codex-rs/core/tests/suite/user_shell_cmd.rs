@@ -277,14 +277,21 @@ async fn user_shell_command_is_truncated_only_once() -> anyhow::Result<()> {
     let fixture = builder.build(&server).await?;
 
     let call_id = "user-shell-double-truncation";
-    let args = serde_json::json!({
-        "command": [
-            "/bin/sh",
-            "-c",
-            "awk 'BEGIN{for(i=1;i<=2000;i++){for(j=0;j<100;j++) printf \"A\"; print \"\"}}'"
-        ],
-        "timeout_ms": 5_000,
-    });
+    let args = if cfg!(windows) {
+        serde_json::json!({
+            "command": [
+                "powershell",
+                "-Command",
+                "for ($i=1; $i -le 2000; $i++) { Write-Output $i }"
+            ],
+            "timeout_ms": 5_000,
+        })
+    } else {
+        serde_json::json!({
+            "command": ["/bin/sh", "-c", "seq 1 2000"],
+            "timeout_ms": 5_000,
+        })
+    };
 
     mount_sse_once_match(
         &server,
