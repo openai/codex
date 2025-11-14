@@ -75,6 +75,7 @@ enum ActionKind {
     },
     RunUnifiedExecCommand {
         command: &'static str,
+        justification: Option<&'static str>,
     },
     ApplyPatchFunction {
         target: TargetPath,
@@ -85,6 +86,9 @@ enum ActionKind {
         content: &'static str,
     },
 }
+
+const DEFAULT_UNIFIED_EXEC_JUSTIFICATION: &str =
+    "Requires escalated permissions to bypass the sandbox in tests.";
 
 impl ActionKind {
     async fn prepare(
@@ -139,8 +143,17 @@ impl ActionKind {
                 let event = shell_event(call_id, &command, 1_000, with_escalated_permissions)?;
                 Ok((event, Some(command)))
             }
-            ActionKind::RunUnifiedExecCommand { command } => {
-                let event = exec_command_event(call_id, command, Some(1000))?;
+            ActionKind::RunUnifiedExecCommand {
+                command,
+                justification,
+            } => {
+                let event = exec_command_event(
+                    call_id,
+                    command,
+                    Some(1000),
+                    with_escalated_permissions,
+                    *justification,
+                )?;
                 Ok((
                     event,
                     Some(vec![
@@ -199,12 +212,23 @@ fn shell_event(
     Ok(ev_function_call(call_id, "shell", &args_str))
 }
 
-fn exec_command_event(call_id: &str, cmd: &str, yield_time_ms: Option<u64>) -> Result<Value> {
+fn exec_command_event(
+    call_id: &str,
+    cmd: &str,
+    yield_time_ms: Option<u64>,
+    with_escalated_permissions: bool,
+    justification: Option<&str>,
+) -> Result<Value> {
     let mut args = json!({
         "cmd": cmd.to_string(),
     });
     if let Some(yield_time_ms) = yield_time_ms {
         args["yield_time_ms"] = json!(yield_time_ms);
+    }
+    if with_escalated_permissions {
+        args["with_escalated_permissions"] = json!(true);
+        let reason = justification.unwrap_or(DEFAULT_UNIFIED_EXEC_JUSTIFICATION);
+        args["justification"] = json!(reason);
     }
     let args_str = serde_json::to_string(&args)?;
     Ok(ev_function_call(call_id, "exec_command", &args_str))
@@ -1109,6 +1133,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             action: ActionKind::RunUnifiedExecCommand {
                 command: "echo \"hello unified exec\"",
+                justification: None,
             },
             with_escalated_permissions: false,
             features: vec![Feature::UnifiedExec],
@@ -1118,12 +1143,34 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 stdout_contains: "hello unified exec",
             },
         },
+        #[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
+        // Linux sandbox arg0 test workaround doesn't work on ARM
+        ScenarioSpec {
+            name: "unified exec on request escalated requires approval",
+            approval_policy: OnRequest,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            action: ActionKind::RunUnifiedExecCommand {
+                command: "python3 -c 'print('\"'\"'escalated unified exec'\"'\"')'",
+                justification: Some(DEFAULT_UNIFIED_EXEC_JUSTIFICATION),
+            },
+            with_escalated_permissions: true,
+            features: vec![Feature::UnifiedExec],
+            model_override: None,
+            outcome: Outcome::ExecApproval {
+                decision: ReviewDecision::Approved,
+                expected_reason: Some(DEFAULT_UNIFIED_EXEC_JUSTIFICATION),
+            },
+            expectation: Expectation::CommandSuccess {
+                stdout_contains: "escalated unified exec",
+            },
+        },
         ScenarioSpec {
             name: "unified exec on request requires approval unless trusted",
             approval_policy: AskForApproval::UnlessTrusted,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             action: ActionKind::RunUnifiedExecCommand {
                 command: "git reset --hard",
+                justification: None,
             },
             with_escalated_permissions: false,
             features: vec![Feature::UnifiedExec],

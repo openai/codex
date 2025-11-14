@@ -19,7 +19,6 @@ use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
 use crate::tools::sandboxing::ToolCtx;
 
 use super::ExecCommandRequest;
-use super::MIN_YIELD_TIME_MS;
 use super::SessionEntry;
 use super::UnifiedExecContext;
 use super::UnifiedExecError;
@@ -51,12 +50,17 @@ impl UnifiedExecSessionManager {
         ];
 
         let session = self
-            .open_session_with_sandbox(command, cwd.clone(), context)
+            .open_session_with_sandbox(
+                command,
+                cwd.clone(),
+                request.with_escalated_permissions,
+                request.justification,
+                context,
+            )
             .await?;
 
         let max_tokens = resolve_max_tokens(request.max_output_tokens);
-        let yield_time_ms =
-            clamp_yield_time(Some(request.yield_time_ms.unwrap_or(MIN_YIELD_TIME_MS)));
+        let yield_time_ms = clamp_yield_time(request.yield_time_ms);
 
         let start = Instant::now();
         let (output_buffer, output_notify) = session.output_handles();
@@ -300,10 +304,16 @@ impl UnifiedExecSessionManager {
             .command
             .split_first()
             .ok_or(UnifiedExecError::MissingCommandLine)?;
-        let spawned =
-            codex_utils_pty::spawn_pty_process(program, args, env.cwd.as_path(), &env.env)
-                .await
-                .map_err(|err| UnifiedExecError::create_session(err.to_string()))?;
+
+        let spawned = codex_utils_pty::spawn_pty_process(
+            program,
+            args,
+            env.cwd.as_path(),
+            &env.env,
+            &env.arg0,
+        )
+        .await
+        .map_err(|err| UnifiedExecError::create_session(err.to_string()))?;
         UnifiedExecSession::from_spawned(spawned, env.sandbox).await
     }
 
@@ -311,6 +321,8 @@ impl UnifiedExecSessionManager {
         &self,
         command: Vec<String>,
         cwd: PathBuf,
+        with_escalated_permissions: Option<bool>,
+        justification: Option<String>,
         context: &UnifiedExecContext,
     ) -> Result<UnifiedExecSession, UnifiedExecError> {
         let mut orchestrator = ToolOrchestrator::new();
@@ -319,6 +331,8 @@ impl UnifiedExecSessionManager {
             command,
             cwd,
             create_env(&context.turn.shell_environment_policy),
+            with_escalated_permissions,
+            justification,
         );
         let tool_ctx = ToolCtx {
             session: context.session.as_ref(),

@@ -6,6 +6,9 @@ use codex_protocol::ConversationId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
+use codex_protocol::items::TurnItem as CoreTurnItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::user_input::UserInput as CoreUserInput;
@@ -288,11 +291,39 @@ pub struct ThreadStartResponse {
     pub thread: Thread,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+/// There are three ways to resume a thread:
+/// 1. By thread_id: load the thread from disk by thread_id and resume it.
+/// 2. By history: instantiate the thread from memory and resume it.
+/// 3. By path: load the thread from disk by path and resume it.
+///
+/// The precedence is: history > path > thread_id.
+/// If using history or path, the thread_id param will be ignored.
+///
+/// Prefer using thread_id whenever possible.
 pub struct ThreadResumeParams {
     pub thread_id: String,
+
+    /// [UNSTABLE] FOR CODEX CLOUD - DO NOT USE.
+    /// If specified, the thread will be resumed with the provided history
+    /// instead of loaded from disk.
+    pub history: Option<Vec<ResponseItem>>,
+
+    /// [UNSTABLE] Specify the rollout path to resume from.
+    /// If specified, the thread_id param will be ignored.
+    pub path: Option<PathBuf>,
+
+    /// Configuration overrides for the resumed thread, if any.
+    pub model: Option<String>,
+    pub model_provider: Option<String>,
+    pub cwd: Option<String>,
+    pub approval_policy: Option<AskForApproval>,
+    pub sandbox: Option<SandboxMode>,
+    pub config: Option<HashMap<String, serde_json::Value>>,
+    pub base_instructions: Option<String>,
+    pub developer_instructions: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -359,6 +390,8 @@ pub struct Thread {
     pub model_provider: String,
     /// Unix timestamp (in seconds) when the thread was created.
     pub created_at: i64,
+    /// [UNSTABLE] Path to the thread on disk.
+    pub path: PathBuf,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -457,6 +490,17 @@ impl UserInput {
     }
 }
 
+impl From<CoreUserInput> for UserInput {
+    fn from(value: CoreUserInput) -> Self {
+        match value {
+            CoreUserInput::Text { text } => UserInput::Text { text },
+            CoreUserInput::Image { image_url } => UserInput::Image { url: image_url },
+            CoreUserInput::LocalImage { path } => UserInput::LocalImage { path },
+            _ => unreachable!("unsupported user input variant"),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]
@@ -512,6 +556,42 @@ pub enum ThreadItem {
         id: String,
         review: String,
     },
+}
+
+impl From<CoreTurnItem> for ThreadItem {
+    fn from(value: CoreTurnItem) -> Self {
+        match value {
+            CoreTurnItem::UserMessage(user) => ThreadItem::UserMessage {
+                id: user.id,
+                content: user.content.into_iter().map(UserInput::from).collect(),
+            },
+            CoreTurnItem::AgentMessage(agent) => {
+                let text = agent
+                    .content
+                    .into_iter()
+                    .map(|entry| match entry {
+                        CoreAgentMessageContent::Text { text } => text,
+                    })
+                    .collect::<String>();
+                ThreadItem::AgentMessage { id: agent.id, text }
+            }
+            CoreTurnItem::Reasoning(reasoning) => {
+                let text = if !reasoning.summary_text.is_empty() {
+                    reasoning.summary_text.join("\n")
+                } else {
+                    reasoning.raw_content.join("\n")
+                };
+                ThreadItem::Reasoning {
+                    id: reasoning.id,
+                    text,
+                }
+            }
+            CoreTurnItem::WebSearch(search) => ThreadItem::WebSearch {
+                id: search.id,
+                query: search.query,
+            },
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -707,4 +787,101 @@ pub struct AccountLoginCompletedNotification {
     pub login_id: Option<String>,
     pub success: bool,
     pub error: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_protocol::items::AgentMessageContent;
+    use codex_protocol::items::AgentMessageItem;
+    use codex_protocol::items::ReasoningItem;
+    use codex_protocol::items::TurnItem;
+    use codex_protocol::items::UserMessageItem;
+    use codex_protocol::items::WebSearchItem;
+    use codex_protocol::user_input::UserInput as CoreUserInput;
+    use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
+
+    #[test]
+    fn core_turn_item_into_thread_item_converts_supported_variants() {
+        let user_item = TurnItem::UserMessage(UserMessageItem {
+            id: "user-1".to_string(),
+            content: vec![
+                CoreUserInput::Text {
+                    text: "hello".to_string(),
+                },
+                CoreUserInput::Image {
+                    image_url: "https://example.com/image.png".to_string(),
+                },
+                CoreUserInput::LocalImage {
+                    path: PathBuf::from("local/image.png"),
+                },
+            ],
+        });
+
+        assert_eq!(
+            ThreadItem::from(user_item),
+            ThreadItem::UserMessage {
+                id: "user-1".to_string(),
+                content: vec![
+                    UserInput::Text {
+                        text: "hello".to_string(),
+                    },
+                    UserInput::Image {
+                        url: "https://example.com/image.png".to_string(),
+                    },
+                    UserInput::LocalImage {
+                        path: PathBuf::from("local/image.png"),
+                    },
+                ],
+            }
+        );
+
+        let agent_item = TurnItem::AgentMessage(AgentMessageItem {
+            id: "agent-1".to_string(),
+            content: vec![
+                AgentMessageContent::Text {
+                    text: "Hello ".to_string(),
+                },
+                AgentMessageContent::Text {
+                    text: "world".to_string(),
+                },
+            ],
+        });
+
+        assert_eq!(
+            ThreadItem::from(agent_item),
+            ThreadItem::AgentMessage {
+                id: "agent-1".to_string(),
+                text: "Hello world".to_string(),
+            }
+        );
+
+        let reasoning_item = TurnItem::Reasoning(ReasoningItem {
+            id: "reasoning-1".to_string(),
+            summary_text: vec!["line one".to_string(), "line two".to_string()],
+            raw_content: vec![],
+        });
+
+        assert_eq!(
+            ThreadItem::from(reasoning_item),
+            ThreadItem::Reasoning {
+                id: "reasoning-1".to_string(),
+                text: "line one\nline two".to_string(),
+            }
+        );
+
+        let search_item = TurnItem::WebSearch(WebSearchItem {
+            id: "search-1".to_string(),
+            query: "docs".to_string(),
+        });
+
+        assert_eq!(
+            ThreadItem::from(search_item),
+            ThreadItem::WebSearch {
+                id: "search-1".to_string(),
+                query: "docs".to_string(),
+            }
+        );
+    }
 }
