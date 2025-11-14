@@ -50,27 +50,13 @@ pub(crate) fn exec_policy_for(
     load_policy(cwd).map(Some)
 }
 
-pub(crate) fn commands_for_policy(command: &[String]) -> Vec<Vec<String>> {
-    if let Some(commands) = parse_shell_lc_plain_commands(command)
-        && !commands.is_empty()
-    {
-        return commands;
-    }
-
-    vec![command.to_vec()]
-}
-
 pub(crate) fn evaluate_with_policy(
     policy: &Policy,
     command: &[String],
     approval_policy: AskForApproval,
 ) -> Option<ApprovalRequirement> {
-    let commands = commands_for_policy(command);
-    let evaluation = if let [single] = commands.as_slice() {
-        policy.check(single)
-    } else {
-        policy.check_multiple(commands.iter())
-    };
+    let commands = parse_shell_lc_plain_commands(command).unwrap_or_else(|| vec![command.to_vec()]);
+    let evaluation = policy.check_multiple(commands.iter());
 
     match evaluation {
         Evaluation::Match { decision, .. } => match decision {
