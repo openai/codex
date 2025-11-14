@@ -151,10 +151,11 @@ pub struct ExecResult {
 
 fn decide_escalate(file: &str, argv: &[String], _workdir: &PathBuf) -> EscalateAction {
     // TODO: execpolicy
-    if file == "/opt/homebrew/bin/gh" && argv[1] == "issue" && argv[2] == "list" {
-        EscalateAction::Escalate
-    } else {
-        EscalateAction::RunInSandbox
+    match (file, argv) {
+        ("/opt/homebrew/bin/gh", [_, arg1, arg2, ..]) if arg1 == "issue" && arg2 == "list" => {
+            EscalateAction::Escalate
+        }
+        _ => EscalateAction::RunInSandbox,
     }
 }
 
