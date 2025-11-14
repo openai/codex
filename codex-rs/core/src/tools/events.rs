@@ -88,7 +88,7 @@ pub(crate) enum ToolEmitter {
         auto_approved: bool,
     },
     UnifiedExec {
-        command: String,
+        command: Vec<String>,
         cwd: PathBuf,
         source: ExecCommandSource,
     },
@@ -110,9 +110,9 @@ impl ToolEmitter {
         }
     }
 
-    pub fn unified_exec(command: String, cwd: PathBuf, source: ExecCommandSource) -> Self {
+    pub fn unified_exec(command: &[String], cwd: PathBuf, source: ExecCommandSource) -> Self {
         Self::UnifiedExec {
-            command,
+            command: command.to_vec(),
             cwd,
             source,
         }
@@ -224,7 +224,7 @@ impl ToolEmitter {
                 },
                 ToolEventStage::Begin,
             ) => {
-                emit_exec_command_begin(ctx, &[command.to_string()], cwd.as_path(), *source).await;
+                emit_exec_command_begin(ctx, command, cwd.as_path(), *source).await;
             }
             (Self::UnifiedExec { .. }, ToolEventStage::Success(output)) => {
                 emit_exec_end(

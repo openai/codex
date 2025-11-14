@@ -215,7 +215,11 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
 
     assert_eq!(
         begin_event.command,
-        vec!["/bin/echo hello unified exec".to_string()]
+        vec![
+            "/bin/bash".to_string(),
+            "-lc".to_string(),
+            "/bin/echo hello unified exec".to_string()
+        ]
     );
     assert_eq!(begin_event.cwd, cwd.path());
 
@@ -755,6 +759,15 @@ async fn unified_exec_emits_begin_event_for_write_stdin_requests() -> Result<()>
         .expect("missing exec_command begin");
     assert_eq!(open_event.command[0], "/bin/sh -c echo ready");
     assert_eq!(open_event.source, ExecCommandSource::UnifiedExecStartup);
+
+    // assert_eq!(
+    //     begin_events[0].command,
+    //     vec![
+    //         "/bin/bash".to_string(),
+    //         "-lc".to_string(),
+    //         "/bin/sh -c echo ready".to_string()
+    //     ]
+    // );
 
     let poll_event = begin_events
         .iter()

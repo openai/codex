@@ -153,6 +153,15 @@ async fn run_compact_task_inner(
     new_history.extend(ghost_snapshots);
     sess.replace_history(new_history).await;
 
+    if let Some(estimated_tokens) = sess
+        .clone_history()
+        .await
+        .estimate_token_count(&turn_context)
+    {
+        sess.override_last_token_usage_estimate(&turn_context, estimated_tokens)
+            .await;
+    }
+
     let rollout_item = RolloutItem::Compacted(CompactedItem {
         message: summary_text.clone(),
     });

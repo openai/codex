@@ -203,9 +203,17 @@ pub enum ResponseEvent {
         token_usage: Option<TokenUsage>,
     },
     OutputTextDelta(String),
-    ReasoningSummaryDelta(String),
-    ReasoningContentDelta(String),
-    ReasoningSummaryPartAdded,
+    ReasoningSummaryDelta {
+        delta: String,
+        summary_index: i64,
+    },
+    ReasoningContentDelta {
+        delta: String,
+        content_index: i64,
+    },
+    ReasoningSummaryPartAdded {
+        summary_index: i64,
+    },
     RateLimits(RateLimitSnapshot),
 }
 
@@ -342,21 +350,6 @@ pub(crate) mod tools {
     }
 }
 
-pub(crate) fn create_reasoning_param_for_request(
-    model_family: &ModelFamily,
-    effort: Option<ReasoningEffortConfig>,
-    summary: ReasoningSummaryConfig,
-) -> Option<Reasoning> {
-    if !model_family.supports_reasoning_summaries {
-        return None;
-    }
-
-    Some(Reasoning {
-        effort,
-        summary: Some(summary),
-    })
-}
-
 pub(crate) fn create_text_param_for_request(
     verbosity: Option<VerbosityConfig>,
     output_schema: &Option<Value>,
@@ -422,6 +415,10 @@ mod tests {
                 expects_apply_patch_instructions: true,
             },
             InstructionsTestCase {
+                slug: "gpt-5.1",
+                expects_apply_patch_instructions: false,
+            },
+            InstructionsTestCase {
                 slug: "codex-mini-latest",
                 expects_apply_patch_instructions: true,
             },
@@ -431,6 +428,10 @@ mod tests {
             },
             InstructionsTestCase {
                 slug: "gpt-5-codex",
+                expects_apply_patch_instructions: false,
+            },
+            InstructionsTestCase {
+                slug: "gpt-5.1-codex",
                 expects_apply_patch_instructions: false,
             },
         ];
