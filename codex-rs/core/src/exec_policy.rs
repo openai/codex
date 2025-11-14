@@ -48,7 +48,7 @@ pub(crate) fn exec_policy_for(
         return Ok(None);
     }
 
-    load_policy(cwd)
+   load_policy(cwd).map(Some)
 }
 
 pub(crate) fn commands_for_policy(command: &[String]) -> Vec<Vec<String>> {
@@ -94,7 +94,7 @@ pub(crate) fn evaluate_with_policy(
     }
 }
 
-fn load_policy(cwd: &Path) -> Result<Option<Arc<Policy>>, ExecPolicyError> {
+fn load_policy(cwd: &Path) -> Result<Arc<Policy>, ExecPolicyError> {
     let codex_dir = cwd.join(".codex");
     let entries = match fs::read_dir(&codex_dir) {
         Ok(entries) => entries,
@@ -124,10 +124,6 @@ fn load_policy(cwd: &Path) -> Result<Option<Arc<Policy>>, ExecPolicyError> {
         }
     }
 
-    if policy_paths.is_empty() {
-        return Ok(None);
-    }
-
     policy_paths.sort();
 
     let mut parser = PolicyParser::new();
@@ -153,7 +149,7 @@ fn load_policy(cwd: &Path) -> Result<Option<Arc<Policy>>, ExecPolicyError> {
         codex_dir.display()
     );
 
-    Ok(Some(policy))
+    Ok(policy)
 }
 
 #[cfg(test)]
