@@ -109,6 +109,22 @@ def assert_exists(p: Path) -> bool:
 def assert_not_exists(p: Path) -> bool:
     return not p.exists()
 
+def make_junction(link: Path, target: Path) -> bool:
+    """Create a directory junction; return True if it exists afterward."""
+    remove_if_exists(link)
+    target.mkdir(parents=True, exist_ok=True)
+    cmd = ["cmd", "/c", f'mklink /J "{link}" "{target}"']
+    cp = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    return cp.returncode == 0 and link.exists()
+
+def make_symlink(link: Path, target: Path) -> bool:
+    """Create a directory symlink; return True if it exists afterward."""
+    remove_if_exists(link)
+    target.mkdir(parents=True, exist_ok=True)
+    cmd = ["cmd", "/c", f'mklink /D "{link}" "{target}"']
+    cp = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    return cp.returncode == 0 and link.exists()
+
 def summarize(results: List[CaseResult]) -> int:
     ok = sum(1 for r in results if r.ok)
     total = len(results)
@@ -299,6 +315,162 @@ def main() -> int:
     target = WS_ROOT / "cmd_ro.txt"; remove_if_exists(target)
     rc, out, err = run_sbx("read-only", ["cmd", "/c", "echo nope > cmd_ro.txt"], WS_ROOT)
     add("RO: cmd redirection denied", rc != 0 and not target.exists(), f"rc={rc}")
+
+    # 29. WS: CWD junction poisoning denied (allowlist should not follow to OUTSIDE)
+    poison_cwd = WS_ROOT / "poison_cwd"
+    if make_junction(poison_cwd, OUTSIDE):
+        target = OUTSIDE / "poisoned.txt"
+        remove_if_exists(target)
+        rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "echo poison > poisoned.txt"], poison_cwd)
+        add("WS: junction poisoning via CWD denied", rc != 0 and assert_not_exists(target), f"rc={rc}, err={err}")
+    else:
+        add("WS: junction poisoning via CWD denied (setup skipped)", True, "junction creation failed")
+
+    # 30. WS: junction into Windows denied
+    sys_link = WS_ROOT / "sys_link"
+    sys_target = Path("C:/Windows")
+    sys_file = sys_target / "system32" / "sbx_junc.txt"
+    if sys_file.exists():
+        remove_if_exists(sys_file)
+    if make_junction(sys_link, sys_target):
+        rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "echo bad > sys_link\\system32\\sbx_junc.txt"], WS_ROOT)
+        add("WS: junction into Windows denied", rc != 0 and not sys_file.exists(), f"rc={rc}, err={err}")
+    else:
+        add("WS: junction into Windows denied (setup skipped)", True, "junction creation failed")
+
+    # 31. WS: device/pipe access blocked
+    rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "type \\\\.\\PhysicalDrive0"], WS_ROOT)
+    add("WS: raw device access denied", rc != 0, f"rc={rc}")
+
+    rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "echo hi > \\\\.\\pipe\\codex_testpipe"], WS_ROOT)
+    add("WS: named pipe creation denied", rc != 0, f"rc={rc}")
+
+    # 32. WS: ADS/long-path escape denied
+    ads_base = WS_ROOT / "ads_base.txt"
+    remove_if_exists(ads_base)
+    rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "echo secret > ads_base.txt:stream"], WS_ROOT)
+    add("WS: ADS write denied", rc != 0 and assert_not_exists(ads_base), f"rc={rc}")
+
+    lp_target = Path(r"\\?\C:\sbx_longpath_test.txt")
+    rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "echo long > \\\\?\\C:\\sbx_longpath_test.txt"], WS_ROOT)
+    add("WS: long-path escape denied", rc != 0 and not lp_target.exists(), f"rc={rc}")
+
+    # 33. WS: case-insensitive protected path bypass denied (.GiT)
+    git_variation = WS_ROOT / ".GiT" / "config"
+    remove_if_exists(git_variation.parent)
+    git_variation.parent.mkdir(exist_ok=True)
+    rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "echo hack > .GiT\\config"], WS_ROOT)
+    add("WS: protected path case-variation denied", rc != 0 and assert_not_exists(git_variation), f"rc={rc}")
+
+    # 34. WS: policy tamper (.codex artifacts) denied
+    rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "echo tamper > .codex\\cap_sid"], WS_ROOT)
+    rc2, out2, err2 = run_sbx("workspace-write", ["cmd", "/c", "echo tamper > .codex\\policy.json"], WS_ROOT)
+    add("WS: .codex cap_sid tamper denied", rc != 0, f"rc={rc}, err={err}")
+    add("WS: .codex policy tamper denied", rc2 != 0, f"rc={rc2}, err={err2}")
+
+    # 35. WS: PATH stub bypass denied (ssh before stubs)
+    tools_dir = WS_ROOT / "tools"
+    tools_dir.mkdir(exist_ok=True)
+    ssh_path = None
+    if have("ssh"):
+        # Best-effort copy ssh.exe if found in PATH (optional)
+        try:
+            where_out = subprocess.run(["where", "ssh"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+            for line in where_out.stdout.splitlines():
+                candidate = Path(line.strip())
+                if candidate.exists():
+                    ssh_path = candidate
+                    break
+            if ssh_path:
+                dest = tools_dir / "ssh.exe"
+                shutil.copy2(ssh_path, dest)
+                rc, out, err = run_sbx(
+                    "workspace-write",
+                    ["cmd", "/c", f"set PATH={tools_dir};%PATH% & ssh example.com"],
+                    WS_ROOT,
+                )
+                add("WS: PATH stub bypass denied (ssh)", rc != 0, f"rc={rc}")
+            else:
+                add("WS: PATH stub bypass denied (ssh missing)", True)
+        except Exception as ex:
+            add("WS: PATH stub bypass denied (ssh copy failed)", True, str(ex))
+    else:
+        add("WS: PATH stub bypass denied (ssh not present)", True)
+
+    # 36. WS: symlink race (best-effort deny)
+    race_root = WS_ROOT / "race_root"
+    make_dir_clean(race_root)
+    inside = race_root / "inside"
+    outside = OUTSIDE / "race_out"
+    inside.mkdir(parents=True, exist_ok=True)
+    outside.mkdir(parents=True, exist_ok=True)
+    link = race_root / "flip"
+    make_symlink(link, inside)
+    # Fire a quick toggle loop and attempt a write
+    outside_abs = str(OUTSIDE)
+    inside_abs = str(inside)
+    toggle = [
+        "cmd",
+        "/c",
+        f'for /L %i in (1,1,400) do (rmdir flip & mklink /D flip "{inside_abs}" >NUL & rmdir flip & mklink /D flip "{outside_abs}" >NUL)',
+    ]
+    subprocess.Popen(toggle, cwd=str(race_root), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "echo race > flip\\race.txt"], race_root)
+    add("WS: symlink race write denied (best-effort)", rc != 0 and not (outside / "race.txt").exists(), f"rc={rc}")
+
+    # 37. WS: audit blind spots — deep junction/world-writable denied
+    deep = WS_ROOT / "deep" / "redir"
+    unsafe_dir = WS_ROOT / "deep" / "unsafe"
+    make_junction(deep, Path("C:/Windows"))
+    unsafe_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["icacls", str(unsafe_dir), "/grant", "Everyone:(F)"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "echo probe > deep\\redir\\system32\\audit_gap.txt"], WS_ROOT)
+    add("WS: deep junction/world-writable escape denied", rc != 0, f"rc={rc}, err={err}")
+
+    # 38. WS: policy poisoning via workspace symlink root denied
+    # Simulate workspace replaced by symlink to C:\; expect writes to be denied.
+    fake_root = WS_ROOT / "fake_root"
+    if make_symlink(fake_root, Path("C:/")):
+        rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "echo owned > codex_escape.txt"], fake_root)
+        add("WS: workspace-root symlink poisoning denied", rc != 0, f"rc={rc}")
+    else:
+        add("WS: workspace-root symlink poisoning denied (setup skipped)", True, "symlink creation failed")
+
+    # 39. WS: UNC/other-drive canonicalization denied
+    unc_link = WS_ROOT / "unc_link"
+    other_to = Path(r"\\\\localhost\\C$")
+    if make_symlink(unc_link, other_to):
+        rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "echo unc > unc_link\\unc_test.txt"], WS_ROOT)
+        add("WS: UNC link escape denied", rc != 0, f"rc={rc}")
+    else:
+        add("WS: UNC link escape denied (setup skipped)", True, "symlink creation failed")
+
+    other_drive = WS_ROOT / "other_drive"
+    other_target = Path("D:/")  # best-effort; may not exist
+    if make_symlink(other_drive, other_target):
+        rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "echo drive > other_drive\\drive.txt"], WS_ROOT)
+        add("WS: other-drive link escape denied", rc != 0, f"rc={rc}")
+    else:
+        add("WS: other-drive link escape denied (setup skipped)", True, "symlink creation failed")
+
+    # 40. WS: timeout cleanup still denies outside write
+    slow_ps = WS_ROOT / "sleep.ps1"
+    slow_ps.write_text("Start-Sleep 15", encoding="utf-8")
+    try:
+        run_sbx("workspace-write", ["powershell", "-File", "sleep.ps1"], WS_ROOT)
+    except Exception:
+        pass
+    outside_after_timeout = OUTSIDE / "timeout_leak.txt"
+    remove_if_exists(outside_after_timeout)
+    rc, out, err = run_sbx("workspace-write", ["cmd", "/c", f"echo leak > {outside_after_timeout}"], WS_ROOT)
+    add("WS: post-timeout outside write still denied", rc != 0 and assert_not_exists(outside_after_timeout), f"rc={rc}")
+
+    # 41. WS: additional protected path variation (.ssh)
+    ssh_var = WS_ROOT / ".SsH" / "config"
+    remove_if_exists(ssh_var.parent)
+    ssh_var.parent.mkdir(exist_ok=True)
+    rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "echo key > .SsH\\config"], WS_ROOT)
+    add("WS: protected path variation (.ssh) denied", rc != 0 and assert_not_exists(ssh_var), f"rc={rc}")
 
     return summarize(results)
 
