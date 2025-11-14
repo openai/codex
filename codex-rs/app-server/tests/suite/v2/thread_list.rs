@@ -6,10 +6,8 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
-use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::timeout;
-use uuid::Uuid;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -150,46 +148,13 @@ async fn thread_list_respects_provider_filter() -> Result<()> {
         "X",
         Some("mock_provider"),
     )?; // mock_provider
-    // one with a different provider
-    let uuid = Uuid::new_v4();
-    let dir = codex_home
-        .path()
-        .join("sessions")
-        .join("2025")
-        .join("01")
-        .join("02");
-    std::fs::create_dir_all(&dir)?;
-    let file_path = dir.join(format!("rollout-2025-01-02T11-00-00-{uuid}.jsonl"));
-    let lines = [
-        json!({
-            "timestamp": "2025-01-02T11:00:00Z",
-            "type": "session_meta",
-            "payload": {
-                "id": uuid,
-                "timestamp": "2025-01-02T11:00:00Z",
-                "cwd": "/",
-                "originator": "codex",
-                "cli_version": "0.0.0",
-                "instructions": null,
-                "source": "vscode",
-                "model_provider": "other_provider"
-            }
-        })
-        .to_string(),
-        json!({
-            "timestamp": "2025-01-02T11:00:00Z",
-            "type":"response_item",
-            "payload": {"type":"message","role":"user","content":[{"type":"input_text","text":"X"}]}
-        })
-        .to_string(),
-        json!({
-            "timestamp": "2025-01-02T11:00:00Z",
-            "type":"event_msg",
-            "payload": {"type":"user_message","message":"X","kind":"plain"}
-        })
-        .to_string(),
-    ];
-    std::fs::write(file_path, lines.join("\n") + "\n")?;
+    let _b = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-02T11-00-00",
+        "2025-01-02T11:00:00Z",
+        "X",
+        Some("other_provider"),
+    )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;

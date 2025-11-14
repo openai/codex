@@ -215,7 +215,13 @@ async fn streams_reasoning_from_string_delta() {
     }
 
     match &events[1] {
-        ResponseEvent::ReasoningContentDelta(text) => assert_eq!(text, "think1"),
+        ResponseEvent::ReasoningContentDelta {
+            delta,
+            content_index,
+        } => {
+            assert_eq!(delta, "think1");
+            assert_eq!(content_index, &0);
+        }
         other => panic!("expected reasoning delta, got {other:?}"),
     }
 
@@ -267,12 +273,24 @@ async fn streams_reasoning_from_object_delta() {
     }
 
     match &events[1] {
-        ResponseEvent::ReasoningContentDelta(text) => assert_eq!(text, "partA"),
+        ResponseEvent::ReasoningContentDelta {
+            delta,
+            content_index,
+        } => {
+            assert_eq!(delta, "partA");
+            assert_eq!(content_index, &0);
+        }
         other => panic!("expected reasoning delta, got {other:?}"),
     }
 
     match &events[2] {
-        ResponseEvent::ReasoningContentDelta(text) => assert_eq!(text, "partB"),
+        ResponseEvent::ReasoningContentDelta {
+            delta,
+            content_index,
+        } => {
+            assert_eq!(delta, "partB");
+            assert_eq!(content_index, &1);
+        }
         other => panic!("expected reasoning delta, got {other:?}"),
     }
 
@@ -319,7 +337,13 @@ async fn streams_reasoning_from_final_message() {
     }
 
     match &events[1] {
-        ResponseEvent::ReasoningContentDelta(text) => assert_eq!(text, "final-cot"),
+        ResponseEvent::ReasoningContentDelta {
+            delta,
+            content_index,
+        } => {
+            assert_eq!(delta, "final-cot");
+            assert_eq!(content_index, &0);
+        }
         other => panic!("expected reasoning delta, got {other:?}"),
     }
 
@@ -354,7 +378,13 @@ async fn streams_reasoning_before_tool_call() {
     }
 
     match &events[1] {
-        ResponseEvent::ReasoningContentDelta(text) => assert_eq!(text, "pre-tool"),
+        ResponseEvent::ReasoningContentDelta {
+            delta,
+            content_index,
+        } => {
+            assert_eq!(delta, "pre-tool");
+            assert_eq!(content_index, &0);
+        }
         other => panic!("expected reasoning delta, got {other:?}"),
     }
 

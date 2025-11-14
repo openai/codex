@@ -13,10 +13,7 @@ use crate::export_server_responses;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
-use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::FileChange;
-use codex_protocol::protocol::SandboxPolicy;
 use schemars::JsonSchema;
 use schemars::schema_for;
 use serde::Serialize;
@@ -120,10 +117,6 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
         |d| write_json_schema_with_return::<crate::ClientNotification>(d, "ClientNotification"),
         |d| write_json_schema_with_return::<crate::ServerNotification>(d, "ServerNotification"),
         |d| write_json_schema_with_return::<EventMsg>(d, "EventMsg"),
-        |d| write_json_schema_with_return::<FileChange>(d, "FileChange"),
-        |d| write_json_schema_with_return::<crate::protocol::v1::InputItem>(d, "InputItem"),
-        |d| write_json_schema_with_return::<ParsedCommand>(d, "ParsedCommand"),
-        |d| write_json_schema_with_return::<SandboxPolicy>(d, "SandboxPolicy"),
     ];
 
     let mut schemas: Vec<GeneratedSchema> = Vec::new();
@@ -152,13 +145,10 @@ fn build_schema_bundle(schemas: Vec<GeneratedSchema>) -> Result<Value> {
         "ClientNotification",
         "ClientRequest",
         "EventMsg",
-        "FileChange",
-        "InputItem",
-        "ParsedCommand",
-        "SandboxPolicy",
         "ServerNotification",
         "ServerRequest",
     ];
+    const IGNORED_DEFINITIONS: &[&str] = &["Option<()>"];
 
     let namespaced_types = collect_namespaced_types(&schemas);
     let mut definitions = Map::new();
@@ -171,6 +161,10 @@ fn build_schema_bundle(schemas: Vec<GeneratedSchema>) -> Result<Value> {
             in_v1_dir,
         } = schema;
 
+        if IGNORED_DEFINITIONS.contains(&logical_name.as_str()) {
+            continue;
+        }
+
         if let Some(ref ns) = namespace {
             rewrite_refs_to_namespace(&mut value, ns);
         }
@@ -181,6 +175,9 @@ fn build_schema_bundle(schemas: Vec<GeneratedSchema>) -> Result<Value> {
             && let Value::Object(defs_obj) = defs
         {
             for (def_name, mut def_schema) in defs_obj {
+                if IGNORED_DEFINITIONS.contains(&def_name.as_str()) {
+                    continue;
+                }
                 if SPECIAL_DEFINITIONS.contains(&def_name.as_str()) {
                     continue;
                 }
@@ -382,14 +379,6 @@ fn variant_definition_name(base: &str, variant: &Value) -> Option<String> {
             let pascal = to_pascal_case(type_literal);
             return Some(match base {
                 "EventMsg" => format!("{pascal}EventMsg"),
-                _ => format!("{pascal}{base}"),
-            });
-        }
-
-        if let Some(mode_literal) = literal_from_property(props, "mode") {
-            let pascal = to_pascal_case(mode_literal);
-            return Some(match base {
-                "SandboxPolicy" => format!("{pascal}SandboxPolicy"),
                 _ => format!("{pascal}{base}"),
             });
         }

@@ -29,6 +29,15 @@ use crate::wait_for_event;
 
 type ConfigMutator = dyn FnOnce(&mut Config) + Send;
 
+/// A collection of different ways the model can output an apply_patch call
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ApplyPatchModelOutput {
+    Freeform,
+    Function,
+    Shell,
+    ShellViaHeredoc,
+}
+
 pub struct TestCodexBuilder {
     config_mutators: Vec<Box<ConfigMutator>>,
 }
@@ -264,6 +273,19 @@ impl TestCodexHarness {
             .and_then(Value::as_str)
             .expect("output string")
             .to_string()
+    }
+
+    pub async fn apply_patch_output(
+        &self,
+        call_id: &str,
+        output_type: ApplyPatchModelOutput,
+    ) -> String {
+        match output_type {
+            ApplyPatchModelOutput::Freeform => self.custom_tool_call_output(call_id).await,
+            ApplyPatchModelOutput::Function
+            | ApplyPatchModelOutput::Shell
+            | ApplyPatchModelOutput::ShellViaHeredoc => self.function_call_stdout(call_id).await,
+        }
     }
 }
 

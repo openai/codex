@@ -12,6 +12,7 @@ use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
+use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
 use codex_app_server_protocol::ApplyPatchApprovalResponse;
 use codex_app_server_protocol::ArchiveConversationParams;
@@ -70,6 +71,9 @@ use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::NewConversationResponse;
 use codex_app_server_protocol::ParsedCommand as V2ParsedCommand;
+use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
+use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
+use codex_app_server_protocol::ReasoningTextDeltaNotification;
 use codex_app_server_protocol::RemoveConversationListenerParams;
 use codex_app_server_protocol::RemoveConversationSubscriptionResponse;
 use codex_app_server_protocol::RequestId;
@@ -2722,6 +2726,48 @@ async fn apply_bespoke_event_handling(
                 });
             }
         },
+        EventMsg::AgentMessageContentDelta(event) => {
+            let notification = AgentMessageDeltaNotification {
+                item_id: event.item_id,
+                delta: event.delta,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::AgentMessageDelta(notification))
+                .await;
+        }
+        EventMsg::ReasoningContentDelta(event) => {
+            let notification = ReasoningSummaryTextDeltaNotification {
+                item_id: event.item_id,
+                delta: event.delta,
+                summary_index: event.summary_index,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ReasoningSummaryTextDelta(
+                    notification,
+                ))
+                .await;
+        }
+        EventMsg::ReasoningRawContentDelta(event) => {
+            let notification = ReasoningTextDeltaNotification {
+                item_id: event.item_id,
+                delta: event.delta,
+                content_index: event.content_index,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ReasoningTextDelta(notification))
+                .await;
+        }
+        EventMsg::AgentReasoningSectionBreak(event) => {
+            let notification = ReasoningSummaryPartAddedNotification {
+                item_id: event.item_id,
+                summary_index: event.summary_index,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ReasoningSummaryPartAdded(
+                    notification,
+                ))
+                .await;
+        }
         EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
             call_id,
             turn_id,
@@ -2797,6 +2843,37 @@ async fn apply_bespoke_event_handling(
             outgoing
                 .send_server_notification(ServerNotification::ItemCompleted(notification))
                 .await;
+        }
+        EventMsg::ExecCommandBegin(exec_command_begin_event) => {
+            let item: ThreadItem = ThreadItem::CommandExecution {
+                id: exec_command_begin_event.call_id.clone(),
+                command: exec_command_begin_event.command,
+                cwd: exec_command_begin_event.cwd,
+                status: CommandExecutionStatus::InProgress,
+                parsed_cmd: exec_command_begin_event.parsed_cmd,
+                is_user_shell_command: exec_command_begin_event.is_user_shell_command,
+                aggregated_output: None,
+                exit_code: None,
+                duration_ms: None,
+            }
+            .into();
+            let notification = ItemStartedNotification { item };
+            outgoing
+                .send_server_notification(ServerNotification::ItemStarted(notification))
+                .await;
+        }
+        EventMsg::ExecCommandOutputDelta(exec_command_output_delta_event) => {
+            let notification = ExecCommandOutputDeltaNotification {
+                item_id: exec_command_output_delta_event.item_id,
+                delta: exec_command_output_delta_event.delta,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ExecCommandOutputDelta(notification))
+                .await;
+        }
+        EventMsg::ExecCommandEnd(exec_command_end_event) => {
+            // TODO: update the item to include the exit code and duration
+            // outgoing.send_server_notification(ServerNotification::ItemCompleted(notification)).await;
         }
         // If this is a TurnAborted, reply to any pending interrupt requests.
         EventMsg::TurnAborted(turn_aborted_event) => {

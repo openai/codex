@@ -203,9 +203,17 @@ pub enum ResponseEvent {
         token_usage: Option<TokenUsage>,
     },
     OutputTextDelta(String),
-    ReasoningSummaryDelta(String),
-    ReasoningContentDelta(String),
-    ReasoningSummaryPartAdded,
+    ReasoningSummaryDelta {
+        delta: String,
+        summary_index: i64,
+    },
+    ReasoningContentDelta {
+        delta: String,
+        content_index: i64,
+    },
+    ReasoningSummaryPartAdded {
+        summary_index: i64,
+    },
     RateLimits(RateLimitSnapshot),
 }
 

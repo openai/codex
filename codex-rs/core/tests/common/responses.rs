@@ -12,6 +12,8 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path_regex;
 
+use crate::test_codex::ApplyPatchModelOutput;
+
 #[derive(Debug, Clone)]
 pub struct ResponseMock {
     requests: Arc<Mutex<Vec<ResponsesRequest>>>,
@@ -294,6 +296,7 @@ pub fn ev_reasoning_summary_text_delta(delta: &str) -> Value {
     serde_json::json!({
         "type": "response.reasoning_summary_text.delta",
         "delta": delta,
+        "summary_index": 0,
     })
 }
 
@@ -301,6 +304,7 @@ pub fn ev_reasoning_text_delta(delta: &str) -> Value {
     serde_json::json!({
         "type": "response.reasoning_text.delta",
         "delta": delta,
+        "content_index": 0,
     })
 }
 
@@ -367,6 +371,21 @@ pub fn ev_local_shell_call(call_id: &str, status: &str, command: Vec<&str>) -> V
     })
 }
 
+pub fn ev_apply_patch_call(
+    call_id: &str,
+    patch: &str,
+    output_type: ApplyPatchModelOutput,
+) -> Value {
+    match output_type {
+        ApplyPatchModelOutput::Freeform => ev_apply_patch_custom_tool_call(call_id, patch),
+        ApplyPatchModelOutput::Function => ev_apply_patch_function_call(call_id, patch),
+        ApplyPatchModelOutput::Shell => ev_apply_patch_shell_call(call_id, patch),
+        ApplyPatchModelOutput::ShellViaHeredoc => {
+            ev_apply_patch_shell_call_via_heredoc(call_id, patch)
+        }
+    }
+}
+
 /// Convenience: SSE event for an `apply_patch` custom tool call with raw patch
 /// text. This mirrors the payload produced by the Responses API when the model
 /// invokes `apply_patch` directly (before we convert it to a function call).
@@ -398,6 +417,21 @@ pub fn ev_apply_patch_function_call(call_id: &str, patch: &str) -> Value {
             "call_id": call_id
         }
     })
+}
+
+pub fn ev_apply_patch_shell_call(call_id: &str, patch: &str) -> Value {
+    let args = serde_json::json!({ "command": ["apply_patch", patch] });
+    let arguments = serde_json::to_string(&args).expect("serialize apply_patch arguments");
+
+    ev_function_call(call_id, "shell", &arguments)
+}
+
+pub fn ev_apply_patch_shell_call_via_heredoc(call_id: &str, patch: &str) -> Value {
+    let script = format!("apply_patch <<'EOF'\n{patch}\nEOF\n");
+    let args = serde_json::json!({ "command": ["bash", "-lc", script] });
+    let arguments = serde_json::to_string(&args).expect("serialize apply_patch arguments");
+
+    ev_function_call(call_id, "shell", &arguments)
 }
 
 pub fn sse_failed(id: &str, code: &str, message: &str) -> String {
