@@ -1,13 +1,20 @@
 /// E2E tests for API validation error rollback
-use codex_core::protocol::{EventMsg, Op};
+use codex_core::protocol::EventMsg;
+use codex_core::protocol::Op;
 use codex_protocol::user_input::UserInput;
-use core_test_support::responses::{
-    ev_assistant_message, ev_completed, ev_response_created, mount_sse_once_match, sse,
-    start_mock_server,
-};
-use core_test_support::{skip_if_no_network, test_codex::test_codex, wait_for_event};
+use core_test_support::responses::ev_assistant_message;
+use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_sse_once_match;
+use core_test_support::responses::sse;
+use core_test_support::responses::start_mock_server;
+use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
 use serde_json::json;
-use wiremock::{matchers::*, Mock, ResponseTemplate};
+use wiremock::Mock;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::*;
 
 fn invalid_request_error(message: &str) -> ResponseTemplate {
     ResponseTemplate::new(400)
@@ -50,12 +57,8 @@ async fn test_invalid_request_triggers_rollback_and_retry() -> anyhow::Result<()
         ev_assistant_message("msg-2", "Recovered"),
         ev_completed("resp-2"),
     ]);
-    let _m2 = mount_sse_once_match(
-        &server,
-        body_string_contains("SYSTEM ERROR"),
-        turn2_success,
-    )
-    .await;
+    let _m2 =
+        mount_sse_once_match(&server, body_string_contains("SYSTEM ERROR"), turn2_success).await;
 
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
