@@ -550,7 +550,6 @@ mod tests {
     use codex_core::config::ConfigOverrides;
     use codex_core::config::ConfigToml;
     use codex_core::config::ProjectConfig;
-    use codex_core::set_windows_sandbox_enabled;
     use serial_test::serial;
     use tempfile::TempDir;
 
@@ -565,7 +564,7 @@ mod tests {
         )?;
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig { trust_level: None };
-        set_windows_sandbox_enabled(false);
+        config.set_windows_sandbox_globally(false);
 
         let should_show = should_show_trust_screen(&config);
         if cfg!(target_os = "windows") {
@@ -592,7 +591,7 @@ mod tests {
         )?;
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig { trust_level: None };
-        set_windows_sandbox_enabled(true);
+        config.set_windows_sandbox_globally(true);
 
         let should_show = should_show_trust_screen(&config);
         if cfg!(target_os = "windows") {

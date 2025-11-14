@@ -555,9 +555,7 @@ impl App {
                         .await
                     {
                         Ok(()) => {
-                            codex_core::set_windows_sandbox_enabled(true);
-                            self.config.features.enable(Feature::WindowsSandbox);
-                            self.config.forced_auto_mode_downgraded_on_windows = false;
+                            self.config.set_windows_sandbox_globally(true);
                             self.chat_widget.clear_forced_auto_mode_downgrade();
                             if let Some((sample_paths, extra_count, failed_scan)) =
                                 self.chat_widget.world_writable_warning_details()
