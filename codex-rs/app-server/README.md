@@ -258,3 +258,34 @@ Field notes:
 - `codex app-server generate-ts --out <dir>` emits v2 types under `v2/`.
 - `codex app-server generate-json-schema --out <dir>` outputs `codex_app_server_protocol.schemas.json`.
 - See [“Authentication and authorization” in the config docs](../../docs/config.md#authentication-and-authorization) for configuration knobs.
+
+
+## V2 streaming events (Work-in-progress)
+
+V2 notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `turn/*`, and `item/*` notifications.
+
+### Turn events
+
+The app-server streams JSON-RPC notifications while a turn is running. Each turn starts with `turn/started` (initial `turn`) and ends with `turn/completed` (final `turn` plus token `usage`), and clients subscribe to the events they care about, rendering each item incrementally as updates arrive. The per-item lifecycle is always: `item/started` → zero or more item-specific deltas → `item/completed`.
+
+#### Thread items
+
+`ThreadItem` is the tagged union carried in turn responses and `item/*` notifications. Currently we support events for the following items:
+- `userMessage` — `{id, content}` where `content` is a list of user inputs (`text`, `image`, or `localImage`).
+- `agentMessage` — `{id, text}` containing the accumulated agent reply.
+- `reasoning` — `{id, summary, content}` where `summary` holds streamed reasoning summaries (applicable for most OpenAI models) and `content` holds raw reasoning blocks (applicable for e.g. open source models).
+- `mcpToolCall` — `{id, server, tool, status, arguments, result?, error?}` describing MCP calls; `status` is `inProgress`, `completed`, or `failed`.
+- `webSearch` — `{id, query}` for a web search request issued by the agent.
+
+All items emit two shared lifecycle events:
+- `item/started` — emits the full `item` when a new unit of work begins so the UI can render it immediately; the `item.id` in this payload matches the `itemId` used by deltas.
+- `item/completed` — sends the final `item` once that work finishes (e.g., after a tool call or message completes); treat this as the authoritative state.
+
+There are additional item-specific events:
+#### agentMessage
+- `item/agentMessage/delta` — appends streamed text for the agent message; concatenate `delta` values for the same `itemId` in order to reconstruct the full reply.
+#### reasoning
+- `item/reasoning/summaryTextDelta` — streams readable reasoning summaries; `summaryIndex` increments when a new summary section opens.
+- `item/reasoning/summaryPartAdded` — marks the boundary between reasoning summary sections for an `itemId`; subsequent `summaryTextDelta` entries share the same `summaryIndex`.
+- `item/reasoning/textDelta` — streams raw reasoning text (only applicable for e.g. open source models); use `contentIndex` to group deltas that belong together before showing them in the UI.
+
