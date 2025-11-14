@@ -17,6 +17,9 @@ use crate::mcp::auth::McpAuthStatusEntry;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use async_channel::Sender;
+use codex_async_utils::CancelErr;
+use codex_async_utils::OrCancelExt;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpStartupCompleteEvent;
@@ -37,7 +40,6 @@ use mcp_types::Resource;
 use mcp_types::ResourceTemplate;
 use mcp_types::Tool;
 
-use async_channel::Sender;
 use serde_json::json;
 use sha1::Digest;
 use sha1::Sha1;
@@ -452,12 +454,9 @@ pub fn spawn_startup_job(
         });
     }
 
-    let mut join_set = build_startup_tasks(valid_servers, store_mode);
-
     let cancel_token = CancellationToken::new();
+    let mut join_set = build_startup_tasks(valid_servers, store_mode, &cancel_token);
     let (ready_tx, ready_rx) = watch::channel(false);
-    let cancel_token_task = cancel_token.clone();
-    let mut inflight: std::collections::HashSet<String> = starting_servers.into_iter().collect();
     tokio::spawn(async move {
         let mut summary = McpStartupCompleteEvent::default();
         summary.failed.extend(errors.drain().map(|(server, err)| {
@@ -468,67 +467,62 @@ pub fn spawn_startup_job(
             }
         }));
 
-        loop {
-            tokio::select! {
-                _ = cancel_token_task.cancelled(), if !join_set.is_empty() => {
-                    // mark remaining inflight servers as cancelled before aborting tasks
-                    summary.cancelled.extend(inflight.drain());
-                    join_set.shutdown().await;
-                    break;
-                }
-                Some(res) = join_set.join_next() => {
-                    match res {
-                        Ok((server_name, StartupOutcome::Ready { managed })) => {
-                            manager.add_client(server_name.clone(), managed).await;
-                            summary.ready.push(server_name.clone());
-                            inflight.remove(&server_name);
-                            let _ = emit_update(
-                                &tx_event,
-                                McpStartupUpdateEvent {
-                                    server: server_name,
-                                    status: McpStartupStatus::Ready,
-                                },
-                            )
-                            .await;
-                        }
-                        Ok((server_name, StartupOutcome::Failed { error })) => {
-                            let error_str = mcp_init_error_display(
-                                &server_name,
-                                auth_entries.get(&server_name),
-                                &error,
-                            );
-                            summary.failed.push(McpStartupFailure {
-                                server: server_name.clone(),
-                                error: error_str.clone(),
-                            });
-                            inflight.remove(&server_name);
-                            let _ = emit_update(
-                                &tx_event,
-                                McpStartupUpdateEvent {
-                                    server: server_name,
-                                    status: McpStartupStatus::Failed { error: error_str },
-                                },
-                            )
-                            .await;
-                        }
-                        Ok((server_name, StartupOutcome::Cancelled)) => {
-                            summary.cancelled.push(server_name.clone());
-                            inflight.remove(&server_name);
-                            let _ = emit_update(
-                                &tx_event,
-                                McpStartupUpdateEvent {
-                                    server: server_name,
-                                    status: McpStartupStatus::Cancelled,
-                                },
-                            )
-                            .await;
-                        }
-                        Err(err) => {
-                            warn!("Task panic when starting MCP server: {err:#}");
-                        }
+        while let Some(res) = join_set.join_next().await {
+            match res {
+                Ok((server_name, StartupOutcome::Ready { managed })) => {
+                    manager.add_client(server_name.clone(), managed).await;
+                    summary.ready.push(server_name.clone());
+                    if let Err(err) = emit_update(
+                        &tx_event,
+                        McpStartupUpdateEvent {
+                            server: server_name,
+                            status: McpStartupStatus::Ready,
+                        },
+                    )
+                    .await
+                    {
+                        warn!("failed to emit MCP ready update: {err:#}");
                     }
                 }
-                else => break,
+                Ok((server_name, StartupOutcome::Failed { error })) => {
+                    let error_str = mcp_init_error_display(
+                        &server_name,
+                        auth_entries.get(&server_name),
+                        &error,
+                    );
+                    summary.failed.push(McpStartupFailure {
+                        server: server_name.clone(),
+                        error: error_str.clone(),
+                    });
+                    if let Err(err) = emit_update(
+                        &tx_event,
+                        McpStartupUpdateEvent {
+                            server: server_name,
+                            status: McpStartupStatus::Failed { error: error_str },
+                        },
+                    )
+                    .await
+                    {
+                        warn!("failed to emit MCP failure update: {err:#}");
+                    }
+                }
+                Ok((server_name, StartupOutcome::Cancelled)) => {
+                    summary.cancelled.push(server_name.clone());
+                    if let Err(err) = emit_update(
+                        &tx_event,
+                        McpStartupUpdateEvent {
+                            server: server_name,
+                            status: McpStartupStatus::Cancelled,
+                        },
+                    )
+                    .await
+                    {
+                        warn!("failed to emit MCP cancellation update: {err:#}");
+                    }
+                }
+                Err(err) => {
+                    warn!("Task panic when starting MCP server: {err:#}");
+                }
             }
         }
 
@@ -643,6 +637,7 @@ enum StartupOutcome {
 fn build_startup_tasks(
     mcp_servers: HashMap<String, McpServerConfig>,
     store_mode: OAuthCredentialsStoreMode,
+    cancel_token: &CancellationToken,
 ) -> JoinSet<(String, StartupOutcome)> {
     let mut join_set = JoinSet::new();
 
@@ -654,6 +649,8 @@ fn build_startup_tasks(
         let startup_timeout = cfg.startup_timeout_sec.unwrap_or(DEFAULT_STARTUP_TIMEOUT);
         let tool_timeout = cfg.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT);
 
+        let startup_cancel = cancel_token.clone();
+
         join_set.spawn(async move {
             let outcome = start_server_task(
                 server_name.clone(),
@@ -661,7 +658,7 @@ fn build_startup_tasks(
                 store_mode,
                 startup_timeout,
                 tool_timeout,
-                None,
+                startup_cancel,
             )
             .await;
             (server_name, outcome)
@@ -677,10 +674,9 @@ async fn start_server_task(
     store_mode: OAuthCredentialsStoreMode,
     startup_timeout: Duration,
     tool_timeout: Duration,
-    cancel_token: Option<CancellationToken>,
+    cancel_token: CancellationToken,
 ) -> StartupOutcome {
-    let cancel = cancel_token.unwrap_or_default();
-    if cancel.is_cancelled() {
+    if cancel_token.is_cancelled() {
         return StartupOutcome::Cancelled;
     }
 
@@ -785,9 +781,9 @@ async fn start_server_task(
         StartupOutcome::Ready { managed }
     };
 
-    tokio::select! {
-        _ = cancel.cancelled() => StartupOutcome::Cancelled,
-        result = work_fut => result,
+    match work_fut.or_cancel(&cancel_token).await {
+        Ok(result) => result,
+        Err(CancelErr::Cancelled) => StartupOutcome::Cancelled,
     }
 }
 
