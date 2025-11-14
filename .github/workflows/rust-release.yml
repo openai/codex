@@ -100,6 +100,46 @@ jobs:
       - name: Cargo build
         run: cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy
 
+      - if: ${{ contains(matrix.target, 'linux') }}
+        name: Install cosign
+        uses: sigstore/cosign-installer@v3.5.0
+
+      - if: ${{ contains(matrix.target, 'linux') }}
+        name: Sign Linux binaries with cosign
+        shell: bash
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+          COSIGN_YES: "1"
+        run: |
+          set -euo pipefail
+
+          binaries=(codex codex-responses-api-proxy)
+          for binary in "${binaries[@]}"; do
+            source_path="target/${{ matrix.target }}/release/${binary}"
+            bundle_path="${source_path}.sigstore"
+
+            if [[ ! -f "$source_path" ]]; then
+              echo "Binary $source_path not found"
+              exit 1
+            fi
+
+            cosign sign-blob --yes --bundle "$bundle_path" "$source_path"
+          done
+
+      - if: ${{ contains(matrix.target, 'windows') }}
+        name: Sign Windows binaries with Azure Trusted Signing
+        uses: azure/trusted-signing-action@v0
+        with:
+          endpoint: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          code-signing-account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
+          app-registration-client-id: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID }}
+          app-registration-tenant-id: ${{ secrets.AZURE_TRUSTED_SIGNING_TENANT_ID }}
+          app-registration-client-secret: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_SECRET }}
+          files: |
+            ${{ github.workspace }}/codex-rs/target/${{ matrix.target }}/release/codex.exe
+            ${{ github.workspace }}/codex-rs/target/${{ matrix.target }}/release/codex-responses-api-proxy.exe
+
       - if: ${{ matrix.runner == 'macos-15-xlarge' }}
         name: Configure Apple code signing
         shell: bash
@@ -283,6 +323,11 @@ jobs:
             cp target/${{ matrix.target }}/release/codex-responses-api-proxy "$dest/codex-responses-api-proxy-${{ matrix.target }}"
           fi
 
+          if [[ "${{ matrix.target }}" == *linux* ]]; then
+            cp target/${{ matrix.target }}/release/codex.sigstore "$dest/codex-${{ matrix.target }}.sigstore"
+            cp target/${{ matrix.target }}/release/codex-responses-api-proxy.sigstore "$dest/codex-responses-api-proxy-${{ matrix.target }}.sigstore"
+          fi
+
       - if: ${{ matrix.runner == 'windows-11-arm' }}
         name: Install zstd
         shell: powershell
@@ -318,6 +363,11 @@ jobs:
             # Skip files that are already archives (shouldn't happen, but be
             # safe).
             if [[ "$base" == *.tar.gz || "$base" == *.zip ]]; then
+              continue
+            fi
+
+            # Don't try to compress signature bundles.
+            if [[ "$base" == *.sigstore ]]; then
               continue
             fi
 

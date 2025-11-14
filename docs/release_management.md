@@ -28,6 +28,19 @@ Running the publishing script will kick off a GitHub Action to build the release
 
 When the workflow finishes, the GitHub Release is "done," but you still have to consider npm and Homebrew.
 
+## Code signing
+
+All release artifacts are signed automatically inside the `rust-release` workflow:
+
+- **macOS** – Uses the existing Apple certificate + notarization flow.
+- **Linux** – Each binary is signed with [Sigstore cosign](https://github.com/sigstore/cosign). The release includes
+  `.sigstore` bundles (signature + certificate) for every Linux binary so downstream users can verify the build with
+  `cosign verify-blob --bundle <bundle> <binary>`.
+- **Windows** – Binaries are signed with [Azure Trusted Signing](https://learn.microsoft.com/en-us/azure/trusted-signing/).
+  The workflow requires the following repository secrets to be populated: `AZURE_TRUSTED_SIGNING_ENDPOINT`,
+  `AZURE_TRUSTED_SIGNING_ACCOUNT_NAME`, `AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE`,
+  `AZURE_TRUSTED_SIGNING_CLIENT_ID`, `AZURE_TRUSTED_SIGNING_CLIENT_SECRET`, and `AZURE_TRUSTED_SIGNING_TENANT_ID`.
+
 ## Publishing to npm
 
 The GitHub Action is responsible for publishing to npm.
