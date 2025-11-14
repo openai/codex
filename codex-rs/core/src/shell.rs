@@ -117,18 +117,22 @@ pub async fn default_user_shell() -> Shell {
         .await
         .map(|o| o.status.success())
         .unwrap_or(false);
-    let bash_exe = if Command::new("bash.exe")
-        .arg("--version")
-        .stdin(std::process::Stdio::null())
-        .output()
-        .await
-        .ok()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-    {
-        which::which("bash.exe").ok()
-    } else {
-        None
+    // Consistency: use which::which("bash.exe") to resolve a concrete path and
+    // validate that specific path with --version. This avoids discrepancies
+    // between the path used for detection vs the fallback path we return.
+    let bash_exe = match which::which("bash.exe") {
+        Ok(path) => {
+            let ok = Command::new(&path)
+                .arg("--version")
+                .stdin(std::process::Stdio::null())
+                .output()
+                .await
+                .ok()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            if ok { Some(path) } else { None }
+        }
+        Err(_) => None,
     };
 
     if has_pwsh {
@@ -450,6 +454,83 @@ mod tests_windows {
                 .map(|s| (*s).to_string())
                 .collect::<Vec<_>>();
             assert_eq!(command, expected, "input: {input:?} config: {config:?}");
+        }
+    }
+
+    #[test]
+    fn test_default_user_shell_prefers_path_bash_override() {
+        // Create a high-priority PATH entry that exposes a known bash.exe alias and
+        // ensure default_user_shell picks that path for its bash fallback.
+        let temp_dir = tempfile::tempdir().expect("create temp dir for bash alias");
+        let temp_bash = temp_dir.path().join("bash.exe");
+
+        let cmd_source = match which::which("cmd.exe") {
+            Ok(path) => path,
+            Err(err) => {
+                tracing::warn!("[test] skip: which('cmd.exe') failed: {err}");
+                return;
+            }
+        };
+        if !cmd_source.exists() {
+            tracing::warn!("[test] skip: cmd.exe missing at {cmd_source:?}");
+            return;
+        }
+        std::fs::copy(&cmd_source, &temp_bash).expect("copy cmd.exe into temp dir");
+
+        let mut path_value = std::ffi::OsString::new();
+        path_value.push(temp_dir.path());
+        if let Some(existing) = std::env::var_os("PATH") {
+            path_value.push(";");
+            path_value.push(existing);
+        }
+        let _guard = EnvVarGuard::set("PATH", path_value);
+
+        let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+        let shell = runtime.block_on(default_user_shell());
+        let expected_bash = temp_bash
+            .canonicalize()
+            .unwrap_or_else(|_| temp_bash.clone());
+
+        match shell {
+            Shell::PowerShell(config) => {
+                let fallback = config
+                    .bash_exe_fallback
+                    .expect("bash fallback should be present");
+                let resolved = std::fs::canonicalize(&fallback).unwrap_or(fallback);
+                assert_eq!(
+                    resolved, expected_bash,
+                    "default_user_shell should honor PATH override for bash.exe"
+                );
+            }
+            other => panic!("expected PowerShell config, got {other:?}"),
+        }
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: std::ffi::OsString) -> Self {
+            let original = std::env::var_os(key);
+            // SAFETY: tests run serially; mutating the process environment is controlled and restored.
+            unsafe {
+                std::env::set_var(key, &value);
+            }
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            // SAFETY: guard restores the previous environment state before other tests continue.
+            unsafe {
+                match &self.original {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
         }
     }
 }
