@@ -41,9 +41,9 @@ const TYPESCRIPT_SDK_ORIGINATOR = "codex_sdk_ts";
 
 export class CodexExec {
   private executablePath: string;
-  private envOverride?: NodeJS.ProcessEnv;
+  private envOverride?: Record<string, string>;
 
-  constructor(executablePath: string | null = null, env?: NodeJS.ProcessEnv) {
+  constructor(executablePath: string | null = null, env?: Record<string, string>) {
     this.executablePath = executablePath || findCodexPath();
     this.envOverride = env;
   }
