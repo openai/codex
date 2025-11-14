@@ -306,6 +306,9 @@ async fn unified_exec_respects_workdir_override() -> Result<()> {
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 
+    let requests = server.received_requests().await.expect("recorded requests");
+    assert!(!requests.is_empty(), "expected at least one POST request");
+
     Ok(())
 }
 
