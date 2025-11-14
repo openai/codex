@@ -20,6 +20,10 @@ pub enum ConfigShellToolType {
     Default,
     Local,
     UnifiedExec,
+    /// Do not include a shell tool by default. Useful when using Codex
+    /// with tools provided exclusively provided by MCP servers. Often used
+    /// with `--config base_instructions=CUSTOM_INSTRUCTIONS`
+    /// to customize agent behavior.
     Disabled,
 }
 
