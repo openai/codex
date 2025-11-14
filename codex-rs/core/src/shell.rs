@@ -291,7 +291,8 @@ mod tests {
         };
 
         assert!(
-            shell_path.ends_with(PathBuf::from("/bin/bash")),
+            shell_path == PathBuf::from("/bin/bash")
+                || shell_path == PathBuf::from("/usr/bin/bash"),
             "shell path: {shell_path:?}",
         );
     }
