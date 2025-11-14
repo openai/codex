@@ -257,10 +257,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::ShellCommandTool,
         key: "shell_command_tool",
         stage: Stage::Experimental,
-        #[cfg(not(target_os = "windows"))]
         default_enabled: false,
-        #[cfg(target_os = "windows")]
-        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::RmcpClient,
