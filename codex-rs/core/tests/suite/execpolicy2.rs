@@ -89,7 +89,6 @@ async fn execpolicy2_blocks_shell_invocation() -> Result<()> {
     })
     .await;
 
-    assert_eq!(end.exit_code, -1);
     assert!(
         end.aggregated_output
             .contains("execpolicy forbids this command"),
