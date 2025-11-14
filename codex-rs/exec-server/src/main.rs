@@ -414,7 +414,8 @@ impl EscalateArgs {
                 workdir: std::env::current_dir()?,
                 env: std::env::vars().collect(),
             })
-            .await?;
+            .await
+            .context("failed to send EscalateRequest")?;
         let (message, mut fds) = client.receive_with_fds::<EscalateServerMessage>().await?;
         let EscalateServerMessage::EscalateResponse(action) = message;
         match action {
@@ -438,7 +439,8 @@ impl EscalateArgs {
                         },
                         &fds_to_send,
                     )
-                    .await?;
+                    .await
+                    .context("failed to send SuperExecMessage")?;
                 let SuperExecResult { exit_code } =
                     super_exec_socket.receive::<SuperExecResult>().await?;
                 std::process::exit(exit_code);
