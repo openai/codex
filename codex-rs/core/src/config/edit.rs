@@ -230,7 +230,9 @@ impl ConfigDocument {
     fn apply(&mut self, edit: &ConfigEdit) -> anyhow::Result<bool> {
         match edit {
             ConfigEdit::SetModel { model, effort } => Ok({
-                (&model).map(|model| Tokenizer::warm_model_cache(&model));
+                if let Some(model) = &model {
+                    Tokenizer::warm_model_cache(model)
+                }
                 let mut mutated = false;
                 mutated |= self.write_profile_value(
                     &["model"],
