@@ -290,7 +290,10 @@ mod tests {
             _ => panic!("expected bash shell"),
         };
 
-        assert!(shell_path.ends_with(PathBuf::from("/bin/bash")));
+        assert!(
+            shell_path.ends_with(PathBuf::from("/bin/bash")),
+            "shell path: {shell_path:?}",
+        );
     }
 
     #[tokio::test]
