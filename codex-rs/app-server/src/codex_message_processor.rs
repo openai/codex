@@ -2724,6 +2724,7 @@ async fn apply_bespoke_event_handling(
         },
         EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
             call_id,
+            turn_id,
             command,
             cwd,
             reason,
@@ -2757,8 +2758,7 @@ async fn apply_bespoke_event_handling(
                 };
                 let params = CommandExecutionRequestApprovalParams {
                     thread_id: conversation_id.to_string(),
-                    // TODO: use the actual IDs once we have them
-                    turn_id: "placeholder_turn_id".to_string(),
+                    turn_id: turn_id.clone(),
                     // TODO: Until we migrate the core to be aware of a first class CommandExecutionItem
                     // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
                     item_id: call_id.clone(),
