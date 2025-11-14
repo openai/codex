@@ -16,18 +16,20 @@ use std::os::fd::RawFd;
 use tokio::io::Interest;
 use tokio::io::unix::AsyncFd;
 
-const MAX_MESSAGE_SIZE: usize = 64 * 1024;
 const MAX_FDS_PER_MESSAGE: usize = 16;
-
-#[derive(Debug)]
-struct ReceivedMessage {
-    data: Vec<u8>,
-    #[allow(dead_code)]
-    fds: Vec<OwnedFd>,
-}
+const LENGTH_PREFIX_SIZE: usize = size_of::<u32>();
 
 fn assume_init(buf: &[MaybeUninit<u8>]) -> &[u8] {
     unsafe { std::slice::from_raw_parts(buf.as_ptr().cast(), buf.len()) }
+}
+fn assume_init_vec(mut buf: Vec<MaybeUninit<u8>>) -> Vec<u8> {
+    unsafe {
+        let ptr = buf.as_mut_ptr() as *mut u8;
+        let len = buf.len();
+        let cap = buf.capacity();
+        std::mem::forget(buf);
+        Vec::from_raw_parts(ptr, len, cap)
+    }
 }
 fn control_space_for_fds(count: usize) -> usize {
     unsafe { libc::CMSG_SPACE((count * size_of::<RawFd>()) as _) as usize }
@@ -62,28 +64,89 @@ fn extract_fds(control: &mut [MaybeUninit<u8>], len: usize) -> std::io::Result<V
     Ok(fds)
 }
 
-fn receive_message(socket: &Socket) -> std::io::Result<ReceivedMessage> {
-    let mut data = [MaybeUninit::<u8>::uninit(); MAX_MESSAGE_SIZE];
+async fn read_frame_header(
+    async_socket: &AsyncFd<Socket>,
+) -> std::io::Result<(usize, Vec<OwnedFd>)> {
+    let mut header = [MaybeUninit::<u8>::uninit(); LENGTH_PREFIX_SIZE];
+    let mut filled = 0;
     let mut control = vec![MaybeUninit::<u8>::uninit(); control_space_for_fds(MAX_FDS_PER_MESSAGE)];
-    let (received, control_len) = {
-        let mut bufs = [MaybeUninitSlice::new(&mut data)];
-        let mut msg = MsgHdrMut::new()
-            .with_buffers(&mut bufs)
-            .with_control(&mut control);
-        let received = socket.recvmsg(&mut msg, 0)?;
-        (received, msg.control_len())
-    };
+    let mut control_len = 0usize;
+    let mut captured_control = false;
 
-    let message = assume_init(&data[..received]).to_vec();
-    let fds = extract_fds(&mut control, control_len)?;
-    Ok(ReceivedMessage { data: message, fds })
+    while filled < LENGTH_PREFIX_SIZE {
+        let mut guard = async_socket.readable().await?;
+        let result = if !captured_control {
+            guard.try_io(|inner| {
+                let mut bufs = [MaybeUninitSlice::new(&mut header[filled..])];
+                let mut msg = MsgHdrMut::new()
+                    .with_buffers(&mut bufs)
+                    .with_control(&mut control);
+                let read = inner.get_ref().recvmsg(&mut msg, 0)?;
+                control_len = msg.control_len();
+                captured_control = true;
+                Ok(read)
+            })
+        } else {
+            guard.try_io(|inner| inner.get_ref().recv(&mut header[filled..]))
+        };
+
+        match result {
+            Ok(Ok(0)) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "socket closed while receiving frame header",
+                ));
+            }
+            Ok(Ok(n)) => {
+                filled += n;
+                assert!(filled <= LENGTH_PREFIX_SIZE);
+                if filled == LENGTH_PREFIX_SIZE {
+                    #[allow(clippy::expect_used)]
+                    let len_bytes: [u8; LENGTH_PREFIX_SIZE] = assume_init(&header)
+                        .try_into()
+                        .expect("length prefix size mismatch");
+                    let payload_len = u32::from_le_bytes(len_bytes) as usize;
+                    let fds = extract_fds(&mut control, control_len)?;
+                    return Ok((payload_len, fds));
+                }
+            }
+            Ok(Err(err)) => return Err(err),
+            Err(_would_block) => continue,
+        }
+    }
+    unreachable!("header loop always returns")
 }
-pub(crate) fn receive_json_message<T: for<'de> Deserialize<'de>>(
-    socket: &Socket,
-) -> std::io::Result<(T, Vec<OwnedFd>)> {
-    let ReceivedMessage { data, fds } = receive_message(socket)?;
-    let message: T = serde_json::from_slice(&data)?;
-    Ok((message, fds))
+
+async fn read_frame_payload(
+    async_socket: &AsyncFd<Socket>,
+    message_len: usize,
+) -> std::io::Result<Vec<u8>> {
+    if message_len == 0 {
+        return Ok(Vec::new());
+    }
+    let mut payload = vec![MaybeUninit::<u8>::uninit(); message_len];
+    let mut filled = 0;
+    while filled < message_len {
+        let mut guard = async_socket.readable().await?;
+        match guard.try_io(|inner| inner.get_ref().recv(&mut payload[filled..])) {
+            Ok(Ok(0)) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "socket closed while receiving frame payload",
+                ));
+            }
+            Ok(Ok(n)) => {
+                filled += n;
+                assert!(filled <= message_len);
+                if filled == message_len {
+                    return Ok(assume_init_vec(payload));
+                }
+            }
+            Ok(Err(err)) => return Err(err),
+            Err(_would_block) => continue,
+        }
+    }
+    unreachable!("loop exits only after returning payload")
 }
 fn send_message_bytes(socket: &Socket, data: &[u8], fds: &[OwnedFd]) -> std::io::Result<()> {
     if fds.len() > MAX_FDS_PER_MESSAGE {
@@ -92,6 +155,10 @@ fn send_message_bytes(socket: &Socket, data: &[u8], fds: &[OwnedFd]) -> std::io:
             format!("too many fds: {}", fds.len()),
         ));
     }
+    let mut frame = Vec::with_capacity(LENGTH_PREFIX_SIZE + data.len());
+    frame.extend_from_slice(&encode_length(data.len())?);
+    frame.extend_from_slice(data);
+
     let mut control = vec![0u8; control_space_for_fds(fds.len())];
     unsafe {
         let cmsg = control.as_mut_ptr().cast::<libc::cmsghdr>();
@@ -104,10 +171,30 @@ fn send_message_bytes(socket: &Socket, data: &[u8], fds: &[OwnedFd]) -> std::io:
         }
     }
 
-    let payload = [IoSlice::new(data)];
+    let payload = [IoSlice::new(&frame)];
     let msg = MsgHdr::new().with_buffers(&payload).with_control(&control);
-    socket.sendmsg(&msg, 0)?;
+    let mut sent = socket.sendmsg(&msg, 0)?;
+    while sent < frame.len() {
+        let bytes = socket.send(&frame[sent..])?;
+        if bytes == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WriteZero,
+                "socket closed while sending frame payload",
+            ));
+        }
+        sent += bytes;
+    }
     Ok(())
+}
+
+fn encode_length(len: usize) -> std::io::Result<[u8; LENGTH_PREFIX_SIZE]> {
+    let len_u32 = u32::try_from(len).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("message too large: {len}"),
+        )
+    })?;
+    Ok(len_u32.to_le_bytes())
 }
 
 pub(crate) fn send_json_message<T: Serialize>(
@@ -141,7 +228,7 @@ impl AsyncSocket {
     }
 
     pub fn pair() -> std::io::Result<(AsyncSocket, AsyncSocket)> {
-        let (server, client) = Socket::pair(Domain::UNIX, Type::DGRAM, None)?;
+        let (server, client) = Socket::pair(Domain::UNIX, Type::STREAM, None)?;
         Ok((AsyncSocket::new(server)?, AsyncSocket::new(client)?))
     }
 
@@ -160,9 +247,10 @@ impl AsyncSocket {
     pub async fn receive_with_fds<T: for<'de> Deserialize<'de>>(
         &self,
     ) -> std::io::Result<(T, Vec<OwnedFd>)> {
-        self.inner
-            .async_io(Interest::READABLE, |socket| receive_json_message(socket))
-            .await
+        let (message_len, fds) = read_frame_header(&self.inner).await?;
+        let payload = read_frame_payload(&self.inner, message_len).await?;
+        let message: T = serde_json::from_slice(&payload)?;
+        Ok((message, fds))
     }
 
     pub async fn send<T>(&self, msg: T) -> std::io::Result<()>
