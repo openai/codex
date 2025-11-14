@@ -27,7 +27,6 @@ mod compact;
 mod compact_resume_fork;
 mod deprecation_notice;
 mod exec;
-#[cfg(not(target_os = "windows"))]
 mod execpolicy2;
 mod fork_conversation;
 mod grep_files;
