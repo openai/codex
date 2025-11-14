@@ -10,6 +10,9 @@ use codex_app_server_protocol::ExecCommandApprovalResponse;
 use codex_app_server_protocol::InterruptConversationResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
+use codex_app_server_protocol::McpToolCallError;
+use codex_app_server_protocol::McpToolCallResult;
+use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
 use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
 use codex_app_server_protocol::ReasoningTextDeltaNotification;
@@ -22,6 +25,8 @@ use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
+use codex_core::protocol::McpToolCallBeginEvent;
+use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
 use codex_protocol::ConversationId;
@@ -61,64 +66,15 @@ pub(crate) async fn apply_bespoke_event_handling(
                 on_patch_approval_response(event_id, rx, conversation).await;
             });
         }
+        // TODO(celia): properly construct McpToolCall TurnItem in core.
         EventMsg::McpToolCallBegin(begin_event) => {
-            let item = ThreadItem::McpToolCall {
-                id: begin_event.call_id,
-                server: begin_event.invocation.server,
-                tool: begin_event.invocation.tool,
-                status: codex_app_server_protocol::McpToolCallStatus::InProgress,
-                arguments: begin_event
-                    .invocation
-                    .arguments
-                    .unwrap_or(serde_json::Value::Null),
-                result: None,
-                error: None,
-            };
-            let notification = ItemStartedNotification { item };
+            let notification = construct_mcp_tool_call_notification(begin_event).await;
             outgoing
                 .send_server_notification(ServerNotification::ItemStarted(notification))
                 .await;
         }
         EventMsg::McpToolCallEnd(end_event) => {
-            let status = if end_event.is_success() {
-                codex_app_server_protocol::McpToolCallStatus::Completed
-            } else {
-                codex_app_server_protocol::McpToolCallStatus::Failed
-            };
-
-            let (result, error) = match &end_event.result {
-                Ok(value) => (
-                    Some(codex_app_server_protocol::McpToolCallResult {
-                        content: value.content.clone(),
-                        structured_content: value
-                            .structured_content
-                            .clone()
-                            .unwrap_or(serde_json::Value::Null),
-                    }),
-                    None,
-                ),
-                Err(message) => (
-                    None,
-                    Some(codex_app_server_protocol::McpToolCallError {
-                        message: message.clone(),
-                    }),
-                ),
-            };
-
-            let item = ThreadItem::McpToolCall {
-                id: end_event.call_id,
-                server: end_event.invocation.server,
-                tool: end_event.invocation.tool,
-                status,
-                arguments: end_event
-                    .invocation
-                    .arguments
-                    .clone()
-                    .unwrap_or(serde_json::Value::Null),
-                result,
-                error,
-            };
-            let notification = ItemCompletedNotification { item };
+            let notification = construct_mcp_tool_call_end_notification(end_event).await;
             outgoing
                 .send_server_notification(ServerNotification::ItemCompleted(notification))
                 .await;
@@ -320,4 +276,67 @@ async fn on_exec_approval_response(
     {
         error!("failed to submit ExecApproval: {err}");
     }
+}
+
+/// similar to handle_mcp_tool_call_begin in exec
+async fn construct_mcp_tool_call_notification(
+    begin_event: McpToolCallBeginEvent,
+) -> ItemStartedNotification {
+    let item = ThreadItem::McpToolCall {
+        id: begin_event.call_id,
+        server: begin_event.invocation.server,
+        tool: begin_event.invocation.tool,
+        status: McpToolCallStatus::InProgress,
+        arguments: begin_event
+            .invocation
+            .arguments
+            .unwrap_or(JsonRpcResult::Null),
+        result: None,
+        error: None,
+    };
+    ItemStartedNotification { item }
+}
+
+/// simiilar to handle_mcp_tool_call_end in exec
+async fn construct_mcp_tool_call_end_notification(
+    end_event: McpToolCallEndEvent,
+) -> ItemCompletedNotification {
+    let status = if end_event.is_success() {
+        McpToolCallStatus::Completed
+    } else {
+        McpToolCallStatus::Failed
+    };
+
+    let (result, error) = match &end_event.result {
+        Ok(value) => (
+            Some(McpToolCallResult {
+                content: value.content.clone(),
+                structured_content: value
+                    .structured_content
+                    .clone()
+                    .unwrap_or(JsonRpcResult::Null),
+            }),
+            None,
+        ),
+        Err(message) => (
+            None,
+            Some(McpToolCallError {
+                message: message.clone(),
+            }),
+        ),
+    };
+
+    let item = ThreadItem::McpToolCall {
+        id: end_event.call_id,
+        server: end_event.invocation.server,
+        tool: end_event.invocation.tool,
+        status,
+        arguments: end_event
+            .invocation
+            .arguments
+            .unwrap_or(JsonRpcResult::Null),
+        result,
+        error,
+    };
+    ItemCompletedNotification { item }
 }
