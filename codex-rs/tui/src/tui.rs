@@ -37,6 +37,7 @@ use tokio_stream::Stream;
 
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
+use crate::notifications::PostNotification;
 #[cfg(unix)]
 use crate::tui::job_control::SUSPEND_KEY;
 #[cfg(unix)]

@@ -30,7 +30,7 @@ fn post_macos_notification(_: &str) -> bool {
 
 /// Command that emits an OSC 9 desktop notification with a message.
 #[derive(Debug, Clone)]
-struct PostNotification(pub String);
+pub struct PostNotification(pub String);
 
 impl Command for PostNotification {
     fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
