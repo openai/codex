@@ -43,6 +43,7 @@ use crate::error::CodexErr;
 use crate::error::ConnectionFailedError;
 use crate::error::ResponseStreamFailed;
 use crate::error::Result;
+use crate::error::RetryLimitReachedError;
 use crate::error::UnexpectedResponseError;
 use crate::error::UsageLimitReachedError;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
@@ -570,11 +571,13 @@ impl StreamAttemptError {
             StreamAttemptError::Fatal(e) => e,
             StreamAttemptError::RetryableHttpError {
                 status, request_id, ..
-            } => CodexErr::UnexpectedStatus(UnexpectedResponseError {
-                status,
-                body: String::new(),
-                request_id,
-            }),
+            } => {
+                if status == StatusCode::INTERNAL_SERVER_ERROR {
+                    CodexErr::InternalServerError
+                } else {
+                    CodexErr::RetryLimit(RetryLimitReachedError { status, request_id })
+                }
+            }
             StreamAttemptError::RetryableTransportError(e) => e,
         }
     }
