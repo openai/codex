@@ -10,6 +10,7 @@ use tokio::sync::mpsc::unbounded_channel;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::history_cell;
 
 /// Spawn the agent bootstrapper and op forwarding loop, returning the
 /// `UnboundedSender<Op>` used by the UI to submit operations.
@@ -29,8 +30,12 @@ pub(crate) fn spawn_agent(
         } = match server.new_conversation(config).await {
             Ok(v) => v,
             Err(e) => {
-                // TODO: surface this error to the user.
-                tracing::error!("failed to initialize codex: {e}");
+                let message =
+                    format!("Failed to initialize Codex: {e}");
+                tracing::error!("{message}");
+                app_event_tx_clone.send(AppEvent::InsertHistoryCell(Box::new(
+                    history_cell::new_error_event(message),
+                )));
                 return;
             }
         };

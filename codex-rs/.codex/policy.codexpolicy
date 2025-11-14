@@ -1,0 +1,13 @@
+# Execpolicy v2 smoke-test policy
+prefix_rule(
+    pattern = ["echo", ["a", "b"]],
+    decision = "allow",
+    match = ["echo c"],
+    not_match = ["echo-policy-allowed"],
+)
+
+prefix_rule(
+    pattern = ["echo", "c"],
+    decision = "forbidden",
+    match = ["echo c"],
+)
