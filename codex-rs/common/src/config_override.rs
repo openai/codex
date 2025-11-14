@@ -152,6 +152,15 @@ mod tests {
     }
 
     #[test]
+    fn parses_bool() {
+        let true_literal = parse_toml_value("true").expect("parse");
+        assert_eq!(true_literal.as_bool(), Some(true));
+
+        let false_literal = parse_toml_value("false").expect("parse");
+        assert_eq!(false_literal.as_bool(), Some(false));
+    }
+
+    #[test]
     fn fails_on_unquoted_string() {
         assert!(parse_toml_value("hello").is_err());
     }
