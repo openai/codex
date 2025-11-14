@@ -542,6 +542,7 @@ fn exec_approval_emits_proposed_command_and_decision_history() {
     // Trigger an exec approval request with a short, single-line command
     let ev = ExecApprovalRequestEvent {
         call_id: "call-short".into(),
+        turn_id: "turn-short".into(),
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: Some(
@@ -585,6 +586,7 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
     // Multiline command: modal should show full command, history records decision only
     let ev_multi = ExecApprovalRequestEvent {
         call_id: "call-multi".into(),
+        turn_id: "turn-multi".into(),
         command: vec!["bash".into(), "-lc".into(), "echo line1\necho line2".into()],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: Some(
@@ -636,6 +638,7 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
     let long = format!("echo {}", "a".repeat(200));
     let ev_long = ExecApprovalRequestEvent {
         call_id: "call-long".into(),
+        turn_id: "turn-long".into(),
         command: vec!["bash".into(), "-lc".into(), long],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: None,
@@ -667,38 +670,64 @@ fn begin_exec_with_source(
     call_id: &str,
     raw_cmd: &str,
     source: ExecCommandSource,
-) {
+) -> ExecCommandBeginEvent {
     // Build the full command vec and parse it using core's parser,
     // then convert to protocol variants for the event payload.
     let command = vec!["bash".to_string(), "-lc".to_string(), raw_cmd.to_string()];
     let parsed_cmd: Vec<ParsedCommand> = codex_core::parse_command::parse_command(&command);
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let interaction_input = None;
+    let event = ExecCommandBeginEvent {
+        call_id: call_id.to_string(),
+        turn_id: "turn-1".to_string(),
+        command,
+        cwd,
+        parsed_cmd,
+        source,
+        interaction_input,
+    };
     chat.handle_codex_event(Event {
         id: call_id.to_string(),
-        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
-            call_id: call_id.to_string(),
-            command,
-            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            parsed_cmd,
-            source,
-            interaction_input: None,
-        }),
+        msg: EventMsg::ExecCommandBegin(event.clone()),
     });
+    event
 }
 
-fn begin_exec(chat: &mut ChatWidget, call_id: &str, raw_cmd: &str) {
-    begin_exec_with_source(chat, call_id, raw_cmd, ExecCommandSource::Agent);
+fn begin_exec(chat: &mut ChatWidget, call_id: &str, raw_cmd: &str) -> ExecCommandBeginEvent {
+    begin_exec_with_source(chat, call_id, raw_cmd, ExecCommandSource::Agent)
 }
 
-fn end_exec(chat: &mut ChatWidget, call_id: &str, stdout: &str, stderr: &str, exit_code: i32) {
+fn end_exec(
+    chat: &mut ChatWidget,
+    begin_event: ExecCommandBeginEvent,
+    stdout: &str,
+    stderr: &str,
+    exit_code: i32,
+) {
     let aggregated = if stderr.is_empty() {
         stdout.to_string()
     } else {
         format!("{stdout}{stderr}")
     };
+    let ExecCommandBeginEvent {
+        call_id,
+        turn_id,
+        command,
+        cwd,
+        parsed_cmd,
+        source,
+        interaction_input,
+    } = begin_event;
     chat.handle_codex_event(Event {
-        id: call_id.to_string(),
+        id: call_id.clone(),
         msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
-            call_id: call_id.to_string(),
+            call_id,
+            turn_id,
+            command,
+            cwd,
+            parsed_cmd,
+            source,
+            interaction_input,
             stdout: stdout.to_string(),
             stderr: stderr.to_string(),
             aggregated_output: aggregated.clone(),
@@ -896,13 +925,13 @@ fn exec_history_cell_shows_working_then_completed() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
     // Begin command
-    begin_exec(&mut chat, "call-1", "echo done");
+    let begin = begin_exec(&mut chat, "call-1", "echo done");
 
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 0, "no exec cell should have been flushed yet");
 
     // End command successfully
-    end_exec(&mut chat, "call-1", "done", "", 0);
+    end_exec(&mut chat, begin, "done", "", 0);
 
     let cells = drain_insert_history(&mut rx);
     // Exec end now finalizes and flushes the exec cell immediately.
@@ -926,12 +955,12 @@ fn exec_history_cell_shows_working_then_failed() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
     // Begin command
-    begin_exec(&mut chat, "call-2", "false");
+    let begin = begin_exec(&mut chat, "call-2", "false");
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 0, "no exec cell should have been flushed yet");
 
     // End command with failure
-    end_exec(&mut chat, "call-2", "", "Bloop", 2);
+    end_exec(&mut chat, begin, "", "Bloop", 2);
 
     let cells = drain_insert_history(&mut rx);
     // Exec end with failure should also flush immediately.
@@ -949,7 +978,7 @@ fn exec_history_cell_shows_working_then_failed() {
 fn exec_history_shows_unified_exec_startup_commands() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
-    begin_exec_with_source(
+    let begin = begin_exec_with_source(
         &mut chat,
         "call-startup",
         "echo unified exec startup",
@@ -960,13 +989,7 @@ fn exec_history_shows_unified_exec_startup_commands() {
         "exec begin should not flush until completion"
     );
 
-    end_exec(
-        &mut chat,
-        "call-startup",
-        "echo unified exec startup\n",
-        "",
-        0,
-    );
+    end_exec(&mut chat, begin, "echo unified exec startup\n", "", 0);
 
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1, "expected finalized exec cell to flush");
@@ -1681,29 +1704,29 @@ fn exec_history_extends_previous_when_consecutive() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
     // 1) Start "ls -la" (List)
-    begin_exec(&mut chat, "call-ls", "ls -la");
+    let begin_ls = begin_exec(&mut chat, "call-ls", "ls -la");
     assert_snapshot!("exploring_step1_start_ls", active_blob(&chat));
 
     // 2) Finish "ls -la"
-    end_exec(&mut chat, "call-ls", "", "", 0);
+    end_exec(&mut chat, begin_ls, "", "", 0);
     assert_snapshot!("exploring_step2_finish_ls", active_blob(&chat));
 
     // 3) Start "cat foo.txt" (Read)
-    begin_exec(&mut chat, "call-cat-foo", "cat foo.txt");
+    let begin_cat_foo = begin_exec(&mut chat, "call-cat-foo", "cat foo.txt");
     assert_snapshot!("exploring_step3_start_cat_foo", active_blob(&chat));
 
     // 4) Complete "cat foo.txt"
-    end_exec(&mut chat, "call-cat-foo", "hello from foo", "", 0);
+    end_exec(&mut chat, begin_cat_foo, "hello from foo", "", 0);
     assert_snapshot!("exploring_step4_finish_cat_foo", active_blob(&chat));
 
     // 5) Start & complete "sed -n 100,200p foo.txt" (treated as Read of foo.txt)
-    begin_exec(&mut chat, "call-sed-range", "sed -n 100,200p foo.txt");
-    end_exec(&mut chat, "call-sed-range", "chunk", "", 0);
+    let begin_sed_range = begin_exec(&mut chat, "call-sed-range", "sed -n 100,200p foo.txt");
+    end_exec(&mut chat, begin_sed_range, "chunk", "", 0);
     assert_snapshot!("exploring_step5_finish_sed_range", active_blob(&chat));
 
     // 6) Start & complete "cat bar.txt"
-    begin_exec(&mut chat, "call-cat-bar", "cat bar.txt");
-    end_exec(&mut chat, "call-cat-bar", "hello from bar", "", 0);
+    let begin_cat_bar = begin_exec(&mut chat, "call-cat-bar", "cat bar.txt");
+    end_exec(&mut chat, begin_cat_bar, "hello from bar", "", 0);
     assert_snapshot!("exploring_step6_finish_cat_bar", active_blob(&chat));
 }
 
@@ -1785,6 +1808,7 @@ async fn binary_size_transcript_snapshot() {
                                 id: ev.id,
                                 msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                                     call_id: e.call_id.clone(),
+                                    turn_id: e.turn_id,
                                     command: e.command,
                                     cwd: e.cwd,
                                     parsed_cmd,
@@ -1901,6 +1925,7 @@ fn approval_modal_exec_snapshot() {
     // Inject an exec approval request to display the approval modal.
     let ev = ExecApprovalRequestEvent {
         call_id: "call-approve-cmd".into(),
+        turn_id: "turn-approve-cmd".into(),
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: Some(
@@ -1948,6 +1973,7 @@ fn approval_modal_exec_without_reason_snapshot() {
 
     let ev = ExecApprovalRequestEvent {
         call_id: "call-approve-cmd-noreason".into(),
+        turn_id: "turn-approve-cmd-noreason".into(),
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: None,
@@ -2157,6 +2183,7 @@ fn status_widget_and_approval_modal_snapshot() {
     // Now show an approval modal (e.g. exec approval).
     let ev = ExecApprovalRequestEvent {
         call_id: "call-approve-exec".into(),
+        turn_id: "turn-approve-exec".into(),
         command: vec!["echo".into(), "hello world".into()],
         cwd: PathBuf::from("/tmp"),
         reason: Some(
@@ -2858,24 +2885,28 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
         msg: EventMsg::AgentMessage(AgentMessageEvent { message: "I’m going to search the repo for where “Change Approved” is rendered to update that view.".into() }),
     });
 
+    let command = vec!["bash".into(), "-lc".into(), "rg \"Change Approved\"".into()];
+    let parsed_cmd = vec![
+        ParsedCommand::Search {
+            query: Some("Change Approved".into()),
+            path: None,
+            cmd: "rg \"Change Approved\"".into(),
+        },
+        ParsedCommand::Read {
+            name: "diff_render.rs".into(),
+            cmd: "cat diff_render.rs".into(),
+            path: "diff_render.rs".into(),
+        },
+    ];
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     chat.handle_codex_event(Event {
         id: "c1".into(),
         msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
             call_id: "c1".into(),
-            command: vec!["bash".into(), "-lc".into(), "rg \"Change Approved\"".into()],
-            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            parsed_cmd: vec![
-                ParsedCommand::Search {
-                    query: Some("Change Approved".into()),
-                    path: None,
-                    cmd: "rg \"Change Approved\"".into(),
-                },
-                ParsedCommand::Read {
-                    name: "diff_render.rs".into(),
-                    cmd: "cat diff_render.rs".into(),
-                    path: "diff_render.rs".into(),
-                },
-            ],
+            turn_id: "turn-1".into(),
+            command: command.clone(),
+            cwd: cwd.clone(),
+            parsed_cmd: parsed_cmd.clone(),
             source: ExecCommandSource::Agent,
             interaction_input: None,
         }),
@@ -2884,6 +2915,12 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
         id: "c1".into(),
         msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: "c1".into(),
+            turn_id: "turn-1".into(),
+            command,
+            cwd,
+            parsed_cmd,
+            source: ExecCommandSource::Agent,
+            interaction_input: None,
             stdout: String::new(),
             stderr: String::new(),
             aggregated_output: String::new(),

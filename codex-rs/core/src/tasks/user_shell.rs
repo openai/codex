@@ -65,22 +65,24 @@ impl SessionTask for UserShellCommandTask {
         // allows commands that use shell features (pipes, &&, redirects, etc.).
         // We do not source rc files or otherwise reformat the script.
         let use_login_shell = true;
-        let shell_invocation = session
+        let command = session
             .user_shell()
             .derive_exec_args(&self.command, use_login_shell);
 
         let call_id = Uuid::new_v4().to_string();
         let raw_command = self.command.clone();
+        let cwd = turn_context.cwd.clone();
 
-        let parsed_cmd = parse_command(&shell_invocation);
+        let parsed_cmd = parse_command(&command);
         session
             .send_event(
                 turn_context.as_ref(),
                 EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                     call_id: call_id.clone(),
-                    command: shell_invocation.clone(),
-                    cwd: turn_context.cwd.clone(),
-                    parsed_cmd,
+                    turn_id: turn_context.sub_id.clone(),
+                    command: command.clone(),
+                    cwd: cwd.clone(),
+                    parsed_cmd: parsed_cmd.clone(),
                     source: ExecCommandSource::UserShell,
                     interaction_input: None,
                 }),
@@ -88,8 +90,8 @@ impl SessionTask for UserShellCommandTask {
             .await;
 
         let exec_env = ExecEnv {
-            command: shell_invocation,
-            cwd: turn_context.cwd.clone(),
+            command: command.clone(),
+            cwd: cwd.clone(),
             env: create_env(&turn_context.shell_environment_policy),
             timeout_ms: None,
             sandbox: SandboxType::None,
@@ -129,6 +131,12 @@ impl SessionTask for UserShellCommandTask {
                         turn_context.as_ref(),
                         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                             call_id,
+                            turn_id: turn_context.sub_id.clone(),
+                            command: command.clone(),
+                            cwd: cwd.clone(),
+                            parsed_cmd: parsed_cmd.clone(),
+                            source: ExecCommandSource::UserShell,
+                            interaction_input: None,
                             stdout: String::new(),
                             stderr: aborted_message.clone(),
                             aggregated_output: aborted_message.clone(),
@@ -145,6 +153,12 @@ impl SessionTask for UserShellCommandTask {
                         turn_context.as_ref(),
                         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                             call_id: call_id.clone(),
+                            turn_id: turn_context.sub_id.clone(),
+                            command: command.clone(),
+                            cwd: cwd.clone(),
+                            parsed_cmd: parsed_cmd.clone(),
+                            source: ExecCommandSource::UserShell,
+                            interaction_input: None,
                             stdout: output.stdout.text.clone(),
                             stderr: output.stderr.text.clone(),
                             aggregated_output: output.aggregated_output.text.clone(),
@@ -176,6 +190,12 @@ impl SessionTask for UserShellCommandTask {
                         turn_context.as_ref(),
                         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                             call_id,
+                            turn_id: turn_context.sub_id.clone(),
+                            command,
+                            cwd,
+                            parsed_cmd,
+                            source: ExecCommandSource::UserShell,
+                            interaction_input: None,
                             stdout: exec_output.stdout.text.clone(),
                             stderr: exec_output.stderr.text.clone(),
                             aggregated_output: exec_output.aggregated_output.text.clone(),

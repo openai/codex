@@ -1245,7 +1245,7 @@ impl CodexMessageProcessor {
                 // Auto-attach a conversation listener when starting a thread.
                 // Use the same behavior as the v1 API with experimental_raw_events=false.
                 if let Err(err) = self
-                    .attach_conversation_listener(conversation_id, false)
+                    .attach_conversation_listener(conversation_id, false, ApiVersion::V2)
                     .await
                 {
                     tracing::warn!(
@@ -1523,7 +1523,7 @@ impl CodexMessageProcessor {
             }) => {
                 // Auto-attach a conversation listener when resuming a thread.
                 if let Err(err) = self
-                    .attach_conversation_listener(conversation_id, false)
+                    .attach_conversation_listener(conversation_id, false, ApiVersion::V2)
                     .await
                 {
                     tracing::warn!(
@@ -2376,7 +2376,7 @@ impl CodexMessageProcessor {
             experimental_raw_events,
         } = params;
         match self
-            .attach_conversation_listener(conversation_id, experimental_raw_events)
+            .attach_conversation_listener(conversation_id, experimental_raw_events, ApiVersion::V1)
             .await
         {
             Ok(subscription_id) => {
@@ -2417,6 +2417,7 @@ impl CodexMessageProcessor {
         &mut self,
         conversation_id: ConversationId,
         experimental_raw_events: bool,
+        api_version: ApiVersion,
     ) -> Result<Uuid, JSONRPCErrorError> {
         let conversation = match self
             .conversation_manager
@@ -2440,6 +2441,7 @@ impl CodexMessageProcessor {
 
         let outgoing_for_task = self.outgoing.clone();
         let pending_interrupts = self.pending_interrupts.clone();
+        let api_version_for_task = api_version;
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -2495,6 +2497,7 @@ impl CodexMessageProcessor {
                             conversation.clone(),
                             outgoing_for_task.clone(),
                             pending_interrupts.clone(),
+                            api_version_for_task,
                         )
                         .await;
                     }
