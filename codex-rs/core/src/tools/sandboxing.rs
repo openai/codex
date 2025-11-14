@@ -112,7 +112,7 @@ pub(crate) trait Approvable<Req> {
         }
         matches!(policy, AskForApproval::Never)
     }
-    
+
     /// Decide whether an initial user approval should be requested or forbidden before the
     /// first attempt. Defaults to the orchestrator's behavior (pre‑refactor):
     /// - Never, OnFailure: do not ask
