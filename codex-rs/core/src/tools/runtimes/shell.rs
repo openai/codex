@@ -6,11 +6,13 @@ builds a CommandSpec, and runs it under the current SandboxAttempt.
 */
 use crate::command_safety::is_dangerous_command::requires_initial_appoval;
 use crate::exec::ExecToolCallOutput;
+use crate::exec_policy::evaluate_with_policy;
 use crate::protocol::SandboxPolicy;
 use crate::sandboxing::execute_env;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
+use crate::tools::sandboxing::ApprovalRequirement;
 use crate::tools::sandboxing::ProvidesSandboxRetryData;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::SandboxRetryData;
@@ -20,10 +22,12 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
+use codex_execpolicy2::Policy as ExecPolicyV2;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub struct ShellRequest {
@@ -33,6 +37,7 @@ pub struct ShellRequest {
     pub env: std::collections::HashMap<String, String>,
     pub with_escalated_permissions: Option<bool>,
     pub justification: Option<String>,
+    pub exec_policy: Option<Arc<ExecPolicyV2>>,
 }
 
 impl ProvidesSandboxRetryData for ShellRequest {
@@ -65,6 +70,24 @@ impl ShellRuntime {
             call_id: ctx.call_id.clone(),
             tx_event: ctx.session.get_tx_event(),
         })
+    }
+
+    fn base_approval_requirement(
+        &self,
+        req: &ShellRequest,
+        policy: AskForApproval,
+        sandbox_policy: &SandboxPolicy,
+    ) -> ApprovalRequirement {
+        if requires_initial_appoval(
+            policy,
+            sandbox_policy,
+            &req.command,
+            req.with_escalated_permissions.unwrap_or(false),
+        ) {
+            ApprovalRequirement::NeedsApproval { reason: None }
+        } else {
+            ApprovalRequirement::Skip
+        }
     }
 }
 
@@ -114,18 +137,19 @@ impl Approvable<ShellRequest> for ShellRuntime {
         })
     }
 
-    fn wants_initial_approval(
+    fn approval_requirement(
         &self,
         req: &ShellRequest,
         policy: AskForApproval,
         sandbox_policy: &SandboxPolicy,
-    ) -> bool {
-        requires_initial_appoval(
-            policy,
-            sandbox_policy,
-            &req.command,
-            req.with_escalated_permissions.unwrap_or(false),
-        )
+    ) -> ApprovalRequirement {
+        if let Some(exec_policy) = &req.exec_policy
+            && let Some(requirement) = evaluate_with_policy(exec_policy, &req.command, policy)
+        {
+            return requirement;
+        }
+
+        self.base_approval_requirement(req, policy, sandbox_policy)
     }
 
     fn wants_escalated_first_attempt(&self, req: &ShellRequest) -> bool {
@@ -155,5 +179,87 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             .await
             .map_err(ToolError::Codex)?;
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_execpolicy2::PolicyParser;
+    use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
+
+    fn parse_policy(src: &str) -> Arc<ExecPolicyV2> {
+        let mut parser = PolicyParser::new();
+        parser
+            .parse("test.codexpolicy", src)
+            .expect("parse execpolicy2 file");
+        Arc::new(parser.build())
+    }
+
+    fn shell_request(command: &[&str], exec_policy: Option<Arc<ExecPolicyV2>>) -> ShellRequest {
+        ShellRequest {
+            command: command.iter().map(ToString::to_string).collect(),
+            cwd: PathBuf::from("."),
+            timeout_ms: None,
+            env: HashMap::new(),
+            with_escalated_permissions: None,
+            justification: None,
+            exec_policy,
+        }
+    }
+
+    #[test]
+    fn prompt_decision_requires_approval() {
+        let policy = parse_policy(r#"prefix_rule(pattern=["echo"], decision="prompt")"#);
+        let req = shell_request(&["echo", "hi"], Some(policy));
+        let runtime = ShellRuntime::new();
+
+        let requirement = runtime.approval_requirement(
+            &req,
+            AskForApproval::OnRequest,
+            &SandboxPolicy::DangerFullAccess,
+        );
+
+        assert_eq!(
+            requirement,
+            ApprovalRequirement::NeedsApproval {
+                reason: Some("execpolicy requires approval for this command".to_string())
+            }
+        );
+    }
+
+    #[test]
+    fn prompt_blocked_when_approval_disabled() {
+        let policy = parse_policy(r#"prefix_rule(pattern=["echo"], decision="prompt")"#);
+        let req = shell_request(&["echo", "hi"], Some(policy));
+        let runtime = ShellRuntime::new();
+
+        let requirement = runtime.approval_requirement(
+            &req,
+            AskForApproval::Never,
+            &SandboxPolicy::DangerFullAccess,
+        );
+
+        assert_eq!(
+            requirement,
+            ApprovalRequirement::Forbidden {
+                reason: "execpolicy requires approval for this command".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn user_shell_commands_skip_execpolicy() {
+        let req = shell_request(&["echo", "hi"], None);
+        let runtime = ShellRuntime::new();
+
+        let requirement = runtime.approval_requirement(
+            &req,
+            AskForApproval::OnRequest,
+            &SandboxPolicy::DangerFullAccess,
+        );
+
+        assert_eq!(requirement, ApprovalRequirement::Skip);
     }
 }
