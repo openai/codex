@@ -47,7 +47,7 @@ pub(crate) fn exec_policy_for(
         return Ok(None);
     }
 
-   load_policy(cwd).map(Some)
+    load_policy(cwd).map(Some)
 }
 
 pub(crate) fn commands_for_policy(command: &[String]) -> Vec<Vec<String>> {
