@@ -15,7 +15,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
-use core_test_support::responses::mount_sse_once_match;
+use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
@@ -25,7 +25,6 @@ use core_test_support::wait_for_event_match;
 use regex_lite::escape;
 use std::path::PathBuf;
 use tempfile::TempDir;
-use wiremock::matchers::any;
 
 #[tokio::test]
 async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
@@ -293,9 +292,8 @@ async fn user_shell_command_is_truncated_only_once() -> anyhow::Result<()> {
         })
     };
 
-    mount_sse_once_match(
+    mount_sse_once(
         &server,
-        any(),
         sse(vec![
             ev_response_created("resp-1"),
             ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
@@ -303,9 +301,8 @@ async fn user_shell_command_is_truncated_only_once() -> anyhow::Result<()> {
         ]),
     )
     .await;
-    let mock2 = mount_sse_once_match(
+    let mock2 = mount_sse_once(
         &server,
-        any(),
         sse(vec![
             ev_assistant_message("msg-1", "done"),
             ev_completed("resp-2"),
