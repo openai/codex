@@ -1898,7 +1898,7 @@ mod tests {
         } else {
             "Runs a shell command and returns its output.".to_string()
         };
-        assert_eq!(description, expected);
+        assert_eq!(description, &expected);
     }
 
     #[test]
