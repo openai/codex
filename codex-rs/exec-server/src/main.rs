@@ -97,8 +97,11 @@ mod socket;
 // C->S on the escalate socket
 #[derive(Clone, Serialize, Deserialize, Debug)]
 enum EscalateClientMessage {
+    /// The client wants to run exec() with the given arguments.
     EscalateRequest {
+        /// The absolute path to the executable to run, i.e. the first arg to exec.
         file: String,
+        /// The argv, including the program name (argv[0]).
         argv: Vec<String>,
         workdir: PathBuf,
         env: HashMap<String, String>,
@@ -115,7 +118,7 @@ enum EscalateServerMessage {
 enum EscalateAction {
     RunInSandbox,
 
-    // This message is expected to come with an fd which is a socket for super-exec.
+    /// This message is expected to come with an fd which is a socket for super-exec.
     Escalate,
 }
 
@@ -168,37 +171,44 @@ async fn super_exec_task(
     env: HashMap<String, String>,
 ) -> anyhow::Result<()> {
     let (msg, fds) = socket.receive_with_fds::<SuperExecMessage>().await?;
-    assert_eq!(fds.len(), msg.fds.len());
+    if fds.len() != msg.fds.len() {
+        return Err(anyhow::anyhow!(
+            "mismatched number of fds in SuperExecMessage: {} in the message, {} from the control message",
+            msg.fds.len(),
+            fds.len()
+        ));
+    }
 
-    assert!(
-        msg.fds
-            .iter()
-            .all(|src_fd| !fds.iter().any(|dst_fd| dst_fd.as_raw_fd() == *src_fd)),
-        "TODO: handle overlapping fds"
-    );
+    if msg
+        .fds
+        .iter()
+        .any(|src_fd| fds.iter().any(|dst_fd| dst_fd.as_raw_fd() == *src_fd))
+    {
+        // TODO: handle overlapping fds
+        return Err(anyhow::anyhow!(
+            "overlapping fds not yet supported in SuperExecMessage"
+        ));
+    }
 
-    let mut child = unsafe {
-        Command::new(file)
-            .args(&argv[1..])
-            .arg0(argv[0].clone())
-            .envs(env)
-            .current_dir(workdir)
-            // We null out the standard FDs because we will dup2() the forwarded FDs in pre_exec().
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            // This moves the forwarded FDs into the correct positions in the child process.
-            // `msg.fds` will be dropped and thus closed after this call, but that's OK because
-            // they've been dup2()ed.
-            .pre_exec(move || {
-                for (dst_fd, src_fd) in msg.fds.iter().zip(&fds) {
-                    libc::dup2(src_fd.as_raw_fd(), *dst_fd);
-                }
-                Ok(())
-            })
-            .spawn()
-            .context("failed to spawn command")?
-    };
+    let mut command = Command::new(file);
+    command
+        .args(&argv[1..])
+        .arg0(argv[0].clone())
+        .envs(&env)
+        .current_dir(&workdir)
+        // We null out the standard FDs because we will dup2() the forwarded FDs in pre_exec().
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    unsafe {
+        command.pre_exec(move || {
+            for (dst_fd, src_fd) in msg.fds.iter().zip(&fds) {
+                libc::dup2(src_fd.as_raw_fd(), *dst_fd);
+            }
+            Ok(())
+        });
+    }
+    let mut child = command.spawn()?;
 
     let exit_status = child.wait().await?;
     socket
@@ -245,7 +255,12 @@ async fn escalate_task(socket: AsyncSocket) -> anyhow::Result<()> {
     }
 }
 
+fn get_bash_path() -> Result<String> {
+    std::env::var("CODEX_BASH_PATH").context("CODEX_BASH_PATH must be set")
+}
+
 async fn shell_exec(params: ExecParams) -> anyhow::Result<ExecResult> {
+    let bash_path = get_bash_path()?;
     let ExecParams {
         command,
         workdir,
@@ -267,11 +282,7 @@ async fn shell_exec(params: ExecParams) -> anyhow::Result<ExecResult> {
     );
     let result = process_exec_tool_call(
         codex_core::exec::ExecParams {
-            command: vec![
-                "/users/nornagon/code/bash/bash".to_string(),
-                "-c".to_string(),
-                command,
-            ],
+            command: vec![bash_path, "-c".to_string(), command],
             cwd: PathBuf::from(&workdir),
             timeout_ms,
             env,
@@ -354,7 +365,7 @@ impl Default for ExecTool {
 impl ServerHandler for ExecTool {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
-            protocol_version: ProtocolVersion::V_2024_11_05,
+            protocol_version: ProtocolVersion::V_2025_06_18,
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
@@ -389,6 +400,11 @@ enum Commands {
 fn get_escalate_client() -> anyhow::Result<AsyncSocket> {
     // TODO: we should defensively require only calling this once, since AsyncSocket will take ownership of the fd.
     let client_fd = std::env::var("CODEX_ESCALATE_SOCKET")?.parse::<i32>()?;
+    if client_fd < 0 {
+        return Err(anyhow::anyhow!(
+            "CODEX_ESCALATE_SOCKET is not a valid file descriptor: {client_fd}"
+        ));
+    }
     Ok(unsafe { AsyncSocket::from_raw_fd(client_fd) }?)
 }
 
@@ -420,7 +436,12 @@ impl EscalateArgs {
         let EscalateServerMessage::EscalateResponse(action) = message;
         match action {
             EscalateAction::Escalate => {
-                assert_eq!(fds.len(), 1);
+                if fds.len() != 1 {
+                    return Err(anyhow::anyhow!(
+                        "expected 1 fd in EscalateResponse, got {}",
+                        fds.len()
+                    ));
+                }
                 let super_exec_socket = AsyncSocket::from_fd(fds.remove(0))?;
 
                 // TODO: maybe we should send ALL open FDs (except the escalate client)?
@@ -507,6 +528,9 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     }
+
+    // Fail early if the bash path is not set.
+    let _ = get_bash_path()?;
 
     tracing::info!("Starting MCP server");
     let service = ExecTool::new().serve(stdio()).await.inspect_err(|e| {
