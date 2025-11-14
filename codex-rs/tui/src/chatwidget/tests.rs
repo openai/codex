@@ -18,11 +18,13 @@ use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
 use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
+use codex_core::protocol::BackgroundEventEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
+use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::Op;
@@ -660,7 +662,12 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
 }
 
 // --- Small helpers to tersely drive exec begin/end and snapshot active cell ---
-fn begin_exec(chat: &mut ChatWidget, call_id: &str, raw_cmd: &str) {
+fn begin_exec_with_source(
+    chat: &mut ChatWidget,
+    call_id: &str,
+    raw_cmd: &str,
+    source: ExecCommandSource,
+) {
     // Build the full command vec and parse it using core's parser,
     // then convert to protocol variants for the event payload.
     let command = vec!["bash".to_string(), "-lc".to_string(), raw_cmd.to_string()];
@@ -672,9 +679,14 @@ fn begin_exec(chat: &mut ChatWidget, call_id: &str, raw_cmd: &str) {
             command,
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             parsed_cmd,
-            is_user_shell_command: false,
+            source,
+            interaction_input: None,
         }),
     });
+}
+
+fn begin_exec(chat: &mut ChatWidget, call_id: &str, raw_cmd: &str) {
+    begin_exec_with_source(chat, call_id, raw_cmd, ExecCommandSource::Agent);
 }
 
 fn end_exec(chat: &mut ChatWidget, call_id: &str, stdout: &str, stderr: &str, exit_code: i32) {
@@ -931,6 +943,38 @@ fn exec_history_cell_shows_working_then_failed() {
         "expected command and header text present: {blob:?}"
     );
     assert!(blob.to_lowercase().contains("bloop"), "expected error text");
+}
+
+#[test]
+fn exec_history_shows_unified_exec_startup_commands() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    begin_exec_with_source(
+        &mut chat,
+        "call-startup",
+        "echo unified exec startup",
+        ExecCommandSource::UnifiedExecStartup,
+    );
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "exec begin should not flush until completion"
+    );
+
+    end_exec(
+        &mut chat,
+        "call-startup",
+        "echo unified exec startup\n",
+        "",
+        0,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected finalized exec cell to flush");
+    let blob = lines_to_single_string(&cells[0]);
+    assert!(
+        blob.contains("• Ran echo unified exec startup"),
+        "expected startup command to render: {blob:?}"
+    );
 }
 
 /// Selecting the custom prompt option from the review popup sends
@@ -1744,7 +1788,8 @@ async fn binary_size_transcript_snapshot() {
                                     command: e.command,
                                     cwd: e.cwd,
                                     parsed_cmd,
-                                    is_user_shell_command: false,
+                                    source: ExecCommandSource::Agent,
+                                    interaction_input: e.interaction_input.clone(),
                                 }),
                             }
                         }
@@ -2162,6 +2207,22 @@ fn status_widget_active_snapshot() {
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw status widget");
     assert_snapshot!("status_widget_active", terminal.backend());
+}
+
+#[test]
+fn background_event_updates_status_header() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    chat.handle_codex_event(Event {
+        id: "bg-1".into(),
+        msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+            message: "Waiting for `vim`".to_string(),
+        }),
+    });
+
+    assert!(chat.bottom_pane.status_indicator_visible());
+    assert_eq!(chat.current_status_header, "Waiting for `vim`");
+    assert!(drain_insert_history(&mut rx).is_empty());
 }
 
 #[test]
@@ -2815,7 +2876,8 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
                     path: "diff_render.rs".into(),
                 },
             ],
-            is_user_shell_command: false,
+            source: ExecCommandSource::Agent,
+            interaction_input: None,
         }),
     });
     chat.handle_codex_event(Event {

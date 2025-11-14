@@ -133,6 +133,7 @@ use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
+use codex_utils_tokenizer::warm_model_cache;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -589,6 +590,9 @@ impl Session {
 
         // Create the mutable state for the Session.
         let state = SessionState::new(session_configuration.clone());
+
+        // Warm the tokenizer cache for the session model without blocking startup.
+        warm_model_cache(&session_configuration.model);
 
         let services = SessionServices {
             mcp_connection_manager,

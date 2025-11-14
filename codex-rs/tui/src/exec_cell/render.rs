@@ -14,6 +14,7 @@ use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
 use codex_ansi_escape::ansi_escape_line;
 use codex_common::elapsed::format_duration;
+use codex_core::protocol::ExecCommandSource;
 use codex_protocol::parse_command::ParsedCommand;
 use itertools::Itertools;
 use ratatui::prelude::*;
@@ -24,6 +25,7 @@ use unicode_width::UnicodeWidthStr;
 
 pub(crate) const TOOL_CALL_MAX_LINES: usize = 5;
 const USER_SHELL_TOOL_CALL_MAX_LINES: usize = 50;
+const MAX_INTERACTION_PREVIEW_CHARS: usize = 80;
 
 pub(crate) struct OutputLinesParams {
     pub(crate) line_limit: usize,
@@ -36,17 +38,45 @@ pub(crate) fn new_active_exec_command(
     call_id: String,
     command: Vec<String>,
     parsed: Vec<ParsedCommand>,
-    is_user_shell_command: bool,
+    source: ExecCommandSource,
+    interaction_input: Option<String>,
 ) -> ExecCell {
     ExecCell::new(ExecCall {
         call_id,
         command,
         parsed,
         output: None,
-        is_user_shell_command,
+        source,
         start_time: Some(Instant::now()),
         duration: None,
+        interaction_input,
     })
+}
+
+fn format_unified_exec_interaction(command: &[String], input: Option<&str>) -> String {
+    let command_display = command.join(" ");
+    match input {
+        Some(data) if !data.is_empty() => {
+            let preview = summarize_interaction_input(data);
+            format!("Interacted with `{command_display}`, sent `{preview}`")
+        }
+        _ => format!("Waited for `{command_display}`"),
+    }
+}
+
+fn summarize_interaction_input(input: &str) -> String {
+    let single_line = input.replace('\n', "\\n");
+    let sanitized = single_line.replace('`', "\\`");
+    if sanitized.chars().count() <= MAX_INTERACTION_PREVIEW_CHARS {
+        return sanitized;
+    }
+
+    let mut preview = String::new();
+    for ch in sanitized.chars().take(MAX_INTERACTION_PREVIEW_CHARS) {
+        preview.push(ch);
+    }
+    preview.push_str("...");
+    preview
 }
 
 #[derive(Clone)]
@@ -181,7 +211,9 @@ impl HistoryCell for ExecCell {
             lines.extend(cmd_display);
 
             if let Some(output) = call.output.as_ref() {
-                lines.extend(output.formatted_output.lines().map(ansi_escape_line));
+                if !call.is_unified_exec_interaction() {
+                    lines.extend(output.formatted_output.lines().map(ansi_escape_line));
+                }
                 let duration = call
                     .duration
                     .map(format_duration)
@@ -317,19 +349,29 @@ impl ExecCell {
             Some(false) => "•".red().bold(),
             None => spinner(call.start_time),
         };
-        let title = if self.is_active() {
+        let is_interaction = call.is_unified_exec_interaction();
+        let title = if is_interaction {
+            ""
+        } else if self.is_active() {
             "Running"
-        } else if call.is_user_shell_command {
+        } else if call.is_user_shell_command() {
             "You ran"
         } else {
             "Ran"
         };
 
-        let mut header_line =
-            Line::from(vec![bullet.clone(), " ".into(), title.bold(), " ".into()]);
+        let mut header_line = if is_interaction {
+            Line::from(vec![bullet.clone(), " ".into()])
+        } else {
+            Line::from(vec![bullet.clone(), " ".into(), title.bold(), " ".into()])
+        };
         let header_prefix_width = header_line.width();
 
-        let cmd_display = strip_bash_lc_and_escape(&call.command);
+        let cmd_display = if call.is_unified_exec_interaction() {
+            format_unified_exec_interaction(&call.command, call.interaction_input.as_deref())
+        } else {
+            strip_bash_lc_and_escape(&call.command)
+        };
         let highlighted_lines = highlight_bash_to_lines(&cmd_display);
 
         let continuation_wrap_width = layout.command_continuation.wrap_width(width);
@@ -373,7 +415,7 @@ impl ExecCell {
         }
 
         if let Some(output) = call.output.as_ref() {
-            let line_limit = if call.is_user_shell_command {
+            let line_limit = if call.is_user_shell_command() {
                 USER_SHELL_TOOL_CALL_MAX_LINES
             } else {
                 TOOL_CALL_MAX_LINES
@@ -387,18 +429,20 @@ impl ExecCell {
                     include_prefix: false,
                 },
             );
-            let display_limit = if call.is_user_shell_command {
+            let display_limit = if call.is_user_shell_command() {
                 USER_SHELL_TOOL_CALL_MAX_LINES
             } else {
                 layout.output_max_lines
             };
 
             if raw_output.lines.is_empty() {
-                lines.extend(prefix_lines(
-                    vec![Line::from("(no output)".dim())],
-                    Span::from(layout.output_block.initial_prefix).dim(),
-                    Span::from(layout.output_block.subsequent_prefix),
-                ));
+                if !call.is_unified_exec_interaction() {
+                    lines.extend(prefix_lines(
+                        vec![Line::from("(no output)".dim())],
+                        Span::from(layout.output_block.initial_prefix).dim(),
+                        Span::from(layout.output_block.subsequent_prefix),
+                    ));
+                }
             } else {
                 let trimmed_output = Self::truncate_lines_middle(
                     &raw_output.lines,
