@@ -24,6 +24,7 @@ use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::model_family::find_family_for_model;
+use codex_core::protocol::FinalOutput;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
@@ -52,6 +53,23 @@ pub struct AppExitInfo {
     pub token_usage: TokenUsage,
     pub conversation_id: Option<ConversationId>,
     pub update_action: Option<UpdateAction>,
+}
+
+fn session_summary_lines(
+    token_usage: TokenUsage,
+    conversation_id: Option<ConversationId>,
+) -> Option<Vec<String>> {
+    if token_usage.is_zero() {
+        return None;
+    }
+
+    let mut lines = vec![FinalOutput::from(token_usage).to_string()];
+    if let Some(conversation_id) = conversation_id {
+        lines.push(format!(
+            "To continue this session, run codex resume {conversation_id}"
+        ));
+    }
+    Some(lines)
 }
 
 fn should_show_model_migration_prompt(
@@ -365,6 +383,10 @@ impl App {
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
         match event {
             AppEvent::NewSession => {
+                let summary_lines = session_summary_lines(
+                    self.chat_widget.token_usage(),
+                    self.chat_widget.conversation_id(),
+                );
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: self.config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -376,6 +398,11 @@ impl App {
                     feedback: self.feedback.clone(),
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
+                if let Some(lines) = summary_lines {
+                    for line in lines {
+                        self.chat_widget.add_info_message(line, None);
+                    }
+                }
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::InsertHistoryCell(cell) => {
@@ -969,5 +996,30 @@ mod tests {
         let (_, nth, prefill) = app.backtrack.pending.clone().expect("pending backtrack");
         assert_eq!(nth, 1);
         assert_eq!(prefill, "follow-up (edited)");
+    }
+
+    #[test]
+    fn session_summary_lines_skip_zero_usage() {
+        assert!(session_summary_lines(TokenUsage::default(), None).is_none());
+    }
+
+    #[test]
+    fn session_summary_lines_include_resume_hint() {
+        let mut usage = TokenUsage::default();
+        usage.input_tokens = 10;
+        usage.output_tokens = 2;
+        usage.total_tokens = 12;
+        let conversation =
+            ConversationId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
+
+        let lines = session_summary_lines(usage, Some(conversation)).expect("lines");
+        assert_eq!(
+            lines,
+            vec![
+                "Token usage: total=12 input=10 output=2".to_string(),
+                "To continue this session, run codex resume 123e4567-e89b-12d3-a456-426614174000"
+                    .to_string()
+            ]
+        );
     }
 }
