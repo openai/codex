@@ -1245,6 +1245,7 @@ pub struct ExecCommandBeginEvent {
     pub source: ExecCommandSource,
     /// Raw input sent to a unified exec session (if this is an interaction event).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub interaction_input: Option<String>,
 }
 
