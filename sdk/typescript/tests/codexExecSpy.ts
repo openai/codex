@@ -22,7 +22,7 @@ export function codexExecSpy(): {
     const commandArgs = spawnArgs[1];
     args.push(Array.isArray(commandArgs) ? [...commandArgs] : []);
     const options = spawnArgs[2] as child_process.SpawnOptions | undefined;
-    envs.push(options?.env);
+    envs.push(options?.env as Record<string, string> | undefined);
     return previousImplementation(...spawnArgs);
   }) as typeof actualChildProcess.spawn);
 
