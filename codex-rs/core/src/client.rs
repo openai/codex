@@ -560,6 +560,8 @@ struct SseEvent {
     response: Option<Value>,
     item: Option<Value>,
     delta: Option<String>,
+    summary_index: Option<i64>,
+    content_index: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -819,16 +821,22 @@ async fn process_sse<S>(
                 }
             }
             "response.reasoning_summary_text.delta" => {
-                if let Some(delta) = event.delta {
-                    let event = ResponseEvent::ReasoningSummaryDelta(delta);
+                if let (Some(delta), Some(summary_index)) = (event.delta, event.summary_index) {
+                    let event = ResponseEvent::ReasoningSummaryDelta {
+                        delta,
+                        summary_index,
+                    };
                     if tx_event.send(Ok(event)).await.is_err() {
                         return;
                     }
                 }
             }
             "response.reasoning_text.delta" => {
-                if let Some(delta) = event.delta {
-                    let event = ResponseEvent::ReasoningContentDelta(delta);
+                if let (Some(delta), Some(content_index)) = (event.delta, event.content_index) {
+                    let event = ResponseEvent::ReasoningContentDelta {
+                        delta,
+                        content_index,
+                    };
                     if tx_event.send(Ok(event)).await.is_err() {
                         return;
                     }
@@ -905,10 +913,12 @@ async fn process_sse<S>(
                 }
             }
             "response.reasoning_summary_part.added" => {
-                // Boundary between reasoning summary sections (e.g., titles).
-                let event = ResponseEvent::ReasoningSummaryPartAdded;
-                if tx_event.send(Ok(event)).await.is_err() {
-                    return;
+                if let Some(summary_index) = event.summary_index {
+                    // Boundary between reasoning summary sections (e.g., titles).
+                    let event = ResponseEvent::ReasoningSummaryPartAdded { summary_index };
+                    if tx_event.send(Ok(event)).await.is_err() {
+                        return;
+                    }
                 }
             }
             "response.reasoning_summary_text.done" => {}

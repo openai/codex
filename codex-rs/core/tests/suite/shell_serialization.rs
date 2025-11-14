@@ -3,12 +3,7 @@
 use anyhow::Result;
 use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_apply_patch_function_call;
 use core_test_support::responses::ev_assistant_message;
@@ -21,9 +16,7 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
-use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 use serde_json::Value;
@@ -41,69 +34,6 @@ const FIXTURE_JSON: &str = r#"{
     }
 }
 "#;
-
-async fn submit_turn(test: &TestCodex, prompt: &str, sandbox_policy: SandboxPolicy) -> Result<()> {
-    let session_model = test.session_configured.model.clone();
-
-    test.codex
-        .submit(Op::UserTurn {
-            items: vec![UserInput::Text {
-                text: prompt.into(),
-            }],
-            final_output_json_schema: None,
-            cwd: test.cwd.path().to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            sandbox_policy,
-            model: session_model,
-            effort: None,
-            summary: ReasoningSummary::Auto,
-        })
-        .await?;
-
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TaskComplete(_))
-    })
-    .await;
-
-    Ok(())
-}
-
-fn request_bodies(requests: &[wiremock::Request]) -> Result<Vec<Value>> {
-    requests
-        .iter()
-        .map(|req| Ok(serde_json::from_slice::<Value>(&req.body)?))
-        .collect()
-}
-
-fn find_function_call_output<'a>(bodies: &'a [Value], call_id: &str) -> Option<&'a Value> {
-    for body in bodies {
-        if let Some(items) = body.get("input").and_then(Value::as_array) {
-            for item in items {
-                if item.get("type").and_then(Value::as_str) == Some("function_call_output")
-                    && item.get("call_id").and_then(Value::as_str) == Some(call_id)
-                {
-                    return Some(item);
-                }
-            }
-        }
-    }
-    None
-}
-
-fn find_custom_tool_call_output<'a>(bodies: &'a [Value], call_id: &str) -> Option<&'a Value> {
-    for body in bodies {
-        if let Some(items) = body.get("input").and_then(Value::as_array) {
-            for item in items {
-                if item.get("type").and_then(Value::as_str) == Some("custom_tool_call_output")
-                    && item.get("call_id").and_then(Value::as_str) == Some(call_id)
-                {
-                    return Some(item);
-                }
-            }
-        }
-    }
-    None
-}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shell_output_stays_json_without_freeform_apply_patch() -> Result<()> {
@@ -133,21 +63,16 @@ async fn shell_output_stays_json_without_freeform_apply_patch() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let mock = mount_sse_sequence(&server, responses).await;
 
-    submit_turn(
-        &test,
+    test.submit_turn_with_policy(
         "run the json shell command",
         SandboxPolicy::DangerFullAccess,
     )
     .await?;
 
-    let requests = server
-        .received_requests()
-        .await
-        .expect("recorded requests present");
-    let bodies = request_bodies(&requests)?;
-    let output_item = find_function_call_output(&bodies, call_id).expect("shell output present");
+    let req = mock.last_request().expect("shell output request recorded");
+    let output_item = req.function_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
@@ -202,22 +127,18 @@ async fn shell_output_is_structured_with_freeform_apply_patch() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let mock = mount_sse_sequence(&server, responses).await;
 
-    submit_turn(
-        &test,
+    test.submit_turn_with_policy(
         "run the structured shell command",
         SandboxPolicy::DangerFullAccess,
     )
     .await?;
 
-    let requests = server
-        .received_requests()
-        .await
-        .expect("recorded requests present");
-    let bodies = request_bodies(&requests)?;
-    let output_item =
-        find_function_call_output(&bodies, call_id).expect("structured output present");
+    let req = mock
+        .last_request()
+        .expect("structured shell output request recorded");
+    let output_item = req.function_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
@@ -269,21 +190,16 @@ async fn shell_output_preserves_fixture_json_without_serialization() -> Result<(
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let mock = mount_sse_sequence(&server, responses).await;
 
-    submit_turn(
-        &test,
+    test.submit_turn_with_policy(
         "read the fixture JSON with sed",
         SandboxPolicy::DangerFullAccess,
     )
     .await?;
 
-    let requests = server
-        .received_requests()
-        .await
-        .expect("recorded requests present");
-    let bodies = request_bodies(&requests)?;
-    let output_item = find_function_call_output(&bodies, call_id).expect("shell output present");
+    let req = mock.last_request().expect("shell output request recorded");
+    let output_item = req.function_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
@@ -345,22 +261,18 @@ async fn shell_output_structures_fixture_with_serialization() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let mock = mount_sse_sequence(&server, responses).await;
 
-    submit_turn(
-        &test,
+    test.submit_turn_with_policy(
         "read the fixture JSON with structured output",
         SandboxPolicy::DangerFullAccess,
     )
     .await?;
 
-    let requests = server
-        .received_requests()
-        .await
-        .expect("recorded requests present");
-    let bodies = request_bodies(&requests)?;
-    let output_item =
-        find_function_call_output(&bodies, call_id).expect("structured output present");
+    let req = mock
+        .last_request()
+        .expect("structured output request recorded");
+    let output_item = req.function_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
@@ -420,22 +332,18 @@ async fn shell_output_for_freeform_tool_records_duration() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let mock = mount_sse_sequence(&server, responses).await;
 
-    submit_turn(
-        &test,
+    test.submit_turn_with_policy(
         "run the structured shell command",
         SandboxPolicy::DangerFullAccess,
     )
     .await?;
 
-    let requests = server
-        .received_requests()
-        .await
-        .expect("recorded requests present");
-    let bodies = request_bodies(&requests)?;
-    let output_item =
-        find_function_call_output(&bodies, call_id).expect("structured output present");
+    let req = mock
+        .last_request()
+        .expect("structured output request recorded");
+    let output_item = req.function_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
@@ -490,22 +398,18 @@ async fn shell_output_reserializes_truncated_content() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let mock = mount_sse_sequence(&server, responses).await;
 
-    submit_turn(
-        &test,
+    test.submit_turn_with_policy(
         "run the truncation shell command",
         SandboxPolicy::DangerFullAccess,
     )
     .await?;
 
-    let requests = server
-        .received_requests()
-        .await
-        .expect("recorded requests present");
-    let bodies = request_bodies(&requests)?;
-    let output_item =
-        find_function_call_output(&bodies, call_id).expect("truncated output present");
+    let req = mock
+        .last_request()
+        .expect("truncated output request recorded");
+    let output_item = req.function_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
@@ -570,22 +474,18 @@ async fn apply_patch_custom_tool_output_is_structured() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let mock = mount_sse_sequence(&server, responses).await;
 
-    submit_turn(
-        &test,
+    test.submit_turn_with_policy(
         "apply the patch via custom tool",
         SandboxPolicy::DangerFullAccess,
     )
     .await?;
 
-    let requests = server
-        .received_requests()
-        .await
-        .expect("recorded requests present");
-    let bodies = request_bodies(&requests)?;
-    let output_item =
-        find_custom_tool_call_output(&bodies, call_id).expect("apply_patch output present");
+    let req = mock
+        .last_request()
+        .expect("apply_patch output request recorded");
+    let output_item = req.custom_tool_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
@@ -630,22 +530,18 @@ async fn apply_patch_custom_tool_call_creates_file() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let mock = mount_sse_sequence(&server, responses).await;
 
-    submit_turn(
-        &test,
+    test.submit_turn_with_policy(
         "apply the patch via custom tool to create a file",
         SandboxPolicy::DangerFullAccess,
     )
     .await?;
 
-    let requests = server
-        .received_requests()
-        .await
-        .expect("recorded requests present");
-    let bodies = request_bodies(&requests)?;
-    let output_item =
-        find_custom_tool_call_output(&bodies, call_id).expect("apply_patch output present");
+    let req = mock
+        .last_request()
+        .expect("apply_patch output request recorded");
+    let output_item = req.custom_tool_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
@@ -699,22 +595,18 @@ async fn apply_patch_custom_tool_call_updates_existing_file() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let mock = mount_sse_sequence(&server, responses).await;
 
-    submit_turn(
-        &test,
+    test.submit_turn_with_policy(
         "apply the patch via custom tool to update a file",
         SandboxPolicy::DangerFullAccess,
     )
     .await?;
 
-    let requests = server
-        .received_requests()
-        .await
-        .expect("recorded requests present");
-    let bodies = request_bodies(&requests)?;
-    let output_item =
-        find_custom_tool_call_output(&bodies, call_id).expect("apply_patch output present");
+    let req = mock
+        .last_request()
+        .expect("apply_patch output request recorded");
+    let output_item = req.custom_tool_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
@@ -762,22 +654,18 @@ async fn apply_patch_custom_tool_call_reports_failure_output() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let mock = mount_sse_sequence(&server, responses).await;
 
-    submit_turn(
-        &test,
+    test.submit_turn_with_policy(
         "attempt a failing apply_patch via custom tool",
         SandboxPolicy::DangerFullAccess,
     )
     .await?;
 
-    let requests = server
-        .received_requests()
-        .await
-        .expect("recorded requests present");
-    let bodies = request_bodies(&requests)?;
-    let output_item =
-        find_custom_tool_call_output(&bodies, call_id).expect("apply_patch output present");
+    let req = mock
+        .last_request()
+        .expect("apply_patch output request recorded");
+    let output_item = req.custom_tool_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
@@ -817,22 +705,18 @@ async fn apply_patch_function_call_output_is_structured() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let mock = mount_sse_sequence(&server, responses).await;
 
-    submit_turn(
-        &test,
+    test.submit_turn_with_policy(
         "apply the patch via function-call apply_patch",
         SandboxPolicy::DangerFullAccess,
     )
     .await?;
 
-    let requests = server
-        .received_requests()
-        .await
-        .expect("recorded requests present");
-    let bodies = request_bodies(&requests)?;
-    let output_item =
-        find_function_call_output(&bodies, call_id).expect("apply_patch function output present");
+    let req = mock
+        .last_request()
+        .expect("apply_patch function output request recorded");
+    let output_item = req.function_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
@@ -880,21 +764,16 @@ async fn shell_output_is_structured_for_nonzero_exit() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let mock = mount_sse_sequence(&server, responses).await;
 
-    submit_turn(
-        &test,
+    test.submit_turn_with_policy(
         "run the failing shell command",
         SandboxPolicy::DangerFullAccess,
     )
     .await?;
 
-    let requests = server
-        .received_requests()
-        .await
-        .expect("recorded requests present");
-    let bodies = request_bodies(&requests)?;
-    let output_item = find_function_call_output(&bodies, call_id).expect("shell output present");
+    let req = mock.last_request().expect("shell output request recorded");
+    let output_item = req.function_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
@@ -934,22 +813,18 @@ async fn local_shell_call_output_is_structured() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let mock = mount_sse_sequence(&server, responses).await;
 
-    submit_turn(
-        &test,
+    test.submit_turn_with_policy(
         "run the local shell command",
         SandboxPolicy::DangerFullAccess,
     )
     .await?;
 
-    let requests = server
-        .received_requests()
-        .await
-        .expect("recorded requests present");
-    let bodies = request_bodies(&requests)?;
-    let output_item =
-        find_function_call_output(&bodies, call_id).expect("local shell output present");
+    let req = mock
+        .last_request()
+        .expect("local shell output request recorded");
+    let output_item = req.function_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)

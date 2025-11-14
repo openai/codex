@@ -10,11 +10,7 @@ use anyhow::Result;
 use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -26,43 +22,10 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
-use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event;
 use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
-
-async fn submit_turn(
-    test: &TestCodex,
-    prompt: &str,
-    approval_policy: AskForApproval,
-    sandbox_policy: SandboxPolicy,
-) -> Result<()> {
-    let session_model = test.session_configured.model.clone();
-
-    test.codex
-        .submit(Op::UserTurn {
-            items: vec![UserInput::Text {
-                text: prompt.into(),
-            }],
-            final_output_json_schema: None,
-            cwd: test.cwd.path().to_path_buf(),
-            approval_policy,
-            sandbox_policy,
-            model: session_model,
-            effort: None,
-            summary: ReasoningSummary::Auto,
-        })
-        .await?;
-
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TaskComplete(_))
-    })
-    .await;
-
-    Ok(())
-}
 
 fn tool_names(body: &Value) -> Vec<String> {
     body.get("tools")
@@ -110,8 +73,7 @@ async fn custom_tool_unknown_returns_custom_output_error() -> Result<()> {
     )
     .await;
 
-    submit_turn(
-        &test,
+    test.submit_turn_with_policies(
         "invoke custom tool",
         AskForApproval::Never,
         SandboxPolicy::DangerFullAccess,
@@ -189,8 +151,7 @@ async fn shell_escalated_permissions_rejected_then_ok() -> Result<()> {
     )
     .await;
 
-    submit_turn(
-        &test,
+    test.submit_turn_with_policies(
         "run the shell command",
         AskForApproval::Never,
         SandboxPolicy::DangerFullAccess,
@@ -202,24 +163,22 @@ async fn shell_escalated_permissions_rejected_then_ok() -> Result<()> {
         "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}"
     );
 
-    let blocked_item = second_mock
+    let blocked_output = second_mock
         .single_request()
-        .function_call_output(call_id_blocked);
+        .function_call_output_content_and_success(call_id_blocked)
+        .and_then(|(content, _)| content)
+        .expect("blocked output string");
     assert_eq!(
-        blocked_item.get("output").and_then(Value::as_str),
-        Some(expected_message.as_str()),
+        blocked_output, expected_message,
         "unexpected rejection message"
     );
 
-    let success_item = third_mock
+    let success_output = third_mock
         .single_request()
-        .function_call_output(call_id_success);
-    let output_json: Value = serde_json::from_str(
-        success_item
-            .get("output")
-            .and_then(Value::as_str)
-            .expect("success output string"),
-    )?;
+        .function_call_output_content_and_success(call_id_success)
+        .and_then(|(content, _)| content)
+        .expect("success output string");
+    let output_json: Value = serde_json::from_str(&success_output)?;
     assert_eq!(
         output_json["metadata"]["exit_code"].as_i64(),
         Some(0),
@@ -348,8 +307,7 @@ async fn collect_tools(use_unified_exec: bool) -> Result<Vec<String>> {
     });
     let test = builder.build(&server).await?;
 
-    submit_turn(
-        &test,
+    test.submit_turn_with_policies(
         "list tools",
         AskForApproval::Never,
         SandboxPolicy::DangerFullAccess,
@@ -423,8 +381,7 @@ async fn shell_timeout_includes_timeout_prefix_and_metadata() -> Result<()> {
     )
     .await;
 
-    submit_turn(
-        &test,
+    test.submit_turn_with_policies(
         "run a long command",
         AskForApproval::Never,
         SandboxPolicy::DangerFullAccess,
@@ -515,8 +472,7 @@ time.sleep(60)
 
     let start = Instant::now();
     let output_str = tokio::time::timeout(Duration::from_secs(10), async {
-        submit_turn(
-            &test,
+        test.submit_turn_with_policies(
             "run a command with a detached grandchild",
             AskForApproval::Never,
             SandboxPolicy::DangerFullAccess,
@@ -600,8 +556,7 @@ async fn shell_spawn_failure_truncates_exec_error() -> Result<()> {
     )
     .await;
 
-    submit_turn(
-        &test,
+    test.submit_turn_with_policies(
         "spawn a missing binary",
         AskForApproval::Never,
         SandboxPolicy::DangerFullAccess,
