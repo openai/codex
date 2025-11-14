@@ -47,42 +47,10 @@ pub(crate) fn exec_policy_for(
         return Ok(None);
     }
 
-    load_policy(cwd).map(Some)
-}
-
-pub(crate) fn evaluate_with_policy(
-    policy: &Policy,
-    command: &[String],
-    approval_policy: AskForApproval,
-) -> Option<ApprovalRequirement> {
-    let commands = parse_shell_lc_plain_commands(command).unwrap_or_else(|| vec![command.to_vec()]);
-    let evaluation = policy.check_multiple(commands.iter());
-
-    match evaluation {
-        Evaluation::Match { decision, .. } => match decision {
-            Decision::Forbidden => Some(ApprovalRequirement::Forbidden {
-                reason: FORBIDDEN_REASON.to_string(),
-            }),
-            Decision::Prompt => {
-                let reason = PROMPT_REASON.to_string();
-                if matches!(approval_policy, AskForApproval::Never) {
-                    Some(ApprovalRequirement::Forbidden { reason })
-                } else {
-                    Some(ApprovalRequirement::NeedsApproval {
-                        reason: Some(reason),
-                    })
-                }
-            }
-            Decision::Allow => Some(ApprovalRequirement::Skip),
-        },
-        Evaluation::NoMatch => None,
-    }
-}
-
-fn load_policy(cwd: &Path) -> Result<Arc<Policy>, ExecPolicyError> {
     let codex_dir = cwd.join(".codex");
     let entries = match fs::read_dir(&codex_dir) {
         Ok(entries) => entries,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(source) => {
             return Err(ExecPolicyError::ReadDir {
                 dir: codex_dir,
@@ -133,14 +101,67 @@ fn load_policy(cwd: &Path) -> Result<Arc<Policy>, ExecPolicyError> {
         codex_dir.display()
     );
 
-    Ok(policy)
+    Ok(Some(policy))
+}
+
+pub(crate) fn evaluate_with_policy(
+    policy: &Policy,
+    command: &[String],
+    approval_policy: AskForApproval,
+) -> Option<ApprovalRequirement> {
+    let commands = parse_shell_lc_plain_commands(command).unwrap_or_else(|| vec![command.to_vec()]);
+    let evaluation = policy.check_multiple(commands.iter());
+
+    match evaluation {
+        Evaluation::Match { decision, .. } => match decision {
+            Decision::Forbidden => Some(ApprovalRequirement::Forbidden {
+                reason: FORBIDDEN_REASON.to_string(),
+            }),
+            Decision::Prompt => {
+                let reason = PROMPT_REASON.to_string();
+                if matches!(approval_policy, AskForApproval::Never) {
+                    Some(ApprovalRequirement::Forbidden { reason })
+                } else {
+                    Some(ApprovalRequirement::NeedsApproval {
+                        reason: Some(reason),
+                    })
+                }
+            }
+            Decision::Allow => Some(ApprovalRequirement::Skip),
+        },
+        Evaluation::NoMatch => None,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::features::Feature;
+    use crate::features::Features;
     use codex_protocol::protocol::AskForApproval;
     use pretty_assertions::assert_eq;
+    use tempfile::tempdir;
+
+    #[test]
+    fn returns_none_when_feature_disabled() {
+        let features = Features::with_defaults();
+        let temp_dir = tempdir().expect("create temp dir");
+
+        let policy = exec_policy_for(&features, temp_dir.path()).expect("policy result");
+
+        assert!(policy.is_none());
+    }
+
+    #[test]
+    fn returns_none_when_codex_dir_is_missing() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::ExecPolicyV2);
+        let temp_dir = tempdir().expect("create temp dir");
+
+        let policy = exec_policy_for(&features, temp_dir.path()).expect("policy result");
+
+        assert!(policy.is_none());
+    }
 
     #[test]
     fn evaluates_bash_lc_inner_commands() {
