@@ -18,6 +18,8 @@ export type CodexExecArgs = {
   sandboxMode?: SandboxMode;
   // --cd
   workingDirectory?: string;
+  // --add-dir
+  additionalDirectories?: string[];
   // --skip-git-repo-check
   skipGitRepoCheck?: boolean;
   // --output-schema
@@ -56,6 +58,12 @@ export class CodexExec {
 
     if (args.workingDirectory) {
       commandArgs.push("--cd", args.workingDirectory);
+    }
+
+    if (args.additionalDirectories?.length) {
+      for (const dir of args.additionalDirectories) {
+        commandArgs.push("--add-dir", dir);
+      }
     }
 
     if (args.skipGitRepoCheck) {

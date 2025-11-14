@@ -45,14 +45,6 @@ fn find_image_message(body: &Value) -> Option<&Value> {
         })
 }
 
-fn extract_output_text(item: &Value) -> Option<&str> {
-    item.get("output").and_then(|value| match value {
-        Value::String(text) => Some(text.as_str()),
-        Value::Object(obj) => obj.get("content").and_then(Value::as_str),
-        _ => None,
-    })
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
@@ -207,10 +199,12 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
     assert_eq!(tool_event.call_id, call_id);
     assert_eq!(tool_event.path, abs_path);
 
-    let body = mock.single_request().body_json();
-    let output_item = mock.single_request().function_call_output(call_id);
-
-    let output_text = extract_output_text(&output_item).expect("output text present");
+    let req = mock.single_request();
+    let body = req.body_json();
+    let output_text = req
+        .function_call_output_content_and_success(call_id)
+        .and_then(|(content, _)| content)
+        .expect("output text present");
     assert_eq!(output_text, "attached local image path");
 
     let image_message =
@@ -299,9 +293,12 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 
-    let body_with_tool_output = mock.single_request().body_json();
-    let output_item = mock.single_request().function_call_output(call_id);
-    let output_text = extract_output_text(&output_item).expect("output text present");
+    let req = mock.single_request();
+    let body_with_tool_output = req.body_json();
+    let output_text = req
+        .function_call_output_content_and_success(call_id)
+        .and_then(|(content, _)| content)
+        .expect("output text present");
     let expected_message = format!("image path `{}` is not a file", abs_path.display());
     assert_eq!(output_text, expected_message);
 
@@ -398,8 +395,11 @@ async fn view_image_tool_placeholder_for_non_image_files() -> anyhow::Result<()>
         "placeholder should mention path: {placeholder}"
     );
 
-    let output_item = mock.single_request().function_call_output(call_id);
-    let output_text = extract_output_text(&output_item).expect("output text present");
+    let output_text = mock
+        .single_request()
+        .function_call_output_content_and_success(call_id)
+        .and_then(|(content, _)| content)
+        .expect("output text present");
     assert_eq!(output_text, "attached local image path");
 
     Ok(())
@@ -456,9 +456,12 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 
-    let body_with_tool_output = mock.single_request().body_json();
-    let output_item = mock.single_request().function_call_output(call_id);
-    let output_text = extract_output_text(&output_item).expect("output text present");
+    let req = mock.single_request();
+    let body_with_tool_output = req.body_json();
+    let output_text = req
+        .function_call_output_content_and_success(call_id)
+        .and_then(|(content, _)| content)
+        .expect("output text present");
     let expected_prefix = format!("unable to locate image at `{}`:", abs_path.display());
     assert!(
         output_text.starts_with(&expected_prefix),

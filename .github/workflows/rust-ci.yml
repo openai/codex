@@ -406,10 +406,10 @@ jobs:
 
       - name: tests
         id: test
-        continue-on-error: true
         run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test
         env:
           RUST_BACKTRACE: 1
+          NEXTEST_STATUS_LEVEL: leak
 
       - name: Save cargo home cache
         if: always() && !cancelled() && steps.cache_cargo_home_restore.outputs.cache-hit != 'true'

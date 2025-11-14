@@ -14,6 +14,7 @@ use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
 use core_test_support::responses;
+use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_apply_patch_function_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -30,12 +31,22 @@ use serde_json::Value;
 use serde_json::json;
 use wiremock::matchers::any;
 
-fn extract_output_text(item: &Value) -> Option<&str> {
-    item.get("output").and_then(|value| match value {
-        Value::String(text) => Some(text.as_str()),
-        Value::Object(obj) => obj.get("content").and_then(Value::as_str),
-        _ => None,
-    })
+fn call_output(req: &ResponsesRequest, call_id: &str) -> (String, Option<bool>) {
+    let raw = req.function_call_output(call_id);
+    assert_eq!(
+        raw.get("call_id").and_then(Value::as_str),
+        Some(call_id),
+        "mismatched call_id in function_call_output"
+    );
+    let (content_opt, success) = match req.function_call_output_content_and_success(call_id) {
+        Some(values) => values,
+        None => panic!("function_call_output present"),
+    };
+    let content = match content_opt {
+        Some(c) => c,
+        None => panic!("function_call_output content present"),
+    };
+    (content, success)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -90,9 +101,8 @@ async fn shell_tool_executes_command_and_streams_output() -> anyhow::Result<()> 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 
     let req = second_mock.single_request();
-    let output_item = req.function_call_output(call_id);
-    let output_text = extract_output_text(&output_item).expect("output text present");
-    let exec_output: Value = serde_json::from_str(output_text)?;
+    let (output_text, _) = call_output(&req, call_id);
+    let exec_output: Value = serde_json::from_str(&output_text)?;
     assert_eq!(exec_output["metadata"]["exit_code"], 0);
     let stdout = exec_output["output"].as_str().expect("stdout field");
     assert_regex_match(r"(?s)^tool harness\n?$", stdout);
@@ -174,12 +184,7 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
     assert!(saw_plan_update, "expected PlanUpdate event");
 
     let req = second_mock.single_request();
-    let output_item = req.function_call_output(call_id);
-    assert_eq!(
-        output_item.get("call_id").and_then(Value::as_str),
-        Some(call_id)
-    );
-    let output_text = extract_output_text(&output_item).expect("output text present");
+    let (output_text, _success_flag) = call_output(&req, call_id);
     assert_eq!(output_text, "Plan updated");
 
     Ok(())
@@ -252,22 +257,12 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
     );
 
     let req = second_mock.single_request();
-    let output_item = req.function_call_output(call_id);
-    assert_eq!(
-        output_item.get("call_id").and_then(Value::as_str),
-        Some(call_id)
-    );
-    let output_text = extract_output_text(&output_item).expect("output text present");
+    let (output_text, success_flag) = call_output(&req, call_id);
     assert!(
         output_text.contains("failed to parse function arguments"),
         "expected parse error message in output text, got {output_text:?}"
     );
-    if let Some(success_flag) = output_item
-        .get("output")
-        .and_then(|value| value.as_object())
-        .and_then(|obj| obj.get("success"))
-        .and_then(serde_json::Value::as_bool)
-    {
+    if let Some(success_flag) = success_flag {
         assert!(
             !success_flag,
             "expected tool output to mark success=false for malformed payload"
@@ -357,12 +352,7 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
     assert!(patch_end_success);
 
     let req = second_mock.single_request();
-    let output_item = req.function_call_output(call_id);
-    assert_eq!(
-        output_item.get("call_id").and_then(Value::as_str),
-        Some(call_id)
-    );
-    let output_text = extract_output_text(&output_item).expect("output text present");
+    let (output_text, _success_flag) = call_output(&req, call_id);
 
     let expected_pattern = format!(
         r"(?s)^Exit code: 0
@@ -372,7 +362,7 @@ Success. Updated the following files:
 A {file_name}
 ?$"
     );
-    assert_regex_match(&expected_pattern, output_text);
+    assert_regex_match(&expected_pattern, &output_text);
 
     let updated_contents = fs::read_to_string(file_path)?;
     assert_eq!(
@@ -437,12 +427,7 @@ async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
     wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 
     let req = second_mock.single_request();
-    let output_item = req.function_call_output(call_id);
-    assert_eq!(
-        output_item.get("call_id").and_then(Value::as_str),
-        Some(call_id)
-    );
-    let output_text = extract_output_text(&output_item).expect("output text present");
+    let (output_text, success_flag) = call_output(&req, call_id);
 
     assert!(
         output_text.contains("apply_patch verification failed"),
@@ -453,12 +438,7 @@ async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
         "expected parse diagnostics in output text, got {output_text:?}"
     );
 
-    if let Some(success_flag) = output_item
-        .get("output")
-        .and_then(|value| value.as_object())
-        .and_then(|obj| obj.get("success"))
-        .and_then(serde_json::Value::as_bool)
-    {
+    if let Some(success_flag) = success_flag {
         assert!(
             !success_flag,
             "expected tool output to mark success=false for parse failures"
