@@ -550,7 +550,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
 
     let expected_requests_inputs = json!([
     [
-        // 0
+        // 0: first request of the user message.
       {
         "content": [
           {
@@ -574,7 +574,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     ]
     ,
     [
-        // 1
+        // 1: first automatic compaction request.
       {
         "content": [
           {
@@ -640,7 +640,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     ]
     ,
     [
-      // 2
+      // 2: request after first automatic compaction.
       {
         "content": [
           {
@@ -674,7 +674,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     ]
     ,
     [
-        // 3
+        // 3: request for second automatic compaction.
       {
         "content": [
           {
@@ -749,7 +749,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
       }
     ]
     ,
-    // 4
+    // 4: request after second automatic compaction.
     [
       {
         "content": [
@@ -784,7 +784,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     ]
     ,
     [
-      // 5
+      // 5: request for third automatic compaction.
       {
         "content": [
           {
@@ -861,7 +861,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     ,
     [
       {
-        // 6
+        // 6: request after third automatic compaction.
         "content": [
           {
             "text": environment_message,
