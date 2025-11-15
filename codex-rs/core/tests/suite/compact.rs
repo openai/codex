@@ -4,6 +4,7 @@ use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
 use codex_core::built_in_model_providers;
+use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
 use codex_core::protocol::ErrorEvent;
@@ -55,8 +56,6 @@ const DUMMY_FUNCTION_NAME: &str = "unsupported_tool";
 const DUMMY_CALL_ID: &str = "call-multi-auto";
 const FUNCTION_CALL_LIMIT_MSG: &str = "function call limit push";
 const POST_AUTO_USER_MSG: &str = "post auto follow-up";
-const COMPACT_PROMPT_MARKER: &str = "You have exceeded the maximum number of tokens, please stop and write a summary of your work for the next agent. Your note should summarize what you finished and what still needs work.";
-pub(super) const TEST_COMPACT_PROMPT: &str = "You have exceeded the maximum number of tokens, please stop and write a summary of your work for the next agent. Your note should summarize what you finished and what still needs work.";
 
 pub(super) const COMPACT_WARNING_MESSAGE: &str = "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start a new conversation when possible to keep conversations small and targeted.";
 
@@ -82,7 +81,7 @@ fn drop_call_id(value: &mut serde_json::Value) {
 }
 
 fn set_test_compact_prompt(config: &mut Config) {
-    config.compact_prompt = Some(TEST_COMPACT_PROMPT.to_string());
+    config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -110,13 +109,13 @@ async fn summarize_context_three_requests_and_instructions() {
     // Mount three expectations, one per request, matched by body content.
     let first_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains("\"text\":\"hello world\"") && !body.contains(COMPACT_PROMPT_MARKER)
+        body.contains("\"text\":\"hello world\"") && !body.contains(SUMMARIZATION_PROMPT)
     };
     let first_request_mock = mount_sse_once_match(&server, first_matcher, sse1).await;
 
     let second_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(COMPACT_PROMPT_MARKER)
+        body.contains(SUMMARIZATION_PROMPT)
     };
     let second_request_mock = mount_sse_once_match(&server, second_matcher, sse2).await;
 
@@ -200,7 +199,7 @@ async fn summarize_context_three_requests_and_instructions() {
     assert_eq!(last2.get("role").unwrap().as_str().unwrap(), "user");
     let text2 = last2["content"][0]["text"].as_str().unwrap();
     assert_eq!(
-        text2, TEST_COMPACT_PROMPT,
+        text2, SUMMARIZATION_PROMPT,
         "expected summarize trigger, got `{text2}`"
     );
 
@@ -257,7 +256,7 @@ async fn summarize_context_three_requests_and_instructions() {
     assert!(
         !messages
             .iter()
-            .any(|(_, text)| text.contains(TEST_COMPACT_PROMPT)),
+            .any(|(_, text)| text.contains(SUMMARIZATION_PROMPT)),
         "third request should not include the summarize trigger"
     );
 
@@ -361,7 +360,7 @@ async fn manual_compact_uses_custom_prompt() {
         if text == custom_prompt {
             found_custom_prompt = true;
         }
-        if text == TEST_COMPACT_PROMPT {
+        if text == SUMMARIZATION_PROMPT {
             found_default_prompt = true;
         }
     }
@@ -526,7 +525,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
 
     let requests_payloads = server.received_requests().await.unwrap();
 
-    let body = requests_payloads.clone()[0]
+    let body = requests_payloads[0]
         .body_json::<serde_json::Value>()
         .unwrap();
     let input = body.get("input").and_then(|v| v.as_array()).unwrap();
@@ -630,7 +629,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
       {
         "content": [
           {
-            "text": "You have exceeded the maximum number of tokens, please stop and write a summary of your work for the next agent. Your note should summarize what you finished and what still needs work.",
+            "text": SUMMARIZATION_PROMPT,
             "type": "input_text"
           }
         ],
@@ -664,7 +663,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
       {
         "content": [
           {
-            "text": "Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to  assist with your own analysis:\nThe task is to create an app. I started to create a react app.",
+            "text": format!("{SUMMARY_PREFIX}\nThe task is to create an app. I started to create a react app."),
             "type": "input_text"
           }
         ],
@@ -698,7 +697,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
       {
         "content": [
           {
-            "text": "Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to  assist with your own analysis:\nThe task is to create an app. I started to create a react app.",
+            "text": format!("{SUMMARY_PREFIX}\nThe task is to create an app. I started to create a react app."),
             "type": "input_text"
           }
         ],
@@ -740,7 +739,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
       {
         "content": [
           {
-            "text": "You have exceeded the maximum number of tokens, please stop and write a summary of your work for the next agent. Your note should summarize what you finished and what still needs work.",
+            "text": SUMMARIZATION_PROMPT,
             "type": "input_text"
           }
         ],
@@ -774,7 +773,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
       {
         "content": [
           {
-            "text": "Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to  assist with your own analysis:\nThe task is to create an app. I started to create a react app. then I realized that I need to create a node app.",
+            "text": format!("{SUMMARY_PREFIX}\nThe task is to create an app. I started to create a react app. then I realized that I need to create a node app."),
             "type": "input_text"
           }
         ],
@@ -808,7 +807,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
       {
         "content": [
           {
-            "text": "Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to  assist with your own analysis:\nThe task is to create an app. I started to create a react app. then I realized that I need to create a node app.",
+            "text": format!("{SUMMARY_PREFIX}\nThe task is to create an app. I started to create a react app. then I realized that I need to create a node app."),
             "type": "input_text"
           }
         ],
@@ -850,7 +849,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
       {
         "content": [
           {
-            "text": "You have exceeded the maximum number of tokens, please stop and write a summary of your work for the next agent. Your note should summarize what you finished and what still needs work.",
+            "text": SUMMARIZATION_PROMPT,
             "type": "input_text"
           }
         ],
@@ -884,7 +883,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
       {
         "content": [
           {
-            "text": "Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to  assist with your own analysis:\nThe task is to create an app. I started to create a react app. then I realized that I need to create a node app. then I realized that I need to create a python app.",
+            "text": format!("{SUMMARY_PREFIX}\nThe task is to create an app. I started to create a react app. then I realized that I need to create a node app. then I realized that I need to create a python app."),
             "type": "input_text"
           }
         ],
@@ -938,7 +937,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(FIRST_AUTO_MSG)
             && !body.contains(SECOND_AUTO_MSG)
-            && !body.contains(COMPACT_PROMPT_MARKER)
+            && !body.contains(SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, first_matcher, sse1).await;
 
@@ -946,27 +945,27 @@ async fn auto_compact_runs_after_token_limit_hit() {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(SECOND_AUTO_MSG)
             && body.contains(FIRST_AUTO_MSG)
-            && !body.contains(COMPACT_PROMPT_MARKER)
+            && !body.contains(SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, second_matcher, sse2).await;
 
     let third_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(COMPACT_PROMPT_MARKER)
+        body.contains(SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, third_matcher, sse3).await;
 
     let resume_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(AUTO_SUMMARY_TEXT)
-            && !body.contains(COMPACT_PROMPT_MARKER)
+            && !body.contains(SUMMARIZATION_PROMPT)
             && !body.contains(POST_AUTO_USER_MSG)
     };
     mount_sse_once_match(&server, resume_matcher, sse_resume).await;
 
     let fourth_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(POST_AUTO_USER_MSG) && !body.contains(COMPACT_PROMPT_MARKER)
+        body.contains(POST_AUTO_USER_MSG) && !body.contains(SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, fourth_matcher, sse4).await;
 
@@ -1030,7 +1029,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
     let is_auto_compact = |req: &wiremock::Request| {
         std::str::from_utf8(&req.body)
             .unwrap_or("")
-            .contains(COMPACT_PROMPT_MARKER)
+            .contains(SUMMARIZATION_PROMPT)
     };
     let auto_compact_count = requests.iter().filter(|req| is_auto_compact(req)).count();
     assert_eq!(
@@ -1053,7 +1052,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         .find_map(|(idx, req)| {
             let body = std::str::from_utf8(&req.body).unwrap_or("");
             (body.contains(AUTO_SUMMARY_TEXT)
-                && !body.contains(COMPACT_PROMPT_MARKER)
+                && !body.contains(SUMMARIZATION_PROMPT)
                 && !body.contains(POST_AUTO_USER_MSG))
             .then_some(idx)
         })
@@ -1065,7 +1064,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         .rev()
         .find_map(|(idx, req)| {
             let body = std::str::from_utf8(&req.body).unwrap_or("");
-            (body.contains(POST_AUTO_USER_MSG) && !body.contains(COMPACT_PROMPT_MARKER))
+            (body.contains(POST_AUTO_USER_MSG) && !body.contains(SUMMARIZATION_PROMPT))
                 .then_some(idx)
         })
         .expect("follow-up request missing");
@@ -1112,7 +1111,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         .and_then(|text| text.as_str())
         .unwrap_or_default();
     assert_eq!(
-        last_text, TEST_COMPACT_PROMPT,
+        last_text, SUMMARIZATION_PROMPT,
         "auto compact should send the summarization prompt as a user message",
     );
 
@@ -1193,7 +1192,7 @@ async fn auto_compact_persists_rollout_entries() {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(FIRST_AUTO_MSG)
             && !body.contains(SECOND_AUTO_MSG)
-            && !body.contains(COMPACT_PROMPT_MARKER)
+            && !body.contains(SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, first_matcher, sse1).await;
 
@@ -1201,13 +1200,13 @@ async fn auto_compact_persists_rollout_entries() {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(SECOND_AUTO_MSG)
             && body.contains(FIRST_AUTO_MSG)
-            && !body.contains(COMPACT_PROMPT_MARKER)
+            && !body.contains(SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, second_matcher, sse2).await;
 
     let third_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(COMPACT_PROMPT_MARKER)
+        body.contains(SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, third_matcher, sse3).await;
 
@@ -1306,19 +1305,19 @@ async fn auto_compact_stops_after_failed_attempt() {
 
     let first_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(FIRST_AUTO_MSG) && !body.contains(COMPACT_PROMPT_MARKER)
+        body.contains(FIRST_AUTO_MSG) && !body.contains(SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, first_matcher, sse1.clone()).await;
 
     let second_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(COMPACT_PROMPT_MARKER)
+        body.contains(SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, second_matcher, sse2.clone()).await;
 
     let third_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        !body.contains(COMPACT_PROMPT_MARKER) && body.contains(SUMMARY_TEXT)
+        !body.contains(SUMMARIZATION_PROMPT) && body.contains(SUMMARY_TEXT)
     };
     mount_sse_once_match(&server, third_matcher, sse3.clone()).await;
 
@@ -1379,7 +1378,7 @@ async fn auto_compact_stops_after_failed_attempt() {
                 .and_then(|items| items.first())
                 .and_then(|entry| entry.get("text"))
                 .and_then(|text| text.as_str())
-                .map(|text| text == TEST_COMPACT_PROMPT)
+                .map(|text| text == SUMMARIZATION_PROMPT)
                 .unwrap_or(false)
     });
     assert!(
@@ -1486,7 +1485,7 @@ async fn manual_compact_retries_after_context_window_error() {
             .and_then(|items| items.first())
             .and_then(|entry| entry.get("text"))
             .and_then(|text| text.as_str()),
-        Some(TEST_COMPACT_PROMPT),
+        Some(SUMMARIZATION_PROMPT),
         "compact attempt should include summarization prompt"
     );
     assert_eq!(
@@ -1497,7 +1496,7 @@ async fn manual_compact_retries_after_context_window_error() {
             .and_then(|items| items.first())
             .and_then(|entry| entry.get("text"))
             .and_then(|text| text.as_str()),
-        Some(TEST_COMPACT_PROMPT),
+        Some(SUMMARIZATION_PROMPT),
         "retry attempt should include summarization prompt"
     );
     assert_eq!(
@@ -1643,13 +1642,13 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         "first turn request missing first user message"
     );
     assert!(
-        !contains_user_text(&first_turn_input, TEST_COMPACT_PROMPT),
+        !contains_user_text(&first_turn_input, SUMMARIZATION_PROMPT),
         "first turn request should not include summarization prompt"
     );
 
     let first_compact_input = requests[1].input();
     assert!(
-        contains_user_text(&first_compact_input, TEST_COMPACT_PROMPT),
+        contains_user_text(&first_compact_input, SUMMARIZATION_PROMPT),
         "first compact request should include summarization prompt"
     );
     assert!(
@@ -1669,7 +1668,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
 
     let second_compact_input = requests[3].input();
     assert!(
-        contains_user_text(&second_compact_input, TEST_COMPACT_PROMPT),
+        contains_user_text(&second_compact_input, SUMMARIZATION_PROMPT),
         "second compact request should include summarization prompt"
     );
     assert!(
@@ -1841,7 +1840,7 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
         "first request should contain the user input"
     );
     assert!(
-        request_bodies[1].contains(COMPACT_PROMPT_MARKER),
+        request_bodies[1].contains(SUMMARIZATION_PROMPT),
         "first auto compact request should include the summarization prompt"
     );
     assert!(
@@ -1849,7 +1848,7 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
         "function call output should be sent before the second auto compact"
     );
     assert!(
-        request_bodies[4].contains(COMPACT_PROMPT_MARKER),
+        request_bodies[4].contains(SUMMARIZATION_PROMPT),
         "second auto compact request should include the summarization prompt"
     );
 }
@@ -1945,7 +1944,7 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
 
     let auto_compact_body = auto_compact_mock.single_request().body_json().to_string();
     assert!(
-        auto_compact_body.contains(COMPACT_PROMPT_MARKER),
+        auto_compact_body.contains(SUMMARIZATION_PROMPT),
         "auto compact request should include the summarization prompt after exceeding 95% (limit {limit})"
     );
 }
