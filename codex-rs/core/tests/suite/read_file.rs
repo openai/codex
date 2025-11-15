@@ -1,25 +1,11 @@
 #![cfg(not(target_os = "windows"))]
 
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::user_input::UserInput;
-use core_test_support::responses;
-use core_test_support::responses::ev_assistant_message;
-use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_function_call;
-use core_test_support::responses::ev_response_created;
-use core_test_support::responses::sse;
+use core_test_support::responses::mount_function_call_agent_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
-use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
-use serde_json::Value;
-use wiremock::matchers::any;
+use serde_json::json;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "disabled until we enable read_file tool"]
@@ -27,72 +13,29 @@ async fn read_file_tool_returns_requested_lines() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
+    let test = test_codex().build(&server).await?;
 
-    let TestCodex {
-        codex,
-        cwd,
-        session_configured,
-        ..
-    } = test_codex().build(&server).await?;
-
-    let file_path = cwd.path().join("sample.txt");
+    let file_path = test.cwd.path().join("sample.txt");
     std::fs::write(&file_path, "first\nsecond\nthird\nfourth\n")?;
     let file_path = file_path.to_string_lossy().to_string();
 
     let call_id = "read-file-call";
-    let arguments = serde_json::json!({
+    let arguments = json!({
         "file_path": file_path,
         "offset": 2,
         "limit": 2,
     })
     .to_string();
 
-    let first_response = sse(vec![
-        ev_response_created("resp-1"),
-        ev_function_call(call_id, "read_file", &arguments),
-        ev_completed("resp-1"),
-    ]);
-    responses::mount_sse_once_match(&server, any(), first_response).await;
+    let mocks = mount_function_call_agent_response(&server, call_id, &arguments, "read_file").await;
 
-    let second_response = sse(vec![
-        ev_assistant_message("msg-1", "done"),
-        ev_completed("resp-2"),
-    ]);
-    let second_mock = responses::mount_sse_once_match(&server, any(), second_response).await;
+    test.submit_turn("please inspect sample.txt").await?;
 
-    let session_model = session_configured.model.clone();
-
-    codex
-        .submit(Op::UserTurn {
-            items: vec![UserInput::Text {
-                text: "please inspect sample.txt".into(),
-            }],
-            final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            model: session_model,
-            effort: None,
-            summary: ReasoningSummary::Auto,
-        })
-        .await?;
-
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
-
-    let req = second_mock.single_request();
-    let tool_output_item = req.function_call_output(call_id);
-    assert_eq!(
-        tool_output_item.get("call_id").and_then(Value::as_str),
-        Some(call_id)
-    );
-    let output_text = tool_output_item
-        .get("output")
-        .and_then(|value| match value {
-            Value::String(text) => Some(text.as_str()),
-            Value::Object(obj) => obj.get("content").and_then(Value::as_str),
-            _ => None,
-        })
-        .expect("output text present");
+    let req = mocks.completion.single_request();
+    let (output_text_opt, _) = req
+        .function_call_output_content_and_success(call_id)
+        .expect("output present");
+    let output_text = output_text_opt.expect("output text present");
     assert_eq!(output_text, "L2: second\nL3: third");
 
     Ok(())

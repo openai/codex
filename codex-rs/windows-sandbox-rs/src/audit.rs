@@ -1,6 +1,5 @@
 use crate::token::world_sid;
 use crate::winutil::to_wide;
-use anyhow::anyhow;
 use anyhow::Result;
 use std::collections::HashSet;
 use std::ffi::c_void;
@@ -177,7 +176,7 @@ pub fn audit_everyone_writable(
     cwd: &Path,
     env: &std::collections::HashMap<String, String>,
     logs_base_dir: Option<&Path>,
-) -> Result<()> {
+) -> Result<Vec<PathBuf>> {
     let start = Instant::now();
     let mut flagged: Vec<PathBuf> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
@@ -265,14 +264,7 @@ pub fn audit_everyone_writable(
             ),
             logs_base_dir,
         );
-        let mut list_err = String::new();
-        for p in flagged {
-            list_err.push_str(&format!("\n - {}", p.display()));
-        }
-        return Err(anyhow!(
-            "Refusing to run: found directories writable by Everyone: {}",
-            list_err
-        ));
+        return Ok(flagged);
     }
     // Log success once if nothing flagged
     crate::logging::log_note(
@@ -281,7 +273,7 @@ pub fn audit_everyone_writable(
         ),
         logs_base_dir,
     );
-    Ok(())
+    Ok(Vec::new())
 }
 // Fast mask-based check: does the DACL contain any ACCESS_ALLOWED ACE for
 // Everyone that includes generic or specific write bits? Skips inherit-only

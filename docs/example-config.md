@@ -136,8 +136,8 @@ file_opener = "vscode"
 ################################################################################
 
 [tui]
-# Desktop notifications from the TUI: boolean or filtered list. Default: false
-# Examples: true | ["agent-turn-complete", "approval-requested"]
+# Desktop notifications from the TUI: boolean or filtered list. Default: true
+# Examples: false | ["agent-turn-complete", "approval-requested"]
 notifications = false
 
 # Suppress internal reasoning events from output (default: false)
@@ -159,6 +159,7 @@ windows_wsl_setup_acknowledged = false
 # In-product notices (mostly set automatically by Codex).
 [notice]
 # hide_full_access_warning = true
+# hide_rate_limit_model_nudge = true
 
 ################################################################################
 # Authentication & Login
