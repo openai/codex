@@ -60,6 +60,8 @@ use codex_app_server_protocol::RemoveConversationSubscriptionResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ResumeConversationParams;
 use codex_app_server_protocol::ResumeConversationResponse;
+use codex_app_server_protocol::ReviewDecision as V2ReviewDecision;
+use codex_app_server_protocol::SandboxCommandAssessment as V2SandboxCommandAssessment;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserMessageResponse;
@@ -1245,7 +1247,7 @@ impl CodexMessageProcessor {
                 // Auto-attach a conversation listener when starting a thread.
                 // Use the same behavior as the v1 API with experimental_raw_events=false.
                 if let Err(err) = self
-                    .attach_conversation_listener(conversation_id, false)
+                    .attach_conversation_listener(conversation_id, false, ApiVersion::V2)
                     .await
                 {
                     tracing::warn!(
@@ -1523,7 +1525,7 @@ impl CodexMessageProcessor {
             }) => {
                 // Auto-attach a conversation listener when resuming a thread.
                 if let Err(err) = self
-                    .attach_conversation_listener(conversation_id, false)
+                    .attach_conversation_listener(conversation_id, false, ApiVersion::V2)
                     .await
                 {
                     tracing::warn!(
@@ -2376,7 +2378,7 @@ impl CodexMessageProcessor {
             experimental_raw_events,
         } = params;
         match self
-            .attach_conversation_listener(conversation_id, experimental_raw_events)
+            .attach_conversation_listener(conversation_id, experimental_raw_events, ApiVersion::V1)
             .await
         {
             Ok(subscription_id) => {
@@ -2417,6 +2419,7 @@ impl CodexMessageProcessor {
         &mut self,
         conversation_id: ConversationId,
         experimental_raw_events: bool,
+        api_version: ApiVersion,
     ) -> Result<Uuid, JSONRPCErrorError> {
         let conversation = match self
             .conversation_manager
@@ -2440,7 +2443,16 @@ impl CodexMessageProcessor {
 
         let outgoing_for_task = self.outgoing.clone();
         let pending_interrupts = self.pending_interrupts.clone();
+        let api_version_for_task = api_version;
         tokio::spawn(async move {
+            // This is a temporary solution to track the current "virtual" ThreadItem for this conversation.
+            //
+            // This is necessary because we don't have all the items defined in core yet, so as a shortcut
+            // we are mapping some of the existing EventMsg payloads and constructing a ThreadItem on the fly.
+            //
+            // As an example, EventMsg::ExecCommandBegin and EventMsg::ExecCommandEnd are mapped to
+            // a single ThreadItem::CommandExecution that gets mutated as the command execution progresses.
+            let mut current_virtual_item: Option<ThreadItem> = None;
             loop {
                 tokio::select! {
                     _ = &mut cancel_rx => {
@@ -2495,6 +2507,8 @@ impl CodexMessageProcessor {
                             conversation.clone(),
                             outgoing_for_task.clone(),
                             pending_interrupts.clone(),
+                            api_version_for_task,
+                            &mut current_virtual_item,
                         )
                         .await;
                     }

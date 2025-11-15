@@ -15,6 +15,7 @@ use crate::protocol::PatchApplyEndEvent;
 use crate::protocol::TurnDiffEvent;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::sandboxing::ToolError;
+use codex_protocol::parse_command::ParsedCommand;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -61,6 +62,7 @@ pub(crate) async fn emit_exec_command_begin(
     ctx: ToolEventCtx<'_>,
     command: &[String],
     cwd: &Path,
+    parsed_cmd: &[ParsedCommand],
     source: ExecCommandSource,
     interaction_input: Option<String>,
 ) {
@@ -69,9 +71,10 @@ pub(crate) async fn emit_exec_command_begin(
             ctx.turn,
             EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                 call_id: ctx.call_id.to_string(),
+                turn_id: ctx.turn.sub_id.clone(),
                 command: command.to_vec(),
                 cwd: cwd.to_path_buf(),
-                parsed_cmd: parse_command(command),
+                parsed_cmd: parsed_cmd.to_vec(),
                 source,
                 interaction_input,
             }),
@@ -84,6 +87,7 @@ pub(crate) enum ToolEmitter {
         command: Vec<String>,
         cwd: PathBuf,
         source: ExecCommandSource,
+        parsed_cmd: Vec<ParsedCommand>,
     },
     ApplyPatch {
         changes: HashMap<PathBuf, FileChange>,
@@ -94,15 +98,18 @@ pub(crate) enum ToolEmitter {
         cwd: PathBuf,
         source: ExecCommandSource,
         interaction_input: Option<String>,
+        parsed_cmd: Vec<ParsedCommand>,
     },
 }
 
 impl ToolEmitter {
     pub fn shell(command: Vec<String>, cwd: PathBuf, source: ExecCommandSource) -> Self {
+        let parsed_cmd = parse_command(&command);
         Self::Shell {
             command,
             cwd,
             source,
+            parsed_cmd,
         }
     }
 
@@ -119,11 +126,13 @@ impl ToolEmitter {
         source: ExecCommandSource,
         interaction_input: Option<String>,
     ) -> Self {
+        let parsed_cmd = parse_command(command);
         Self::UnifiedExec {
             command: command.to_vec(),
             cwd,
             source,
             interaction_input,
+            parsed_cmd,
         }
     }
 
@@ -134,46 +143,74 @@ impl ToolEmitter {
                     command,
                     cwd,
                     source,
+                    parsed_cmd,
                 },
                 ToolEventStage::Begin,
             ) => {
-                emit_exec_command_begin(ctx, command, cwd.as_path(), *source, None).await;
+                emit_exec_command_begin(ctx, command, cwd.as_path(), parsed_cmd, *source, None)
+                    .await;
             }
-            (Self::Shell { .. }, ToolEventStage::Success(output)) => {
-                emit_exec_end(
-                    ctx,
-                    output.stdout.text.clone(),
-                    output.stderr.text.clone(),
-                    output.aggregated_output.text.clone(),
-                    output.exit_code,
-                    output.duration,
-                    format_exec_output_str(&output),
-                )
-                .await;
+            (
+                Self::Shell {
+                    command,
+                    cwd,
+                    source,
+                    parsed_cmd,
+                },
+                ToolEventStage::Success(output),
+            ) => {
+                let meta = ExecEventMetadata {
+                    command,
+                    cwd: cwd.as_path(),
+                    parsed_cmd,
+                    source: *source,
+                    interaction_input: None,
+                };
+                emit_exec_end(ctx, meta, payload_from_output(&output)).await;
             }
-            (Self::Shell { .. }, ToolEventStage::Failure(ToolEventFailure::Output(output))) => {
-                emit_exec_end(
-                    ctx,
-                    output.stdout.text.clone(),
-                    output.stderr.text.clone(),
-                    output.aggregated_output.text.clone(),
-                    output.exit_code,
-                    output.duration,
-                    format_exec_output_str(&output),
-                )
-                .await;
+            (
+                Self::Shell {
+                    command,
+                    cwd,
+                    source,
+                    parsed_cmd,
+                },
+                ToolEventStage::Failure(ToolEventFailure::Output(output)),
+            ) => {
+                let meta = ExecEventMetadata {
+                    command,
+                    cwd: cwd.as_path(),
+                    parsed_cmd,
+                    source: *source,
+                    interaction_input: None,
+                };
+                emit_exec_end(ctx, meta, payload_from_output(&output)).await;
             }
-            (Self::Shell { .. }, ToolEventStage::Failure(ToolEventFailure::Message(message))) => {
-                emit_exec_end(
-                    ctx,
-                    String::new(),
-                    (*message).to_string(),
-                    (*message).to_string(),
-                    -1,
-                    Duration::ZERO,
-                    message.clone(),
-                )
-                .await;
+            (
+                Self::Shell {
+                    command,
+                    cwd,
+                    source,
+                    parsed_cmd,
+                },
+                ToolEventStage::Failure(ToolEventFailure::Message(message)),
+            ) => {
+                let meta = ExecEventMetadata {
+                    command,
+                    cwd: cwd.as_path(),
+                    parsed_cmd,
+                    source: *source,
+                    interaction_input: None,
+                };
+                let payload = ExecCommandResultPayload {
+                    stdout: String::new(),
+                    stderr: (*message).to_string(),
+                    aggregated_output: (*message).to_string(),
+                    exit_code: -1,
+                    duration: Duration::ZERO,
+                    formatted_output: message.clone(),
+                };
+                emit_exec_end(ctx, meta, payload).await;
             }
 
             (
@@ -231,6 +268,7 @@ impl ToolEmitter {
                     cwd,
                     source,
                     interaction_input,
+                    parsed_cmd,
                 },
                 ToolEventStage::Begin,
             ) => {
@@ -238,52 +276,76 @@ impl ToolEmitter {
                     ctx,
                     command,
                     cwd.as_path(),
+                    parsed_cmd,
                     *source,
                     interaction_input.clone(),
                 )
                 .await;
             }
-            (Self::UnifiedExec { .. }, ToolEventStage::Success(output)) => {
-                emit_exec_end(
-                    ctx,
-                    output.stdout.text.clone(),
-                    output.stderr.text.clone(),
-                    output.aggregated_output.text.clone(),
-                    output.exit_code,
-                    output.duration,
-                    format_exec_output_str(&output),
-                )
-                .await;
+            (
+                Self::UnifiedExec {
+                    command,
+                    cwd,
+                    source,
+                    interaction_input,
+                    parsed_cmd,
+                },
+                ToolEventStage::Success(output),
+            ) => {
+                let meta = ExecEventMetadata {
+                    command,
+                    cwd: cwd.as_path(),
+                    parsed_cmd,
+                    source: *source,
+                    interaction_input: interaction_input.clone(),
+                };
+                emit_exec_end(ctx, meta, payload_from_output(&output)).await;
             }
             (
-                Self::UnifiedExec { .. },
+                Self::UnifiedExec {
+                    command,
+                    cwd,
+                    source,
+                    interaction_input,
+                    parsed_cmd,
+                },
                 ToolEventStage::Failure(ToolEventFailure::Output(output)),
             ) => {
-                emit_exec_end(
-                    ctx,
-                    output.stdout.text.clone(),
-                    output.stderr.text.clone(),
-                    output.aggregated_output.text.clone(),
-                    output.exit_code,
-                    output.duration,
-                    format_exec_output_str(&output),
-                )
-                .await;
+                let meta = ExecEventMetadata {
+                    command,
+                    cwd: cwd.as_path(),
+                    parsed_cmd,
+                    source: *source,
+                    interaction_input: interaction_input.clone(),
+                };
+                emit_exec_end(ctx, meta, payload_from_output(&output)).await;
             }
             (
-                Self::UnifiedExec { .. },
+                Self::UnifiedExec {
+                    command,
+                    cwd,
+                    source,
+                    interaction_input,
+                    parsed_cmd,
+                },
                 ToolEventStage::Failure(ToolEventFailure::Message(message)),
             ) => {
-                emit_exec_end(
-                    ctx,
-                    String::new(),
-                    (*message).to_string(),
-                    (*message).to_string(),
-                    -1,
-                    Duration::ZERO,
-                    message.clone(),
-                )
-                .await;
+                let meta = ExecEventMetadata {
+                    command,
+                    cwd: cwd.as_path(),
+                    parsed_cmd,
+                    source: *source,
+                    interaction_input: interaction_input.clone(),
+                };
+                let payload = ExecCommandResultPayload {
+                    stdout: String::new(),
+                    stderr: (*message).to_string(),
+                    aggregated_output: (*message).to_string(),
+                    exit_code: -1,
+                    duration: Duration::ZERO,
+                    formatted_output: message.clone(),
+                };
+                emit_exec_end(ctx, meta, payload).await;
             }
         }
     }
@@ -340,26 +402,56 @@ impl ToolEmitter {
     }
 }
 
-async fn emit_exec_end(
-    ctx: ToolEventCtx<'_>,
+struct ExecEventMetadata<'a> {
+    command: &'a [String],
+    cwd: &'a Path,
+    parsed_cmd: &'a [ParsedCommand],
+    source: ExecCommandSource,
+    interaction_input: Option<String>,
+}
+
+struct ExecCommandResultPayload {
     stdout: String,
     stderr: String,
     aggregated_output: String,
     exit_code: i32,
     duration: Duration,
     formatted_output: String,
+}
+
+fn payload_from_output(output: &ExecToolCallOutput) -> ExecCommandResultPayload {
+    ExecCommandResultPayload {
+        stdout: output.stdout.text.clone(),
+        stderr: output.stderr.text.clone(),
+        aggregated_output: output.aggregated_output.text.clone(),
+        exit_code: output.exit_code,
+        duration: output.duration,
+        formatted_output: format_exec_output_str(output),
+    }
+}
+
+async fn emit_exec_end(
+    ctx: ToolEventCtx<'_>,
+    meta: ExecEventMetadata<'_>,
+    payload: ExecCommandResultPayload,
 ) {
     ctx.session
         .send_event(
             ctx.turn,
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id: ctx.call_id.to_string(),
-                stdout,
-                stderr,
-                aggregated_output,
-                exit_code,
-                duration,
-                formatted_output,
+                turn_id: ctx.turn.sub_id.clone(),
+                command: meta.command.to_vec(),
+                cwd: meta.cwd.to_path_buf(),
+                parsed_cmd: meta.parsed_cmd.to_vec(),
+                source: meta.source,
+                interaction_input: meta.interaction_input,
+                stdout: payload.stdout,
+                stderr: payload.stderr,
+                aggregated_output: payload.aggregated_output,
+                exit_code: payload.exit_code,
+                duration: payload.duration,
+                formatted_output: payload.formatted_output,
             }),
         )
         .await;

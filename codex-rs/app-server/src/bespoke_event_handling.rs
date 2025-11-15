@@ -5,14 +5,20 @@ use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
 use codex_app_server_protocol::ApplyPatchApprovalResponse;
+use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
+use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
+use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
+use codex_app_server_protocol::FileChangeRequestApprovalParams;
+use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::InterruptConversationResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::McpToolCallError;
 use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus;
+use codex_app_server_protocol::ParsedCommand as V2ParsedCommand;
 use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
 use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
 use codex_app_server_protocol::ReasoningTextDeltaNotification;
@@ -25,6 +31,7 @@ use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
+use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
@@ -33,8 +40,9 @@ use codex_protocol::ConversationId;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use tracing::error;
+use tracing::warn;
 
-type JsonRpcResult = serde_json::Value;
+type JsonValue = serde_json::Value;
 
 pub(crate) async fn apply_bespoke_event_handling(
     event: Event,
@@ -42,6 +50,8 @@ pub(crate) async fn apply_bespoke_event_handling(
     conversation: Arc<CodexConversation>,
     outgoing: Arc<OutgoingMessageSender>,
     pending_interrupts: PendingInterrupts,
+    api_version: ApiVersion,
+    current_virtual_item: &mut Option<ThreadItem>,
 ) {
     let Event { id: event_id, msg } = event;
     match msg {
@@ -50,22 +60,90 @@ pub(crate) async fn apply_bespoke_event_handling(
             changes,
             reason,
             grant_root,
-        }) => {
-            let params = ApplyPatchApprovalParams {
-                conversation_id,
-                call_id,
-                file_changes: changes,
-                reason,
-                grant_root,
-            };
-            let rx = outgoing
-                .send_request(ServerRequestPayload::ApplyPatchApproval(params))
-                .await;
-            // TODO(mbolin): Enforce a timeout so this task does not live indefinitely?
-            tokio::spawn(async move {
-                on_patch_approval_response(event_id, rx, conversation).await;
-            });
-        }
+        }) => match api_version {
+            ApiVersion::V1 => {
+                let params = ApplyPatchApprovalParams {
+                    conversation_id,
+                    call_id,
+                    file_changes: changes,
+                    reason,
+                    grant_root,
+                };
+                let rx = outgoing
+                    .send_request(ServerRequestPayload::ApplyPatchApproval(params))
+                    .await;
+                tokio::spawn(async move {
+                    on_patch_approval_response(event_id, rx, conversation).await;
+                });
+            }
+            ApiVersion::V2 => {
+                // Until we migrate the core to be aware of a first class FileChangeItem
+                // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
+                let item_id = call_id.clone();
+                let params = FileChangeRequestApprovalParams {
+                    thread_id: conversation_id.to_string(),
+                    // TODO: use the actual IDs once we have them
+                    turn_id: "placeholder_turn_id".to_string(),
+                    item_id,
+                    reason,
+                    grant_root,
+                };
+                let rx = outgoing
+                    .send_request(ServerRequestPayload::FileChangeRequestApproval(params))
+                    .await;
+                tokio::spawn(async move {
+                    on_file_change_request_approval_response(event_id, rx, conversation).await;
+                });
+            }
+        },
+        EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
+            call_id,
+            turn_id,
+            command,
+            cwd,
+            reason,
+            risk,
+            parsed_cmd,
+        }) => match api_version {
+            ApiVersion::V1 => {
+                let params = ExecCommandApprovalParams {
+                    conversation_id,
+                    call_id,
+                    command,
+                    cwd,
+                    reason,
+                    risk,
+                    parsed_cmd,
+                };
+                let rx = outgoing
+                    .send_request(ServerRequestPayload::ExecCommandApproval(params))
+                    .await;
+                tokio::spawn(async move {
+                    on_exec_approval_response(event_id, rx, conversation).await;
+                });
+            }
+            ApiVersion::V2 => {
+                let params = CommandExecutionRequestApprovalParams {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: turn_id.clone(),
+                    // Until we migrate the core to be aware of a first class CommandExecutionItem
+                    // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
+                    item_id: call_id.clone(),
+                    reason,
+                    risk: risk.map(V2SandboxCommandAssessment::from),
+                    parsed_cmd: parsed_cmd.into_iter().map(V2ParsedCommand::from).collect(),
+                };
+                let rx = outgoing
+                    .send_request(ServerRequestPayload::CommandExecutionRequestApproval(
+                        params,
+                    ))
+                    .await;
+                tokio::spawn(async move {
+                    on_command_execution_request_approval_response(event_id, rx, conversation)
+                        .await;
+                });
+            }
+        },
         // TODO(celia): properly construct McpToolCall TurnItem in core.
         EventMsg::McpToolCallBegin(begin_event) => {
             let notification = construct_mcp_tool_call_notification(begin_event).await;
@@ -121,32 +199,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 ))
                 .await;
         }
-        EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
-            call_id,
-            command,
-            cwd,
-            reason,
-            risk,
-            parsed_cmd,
-        }) => {
-            let params = ExecCommandApprovalParams {
-                conversation_id,
-                call_id,
-                command,
-                cwd,
-                reason,
-                risk,
-                parsed_cmd,
-            };
-            let rx = outgoing
-                .send_request(ServerRequestPayload::ExecCommandApproval(params))
-                .await;
-
-            // TODO(mbolin): Enforce a timeout so this task does not live indefinitely?
-            tokio::spawn(async move {
-                on_exec_approval_response(event_id, rx, conversation).await;
-            });
-        }
         EventMsg::TokenCount(token_count_event) => {
             if let Some(rate_limits) = token_count_event.rate_limits {
                 outgoing
@@ -171,6 +223,91 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing
                 .send_server_notification(ServerNotification::ItemCompleted(notification))
                 .await;
+        }
+        EventMsg::ExecCommandBegin(exec_command_begin_event) => {
+            let item = ThreadItem::CommandExecution {
+                id: exec_command_begin_event.call_id.clone(),
+                command: exec_command_begin_event.command.join(" "),
+                cwd: exec_command_begin_event.cwd,
+                status: CommandExecutionStatus::InProgress,
+                parsed_cmd: exec_command_begin_event
+                    .parsed_cmd
+                    .into_iter()
+                    .map(V2ParsedCommand::from)
+                    .collect(),
+                aggregated_output: None,
+                exit_code: None,
+                duration_ms: None,
+            };
+            *current_virtual_item = Some(item.clone());
+            let notification = ItemStartedNotification { item };
+            outgoing
+                .send_server_notification(ServerNotification::ItemStarted(notification))
+                .await;
+        }
+        EventMsg::ExecCommandOutputDelta(_exec_command_output_delta_event) => {
+            // TODO: implement
+        }
+        EventMsg::ExecCommandEnd(exec_command_end_event) => {
+            let ExecCommandEndEvent {
+                call_id,
+                aggregated_output,
+                exit_code,
+                duration,
+                ..
+            } = exec_command_end_event;
+
+            let Some(mut item) = current_virtual_item.take() else {
+                error!(
+                    "ExecCommandEnd received but current_virtual_item is None; expecting a CommandExecution item with id={call_id}"
+                );
+                return;
+            };
+
+            match &mut item {
+                ThreadItem::CommandExecution {
+                    id,
+                    status,
+                    aggregated_output: stored_aggregated_output,
+                    exit_code: stored_exit_code,
+                    duration_ms,
+                    ..
+                } => {
+                    if *id != call_id {
+                        error!(
+                            "ExecCommandEnd call_id={call_id} did not match current_virtual_item id={id}"
+                        );
+                    }
+                    *status = if exit_code == 0 {
+                        CommandExecutionStatus::Completed
+                    } else {
+                        CommandExecutionStatus::Failed
+                    };
+                    *stored_aggregated_output = Some(aggregated_output);
+                    *stored_exit_code = Some(exit_code);
+                    let duration_ms_value = match i64::try_from(duration.as_millis()) {
+                        Ok(value) => value,
+                        Err(_) => {
+                            warn!(
+                                "duration {}ms exceeded i64::MAX; clamping value",
+                                duration.as_millis()
+                            );
+                            i64::MAX
+                        }
+                    };
+                    *duration_ms = Some(duration_ms_value);
+                    let notification = ItemCompletedNotification { item };
+                    outgoing
+                        .send_server_notification(ServerNotification::ItemCompleted(notification))
+                        .await;
+                    *current_virtual_item = None;
+                }
+                other => {
+                    error!(
+                        "current_virtual_item is {other:?} when ExecCommandEnd call_id={call_id} arrived; expected a CommandExecution item"
+                    );
+                }
+            }
         }
         // If this is a TurnAborted, reply to any pending interrupt requests.
         EventMsg::TurnAborted(turn_aborted_event) => {
@@ -202,7 +339,7 @@ pub(crate) async fn apply_bespoke_event_handling(
 
 async fn on_patch_approval_response(
     event_id: String,
-    receiver: oneshot::Receiver<JsonRpcResult>,
+    receiver: oneshot::Receiver<JsonValue>,
     codex: Arc<CodexConversation>,
 ) {
     let response = receiver.await;
@@ -244,7 +381,7 @@ async fn on_patch_approval_response(
 
 async fn on_exec_approval_response(
     event_id: String,
-    receiver: oneshot::Receiver<JsonRpcResult>,
+    receiver: oneshot::Receiver<JsonValue>,
     conversation: Arc<CodexConversation>,
 ) {
     let response = receiver.await;
@@ -278,6 +415,83 @@ async fn on_exec_approval_response(
     }
 }
 
+async fn on_file_change_request_approval_response(
+    event_id: String,
+    receiver: oneshot::Receiver<JsonValue>,
+    codex: Arc<CodexConversation>,
+) {
+    let response = receiver.await;
+    let value = match response {
+        Ok(value) => value,
+        Err(err) => {
+            error!("request failed: {err:?}");
+            if let Err(submit_err) = codex
+                .submit(Op::PatchApproval {
+                    id: event_id.clone(),
+                    decision: ReviewDecision::Denied,
+                })
+                .await
+            {
+                error!("failed to submit denied PatchApproval after request failure: {submit_err}");
+            }
+            return;
+        }
+    };
+
+    let response = serde_json::from_value::<FileChangeRequestApprovalResponse>(value)
+        .unwrap_or_else(|err| {
+            error!("failed to deserialize FileChangeRequestApprovalResponse: {err}");
+            FileChangeRequestApprovalResponse {
+                decision: V2ReviewDecision::Denied,
+            }
+        });
+
+    let decision = response.decision.to_core();
+    if let Err(err) = codex
+        .submit(Op::PatchApproval {
+            id: event_id,
+            decision,
+        })
+        .await
+    {
+        error!("failed to submit PatchApproval: {err}");
+    }
+}
+
+async fn on_command_execution_request_approval_response(
+    event_id: String,
+    receiver: oneshot::Receiver<JsonValue>,
+    conversation: Arc<CodexConversation>,
+) {
+    let response = receiver.await;
+    let value = match response {
+        Ok(value) => value,
+        Err(err) => {
+            error!("request failed: {err:?}");
+            return;
+        }
+    };
+
+    let response = serde_json::from_value::<CommandExecutionRequestApprovalResponse>(value)
+        .unwrap_or_else(|err| {
+            error!("failed to deserialize CommandExecutionRequestApprovalResponse: {err}");
+            CommandExecutionRequestApprovalResponse {
+                decision: V2ReviewDecision::Denied,
+            }
+        });
+
+    let decision = response.decision.to_core();
+    if let Err(err) = conversation
+        .submit(Op::ExecApproval {
+            id: event_id,
+            decision,
+        })
+        .await
+    {
+        error!("failed to submit ExecApproval: {err}");
+    }
+}
+
 /// similar to handle_mcp_tool_call_begin in exec
 async fn construct_mcp_tool_call_notification(
     begin_event: McpToolCallBeginEvent,
@@ -287,10 +501,7 @@ async fn construct_mcp_tool_call_notification(
         server: begin_event.invocation.server,
         tool: begin_event.invocation.tool,
         status: McpToolCallStatus::InProgress,
-        arguments: begin_event
-            .invocation
-            .arguments
-            .unwrap_or(JsonRpcResult::Null),
+        arguments: begin_event.invocation.arguments.unwrap_or(JsonValue::Null),
         result: None,
         error: None,
     };
@@ -328,10 +539,7 @@ async fn construct_mcp_tool_call_end_notification(
         server: end_event.invocation.server,
         tool: end_event.invocation.tool,
         status,
-        arguments: end_event
-            .invocation
-            .arguments
-            .unwrap_or(JsonRpcResult::Null),
+        arguments: end_event.invocation.arguments.unwrap_or(JsonValue::Null),
         result,
         error,
     };
