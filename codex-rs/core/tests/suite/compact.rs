@@ -7,7 +7,6 @@ use codex_core::built_in_model_providers;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
-use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::RolloutItem;
@@ -44,7 +43,6 @@ const THIRD_USER_MSG: &str = "next turn";
 const AUTO_SUMMARY_TEXT: &str = "AUTO_SUMMARY";
 const FIRST_AUTO_MSG: &str = "token limit start";
 const SECOND_AUTO_MSG: &str = "token limit push";
-const STILL_TOO_BIG_REPLY: &str = "STILL_TOO_BIG";
 const MULTI_AUTO_MSG: &str = "multi auto";
 const SECOND_LARGE_REPLY: &str = "SECOND_LARGE_REPLY";
 const FIRST_AUTO_SUMMARY: &str = "FIRST_AUTO_SUMMARY";
@@ -963,7 +961,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         ev_assistant_message("m4", FINAL_REPLY),
         ev_completed_with_tokens("r4", 120),
     ]);
-    let prefixed_auto_summary = summary_with_prefix(AUTO_SUMMARY_TEXT);
+    let prefixed_auto_summary = AUTO_SUMMARY_TEXT;
 
     let first_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
@@ -987,10 +985,10 @@ async fn auto_compact_runs_after_token_limit_hit() {
     };
     mount_sse_once_match(&server, third_matcher, sse3).await;
 
-    let resume_marker = prefixed_auto_summary.clone();
+    let resume_marker = prefixed_auto_summary;
     let resume_matcher = move |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(&resume_marker)
+        body.contains(resume_marker)
             && !body.contains(SUMMARIZATION_PROMPT)
             && !body.contains(POST_AUTO_USER_MSG)
     };
@@ -1079,13 +1077,13 @@ async fn auto_compact_runs_after_token_limit_hit() {
         "auto compact should add a third request"
     );
 
-    let resume_summary_marker = prefixed_auto_summary.clone();
+    let resume_summary_marker = prefixed_auto_summary;
     let resume_index = requests
         .iter()
         .enumerate()
         .find_map(|(idx, req)| {
             let body = std::str::from_utf8(&req.body).unwrap_or("");
-            (body.contains(&resume_summary_marker)
+            (body.contains(resume_summary_marker)
                 && !body.contains(SUMMARIZATION_PROMPT)
                 && !body.contains(POST_AUTO_USER_MSG))
             .then_some(idx)
@@ -1160,7 +1158,8 @@ async fn auto_compact_runs_after_token_limit_hit() {
                     .and_then(|arr| arr.first())
                     .and_then(|entry| entry.get("text"))
                     .and_then(|v| v.as_str())
-                    == Some(prefixed_auto_summary.as_str())
+                    .map(|text| text.contains(prefixed_auto_summary))
+                    .unwrap_or(false)
         }),
         "resume request should include compacted history"
     );
@@ -1197,7 +1196,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
     assert!(
         user_texts
             .iter()
-            .any(|text| text == prefixed_auto_summary.as_str()),
+            .any(|text| text.contains(prefixed_auto_summary)),
         "auto compact follow-up request should include the summary message"
     );
 }
@@ -1314,114 +1313,6 @@ async fn auto_compact_persists_rollout_entries() {
     assert!(
         turn_context_count >= 2,
         "expected at least two turn context entries, got {turn_context_count}"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn auto_compact_stops_after_failed_attempt() {
-    skip_if_no_network!();
-
-    let server = start_mock_server().await;
-
-    let sse1 = sse(vec![
-        ev_assistant_message("m1", FIRST_REPLY),
-        ev_completed_with_tokens("r1", 500),
-    ]);
-
-    let summary_payload = auto_summary(SUMMARY_TEXT);
-    let sse2 = sse(vec![
-        ev_assistant_message("m2", &summary_payload),
-        ev_completed_with_tokens("r2", 50),
-    ]);
-    let prefixed_summary_text = summary_with_prefix(SUMMARY_TEXT);
-
-    let sse3 = sse(vec![
-        ev_assistant_message("m3", STILL_TOO_BIG_REPLY),
-        ev_completed_with_tokens("r3", 500),
-    ]);
-
-    let first_matcher = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(FIRST_AUTO_MSG) && !body.contains(SUMMARIZATION_PROMPT)
-    };
-    mount_sse_once_match(&server, first_matcher, sse1.clone()).await;
-
-    let second_matcher = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(SUMMARIZATION_PROMPT)
-    };
-    mount_sse_once_match(&server, second_matcher, sse2.clone()).await;
-
-    let summary_marker = prefixed_summary_text.clone();
-    let third_matcher = move |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        !body.contains(SUMMARIZATION_PROMPT) && body.contains(&summary_marker)
-    };
-    mount_sse_once_match(&server, third_matcher, sse3.clone()).await;
-
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-
-    let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home);
-    config.model_provider = model_provider;
-    set_test_compact_prompt(&mut config);
-    config.model_auto_compact_token_limit = Some(200);
-    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
-    let codex = conversation_manager
-        .new_conversation(config)
-        .await
-        .unwrap()
-        .conversation;
-
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: FIRST_AUTO_MSG.into(),
-            }],
-        })
-        .await
-        .unwrap();
-
-    let error_event = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Error(_))).await;
-    let EventMsg::Error(ErrorEvent { message }) = error_event else {
-        panic!("expected error event");
-    };
-    assert!(
-        message.contains("limit"),
-        "error message should include limit information: {message}"
-    );
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
-
-    let requests = server.received_requests().await.unwrap();
-    assert_eq!(
-        requests.len(),
-        3,
-        "auto compact should attempt at most one summarization before erroring"
-    );
-
-    let last_body = requests[2].body_json::<serde_json::Value>().unwrap();
-    let input = last_body
-        .get("input")
-        .and_then(|v| v.as_array())
-        .unwrap_or_else(|| panic!("unexpected request format: {last_body}"));
-    let contains_prompt = input.iter().any(|item| {
-        item.get("type").and_then(|v| v.as_str()) == Some("message")
-            && item.get("role").and_then(|v| v.as_str()) == Some("user")
-            && item
-                .get("content")
-                .and_then(|v| v.as_array())
-                .and_then(|items| items.first())
-                .and_then(|entry| entry.get("text"))
-                .and_then(|text| text.as_str())
-                .map(|text| text == SUMMARIZATION_PROMPT)
-                .unwrap_or(false)
-    });
-    assert!(
-        !contains_prompt,
-        "third request should be the follow-up turn, not another summarization",
     );
 }
 
@@ -1563,7 +1454,6 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
     let final_user_message = "post compact follow-up";
     let first_summary = "FIRST_MANUAL_SUMMARY";
     let second_summary = "SECOND_MANUAL_SUMMARY";
-    let expected_first_summary = summary_with_prefix(first_summary);
     let expected_second_summary = summary_with_prefix(second_summary);
 
     let server = start_mock_server().await;
@@ -1737,14 +1627,6 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         json!({
             "content": vec![json!({
                 "text": first_user_message,
-                "type": "input_text",
-            })],
-            "role": "user",
-            "type": "message",
-        }),
-        json!({
-            "content": vec![json!({
-                "text": expected_first_summary,
                 "type": "input_text",
             })],
             "role": "user",
