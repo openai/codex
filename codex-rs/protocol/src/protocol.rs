@@ -1216,6 +1216,21 @@ pub struct ReviewLineRange {
     pub end: u32,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecCommandSource {
+    Agent,
+    UserShell,
+    UnifiedExecStartup,
+    UnifiedExecInteraction,
+}
+
+impl Default for ExecCommandSource {
+    fn default() -> Self {
+        Self::Agent
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ExecCommandBeginEvent {
     /// Identifier so this can be paired with the ExecCommandEnd event.
@@ -1225,10 +1240,13 @@ pub struct ExecCommandBeginEvent {
     /// The command's working directory if not the default cwd for the agent.
     pub cwd: PathBuf,
     pub parsed_cmd: Vec<ParsedCommand>,
-    /// True when this exec was initiated directly by the user (e.g. bang command),
-    /// not by the agent/model. Defaults to false for backwards compatibility.
+    /// Where the command originated. Defaults to Agent for backward compatibility.
     #[serde(default)]
-    pub is_user_shell_command: bool,
+    pub source: ExecCommandSource,
+    /// Raw input sent to a unified exec session (if this is an interaction event).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub interaction_input: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

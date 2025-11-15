@@ -640,7 +640,7 @@ pub enum McpToolCallStatus {
 #[ts(export_to = "v2/")]
 pub struct McpToolCallResult {
     pub content: Vec<McpContentBlock>,
-    pub structured_content: JsonValue,
+    pub structured_content: Option<JsonValue>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

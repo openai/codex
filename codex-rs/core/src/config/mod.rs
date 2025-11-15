@@ -1323,7 +1323,7 @@ persistence = "none"
     }
 
     #[test]
-    fn tui_config_missing_notifications_field_defaults_to_disabled() {
+    fn tui_config_missing_notifications_field_defaults_to_enabled() {
         let cfg = r#"
 [tui]
 "#;
@@ -1332,7 +1332,7 @@ persistence = "none"
             .expect("TUI config without notifications should succeed");
         let tui = parsed.tui.expect("config should include tui section");
 
-        assert_eq!(tui.notifications, Notifications::Enabled(false));
+        assert_eq!(tui.notifications, Notifications::Enabled(true));
     }
 
     #[test]

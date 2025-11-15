@@ -74,6 +74,7 @@ pub(crate) struct ExecCommandRequest {
 
 #[derive(Debug)]
 pub(crate) struct WriteStdinRequest<'a> {
+    pub call_id: &'a str,
     pub session_id: i32,
     pub input: &'a str,
     pub yield_time_ms: u64,
@@ -89,6 +90,7 @@ pub(crate) struct UnifiedExecResponse {
     pub session_id: Option<i32>,
     pub exit_code: Option<i32>,
     pub original_token_count: Option<usize>,
+    pub session_command: Option<Vec<String>>,
 }
 
 #[derive(Default)]
@@ -213,6 +215,7 @@ mod tests {
             .services
             .unified_exec_manager
             .write_stdin(WriteStdinRequest {
+                call_id: "write-stdin",
                 session_id,
                 input,
                 yield_time_ms,
