@@ -11,6 +11,7 @@ use crate::exec::ExecParams;
 use crate::exec_env::create_env;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
+use crate::protocol::ExecCommandSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -285,11 +286,13 @@ impl ShellHandler {
         }
 
         // Regular shell execution path.
-        let emitter = ToolEmitter::shell(
-            exec_params.command.clone(),
-            exec_params.cwd.clone(),
-            is_user_shell_command,
-        );
+        let source = if is_user_shell_command {
+            ExecCommandSource::UserShell
+        } else {
+            ExecCommandSource::Agent
+        };
+        let emitter =
+            ToolEmitter::shell(exec_params.command.clone(), exec_params.cwd.clone(), source);
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
         emitter.begin(event_ctx).await;
 

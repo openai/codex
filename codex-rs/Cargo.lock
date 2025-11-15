@@ -850,6 +850,7 @@ dependencies = [
  "codex-protocol",
  "codex-utils-json-to-toml",
  "core_test_support",
+ "mcp-types",
  "opentelemetry-appender-tracing",
  "os_info",
  "pretty_assertions",
@@ -880,6 +881,19 @@ dependencies = [
  "serde_json",
  "strum_macros 0.27.2",
  "ts-rs",
+ "uuid",
+]
+
+[[package]]
+name = "codex-app-server-test-client"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "codex-app-server-protocol",
+ "codex-protocol",
+ "serde",
+ "serde_json",
  "uuid",
 ]
 
@@ -1550,9 +1564,11 @@ name = "codex-utils-tokenizer"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "codex-utils-cache",
  "pretty_assertions",
  "thiserror 2.0.17",
  "tiktoken-rs",
+ "tokio",
 ]
 
 [[package]]
@@ -6302,9 +6318,9 @@ dependencies = [
 
 [[package]]
 name = "tiktoken-rs"
-version = "0.7.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25563eeba904d770acf527e8b370fe9a5547bacd20ff84a0b6c3bc41288e5625"
+checksum = "3a19830747d9034cd9da43a60eaa8e552dfda7712424aebf187b7a60126bae0d"
 dependencies = [
  "anyhow",
  "base64",

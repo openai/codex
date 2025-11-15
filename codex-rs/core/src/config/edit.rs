@@ -3,6 +3,8 @@ use crate::config::types::McpServerConfig;
 use crate::config::types::Notice;
 use anyhow::Context;
 use codex_protocol::config_types::ReasoningEffort;
+use codex_protocol::config_types::TrustLevel;
+use codex_utils_tokenizer::warm_model_cache;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -33,9 +35,9 @@ pub enum ConfigEdit {
     SetNoticeHideModelMigrationPrompt(String, bool),
     /// Replace the entire `[mcp_servers]` table.
     ReplaceMcpServers(BTreeMap<String, McpServerConfig>),
-    /// Set trust_level = "trusted" under `[projects."<path>"]`,
+    /// Set trust_level under `[projects."<path>"]`,
     /// migrating inline tables to explicit tables.
-    SetProjectTrusted(PathBuf),
+    SetProjectTrustLevel { path: PathBuf, level: TrustLevel },
     /// Set the value stored at the exact dotted path.
     SetPath {
         segments: Vec<String>,
@@ -229,6 +231,9 @@ impl ConfigDocument {
     fn apply(&mut self, edit: &ConfigEdit) -> anyhow::Result<bool> {
         match edit {
             ConfigEdit::SetModel { model, effort } => Ok({
+                if let Some(model) = &model {
+                    warm_model_cache(model)
+                }
                 let mut mutated = false;
                 mutated |= self.write_profile_value(
                     &["model"],
@@ -270,10 +275,14 @@ impl ConfigDocument {
             ConfigEdit::ReplaceMcpServers(servers) => Ok(self.replace_mcp_servers(servers)),
             ConfigEdit::SetPath { segments, value } => Ok(self.insert(segments, value.clone())),
             ConfigEdit::ClearPath { segments } => Ok(self.clear_owned(segments)),
-            ConfigEdit::SetProjectTrusted(project_path) => {
+            ConfigEdit::SetProjectTrustLevel { path, level } => {
                 // Delegate to the existing, tested logic in config.rs to
                 // ensure tables are explicit and migration is preserved.
-                crate::config::set_project_trusted_inner(&mut self.doc, project_path.as_path())?;
+                crate::config::set_project_trust_level_inner(
+                    &mut self.doc,
+                    path.as_path(),
+                    *level,
+                )?;
                 Ok(true)
             }
         }
@@ -529,9 +538,15 @@ impl ConfigEditsBuilder {
         self
     }
 
-    pub fn set_project_trusted<P: Into<PathBuf>>(mut self, project_path: P) -> Self {
-        self.edits
-            .push(ConfigEdit::SetProjectTrusted(project_path.into()));
+    pub fn set_project_trust_level<P: Into<PathBuf>>(
+        mut self,
+        project_path: P,
+        trust_level: TrustLevel,
+    ) -> Self {
+        self.edits.push(ConfigEdit::SetProjectTrustLevel {
+            path: project_path.into(),
+            level: trust_level,
+        });
         self
     }
 

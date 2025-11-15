@@ -13,7 +13,7 @@ use codex_core::shell::Shell;
 use codex_core::shell::default_user_shell;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_sse_fixture_with_id;
-use core_test_support::responses::mount_sse_once_match;
+use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
@@ -21,7 +21,6 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use std::collections::HashMap;
 use tempfile::TempDir;
-use wiremock::matchers::any;
 
 fn text_user_input(text: String) -> serde_json::Value {
     serde_json::json!({
@@ -70,8 +69,8 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
     use pretty_assertions::assert_eq;
 
     let server = start_mock_server().await;
-    let req1 = mount_sse_once_match(&server, any(), sse_completed("resp-1")).await;
-    let req2 = mount_sse_once_match(&server, any(), sse_completed("resp-2")).await;
+    let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
@@ -128,8 +127,8 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
     use pretty_assertions::assert_eq;
 
     let server = start_mock_server().await;
-    let req1 = mount_sse_once_match(&server, any(), sse_completed("resp-1")).await;
-    let req2 = mount_sse_once_match(&server, any(), sse_completed("resp-2")).await;
+    let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
 
     let TestCodex { codex, config, .. } = test_codex()
         .with_config(|config| {
@@ -247,8 +246,8 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
     use pretty_assertions::assert_eq;
 
     let server = start_mock_server().await;
-    let req1 = mount_sse_once_match(&server, any(), sse_completed("resp-1")).await;
-    let req2 = mount_sse_once_match(&server, any(), sse_completed("resp-2")).await;
+    let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
 
     let TestCodex { codex, config, .. } = test_codex()
         .with_config(|config| {
@@ -328,8 +327,8 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
     use pretty_assertions::assert_eq;
 
     let server = start_mock_server().await;
-    let req1 = mount_sse_once_match(&server, any(), sse_completed("resp-1")).await;
-    let req2 = mount_sse_once_match(&server, any(), sse_completed("resp-2")).await;
+    let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
@@ -427,8 +426,8 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
     use pretty_assertions::assert_eq;
 
     let server = start_mock_server().await;
-    let req1 = mount_sse_once_match(&server, any(), sse_completed("resp-1")).await;
-    let req2 = mount_sse_once_match(&server, any(), sse_completed("resp-2")).await;
+    let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
@@ -523,8 +522,8 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
     use pretty_assertions::assert_eq;
 
     let server = start_mock_server().await;
-    let req1 = mount_sse_once_match(&server, any(), sse_completed("resp-1")).await;
-    let req2 = mount_sse_once_match(&server, any(), sse_completed("resp-2")).await;
+    let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
 
     let TestCodex { codex, config, .. } = test_codex()
         .with_config(|config| {
@@ -611,8 +610,8 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
 
     let server = start_mock_server().await;
 
-    let req1 = mount_sse_once_match(&server, any(), sse_completed("resp-1")).await;
-    let req2 = mount_sse_once_match(&server, any(), sse_completed("resp-2")).await;
+    let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
     let TestCodex { codex, config, .. } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());

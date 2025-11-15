@@ -82,7 +82,6 @@ mod wrapping;
 #[cfg(test)]
 pub mod test_backend;
 
-use crate::onboarding::TrustDirectorySelection;
 use crate::onboarding::WSL_INSTRUCTIONS;
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;
@@ -378,13 +377,8 @@ async fn run_ratatui_app(
                 update_action: None,
             });
         }
-        // if the user acknowledged windows or made an explicit decision ato trust the directory, reload the config accordingly
-        if should_show_windows_wsl_screen
-            || onboarding_result
-                .directory_trust_decision
-                .map(|d| d == TrustDirectorySelection::Trust)
-                .unwrap_or(false)
-        {
+        // if the user acknowledged windows or made any trust decision, reload the config accordingly
+        if should_show_windows_wsl_screen || onboarding_result.directory_trust_decision.is_some() {
             load_config_or_exit(cli_kv_overrides, overrides).await
         } else {
             initial_config
@@ -540,8 +534,8 @@ fn should_show_trust_screen(config: &Config) -> bool {
         // Respect explicit approval/sandbox overrides made by the user.
         return false;
     }
-    // otherwise, skip iff the active project is trusted
-    !config.active_project.is_trusted()
+    // otherwise, show only if no trust decision has been made
+    config.active_project.trust_level.is_none()
 }
 
 fn should_show_onboarding(
@@ -633,6 +627,27 @@ mod tests {
                 "Non-Windows should still show trust prompt when project is untrusted"
             );
         }
+        Ok(())
+    }
+    #[test]
+    fn untrusted_project_skips_trust_prompt() -> std::io::Result<()> {
+        use codex_protocol::config_types::TrustLevel;
+        let temp_dir = TempDir::new()?;
+        let mut config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            temp_dir.path().to_path_buf(),
+        )?;
+        config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
+        config.active_project = ProjectConfig {
+            trust_level: Some(TrustLevel::Untrusted),
+        };
+
+        let should_show = should_show_trust_screen(&config);
+        assert!(
+            !should_show,
+            "Trust prompt should not be shown for projects explicitly marked as untrusted"
+        );
         Ok(())
     }
 }
