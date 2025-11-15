@@ -76,6 +76,10 @@ pub enum CodexErr {
     )]
     ContextWindowExceeded,
 
+    /// API rejected the request due to invalid content: `invalid_request_error`.
+    #[error("{0}")]
+    InvalidRequest(InvalidRequestError),
+
     #[error("no conversation with id: {0}")]
     ConversationNotFound(ConversationId),
 
@@ -297,6 +301,18 @@ impl std::fmt::Display for RetryLimitReachedError {
                 .map(|id| format!(", request id: {id}"))
                 .unwrap_or_default()
         )
+    }
+}
+
+#[derive(Debug)]
+pub struct InvalidRequestError {
+    pub message: String,
+    pub code: Option<String>,
+}
+
+impl std::fmt::Display for InvalidRequestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "API rejected the request: {}", self.message)
     }
 }
 
