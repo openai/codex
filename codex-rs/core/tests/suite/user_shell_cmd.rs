@@ -1,6 +1,4 @@
 use anyhow::Context;
-use codex_core::ConversationManager;
-use codex_core::NewConversation;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecCommandEndEvent;
@@ -10,7 +8,6 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TurnAbortReason;
 use core_test_support::assert_regex_match;
-use core_test_support::load_default_config_for_test;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -24,42 +21,25 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use regex_lite::escape;
-use std::path::PathBuf;
-use tempfile::TempDir;
 
 #[tokio::test]
-async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
-    // Create a temporary working directory with a known file.
-    let cwd = TempDir::new().unwrap();
+async fn user_shell_cmd_ls_and_cat_in_temp_dir() -> anyhow::Result<()> {
+    let server = responses::start_mock_server().await;
+    let mut builder = test_codex();
+    let test = builder.build(&server).await?;
+
+    // Create a file in the Codex workspace so shell commands can inspect it.
     let file_name = "hello.txt";
-    let file_path: PathBuf = cwd.path().join(file_name);
+    let file_path = test.cwd.path().join(file_name);
     let contents = "hello from bang test\n";
-    tokio::fs::write(&file_path, contents)
-        .await
-        .expect("write temp file");
-
-    // Load config and pin cwd to the temp dir so ls/cat operate there.
-    let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home);
-    config.cwd = cwd.path().to_path_buf();
-
-    let conversation_manager =
-        ConversationManager::with_auth(codex_core::CodexAuth::from_api_key("dummy"));
-    let NewConversation {
-        conversation: codex,
-        ..
-    } = conversation_manager
-        .new_conversation(config)
-        .await
-        .expect("create new conversation");
+    tokio::fs::write(&file_path, contents).await?;
 
     // 1) shell command should list the file
     let list_cmd = "ls".to_string();
-    codex
+    test.codex
         .submit(Op::RunUserShellCommand { command: list_cmd })
-        .await
-        .unwrap();
-    let msg = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecCommandEnd(_))).await;
+        .await?;
+    let msg = wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::ExecCommandEnd(_))).await;
     let EventMsg::ExecCommandEnd(ExecCommandEndEvent {
         stdout, exit_code, ..
     }) = msg
@@ -74,11 +54,10 @@ async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
 
     // 2) shell command should print the file contents verbatim
     let cat_cmd = format!("cat {file_name}");
-    codex
+    test.codex
         .submit(Op::RunUserShellCommand { command: cat_cmd })
-        .await
-        .unwrap();
-    let msg = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecCommandEnd(_))).await;
+        .await?;
+    let msg = wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::ExecCommandEnd(_))).await;
     let EventMsg::ExecCommandEnd(ExecCommandEndEvent {
         mut stdout,
         exit_code,
@@ -93,40 +72,37 @@ async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
         stdout = stdout.replace("\r\n", "\n");
     }
     assert_eq!(stdout, contents);
+
+    Ok(())
 }
 
 #[tokio::test]
-async fn user_shell_cmd_can_be_interrupted() {
-    // Set up isolated config and conversation.
-    let codex_home = TempDir::new().unwrap();
-    let config = load_default_config_for_test(&codex_home);
-    let conversation_manager =
-        ConversationManager::with_auth(codex_core::CodexAuth::from_api_key("dummy"));
-    let NewConversation {
-        conversation: codex,
-        ..
-    } = conversation_manager
-        .new_conversation(config)
-        .await
-        .expect("create new conversation");
+async fn user_shell_cmd_can_be_interrupted() -> anyhow::Result<()> {
+    let server = responses::start_mock_server().await;
+    let mut builder = test_codex();
+    let test = builder.build(&server).await?;
 
     // Start a long-running command and then interrupt it.
     let sleep_cmd = "sleep 5".to_string();
-    codex
+    test.codex
         .submit(Op::RunUserShellCommand { command: sleep_cmd })
-        .await
-        .unwrap();
+        .await?;
 
     // Wait until it has started (ExecCommandBegin), then interrupt.
-    let _ = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecCommandBegin(_))).await;
-    codex.submit(Op::Interrupt).await.unwrap();
+    let _ = wait_for_event(&test.codex, |ev| {
+        matches!(ev, EventMsg::ExecCommandBegin(_))
+    })
+    .await;
+    test.codex.submit(Op::Interrupt).await?;
 
     // Expect a TurnAborted(Interrupted) notification.
-    let msg = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnAborted(_))).await;
+    let msg = wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnAborted(_))).await;
     let EventMsg::TurnAborted(ev) = msg else {
         unreachable!()
     };
     assert_eq!(ev.reason, TurnAbortReason::Interrupted);
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

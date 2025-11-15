@@ -1,34 +1,28 @@
-use codex_core::CodexAuth;
-use codex_core::ConversationManager;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol_config_types::ReasoningEffort;
-use core_test_support::load_default_config_for_test;
+use core_test_support::responses::start_mock_server;
+use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
-use tempfile::TempDir;
 
 const CONFIG_TOML: &str = "config.toml";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn override_turn_context_does_not_persist_when_config_exists() {
-    let codex_home = TempDir::new().unwrap();
-    let config_path = codex_home.path().join(CONFIG_TOML);
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_model("gpt-4o")
+        .build(&server)
+        .await
+        .expect("build test codex");
+    let codex = test.codex.clone();
+
+    let config_path = test.home.path().join(CONFIG_TOML);
     let initial_contents = "model = \"gpt-4o\"\n";
     tokio::fs::write(&config_path, initial_contents)
         .await
         .expect("seed config.toml");
-
-    let mut config = load_default_config_for_test(&codex_home);
-    config.model = "gpt-4o".to_string();
-
-    let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
-    let codex = conversation_manager
-        .new_conversation(config)
-        .await
-        .expect("create conversation")
-        .conversation;
 
     codex
         .submit(Op::OverrideTurnContext {
@@ -53,22 +47,20 @@ async fn override_turn_context_does_not_persist_when_config_exists() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn override_turn_context_does_not_create_config_file() {
-    let codex_home = TempDir::new().unwrap();
-    let config_path = codex_home.path().join(CONFIG_TOML);
+    let server = start_mock_server().await;
+    let test = test_codex().build(&server).await.expect("build test codex");
+    let codex = test.codex.clone();
+
+    let config_path = test.home.path().join(CONFIG_TOML);
+    if config_path.exists() {
+        tokio::fs::remove_file(&config_path)
+            .await
+            .expect("remove existing config.toml");
+    }
     assert!(
         !config_path.exists(),
         "test setup should start without config"
     );
-
-    let config = load_default_config_for_test(&codex_home);
-
-    let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
-    let codex = conversation_manager
-        .new_conversation(config)
-        .await
-        .expect("create conversation")
-        .conversation;
 
     codex
         .submit(Op::OverrideTurnContext {
