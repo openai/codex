@@ -929,7 +929,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
                 value
                     .get("type")
                     .and_then(|ty| ty.as_str())
-                    .is_none_or(|ty| ty != "local_shell_call")
+                    .is_none_or(|ty| ty != "function_call_output")
             })
             .cloned()
             .collect()
