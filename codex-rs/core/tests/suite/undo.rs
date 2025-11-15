@@ -30,8 +30,8 @@ use pretty_assertions::assert_eq;
 async fn undo_harness() -> Result<TestCodexHarness> {
     TestCodexHarness::with_config(|config: &mut Config| {
         config.include_apply_patch_tool = true;
-        config.model = "gpt-5".to_string();
-        config.model_family = find_family_for_model("gpt-5").expect("gpt-5 is valid");
+        config.model = "gpt-5.1".to_string();
+        config.model_family = find_family_for_model("gpt-5.1").expect("gpt-5.1 is valid");
         config.features.enable(Feature::GhostCommit);
     })
     .await

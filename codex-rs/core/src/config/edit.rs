@@ -584,7 +584,7 @@ mod tests {
             codex_home,
             None,
             &[ConfigEdit::SetModel {
-                model: Some("gpt-5-codex".to_string()),
+                model: Some("gpt-5.1-codex".to_string()),
                 effort: Some(ReasoningEffort::High),
             }],
         )
@@ -592,7 +592,7 @@ mod tests {
 
         let contents =
             std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
-        let expected = r#"model = "gpt-5-codex"
+        let expected = r#"model = "gpt-5.1-codex"
 model_reasoning_effort = "high"
 "#;
         assert_eq!(contents, expected);
@@ -722,7 +722,7 @@ model = "o5-preview"
         std::fs::write(
             codex_home.join(CONFIG_TOML_FILE),
             r#"[profiles."team a"]
-model = "gpt-5-codex"
+model = "gpt-5.1-codex"
 "#,
         )
         .expect("seed");
@@ -972,14 +972,14 @@ B = \"2\"
         let codex_home = tmp.path().to_path_buf();
 
         ConfigEditsBuilder::new(&codex_home)
-            .set_model(Some("gpt-5-codex"), Some(ReasoningEffort::High))
+            .set_model(Some("gpt-5.1-codex"), Some(ReasoningEffort::High))
             .apply()
             .await
             .expect("persist");
 
         let contents =
             std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
-        let expected = r#"model = "gpt-5-codex"
+        let expected = r#"model = "gpt-5.1-codex"
 model_reasoning_effort = "high"
 "#;
         assert_eq!(contents, expected);
@@ -1001,11 +1001,11 @@ model_reasoning_effort = "low"
             std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
         assert_eq!(contents, initial_expected);
 
-        let updated_expected = r#"model = "gpt-5-codex"
+        let updated_expected = r#"model = "gpt-5.1-codex"
 model_reasoning_effort = "high"
 "#;
         ConfigEditsBuilder::new(codex_home)
-            .set_model(Some("gpt-5-codex"), Some(ReasoningEffort::High))
+            .set_model(Some("gpt-5.1-codex"), Some(ReasoningEffort::High))
             .apply_blocking()
             .expect("persist update");
         contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
