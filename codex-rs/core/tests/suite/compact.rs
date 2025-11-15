@@ -921,13 +921,25 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     ]
     ]);
 
+    // ignore local shell calls output because it differs from OS to another and it's out of the scope of this test.
+    fn normalize_inputs(values: &[serde_json::Value]) -> Vec<serde_json::Value> {
+        values
+            .iter()
+            .filter(|value| {
+                value
+                    .get("type")
+                    .and_then(|ty| ty.as_str())
+                    .is_none_or(|ty| ty != "local_shell_call")
+            })
+            .cloned()
+            .collect()
+    }
+
     for (i, request) in requests_payloads.iter().enumerate() {
         let body = request.body_json::<serde_json::Value>().unwrap();
         let input = body.get("input").and_then(|v| v.as_array()).unwrap();
-        assert_eq!(
-            input.as_slice(),
-            expected_requests_inputs[i].as_array().unwrap().as_slice()
-        );
+        let expected_input = expected_requests_inputs[i].as_array().unwrap();
+        assert_eq!(normalize_inputs(input), normalize_inputs(expected_input));
     }
 
     // test 3: the number of requests should be 7
