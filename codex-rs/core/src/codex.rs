@@ -2486,7 +2486,7 @@ mod tests {
         let state = SessionState::new(session_configuration.clone());
 
         let services = SessionServices {
-            mcp_connection_manager: Arc::new(McpConnectionManager::default()),
+            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: CancellationToken::new(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::new(None),
@@ -2563,7 +2563,7 @@ mod tests {
         let state = SessionState::new(session_configuration.clone());
 
         let services = SessionServices {
-            mcp_connection_manager: Arc::new(McpConnectionManager::default()),
+            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: CancellationToken::new(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::new(None),
@@ -2745,15 +2745,19 @@ mod tests {
     #[tokio::test]
     async fn fatal_tool_error_stops_turn_and_reports_error() {
         let (session, turn_context, _rx) = make_session_and_context_with_rx();
+        let tools = {
+            session
+                .services
+                .mcp_connection_manager
+                .read()
+                .await
+                .list_all_tools()
+                .await
+        };
         let router = ToolRouter::from_config(
             &turn_context.tools_config,
             Some(
-                session
-                    .services
-                    .mcp_connection_manager
-                    .clone()
-                    .list_all_tools()
-                    .await
+                tools
                     .into_iter()
                     .map(|(name, tool)| (name, tool.tool))
                     .collect(),

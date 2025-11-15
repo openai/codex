@@ -964,28 +964,24 @@ mod tests {
 
     #[test]
     fn filter_tools_applies_per_server_filters() {
-        let tools = vec![
+        let server1_tools = vec![
             create_test_tool("server1", "tool_a"),
             create_test_tool("server1", "tool_b"),
-            create_test_tool("server2", "tool_a"),
         ];
-        let mut filters = HashMap::new();
-        filters.insert(
-            "server1".to_string(),
-            ToolFilter {
-                enabled: Some(HashSet::from(["tool_a".to_string(), "tool_b".to_string()])),
-                disabled: HashSet::from(["tool_b".to_string()]),
-            },
-        );
-        filters.insert(
-            "server2".to_string(),
-            ToolFilter {
-                enabled: None,
-                disabled: HashSet::from(["tool_a".to_string()]),
-            },
-        );
+        let server2_tools = vec![create_test_tool("server2", "tool_a")];
+        let server1_filter = ToolFilter {
+            enabled: Some(HashSet::from(["tool_a".to_string(), "tool_b".to_string()])),
+            disabled: HashSet::from(["tool_b".to_string()]),
+        };
+        let server2_filter = ToolFilter {
+            enabled: None,
+            disabled: HashSet::from(["tool_a".to_string()]),
+        };
 
-        let filtered = filter_tools(tools, filter);
+        let filtered: Vec<_> = filter_tools(server1_tools, server1_filter)
+            .into_iter()
+            .chain(filter_tools(server2_tools, server2_filter))
+            .collect();
 
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].server_name, "server1");
@@ -1011,7 +1007,7 @@ mod tests {
             },
             auth_status: McpAuthStatus::Unsupported,
         };
-        let err = anyhow::anyhow!("OAuth is unsupported");
+        let err: StartupOutcomeError = anyhow::anyhow!("OAuth is unsupported").into();
 
         let display = mcp_init_error_display(server_name, Some(&entry), &err);
 
@@ -1025,7 +1021,7 @@ mod tests {
     #[test]
     fn mcp_init_error_display_prompts_for_login_when_auth_required() {
         let server_name = "example";
-        let err = anyhow::anyhow!("Auth required for server");
+        let err: StartupOutcomeError = anyhow::anyhow!("Auth required for server").into();
 
         let display = mcp_init_error_display(server_name, None, &err);
 
@@ -1055,7 +1051,7 @@ mod tests {
             },
             auth_status: McpAuthStatus::Unsupported,
         };
-        let err = anyhow::anyhow!("boom");
+        let err: StartupOutcomeError = anyhow::anyhow!("boom").into();
 
         let display = mcp_init_error_display(server_name, Some(&entry), &err);
 
@@ -1067,7 +1063,7 @@ mod tests {
     #[test]
     fn mcp_init_error_display_includes_startup_timeout_hint() {
         let server_name = "slow";
-        let err = anyhow::anyhow!("request timed out");
+        let err: StartupOutcomeError = anyhow::anyhow!("request timed out").into();
 
         let display = mcp_init_error_display(server_name, None, &err);
 
