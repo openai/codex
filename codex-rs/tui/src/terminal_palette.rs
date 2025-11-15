@@ -1,6 +1,10 @@
 use crate::color::perceptual_distance;
 use ratatui::style::Color;
 
+/// When false, disables terminal color requery on focus to prevent OSC
+/// query responses from bleeding into the input stream.
+const ENABLE_COLOR_REQUERY: bool = false;
+
 /// Returns the closest color to the target color that the terminal can display.
 pub fn best_color(target: (u8, u8, u8)) -> Color {
     let Some(color_level) = supports_color::on_cached(supports_color::Stream::Stdout) else {
@@ -26,7 +30,9 @@ pub fn best_color(target: (u8, u8, u8)) -> Color {
 }
 
 pub fn requery_default_colors() {
-    imp::requery_default_colors();
+    if ENABLE_COLOR_REQUERY {
+        imp::requery_default_colors();
+    }
 }
 
 #[derive(Clone, Copy)]
