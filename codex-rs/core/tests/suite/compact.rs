@@ -454,6 +454,9 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
 
     // user message
     let user_message = "create an app";
+
+    // Prepare the mock responses from the model
+
     // summary texts from model
     let first_summary_text = "The task is to create an app. I started to create a react app.";
     let second_summary_text = "The task is to create an app. I started to create a react app. then I realized that I need to create a node app.";
@@ -462,45 +465,53 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     let prefixed_first_summary = summary_with_prefix(first_summary_text);
     let prefixed_second_summary = summary_with_prefix(second_summary_text);
     let prefixed_third_summary = summary_with_prefix(third_summary_text);
-
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: user_message.into(),
-            }],
-        })
-        .await
-        .expect("submit user input");
-
+    // token used count after long work
     let token_count_used = 270_000;
+    // token used count after compaction
     let token_count_used_after_compaction = 80000;
+
+    // mock responses from the model
+
+    // first chunk of work
     let model_reasoning_response_1_sse = sse(vec![
         ev_reasoning_item("m1", &["I will create a react app"], &[]),
         ev_local_shell_call("r1-shell", "completed", vec!["echo", "make-react"]),
         ev_completed_with_tokens("r1", token_count_used),
     ]);
+
+    // first compaction response
     let model_compact_response_1_sse = sse(vec![
         ev_assistant_message("m2", first_summary_text),
         ev_completed_with_tokens("r2", token_count_used_after_compaction),
     ]);
+
+    // second chunk of work
     let model_reasoning_response_2_sse = sse(vec![
         ev_reasoning_item("m3", &["I will create a node app"], &[]),
         ev_local_shell_call("r3-shell", "completed", vec!["echo", "make-node"]),
         ev_completed_with_tokens("r3", token_count_used),
     ]);
+
+    // second compaction response
     let model_compact_response_2_sse = sse(vec![
         ev_assistant_message("m4", second_summary_text),
         ev_completed_with_tokens("r4", token_count_used_after_compaction),
     ]);
+
+    // third chunk of work
     let model_reasoning_response_3_sse = sse(vec![
         ev_reasoning_item("m6", &["I will create a python app"], &[]),
         ev_local_shell_call("r6-shell", "completed", vec!["echo", "make-python"]),
         ev_completed_with_tokens("r6", token_count_used),
     ]);
+
+    // third compaction response
     let model_compact_response_3_sse = sse(vec![
         ev_assistant_message("m7", third_summary_text),
         ev_completed_with_tokens("r7", token_count_used_after_compaction),
     ]);
+
+    // final response
     let model_final_response_sse = sse(vec![
         ev_assistant_message(
             "m8",
@@ -509,6 +520,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         ev_completed_with_tokens("r8", token_count_used_after_compaction + 1000),
     ]);
 
+    // mount the mock responses from the model
     let bodies = vec![
         model_reasoning_response_1_sse,
         model_compact_response_1_sse,
@@ -518,10 +530,20 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         model_compact_response_3_sse,
         model_final_response_sse,
     ];
-
     mount_sse_sequence(&server, bodies).await;
+
+    // Start the conversation with the user message
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: user_message.into(),
+            }],
+        })
+        .await
+        .expect("submit user input");
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
+    // collect the requests payloads from the model
     let requests_payloads = server.received_requests().await.unwrap();
 
     let body = requests_payloads[0]
@@ -544,16 +566,17 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         let input = body.get("input").and_then(|v| v.as_array()).unwrap();
         assert_eq!(input.len(), 3);
         let environment_message = input[0]["content"][0]["text"].as_str().unwrap();
-        let user_message = input[1]["content"][0]["text"].as_str().unwrap();
+        let user_message_received = input[1]["content"][0]["text"].as_str().unwrap();
         let summary_message = input[2]["content"][0]["text"].as_str().unwrap();
         assert_eq!(environment_message, environment_message);
-        assert_eq!(user_message, "create an app");
+        assert_eq!(user_message_received, user_message);
         assert_eq!(
             summary_message, expected_summary,
             "compaction request at index {i} should include the prefixed summary"
         );
     }
 
+    // test 2: the expected requests inputs should be as follows:
     let expected_requests_inputs = json!([
     [
         // 0: first request of the user message.
@@ -900,8 +923,6 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     ]
     ]);
 
-    assert_eq!(requests_payloads.len(), 7);
-
     for (i, request) in requests_payloads.iter().enumerate() {
         let body = request.body_json::<serde_json::Value>().unwrap();
         let input = body.get("input").and_then(|v| v.as_array()).unwrap();
@@ -910,6 +931,9 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
             expected_requests_inputs[i].as_array().unwrap().as_slice()
         );
     }
+
+    // test 3: the number of requests should be 7
+    assert_eq!(requests_payloads.len(), 7);
 }
 
 // Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
