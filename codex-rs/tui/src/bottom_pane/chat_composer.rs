@@ -216,6 +216,34 @@ impl ChatComposer {
         true
     }
 
+    pub(crate) fn resume_arg_from_line(line: &str) -> Option<&str> {
+        line.trim_start()
+            .strip_prefix("/resume")
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
+
+    pub(crate) fn handle_resume_with_arg(&mut self, arg: &str) -> (InputResult, bool) {
+        if self.is_task_running {
+            let msg = format!(
+                "'/{}' is disabled while a task is in progress.",
+                SlashCommand::Resume.command()
+            );
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                crate::history_cell::new_error_event(msg),
+            )));
+            return (InputResult::None, true);
+        }
+
+        if arg.eq_ignore_ascii_case("last") {
+            self.app_event_tx.send(AppEvent::ResumeLast);
+        } else {
+            self.app_event_tx
+                .send(AppEvent::ResumeById(arg.to_string()));
+        }
+        (InputResult::None, true)
+    }
+
     pub fn handle_paste(&mut self, pasted: String) -> bool {
         let char_count = pasted.chars().count();
         if char_count > LARGE_PASTE_CHAR_THRESHOLD {
@@ -490,7 +518,14 @@ impl ChatComposer {
                 // If the current line starts with a custom prompt name and includes
                 // positional args for a numeric-style template, expand and submit
                 // immediately regardless of the popup selection.
-                let first_line = self.textarea.text().lines().next().unwrap_or("");
+                let first_line_owned = self
+                    .textarea
+                    .text()
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+                let first_line = first_line_owned.as_str();
                 if let Some((name, _rest)) = parse_slash_name(first_line)
                     && let Some(prompt_name) = name.strip_prefix(&format!("{PROMPTS_CMD_PREFIX}:"))
                     && let Some(prompt) = self.custom_prompts.iter().find(|p| p.name == prompt_name)
@@ -504,6 +539,12 @@ impl ChatComposer {
                 if let Some(sel) = popup.selected_item() {
                     match sel {
                         CommandItem::Builtin(cmd) => {
+                            if cmd == SlashCommand::Resume
+                                && let Some(arg) = Self::resume_arg_from_line(first_line)
+                            {
+                                self.textarea.set_text("");
+                                return self.handle_resume_with_arg(arg);
+                            }
                             self.textarea.set_text("");
                             return (InputResult::Command(cmd), true);
                         }
@@ -530,7 +571,6 @@ impl ChatComposer {
                         }
                     }
                 }
-                // Fallback to default newline handling if no command selected.
                 self.handle_key_event_without_popup(key_event)
             }
             input => self.handle_input_basic(input),
@@ -926,7 +966,14 @@ impl ChatComposer {
                 // the '/name' token and our caret-based heuristic hides the popup,
                 // but Enter should still dispatch the command rather than submit
                 // literal text.
-                let first_line = self.textarea.text().lines().next().unwrap_or("");
+                let first_line_owned = self
+                    .textarea
+                    .text()
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+                let first_line = first_line_owned.as_str();
                 if let Some((name, rest)) = parse_slash_name(first_line)
                     && rest.is_empty()
                     && let Some((_n, cmd)) = built_in_slash_commands()
@@ -935,6 +982,12 @@ impl ChatComposer {
                 {
                     self.textarea.set_text("");
                     return (InputResult::Command(cmd), true);
+                }
+
+                // Special-case: '/resume <arg>' without popup.
+                if let Some(arg) = Self::resume_arg_from_line(first_line) {
+                    self.textarea.set_text("");
+                    return self.handle_resume_with_arg(arg);
                 }
                 // If we're in a paste-like burst capture, treat Enter as part of the burst
                 // and accumulate it rather than submitting or inserting immediately.
