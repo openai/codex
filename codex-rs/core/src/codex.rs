@@ -1873,6 +1873,7 @@ pub(crate) async fn run_task(
                 let (responses, items_to_record_in_conversation_history) =
                     process_items(processed_items, &sess, &turn_context).await;
 
+                // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached {
                     compact::run_inline_auto_compact_task(sess.clone(), turn_context.clone()).await;
                     continue;
