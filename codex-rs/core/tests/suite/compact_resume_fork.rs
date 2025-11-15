@@ -240,6 +240,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "include": [
         "reasoning.encrypted_content"
       ],
+      "max_output_tokens": 128000,
       "prompt_cache_key": prompt_cache_key
     });
     let compact_1 = json!(
@@ -309,6 +310,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "include": [
         "reasoning.encrypted_content"
       ],
+      "max_output_tokens": 128000,
       "prompt_cache_key": prompt_cache_key
     });
     let user_turn_2_after_compact = json!(
@@ -369,6 +371,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "include": [
         "reasoning.encrypted_content"
       ],
+      "max_output_tokens": 128000,
       "prompt_cache_key": prompt_cache_key
     });
     let usert_turn_3_after_resume = json!(
@@ -449,6 +452,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "include": [
         "reasoning.encrypted_content"
       ],
+      "max_output_tokens": 128000,
       "prompt_cache_key": prompt_cache_key
     });
     let user_turn_3_after_fork = json!(
@@ -529,6 +533,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "include": [
         "reasoning.encrypted_content"
       ],
+      "max_output_tokens": 128000,
       "prompt_cache_key": fork_prompt_cache_key
     });
     let mut expected = json!([
