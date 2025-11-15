@@ -6,16 +6,15 @@
 //!      key. These override or extend the defaults at runtime.
 
 use crate::CodexAuth;
-use crate::default_client::CodexHttpClient;
-use crate::default_client::CodexRequestBuilder;
+use crate::client::http::CodexHttpClient;
+use crate::client::http::CodexRequestBuilder;
+use crate::error::EnvVarError;
 use codex_app_server_protocol::AuthMode;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::env::VarError;
 use std::time::Duration;
-
-use crate::error::EnvVarError;
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u64 = 300_000;
 const DEFAULT_STREAM_MAX_RETRIES: u64 = 5;
 const DEFAULT_REQUEST_MAX_RETRIES: u64 = 4;

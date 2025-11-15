@@ -1,5 +1,5 @@
-use crate::client_common::tools::ResponsesApiTool;
-use crate::client_common::tools::ToolSpec;
+use crate::client::ResponsesApiTool;
+use crate::client::ToolSpec;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::model_family::ModelFamily;
@@ -1074,7 +1074,7 @@ pub(crate) fn build_specs(
 
 #[cfg(test)]
 mod tests {
-    use crate::client_common::tools::FreeformTool;
+    use crate::client::FreeformTool;
     use crate::model_family::find_family_for_model;
     use crate::tools::registry::ConfiguredToolSpec;
     use mcp_types::ToolInputSchema;

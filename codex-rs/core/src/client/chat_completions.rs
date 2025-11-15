@@ -1,15 +1,16 @@
 use std::time::Duration;
 
 use crate::ModelProviderInfo;
+use crate::client::ResponseEvent;
+use crate::client::ResponseStream;
+use crate::client::http::CodexHttpClient;
+use crate::client::retry::RetryableStreamError;
+use crate::client::retry::retry_stream;
 use crate::client_common::Prompt;
-use crate::client_common::ResponseEvent;
-use crate::client_common::ResponseStream;
-use crate::default_client::CodexHttpClient;
 use crate::error::CodexErr;
 use crate::error::ConnectionFailedError;
 use crate::error::ResponseStreamFailed;
 use crate::error::Result;
-use crate::error::RetryLimitReachedError;
 use crate::error::UnexpectedResponseError;
 use crate::model_family::ModelFamily;
 use crate::tools::spec::create_tools_json_for_chat_completions_api;
@@ -21,19 +22,12 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
 use eventsource_stream::Eventsource;
 use futures::Stream;
-use futures::StreamExt;
 use futures::TryStreamExt;
 use reqwest::StatusCode;
 use serde_json::json;
-use std::pin::Pin;
-use std::task::Context;
-use std::task::Poll;
 use tokio::sync::mpsc;
-use tokio::time::timeout;
-use tracing::debug;
 use tracing::trace;
 
 /// Implementation for the classic Chat Completions API.
@@ -55,7 +49,7 @@ pub(crate) async fn stream_chat_completions(
     let mut messages = Vec::<serde_json::Value>::new();
 
     let full_instructions = prompt.get_full_instructions(model_family);
-    messages.push(json!({"role": "system", "content": full_instructions}));
+    messages.push(json!({ "role": "system", "content": full_instructions }));
 
     let input = prompt.get_formatted_input();
 
@@ -128,7 +122,7 @@ pub(crate) async fn stream_chat_completions(
                 {
                     reasoning_by_anchor_index
                         .entry(idx - 1)
-                        .and_modify(|v| v.push_str(&text))
+                        .and_modify(|v| v.push_str(text.as_str()))
                         .or_insert(text.clone());
                     attached = true;
                 }
@@ -139,13 +133,13 @@ pub(crate) async fn stream_chat_completions(
                         ResponseItem::FunctionCall { .. } | ResponseItem::LocalShellCall { .. } => {
                             reasoning_by_anchor_index
                                 .entry(idx + 1)
-                                .and_modify(|v| v.push_str(&text))
+                                .and_modify(|v| v.push_str(text.as_str()))
                                 .or_insert(text.clone());
                         }
                         ResponseItem::Message { role, .. } if role == "assistant" => {
                             reasoning_by_anchor_index
                                 .entry(idx + 1)
-                                .and_modify(|v| v.push_str(&text))
+                                .and_modify(|v| v.push_str(text.as_str()))
                                 .or_insert(text.clone());
                         }
                         _ => {}
@@ -203,13 +197,18 @@ pub(crate) async fn stream_chat_completions(
                     json!(text)
                 };
 
-                let mut msg = json!({"role": role, "content": content_value});
+                let mut msg = json!({
+                    "role": role,
+                    "content": content_value
+                });
+
                 if role == "assistant"
                     && let Some(reasoning) = reasoning_by_anchor_index.get(&idx)
                     && let Some(obj) = msg.as_object_mut()
                 {
                     obj.insert("reasoning".to_string(), json!(reasoning));
                 }
+
                 messages.push(msg);
             }
             ResponseItem::FunctionCall {
@@ -228,22 +227,24 @@ pub(crate) async fn stream_chat_completions(
                             "name": name,
                             "arguments": arguments,
                         }
-                    }]
+                    }],
                 });
+
                 if let Some(reasoning) = reasoning_by_anchor_index.get(&idx)
                     && let Some(obj) = msg.as_object_mut()
                 {
                     obj.insert("reasoning".to_string(), json!(reasoning));
                 }
+
                 messages.push(msg);
             }
+
             ResponseItem::LocalShellCall {
                 id,
                 call_id: _,
                 status,
                 action,
             } => {
-                // Confirm with API team.
                 let mut msg = json!({
                     "role": "assistant",
                     "content": null,
@@ -254,13 +255,16 @@ pub(crate) async fn stream_chat_completions(
                         "action": action,
                     }]
                 });
+
                 if let Some(reasoning) = reasoning_by_anchor_index.get(&idx)
                     && let Some(obj) = msg.as_object_mut()
                 {
                     obj.insert("reasoning".to_string(), json!(reasoning));
                 }
+
                 messages.push(msg);
             }
+
             ResponseItem::FunctionCallOutput { call_id, output } => {
                 // Prefer structured content items when available (e.g., images)
                 // otherwise fall back to the legacy plain-string content.
@@ -287,6 +291,7 @@ pub(crate) async fn stream_chat_completions(
                     "content": content_value,
                 }));
             }
+
             ResponseItem::CustomToolCall {
                 id,
                 call_id: _,
@@ -304,7 +309,7 @@ pub(crate) async fn stream_chat_completions(
                             "name": name,
                             "input": input,
                         }
-                    }]
+                    }],
                 }));
             }
             ResponseItem::CustomToolCallOutput { call_id, output } => {
@@ -314,117 +319,148 @@ pub(crate) async fn stream_chat_completions(
                     "content": output,
                 }));
             }
-            ResponseItem::GhostSnapshot { .. } => {
-                // Ghost snapshots annotate history but are not sent to the model.
+
+            ResponseItem::Reasoning { .. } => {
+                // Omit from conversation history; reasoning is attached to anchors above.
                 continue;
             }
-            ResponseItem::Reasoning { .. }
-            | ResponseItem::WebSearchCall { .. }
-            | ResponseItem::Other => {
-                // Omit these items from the conversation history.
+
+            ResponseItem::WebSearchCall { .. } | ResponseItem::Other => {
+                continue;
+            }
+
+            ResponseItem::GhostSnapshot { .. } => {
+                // Ghost snapshots annotate history but are not sent to the model.
                 continue;
             }
         }
     }
 
     let tools_json = create_tools_json_for_chat_completions_api(&prompt.tools)?;
-    let payload = json!({
+
+    let mut body = json!({
         "model": model_family.slug,
         "messages": messages,
         "stream": true,
-        "tools": tools_json,
+        "stream_options": {
+            "include_usage": true,
+        },
     });
 
-    debug!(
+    if !tools_json.is_empty() {
+        body["tools"] = json!(tools_json);
+        body["tool_choice"] = json!("auto");
+    }
+
+    if let SessionSource::SubAgent(sub) = session_source {
+        let subagent = crate::client::types::subagent_label(sub);
+        body["metadata"] = json!({
+            "x-openai-subagent": subagent,
+        });
+    }
+
+    let max_attempts = provider.request_max_retries();
+    retry_stream(max_attempts, |attempt| {
+        let body = body.clone();
+        async move {
+            stream_single_chat_completion(attempt, client, provider, otel_event_manager, body)
+                .await
+                .map_err(ChatStreamError::Retryable)
+        }
+    })
+    .await
+}
+
+async fn stream_single_chat_completion(
+    attempt: u64,
+    client: &CodexHttpClient,
+    provider: &ModelProviderInfo,
+    otel_event_manager: &OtelEventManager,
+    body: serde_json::Value,
+) -> Result<ResponseStream> {
+    trace!(
         "POST to {}: {}",
         provider.get_full_url(&None),
-        payload.to_string()
+        body.to_string()
     );
 
-    let mut attempt = 0;
-    let max_retries = provider.request_max_retries();
-    loop {
-        attempt += 1;
+    let mut req_builder = provider.create_request_builder(client, &None).await?;
+    req_builder = req_builder
+        .header(reqwest::header::ACCEPT, "text/event-stream")
+        .json(&body);
 
-        let mut req_builder = provider.create_request_builder(client, &None).await?;
+    let res = otel_event_manager
+        .log_request(attempt, || req_builder.send())
+        .await;
 
-        // Include subagent header only for subagent sessions.
-        if let SessionSource::SubAgent(sub) = session_source.clone() {
-            let subagent = if let SubAgentSource::Other(label) = sub {
-                label
-            } else {
-                serde_json::to_value(&sub)
-                    .ok()
-                    .and_then(|v| v.as_str().map(std::string::ToString::to_string))
-                    .unwrap_or_else(|| "other".to_string())
-            };
-            req_builder = req_builder.header("x-openai-subagent", subagent);
+    let mut request_id = None;
+    if let Ok(resp) = &res {
+        request_id = resp
+            .headers()
+            .get("cf-ray")
+            .map(|v| v.to_str().unwrap_or_default().to_string());
+    }
+
+    match res {
+        Ok(resp) if resp.status().is_success() => {
+            let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
+
+            // spawn task to process SSE
+            let stream = resp.bytes_stream().map_err(move |e| {
+                CodexErr::ResponseStreamFailed(ResponseStreamFailed {
+                    source: e,
+                    request_id: request_id.clone(),
+                })
+            });
+            tokio::spawn(process_chat_sse(
+                stream,
+                tx_event,
+                provider.stream_idle_timeout(),
+                otel_event_manager.clone(),
+            ));
+
+            Ok(ResponseStream { rx_event })
         }
+        Ok(res) => {
+            let status = res.status();
 
-        let res = otel_event_manager
-            .log_request(attempt, || {
-                req_builder
-                    .header(reqwest::header::ACCEPT, "text/event-stream")
-                    .json(&payload)
-                    .send()
-            })
-            .await;
-
-        match res {
-            Ok(resp) if resp.status().is_success() => {
-                let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
-                let stream = resp.bytes_stream().map_err(|e| {
-                    CodexErr::ResponseStreamFailed(ResponseStreamFailed {
-                        source: e,
-                        request_id: None,
-                    })
-                });
-                tokio::spawn(process_chat_sse(
-                    stream,
-                    tx_event,
-                    provider.stream_idle_timeout(),
-                    otel_event_manager.clone(),
-                ));
-                return Ok(ResponseStream { rx_event });
+            if !(status == StatusCode::TOO_MANY_REQUESTS
+                || status == StatusCode::UNAUTHORIZED
+                || status.is_server_error())
+            {
+                // Surface the error body to callers. Use `unwrap_or_default` per Clippy.
+                let body = res.text().await.unwrap_or_default();
+                return Err(CodexErr::UnexpectedStatus(UnexpectedResponseError {
+                    status,
+                    body,
+                    request_id: None,
+                }));
             }
-            Ok(res) => {
-                let status = res.status();
-                if !(status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error()) {
-                    let body = (res.text().await).unwrap_or_default();
-                    return Err(CodexErr::UnexpectedStatus(UnexpectedResponseError {
-                        status,
-                        body,
-                        request_id: None,
-                    }));
-                }
 
-                if attempt > max_retries {
-                    return Err(CodexErr::RetryLimit(RetryLimitReachedError {
-                        status,
-                        request_id: None,
-                    }));
-                }
+            Err(CodexErr::UnexpectedStatus(UnexpectedResponseError {
+                status,
+                body: String::new(),
+                request_id,
+            }))
+        }
+        Err(e) => Err(CodexErr::ConnectionFailed(ConnectionFailedError {
+            source: e,
+        })),
+    }
+}
 
-                let retry_after_secs = res
-                    .headers()
-                    .get(reqwest::header::RETRY_AFTER)
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|s| s.parse::<u64>().ok());
+enum ChatStreamError {
+    Retryable(CodexErr),
+}
 
-                let delay = retry_after_secs
-                    .map(|s| Duration::from_millis(s * 1_000))
-                    .unwrap_or_else(|| backoff(attempt));
-                tokio::time::sleep(delay).await;
-            }
-            Err(e) => {
-                if attempt > max_retries {
-                    return Err(CodexErr::ConnectionFailed(ConnectionFailedError {
-                        source: e,
-                    }));
-                }
-                let delay = backoff(attempt);
-                tokio::time::sleep(delay).await;
-            }
+impl RetryableStreamError for ChatStreamError {
+    fn delay(&self, attempt: u64) -> Option<Duration> {
+        Some(backoff(attempt))
+    }
+
+    fn into_error(self) -> CodexErr {
+        match self {
+            ChatStreamError::Retryable(e) => e,
         }
     }
 }
@@ -488,9 +524,7 @@ async fn append_reasoning_text(
             .await;
     }
 }
-/// Lightweight SSE processor for the Chat Completions streaming format. The
-/// output is mapped onto Codex's internal [`ResponseEvent`] so that the rest
-/// of the pipeline can stay agnostic of the underlying wire format.
+
 async fn process_chat_sse<S>(
     stream: S,
     tx_event: mpsc::Sender<Result<ResponseEvent>>,
@@ -519,21 +553,15 @@ async fn process_chat_sse<S>(
     let mut reasoning_item: Option<ResponseItem> = None;
 
     loop {
-        let start = std::time::Instant::now();
-        let response = timeout(idle_timeout, stream.next()).await;
-        let duration = start.elapsed();
-        otel_event_manager.log_sse_event(&response, duration);
-
-        let sse = match response {
-            Ok(Some(Ok(ev))) => ev,
-            Ok(Some(Err(e))) => {
-                let _ = tx_event
-                    .send(Err(CodexErr::Stream(e.to_string(), None)))
-                    .await;
-                return;
-            }
-            Ok(None) => {
-                // Stream closed gracefully – emit Completed with dummy id.
+        let sse = match crate::client::sse::next_sse_event(
+            &mut stream,
+            idle_timeout,
+            &otel_event_manager,
+        )
+        .await
+        {
+            crate::client::sse::SseNext::Event(ev) => ev,
+            crate::client::sse::SseNext::Eof => {
                 let _ = tx_event
                     .send(Ok(ResponseEvent::Completed {
                         response_id: String::new(),
@@ -542,7 +570,11 @@ async fn process_chat_sse<S>(
                     .await;
                 return;
             }
-            Err(_) => {
+            crate::client::sse::SseNext::StreamError(message) => {
+                let _ = tx_event.send(Err(CodexErr::Stream(message, None))).await;
+                return;
+            }
+            crate::client::sse::SseNext::Timeout => {
                 let _ = tx_event
                     .send(Err(CodexErr::Stream(
                         "idle timeout waiting for SSE".into(),
@@ -720,258 +752,5 @@ async fn process_chat_sse<S>(
                 return; // End processing for this SSE stream.
             }
         }
-    }
-}
-
-/// Optional client-side aggregation helper
-///
-/// Stream adapter that merges the incremental `OutputItemDone` chunks coming from
-/// [`process_chat_sse`] into a *running* assistant message, **suppressing the
-/// per-token deltas**.  The stream stays silent while the model is thinking
-/// and only emits two events per turn:
-///
-///   1. `ResponseEvent::OutputItemDone` with the *complete* assistant message
-///      (fully concatenated).
-///   2. The original `ResponseEvent::Completed` right after it.
-///
-/// This mirrors the behaviour the TypeScript CLI exposes to its higher layers.
-///
-/// The adapter is intentionally *lossless*: callers who do **not** opt in via
-/// [`AggregateStreamExt::aggregate()`] keep receiving the original unmodified
-/// events.
-#[derive(Copy, Clone, Eq, PartialEq)]
-enum AggregateMode {
-    AggregatedOnly,
-    Streaming,
-}
-pub(crate) struct AggregatedChatStream<S> {
-    inner: S,
-    cumulative: String,
-    cumulative_reasoning: String,
-    pending: std::collections::VecDeque<ResponseEvent>,
-    mode: AggregateMode,
-}
-
-impl<S> Stream for AggregatedChatStream<S>
-where
-    S: Stream<Item = Result<ResponseEvent>> + Unpin,
-{
-    type Item = Result<ResponseEvent>;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.get_mut();
-
-        // First, flush any buffered events from the previous call.
-        if let Some(ev) = this.pending.pop_front() {
-            return Poll::Ready(Some(Ok(ev)));
-        }
-
-        loop {
-            match Pin::new(&mut this.inner).poll_next(cx) {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(None) => return Poll::Ready(None),
-                Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
-                Poll::Ready(Some(Ok(ResponseEvent::OutputItemDone(item)))) => {
-                    // If this is an incremental assistant message chunk, accumulate but
-                    // do NOT emit yet. Forward any other item (e.g. FunctionCall) right
-                    // away so downstream consumers see it.
-
-                    let is_assistant_message = matches!(
-                        &item,
-                        codex_protocol::models::ResponseItem::Message { role, .. } if role == "assistant"
-                    );
-
-                    if is_assistant_message {
-                        match this.mode {
-                            AggregateMode::AggregatedOnly => {
-                                // Only use the final assistant message if we have not
-                                // seen any deltas; otherwise, deltas already built the
-                                // cumulative text and this would duplicate it.
-                                if this.cumulative.is_empty()
-                                    && let codex_protocol::models::ResponseItem::Message {
-                                        content,
-                                        ..
-                                    } = &item
-                                    && let Some(text) = content.iter().find_map(|c| match c {
-                                        codex_protocol::models::ContentItem::OutputText {
-                                            text,
-                                        } => Some(text),
-                                        _ => None,
-                                    })
-                                {
-                                    this.cumulative.push_str(text);
-                                }
-                                // Swallow assistant message here; emit on Completed.
-                                continue;
-                            }
-                            AggregateMode::Streaming => {
-                                // In streaming mode, if we have not seen any deltas, forward
-                                // the final assistant message directly. If deltas were seen,
-                                // suppress the final message to avoid duplication.
-                                if this.cumulative.is_empty() {
-                                    return Poll::Ready(Some(Ok(ResponseEvent::OutputItemDone(
-                                        item,
-                                    ))));
-                                } else {
-                                    continue;
-                                }
-                            }
-                        }
-                    }
-
-                    // Not an assistant message – forward immediately.
-                    return Poll::Ready(Some(Ok(ResponseEvent::OutputItemDone(item))));
-                }
-                Poll::Ready(Some(Ok(ResponseEvent::RateLimits(snapshot)))) => {
-                    return Poll::Ready(Some(Ok(ResponseEvent::RateLimits(snapshot))));
-                }
-                Poll::Ready(Some(Ok(ResponseEvent::Completed {
-                    response_id,
-                    token_usage,
-                }))) => {
-                    // Build any aggregated items in the correct order: Reasoning first, then Message.
-                    let mut emitted_any = false;
-
-                    if !this.cumulative_reasoning.is_empty()
-                        && matches!(this.mode, AggregateMode::AggregatedOnly)
-                    {
-                        let aggregated_reasoning =
-                            codex_protocol::models::ResponseItem::Reasoning {
-                                id: String::new(),
-                                summary: Vec::new(),
-                                content: Some(vec![
-                                    codex_protocol::models::ReasoningItemContent::ReasoningText {
-                                        text: std::mem::take(&mut this.cumulative_reasoning),
-                                    },
-                                ]),
-                                encrypted_content: None,
-                            };
-                        this.pending
-                            .push_back(ResponseEvent::OutputItemDone(aggregated_reasoning));
-                        emitted_any = true;
-                    }
-
-                    // Always emit the final aggregated assistant message when any
-                    // content deltas have been observed. In AggregatedOnly mode this
-                    // is the sole assistant output; in Streaming mode this finalizes
-                    // the streamed deltas into a terminal OutputItemDone so callers
-                    // can persist/render the message once per turn.
-                    if !this.cumulative.is_empty() {
-                        let aggregated_message = codex_protocol::models::ResponseItem::Message {
-                            id: None,
-                            role: "assistant".to_string(),
-                            content: vec![codex_protocol::models::ContentItem::OutputText {
-                                text: std::mem::take(&mut this.cumulative),
-                            }],
-                        };
-                        this.pending
-                            .push_back(ResponseEvent::OutputItemDone(aggregated_message));
-                        emitted_any = true;
-                    }
-
-                    // Always emit Completed last when anything was aggregated.
-                    if emitted_any {
-                        this.pending.push_back(ResponseEvent::Completed {
-                            response_id: response_id.clone(),
-                            token_usage: token_usage.clone(),
-                        });
-                        // Return the first pending event now.
-                        if let Some(ev) = this.pending.pop_front() {
-                            return Poll::Ready(Some(Ok(ev)));
-                        }
-                    }
-
-                    // Nothing aggregated – forward Completed directly.
-                    return Poll::Ready(Some(Ok(ResponseEvent::Completed {
-                        response_id,
-                        token_usage,
-                    })));
-                }
-                Poll::Ready(Some(Ok(ResponseEvent::Created))) => {
-                    // These events are exclusive to the Responses API and
-                    // will never appear in a Chat Completions stream.
-                    continue;
-                }
-                Poll::Ready(Some(Ok(ResponseEvent::OutputTextDelta(delta)))) => {
-                    // Always accumulate deltas so we can emit a final OutputItemDone at Completed.
-                    this.cumulative.push_str(&delta);
-                    if matches!(this.mode, AggregateMode::Streaming) {
-                        // In streaming mode, also forward the delta immediately.
-                        return Poll::Ready(Some(Ok(ResponseEvent::OutputTextDelta(delta))));
-                    } else {
-                        continue;
-                    }
-                }
-                Poll::Ready(Some(Ok(ResponseEvent::ReasoningContentDelta {
-                    delta,
-                    content_index,
-                }))) => {
-                    // Always accumulate reasoning deltas so we can emit a final Reasoning item at Completed.
-                    this.cumulative_reasoning.push_str(&delta);
-                    if matches!(this.mode, AggregateMode::Streaming) {
-                        // In streaming mode, also forward the delta immediately.
-                        return Poll::Ready(Some(Ok(ResponseEvent::ReasoningContentDelta {
-                            delta,
-                            content_index,
-                        })));
-                    } else {
-                        continue;
-                    }
-                }
-                Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryDelta { .. }))) => {
-                    continue;
-                }
-                Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryPartAdded { .. }))) => {
-                    continue;
-                }
-                Poll::Ready(Some(Ok(ResponseEvent::OutputItemAdded(item)))) => {
-                    return Poll::Ready(Some(Ok(ResponseEvent::OutputItemAdded(item))));
-                }
-            }
-        }
-    }
-}
-
-/// Extension trait that activates aggregation on any stream of [`ResponseEvent`].
-pub(crate) trait AggregateStreamExt: Stream<Item = Result<ResponseEvent>> + Sized {
-    /// Returns a new stream that emits **only** the final assistant message
-    /// per turn instead of every incremental delta.  The produced
-    /// `ResponseEvent` sequence for a typical text turn looks like:
-    ///
-    /// ```ignore
-    ///     OutputItemDone(<full message>)
-    ///     Completed
-    /// ```
-    ///
-    /// No other `OutputItemDone` events will be seen by the caller.
-    ///
-    /// Usage:
-    ///
-    /// ```ignore
-    /// let agg_stream = client.stream(&prompt).await?.aggregate();
-    /// while let Some(event) = agg_stream.next().await {
-    ///     // event now contains cumulative text
-    /// }
-    /// ```
-    fn aggregate(self) -> AggregatedChatStream<Self> {
-        AggregatedChatStream::new(self, AggregateMode::AggregatedOnly)
-    }
-}
-
-impl<T> AggregateStreamExt for T where T: Stream<Item = Result<ResponseEvent>> + Sized {}
-
-impl<S> AggregatedChatStream<S> {
-    fn new(inner: S, mode: AggregateMode) -> Self {
-        AggregatedChatStream {
-            inner,
-            cumulative: String::new(),
-            cumulative_reasoning: String::new(),
-            pending: std::collections::VecDeque::new(),
-            mode,
-        }
-    }
-
-    pub(crate) fn streaming_mode(inner: S) -> Self {
-        Self::new(inner, AggregateMode::Streaming)
     }
 }

@@ -23,7 +23,6 @@ pub use crate::auth::storage::AuthDotJson;
 use crate::auth::storage::AuthStorageBackend;
 use crate::auth::storage::create_auth_storage;
 use crate::config::Config;
-use crate::default_client::CodexHttpClient;
 use crate::error::RefreshTokenFailedError;
 use crate::error::RefreshTokenFailedReason;
 use crate::token_data::KnownPlan as InternalKnownPlan;
@@ -272,7 +271,7 @@ impl CodexAuth {
             mode: AuthMode::ChatGPT,
             storage: create_auth_storage(PathBuf::new(), AuthCredentialsStoreMode::File),
             auth_dot_json,
-            client: crate::default_client::create_client(),
+            client: crate::client::http::create_client(),
         }
     }
 
@@ -287,7 +286,7 @@ impl CodexAuth {
     }
 
     pub fn from_api_key(api_key: &str) -> Self {
-        Self::from_api_key_with_client(api_key, crate::default_client::create_client())
+        Self::from_api_key_with_client(api_key, crate::client::http::create_client())
     }
 }
 
@@ -447,7 +446,7 @@ fn load_auth(
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<Option<CodexAuth>> {
     if enable_codex_api_key_env && let Some(api_key) = read_codex_api_key_from_env() {
-        let client = crate::default_client::create_client();
+        let client = crate::client::http::create_client();
         return Ok(Some(CodexAuth::from_api_key_with_client(
             api_key.as_str(),
             client,
@@ -456,7 +455,7 @@ fn load_auth(
 
     let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
 
-    let client = crate::default_client::create_client();
+    let client = crate::client::http::create_client();
     let auth_dot_json = match storage.load()? {
         Some(auth) => auth,
         None => return Ok(None),
@@ -632,6 +631,7 @@ fn refresh_token_endpoint() -> String {
         .unwrap_or_else(|_| REFRESH_TOKEN_URL.to_string())
 }
 
+use crate::client::http::CodexHttpClient;
 use std::sync::RwLock;
 
 /// Internal cached auth state.

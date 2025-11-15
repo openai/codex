@@ -17,7 +17,7 @@ use chrono::Utc;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::AuthDotJson;
 use codex_core::auth::save_auth;
-use codex_core::default_client::originator;
+use codex_core::client::http::originator;
 use codex_core::token_data::TokenData;
 use codex_core::token_data::parse_id_token;
 use rand::RngCore;
