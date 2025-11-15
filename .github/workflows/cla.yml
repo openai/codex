@@ -13,6 +13,9 @@ permissions:
 
 jobs:
   cla:
+    # Only run the CLA assistant for the canonical openai repo so forks are not blocked
+    # and contributors who signed previously do not receive duplicate CLA notifications.
+    if: ${{ github.repository_owner == 'openai' }}
     runs-on: ubuntu-latest
     steps:
       - uses: contributor-assistant/github-action@v2.6.1
