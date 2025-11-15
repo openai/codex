@@ -1,11 +1,6 @@
-use codex_core::CodexAuth;
-use codex_core::CodexConversation;
 use codex_core::ContentItem;
-use codex_core::ConversationManager;
-use codex_core::ModelProviderInfo;
 use codex_core::REVIEW_PROMPT;
 use codex_core::ResponseItem;
-use codex_core::built_in_model_providers;
 use codex_core::config::Config;
 use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_core::protocol::EventMsg;
@@ -19,9 +14,10 @@ use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
-use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id_from_str;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
@@ -73,8 +69,8 @@ async fn review_op_emits_lifecycle_and_review_output() {
     let review_json_escaped = serde_json::to_string(&review_json).unwrap();
     let sse_raw = sse_template.replace("__REVIEW__", &review_json_escaped);
     let server = start_responses_server_with_sse(&sse_raw, 1).await;
-    let codex_home = TempDir::new().unwrap();
-    let codex = new_conversation_for_server(&server, &codex_home, |_| {}).await;
+    let test = new_conversation_for_server(&server, |_| {}).await;
+    let codex = Arc::clone(&test.codex);
 
     // Submit review request.
     codex
@@ -170,8 +166,8 @@ async fn review_op_with_plain_text_emits_review_fallback() {
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
     let server = start_responses_server_with_sse(sse_raw, 1).await;
-    let codex_home = TempDir::new().unwrap();
-    let codex = new_conversation_for_server(&server, &codex_home, |_| {}).await;
+    let test = new_conversation_for_server(&server, |_| {}).await;
+    let codex = Arc::clone(&test.codex);
 
     codex
         .submit(Op::Review {
@@ -228,8 +224,8 @@ async fn review_filters_agent_message_related_events() {
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
     let server = start_responses_server_with_sse(sse_raw, 1).await;
-    let codex_home = TempDir::new().unwrap();
-    let codex = new_conversation_for_server(&server, &codex_home, |_| {}).await;
+    let test = new_conversation_for_server(&server, |_| {}).await;
+    let codex = Arc::clone(&test.codex);
 
     codex
         .submit(Op::Review {
@@ -312,8 +308,8 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
     let review_json_escaped = serde_json::to_string(&review_json).unwrap();
     let sse_raw = sse_template.replace("__REVIEW__", &review_json_escaped);
     let server = start_responses_server_with_sse(&sse_raw, 1).await;
-    let codex_home = TempDir::new().unwrap();
-    let codex = new_conversation_for_server(&server, &codex_home, |_| {}).await;
+    let test = new_conversation_for_server(&server, |_| {}).await;
+    let codex = Arc::clone(&test.codex);
 
     codex
         .submit(Op::Review {
@@ -360,13 +356,13 @@ async fn review_uses_custom_review_model_from_config() {
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
     let server = start_responses_server_with_sse(sse_raw, 1).await;
-    let codex_home = TempDir::new().unwrap();
     // Choose a review model different from the main model; ensure it is used.
-    let codex = new_conversation_for_server(&server, &codex_home, |cfg| {
+    let test = new_conversation_for_server(&server, |cfg| {
         cfg.model = "gpt-4.1".to_string();
         cfg.review_model = "gpt-5".to_string();
     })
     .await;
+    let codex = Arc::clone(&test.codex);
 
     codex
         .submit(Op::Review {
@@ -415,13 +411,7 @@ async fn review_input_isolated_from_parent_history() {
     let server = start_responses_server_with_sse(sse_raw, 1).await;
 
     // Seed a parent session history via resume file with both user + assistant items.
-    let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home);
-    config.model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-
+    let codex_home = Arc::new(TempDir::new().unwrap());
     let session_file = codex_home.path().join("resume.jsonl");
     {
         let mut f = tokio::fs::File::create(&session_file).await.unwrap();
@@ -480,8 +470,14 @@ async fn review_input_isolated_from_parent_history() {
             .await
             .unwrap();
     }
-    let codex =
-        resume_conversation_for_server(&server, &codex_home, session_file.clone(), |_| {}).await;
+    let test = resume_conversation_for_server(
+        &server,
+        Arc::clone(&codex_home),
+        session_file.clone(),
+        |_| {},
+    )
+    .await;
+    let codex = Arc::clone(&test.codex);
 
     // Submit review request; it must start fresh (no parent history in `input`).
     let review_prompt = "Please review only this".to_string();
@@ -593,8 +589,8 @@ async fn review_history_does_not_leak_into_parent_session() {
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
     let server = start_responses_server_with_sse(sse_raw, 2).await;
-    let codex_home = TempDir::new().unwrap();
-    let codex = new_conversation_for_server(&server, &codex_home, |_| {}).await;
+    let test = new_conversation_for_server(&server, |_| {}).await;
+    let codex = Arc::clone(&test.codex);
 
     // 1) Run a review turn that produces an assistant message (isolated in child).
     codex
@@ -682,55 +678,28 @@ async fn start_responses_server_with_sse(sse_raw: &str, expected_requests: usize
 
 /// Create a conversation configured to talk to the provided mock server.
 #[expect(clippy::expect_used)]
-async fn new_conversation_for_server<F>(
-    server: &MockServer,
-    codex_home: &TempDir,
-    mutator: F,
-) -> Arc<CodexConversation>
+async fn new_conversation_for_server<F>(server: &MockServer, mutator: F) -> TestCodex
 where
-    F: FnOnce(&mut Config),
+    F: FnOnce(&mut Config) + Send + 'static,
 {
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-    let mut config = load_default_config_for_test(codex_home);
-    config.model_provider = model_provider;
-    mutator(&mut config);
-    let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
-    conversation_manager
-        .new_conversation(config)
-        .await
-        .expect("create conversation")
-        .conversation
+    let mut builder = test_codex().with_config(mutator);
+    builder.build(server).await.expect("create conversation")
 }
 
 /// Create a conversation resuming from a rollout file, configured to talk to the provided mock server.
 #[expect(clippy::expect_used)]
 async fn resume_conversation_for_server<F>(
     server: &MockServer,
-    codex_home: &TempDir,
+    codex_home: Arc<TempDir>,
     resume_path: std::path::PathBuf,
     mutator: F,
-) -> Arc<CodexConversation>
+) -> TestCodex
 where
-    F: FnOnce(&mut Config),
+    F: FnOnce(&mut Config) + Send + 'static,
 {
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-    let mut config = load_default_config_for_test(codex_home);
-    config.model_provider = model_provider;
-    mutator(&mut config);
-    let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
-    let auth_manager =
-        codex_core::AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-    conversation_manager
-        .resume_conversation_from_rollout(config, resume_path, auth_manager)
+    let mut builder = test_codex().with_config(mutator);
+    builder
+        .resume(server, codex_home, resume_path)
         .await
         .expect("resume conversation")
-        .conversation
 }

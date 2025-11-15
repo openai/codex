@@ -12,9 +12,9 @@ use codex_core::protocol::TurnContextItem;
 use codex_core::protocol::WarningEvent;
 use codex_protocol::ConversationId;
 use core::time::Duration;
-use core_test_support::load_default_config_for_test;
+use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
-use tempfile::TempDir;
+use wiremock::MockServer;
 
 fn resume_history(config: &codex_core::config::Config, previous_model: &str, rollout_path: &std::path::Path) -> InitialHistory {
     let turn_ctx = TurnContextItem {
@@ -36,13 +36,19 @@ fn resume_history(config: &codex_core::config::Config, previous_model: &str, rol
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn emits_warning_when_resumed_model_differs() {
     // Arrange a config with a current model and a prior rollout recorded under a different model.
-    let home = TempDir::new().expect("tempdir");
-    let mut config = load_default_config_for_test(&home);
-    config.model = "current-model".to_string();
+    let server = MockServer::start().await;
+    let mut builder = test_codex().with_config(|config| {
+        config.model = "current-model".to_string();
+    });
+    let test = builder
+        .build(&server)
+        .await
+        .expect("create test conversation");
+    let mut config = test.config.clone();
     // Ensure cwd is absolute (the helper sets it to the temp dir already).
     assert!(config.cwd.is_absolute());
 
-    let rollout_path = home.path().join("rollout.jsonl");
+    let rollout_path = test.home.path().join("rollout.jsonl");
     std::fs::write(&rollout_path, "").expect("create rollout placeholder");
 
     let initial_history = resume_history(&config, "previous-model", &rollout_path);
