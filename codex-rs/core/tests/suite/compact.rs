@@ -255,7 +255,7 @@ async fn summarize_context_three_requests_and_instructions() {
     assert!(
         messages
             .iter()
-            .any(|(r, t)| r == "user" && t == expected_summary_message),
+            .any(|(r, t)| r == "user" && t == &expected_summary_message),
         "third request should include the summary message"
     );
     assert!(
@@ -444,14 +444,9 @@ async fn manual_compact_emits_estimated_token_usage_event() {
 async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     skip_if_no_network!();
 
-    let auto_compact_limit = 5000;
-
     let server = start_mock_server().await;
 
     let codex = test_codex()
-        .with_config(move |config| {
-            config.model_auto_compact_token_limit = Some(auto_compact_limit);
-        })
         .build(&server)
         .await
         .expect("build codex")
@@ -477,8 +472,8 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         .await
         .expect("submit user input");
 
-    let token_count_used = 6000;
-    let token_count_used_after_compaction = 2000;
+    let token_count_used = 270_000;
+    let token_count_used_after_compaction = 80000;
     let model_reasoning_response_1_sse = sse(vec![
         ev_reasoning_item("m1", &["I will create a react app"], &[]),
         ev_local_shell_call("r1-shell", "completed", vec!["echo", "make-react"]),
