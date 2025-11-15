@@ -1081,7 +1081,10 @@ async fn auto_compact_runs_after_token_limit_hit() {
         requests.len()
     );
     let is_auto_compact = |req: &wiremock::Request| {
-        body_contains_text(std::str::from_utf8(&req.body).unwrap_or(""), SUMMARIZATION_PROMPT)
+        body_contains_text(
+            std::str::from_utf8(&req.body).unwrap_or(""),
+            SUMMARIZATION_PROMPT,
+        )
     };
     let auto_compact_count = requests.iter().filter(|req| is_auto_compact(req)).count();
     assert_eq!(
