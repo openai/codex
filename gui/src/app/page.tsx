@@ -17,6 +17,7 @@ import {
 import { Card } from '@/components/atoms/Card';
 import { Button } from '@/components/atoms/Button';
 import { LoadingSpinner } from '@/components/molecules/LoadingSpinner';
+import { useCodex } from '@/lib/context/CodexContext';
 import {
   Brain,
   Code,

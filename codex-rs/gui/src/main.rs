@@ -3,6 +3,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
+use axum::Json;
+use axum::Router;
 use axum::extract::Path;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -10,8 +12,6 @@ use axum::response::IntoResponse;
 use axum::response::Response;
 use axum::routing::get;
 use axum::routing::post;
-use axum::Json;
-use axum::Router;
 use chrono::DateTime;
 use chrono::Utc;
 use http::Method;
@@ -44,7 +44,7 @@ async fn main() -> Result<(), GuiError> {
 
     let app = Router::new()
         .route("/api/actions", get(list_actions))
-        .route("/api/actions/:id/execute", post(execute_action))
+        .route("/api/actions/{id}/execute", post(execute_action))
         .with_state(state)
         .layer(
             CorsLayer::new()
@@ -453,8 +453,7 @@ fn action_definitions() -> Vec<ActionDefinition> {
         ActionDefinition {
             id: "ask",
             label: "Ask an Agent",
-            description:
-                "Send a quick question or mention a specialized agent to get focused help.",
+            description: "Send a quick question or mention a specialized agent to get focused help.",
             category: ActionCategory::Collaboration,
             cta_label: "Send request",
             fields: vec![
@@ -465,8 +464,7 @@ fn action_definitions() -> Vec<ActionDefinition> {
         ActionDefinition {
             id: "delegate",
             label: "Delegate to Specialist",
-            description:
-                "Assign a scoped goal to a dedicated specialist agent with optional context.",
+            description: "Assign a scoped goal to a dedicated specialist agent with optional context.",
             category: ActionCategory::Collaboration,
             cta_label: "Delegate task",
             fields: vec![
@@ -503,8 +501,7 @@ fn action_definitions() -> Vec<ActionDefinition> {
         ActionDefinition {
             id: "research",
             label: "Deep Research",
-            description:
-                "Launch a deep-research session with controllable depth and breadth settings.",
+            description: "Launch a deep-research session with controllable depth and breadth settings.",
             category: ActionCategory::Launchpad,
             cta_label: "Run research",
             fields: vec![
@@ -562,8 +559,10 @@ fn action_definitions() -> Vec<ActionDefinition> {
             description: "Summarize feedback on a patch or task using the review agent.",
             category: ActionCategory::Quality,
             cta_label: "Request review",
-            fields: vec![ActionFieldDefinition::text_area("task", "Review scope")
-                .with_placeholder("Review the diff in src/lib.rs for regressions")],
+            fields: vec![
+                ActionFieldDefinition::text_area("task", "Review scope")
+                    .with_placeholder("Review the diff in src/lib.rs for regressions"),
+            ],
         },
         ActionDefinition {
             id: "audit",
@@ -571,8 +570,10 @@ fn action_definitions() -> Vec<ActionDefinition> {
             description: "Run a targeted security audit with the sec-audit agent.",
             category: ActionCategory::Quality,
             cta_label: "Start audit",
-            fields: vec![ActionFieldDefinition::text_area("task", "Audit focus")
-                .with_placeholder("Inspect dependency updates for high severity CVEs")],
+            fields: vec![
+                ActionFieldDefinition::text_area("task", "Audit focus")
+                    .with_placeholder("Inspect dependency updates for high severity CVEs"),
+            ],
         },
     ]
 }
