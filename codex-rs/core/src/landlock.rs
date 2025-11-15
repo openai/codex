@@ -1,10 +1,13 @@
 use crate::protocol::SandboxPolicy;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
+use crate::util::display_path_relative_to_home;
 use std::collections::HashMap;
+use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::process::Child;
+use tracing::warn;
 
 /// Spawn a shell tool command under the Linux Landlock+seccomp sandbox helper
 /// (codex-linux-sandbox).
@@ -27,16 +30,47 @@ where
 {
     let args = create_linux_sandbox_command_args(command, sandbox_policy, sandbox_policy_cwd);
     let arg0 = Some("codex-linux-sandbox");
-    spawn_child_async(
-        codex_linux_sandbox_exe.as_ref().to_path_buf(),
-        args,
+    let original_path = codex_linux_sandbox_exe.as_ref().to_path_buf();
+    let result = spawn_child_async(
+        original_path.clone(),
+        args.clone(),
         arg0,
-        command_cwd,
+        command_cwd.clone(),
         sandbox_policy,
         stdio_policy,
-        env,
+        env.clone(),
     )
-    .await
+    .await;
+
+    // Handle case where codex binary was removed. (e.g., during an upgrade)
+    match result {
+        Ok(child) => Ok(child),
+        Err(e) if e.kind() == io::ErrorKind::NotFound && !original_path.exists() => {
+            if let Some(alt_path) = crate::updates::try_codex_in_path().await {
+                warn!(original = ?original_path, alternative = ?alt_path, "Codex binary not found, using alternative from PATH");
+                spawn_child_async(
+                    alt_path,
+                    args,
+                    arg0,
+                    command_cwd,
+                    sandbox_policy,
+                    stdio_policy,
+                    env,
+                )
+                .await
+            } else {
+                let reinstall_hint = crate::updates::get_reinstall_hint();
+                let original_display = display_path_relative_to_home(&original_path);
+                let message = format!(
+                    "Did you delete Codex while it was running?\n\
+                     │ Expected binary to exist: {original_display}\n\
+                     └ Install Codex again to resolve: {reinstall_hint}"
+                );
+                Err(io::Error::new(io::ErrorKind::NotFound, message))
+            }
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Converts the sandbox policy into the CLI invocation for `codex-linux-sandbox`.

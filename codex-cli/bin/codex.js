@@ -64,6 +64,13 @@ const archRoot = path.join(vendorRoot, targetTriple);
 const codexBinaryName = process.platform === "win32" ? "codex.exe" : "codex";
 const binaryPath = path.join(archRoot, "codex", codexBinaryName);
 
+// If --print-binary-path is present, print the codex binary path and exit.
+// See `try_recover_codex_binary` in `codex-rs` for more details.
+if (process.argv.slice(2).includes("--print-binary-path")) {
+  process.stdout.write(binaryPath);
+  process.exit(0);
+}
+
 // Use an asynchronous spawn instead of spawnSync so that Node is able to
 // respond to signals (e.g. Ctrl-C / SIGINT) while the native binary is
 // executing. This allows us to forward those signals to the child process
