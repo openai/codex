@@ -1870,7 +1870,6 @@ pub(crate) async fn run_task(
                 let token_limit_reached = total_usage_tokens
                     .map(|tokens| tokens >= limit)
                     .unwrap_or(false);
-                eprintln!("token_limit_reached: {token_limit_reached}");
                 let (responses, items_to_record_in_conversation_history) =
                     process_items(processed_items, &sess, &turn_context).await;
 
