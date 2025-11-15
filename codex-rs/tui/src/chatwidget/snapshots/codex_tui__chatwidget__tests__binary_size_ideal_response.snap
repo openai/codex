@@ -125,7 +125,7 @@ expression: "lines[start_idx..].join(\"\\n\")"
   and a TLS stack (rustls by default; OpenSSL on musl). In core, login, tui,
   and ollama you enable reqwest with json/stream, which still pulls a large
   transitive set.
-  - Image/terminal stack: codex-tui includes image (with jpeg), ratatui,
+  - Image/terminal stack: codex-tui includes image (with jpeg), ratatouille,
   crossterm, and ratatui-image, which together contribute significant code size
   (decoders, pixel ops, terminal backends).
   - Parsers/VMs: tree-sitter + tree-sitter-bash (in core and apply-patch) and
