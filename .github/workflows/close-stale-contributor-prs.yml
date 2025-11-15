@@ -1,0 +1,105 @@
+name: Close stale contributor PRs
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * *"
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  close-stale-contributor-prs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close inactive PRs from contributors
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const DAYS_INACTIVE = 14;
+            const cutoff = new Date(Date.now() - DAYS_INACTIVE * 24 * 60 * 60 * 1000);
+            const { owner, repo } = context.repo;
+            const dryRun = false;
+            const stalePrs = [];
+
+            core.info(`Dry run mode: ${dryRun}`);
+
+            const prs = await github.paginate(github.rest.pulls.list, {
+              owner,
+              repo,
+              state: "open",
+              per_page: 100,
+              sort: "updated",
+              direction: "asc",
+            });
+
+            for (const pr of prs) {
+              const lastUpdated = new Date(pr.updated_at);
+              if (lastUpdated > cutoff) {
+                core.info(`PR ${pr.number} is fresh`);
+                continue;
+              }
+
+              if (!pr.user || pr.user.type !== "User") {
+                core.info(`PR ${pr.number} wasn't created by a user`);
+                continue;
+              }
+
+              let permission;
+              try {
+                const permissionResponse = await github.rest.repos.getCollaboratorPermissionLevel({
+                  owner,
+                  repo,
+                  username: pr.user.login,
+                });
+                permission = permissionResponse.data.permission;
+              } catch (error) {
+                if (error.status === 404) {
+                  core.info(`Author ${pr.user.login} is not a collaborator; skipping #${pr.number}`);
+                  continue;
+                }
+                throw error;
+              }
+
+              const hasContributorAccess = ["admin", "maintain", "write"].includes(permission);
+              if (!hasContributorAccess) {
+                core.info(`Author ${pr.user.login} has ${permission} access; skipping #${pr.number}`);
+                continue;
+              }
+
+              stalePrs.push(pr);
+            }
+
+            if (!stalePrs.length) {
+              core.info("No stale contributor pull requests found.");
+              return;
+            }
+
+            for (const pr of stalePrs) {
+              const issue_number = pr.number;
+              const closeComment = `Closing this pull request because it has had no updates for more than ${DAYS_INACTIVE} days. If you plan to continue working on it, feel free to reopen or open a new PR.`;
+
+              if (dryRun) {
+                core.info(`[dry-run] Would close contributor PR #${issue_number} from ${pr.user.login}`);
+                continue;
+              }
+
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body: closeComment,
+              });
+
+              await github.rest.pulls.update({
+                owner,
+                repo,
+                pull_number: issue_number,
+                state: "closed",
+              });
+
+              core.info(`Closed contributor PR #${issue_number} from ${pr.user.login}`);
+            }

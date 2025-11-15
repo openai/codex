@@ -67,6 +67,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         dangerously_bypass_approvals_and_sandbox,
         cwd,
         skip_git_repo_check,
+        add_dir,
         color,
         last_message_file,
         json: json_mode,
@@ -249,7 +250,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         show_raw_agent_reasoning: oss.then_some(true),
         tools_web_search_request: None,
         experimental_sandbox_command_assessment: None,
-        additional_writable_roots: Vec::new(),
+        additional_writable_roots: add_dir,
     };
 
     let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides).await?;
