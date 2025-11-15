@@ -80,8 +80,9 @@ fn extract_summary_message(request: &Value, summary_text: &str) -> Value {
                         .and_then(Value::as_array)
                         .and_then(|arr| arr.first())
                         .and_then(|entry| entry.get("text"))
-                        .and_then(Value::as_str)
-                        == Some(summary_text)
+                        .and_then(Value::as_str).
+                        .map(|text| text.contains(summary_text))
+                        .unwrap_or(false)
             })
         })
         .cloned()
