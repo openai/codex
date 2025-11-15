@@ -63,6 +63,10 @@ fn auto_summary(summary: &str) -> String {
     summary.to_string()
 }
 
+fn summary_with_prefix(summary: &str) -> String {
+    format!("{SUMMARY_PREFIX}\n{summary}")
+}
+
 fn drop_call_id(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(obj) => {
@@ -212,6 +216,7 @@ async fn summarize_context_three_requests_and_instructions() {
     );
 
     let mut messages: Vec<(String, String)> = Vec::new();
+    let expected_summary_message = summary_with_prefix(SUMMARY_TEXT);
 
     for item in input3 {
         if let Some("message") = item.get("type").and_then(|v| v.as_str()) {
@@ -250,7 +255,7 @@ async fn summarize_context_three_requests_and_instructions() {
     assert!(
         messages
             .iter()
-            .any(|(r, t)| r == "user" && t == SUMMARY_TEXT),
+            .any(|(r, t)| r == "user" && t == expected_summary_message),
         "third request should include the summary message"
     );
     assert!(
@@ -287,7 +292,7 @@ async fn summarize_context_three_requests_and_instructions() {
                 api_turn_count += 1;
             }
             RolloutItem::Compacted(ci) => {
-                if ci.message == SUMMARY_TEXT {
+                if ci.message == expected_summary_message {
                     saw_compacted_summary = true;
                 }
             }
@@ -454,6 +459,14 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
 
     // user message
     let user_message = "create an app";
+    // summary texts from model
+    let first_summary_text = "The task is to create an app. I started to create a react app.";
+    let second_summary_text = "The task is to create an app. I started to create a react app. then I realized that I need to create a node app.";
+    let third_summary_text = "The task is to create an app. I started to create a react app. then I realized that I need to create a node app. then I realized that I need to create a python app.";
+    // summary texts with prefix
+    let prefixed_first_summary = summary_with_prefix(first_summary_text);
+    let prefixed_second_summary = summary_with_prefix(second_summary_text);
+    let prefixed_third_summary = summary_with_prefix(third_summary_text);
 
     codex
         .submit(Op::UserInput {
@@ -472,10 +485,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         ev_completed_with_tokens("r1", token_count_used),
     ]);
     let model_compact_response_1_sse = sse(vec![
-        ev_assistant_message(
-            "m2",
-            "The task is to create an app. I started to create a react app.",
-        ),
+        ev_assistant_message("m2", first_summary_text),
         ev_completed_with_tokens("r2", token_count_used_after_compaction),
     ]);
     let model_reasoning_response_2_sse = sse(vec![
@@ -484,10 +494,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         ev_completed_with_tokens("r3", token_count_used),
     ]);
     let model_compact_response_2_sse = sse(vec![
-        ev_assistant_message(
-            "m4",
-            "The task is to create an app. I started to create a react app. then I realized that I need to create a node app.",
-        ),
+        ev_assistant_message("m4", second_summary_text),
         ev_completed_with_tokens("r4", token_count_used_after_compaction),
     ]);
     let model_reasoning_response_3_sse = sse(vec![
@@ -496,10 +503,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         ev_completed_with_tokens("r6", token_count_used),
     ]);
     let model_compact_response_3_sse = sse(vec![
-        ev_assistant_message(
-            "m7",
-            "The task is to create an app. I started to create a react app. then I realized that I need to create a node app. then I realized that I need to create a python app.",
-        ),
+        ev_assistant_message("m7", third_summary_text),
         ev_completed_with_tokens("r7", token_count_used_after_compaction),
     ]);
     let model_final_response_sse = sse(vec![
@@ -533,7 +537,12 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
 
     // test 1: after compaction, we should have one environment message, one user message, and one user message with summary prefix
     let compaction_indices = [2, 4, 6];
-    for i in compaction_indices {
+    let expected_summaries = [
+        prefixed_first_summary.as_str(),
+        prefixed_second_summary.as_str(),
+        prefixed_third_summary.as_str(),
+    ];
+    for (i, expected_summary) in compaction_indices.into_iter().zip(expected_summaries) {
         let body = requests_payloads.clone()[i]
             .body_json::<serde_json::Value>()
             .unwrap();
@@ -541,10 +550,13 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         assert_eq!(input.len(), 3);
         let environment_message = input[0]["content"][0]["text"].as_str().unwrap();
         let user_message = input[1]["content"][0]["text"].as_str().unwrap();
-        let summary_prefix = input[2]["content"][0]["text"].as_str().unwrap();
+        let summary_message = input[2]["content"][0]["text"].as_str().unwrap();
         assert_eq!(environment_message, environment_message);
         assert_eq!(user_message, "create an app");
-        assert!(summary_prefix.starts_with(format!("{SUMMARY_PREFIX}\n").as_str()));
+        assert_eq!(
+            summary_message, expected_summary,
+            "compaction request at index {i} should include the prefixed summary"
+        );
     }
 
     let expected_requests_inputs = json!([
@@ -663,7 +675,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
       {
         "content": [
           {
-            "text": format!("{SUMMARY_PREFIX}\nThe task is to create an app. I started to create a react app."),
+            "text": prefixed_first_summary.clone(),
             "type": "input_text"
           }
         ],
@@ -697,7 +709,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
       {
         "content": [
           {
-            "text": format!("{SUMMARY_PREFIX}\nThe task is to create an app. I started to create a react app."),
+            "text": prefixed_first_summary.clone(),
             "type": "input_text"
           }
         ],
@@ -773,7 +785,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
       {
         "content": [
           {
-            "text": format!("{SUMMARY_PREFIX}\nThe task is to create an app. I started to create a react app. then I realized that I need to create a node app."),
+            "text": prefixed_second_summary.clone(),
             "type": "input_text"
           }
         ],
@@ -807,7 +819,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
       {
         "content": [
           {
-            "text": format!("{SUMMARY_PREFIX}\nThe task is to create an app. I started to create a react app. then I realized that I need to create a node app."),
+            "text": prefixed_second_summary.clone(),
             "type": "input_text"
           }
         ],
@@ -883,7 +895,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
       {
         "content": [
           {
-            "text": format!("{SUMMARY_PREFIX}\nThe task is to create an app. I started to create a react app. then I realized that I need to create a node app. then I realized that I need to create a python app."),
+            "text": prefixed_third_summary.clone(),
             "type": "input_text"
           }
         ],
@@ -932,6 +944,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         ev_assistant_message("m4", FINAL_REPLY),
         ev_completed_with_tokens("r4", 120),
     ]);
+    let prefixed_auto_summary = summary_with_prefix(AUTO_SUMMARY_TEXT);
 
     let first_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
@@ -955,9 +968,10 @@ async fn auto_compact_runs_after_token_limit_hit() {
     };
     mount_sse_once_match(&server, third_matcher, sse3).await;
 
-    let resume_matcher = |req: &wiremock::Request| {
+    let resume_marker = prefixed_auto_summary.clone();
+    let resume_matcher = move |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(AUTO_SUMMARY_TEXT)
+        body.contains(&resume_marker)
             && !body.contains(SUMMARIZATION_PROMPT)
             && !body.contains(POST_AUTO_USER_MSG)
     };
@@ -1046,12 +1060,13 @@ async fn auto_compact_runs_after_token_limit_hit() {
         "auto compact should add a third request"
     );
 
+    let resume_summary_marker = prefixed_auto_summary.clone();
     let resume_index = requests
         .iter()
         .enumerate()
         .find_map(|(idx, req)| {
             let body = std::str::from_utf8(&req.body).unwrap_or("");
-            (body.contains(AUTO_SUMMARY_TEXT)
+            (body.contains(&resume_summary_marker)
                 && !body.contains(SUMMARIZATION_PROMPT)
                 && !body.contains(POST_AUTO_USER_MSG))
             .then_some(idx)
@@ -1126,7 +1141,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
                     .and_then(|arr| arr.first())
                     .and_then(|entry| entry.get("text"))
                     .and_then(|v| v.as_str())
-                    == Some(AUTO_SUMMARY_TEXT)
+                    == Some(prefixed_auto_summary.as_str())
         }),
         "resume request should include compacted history"
     );
@@ -1161,7 +1176,9 @@ async fn auto_compact_runs_after_token_limit_hit() {
         "auto compact follow-up request should include the new user message"
     );
     assert!(
-        user_texts.iter().any(|text| text == AUTO_SUMMARY_TEXT),
+        user_texts
+            .iter()
+            .any(|text| text == prefixed_auto_summary.as_str()),
         "auto compact follow-up request should include the summary message"
     );
 }
@@ -1297,6 +1314,7 @@ async fn auto_compact_stops_after_failed_attempt() {
         ev_assistant_message("m2", &summary_payload),
         ev_completed_with_tokens("r2", 50),
     ]);
+    let prefixed_summary_text = summary_with_prefix(SUMMARY_TEXT);
 
     let sse3 = sse(vec![
         ev_assistant_message("m3", STILL_TOO_BIG_REPLY),
@@ -1315,9 +1333,10 @@ async fn auto_compact_stops_after_failed_attempt() {
     };
     mount_sse_once_match(&server, second_matcher, sse2.clone()).await;
 
-    let third_matcher = |req: &wiremock::Request| {
+    let summary_marker = prefixed_summary_text.clone();
+    let third_matcher = move |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        !body.contains(SUMMARIZATION_PROMPT) && body.contains(SUMMARY_TEXT)
+        !body.contains(SUMMARIZATION_PROMPT) && body.contains(&summary_marker)
     };
     mount_sse_once_match(&server, third_matcher, sse3.clone()).await;
 
@@ -1525,6 +1544,8 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
     let final_user_message = "post compact follow-up";
     let first_summary = "FIRST_MANUAL_SUMMARY";
     let second_summary = "SECOND_MANUAL_SUMMARY";
+    let expected_first_summary = summary_with_prefix(first_summary);
+    let expected_second_summary = summary_with_prefix(second_summary);
 
     let server = start_mock_server().await;
 
@@ -1704,7 +1725,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         }),
         json!({
             "content": vec![json!({
-                "text": first_summary,
+                "text": expected_first_summary,
                 "type": "input_text",
             })],
             "role": "user",
@@ -1720,7 +1741,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         }),
         json!({
             "content": vec![json!({
-                "text": second_summary,
+                "text": expected_second_summary,
                 "type": "input_text",
             })],
             "role": "user",
