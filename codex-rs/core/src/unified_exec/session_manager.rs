@@ -6,18 +6,12 @@ use tokio::sync::mpsc;
 use tokio::time::Duration;
 use tokio::time::Instant;
 
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::StreamOutput;
 use crate::exec_env::create_env;
-use crate::protocol::BackgroundEventEvent;
-use crate::protocol::EventMsg;
-use crate::protocol::ExecCommandSource;
 use crate::sandboxing::ExecEnv;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
-use crate::tools::events::ToolEventFailure;
 use crate::tools::events::ToolEventStage;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
@@ -72,18 +66,15 @@ impl UnifiedExecSessionManager {
         let text = String::from_utf8_lossy(&collected).to_string();
         let (output, original_token_count) = truncate_output_to_tokens(&text, max_tokens);
         let chunk_id = generate_chunk_id();
-        let has_exited = session.has_exited();
-        let stored_id = self
-            .store_session(session, context, &request.command, cwd.clone(), start)
-            .await;
-        let exit_code = self
-            .sessions
-            .lock()
-            .await
-            .get(&stored_id)
-            .map(|entry| entry.session.exit_code());
-        // Only include a session_id in the response if the process is still alive.
-        let session_id = if has_exited { None } else { Some(stored_id) };
+        let exit_code = session.exit_code();
+        let session_id = if session.has_exited() {
+            None
+        } else {
+            Some(
+                self.store_session(session, context, &request.command, cwd.clone(), start)
+                    .await,
+            )
+        };
 
         let response = UnifiedExecResponse {
             event_call_id: context.call_id.clone(),
@@ -91,14 +82,9 @@ impl UnifiedExecSessionManager {
             wall_time,
             output,
             session_id,
-            exit_code: exit_code.flatten(),
+            exit_code,
             original_token_count,
-            session_command: Some(request.command.clone()),
         };
-
-        if response.session_id.is_some() {
-            Self::emit_waiting_status(&context.session, &context.turn, &request.command).await;
-        }
 
         // If the command completed during this call, emit an ExecCommandEnd via the emitter.
         if response.session_id.is_none() {
@@ -123,46 +109,11 @@ impl UnifiedExecSessionManager {
     ) -> Result<UnifiedExecResponse, UnifiedExecError> {
         let session_id = request.session_id;
 
-        let (
-            writer_tx,
-            output_buffer,
-            output_notify,
-            session_ref,
-            turn_ref,
-            session_command,
-            session_cwd,
-        ) = self.prepare_session_handles(session_id).await?;
-
-        let interaction_emitter = ToolEmitter::unified_exec(
-            &session_command,
-            session_cwd.clone(),
-            ExecCommandSource::UnifiedExecInteraction,
-            (!request.input.is_empty()).then(|| request.input.to_string()),
-        );
-        let make_event_ctx = || {
-            ToolEventCtx::new(
-                session_ref.as_ref(),
-                turn_ref.as_ref(),
-                request.call_id,
-                None,
-            )
-        };
-        interaction_emitter
-            .emit(make_event_ctx(), ToolEventStage::Begin)
-            .await;
+        let (writer_tx, output_buffer, output_notify) =
+            self.prepare_session_handles(session_id).await?;
 
         if !request.input.is_empty() {
-            if let Err(err) = Self::send_input(&writer_tx, request.input.as_bytes()).await {
-                interaction_emitter
-                    .emit(
-                        make_event_ctx(),
-                        ToolEventStage::Failure(ToolEventFailure::Message(format!(
-                            "write_stdin failed: {err:?}"
-                        ))),
-                    )
-                    .await;
-                return Err(err);
-            }
+            Self::send_input(&writer_tx, request.input.as_bytes()).await?;
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
@@ -200,27 +151,7 @@ impl UnifiedExecSessionManager {
             session_id,
             exit_code,
             original_token_count,
-            session_command: Some(session_command.clone()),
         };
-
-        let interaction_output = ExecToolCallOutput {
-            exit_code: response.exit_code.unwrap_or(0),
-            stdout: StreamOutput::new(response.output.clone()),
-            stderr: StreamOutput::new(String::new()),
-            aggregated_output: StreamOutput::new(response.output.clone()),
-            duration: response.wall_time,
-            timed_out: false,
-        };
-        interaction_emitter
-            .emit(
-                make_event_ctx(),
-                ToolEventStage::Success(interaction_output),
-            )
-            .await;
-
-        if response.session_id.is_some() {
-            Self::emit_waiting_status(&session_ref, &turn_ref, &session_command).await;
-        }
 
         if let (Some(exit), Some(entry)) = (response.exit_code, completion_entry) {
             let total_duration = Instant::now().saturating_duration_since(entry.started_at);
@@ -258,44 +189,17 @@ impl UnifiedExecSessionManager {
     async fn prepare_session_handles(
         &self,
         session_id: i32,
-    ) -> Result<
-        (
-            mpsc::Sender<Vec<u8>>,
-            OutputBuffer,
-            Arc<Notify>,
-            Arc<Session>,
-            Arc<TurnContext>,
-            Vec<String>,
-            PathBuf,
-        ),
-        UnifiedExecError,
-    > {
+    ) -> Result<(mpsc::Sender<Vec<u8>>, OutputBuffer, Arc<Notify>), UnifiedExecError> {
         let sessions = self.sessions.lock().await;
-        let (output_buffer, output_notify, writer_tx, session, turn, command, cwd) =
+        let (output_buffer, output_notify, writer_tx) =
             if let Some(entry) = sessions.get(&session_id) {
                 let (buffer, notify) = entry.session.output_handles();
-                (
-                    buffer,
-                    notify,
-                    entry.session.writer_sender(),
-                    Arc::clone(&entry.session_ref),
-                    Arc::clone(&entry.turn_ref),
-                    entry.command.clone(),
-                    entry.cwd.clone(),
-                )
+                (buffer, notify, entry.session.writer_sender())
             } else {
                 return Err(UnifiedExecError::UnknownSessionId { session_id });
             };
 
-        Ok((
-            writer_tx,
-            output_buffer,
-            output_notify,
-            session,
-            turn,
-            command,
-            cwd,
-        ))
+        Ok((writer_tx, output_buffer, output_notify))
     }
 
     async fn send_input(
@@ -352,12 +256,7 @@ impl UnifiedExecSessionManager {
             &entry.call_id,
             None,
         );
-        let emitter = ToolEmitter::unified_exec(
-            &entry.command,
-            entry.cwd,
-            ExecCommandSource::UnifiedExecStartup,
-            None,
-        );
+        let emitter = ToolEmitter::unified_exec(&entry.command, entry.cwd, true);
         emitter
             .emit(event_ctx, ToolEventStage::Success(output))
             .await;
@@ -385,25 +284,9 @@ impl UnifiedExecSessionManager {
             &context.call_id,
             None,
         );
-        let emitter =
-            ToolEmitter::unified_exec(command, cwd, ExecCommandSource::UnifiedExecStartup, None);
+        let emitter = ToolEmitter::unified_exec(command, cwd, true);
         emitter
             .emit(event_ctx, ToolEventStage::Success(output))
-            .await;
-    }
-
-    async fn emit_waiting_status(
-        session: &Arc<Session>,
-        turn: &Arc<TurnContext>,
-        command: &[String],
-    ) {
-        let command_display = command.join(" ");
-        let message = format!("Waiting for `{command_display}`");
-        session
-            .send_event(
-                turn.as_ref(),
-                EventMsg::BackgroundEvent(BackgroundEventEvent { message }),
-            )
             .await;
     }
 

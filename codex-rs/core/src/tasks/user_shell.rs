@@ -20,7 +20,6 @@ use crate::parse_command::parse_command;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandBeginEvent;
 use crate::protocol::ExecCommandEndEvent;
-use crate::protocol::ExecCommandSource;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::TaskStartedEvent;
 use crate::sandboxing::ExecEnv;
@@ -81,8 +80,7 @@ impl SessionTask for UserShellCommandTask {
                     command: shell_invocation.clone(),
                     cwd: turn_context.cwd.clone(),
                     parsed_cmd,
-                    source: ExecCommandSource::UserShell,
-                    interaction_input: None,
+                    is_user_shell_command: true,
                 }),
             )
             .await;
