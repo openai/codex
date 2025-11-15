@@ -86,6 +86,17 @@ fn set_test_compact_prompt(config: &mut Config) {
     config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
 }
 
+fn body_contains_text(body: &str, text: &str) -> bool {
+    body.contains(&json_fragment(text))
+}
+
+fn json_fragment(text: &str) -> String {
+    serde_json::to_string(text)
+        .expect("serialize text to JSON")
+        .trim_matches('"')
+        .to_string()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn summarize_context_three_requests_and_instructions() {
     skip_if_no_network!();
@@ -111,13 +122,13 @@ async fn summarize_context_three_requests_and_instructions() {
     // Mount three expectations, one per request, matched by body content.
     let first_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains("\"text\":\"hello world\"") && !body.contains(SUMMARIZATION_PROMPT)
+        body.contains("\"text\":\"hello world\"") && !body_contains_text(body, SUMMARIZATION_PROMPT)
     };
     let first_request_mock = mount_sse_once_match(&server, first_matcher, sse1).await;
 
     let second_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(SUMMARIZATION_PROMPT)
+        body_contains_text(body, SUMMARIZATION_PROMPT)
     };
     let second_request_mock = mount_sse_once_match(&server, second_matcher, sse2).await;
 
@@ -979,7 +990,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(FIRST_AUTO_MSG)
             && !body.contains(SECOND_AUTO_MSG)
-            && !body.contains(SUMMARIZATION_PROMPT)
+            && !body_contains_text(body, SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, first_matcher, sse1).await;
 
@@ -987,13 +998,13 @@ async fn auto_compact_runs_after_token_limit_hit() {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(SECOND_AUTO_MSG)
             && body.contains(FIRST_AUTO_MSG)
-            && !body.contains(SUMMARIZATION_PROMPT)
+            && !body_contains_text(body, SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, second_matcher, sse2).await;
 
     let third_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(SUMMARIZATION_PROMPT)
+        body_contains_text(body, SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, third_matcher, sse3).await;
 
@@ -1001,14 +1012,14 @@ async fn auto_compact_runs_after_token_limit_hit() {
     let resume_matcher = move |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(resume_marker)
-            && !body.contains(SUMMARIZATION_PROMPT)
+            && !body_contains_text(body, SUMMARIZATION_PROMPT)
             && !body.contains(POST_AUTO_USER_MSG)
     };
     mount_sse_once_match(&server, resume_matcher, sse_resume).await;
 
     let fourth_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(POST_AUTO_USER_MSG) && !body.contains(SUMMARIZATION_PROMPT)
+        body.contains(POST_AUTO_USER_MSG) && !body_contains_text(body, SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, fourth_matcher, sse4).await;
 
@@ -1070,9 +1081,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         requests.len()
     );
     let is_auto_compact = |req: &wiremock::Request| {
-        std::str::from_utf8(&req.body)
-            .unwrap_or("")
-            .contains(SUMMARIZATION_PROMPT)
+        body_contains_text(std::str::from_utf8(&req.body).unwrap_or(""), SUMMARIZATION_PROMPT)
     };
     let auto_compact_count = requests.iter().filter(|req| is_auto_compact(req)).count();
     assert_eq!(
@@ -1096,7 +1105,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         .find_map(|(idx, req)| {
             let body = std::str::from_utf8(&req.body).unwrap_or("");
             (body.contains(resume_summary_marker)
-                && !body.contains(SUMMARIZATION_PROMPT)
+                && !body_contains_text(body, SUMMARIZATION_PROMPT)
                 && !body.contains(POST_AUTO_USER_MSG))
             .then_some(idx)
         })
@@ -1108,7 +1117,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         .rev()
         .find_map(|(idx, req)| {
             let body = std::str::from_utf8(&req.body).unwrap_or("");
-            (body.contains(POST_AUTO_USER_MSG) && !body.contains(SUMMARIZATION_PROMPT))
+            (body.contains(POST_AUTO_USER_MSG) && !body_contains_text(body, SUMMARIZATION_PROMPT))
                 .then_some(idx)
         })
         .expect("follow-up request missing");
@@ -1239,7 +1248,7 @@ async fn auto_compact_persists_rollout_entries() {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(FIRST_AUTO_MSG)
             && !body.contains(SECOND_AUTO_MSG)
-            && !body.contains(SUMMARIZATION_PROMPT)
+            && !body_contains_text(body, SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, first_matcher, sse1).await;
 
@@ -1247,13 +1256,13 @@ async fn auto_compact_persists_rollout_entries() {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(SECOND_AUTO_MSG)
             && body.contains(FIRST_AUTO_MSG)
-            && !body.contains(SUMMARIZATION_PROMPT)
+            && !body_contains_text(body, SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, second_matcher, sse2).await;
 
     let third_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(SUMMARIZATION_PROMPT)
+        body_contains_text(body, SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, third_matcher, sse3).await;
 
@@ -1774,7 +1783,7 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
         "first request should contain the user input"
     );
     assert!(
-        request_bodies[1].contains(SUMMARIZATION_PROMPT),
+        body_contains_text(&request_bodies[1], SUMMARIZATION_PROMPT),
         "first auto compact request should include the summarization prompt"
     );
     assert!(
@@ -1782,7 +1791,7 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
         "function call output should be sent before the second auto compact"
     );
     assert!(
-        request_bodies[4].contains(SUMMARIZATION_PROMPT),
+        body_contains_text(&request_bodies[4], SUMMARIZATION_PROMPT),
         "second auto compact request should include the summarization prompt"
     );
 }
@@ -1878,7 +1887,7 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
 
     let auto_compact_body = auto_compact_mock.single_request().body_json().to_string();
     assert!(
-        auto_compact_body.contains(SUMMARIZATION_PROMPT),
+        body_contains_text(&auto_compact_body, SUMMARIZATION_PROMPT),
         "auto compact request should include the summarization prompt after exceeding 95% (limit {limit})"
     );
 }

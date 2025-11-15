@@ -43,6 +43,17 @@ fn network_disabled() -> bool {
     std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok()
 }
 
+fn body_contains_text(body: &str, text: &str) -> bool {
+    body.contains(&json_fragment(text))
+}
+
+fn json_fragment(text: &str) -> String {
+    serde_json::to_string(text)
+        .expect("serialize text to JSON")
+        .trim_matches('"')
+        .to_string()
+}
+
 fn filter_out_ghost_snapshot_entries(items: &[Value]) -> Vec<Value> {
     items
         .iter()
@@ -740,7 +751,7 @@ async fn mount_initial_flow(server: &MockServer) {
     let match_first = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains("\"text\":\"hello world\"")
-            && !body.contains(SUMMARIZATION_PROMPT)
+            && !body_contains_text(body, SUMMARIZATION_PROMPT)
             && !body.contains(&format!("\"text\":\"{SUMMARY_TEXT}\""))
             && !body.contains("\"text\":\"AFTER_COMPACT\"")
             && !body.contains("\"text\":\"AFTER_RESUME\"")
@@ -750,7 +761,7 @@ async fn mount_initial_flow(server: &MockServer) {
 
     let match_compact = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(SUMMARIZATION_PROMPT)
+        body_contains_text(body, SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(server, match_compact, sse2).await;
 
@@ -784,7 +795,7 @@ async fn mount_second_compact_flow(server: &MockServer) {
 
     let match_second_compact = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(SUMMARIZATION_PROMPT) && body.contains("AFTER_FORK")
+        body_contains_text(body, SUMMARIZATION_PROMPT) && body.contains("AFTER_FORK")
     };
     mount_sse_once_match(server, match_second_compact, sse6).await;
 
