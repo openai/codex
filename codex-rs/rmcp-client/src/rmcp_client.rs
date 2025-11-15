@@ -259,6 +259,7 @@ impl RmcpClient {
         params: Option<ListToolsRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListToolsResult> {
+        self.refresh_oauth_if_needed().await;
         let service = self.service().await?;
         let rmcp_params = params
             .map(convert_to_rmcp::<_, PaginatedRequestParam>)
@@ -276,6 +277,7 @@ impl RmcpClient {
         params: Option<ListResourcesRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListResourcesResult> {
+        self.refresh_oauth_if_needed().await;
         let service = self.service().await?;
         let rmcp_params = params
             .map(convert_to_rmcp::<_, PaginatedRequestParam>)
@@ -293,6 +295,7 @@ impl RmcpClient {
         params: Option<ListResourceTemplatesRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListResourceTemplatesResult> {
+        self.refresh_oauth_if_needed().await;
         let service = self.service().await?;
         let rmcp_params = params
             .map(convert_to_rmcp::<_, PaginatedRequestParam>)
@@ -310,6 +313,7 @@ impl RmcpClient {
         params: ReadResourceRequestParams,
         timeout: Option<Duration>,
     ) -> Result<ReadResourceResult> {
+        self.refresh_oauth_if_needed().await;
         let service = self.service().await?;
         let rmcp_params: ReadResourceRequestParam = convert_to_rmcp(params)?;
         let fut = service.read_resource(rmcp_params);
@@ -325,6 +329,7 @@ impl RmcpClient {
         arguments: Option<serde_json::Value>,
         timeout: Option<Duration>,
     ) -> Result<CallToolResult> {
+        self.refresh_oauth_if_needed().await;
         let service = self.service().await?;
         let params = CallToolRequestParams { arguments, name };
         let rmcp_params: CallToolRequestParam = convert_to_rmcp(params)?;
@@ -361,6 +366,14 @@ impl RmcpClient {
             && let Err(error) = runtime.persist_if_needed().await
         {
             warn!("failed to persist OAuth tokens: {error}");
+        }
+    }
+
+    async fn refresh_oauth_if_needed(&self) {
+        if let Some(runtime) = self.oauth_persistor().await
+            && let Err(error) = runtime.refresh_if_needed().await
+        {
+            warn!("failed to refresh OAuth tokens: {error}");
         }
     }
 }
