@@ -43,6 +43,7 @@ use mcp_types::ReadResourceResult;
 use serde_json;
 use serde_json::Value;
 use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -68,7 +69,6 @@ use crate::compact::build_compacted_history;
 use crate::compact::collect_user_messages;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
-use crate::mcp_connection_manager::spawn_startup_job;
 use crate::model_family::find_family_for_model;
 use crate::openai_model_info::get_model_info;
 use crate::project_doc::get_user_instructions;
@@ -545,8 +545,8 @@ impl Session {
         let state = SessionState::new(session_configuration.clone());
 
         let services = SessionServices {
-            mcp_connection_manager: McpConnectionManager::default(),
-            mcp_startup: Mutex::new(None),
+            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
+            mcp_startup_cancellation_token: CancellationToken::new(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::new(config.notify.clone()),
             rollout: Mutex::new(Some(rollout_recorder)),
@@ -586,29 +586,17 @@ impl Session {
         for event in events {
             sess.send_event_raw(event).await;
         }
-
-        // Start MCP servers in the background and stream startup updates.
-        match spawn_startup_job(
-            config.mcp_servers.clone(),
-            config.mcp_oauth_credentials_store_mode,
-            sess.services.mcp_connection_manager.clone(),
-            tx_event.clone(),
-            auth_statuses.clone(),
-        ) {
-            Ok(handle) => {
-                let mut guard = sess.services.mcp_startup.lock().await;
-                *guard = Some(handle);
-            }
-            Err(e) => {
-                let message = format!("Failed to start MCP startup job: {e:#}");
-                error!("{message}");
-                sess.send_event_raw(Event {
-                    id: INITIAL_SUBMIT_ID.to_owned(),
-                    msg: EventMsg::Error(ErrorEvent { message }),
-                })
-                .await;
-            }
-        }
+        sess.services
+            .mcp_connection_manager
+            .write()
+            .await
+            .initialize(
+                config.mcp_servers.clone(),
+                config.mcp_oauth_credentials_store_mode,
+                auth_statuses.clone(),
+                tx_event.clone(),
+                sess.services.mcp_startup_cancellation_token.clone(),
+            );
 
         // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
         sess.record_initial_history(initial_history).await;
@@ -1174,6 +1162,8 @@ impl Session {
     ) -> anyhow::Result<ListResourcesResult> {
         self.services
             .mcp_connection_manager
+            .read()
+            .await
             .list_resources(server, params)
             .await
     }
@@ -1185,6 +1175,8 @@ impl Session {
     ) -> anyhow::Result<ListResourceTemplatesResult> {
         self.services
             .mcp_connection_manager
+            .read()
+            .await
             .list_resource_templates(server, params)
             .await
     }
@@ -1196,6 +1188,8 @@ impl Session {
     ) -> anyhow::Result<ReadResourceResult> {
         self.services
             .mcp_connection_manager
+            .read()
+            .await
             .read_resource(server, params)
             .await
     }
@@ -1208,45 +1202,19 @@ impl Session {
     ) -> anyhow::Result<CallToolResult> {
         self.services
             .mcp_connection_manager
+            .read()
+            .await
             .call_tool(server, tool, arguments)
             .await
     }
 
-    pub(crate) fn parse_mcp_tool_name(&self, tool_name: &str) -> Option<(String, String)> {
+    pub(crate) async fn parse_mcp_tool_name(&self, tool_name: &str) -> Option<(String, String)> {
         self.services
             .mcp_connection_manager
+            .read()
+            .await
             .parse_tool_name(tool_name)
-    }
-
-    async fn wait_for_mcp_startup(&self, cancellation_token: CancellationToken) -> CodexResult<()> {
-        if cancellation_token.is_cancelled() {
-            return Err(CodexErr::Interrupted);
-        }
-
-        let readiness = {
-            let guard = self.services.mcp_startup.lock().await;
-            guard
-                .as_ref()
-                .map(super::mcp_connection_manager::McpStartupJobHandle::readiness)
-        };
-
-        if let Some(mut readiness) = readiness {
-            if *readiness.borrow() {
-                return Ok(());
-            }
-            loop {
-                tokio::select! {
-                    _ = cancellation_token.cancelled() => return Err(CodexErr::Interrupted),
-                    changed = readiness.changed() => {
-                        if changed.is_err() || *readiness.borrow() {
-                            return Ok(());
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(())
+            .await
     }
 
     pub async fn interrupt_task(self: &Arc<Self>) {
@@ -1272,13 +1240,7 @@ impl Session {
     }
 
     async fn cancel_mcp_startup(&self) {
-        let handle = {
-            let mut guard = self.services.mcp_startup.lock().await;
-            guard.take()
-        };
-        if let Some(handle) = handle {
-            handle.cancel();
-        }
+        self.services.mcp_startup_cancellation_token.cancel();
     }
 }
 
@@ -1537,16 +1499,15 @@ mod handlers {
     }
 
     pub async fn list_mcp_tools(sess: &Session, config: &Arc<Config>, sub_id: String) {
+        let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
         let (tools, auth_status_entries, resources, resource_templates) = tokio::join!(
-            sess.services.mcp_connection_manager.list_all_tools(),
+            mcp_connection_manager.list_all_tools(),
             compute_auth_statuses(
                 config.mcp_servers.iter(),
                 config.mcp_oauth_credentials_store_mode,
             ),
-            sess.services.mcp_connection_manager.list_all_resources(),
-            sess.services
-                .mcp_connection_manager
-                .list_all_resource_templates()
+            mcp_connection_manager.list_all_resources(),
+            mcp_connection_manager.list_all_resource_templates(),
         );
         let auth_statuses = auth_status_entries
             .iter()
@@ -1555,7 +1516,10 @@ mod handlers {
         let event = Event {
             id: sub_id,
             msg: EventMsg::McpListToolsResponse(crate::protocol::McpListToolsResponseEvent {
-                tools,
+                tools: tools
+                    .into_iter()
+                    .map(|(name, tool)| (name, tool.tool))
+                    .collect(),
                 resources,
                 resource_templates,
                 auth_statuses,
@@ -1901,12 +1865,22 @@ async fn run_turn(
     input: Vec<ResponseItem>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<TurnRunResult> {
-    sess.wait_for_mcp_startup(cancellation_token.child_token())
+    let mcp_tools = sess
+        .services
+        .mcp_connection_manager
+        .read()
+        .await
+        .list_all_tools()
+        .or_cancel(&cancellation_token)
         .await?;
-    let mcp_tools = sess.services.mcp_connection_manager.list_all_tools().await;
     let router = Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
-        Some(mcp_tools),
+        Some(
+            mcp_tools
+                .into_iter()
+                .map(|(name, tool)| (name, tool.tool))
+                .collect(),
+        ),
     ));
 
     let model_supports_parallel = turn_context
@@ -2075,7 +2049,7 @@ async fn try_run_turn(
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
                 let previously_active_item = active_item.take();
-                match ToolRouter::build_tool_call(sess.as_ref(), item.clone()) {
+                match ToolRouter::build_tool_call(sess.as_ref(), item.clone()).await {
                     Ok(Some(call)) => {
                         let payload_preview = call.payload.log_payload().into_owned();
                         tracing::info!("ToolCall: {} {}", call.tool_name, payload_preview);
@@ -2512,8 +2486,8 @@ mod tests {
         let state = SessionState::new(session_configuration.clone());
 
         let services = SessionServices {
-            mcp_connection_manager: McpConnectionManager::default(),
-            mcp_startup: Mutex::new(None),
+            mcp_connection_manager: Arc::new(McpConnectionManager::default()),
+            mcp_startup_cancellation_token: CancellationToken::new(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::new(None),
             rollout: Mutex::new(None),
@@ -2589,8 +2563,8 @@ mod tests {
         let state = SessionState::new(session_configuration.clone());
 
         let services = SessionServices {
-            mcp_connection_manager: McpConnectionManager::default(),
-            mcp_startup: Mutex::new(None),
+            mcp_connection_manager: Arc::new(McpConnectionManager::default()),
+            mcp_startup_cancellation_token: CancellationToken::new(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::new(None),
             rollout: Mutex::new(None),
@@ -2777,8 +2751,12 @@ mod tests {
                 session
                     .services
                     .mcp_connection_manager
+                    .clone()
                     .list_all_tools()
-                    .await,
+                    .await
+                    .into_iter()
+                    .map(|(name, tool)| (name, tool.tool))
+                    .collect(),
             ),
         );
         let item = ResponseItem::CustomToolCall {
@@ -2790,6 +2768,7 @@ mod tests {
         };
 
         let call = ToolRouter::build_tool_call(session.as_ref(), item.clone())
+            .await
             .expect("build tool call")
             .expect("tool call present");
         let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
