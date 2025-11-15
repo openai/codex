@@ -26,6 +26,7 @@ use futures::prelude::*;
 use tracing::error;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt.md");
+pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_prefix.md");
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 
 pub(crate) async fn run_inline_auto_compact_task(
@@ -140,7 +141,9 @@ async fn run_compact_task_inner(
     }
 
     let history_snapshot = sess.clone_history().await.get_history();
-    let summary_text = get_last_assistant_message_from_turn(&history_snapshot).unwrap_or_default();
+    let summary_suffix =
+        get_last_assistant_message_from_turn(&history_snapshot).unwrap_or_default();
+    let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
     let user_messages = collect_user_messages(&history_snapshot);
 
     let initial_context = sess.build_initial_context(turn_context.as_ref());
@@ -201,10 +204,20 @@ pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<String> {
     items
         .iter()
         .filter_map(|item| match crate::event_mapping::parse_turn_item(item) {
-            Some(TurnItem::UserMessage(user)) => Some(user.message()),
+            Some(TurnItem::UserMessage(user)) => {
+                if is_summary_message(&user.message()) {
+                    None
+                } else {
+                    Some(user.message())
+                }
+            }
             _ => None,
         })
         .collect()
+}
+
+pub(crate) fn is_summary_message(message: &str) -> bool {
+    message.starts_with(format!("{SUMMARY_PREFIX}\n").as_str())
 }
 
 pub(crate) fn build_compacted_history(

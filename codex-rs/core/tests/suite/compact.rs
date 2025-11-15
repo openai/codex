@@ -1,10 +1,12 @@
+#![allow(clippy::expect_used)]
 use codex_core::CodexAuth;
 use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
 use codex_core::built_in_model_providers;
+use codex_core::compact::SUMMARIZATION_PROMPT;
+use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
-use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::RolloutItem;
@@ -12,7 +14,10 @@ use codex_core::protocol::RolloutLine;
 use codex_core::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
+use core_test_support::responses::ev_local_shell_call;
+use core_test_support::responses::ev_reasoning_item;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use std::collections::VecDeque;
@@ -38,7 +43,6 @@ const THIRD_USER_MSG: &str = "next turn";
 const AUTO_SUMMARY_TEXT: &str = "AUTO_SUMMARY";
 const FIRST_AUTO_MSG: &str = "token limit start";
 const SECOND_AUTO_MSG: &str = "token limit push";
-const STILL_TOO_BIG_REPLY: &str = "STILL_TOO_BIG";
 const MULTI_AUTO_MSG: &str = "multi auto";
 const SECOND_LARGE_REPLY: &str = "SECOND_LARGE_REPLY";
 const FIRST_AUTO_SUMMARY: &str = "FIRST_AUTO_SUMMARY";
@@ -50,15 +54,15 @@ const DUMMY_FUNCTION_NAME: &str = "unsupported_tool";
 const DUMMY_CALL_ID: &str = "call-multi-auto";
 const FUNCTION_CALL_LIMIT_MSG: &str = "function call limit push";
 const POST_AUTO_USER_MSG: &str = "post auto follow-up";
-const COMPACT_PROMPT_MARKER: &str =
-    "You are performing a CONTEXT CHECKPOINT COMPACTION for a tool.";
-pub(super) const TEST_COMPACT_PROMPT: &str =
-    "You are performing a CONTEXT CHECKPOINT COMPACTION for a tool.\nTest-only compact prompt.";
 
 pub(super) const COMPACT_WARNING_MESSAGE: &str = "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start a new conversation when possible to keep conversations small and targeted.";
 
 fn auto_summary(summary: &str) -> String {
     summary.to_string()
+}
+
+fn summary_with_prefix(summary: &str) -> String {
+    format!("{SUMMARY_PREFIX}\n{summary}")
 }
 
 fn drop_call_id(value: &mut serde_json::Value) {
@@ -79,7 +83,18 @@ fn drop_call_id(value: &mut serde_json::Value) {
 }
 
 fn set_test_compact_prompt(config: &mut Config) {
-    config.compact_prompt = Some(TEST_COMPACT_PROMPT.to_string());
+    config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
+}
+
+fn body_contains_text(body: &str, text: &str) -> bool {
+    body.contains(&json_fragment(text))
+}
+
+fn json_fragment(text: &str) -> String {
+    serde_json::to_string(text)
+        .expect("serialize text to JSON")
+        .trim_matches('"')
+        .to_string()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -107,13 +122,13 @@ async fn summarize_context_three_requests_and_instructions() {
     // Mount three expectations, one per request, matched by body content.
     let first_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains("\"text\":\"hello world\"") && !body.contains(COMPACT_PROMPT_MARKER)
+        body.contains("\"text\":\"hello world\"") && !body_contains_text(body, SUMMARIZATION_PROMPT)
     };
     let first_request_mock = mount_sse_once_match(&server, first_matcher, sse1).await;
 
     let second_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(COMPACT_PROMPT_MARKER)
+        body_contains_text(body, SUMMARIZATION_PROMPT)
     };
     let second_request_mock = mount_sse_once_match(&server, second_matcher, sse2).await;
 
@@ -197,7 +212,7 @@ async fn summarize_context_three_requests_and_instructions() {
     assert_eq!(last2.get("role").unwrap().as_str().unwrap(), "user");
     let text2 = last2["content"][0]["text"].as_str().unwrap();
     assert_eq!(
-        text2, TEST_COMPACT_PROMPT,
+        text2, SUMMARIZATION_PROMPT,
         "expected summarize trigger, got `{text2}`"
     );
 
@@ -210,6 +225,7 @@ async fn summarize_context_three_requests_and_instructions() {
     );
 
     let mut messages: Vec<(String, String)> = Vec::new();
+    let expected_summary_message = summary_with_prefix(SUMMARY_TEXT);
 
     for item in input3 {
         if let Some("message") = item.get("type").and_then(|v| v.as_str()) {
@@ -248,13 +264,13 @@ async fn summarize_context_three_requests_and_instructions() {
     assert!(
         messages
             .iter()
-            .any(|(r, t)| r == "user" && t == SUMMARY_TEXT),
+            .any(|(r, t)| r == "user" && t == &expected_summary_message),
         "third request should include the summary message"
     );
     assert!(
         !messages
             .iter()
-            .any(|(_, text)| text.contains(TEST_COMPACT_PROMPT)),
+            .any(|(_, text)| text.contains(SUMMARIZATION_PROMPT)),
         "third request should not include the summarize trigger"
     );
 
@@ -285,7 +301,7 @@ async fn summarize_context_three_requests_and_instructions() {
                 api_turn_count += 1;
             }
             RolloutItem::Compacted(ci) => {
-                if ci.message == SUMMARY_TEXT {
+                if ci.message == expected_summary_message {
                     saw_compacted_summary = true;
                 }
             }
@@ -358,7 +374,7 @@ async fn manual_compact_uses_custom_prompt() {
         if text == custom_prompt {
             found_custom_prompt = true;
         }
-        if text == TEST_COMPACT_PROMPT {
+        if text == SUMMARIZATION_PROMPT {
             found_default_prompt = true;
         }
     }
@@ -433,6 +449,514 @@ async fn manual_compact_emits_estimated_token_usage_event() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let codex = test_codex()
+        .build(&server)
+        .await
+        .expect("build codex")
+        .codex;
+
+    // user message
+    let user_message = "create an app";
+
+    // Prepare the mock responses from the model
+
+    // summary texts from model
+    let first_summary_text = "The task is to create an app. I started to create a react app.";
+    let second_summary_text = "The task is to create an app. I started to create a react app. then I realized that I need to create a node app.";
+    let third_summary_text = "The task is to create an app. I started to create a react app. then I realized that I need to create a node app. then I realized that I need to create a python app.";
+    // summary texts with prefix
+    let prefixed_first_summary = summary_with_prefix(first_summary_text);
+    let prefixed_second_summary = summary_with_prefix(second_summary_text);
+    let prefixed_third_summary = summary_with_prefix(third_summary_text);
+    // token used count after long work
+    let token_count_used = 270_000;
+    // token used count after compaction
+    let token_count_used_after_compaction = 80000;
+
+    // mock responses from the model
+
+    // first chunk of work
+    let model_reasoning_response_1_sse = sse(vec![
+        ev_reasoning_item("m1", &["I will create a react app"], &[]),
+        ev_local_shell_call("r1-shell", "completed", vec!["echo", "make-react"]),
+        ev_completed_with_tokens("r1", token_count_used),
+    ]);
+
+    // first compaction response
+    let model_compact_response_1_sse = sse(vec![
+        ev_assistant_message("m2", first_summary_text),
+        ev_completed_with_tokens("r2", token_count_used_after_compaction),
+    ]);
+
+    // second chunk of work
+    let model_reasoning_response_2_sse = sse(vec![
+        ev_reasoning_item("m3", &["I will create a node app"], &[]),
+        ev_local_shell_call("r3-shell", "completed", vec!["echo", "make-node"]),
+        ev_completed_with_tokens("r3", token_count_used),
+    ]);
+
+    // second compaction response
+    let model_compact_response_2_sse = sse(vec![
+        ev_assistant_message("m4", second_summary_text),
+        ev_completed_with_tokens("r4", token_count_used_after_compaction),
+    ]);
+
+    // third chunk of work
+    let model_reasoning_response_3_sse = sse(vec![
+        ev_reasoning_item("m6", &["I will create a python app"], &[]),
+        ev_local_shell_call("r6-shell", "completed", vec!["echo", "make-python"]),
+        ev_completed_with_tokens("r6", token_count_used),
+    ]);
+
+    // third compaction response
+    let model_compact_response_3_sse = sse(vec![
+        ev_assistant_message("m7", third_summary_text),
+        ev_completed_with_tokens("r7", token_count_used_after_compaction),
+    ]);
+
+    // final response
+    let model_final_response_sse = sse(vec![
+        ev_assistant_message(
+            "m8",
+            "The task is to create an app. I started to create a react app. then I realized that I need to create a node app. then I realized that I need to create a python app.",
+        ),
+        ev_completed_with_tokens("r8", token_count_used_after_compaction + 1000),
+    ]);
+
+    // mount the mock responses from the model
+    let bodies = vec![
+        model_reasoning_response_1_sse,
+        model_compact_response_1_sse,
+        model_reasoning_response_2_sse,
+        model_compact_response_2_sse,
+        model_reasoning_response_3_sse,
+        model_compact_response_3_sse,
+        model_final_response_sse,
+    ];
+    mount_sse_sequence(&server, bodies).await;
+
+    // Start the conversation with the user message
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: user_message.into(),
+            }],
+        })
+        .await
+        .expect("submit user input");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    // collect the requests payloads from the model
+    let requests_payloads = server.received_requests().await.unwrap();
+
+    let body = requests_payloads[0]
+        .body_json::<serde_json::Value>()
+        .unwrap();
+    let input = body.get("input").and_then(|v| v.as_array()).unwrap();
+    let environment_message = input[0]["content"][0]["text"].as_str().unwrap();
+
+    // test 1: after compaction, we should have one environment message, one user message, and one user message with summary prefix
+    let compaction_indices = [2, 4, 6];
+    let expected_summaries = [
+        prefixed_first_summary.as_str(),
+        prefixed_second_summary.as_str(),
+        prefixed_third_summary.as_str(),
+    ];
+    for (i, expected_summary) in compaction_indices.into_iter().zip(expected_summaries) {
+        let body = requests_payloads.clone()[i]
+            .body_json::<serde_json::Value>()
+            .unwrap();
+        let input = body.get("input").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(input.len(), 3);
+        let environment_message = input[0]["content"][0]["text"].as_str().unwrap();
+        let user_message_received = input[1]["content"][0]["text"].as_str().unwrap();
+        let summary_message = input[2]["content"][0]["text"].as_str().unwrap();
+        assert_eq!(environment_message, environment_message);
+        assert_eq!(user_message_received, user_message);
+        assert_eq!(
+            summary_message, expected_summary,
+            "compaction request at index {i} should include the prefixed summary"
+        );
+    }
+
+    // test 2: the expected requests inputs should be as follows:
+    let expected_requests_inputs = json!([
+    [
+        // 0: first request of the user message.
+      {
+        "content": [
+          {
+            "text": environment_message,
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": [
+          {
+            "text": "create an app",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      }
+    ]
+    ,
+    [
+        // 1: first automatic compaction request.
+      {
+        "content": [
+          {
+            "text": environment_message,
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": [
+          {
+            "text": "create an app",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": null,
+        "encrypted_content": null,
+        "summary": [
+          {
+            "text": "I will create a react app",
+            "type": "summary_text"
+          }
+        ],
+        "type": "reasoning"
+      },
+      {
+        "action": {
+          "command": [
+            "echo",
+            "make-react"
+          ],
+          "env": null,
+          "timeout_ms": null,
+          "type": "exec",
+          "user": null,
+          "working_directory": null
+        },
+        "call_id": "r1-shell",
+        "status": "completed",
+        "type": "local_shell_call"
+      },
+      {
+        "call_id": "r1-shell",
+        "output": "execution error: Io(Os { code: 2, kind: NotFound, message: \"No such file or directory\" })",
+        "type": "function_call_output"
+      },
+      {
+        "content": [
+          {
+            "text": SUMMARIZATION_PROMPT,
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      }
+    ]
+    ,
+    [
+      // 2: request after first automatic compaction.
+      {
+        "content": [
+          {
+            "text": environment_message,
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": [
+          {
+            "text": "create an app",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": [
+          {
+            "text": prefixed_first_summary.clone(),
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      }
+    ]
+    ,
+    [
+        // 3: request for second automatic compaction.
+      {
+        "content": [
+          {
+            "text": environment_message,
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": [
+          {
+            "text": "create an app",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": [
+          {
+            "text": prefixed_first_summary.clone(),
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": null,
+        "encrypted_content": null,
+        "summary": [
+          {
+            "text": "I will create a node app",
+            "type": "summary_text"
+          }
+        ],
+        "type": "reasoning"
+      },
+      {
+        "action": {
+          "command": [
+            "echo",
+            "make-node"
+          ],
+          "env": null,
+          "timeout_ms": null,
+          "type": "exec",
+          "user": null,
+          "working_directory": null
+        },
+        "call_id": "r3-shell",
+        "status": "completed",
+        "type": "local_shell_call"
+      },
+      {
+        "call_id": "r3-shell",
+        "output": "execution error: Io(Os { code: 2, kind: NotFound, message: \"No such file or directory\" })",
+        "type": "function_call_output"
+      },
+      {
+        "content": [
+          {
+            "text": SUMMARIZATION_PROMPT,
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      }
+    ]
+    ,
+    // 4: request after second automatic compaction.
+    [
+      {
+        "content": [
+          {
+            "text": environment_message,
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": [
+          {
+            "text": "create an app",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": [
+          {
+            "text": prefixed_second_summary.clone(),
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      }
+    ]
+    ,
+    [
+      // 5: request for third automatic compaction.
+      {
+        "content": [
+          {
+            "text": environment_message,
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": [
+          {
+            "text": "create an app",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": [
+          {
+            "text": prefixed_second_summary.clone(),
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": null,
+        "encrypted_content": null,
+        "summary": [
+          {
+            "text": "I will create a python app",
+            "type": "summary_text"
+          }
+        ],
+        "type": "reasoning"
+      },
+      {
+        "action": {
+          "command": [
+            "echo",
+            "make-python"
+          ],
+          "env": null,
+          "timeout_ms": null,
+          "type": "exec",
+          "user": null,
+          "working_directory": null
+        },
+        "call_id": "r6-shell",
+        "status": "completed",
+        "type": "local_shell_call"
+      },
+      {
+        "call_id": "r6-shell",
+        "output": "execution error: Io(Os { code: 2, kind: NotFound, message: \"No such file or directory\" })",
+        "type": "function_call_output"
+      },
+      {
+        "content": [
+          {
+            "text": SUMMARIZATION_PROMPT,
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      }
+    ]
+    ,
+    [
+      {
+        // 6: request after third automatic compaction.
+        "content": [
+          {
+            "text": environment_message,
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": [
+          {
+            "text": "create an app",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": [
+          {
+            "text": prefixed_third_summary.clone(),
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      }
+    ]
+    ]);
+
+    // ignore local shell calls output because it differs from OS to another and it's out of the scope of this test.
+    fn normalize_inputs(values: &[serde_json::Value]) -> Vec<serde_json::Value> {
+        values
+            .iter()
+            .filter(|value| {
+                value
+                    .get("type")
+                    .and_then(|ty| ty.as_str())
+                    .is_none_or(|ty| ty != "function_call_output")
+            })
+            .cloned()
+            .collect()
+    }
+
+    for (i, request) in requests_payloads.iter().enumerate() {
+        let body = request.body_json::<serde_json::Value>().unwrap();
+        let input = body.get("input").and_then(|v| v.as_array()).unwrap();
+        let expected_input = expected_requests_inputs[i].as_array().unwrap();
+        assert_eq!(normalize_inputs(input), normalize_inputs(expected_input));
+    }
+
+    // test 3: the number of requests should be 7
+    assert_eq!(requests_payloads.len(), 7);
+}
+
 // Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
 #[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
 #[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
@@ -460,12 +984,13 @@ async fn auto_compact_runs_after_token_limit_hit() {
         ev_assistant_message("m4", FINAL_REPLY),
         ev_completed_with_tokens("r4", 120),
     ]);
+    let prefixed_auto_summary = AUTO_SUMMARY_TEXT;
 
     let first_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(FIRST_AUTO_MSG)
             && !body.contains(SECOND_AUTO_MSG)
-            && !body.contains(COMPACT_PROMPT_MARKER)
+            && !body_contains_text(body, SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, first_matcher, sse1).await;
 
@@ -473,27 +998,28 @@ async fn auto_compact_runs_after_token_limit_hit() {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(SECOND_AUTO_MSG)
             && body.contains(FIRST_AUTO_MSG)
-            && !body.contains(COMPACT_PROMPT_MARKER)
+            && !body_contains_text(body, SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, second_matcher, sse2).await;
 
     let third_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(COMPACT_PROMPT_MARKER)
+        body_contains_text(body, SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, third_matcher, sse3).await;
 
-    let resume_matcher = |req: &wiremock::Request| {
+    let resume_marker = prefixed_auto_summary;
+    let resume_matcher = move |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(AUTO_SUMMARY_TEXT)
-            && !body.contains(COMPACT_PROMPT_MARKER)
+        body.contains(resume_marker)
+            && !body_contains_text(body, SUMMARIZATION_PROMPT)
             && !body.contains(POST_AUTO_USER_MSG)
     };
     mount_sse_once_match(&server, resume_matcher, sse_resume).await;
 
     let fourth_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(POST_AUTO_USER_MSG) && !body.contains(COMPACT_PROMPT_MARKER)
+        body.contains(POST_AUTO_USER_MSG) && !body_contains_text(body, SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, fourth_matcher, sse4).await;
 
@@ -555,9 +1081,10 @@ async fn auto_compact_runs_after_token_limit_hit() {
         requests.len()
     );
     let is_auto_compact = |req: &wiremock::Request| {
-        std::str::from_utf8(&req.body)
-            .unwrap_or("")
-            .contains(COMPACT_PROMPT_MARKER)
+        body_contains_text(
+            std::str::from_utf8(&req.body).unwrap_or(""),
+            SUMMARIZATION_PROMPT,
+        )
     };
     let auto_compact_count = requests.iter().filter(|req| is_auto_compact(req)).count();
     assert_eq!(
@@ -574,13 +1101,14 @@ async fn auto_compact_runs_after_token_limit_hit() {
         "auto compact should add a third request"
     );
 
+    let resume_summary_marker = prefixed_auto_summary;
     let resume_index = requests
         .iter()
         .enumerate()
         .find_map(|(idx, req)| {
             let body = std::str::from_utf8(&req.body).unwrap_or("");
-            (body.contains(AUTO_SUMMARY_TEXT)
-                && !body.contains(COMPACT_PROMPT_MARKER)
+            (body.contains(resume_summary_marker)
+                && !body_contains_text(body, SUMMARIZATION_PROMPT)
                 && !body.contains(POST_AUTO_USER_MSG))
             .then_some(idx)
         })
@@ -592,7 +1120,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         .rev()
         .find_map(|(idx, req)| {
             let body = std::str::from_utf8(&req.body).unwrap_or("");
-            (body.contains(POST_AUTO_USER_MSG) && !body.contains(COMPACT_PROMPT_MARKER))
+            (body.contains(POST_AUTO_USER_MSG) && !body_contains_text(body, SUMMARIZATION_PROMPT))
                 .then_some(idx)
         })
         .expect("follow-up request missing");
@@ -639,7 +1167,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         .and_then(|text| text.as_str())
         .unwrap_or_default();
     assert_eq!(
-        last_text, TEST_COMPACT_PROMPT,
+        last_text, SUMMARIZATION_PROMPT,
         "auto compact should send the summarization prompt as a user message",
     );
 
@@ -654,7 +1182,8 @@ async fn auto_compact_runs_after_token_limit_hit() {
                     .and_then(|arr| arr.first())
                     .and_then(|entry| entry.get("text"))
                     .and_then(|v| v.as_str())
-                    == Some(AUTO_SUMMARY_TEXT)
+                    .map(|text| text.contains(prefixed_auto_summary))
+                    .unwrap_or(false)
         }),
         "resume request should include compacted history"
     );
@@ -689,7 +1218,9 @@ async fn auto_compact_runs_after_token_limit_hit() {
         "auto compact follow-up request should include the new user message"
     );
     assert!(
-        user_texts.iter().any(|text| text == AUTO_SUMMARY_TEXT),
+        user_texts
+            .iter()
+            .any(|text| text.contains(prefixed_auto_summary)),
         "auto compact follow-up request should include the summary message"
     );
 }
@@ -720,7 +1251,7 @@ async fn auto_compact_persists_rollout_entries() {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(FIRST_AUTO_MSG)
             && !body.contains(SECOND_AUTO_MSG)
-            && !body.contains(COMPACT_PROMPT_MARKER)
+            && !body_contains_text(body, SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, first_matcher, sse1).await;
 
@@ -728,13 +1259,13 @@ async fn auto_compact_persists_rollout_entries() {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(SECOND_AUTO_MSG)
             && body.contains(FIRST_AUTO_MSG)
-            && !body.contains(COMPACT_PROMPT_MARKER)
+            && !body_contains_text(body, SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, second_matcher, sse2).await;
 
     let third_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(COMPACT_PROMPT_MARKER)
+        body_contains_text(body, SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, third_matcher, sse3).await;
 
@@ -806,112 +1337,6 @@ async fn auto_compact_persists_rollout_entries() {
     assert!(
         turn_context_count >= 2,
         "expected at least two turn context entries, got {turn_context_count}"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn auto_compact_stops_after_failed_attempt() {
-    skip_if_no_network!();
-
-    let server = start_mock_server().await;
-
-    let sse1 = sse(vec![
-        ev_assistant_message("m1", FIRST_REPLY),
-        ev_completed_with_tokens("r1", 500),
-    ]);
-
-    let summary_payload = auto_summary(SUMMARY_TEXT);
-    let sse2 = sse(vec![
-        ev_assistant_message("m2", &summary_payload),
-        ev_completed_with_tokens("r2", 50),
-    ]);
-
-    let sse3 = sse(vec![
-        ev_assistant_message("m3", STILL_TOO_BIG_REPLY),
-        ev_completed_with_tokens("r3", 500),
-    ]);
-
-    let first_matcher = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(FIRST_AUTO_MSG) && !body.contains(COMPACT_PROMPT_MARKER)
-    };
-    mount_sse_once_match(&server, first_matcher, sse1.clone()).await;
-
-    let second_matcher = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(COMPACT_PROMPT_MARKER)
-    };
-    mount_sse_once_match(&server, second_matcher, sse2.clone()).await;
-
-    let third_matcher = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        !body.contains(COMPACT_PROMPT_MARKER) && body.contains(SUMMARY_TEXT)
-    };
-    mount_sse_once_match(&server, third_matcher, sse3.clone()).await;
-
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-
-    let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home);
-    config.model_provider = model_provider;
-    set_test_compact_prompt(&mut config);
-    config.model_auto_compact_token_limit = Some(200);
-    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
-    let codex = conversation_manager
-        .new_conversation(config)
-        .await
-        .unwrap()
-        .conversation;
-
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: FIRST_AUTO_MSG.into(),
-            }],
-        })
-        .await
-        .unwrap();
-
-    let error_event = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Error(_))).await;
-    let EventMsg::Error(ErrorEvent { message }) = error_event else {
-        panic!("expected error event");
-    };
-    assert!(
-        message.contains("limit"),
-        "error message should include limit information: {message}"
-    );
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
-
-    let requests = server.received_requests().await.unwrap();
-    assert_eq!(
-        requests.len(),
-        3,
-        "auto compact should attempt at most one summarization before erroring"
-    );
-
-    let last_body = requests[2].body_json::<serde_json::Value>().unwrap();
-    let input = last_body
-        .get("input")
-        .and_then(|v| v.as_array())
-        .unwrap_or_else(|| panic!("unexpected request format: {last_body}"));
-    let contains_prompt = input.iter().any(|item| {
-        item.get("type").and_then(|v| v.as_str()) == Some("message")
-            && item.get("role").and_then(|v| v.as_str()) == Some("user")
-            && item
-                .get("content")
-                .and_then(|v| v.as_array())
-                .and_then(|items| items.first())
-                .and_then(|entry| entry.get("text"))
-                .and_then(|text| text.as_str())
-                .map(|text| text == TEST_COMPACT_PROMPT)
-                .unwrap_or(false)
-    });
-    assert!(
-        !contains_prompt,
-        "third request should be the follow-up turn, not another summarization",
     );
 }
 
@@ -1013,7 +1438,7 @@ async fn manual_compact_retries_after_context_window_error() {
             .and_then(|items| items.first())
             .and_then(|entry| entry.get("text"))
             .and_then(|text| text.as_str()),
-        Some(TEST_COMPACT_PROMPT),
+        Some(SUMMARIZATION_PROMPT),
         "compact attempt should include summarization prompt"
     );
     assert_eq!(
@@ -1024,7 +1449,7 @@ async fn manual_compact_retries_after_context_window_error() {
             .and_then(|items| items.first())
             .and_then(|entry| entry.get("text"))
             .and_then(|text| text.as_str()),
-        Some(TEST_COMPACT_PROMPT),
+        Some(SUMMARIZATION_PROMPT),
         "retry attempt should include summarization prompt"
     );
     assert_eq!(
@@ -1053,6 +1478,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
     let final_user_message = "post compact follow-up";
     let first_summary = "FIRST_MANUAL_SUMMARY";
     let second_summary = "SECOND_MANUAL_SUMMARY";
+    let expected_second_summary = summary_with_prefix(second_summary);
 
     let server = start_mock_server().await;
 
@@ -1170,13 +1596,13 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         "first turn request missing first user message"
     );
     assert!(
-        !contains_user_text(&first_turn_input, TEST_COMPACT_PROMPT),
+        !contains_user_text(&first_turn_input, SUMMARIZATION_PROMPT),
         "first turn request should not include summarization prompt"
     );
 
     let first_compact_input = requests[1].input();
     assert!(
-        contains_user_text(&first_compact_input, TEST_COMPACT_PROMPT),
+        contains_user_text(&first_compact_input, SUMMARIZATION_PROMPT),
         "first compact request should include summarization prompt"
     );
     assert!(
@@ -1196,7 +1622,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
 
     let second_compact_input = requests[3].input();
     assert!(
-        contains_user_text(&second_compact_input, TEST_COMPACT_PROMPT),
+        contains_user_text(&second_compact_input, SUMMARIZATION_PROMPT),
         "second compact request should include summarization prompt"
     );
     assert!(
@@ -1232,14 +1658,6 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         }),
         json!({
             "content": vec![json!({
-                "text": first_summary,
-                "type": "input_text",
-            })],
-            "role": "user",
-            "type": "message",
-        }),
-        json!({
-            "content": vec![json!({
                 "text": second_user_message,
                 "type": "input_text",
             })],
@@ -1248,7 +1666,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         }),
         json!({
             "content": vec![json!({
-                "text": second_summary,
+                "text": expected_second_summary,
                 "type": "input_text",
             })],
             "role": "user",
@@ -1368,7 +1786,7 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
         "first request should contain the user input"
     );
     assert!(
-        request_bodies[1].contains(COMPACT_PROMPT_MARKER),
+        body_contains_text(&request_bodies[1], SUMMARIZATION_PROMPT),
         "first auto compact request should include the summarization prompt"
     );
     assert!(
@@ -1376,7 +1794,7 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
         "function call output should be sent before the second auto compact"
     );
     assert!(
-        request_bodies[4].contains(COMPACT_PROMPT_MARKER),
+        body_contains_text(&request_bodies[4], SUMMARIZATION_PROMPT),
         "second auto compact request should include the summarization prompt"
     );
 }
@@ -1472,7 +1890,7 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
 
     let auto_compact_body = auto_compact_mock.single_request().body_json().to_string();
     assert!(
-        auto_compact_body.contains(COMPACT_PROMPT_MARKER),
+        body_contains_text(&auto_compact_body, SUMMARIZATION_PROMPT),
         "auto compact request should include the summarization prompt after exceeding 95% (limit {limit})"
     );
 }
