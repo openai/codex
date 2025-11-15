@@ -850,6 +850,7 @@ dependencies = [
  "codex-protocol",
  "codex-utils-json-to-toml",
  "core_test_support",
+ "mcp-types",
  "opentelemetry-appender-tracing",
  "os_info",
  "pretty_assertions",
@@ -880,6 +881,19 @@ dependencies = [
  "serde_json",
  "strum_macros 0.27.2",
  "ts-rs",
+ "uuid",
+]
+
+[[package]]
+name = "codex-app-server-test-client"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "codex-app-server-protocol",
+ "codex-protocol",
+ "serde",
+ "serde_json",
  "uuid",
 ]
 
@@ -1048,6 +1062,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-core",
  "codex-protocol",
+ "once_cell",
  "serde",
  "toml",
 ]
@@ -1067,6 +1082,7 @@ dependencies = [
  "chrono",
  "codex-app-server-protocol",
  "codex-apply-patch",
+ "codex-arg0",
  "codex-async-utils",
  "codex-file-search",
  "codex-git",
@@ -1081,6 +1097,7 @@ dependencies = [
  "codex-windows-sandbox",
  "core-foundation 0.9.4",
  "core_test_support",
+ "ctor 0.5.0",
  "dirs",
  "dunce",
  "env-flags",
@@ -1112,6 +1129,7 @@ dependencies = [
  "similar",
  "strum_macros 0.27.2",
  "tempfile",
+ "test-case",
  "test-log",
  "thiserror 2.0.17",
  "time",
@@ -1546,9 +1564,11 @@ name = "codex-utils-tokenizer"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "codex-utils-cache",
  "pretty_assertions",
  "thiserror 2.0.17",
  "tiktoken-rs",
+ "tokio",
 ]
 
 [[package]]
@@ -6159,6 +6179,39 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f50febec83f5ee1df3015341d8bd429f2d1cc62bcba7ea2076759d315084683"
 
 [[package]]
+name = "test-case"
+version = "3.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb2550dd13afcd286853192af8601920d959b14c401fcece38071d53bf0768a8"
+dependencies = [
+ "test-case-macros",
+]
+
+[[package]]
+name = "test-case-core"
+version = "3.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adcb7fd841cd518e279be3d5a3eb0636409487998a4aff22f3de87b81e88384f"
+dependencies = [
+ "cfg-if",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.104",
+]
+
+[[package]]
+name = "test-case-macros"
+version = "3.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c89e72a01ed4c579669add59014b9a524d609c0c88c6a585ce37485879f6ffb"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.104",
+ "test-case-core",
+]
+
+[[package]]
 name = "test-log"
 version = "0.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6265,9 +6318,9 @@ dependencies = [
 
 [[package]]
 name = "tiktoken-rs"
-version = "0.7.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25563eeba904d770acf527e8b370fe9a5547bacd20ff84a0b6c3bc41288e5625"
+checksum = "3a19830747d9034cd9da43a60eaa8e552dfda7712424aebf187b7a60126bae0d"
 dependencies = [
  "anyhow",
  "base64",

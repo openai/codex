@@ -18,12 +18,16 @@ export type CodexExecArgs = {
   sandboxMode?: SandboxMode;
   // --cd
   workingDirectory?: string;
+  // --add-dir
+  additionalDirectories?: string[];
   // --skip-git-repo-check
   skipGitRepoCheck?: boolean;
   // --output-schema
   outputSchemaFile?: string;
   // --config model_reasoning_effort
   modelReasoningEffort?: ModelReasoningEffort;
+  // AbortSignal to cancel the execution
+  signal?: AbortSignal;
   // --config sandbox_workspace_write.network_access
   networkAccessEnabled?: boolean;
   // --config features.web_search_request
@@ -37,8 +41,11 @@ const TYPESCRIPT_SDK_ORIGINATOR = "codex_sdk_ts";
 
 export class CodexExec {
   private executablePath: string;
-  constructor(executablePath: string | null = null) {
+  private envOverride?: Record<string, string>;
+
+  constructor(executablePath: string | null = null, env?: Record<string, string>) {
     this.executablePath = executablePath || findCodexPath();
+    this.envOverride = env;
   }
 
   async *run(args: CodexExecArgs): AsyncGenerator<string> {
@@ -56,6 +63,12 @@ export class CodexExec {
       commandArgs.push("--cd", args.workingDirectory);
     }
 
+    if (args.additionalDirectories?.length) {
+      for (const dir of args.additionalDirectories) {
+        commandArgs.push("--add-dir", dir);
+      }
+    }
+
     if (args.skipGitRepoCheck) {
       commandArgs.push("--skip-git-repo-check");
     }
@@ -69,7 +82,10 @@ export class CodexExec {
     }
 
     if (args.networkAccessEnabled !== undefined) {
-      commandArgs.push("--config", `sandbox_workspace_write.network_access=${args.networkAccessEnabled}`);
+      commandArgs.push(
+        "--config",
+        `sandbox_workspace_write.network_access=${args.networkAccessEnabled}`,
+      );
     }
 
     if (args.webSearchEnabled !== undefined) {
@@ -90,9 +106,16 @@ export class CodexExec {
       commandArgs.push("resume", args.threadId);
     }
 
-    const env = {
-      ...process.env,
-    };
+    const env: Record<string, string> = {};
+    if (this.envOverride) {
+      Object.assign(env, this.envOverride);
+    } else {
+      for (const [key, value] of Object.entries(process.env)) {
+        if (value !== undefined) {
+          env[key] = value;
+        }
+      }
+    }
     if (!env[INTERNAL_ORIGINATOR_ENV]) {
       env[INTERNAL_ORIGINATOR_ENV] = TYPESCRIPT_SDK_ORIGINATOR;
     }
@@ -105,6 +128,7 @@ export class CodexExec {
 
     const child = spawn(this.executablePath, commandArgs, {
       env,
+      signal: args.signal,
     });
 
     let spawnError: unknown | null = null;

@@ -35,10 +35,10 @@ use crate::auth::RefreshTokenError;
 use crate::chat_completions::AggregateStreamExt;
 use crate::chat_completions::stream_chat_completions;
 use crate::client_common::Prompt;
+use crate::client_common::Reasoning;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::client_common::ResponsesApiRequest;
-use crate::client_common::create_reasoning_param_for_request;
 use crate::client_common::create_text_param_for_request;
 use crate::config::Config;
 use crate::default_client::CodexHttpClient;
@@ -199,12 +199,18 @@ impl ModelClient {
         let auth_manager = self.auth_manager.clone();
 
         let full_instructions = prompt.get_full_instructions(&self.config.model_family);
-        let tools_json = create_tools_json_for_responses_api(&prompt.tools)?;
-        let reasoning = create_reasoning_param_for_request(
-            &self.config.model_family,
-            self.effort,
-            self.summary,
-        );
+        let tools_json: Vec<Value> = create_tools_json_for_responses_api(&prompt.tools)?;
+
+        let reasoning = if self.config.model_family.supports_reasoning_summaries {
+            Some(Reasoning {
+                effort: self
+                    .effort
+                    .or(self.config.model_family.default_reasoning_effort),
+                summary: Some(self.summary),
+            })
+        } else {
+            None
+        };
 
         let include: Vec<String> = if reasoning.is_some() {
             vec!["reasoning.encrypted_content".to_string()]
@@ -215,7 +221,9 @@ impl ModelClient {
         let input_with_instructions = prompt.get_formatted_input();
 
         let verbosity = if self.config.model_family.support_verbosity {
-            self.config.model_verbosity
+            self.config
+                .model_verbosity
+                .or(self.config.model_family.default_verbosity)
         } else {
             if self.config.model_verbosity.is_some() {
                 warn!(
@@ -294,10 +302,9 @@ impl ModelClient {
         let auth = auth_manager.as_ref().and_then(|m| m.auth());
 
         trace!(
-            "POST to {}: {:?}",
+            "POST to {}: {}",
             self.provider.get_full_url(&auth),
-            serde_json::to_string(payload_json)
-                .unwrap_or("<unable to serialize payload>".to_string())
+            payload_json.to_string()
         );
 
         let mut req_builder = self
@@ -553,6 +560,8 @@ struct SseEvent {
     response: Option<Value>,
     item: Option<Value>,
     delta: Option<String>,
+    summary_index: Option<i64>,
+    content_index: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -812,16 +821,22 @@ async fn process_sse<S>(
                 }
             }
             "response.reasoning_summary_text.delta" => {
-                if let Some(delta) = event.delta {
-                    let event = ResponseEvent::ReasoningSummaryDelta(delta);
+                if let (Some(delta), Some(summary_index)) = (event.delta, event.summary_index) {
+                    let event = ResponseEvent::ReasoningSummaryDelta {
+                        delta,
+                        summary_index,
+                    };
                     if tx_event.send(Ok(event)).await.is_err() {
                         return;
                     }
                 }
             }
             "response.reasoning_text.delta" => {
-                if let Some(delta) = event.delta {
-                    let event = ResponseEvent::ReasoningContentDelta(delta);
+                if let (Some(delta), Some(content_index)) = (event.delta, event.content_index) {
+                    let event = ResponseEvent::ReasoningContentDelta {
+                        delta,
+                        content_index,
+                    };
                     if tx_event.send(Ok(event)).await.is_err() {
                         return;
                     }
@@ -898,10 +913,12 @@ async fn process_sse<S>(
                 }
             }
             "response.reasoning_summary_part.added" => {
-                // Boundary between reasoning summary sections (e.g., titles).
-                let event = ResponseEvent::ReasoningSummaryPartAdded;
-                if tx_event.send(Ok(event)).await.is_err() {
-                    return;
+                if let Some(summary_index) = event.summary_index {
+                    // Boundary between reasoning summary sections (e.g., titles).
+                    let event = ResponseEvent::ReasoningSummaryPartAdded { summary_index };
+                    if tx_event.send(Ok(event)).await.is_err() {
+                        return;
+                    }
                 }
             }
             "response.reasoning_summary_text.done" => {}

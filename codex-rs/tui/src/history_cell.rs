@@ -712,6 +712,7 @@ impl SessionHeaderHistoryCell {
             ReasoningEffortConfig::Low => "low",
             ReasoningEffortConfig::Medium => "medium",
             ReasoningEffortConfig::High => "high",
+            ReasoningEffortConfig::None => "none",
         })
     }
 }
@@ -1475,6 +1476,7 @@ mod tests {
     use serde_json::json;
     use std::collections::HashMap;
 
+    use codex_core::protocol::ExecCommandSource;
     use mcp_types::CallToolResult;
     use mcp_types::ContentBlock;
     use mcp_types::TextContent;
@@ -1875,9 +1877,10 @@ mod tests {
                 },
             ],
             output: None,
-            is_user_shell_command: false,
+            source: ExecCommandSource::Agent,
             start_time: Some(Instant::now()),
             duration: None,
+            interaction_input: None,
         });
         // Mark call complete so markers are ✓
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
@@ -1898,9 +1901,10 @@ mod tests {
                 cmd: "rg shimmer_spans".into(),
             }],
             output: None,
-            is_user_shell_command: false,
+            source: ExecCommandSource::Agent,
             start_time: Some(Instant::now()),
             duration: None,
+            interaction_input: None,
         });
         // Call 1: Search only
         cell.complete_call("c1", CommandOutput::default(), Duration::from_millis(1));
@@ -1914,7 +1918,8 @@ mod tests {
                     cmd: "cat shimmer.rs".into(),
                     path: "shimmer.rs".into(),
                 }],
-                false,
+                ExecCommandSource::Agent,
+                None,
             )
             .unwrap();
         cell.complete_call("c2", CommandOutput::default(), Duration::from_millis(1));
@@ -1928,7 +1933,8 @@ mod tests {
                     cmd: "cat status_indicator_widget.rs".into(),
                     path: "status_indicator_widget.rs".into(),
                 }],
-                false,
+                ExecCommandSource::Agent,
+                None,
             )
             .unwrap();
         cell.complete_call("c3", CommandOutput::default(), Duration::from_millis(1));
@@ -1961,9 +1967,10 @@ mod tests {
                 },
             ],
             output: None,
-            is_user_shell_command: false,
+            source: ExecCommandSource::Agent,
             start_time: Some(Instant::now()),
             duration: None,
+            interaction_input: None,
         });
         cell.complete_call("c1", CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(80);
@@ -1981,9 +1988,10 @@ mod tests {
             command: vec!["bash".into(), "-lc".into(), cmd],
             parsed: Vec::new(),
             output: None,
-            is_user_shell_command: false,
+            source: ExecCommandSource::Agent,
             start_time: Some(Instant::now()),
             duration: None,
+            interaction_input: None,
         });
         // Mark call complete so it renders as "Ran"
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
@@ -2003,9 +2011,10 @@ mod tests {
             command: vec!["echo".into(), "ok".into()],
             parsed: Vec::new(),
             output: None,
-            is_user_shell_command: false,
+            source: ExecCommandSource::Agent,
             start_time: Some(Instant::now()),
             duration: None,
+            interaction_input: None,
         });
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         // Wide enough that it fits inline
@@ -2023,9 +2032,10 @@ mod tests {
             command: vec!["bash".into(), "-lc".into(), long],
             parsed: Vec::new(),
             output: None,
-            is_user_shell_command: false,
+            source: ExecCommandSource::Agent,
             start_time: Some(Instant::now()),
             duration: None,
+            interaction_input: None,
         });
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(24);
@@ -2042,9 +2052,10 @@ mod tests {
             command: vec!["bash".into(), "-lc".into(), cmd],
             parsed: Vec::new(),
             output: None,
-            is_user_shell_command: false,
+            source: ExecCommandSource::Agent,
             start_time: Some(Instant::now()),
             duration: None,
+            interaction_input: None,
         });
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(80);
@@ -2062,9 +2073,10 @@ mod tests {
             command: vec!["bash".into(), "-lc".into(), cmd],
             parsed: Vec::new(),
             output: None,
-            is_user_shell_command: false,
+            source: ExecCommandSource::Agent,
             start_time: Some(Instant::now()),
             duration: None,
+            interaction_input: None,
         });
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(28);
@@ -2082,9 +2094,10 @@ mod tests {
             command: vec!["bash".into(), "-lc".into(), "seq 1 10 1>&2 && false".into()],
             parsed: Vec::new(),
             output: None,
-            is_user_shell_command: false,
+            source: ExecCommandSource::Agent,
             start_time: Some(Instant::now()),
             duration: None,
+            interaction_input: None,
         });
         let stderr: String = (1..=10)
             .map(|n| n.to_string())
@@ -2128,9 +2141,10 @@ mod tests {
             command: vec!["bash".into(), "-lc".into(), long_cmd.to_string()],
             parsed: Vec::new(),
             output: None,
-            is_user_shell_command: false,
+            source: ExecCommandSource::Agent,
             start_time: Some(Instant::now()),
             duration: None,
+            interaction_input: None,
         });
 
         let stderr = "error: first line on stderr\nerror: second line on stderr".to_string();
