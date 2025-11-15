@@ -179,7 +179,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         .as_str()
         .unwrap_or_default()
         .to_string();
-    let expected_model = OPENAI_DEFAULT_MODEL;
+    let expected_model = "gpt-5.1-codex";
     let summary_after_compact = extract_summary_message(&requests[2], SUMMARY_TEXT);
     let summary_after_resume = extract_summary_message(&requests[3], SUMMARY_TEXT);
     let summary_after_fork = extract_summary_message(&requests[4], SUMMARY_TEXT);
