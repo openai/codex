@@ -10,12 +10,14 @@ use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
+use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
+use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
@@ -513,6 +515,31 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     ts_msg!(self, "task aborted: review ended");
                 }
             },
+            EventMsg::EnteredReviewMode(ReviewRequest {
+                user_facing_hint, ..
+            }) => {
+                let banner = format!(">> Code review started: {user_facing_hint} <<");
+                ts_msg!(self, "{banner}");
+            }
+            EventMsg::ExitedReviewMode(ExitedReviewModeEvent { review_output }) => {
+                if let Some(output) = review_output {
+                    if output.findings.is_empty() {
+                        let explanation = output.overall_explanation.trim();
+                        if !explanation.is_empty() {
+                            ts_msg!(self, "{explanation}");
+                        } else {
+                            ts_msg!(self, "Reviewer failed to output a response.");
+                        }
+                    } else {
+                        let block = codex_core::review_format::format_review_findings_block(
+                            &output.findings,
+                            None,
+                        );
+                        ts_msg!(self, "{block}");
+                    }
+                }
+                ts_msg!(self, "{}", "<< Code review finished >>".style(self.dimmed));
+            }
             EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
             EventMsg::WebSearchBegin(_)
             | EventMsg::ExecApprovalRequest(_)
@@ -523,8 +550,6 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::ListCustomPromptsResponse(_)
             | EventMsg::RawResponseItem(_)
             | EventMsg::UserMessage(_)
-            | EventMsg::EnteredReviewMode(_)
-            | EventMsg::ExitedReviewMode(_)
             | EventMsg::AgentMessageDelta(_)
             | EventMsg::AgentReasoningDelta(_)
             | EventMsg::AgentReasoningRawContentDelta(_)
