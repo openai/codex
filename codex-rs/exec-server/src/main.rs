@@ -21,10 +21,10 @@
 //!         |      |
 //!         |      o--(exec)-->o
 //!         |      |           |
-//!         o<--(EscalateReq)--o
-//!         |      |           |
-//!         o---(Escalate)---->o
-//!         |      |           |
+//!         |o<-(EscalateReq)--o
+//!         ||     |           |
+//!         |o--(Escalate)---->o
+//!         ||     |           |
 //!         |o<---------(fds)--o
 //!         ||     |           |
 //!   o<-----o     |           |
@@ -45,9 +45,9 @@
 //!   |      |
 //!   |      o--(exec)-->o
 //!   |      |           |
-//!   o<--(EscalateReq)--o
-//!   |      |           |
-//!   o--(RunInSandbox)->o
+//!   |o<-(EscalateReq)--o
+//!   ||     |           |
+//!   |o-(RunInSandbox)->o
 //!   |      |           |
 //!   |      |           x--(exec)-->o
 //!   |      |                       |
@@ -55,6 +55,7 @@
 //!   |      |
 //!   o<-----x
 //!
+use crate::socket::AsyncDatagramSocket;
 use crate::socket::AsyncSocket;
 use anyhow::Context as _;
 use anyhow::Result;
@@ -162,96 +163,93 @@ fn decide_escalate(file: &str, argv: &[String], _workdir: &PathBuf) -> EscalateA
     }
 }
 
-/// Handle a single super-exec request.
-async fn super_exec_task(
-    socket: AsyncSocket,
-    file: String,
-    argv: Vec<String>,
-    workdir: PathBuf,
-    env: HashMap<String, String>,
-) -> anyhow::Result<()> {
-    let (msg, fds) = socket.receive_with_fds::<SuperExecMessage>().await?;
-    if fds.len() != msg.fds.len() {
-        return Err(anyhow::anyhow!(
-            "mismatched number of fds in SuperExecMessage: {} in the message, {} from the control message",
-            msg.fds.len(),
-            fds.len()
-        ));
-    }
-
-    if msg
-        .fds
-        .iter()
-        .any(|src_fd| fds.iter().any(|dst_fd| dst_fd.as_raw_fd() == *src_fd))
-    {
-        // TODO: handle overlapping fds
-        return Err(anyhow::anyhow!(
-            "overlapping fds not yet supported in SuperExecMessage"
-        ));
-    }
-
-    let mut command = Command::new(file);
-    command
-        .args(&argv[1..])
-        .arg0(argv[0].clone())
-        .envs(&env)
-        .current_dir(&workdir)
-        // We null out the standard FDs because we will dup2() the forwarded FDs in pre_exec().
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    unsafe {
-        command.pre_exec(move || {
-            for (dst_fd, src_fd) in msg.fds.iter().zip(&fds) {
-                libc::dup2(src_fd.as_raw_fd(), *dst_fd);
+async fn handle_escalate_session(socket: AsyncSocket) -> anyhow::Result<()> {
+    let EscalateClientMessage::EscalateRequest {
+        file,
+        argv,
+        workdir,
+        env,
+    } = socket.receive::<EscalateClientMessage>().await?;
+    let action = decide_escalate(&file, &argv, &workdir);
+    tracing::debug!("decided {action:?} for {file:?} {argv:?} {workdir:?}");
+    match action {
+        EscalateAction::RunInSandbox => {
+            socket
+                .send(EscalateServerMessage::EscalateResponse(
+                    EscalateAction::RunInSandbox,
+                ))
+                .await?;
+        }
+        EscalateAction::Escalate => {
+            socket
+                .send(EscalateServerMessage::EscalateResponse(
+                    EscalateAction::Escalate,
+                ))
+                .await?;
+            let (msg, fds) = socket
+                .receive_with_fds::<SuperExecMessage>()
+                .await
+                .context("failed to receive SuperExecMessage")?;
+            if fds.len() != msg.fds.len() {
+                return Err(anyhow::anyhow!(
+                    "mismatched number of fds in SuperExecMessage: {} in the message, {} from the control message",
+                    msg.fds.len(),
+                    fds.len()
+                ));
             }
-            Ok(())
-        });
+
+            if msg
+                .fds
+                .iter()
+                .any(|src_fd| fds.iter().any(|dst_fd| dst_fd.as_raw_fd() == *src_fd))
+            {
+                return Err(anyhow::anyhow!(
+                    "overlapping fds not yet supported in SuperExecMessage"
+                ));
+            }
+
+            let mut command = Command::new(file);
+            command
+                .args(&argv[1..])
+                .arg0(argv[0].clone())
+                .envs(&env)
+                .current_dir(&workdir)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            unsafe {
+                command.pre_exec(move || {
+                    for (dst_fd, src_fd) in msg.fds.iter().zip(&fds) {
+                        libc::dup2(src_fd.as_raw_fd(), *dst_fd);
+                    }
+                    Ok(())
+                });
+            }
+            let mut child = command.spawn()?;
+            let exit_status = child.wait().await?;
+            socket
+                .send(SuperExecResult {
+                    exit_code: exit_status.code().unwrap_or(127),
+                })
+                .await?;
+        }
     }
-    let mut child = command.spawn()?;
-
-    let exit_status = child.wait().await?;
-    socket
-        .send(SuperExecResult {
-            exit_code: exit_status.code().unwrap_or(127),
-        })
-        .await?;
-
     Ok(())
 }
 
-async fn escalate_task(socket: AsyncSocket) -> anyhow::Result<()> {
+async fn escalate_task(socket: AsyncDatagramSocket) -> anyhow::Result<()> {
     loop {
-        let msg = socket.receive::<EscalateClientMessage>().await?;
-
-        let EscalateClientMessage::EscalateRequest {
-            file,
-            argv,
-            workdir,
-            env,
-        } = msg;
-        let action = decide_escalate(&file, &argv, &workdir);
-        tracing::debug!("decided {action:?} for {file:?} {argv:?} {workdir:?}");
-        match action {
-            EscalateAction::RunInSandbox => {
-                socket
-                    .send(EscalateServerMessage::EscalateResponse(
-                        EscalateAction::RunInSandbox,
-                    ))
-                    .await?;
-            }
-            EscalateAction::Escalate => {
-                let (super_exec_server, super_exec_client) = AsyncSocket::pair()?;
-                let client_socket = super_exec_client.into_inner();
-                tokio::spawn(super_exec_task(super_exec_server, file, argv, workdir, env));
-                socket
-                    .send_with_fds(
-                        EscalateServerMessage::EscalateResponse(EscalateAction::Escalate),
-                        &[client_socket.into()],
-                    )
-                    .await?;
-            }
+        let (_, mut fds) = socket.receive_with_fds().await?;
+        if fds.len() != 1 {
+            tracing::error!("expected 1 fd in datagram handshake, got {}", fds.len());
+            continue;
         }
+        let stream_socket = AsyncSocket::from_fd(fds.remove(0))?;
+        tokio::spawn(async move {
+            if let Err(err) = handle_escalate_session(stream_socket).await {
+                tracing::error!("escalate session failed: {err:?}");
+            }
+        });
     }
 }
 
@@ -266,7 +264,7 @@ async fn shell_exec(params: ExecParams) -> anyhow::Result<ExecResult> {
         workdir,
         timeout_ms,
     } = params;
-    let (escalate_server, escalate_client) = AsyncSocket::pair()?;
+    let (escalate_server, escalate_client) = AsyncDatagramSocket::pair()?;
     let client_socket = escalate_client.into_inner();
     client_socket.set_cloexec(false)?;
 
@@ -397,7 +395,7 @@ enum Commands {
     ShellExec(ShellExecArgs),
 }
 
-fn get_escalate_client() -> anyhow::Result<AsyncSocket> {
+fn get_escalate_client() -> anyhow::Result<AsyncDatagramSocket> {
     // TODO: we should defensively require only calling this once, since AsyncSocket will take ownership of the fd.
     let client_fd = std::env::var("CODEX_ESCALATE_SOCKET")?.parse::<i32>()?;
     if client_fd < 0 {
@@ -405,7 +403,7 @@ fn get_escalate_client() -> anyhow::Result<AsyncSocket> {
             "CODEX_ESCALATE_SOCKET is not a valid file descriptor: {client_fd}"
         ));
     }
-    Ok(unsafe { AsyncSocket::from_raw_fd(client_fd) }?)
+    Ok(unsafe { AsyncDatagramSocket::from_raw_fd(client_fd) }?)
 }
 
 /// Invoked from within the sandbox to (potentially) escalate permissions.
@@ -422,7 +420,15 @@ impl EscalateArgs {
     /// the command directly or to proxy to the escalate server.
     async fn run(&self) -> anyhow::Result<()> {
         let EscalateArgs { file, argv } = self;
-        let client = get_escalate_client()?;
+        let handshake_client = get_escalate_client()?;
+        let (server_stream, client_stream) = AsyncSocket::pair()?;
+        let server_fd = server_stream.into_inner();
+        const HANDSHAKE_MESSAGE: [u8; 1] = [0];
+        handshake_client
+            .send_with_fds(&HANDSHAKE_MESSAGE, &[server_fd.into()])
+            .await
+            .context("failed to send handshake datagram")?;
+        let client = client_stream;
         client
             .send(EscalateClientMessage::EscalateRequest {
                 file: file.clone(),
@@ -432,18 +438,10 @@ impl EscalateArgs {
             })
             .await
             .context("failed to send EscalateRequest")?;
-        let (message, mut fds) = client.receive_with_fds::<EscalateServerMessage>().await?;
+        let message = client.receive::<EscalateServerMessage>().await?;
         let EscalateServerMessage::EscalateResponse(action) = message;
         match action {
             EscalateAction::Escalate => {
-                if fds.len() != 1 {
-                    return Err(anyhow::anyhow!(
-                        "expected 1 fd in EscalateResponse, got {}",
-                        fds.len()
-                    ));
-                }
-                let super_exec_socket = AsyncSocket::from_fd(fds.remove(0))?;
-
                 // TODO: maybe we should send ALL open FDs (except the escalate client)?
                 let fds_to_send = [
                     unsafe { OwnedFd::from_raw_fd(io::stdin().as_raw_fd()) },
@@ -453,7 +451,7 @@ impl EscalateArgs {
 
                 // TODO: also forward signals over the super-exec socket
 
-                super_exec_socket
+                client
                     .send_with_fds(
                         SuperExecMessage {
                             fds: fds_to_send.iter().map(AsRawFd::as_raw_fd).collect(),
@@ -462,8 +460,7 @@ impl EscalateArgs {
                     )
                     .await
                     .context("failed to send SuperExecMessage")?;
-                let SuperExecResult { exit_code } =
-                    super_exec_socket.receive::<SuperExecResult>().await?;
+                let SuperExecResult { exit_code } = client.receive::<SuperExecResult>().await?;
                 std::process::exit(exit_code);
             }
             EscalateAction::RunInSandbox => {

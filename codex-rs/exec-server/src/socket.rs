@@ -18,6 +18,7 @@ use tokio::io::unix::AsyncFd;
 
 const MAX_FDS_PER_MESSAGE: usize = 16;
 const LENGTH_PREFIX_SIZE: usize = size_of::<u32>();
+const MAX_DATAGRAM_SIZE: usize = 8192;
 
 fn assume_init(buf: &[MaybeUninit<u8>]) -> &[u8] {
     unsafe { std::slice::from_raw_parts(buf.as_ptr().cast(), buf.len()) }
@@ -206,6 +207,58 @@ pub(crate) fn send_json_message<T: Serialize>(
     send_message_bytes(socket, &data, fds)
 }
 
+fn send_datagram_bytes(socket: &Socket, data: &[u8], fds: &[OwnedFd]) -> std::io::Result<()> {
+    if fds.len() > MAX_FDS_PER_MESSAGE {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("too many fds: {}", fds.len()),
+        ));
+    }
+    let mut control = vec![0u8; control_space_for_fds(fds.len())];
+    if !fds.is_empty() {
+        unsafe {
+            let cmsg = control.as_mut_ptr().cast::<libc::cmsghdr>();
+            (*cmsg).cmsg_len =
+                libc::CMSG_LEN(size_of::<RawFd>() as c_uint * fds.len() as c_uint) as _;
+            (*cmsg).cmsg_level = libc::SOL_SOCKET;
+            (*cmsg).cmsg_type = libc::SCM_RIGHTS;
+            let data_ptr = libc::CMSG_DATA(cmsg).cast::<RawFd>();
+            for (i, fd) in fds.iter().enumerate() {
+                data_ptr.add(i).write(fd.as_raw_fd());
+            }
+        }
+    }
+    let payload = [IoSlice::new(data)];
+    let msg = MsgHdr::new().with_buffers(&payload).with_control(&control);
+    let written = socket.sendmsg(&msg, 0)?;
+    if written != data.len() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::WriteZero,
+            format!(
+                "short datagram write: wrote {written} bytes out of {}",
+                data.len()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn receive_datagram_bytes(socket: &Socket) -> std::io::Result<(Vec<u8>, Vec<OwnedFd>)> {
+    let mut buffer = vec![MaybeUninit::<u8>::uninit(); MAX_DATAGRAM_SIZE];
+    let mut control = vec![MaybeUninit::<u8>::uninit(); control_space_for_fds(MAX_FDS_PER_MESSAGE)];
+    let (read, control_len) = {
+        let mut bufs = [MaybeUninitSlice::new(&mut buffer)];
+        let mut msg = MsgHdrMut::new()
+            .with_buffers(&mut bufs)
+            .with_control(&mut control);
+        let read = socket.recvmsg(&mut msg, 0)?;
+        (read, msg.control_len())
+    };
+    let data = assume_init(&buffer[..read]).to_vec();
+    let fds = extract_fds(&mut control, control_len)?;
+    Ok((data, fds))
+}
+
 pub(crate) struct AsyncSocket {
     inner: AsyncFd<Socket>,
 }
@@ -217,10 +270,6 @@ impl AsyncSocket {
         Ok(AsyncSocket {
             inner: async_socket,
         })
-    }
-
-    pub unsafe fn from_raw_fd(fd: RawFd) -> std::io::Result<AsyncSocket> {
-        AsyncSocket::new(unsafe { Socket::from_raw_fd(fd) })
     }
 
     pub fn from_fd(fd: OwnedFd) -> std::io::Result<AsyncSocket> {
@@ -261,8 +310,51 @@ impl AsyncSocket {
     }
 
     pub async fn receive<T: for<'de> Deserialize<'de>>(&self) -> std::io::Result<T> {
-        let (msg, _) = self.receive_with_fds().await?;
+        let (msg, fds) = self.receive_with_fds().await?;
+        if !fds.is_empty() {
+            tracing::warn!("unexpected fds in receive: {}", fds.len());
+        }
         Ok(msg)
+    }
+
+    pub fn into_inner(self) -> Socket {
+        self.inner.into_inner()
+    }
+}
+
+pub(crate) struct AsyncDatagramSocket {
+    inner: AsyncFd<Socket>,
+}
+
+impl AsyncDatagramSocket {
+    fn new(socket: Socket) -> std::io::Result<Self> {
+        socket.set_nonblocking(true)?;
+        Ok(Self {
+            inner: AsyncFd::new(socket)?,
+        })
+    }
+
+    pub unsafe fn from_raw_fd(fd: RawFd) -> std::io::Result<Self> {
+        Self::new(unsafe { Socket::from_raw_fd(fd) })
+    }
+
+    pub fn pair() -> std::io::Result<(Self, Self)> {
+        let (server, client) = Socket::pair(Domain::UNIX, Type::DGRAM, None)?;
+        Ok((Self::new(server)?, Self::new(client)?))
+    }
+
+    pub async fn send_with_fds(&self, data: &[u8], fds: &[OwnedFd]) -> std::io::Result<()> {
+        self.inner
+            .async_io(Interest::WRITABLE, |socket| {
+                send_datagram_bytes(socket, data, fds)
+            })
+            .await
+    }
+
+    pub async fn receive_with_fds(&self) -> std::io::Result<(Vec<u8>, Vec<OwnedFd>)> {
+        self.inner
+            .async_io(Interest::READABLE, receive_datagram_bytes)
+            .await
     }
 
     pub fn into_inner(self) -> Socket {
