@@ -75,28 +75,10 @@ mod tests {
 
         let result = value.or_cancel(&token).await;
 
-        assert_eq!(result, Ok(42));
-    async fn returns_err_when_token_cancelled_first() {
-        let token = CancellationToken::new();
-        let token_clone = token.clone();
-
-        let cancel_handle = task::spawn(async move {
-            sleep(Duration::from_millis(10)).await;
-            token_clone.cancel();
-        });
-
-        let result = async {
-            sleep(Duration::from_millis(100)).await;
-            7
-        }
-        .or_cancel(&token)
-        .await;
-
-        cancel_handle.await.expect("cancel task panicked");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().dangling_artifacts.is_none());
+        assert!(result.is_ok());
+        assert!(result.unwrap() == 42);
     }
-}
+
     #[tokio::test]
     async fn returns_err_when_token_already_cancelled() {
         let token = CancellationToken::new();

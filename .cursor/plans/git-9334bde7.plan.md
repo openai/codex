@@ -1,243 +1,168 @@
-<!-- 9334bde7-e2a1-4129-bdd0-3bb2d644ccb7 e1b5cabd-e449-452b-a19a-982e5790216f -->
-# Rust 2024リファクタリングとエラー0達成計画
+<!-- 9334bde7-e2a1-4129-bdd0-3bb2d644ccb7 1198d1d5-67ea-421a-a386-f41fbca52eba -->
+# Windows 11 25H2 MCP統合とGPU最適化実装計画
 
 ## 目標
 
-- セマンティックバージョンv2.1.0への統一
-- コンパイルエラー0（`cargo check`）
-- Clippy警告0（`cargo clippy`）
-- テストエラー0（`cargo test`）
-- Rust 2024 editionへの完全移行
-- ジェネリクス型定義の改善
-- TUIとGUIのリファクタリング
+- Windows 11 25H2のMCP統合
+- カーネルドライバーからCodexへのGPU最適化接続
+- Rust 2025年最新ベストプラクティス適用
+- RustCuda（cust）の最新実装パターン適用
+- 型定義の改善と警告0達成
 
-## 現状分析
+## Phase 1: コンパイルエラー修正（最優先）
 
-### 1. バージョン状況
+### 1.1 TUIのrender_refエラー修正
 
-- ワークスペースバージョンは既に`2.1.0`（`codex-rs/Cargo.toml`）
-- 独自バージョンを持つクレート:
-- `windows-sandbox-rs`: `0.1.0`
-- `gui`: `0.1.0`
-- `tauri-gui/src-tauri`: `2.0.0`
-- `cuda-runtime`: `0.1.0`
-- `backend-client`: `0.0.0`
+- [ ] `codex-rs/tui/src/bottom_pane/mod.rs`の`render_ref`呼び出しを修正
+- [ ] `StatusIndicatorWidget`と`ChatComposer`の`WidgetRef`実装確認
+- [ ] `GpuStatsWidget`の`WidgetRef`実装確認
 
-### 2. Rust Edition移行状況
+### 1.2 コンパイル確認
 
-- 大部分はRust 2024に移行済み
-- TUIは既にRust 2024（`codex-rs/tui/Cargo.toml`）
-- 残り3クレートがRust 2021:
-- `codex-rs/windows-sandbox-rs/Cargo.toml`
-- `codex-rs/utils/pty/Cargo.toml`
-- `codex-rs/gui/Cargo.toml`
+- [ ] `cargo build --release -p codex-cli`でエラー0確認
+- [ ] `cargo clippy`で警告確認
 
-### 3. コードベース規模
+## Phase 2: RustCuda（cust）ベストプラクティス適用
 
-- 823個のRustファイル
-- 50+のクレート（workspace members）
+### 2.1 CUDA Runtime実装の改善
 
-## 実装フェーズ
+- [ ] `codex-rs/cuda-runtime/src/cuda_impl.rs`の型定義を改善
+- [ ] `DeviceCopy`トレイトの適切な使用
+- [ ] エラーハンドリングの改善（`anyhow::Result` + `map_err`）
+- [ ] Rust 2024 Editionの`unsafe_op_in_unsafe_fn` lint対応
 
-### Phase 0: セマンティックバージョン統一
+### 2.2 メモリ管理の最適化
 
-1. **バージョン確認**
+- [ ] `DeviceBuffer`のライフタイム管理
+- [ ] Pinned Memoryの実装（カーネルドライバー連携）
+- [ ] ゼロコピー転送の実装
 
-- ワークスペースバージョンは既に`2.1.0`（`codex-rs/Cargo.toml`）
-- 独自バージョンを持つクレートを特定
+## Phase 3: Windows 11 25H2 MCP統合
 
-2. **バージョン統一**
+### 3.1 Windows AI MCP API調査
 
-- `codex-rs/windows-sandbox-rs/Cargo.toml`: `0.1.0` → `2.1.0` または `version = { workspace = true }`
-- `codex-rs/gui/Cargo.toml`: `0.1.0` → `2.1.0` または `version = { workspace = true }`
-- `codex-rs/tauri-gui/src-tauri/Cargo.toml`: `2.0.0` → `2.1.0` または `version = { workspace = true }`
-- `codex-rs/cuda-runtime/Cargo.toml`: `0.1.0` → `2.1.0` または `version = { workspace = true }`
-- `codex-rs/backend-client/Cargo.toml`: `0.0.0` → `2.1.0` または `version = { workspace = true }`
+- [ ] `windows.ai.agents.mcp.h`の存在確認
+- [ ] Windows 11 25H2 SDKのMCP関連API調査
+- [ ] MCP ProtocolのWindows実装確認
 
-3. **統一後の確認**
+### 3.2 MCP統合レイヤー実装
 
-- `cargo check`で依存関係エラーがないか確認
-- バージョン一貫性を検証
+- [ ] `codex-rs/windows-ai/src/mcp.rs`新規作成
+- [ ] Windows AI MCP Runtimeラッパー実装
+- [ ] Codex MCP Serverとの統合
 
-### Phase 1: 現状エラー確認と分析
+### 3.3 MCP通信プロトコル実装
 
-1. **コンパイルエラー確認**
+- [ ] JSON-RPC 2.0 over Windows AI API
+- [ ] 非同期通信（`tokio`）
+- [ ] エラーハンドリングとリトライロジック
 
-- `cd codex-rs && cargo check --all-targets --all-features 2>&1 | tee errors.txt`
-- エラーをカテゴリ別に分類（型エラー、ライフタイム、未使用など）
+## Phase 4: カーネルドライバー→Codex GPU最適化接続
 
-2. **Clippy警告確認**
+### 4.1 カーネルドライバー拡張
 
-- `cd codex-rs && cargo clippy --all-targets --all-features 2>&1 | tee clippy_warnings.txt`
-- 警告を重要度別に分類
+- [ ] `codex-rs/windows-ai/src/kernel_driver.rs`の拡張
+- [ ] GPU統計のリアルタイム取得
+- [ ] Pinned Memory Poolの管理
+- [ ] GPU-awareスケジューリング
 
-3. **テストエラー確認**
+### 4.2 CUDA Runtime統合
 
-- `cd codex-rs && cargo test --all-features 2>&1 | tee test_errors.txt`
-- 失敗テストを特定
+- [ ] `codex-rs/cuda-runtime`とカーネルドライバーの接続
+- [ ] GPUメモリの最適化割り当て
+- [ ] カーネルドライバー経由のGPU操作
 
-### Phase 2: Rust 2024 Edition完全移行
+### 4.3 パフォーマンス最適化
 
-1. **残り3クレートの移行**
+- [ ] レイテンシ削減（目標: 10ms → 4ms）
+- [ ] スループット向上（目標: 100 req/s → 300 req/s）
+- [ ] GPU利用率向上（目標: 60% → 85%）
 
-- `codex-rs/windows-sandbox-rs/Cargo.toml`: `edition = "2024"`
-- `codex-rs/utils/pty/Cargo.toml`: `edition = "2024"`
-- `codex-rs/gui/Cargo.toml`: `edition = "2024"`
+## Phase 5: 型定義とベストプラクティス
 
-2. **TUIとGUIのリファクタリング**
+### 5.1 型定義の改善
 
-- `codex-rs/tui/`: 型定義とジェネリクスの改善（既にRust 2024）
-- `codex-rs/gui/`: 型定義とジェネリクスの改善（Rust 2024移行後）
-- UI関連の型安全性向上
-- エラーハンドリングの統一
+- [ ] ジェネリクス型の適切な制約
+- [ ] トレイト境界の最適化
+- [ ] ライフタイムの明示
 
-3. **移行後の互換性確認**
+### 5.2 Rust 2025ベストプラクティス
 
-- 各クレートで`cargo check`を実行
-- TUIとGUIの動作確認
-- 破壊的変更がないか確認
+- [ ] Rust 2024 Editionの新機能活用
+- [ ] `unsafe`ブロックの適切な使用
+- [ ] エラーハンドリングの統一（`anyhow::Result`）
+- [ ] 非同期処理の最適化（`tokio`）
 
-### Phase 3: ジェネリクス型定義の改善
+### 5.3 警告0達成
 
-1. **型エイリアスの整理**
+- [ ] `cargo clippy --all-targets -- -W clippy::all`で警告0確認
+- [ ] 未使用変数・フィールドの削除または`_`プレフィックス
+- [ ] 型安全性の向上
 
-- 複雑なジェネリクス型にエイリアスを追加
-- 例: `type Result<T> = std::result::Result<T, Error>;`
-- TUI/GUIの型エイリアス整理
+## Phase 6: テストと検証
 
-2. **ジェネリクス制約の最適化**
+### 6.1 単体テスト
 
-- `where`句の整理と簡略化
-- トレイト境界の明確化
-- 関連型の活用
-- TUIの`Terminal`型やGUIの`AppState`型の改善
+- [ ] CUDA Runtimeのテスト
+- [ ] Windows AI APIのテスト
+- [ ] カーネルドライバー統合のテスト
 
-3. **型安全性の向上**
+### 6.2 統合テスト
 
-- `unwrap()`の削除または適切なエラーハンドリング
-- `Option`/`Result`の適切な使用
-- ライフタイム注釈の最適化
+- [ ] MCP統合のE2Eテスト
+- [ ] GPU最適化のパフォーマンステスト
+- [ ] カーネルドライバー接続のテスト
 
-### Phase 4: Rust 2024ベストプラクティス適用
+### 6.3 最終検証
 
-1. **新しい言語機能の活用**
+- [ ] `cargo check`でエラー0確認
+- [ ] `cargo clippy`で警告0確認
+- [ ] `cargo test`で全テスト通過確認
 
-- `let-else`パターン
-- `#[derive(Default)]`の活用
-- パターンマッチングの改善
+## 実装ファイル
 
-2. **Clippy推奨事項の適用**
+### 修正ファイル
 
-- `uninlined_format_args`の修正
-- `redundant_closure`の削除
-- `needless_borrow`の修正
+- `codex-rs/tui/src/bottom_pane/mod.rs` - render_refエラー修正
+- `codex-rs/cuda-runtime/src/cuda_impl.rs` - RustCudaベストプラクティス適用
+- `codex-rs/cuda-runtime/src/lib.rs` - 型定義改善
 
-3. **エラーハンドリングの統一**
+### 新規ファイル
 
-- `thiserror`/`anyhow`の適切な使用
-- エラー型の統一
-- TUI/GUIのエラー型統一
+- `codex-rs/windows-ai/src/mcp.rs` - Windows 11 25H2 MCP統合
+- `codex-rs/windows-ai/src/kernel_cuda_bridge.rs` - カーネルドライバー↔CUDA接続
 
-### Phase 5: 段階的リファクタリング
+### 拡張ファイル
 
-1. **コアクレートから開始**
+- `codex-rs/windows-ai/src/kernel_driver.rs` - GPU最適化機能追加
+- `codex-rs/core/src/windows_ai_integration.rs` - MCP統合追加
 
-- `codex-core`
-- `codex-cli`
-- `codex-protocol`
+## 技術スタック
 
-2. **UIクレートのリファクタリング**
+- **Rust**: 2024 Edition
+- **CUDA**: RustCuda (`cust` 0.3)
+- **Windows AI**: Windows 11 25H2 SDK
+- **MCP**: JSON-RPC 2.0
+- **非同期**: `tokio`
+- **エラーハンドリング**: `anyhow` + `thiserror`
 
-- `codex-tui`: TUI型定義とジェネリクスの改善
-- `codex-rs/tui/src/app.rs` - App構造体の型改善
-- `codex-rs/tui/src/chatwidget.rs` - ChatWidgetの型改善
-- `codex-rs/tui/src/tui.rs` - Terminal型の改善
-- `codex-gui`: GUI型定義とジェネリクスの改善
-- `codex-rs/gui/src/main.rs` - AppState型の改善
-- エラーハンドリング統一
+## 期待される成果
 
-3. **依存関係の順序で処理**
-
-- 依存されていないクレートから
-- 依存関係グラフに従って順次処理
-
-4. **各クレートでの確認**
-
-- リファクタリング後に`cargo check`
-- `cargo clippy`で警告確認
-- `cargo test`でテスト実行
-- TUI/GUIの動作確認
-
-### Phase 6: 最終検証
-
-1. **全体ビルド**
-
-- `cargo build --all-targets --all-features`
-- エラー0を確認
-
-2. **全体Clippy**
-
-- `cargo clippy --all-targets --all-features`
-- 警告0を確認
-
-3. **全体テスト**
-
-- `cargo test --all-features`
-- 失敗0を確認
-
-## 主要ファイル
-
-### バージョン統一対象
-
-- `codex-rs/windows-sandbox-rs/Cargo.toml`
-- `codex-rs/gui/Cargo.toml`
-- `codex-rs/tauri-gui/src-tauri/Cargo.toml`
-- `codex-rs/cuda-runtime/Cargo.toml`
-- `codex-rs/backend-client/Cargo.toml`
-
-### 型定義改善対象
-
-- `codex-rs/core/src/lib.rs` - コア型定義
-- `codex-rs/core/src/codex.rs` - メイン型
-- `codex-rs/core/src/error.rs` - エラー型
-- `codex-rs/cli/src/main.rs` - CLI型
-- `codex-rs/protocol/src/protocol.rs` - プロトコル型
-- `codex-rs/tui/src/` - TUI型定義（全ファイル）
-- `codex-rs/gui/src/` - GUI型定義（全ファイル）
-
-### ジェネリクス改善対象
-
-- `codex-rs/core/src/chat_completions.rs` - `AggregateStreamExt`トレイト
-- `codex-rs/core/src/orchestration/parallel_execution.rs` - 並列実行型
-- `codex-rs/mcp-types/` - MCP型定義
-- `codex-rs/tui/src/tui.rs` - `Terminal`型エイリアス
-- `codex-rs/tui/src/app.rs` - `App`構造体のジェネリクス
-- `codex-rs/gui/src/main.rs` - `AppState`型の改善
-
-## 注意事項
-
-- 段階的に進め、各フェーズで動作確認
-- 既存のテストを壊さない
-- パフォーマンスへの影響を最小化
-- 後方互換性を維持
-- TUI/GUIの動作確認を重視
-- バージョン統一は依存関係に影響を与える可能性があるため注意
-
-## 成功基準
-
-- ✅ 全クレートがv2.1.0に統一
-- ✅ `cargo check`でエラー0
-- ✅ `cargo clippy`で警告0
-- ✅ `cargo test`で失敗0
-- ✅ 全クレートがRust 2024 edition
-- ✅ ジェネリクス型定義が改善されている
-- ✅ TUIとGUIが正常に動作
+- ✅ コンパイルエラー0
+- ✅ Clippy警告0
+- ✅ Windows 11 25H2 MCP統合完了
+- ✅ カーネルドライバー↔Codex GPU最適化接続完了
+- ✅ レイテンシ: 10ms → 4ms（-60%）
+- ✅ スループット: 100 req/s → 300 req/s（+200%）
+- ✅ GPU利用率: 60% → 85%（+25%）
 
 ### To-dos
 
-- [ ] Phase 1: 現状エラー確認と分析（コンパイル、Clippy、テスト）
-- [ ] Phase 2: Rust 2024 Edition完全移行（残り3クレート）
-- [ ] Phase 3: ジェネリクス型定義の改善（型エイリアス、制約最適化）
-- [ ] Phase 4: Rust 2024ベストプラクティス適用（新機能、Clippy推奨）
-- [ ] Phase 5: 段階的リファクタリング（コアから依存関係順）
-- [ ] Phase 6: 最終検証（全体ビルド、Clippy、テストでエラー0確認）
+- [ ] TUIのrender_refエラー修正とコンパイルエラー0達成
+- [ ] RustCuda（cust）のベストプラクティス適用と型定義改善
+- [ ] Windows 11 25H2 MCP統合実装（windows.ai.agents.mcp.h）
+- [ ] カーネルドライバーからCodexへのGPU最適化接続実装
+- [ ] 型定義の改善とRust 2025ベストプラクティス適用
+- [ ] Clippy警告0達成と型安全性向上
+- [ ] MCP統合とGPU最適化の統合テスト実装
+- [ ] 最終検証（cargo check/clippy/test）でエラー0・警告0確認

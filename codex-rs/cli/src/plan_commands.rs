@@ -211,8 +211,8 @@ fn create_Plan(
         mode,
         work_items: vec![],
         risks: vec![],
-        eval: codex_core::Plan::EvalCriteria::default(),
-        budget: codex_core::Plan::Budget {
+        eval: codex_core::plan::EvalCriteria::default(),
+        budget: codex_core::plan::Budget {
             session_cap: Some(budget_tokens),
             cap_min: Some(budget_time),
             ..Default::default()
@@ -250,7 +250,7 @@ fn create_Plan(
 fn list_Plans(state_filter: Option<String>, Plan_dir: &PathBuf) -> Result<()> {
     let entries = std::fs::read_dir(Plan_dir).context("Failed to read Plans directory")?;
 
-    let mut Plans: Vec<PlanBlock> = Vec::new();
+    let mut plan: Vec<PlanBlock> = Vec::new();
 
     for entry in entries {
         let entry = entry?;
@@ -284,7 +284,7 @@ fn list_Plans(state_filter: Option<String>, Plan_dir: &PathBuf) -> Result<()> {
     println!("📋 Plans ({})", plan.len());
     println!();
 
-    for bp in Plans {
+    for bp in plan {
         let status_icon = match bp.state {
             PlanState::Inactive => "⚪",
             PlanState::Drafting => "📝",
@@ -621,7 +621,7 @@ fn parse_execution_mode(s: &str) -> Result<ExecutionMode, String> {
 }
 
 async fn execute_Plan(Plan_id: &str, Plan_dir: &PathBuf) -> Result<()> {
-    use codex_core::Plan::{ExecutionEvent, PlanExecutor};
+    use codex_core::plan::{ExecutionEvent, PlanExecutor};
     use codex_core::orchestration::PlanOrchestrator;
     use std::sync::Arc;
 
@@ -632,7 +632,7 @@ async fn execute_Plan(Plan_id: &str, Plan_dir: &PathBuf) -> Result<()> {
     }
 
     let content = std::fs::read_to_string(&Plan_file)?;
-    let Plan: codex_core::Plan::PlanBlock = serde_json::from_str(&content)?;
+    let Plan: codex_core::plan::PlanBlock = serde_json::from_str(&content)?;
 
     println!("🚀 Executing Plan: {}", Plan.title);
     println!("📋 ID: {}", Plan.id);

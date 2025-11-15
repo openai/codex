@@ -186,6 +186,12 @@ impl GpuStatsWidget {
     }
 }
 
+impl WidgetRef for GpuStatsWidget {
+    fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        GpuStatsWidget::render_ref(self, area, buf);
+    }
+}
+
 fn format_bytes(bytes: u64) -> String {
     const GB: f64 = 1024.0 * 1024.0 * 1024.0;
     const MB: f64 = 1024.0 * 1024.0;
@@ -793,7 +799,7 @@ impl WidgetRef for &BottomPane {
                     width: top_area.width,
                     height,
                 };
-                status.render_ref(status_area, buf);
+                status.render(status_area, buf);
                 cursor_y = cursor_y.saturating_add(height);
                 remaining = remaining.saturating_sub(height);
             }
@@ -814,14 +820,14 @@ impl WidgetRef for &BottomPane {
                 self.queued_user_messages.render(queue_area, buf);
             }
 
-            self.composer.render_ref(content_area, buf);
+            self.composer.render(content_area, buf);
         }
     }
 }
 
 impl Renderable for BottomPane {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        <&BottomPane as WidgetRef>::render_ref(self, area, buf);
+        <&BottomPane as WidgetRef>::render_ref(&self, area, buf);
     }
 
     fn desired_height(&self, width: u16) -> u16 {

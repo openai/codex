@@ -3,10 +3,12 @@
 //! This module provides integration between Codex and Windows 11's native AI APIs,
 //! enabling OS-level optimizations and kernel driver acceleration.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 #[cfg(all(target_os = "windows", feature = "windows-ai"))]
 use codex_windows_ai::{GpuStats, WindowsAiRuntime, kernel_driver::KernelBridge};
+#[cfg(all(target_os = "windows", feature = "windows-ai"))]
+use tracing::{debug, info};
 
 /// Windows AI execution options
 #[derive(Debug, Clone)]

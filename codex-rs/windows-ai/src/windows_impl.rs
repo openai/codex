@@ -38,7 +38,7 @@ fn get_windows_build_number() -> Result<u32> {
 fn check_npu_via_registry() -> Result<bool> {
     // TODO: Implement via registry read when windows crate Registry API is available
     // For now, return false as placeholder
-    Ok(false)
+        Ok(false)
 }
 
 /// Get DirectML version info
@@ -50,7 +50,7 @@ pub fn get_directml_version() -> Result<DirectMlVersion> {
         Ok(DirectMlVersion {
             major: 1,
             minor: if build >= 26200 { 14 } else { 13 },
-            build: build,
+            build,
         })
     } else {
         anyhow::bail!("DirectML 1.13+ requires Windows 11 25H2 (Build 26100+)")

@@ -95,6 +95,8 @@ pub mod turn_diff_tracker;
 
 #[cfg(feature = "windows-ai")]
 pub mod windows_ai_integration;
+#[cfg(feature = "windows-ai")]
+pub use windows_ai_integration::WindowsAiOptions;
 
 pub use rollout::ARCHIVED_SESSIONS_SUBDIR;
 pub use rollout::INTERACTIVE_SESSION_SOURCES;

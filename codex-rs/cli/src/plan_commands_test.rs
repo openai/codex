@@ -23,21 +23,21 @@ mod tests {
     fn test_parse_execution_mode() {
         assert_eq!(
             parse_execution_mode("single").unwrap(),
-            codex_core::Plan::ExecutionMode::Single
+            codex_core::plan::ExecutionMode::Single
         );
         assert_eq!(
             parse_execution_mode("orchestrated").unwrap(),
-            codex_core::Plan::ExecutionMode::Orchestrated
+            codex_core::plan::ExecutionMode::Orchestrated
         );
         assert_eq!(
             parse_execution_mode("competition").unwrap(),
-            codex_core::Plan::ExecutionMode::Competition
+            codex_core::plan::ExecutionMode::Competition
         );
 
         // Case insensitive
         assert_eq!(
             parse_execution_mode("SINGLE").unwrap(),
-            codex_core::Plan::ExecutionMode::Single
+            codex_core::plan::ExecutionMode::Single
         );
 
         // Invalid values should error

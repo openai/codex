@@ -11,7 +11,7 @@ use axum::{
     routing::get,
     Router,
 };
-use codex_core::Plan::{ExecutionEvent};
+use codex_core::plan::ExecutionEvent;
 use futures::{sink::SinkExt, stream::StreamExt};
 use serde_json;
 use std::sync::Arc;

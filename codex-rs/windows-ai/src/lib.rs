@@ -29,12 +29,18 @@ use anyhow::Result;
 mod windows_impl;
 
 #[cfg(target_os = "windows")]
-mod kernel_driver;
+pub mod kernel_driver;
 #[cfg(target_os = "windows")]
 mod kernel_driver_ffi;
+#[cfg(target_os = "windows")]
+mod kernel_cuda_bridge;
+#[cfg(target_os = "windows")]
+mod mcp;
 
 #[cfg(target_os = "windows")]
 pub use windows_impl::*;
+#[cfg(target_os = "windows")]
+pub use mcp::*;
 
 #[cfg(not(target_os = "windows"))]
 mod stub;

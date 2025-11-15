@@ -373,7 +373,7 @@ impl OrchestratorServer {
         active_agents: &Arc<RwLock<HashMap<String, AgentInfo>>>,
         active_tasks: &Arc<RwLock<HashMap<String, TaskInfo>>>,
         token_budget: &Arc<RwLock<TokenBudget>>,
-        _config: &OrchestratorConfig,
+        config: &OrchestratorConfig,
     ) -> RpcResponse {
         match request.method.as_str() {
             "status.get" => {
@@ -391,7 +391,7 @@ impl OrchestratorServer {
                         "server_version": env!("CARGO_PKG_VERSION"),
                         "uptime_seconds": uptime,
                         "queue_size": 0, // TODO: track actual queue size
-                        "queue_capacity": _config.queue_capacity,
+                        "queue_capacity": config.queue_capacity,
                         "active_agents": agents.len(),
                         "active_tasks": tasks.len(),
                         "total_tokens_used": budget.used,
@@ -418,7 +418,11 @@ impl OrchestratorServer {
                     id: request.id.clone(),
                     result: Some(
                         serde_json::to_value(AgentListResponse { agents: agent_list })
-                            .expect("AgentListResponse serialization failed"),
+                            .unwrap_or_else(|e| {
+                                serde_json::json!({
+                                    "error": format!("Serialization failed: {e}")
+                                })
+                            }),
                     ),
                     error: None,
                 }

@@ -17,17 +17,19 @@ windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_Storage",
     "Win32_Storage_FileSystem",
+    "Win32_Security",
     "Win32_System_Com",
     "Win32_System_IO",
 ] }
 
 # Workspace dependencies
 anyhow = { workspace = true }
-serde = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time"] }
 tracing = { workspace = true }
+uuid = { version = "1.0", features = ["v4"] }
 
 [dev-dependencies]
 tokio-test = "0.4"

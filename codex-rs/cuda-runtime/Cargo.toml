@@ -8,7 +8,8 @@ version = { workspace = true }
 
 [dependencies]
 # Rust-CUDA ecosystem (https://github.com/Rust-GPU/Rust-CUDA)
-cust = { version = "0.3", optional = true }
+cust = { version = "0.3.2", optional = true }
+glam = { version = "0.20", optional = true }  # Math library for GPU programming
 
 # Workspace dependencies
 anyhow = { workspace = true }
@@ -22,6 +23,7 @@ criterion = "0.5"
 cublas = ["cuda"] # cuBLAS support for matrix operations
 cuda = ["cust"]   # Enable CUDA support (requires CUDA Toolkit)
 cufft = ["cuda"]  # cuFFT support for FFT operations
+glam = ["dep:glam"]   # Enable glam math library
 default = []
 
 [[bench]]

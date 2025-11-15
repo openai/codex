@@ -15,8 +15,9 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-#[cfg(feature = "cuda")]
-mod git_cuda;
+// git_cuda is conditionally compiled in lib.rs
+// Use it only within #[cfg(feature = "cuda")] blocks
+// Import is done inline within #[cfg(feature = "cuda")] blocks
 
 /// Git analysis commands
 #[derive(Debug, Parser)]
@@ -170,7 +171,8 @@ fn analyze_commits_with_cuda(repo_path: &PathBuf, limit: usize) -> Result<()> {
 
     let oids: Vec<Oid> = revwalk.take(limit).collect::<Result<Vec<_>, _>>()?;
 
-    let commits = git_cuda::analyze_commits_cuda(&repo, oids, limit)?;
+    // git_cuda is conditionally compiled, use crate:: prefix within #[cfg] block
+    let commits = crate::git_cuda::analyze_commits_cuda(&repo, oids, limit)?;
 
     let json = serde_json::to_string_pretty(&commits)?;
     println!("{json}");
@@ -489,15 +491,57 @@ fn analyze_visualize_3d(
     let limit = 100_000; // Support 100,000+ commits
 
     #[cfg(feature = "cuda")]
-    let commits = if use_cuda {
+    let commits: Vec<Commit3D> = if use_cuda {
         let oids: Vec<Oid> = revwalk.take(limit).collect::<Result<Vec<_>, _>>()?;
-        git_cuda::analyze_commits_cuda(&repo, oids, limit)?
+            // git_cuda is conditionally compiled, use crate:: prefix within #[cfg] block
+        crate::git_cuda::analyze_commits_cuda(&repo, oids, limit)?
     } else {
+        // Convert CommitData3D to Commit3D
         generate_3d_commits_cpu(&repo, &mut revwalk, limit)?
+            .into_iter()
+            .map(|c| {
+                let author = c.author.clone();
+                Commit3D {
+                    sha: c.hash,
+                    message: c.message,
+                    author: author.clone(),
+                    author_email: String::new(), // CPU version doesn't track email
+                    timestamp: chrono::DateTime::from_timestamp(c.timestamp, 0)
+                        .unwrap_or_default()
+                        .to_rfc3339(),
+                    branch: "main".to_string(), // CPU version doesn't track branch
+                    parents: Vec::new(), // CPU version doesn't track parents
+                    x: c.x,
+                    y: c.y,
+                    z: c.z,
+                    color: generate_author_color(&format!("{}@unknown", author)),
+                }
+            })
+            .collect()
     };
 
     #[cfg(not(feature = "cuda"))]
-    let commits = generate_3d_commits_cpu(&repo, &mut revwalk, limit)?;
+    let commits: Vec<Commit3D> = generate_3d_commits_cpu(&repo, &mut revwalk, limit)?
+        .into_iter()
+        .map(|c| {
+            let author = c.author.clone();
+            Commit3D {
+                sha: c.hash,
+                message: c.message,
+                author: author.clone(),
+                author_email: String::new(),
+                timestamp: chrono::DateTime::from_timestamp(c.timestamp, 0)
+                    .unwrap_or_default()
+                    .to_rfc3339(),
+                branch: "main".to_string(),
+                parents: Vec::new(),
+                x: c.x,
+                y: c.y,
+                z: c.z,
+                color: generate_author_color(&format!("{}@unknown", author)),
+            }
+        })
+        .collect();
 
     println!("✅ Analyzed {} commits", commits.len());
 
@@ -513,8 +557,8 @@ fn analyze_visualize_3d(
     println!("  Total commits: {}", commits.len());
 
     if let (Some(first), Some(last)) = (commits.first(), commits.last()) {
-        println!("  First commit: {} - {}", first.hash, first.message);
-        println!("  Last commit:  {} - {}", last.hash, last.message);
+        println!("  First commit: {} - {}", first.sha, first.message);
+        println!("  Last commit:  {} - {}", last.sha, last.message);
     }
 
     println!("\n💡 Tip: Use --export-json to save 3D data for GUI visualization");

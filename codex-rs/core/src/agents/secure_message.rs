@@ -103,7 +103,7 @@ pub struct SecureAgentChannel {
 impl SecureAgentChannel {
     /// Create a new secure channel pair
     pub fn new(
-        agent_type: String,
+        _agent_type: String,
         signing_keypair: ed25519_dalek::SigningKey,
         encryption_key: aes_gcm::Key<aes_gcm::Aes256Gcm>,
     ) -> (Self, Self) {
@@ -215,7 +215,8 @@ impl SecureAgentChannel {
         use aes_gcm::aead::KeyInit;
 
         let cipher = Aes256Gcm::new(&self.encryption_key);
-        let nonce = Nonce::from_slice(&self.generate_nonce());
+        let nonce_bytes = self.generate_nonce();
+        let nonce = Nonce::from_slice(&nonce_bytes);
 
         cipher
             .encrypt(nonce, content.as_bytes())
@@ -266,11 +267,11 @@ impl SecureAgentChannel {
         let signature_data = self.build_signature_data(&msg.encrypted_content, &msg.metadata)?;
 
         // Verify Ed25519 signature
-        let signature = Signature::from_bytes(
-            &msg.signature
-                .try_into()
-                .map_err(|_| anyhow::anyhow!("Invalid signature length"))?,
-        );
+        let signature_bytes: [u8; 64] = msg.signature
+            .clone()
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("Invalid signature length"))?;
+        let signature = Signature::from_bytes(&signature_bytes);
 
         public_key
             .verify(&signature_data, &signature)

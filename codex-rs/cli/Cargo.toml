@@ -14,7 +14,7 @@ path = "src/lib.rs"
 [features]
 default = []
 windows-ai = ["codex-core/windows-ai", "codex-windows-ai"]
-cuda = []
+cuda = ["codex-cuda-runtime"]
 
 [lints]
 workspace = true
@@ -30,6 +30,7 @@ codex-chatgpt = { workspace = true }
 codex-cloud-tasks = { path = "../cloud-tasks" }
 codex-common = { workspace = true, features = ["cli"] }
 codex-core = { workspace = true }
+codex-cuda-runtime = { path = "../cuda-runtime", optional = true }
 codex-windows-ai = { path = "../windows-ai", optional = true }
 codex-deep-research = { workspace = true }
 codex-exec = { workspace = true }
@@ -55,6 +56,7 @@ serde_json = { workspace = true }
 slug = "0.1"
 supports-color = { workspace = true }
 toml = { workspace = true }
+tracing = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",

@@ -102,7 +102,7 @@ pub async fn run_delegate_command(
     let runtime_budget = resolve_runtime_budget(&config, DEFAULT_SUBAGENT_RUNTIME_BUDGET);
 
     let reasoning_effort = config.model_reasoning_effort.unwrap_or_default();
-    let reasoning_summary = config.model_reasoning_summary.unwrap_or_default();
+    let reasoning_summary = config.model_reasoning_summary;
     let verbosity = config.model_verbosity.unwrap_or_default();
 
     let runtime = AgentRuntime::new(

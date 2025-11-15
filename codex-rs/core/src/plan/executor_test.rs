@@ -7,6 +7,7 @@ mod tests {
 
     #[test]
     fn test_Plan_can_execute() {
+        #[allow(non_snake_case)]
         let mut Plan = create_test_Plan();
         
         // Should not be executable in Drafting state

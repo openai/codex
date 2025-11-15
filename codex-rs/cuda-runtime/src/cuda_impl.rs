@@ -140,6 +140,7 @@ impl CudaRuntimeImpl {
 /// 
 /// NOTE: T must implement DeviceCopy trait (required by cust::memory::DeviceBuffer)
 pub struct DeviceBufferImpl<T: DeviceCopy> {
+    #[allow(dead_code)] // Reserved for future device-to-host copy operations
     buffer: DeviceBuffer<T>, // Used for device-to-host copy operations
     len: usize, // Store length separately as DeviceBuffer may not have len() method
 }

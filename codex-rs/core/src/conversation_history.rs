@@ -10,14 +10,20 @@ use codex_utils_string::take_last_bytes_at_char_boundary;
 use std::ops::Deref;
 
 // Model-formatting limits: clients get full streams; only content sent to the model is truncated.
+#[allow(dead_code)]
 pub(crate) const MODEL_FORMAT_MAX_BYTES: usize = 10 * 1024; // 10 KiB
+#[allow(dead_code)]
 pub(crate) const MODEL_FORMAT_MAX_LINES: usize = 256; // lines
+#[allow(dead_code)]
 pub(crate) const MODEL_FORMAT_HEAD_LINES: usize = MODEL_FORMAT_MAX_LINES / 2;
+#[allow(dead_code)]
 pub(crate) const MODEL_FORMAT_TAIL_LINES: usize = MODEL_FORMAT_MAX_LINES - MODEL_FORMAT_HEAD_LINES; // 128
+#[allow(dead_code)]
 pub(crate) const MODEL_FORMAT_HEAD_BYTES: usize = MODEL_FORMAT_MAX_BYTES / 2;
 
 /// Transcript of conversation history
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
 pub(crate) struct ConversationHistory {
     /// The oldest items are at the beginning of the vector.
     items: Vec<ResponseItem>,
@@ -398,6 +404,7 @@ impl ConversationHistory {
     }
 }
 
+#[allow(dead_code)]
 fn globally_truncate_function_output_items(
     items: &[FunctionCallOutputContentItem],
 ) -> Vec<FunctionCallOutputContentItem> {
@@ -445,6 +452,7 @@ fn globally_truncate_function_output_items(
     out
 }
 
+#[allow(dead_code)]
 pub(crate) fn format_output_for_model_body(content: &str) -> String {
     // Head+tail truncation for the model: show the beginning and end with an elision.
     // Clients still receive full streams; only this formatted summary is capped.
@@ -456,6 +464,7 @@ pub(crate) fn format_output_for_model_body(content: &str) -> String {
     format!("Total output lines: {total_lines}\n\n{output}")
 }
 
+#[allow(dead_code)]
 fn truncate_formatted_exec_output(content: &str, total_lines: usize) -> String {
     let segments: Vec<&str> = content.split_inclusive('\n').collect();
     let head_take = MODEL_FORMAT_HEAD_LINES.min(segments.len());
@@ -518,6 +527,7 @@ fn truncate_formatted_exec_output(content: &str, total_lines: usize) -> String {
 
 /// API messages include every non-system item (user/assistant messages, reasoning,
 /// tool calls, tool outputs, shell calls, and web-search calls).
+#[allow(dead_code)]
 fn is_api_message(message: &ResponseItem) -> bool {
     match message {
         ResponseItem::Message { role, .. } => role.as_str() != "system",

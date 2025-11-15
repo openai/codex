@@ -63,6 +63,7 @@ impl PlanManager {
     }
 
     /// Create a new Plan
+    #[allow(non_snake_case)]
     pub fn create_Plan(
         &self,
         goal: String,
@@ -90,6 +91,7 @@ impl PlanManager {
     }
 
     /// Get a Plan by ID
+    #[allow(non_snake_case)]
     pub fn get_Plan(&self, id: &str) -> Result<PlanBlock> {
         // Try memory first
         {
@@ -115,6 +117,7 @@ impl PlanManager {
     }
 
     /// Update a Plan (creates new version if scope changes)
+    #[allow(non_snake_case)]
     pub fn update_Plan(&self, id: &str, update_fn: impl FnOnce(&mut PlanBlock)) -> Result<String> {
         let mut bp = self.get_Plan(id)?;
 
@@ -158,6 +161,7 @@ impl PlanManager {
     }
 
     /// Approve a Plan
+    #[allow(non_snake_case)]
     pub fn approve_Plan(
         &self,
         id: &str,
@@ -183,6 +187,7 @@ impl PlanManager {
     }
 
     /// Reject a Plan
+    #[allow(non_snake_case)]
     pub fn reject_Plan(&self, id: &str, reason: String, rejector: Option<String>) -> Result<()> {
         let mut bp = self.get_Plan(id)?;
         bp.state = bp.state.reject(reason, rejector)?;
@@ -199,6 +204,7 @@ impl PlanManager {
     }
 
     /// Supersede a Plan with a new version
+    #[allow(non_snake_case)]
     pub fn supersede_Plan(&self, id: &str, new_id: String) -> Result<()> {
         let mut bp = self.get_Plan(id)?;
         bp.state = bp.state.supersede(new_id)?;
@@ -215,6 +221,7 @@ impl PlanManager {
     }
 
     /// Export Plan to markdown and JSON
+    #[allow(non_snake_case)]
     pub fn export_Plan(&self, id: &str) -> Result<(std::path::PathBuf, std::path::PathBuf)> {
         let bp = self.get_Plan(id)?;
         self.persister.export(&bp).context("Failed to export Plan")
@@ -245,11 +252,13 @@ impl PlanManager {
     }
 
     /// List all Plan IDs
+    #[allow(non_snake_case)]
     pub fn list_Plans(&self) -> Result<Vec<String>> {
         self.persister.list_plans().context("Failed to list Plans")
     }
 
     /// Delete a Plan (soft delete - marks as superseded)
+    #[allow(non_snake_case)]
     pub fn delete_Plan(&self, id: &str) -> Result<()> {
         self.supersede_Plan(id, "deleted".to_string())
     }

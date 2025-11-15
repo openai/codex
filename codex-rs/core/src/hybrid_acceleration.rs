@@ -2,7 +2,7 @@
 //!
 //! Coordinates Windows AI API and CUDA for maximum performance
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tracing::debug;
 use tracing::info;
 
@@ -58,6 +58,7 @@ pub async fn execute_with_acceleration(
         #[cfg(all(target_os = "windows", feature = "windows-ai"))]
         AccelerationMode::WindowsAI => {
             use crate::windows_ai_integration::execute_with_windows_ai;
+            use crate::WindowsAiOptions;
 
             let win_opts = WindowsAiOptions {
                 enabled: true,

@@ -30,12 +30,14 @@ mod lock_cmd;
 mod mcp_cmd;
 mod plan_commands;
 mod webhook_cmd;
+mod wsl_paths;
 
 use crate::git_commands::GitAnalyzeCli;
 use crate::lock_cmd::LockCli;
 use crate::mcp_cmd::McpCli;
 use crate::plan_commands::PlanCli;
 use crate::webhook_cmd::WebhookCli;
+use crate::wsl_paths::normalize_for_wsl;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::features::is_known_feature_key;
@@ -742,7 +744,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             // Log Windows AI usage
             #[cfg(feature = "windows-ai")]
             {
-                if codex_windows_ai::is_windows_ai_available() {
+                if codex_windows_ai::check_windows_ai_available() {
                     eprintln!("🚀 Windows AI enabled (kernel_accelerated: {kernel_accelerated})");
                 } else {
                     eprintln!(
@@ -974,7 +976,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             }
         },
         Some(Subcommand::Plan(plan_cli)) => {
-            plan_commands::run_plan_command(plan_cli).await?;
+            plan_commands::run_Plan_command(plan_cli).await?;
         }
         Some(Subcommand::GitAnalyze(git_cli)) => {
             git_commands::run_git_analyze_command(git_cli).await?;

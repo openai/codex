@@ -22,7 +22,8 @@ pub fn analyze_commits_cuda(
     );
 
     // Initialize CUDA
-    let cuda = CudaRuntime::new(0).context("Failed to initialize CUDA - falling back to CPU")?;
+    let cuda = CudaRuntime::new(0)
+        .map_err(|e| anyhow::anyhow!("Failed to initialize CUDA - falling back to CPU: {e}"))?;
 
     let device_info = cuda.get_device_info()?;
     info!("Using GPU: {}", device_info.name);
@@ -36,12 +37,22 @@ pub fn analyze_commits_cuda(
         let commit = repo.find_commit(*oid)?;
 
         let author_email = commit.author().email().unwrap_or("unknown").to_string();
-        let author_id = *author_map
-            .entry(author_email.clone())
-            .or_insert(author_map.len());
+        let author_id = if let Some(&id) = author_map.get(&author_email) {
+            id
+        } else {
+            let id = author_map.len();
+            author_map.insert(author_email.clone(), id);
+            id
+        };
 
         let branch = get_branch_name(repo, &commit).unwrap_or_else(|| "main".to_string());
-        let branch_id = *branch_map.entry(branch.clone()).or_insert(branch_map.len());
+        let branch_id = if let Some(&id) = branch_map.get(&branch) {
+            id
+        } else {
+            let id = branch_map.len();
+            branch_map.insert(branch.clone(), id);
+            id
+        };
 
         commits_data.push(CommitData {
             sha: format!("{}", oid),
@@ -69,10 +80,10 @@ pub fn analyze_commits_cuda(
     let d_parent_counts = cuda.copy_to_device(&parent_counts)?;
     let d_branch_ids = cuda.copy_to_device(&branch_ids)?;
 
-    // Allocate output buffers
-    let mut d_x = cuda.allocate::<f32>(num_commits)?;
-    let mut d_y = cuda.allocate::<f32>(num_commits)?;
-    let mut d_z = cuda.allocate::<f32>(num_commits)?;
+    // Allocate output buffers (reserved for future CUDA kernel execution)
+    let _d_x = cuda.allocate::<f32>(num_commits)?;
+    let _d_y = cuda.allocate::<f32>(num_commits)?;
+    let _d_z = cuda.allocate::<f32>(num_commits)?;
 
     // Launch CUDA kernel (simplified - actual kernel launch via cudarc)
     debug!("Launching CUDA kernel for {num_commits} commits");
@@ -143,7 +154,9 @@ fn get_branch_name(repo: &Repository, commit: &Commit) -> Option<String> {
         if let Ok((branch, _)) = branch_result {
             if let Some(target) = branch.get().target() {
                 if target == commit.id() {
-                    return branch.name().ok().flatten().map(|s| s.to_string());
+                    if let Ok(Some(name)) = branch.name() {
+                        return Some(name.to_string());
+                    }
                 }
             }
         }
