@@ -1,8 +1,10 @@
+#![allow(clippy::expect_used)]
 use codex_core::CodexAuth;
 use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
 use codex_core::built_in_model_providers;
+use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::EventMsg;
@@ -12,7 +14,10 @@ use codex_core::protocol::RolloutLine;
 use codex_core::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
+use core_test_support::responses::ev_local_shell_call;
+use core_test_support::responses::ev_reasoning_item;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use std::collections::VecDeque;
@@ -50,10 +55,8 @@ const DUMMY_FUNCTION_NAME: &str = "unsupported_tool";
 const DUMMY_CALL_ID: &str = "call-multi-auto";
 const FUNCTION_CALL_LIMIT_MSG: &str = "function call limit push";
 const POST_AUTO_USER_MSG: &str = "post auto follow-up";
-const COMPACT_PROMPT_MARKER: &str =
-    "You are performing a CONTEXT CHECKPOINT COMPACTION for a tool.";
-pub(super) const TEST_COMPACT_PROMPT: &str =
-    "You are performing a CONTEXT CHECKPOINT COMPACTION for a tool.\nTest-only compact prompt.";
+const COMPACT_PROMPT_MARKER: &str = "You have exceeded the maximum number of tokens, please stop and write a summary of your work for the next agent. Your note should summarize what you finished and what still needs work.";
+pub(super) const TEST_COMPACT_PROMPT: &str = "You have exceeded the maximum number of tokens, please stop and write a summary of your work for the next agent. Your note should summarize what you finished and what still needs work.";
 
 pub(super) const COMPACT_WARNING_MESSAGE: &str = "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start a new conversation when possible to keep conversations small and targeted.";
 
@@ -431,6 +434,476 @@ async fn manual_compact_emits_estimated_token_usage_event() {
         last > 0,
         "second TokenCount should reflect a non-zero estimated context size after compaction"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
+    skip_if_no_network!();
+
+    let auto_compact_limit = 5000;
+
+    let server = start_mock_server().await;
+
+    let codex = test_codex()
+        .with_config(move |config| {
+            config.model_auto_compact_token_limit = Some(auto_compact_limit);
+        })
+        .build(&server)
+        .await
+        .expect("build codex")
+        .codex;
+
+    // user message
+    let user_message = "create an app";
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: user_message.into(),
+            }],
+        })
+        .await
+        .expect("submit user input");
+
+    let token_count_used = 6000;
+    let token_count_used_after_compaction = 2000;
+    let model_reasoning_response_1_sse = sse(vec![
+        ev_reasoning_item("m1", &["I will create a react app"], &[]),
+        ev_local_shell_call("r1-shell", "completed", vec!["echo", "make-react"]),
+        ev_completed_with_tokens("r1", token_count_used),
+    ]);
+    let model_compact_response_1_sse = sse(vec![
+        ev_assistant_message(
+            "m2",
+            "The task is to create an app. I started to create a react app.",
+        ),
+        ev_completed_with_tokens("r2", token_count_used_after_compaction),
+    ]);
+    let model_reasoning_response_2_sse = sse(vec![
+        ev_reasoning_item("m3", &["I will create a node app"], &[]),
+        ev_local_shell_call("r3-shell", "completed", vec!["echo", "make-node"]),
+        ev_completed_with_tokens("r3", token_count_used),
+    ]);
+    let model_compact_response_2_sse = sse(vec![
+        ev_assistant_message(
+            "m4",
+            "The task is to create an app. I started to create a react app. then I realized that I need to create a node app.",
+        ),
+        ev_completed_with_tokens("r4", token_count_used_after_compaction),
+    ]);
+    let model_reasoning_response_3_sse = sse(vec![
+        ev_reasoning_item("m6", &["I will create a python app"], &[]),
+        ev_local_shell_call("r6-shell", "completed", vec!["echo", "make-python"]),
+        ev_completed_with_tokens("r6", token_count_used),
+    ]);
+    let model_compact_response_3_sse = sse(vec![
+        ev_assistant_message(
+            "m7",
+            "The task is to create an app. I started to create a react app. then I realized that I need to create a node app. then I realized that I need to create a python app.",
+        ),
+        ev_completed_with_tokens("r7", token_count_used_after_compaction),
+    ]);
+    let model_final_response_sse = sse(vec![
+        ev_assistant_message(
+            "m8",
+            "The task is to create an app. I started to create a react app. then I realized that I need to create a node app. then I realized that I need to create a python app.",
+        ),
+        ev_completed_with_tokens("r8", token_count_used_after_compaction + 1000),
+    ]);
+
+    let bodies = vec![
+        model_reasoning_response_1_sse,
+        model_compact_response_1_sse,
+        model_reasoning_response_2_sse,
+        model_compact_response_2_sse,
+        model_reasoning_response_3_sse,
+        model_compact_response_3_sse,
+        model_final_response_sse,
+    ];
+
+    mount_sse_sequence(&server, bodies).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let requests_payloads = server.received_requests().await.unwrap();
+
+    let body = requests_payloads.clone()[0]
+        .body_json::<serde_json::Value>()
+        .unwrap();
+    let input = body.get("input").and_then(|v| v.as_array()).unwrap();
+    let environment_message = input[0]["content"][0]["text"].as_str().unwrap();
+
+    // test 1: after compaction, we should have one environment message, one user message, and one user message with summary prefix
+    let compaction_indices = [2, 4, 6];
+    for i in compaction_indices {
+        let body = requests_payloads.clone()[i]
+            .body_json::<serde_json::Value>()
+            .unwrap();
+        let input = body.get("input").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(input.len(), 3);
+        let environment_message = input[0]["content"][0]["text"].as_str().unwrap();
+        let user_message = input[1]["content"][0]["text"].as_str().unwrap();
+        let summary_prefix = input[2]["content"][0]["text"].as_str().unwrap();
+        assert_eq!(environment_message, environment_message);
+        assert_eq!(user_message, "create an app");
+        assert!(summary_prefix.starts_with(format!("{SUMMARY_PREFIX}\n").as_str()));
+    }
+
+    let expected_requests_inputs = json!([
+    [
+        // 0
+      {
+        "content": [
+          {
+            "text": environment_message,
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": [
+          {
+            "text": "create an app",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      }
+    ]
+    ,
+    [
+        // 1
+      {
+        "content": [
+          {
+            "text": environment_message,
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": [
+          {
+            "text": "create an app",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": null,
+        "encrypted_content": null,
+        "summary": [
+          {
+            "text": "I will create a react app",
+            "type": "summary_text"
+          }
+        ],
+        "type": "reasoning"
+      },
+      {
+        "action": {
+          "command": [
+            "echo",
+            "make-react"
+          ],
+          "env": null,
+          "timeout_ms": null,
+          "type": "exec",
+          "user": null,
+          "working_directory": null
+        },
+        "call_id": "r1-shell",
+        "status": "completed",
+        "type": "local_shell_call"
+      },
+      {
+        "call_id": "r1-shell",
+        "output": "execution error: Io(Os { code: 2, kind: NotFound, message: \"No such file or directory\" })",
+        "type": "function_call_output"
+      },
+      {
+        "content": [
+          {
+            "text": "You have exceeded the maximum number of tokens, please stop and write a summary of your work for the next agent. Your note should summarize what you finished and what still needs work.",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      }
+    ]
+    ,
+    [
+      // 2
+      {
+        "content": [
+          {
+            "text": environment_message,
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": [
+          {
+            "text": "create an app",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": [
+          {
+            "text": "Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to  assist with your own analysis:\nThe task is to create an app. I started to create a react app.",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      }
+    ]
+    ,
+    [
+        // 3
+      {
+        "content": [
+          {
+            "text": environment_message,
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": [
+          {
+            "text": "create an app",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": [
+          {
+            "text": "Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to  assist with your own analysis:\nThe task is to create an app. I started to create a react app.",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": null,
+        "encrypted_content": null,
+        "summary": [
+          {
+            "text": "I will create a node app",
+            "type": "summary_text"
+          }
+        ],
+        "type": "reasoning"
+      },
+      {
+        "action": {
+          "command": [
+            "echo",
+            "make-node"
+          ],
+          "env": null,
+          "timeout_ms": null,
+          "type": "exec",
+          "user": null,
+          "working_directory": null
+        },
+        "call_id": "r3-shell",
+        "status": "completed",
+        "type": "local_shell_call"
+      },
+      {
+        "call_id": "r3-shell",
+        "output": "execution error: Io(Os { code: 2, kind: NotFound, message: \"No such file or directory\" })",
+        "type": "function_call_output"
+      },
+      {
+        "content": [
+          {
+            "text": "You have exceeded the maximum number of tokens, please stop and write a summary of your work for the next agent. Your note should summarize what you finished and what still needs work.",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      }
+    ]
+    ,
+    // 4
+    [
+      {
+        "content": [
+          {
+            "text": environment_message,
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": [
+          {
+            "text": "create an app",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": [
+          {
+            "text": "Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to  assist with your own analysis:\nThe task is to create an app. I started to create a react app. then I realized that I need to create a node app.",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      }
+    ]
+    ,
+    [
+      // 5
+      {
+        "content": [
+          {
+            "text": environment_message,
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": [
+          {
+            "text": "create an app",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": [
+          {
+            "text": "Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to  assist with your own analysis:\nThe task is to create an app. I started to create a react app. then I realized that I need to create a node app.",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": null,
+        "encrypted_content": null,
+        "summary": [
+          {
+            "text": "I will create a python app",
+            "type": "summary_text"
+          }
+        ],
+        "type": "reasoning"
+      },
+      {
+        "action": {
+          "command": [
+            "echo",
+            "make-python"
+          ],
+          "env": null,
+          "timeout_ms": null,
+          "type": "exec",
+          "user": null,
+          "working_directory": null
+        },
+        "call_id": "r6-shell",
+        "status": "completed",
+        "type": "local_shell_call"
+      },
+      {
+        "call_id": "r6-shell",
+        "output": "execution error: Io(Os { code: 2, kind: NotFound, message: \"No such file or directory\" })",
+        "type": "function_call_output"
+      },
+      {
+        "content": [
+          {
+            "text": "You have exceeded the maximum number of tokens, please stop and write a summary of your work for the next agent. Your note should summarize what you finished and what still needs work.",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      }
+    ]
+    ,
+    [
+      {
+        // 6
+        "content": [
+          {
+            "text": environment_message,
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": [
+          {
+            "text": "create an app",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      },
+      {
+        "content": [
+          {
+            "text": "Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to  assist with your own analysis:\nThe task is to create an app. I started to create a react app. then I realized that I need to create a node app. then I realized that I need to create a python app.",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      }
+    ]
+    ]);
+
+    assert_eq!(requests_payloads.len(), 7);
+
+    for (i, request) in requests_payloads.iter().enumerate() {
+        let body = request.body_json::<serde_json::Value>().unwrap();
+        let input = body.get("input").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(
+            input.as_slice(),
+            expected_requests_inputs[i].as_array().unwrap().as_slice()
+        );
+    }
 }
 
 // Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.

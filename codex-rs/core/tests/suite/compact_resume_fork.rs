@@ -38,8 +38,7 @@ use tempfile::TempDir;
 use wiremock::MockServer;
 
 const AFTER_SECOND_RESUME: &str = "AFTER_SECOND_RESUME";
-const COMPACT_PROMPT_MARKER: &str =
-    "You are performing a CONTEXT CHECKPOINT COMPACTION for a tool.";
+const COMPACT_PROMPT_MARKER: &str = "You have exceeded the maximum number of tokens, please stop and write a summary of your work for the next agent. Your note should summarize what you finished and what still needs work.";
 
 fn network_disabled() -> bool {
     std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok()
