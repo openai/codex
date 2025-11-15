@@ -63,8 +63,7 @@ pub mod types;
 pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5";
 #[cfg(not(target_os = "windows"))]
 pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5-codex";
-const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5-codex";
-pub const GPT_5_CODEX_MEDIUM_MODEL: &str = "gpt-5-codex";
+const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5.1-codex";
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
@@ -79,7 +78,7 @@ pub struct Config {
     /// Optional override of model selection.
     pub model: String,
 
-    /// Model used specifically for review sessions. Defaults to "gpt-5-codex".
+    /// Model used specifically for review sessions. Defaults to "gpt-5.1-codex".
     pub review_model: String,
 
     pub model_family: ModelFamily,
