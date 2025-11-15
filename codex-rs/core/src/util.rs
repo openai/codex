@@ -16,7 +16,12 @@ pub(crate) fn backoff(attempt: u64) -> Duration {
 
 pub(crate) fn error_or_panic(message: String) {
     if cfg!(debug_assertions) || env!("CARGO_PKG_VERSION").contains("alpha") {
-        panic!("{message}");
+        error!("{message}");
+        panic!(
+            "This is an intentional panic to catch errors in debug and alpha builds. 
+            If you don't know why this panic is happening, please report the issue to the Codex team in the appropriate channels including `/feedback`.
+             {message}"
+        );
     } else {
         error!("{message}");
     }
