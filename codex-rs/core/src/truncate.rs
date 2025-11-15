@@ -6,8 +6,6 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_utils_string::take_bytes_at_char_boundary;
 use codex_utils_string::take_last_bytes_at_char_boundary;
 use codex_utils_tokenizer::Tokenizer;
-use serde_json::Value;
-use crate::util::error_or_panic;
 
 /// Model-formatting limits: clients get full streams; only content sent to the model is truncated.
 pub const MODEL_FORMAT_MAX_BYTES: usize = 10 * 1024; // 10 KiB
@@ -150,20 +148,10 @@ fn truncate_formatted_exec_output(
 }
 
 fn debug_panic_on_double_truncation(content: &str) {
-    if let Ok(json) = serde_json::from_str::<Value>(content) {
-        if let Some(output) = json.get("output")
-            && let Some(text) = output.as_str()
-            && text.starts_with("Total output lines:")
-            && text.contains("omitted")
-        {
-            error_or_panic(format!(
-                "FunctionCallOutput content was already truncated before ContextManager::record_items; this would cause double truncation {content}"
-            ));
-        }
-    } else if content.starts_with("Total output lines:") && content.contains("omitted") {
-        error_or_panic(format!(
+    if content.contains("Total output lines:") && content.contains("omitted") {
+        tracing::error!(
             "FunctionCallOutput content was already truncated before ContextManager::record_items; this would cause double truncation {content}"
-        ));
+        );
     }
 }
 
