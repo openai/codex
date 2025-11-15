@@ -7,7 +7,7 @@
 **v2.2.0 "Extended Features" - The World's First AI-Native Operating System**
 
 [![Version](https://img.shields.io/badge/version-2.2.0-blue.svg)](https://github.com/zapabob/codex)
-[![npm](https://img.shields.io/npm/v/@zapabob/codex-cli)](https://www.npmjs.com/package/@zapabob/codex-cli)
+[![npm](https://img.shields.io/npm/v/@zapabob/codex)](https://www.npmjs.com/package/@zapabob/codex)
 [![Rust](https://img.shields.io/badge/rust-2024%20edition-orange)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](LICENSE)
 [![CUDA](https://img.shields.io/badge/CUDA-12.x-76B900)](https://developer.nvidia.com/cuda-toolkit)
@@ -263,7 +263,7 @@ codex-gui
 
 ```bash
 # Install globally
-npm install -g @zapabob/codex-cli
+npm install -g @zapabob/codex
 
 # Verify installation
 codex --version  # codex-cli 2.1.0
@@ -731,10 +731,10 @@ Apache License 2.0 - See [LICENSE](./LICENSE)
 
 ```bash
 # グローバルインストール
-npm install -g @zapabob/codex-cli
+npm install -g @zapabob/codex
 
 # インストール確認
-codex --version  # codex-cli 2.0.0
+codex --version  # codex-cli 2.1.0
 
 # 初期設定
 codex login  # API key設定

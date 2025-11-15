@@ -1,0 +1,74 @@
+# Development files
+node_modules/
+.git/
+.github/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build artifacts
+target/
+dist/
+build/
+*.log
+*.tmp
+
+# Documentation (keep README.md)
+docs/
+_docs/
+*.md
+!README.md
+
+# Test files
+test/
+tests/
+*.test.js
+*.spec.js
+__tests__/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+.circleci/
+
+# IDE
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+*.orig
+
+# Rust specific
+Cargo.lock
+Cargo.toml
+rust-toolchain.toml
+rustfmt.toml
+clippy.toml
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+env/
+.venv/
+
+# TypeScript
+*.tsbuildinfo
+tsconfig.json
+
+# Misc
+.env
+.env.local
+*.pem
+*.key
+
