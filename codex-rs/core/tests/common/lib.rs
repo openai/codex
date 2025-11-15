@@ -152,9 +152,15 @@ where
 {
     use tokio::time::Duration;
     use tokio::time::timeout;
+    // Windows ARM runners are slower to schedule async tasks; give them
+    // a larger floor to reduce spurious timeouts in CI.
+    #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+    const MIN_WAIT: Duration = Duration::from_secs(15);
+    #[cfg(not(all(target_os = "windows", target_arch = "aarch64")))]
+    const MIN_WAIT: Duration = Duration::from_secs(5);
     loop {
         // Allow a bit more time to accommodate async startup work (e.g. config IO, tool discovery)
-        let ev = timeout(wait_time.max(Duration::from_secs(5)), codex.next_event())
+        let ev = timeout(wait_time.max(MIN_WAIT), codex.next_event())
             .await
             .expect("timeout waiting for event")
             .expect("stream ended unexpectedly");

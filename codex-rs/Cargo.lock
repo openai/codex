@@ -904,6 +904,8 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "assert_matches",
+ "clap",
+ "pathdiff",
  "pretty_assertions",
  "similar",
  "tempfile",

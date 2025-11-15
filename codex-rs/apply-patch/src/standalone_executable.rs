@@ -1,3 +1,4 @@
+use clap::Parser;
 use std::io::Read;
 use std::io::Write;
 
@@ -9,25 +10,30 @@ pub fn main() -> ! {
 /// We would prefer to return `std::process::ExitCode`, but its `exit_process()`
 /// method is still a nightly API and we want main() to return !.
 pub fn run_main() -> i32 {
-    // Expect either one argument (the full apply_patch payload) or read it from stdin.
-    let mut args = std::env::args_os();
-    let _argv0 = args.next();
+    let cli = Cli::parse();
 
-    let patch_arg = match args.next() {
-        Some(arg) => match arg.into_string() {
-            Ok(s) => s,
-            Err(_) => {
-                eprintln!("Error: apply_patch requires a UTF-8 PATCH argument.");
-                return 1;
+    // CLI overrides env; if not provided, respect env via default inside eol module
+    if let Some(val) = cli.assume_eol.as_deref() {
+        match crate::eol::parse_assume_eol(val) {
+            Some(sel) => crate::eol::set_assume_eol(sel),
+            None => {
+                eprintln!("Error: invalid --assume-eol value: {val}");
+                return 2;
             }
-        },
+        }
+    }
+
+    let patch_arg = match cli.patch {
+        Some(s) => s,
         None => {
-            // No argument provided; attempt to read the patch from stdin.
+            // No positional provided; attempt to read the patch from stdin.
             let mut buf = String::new();
             match std::io::stdin().read_to_string(&mut buf) {
                 Ok(_) => {
                     if buf.is_empty() {
-                        eprintln!("Usage: apply_patch 'PATCH'\n       echo 'PATCH' | apply-patch");
+                        eprintln!(
+                            "Usage: apply_patch [-E|--assume-eol=lf|crlf|git|detect] 'PATCH'\n       echo 'PATCH' | apply_patch"
+                        );
                         return 2;
                     }
                     buf
@@ -40,12 +46,6 @@ pub fn run_main() -> i32 {
         }
     };
 
-    // Refuse extra args to avoid ambiguity.
-    if args.next().is_some() {
-        eprintln!("Error: apply_patch accepts exactly one argument.");
-        return 2;
-    }
-
     let mut stdout = std::io::stdout();
     let mut stderr = std::io::stderr();
     match crate::apply_patch(&patch_arg, &mut stdout, &mut stderr) {
@@ -56,4 +56,20 @@ pub fn run_main() -> i32 {
         }
         Err(_) => 1,
     }
+}
+
+#[derive(Parser, Debug)]
+#[command(
+    author,
+    version,
+    about = "Apply a simple patch format to the filesystem",
+    disable_help_subcommand = true
+)]
+struct Cli {
+    /// Assume EOL policy for writes: lf|crlf|git|detect (CLI overrides env)
+    #[arg(short = 'E', long = "assume-eol", value_name = "MODE")]
+    assume_eol: Option<String>,
+
+    /// The raw patch body; if omitted, reads from stdin
+    patch: Option<String>,
 }
