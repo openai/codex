@@ -62,8 +62,6 @@ use tempfile::tempdir;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::unbounded_channel;
 
-const TEST_WARNING_MESSAGE: &str = "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start a new conversation when possible to keep conversations small and targeted.";
-
 fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
     Config::load_from_base_config_with_overrides(
@@ -336,6 +334,7 @@ fn make_chatwidget_manual() -> (
         stream_controller: None,
         running_commands: HashMap::new(),
         task_complete_pending: false,
+        mcp_startup_status: None,
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
@@ -2692,7 +2691,7 @@ fn warning_event_adds_warning_history_cell() {
     chat.handle_codex_event(Event {
         id: "sub-1".into(),
         msg: EventMsg::Warning(WarningEvent {
-            message: TEST_WARNING_MESSAGE.to_string(),
+            message: "test warning message".to_string(),
         }),
     });
 
@@ -2700,7 +2699,7 @@ fn warning_event_adds_warning_history_cell() {
     assert_eq!(cells.len(), 1, "expected one warning history cell");
     let rendered = lines_to_single_string(&cells[0]);
     assert!(
-        rendered.contains(TEST_WARNING_MESSAGE),
+        rendered.contains("test warning message"),
         "warning cell missing content: {rendered}"
     );
 }

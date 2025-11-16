@@ -27,6 +27,9 @@ use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::ListCustomPromptsResponseEvent;
 use codex_core::protocol::McpListToolsResponseEvent;
+use codex_core::protocol::McpStartupCompleteEvent;
+use codex_core::protocol::McpStartupStatus;
+use codex_core::protocol::McpStartupUpdateEvent;
 use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
@@ -259,6 +262,7 @@ pub(crate) struct ChatWidget {
     stream_controller: Option<StreamController>,
     running_commands: HashMap<String, RunningCommand>,
     task_complete_pending: bool,
+    mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
     // Accumulates the current reasoning block text to extract a header
@@ -567,8 +571,76 @@ impl ChatWidget {
         self.maybe_send_next_queued_input();
     }
 
-    fn on_warning(&mut self, message: String) {
-        self.add_to_history(history_cell::new_warning_event(message));
+    fn on_warning(&mut self, message: impl Into<String>) {
+        self.add_to_history(history_cell::new_warning_event(message.into()));
+        self.request_redraw();
+    }
+
+    fn on_mcp_startup_update(&mut self, ev: McpStartupUpdateEvent) {
+        let mut status = self.mcp_startup_status.take().unwrap_or_default();
+        if let McpStartupStatus::Failed { error } = &ev.status {
+            self.on_warning(error);
+        }
+        status.insert(ev.server, ev.status);
+        self.mcp_startup_status = Some(status);
+        self.bottom_pane.set_task_running(true);
+        if let Some(current) = &self.mcp_startup_status {
+            let total = current.len();
+            let mut starting: Vec<_> = current
+                .iter()
+                .filter_map(|(name, state)| {
+                    if matches!(state, McpStartupStatus::Starting) {
+                        Some(name)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            starting.sort();
+            if let Some(first) = starting.first() {
+                let completed = total.saturating_sub(starting.len());
+                let max_to_show = 3;
+                let mut to_show: Vec<String> = starting
+                    .iter()
+                    .take(max_to_show)
+                    .map(ToString::to_string)
+                    .collect();
+                if starting.len() > max_to_show {
+                    to_show.push("…".to_string());
+                }
+                let header = if total > 1 {
+                    format!(
+                        "Starting MCP servers ({completed}/{total}): {}",
+                        to_show.join(", ")
+                    )
+                } else {
+                    format!("Booting MCP server: {first}")
+                };
+                self.set_status_header(header);
+            }
+        }
+        self.request_redraw();
+    }
+
+    fn on_mcp_startup_complete(&mut self, ev: McpStartupCompleteEvent) {
+        let mut parts = Vec::new();
+        if !ev.failed.is_empty() {
+            let failed_servers: Vec<_> = ev.failed.iter().map(|f| f.server.clone()).collect();
+            parts.push(format!("failed: {}", failed_servers.join(", ")));
+        }
+        if !ev.cancelled.is_empty() {
+            self.on_warning(format!(
+                "MCP startup interrupted. The following servers were not initialized: {}",
+                ev.cancelled.join(", ")
+            ));
+        }
+        if !parts.is_empty() {
+            self.on_warning(format!("MCP startup incomplete ({})", parts.join("; ")));
+        }
+
+        self.mcp_startup_status = None;
+        self.bottom_pane.set_task_running(false);
+        self.maybe_send_next_queued_input();
         self.request_redraw();
     }
 
@@ -1061,6 +1133,7 @@ impl ChatWidget {
             stream_controller: None,
             running_commands: HashMap::new(),
             task_complete_pending: false,
+            mcp_startup_status: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -1128,6 +1201,7 @@ impl ChatWidget {
             stream_controller: None,
             running_commands: HashMap::new(),
             task_complete_pending: false,
+            mcp_startup_status: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -1540,6 +1614,8 @@ impl ChatWidget {
             }
             EventMsg::Warning(WarningEvent { message }) => self.on_warning(message),
             EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
+            EventMsg::McpStartupUpdate(ev) => self.on_mcp_startup_update(ev),
+            EventMsg::McpStartupComplete(ev) => self.on_mcp_startup_complete(ev),
             EventMsg::TurnAborted(ev) => match ev.reason {
                 TurnAbortReason::Interrupted => {
                     self.on_interrupted_turn(ev.reason);

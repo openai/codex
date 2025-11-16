@@ -279,20 +279,23 @@ impl BottomPane {
     // esc_backtrack_hint_visible removed; hints are controlled internally.
 
     pub fn set_task_running(&mut self, running: bool) {
+        let was_running = self.is_task_running;
         self.is_task_running = running;
         self.composer.set_task_running(running);
 
         if running {
-            if self.status.is_none() {
-                self.status = Some(StatusIndicatorWidget::new(
-                    self.app_event_tx.clone(),
-                    self.frame_requester.clone(),
-                ));
+            if !was_running {
+                if self.status.is_none() {
+                    self.status = Some(StatusIndicatorWidget::new(
+                        self.app_event_tx.clone(),
+                        self.frame_requester.clone(),
+                    ));
+                }
+                if let Some(status) = self.status.as_mut() {
+                    status.set_interrupt_hint_visible(true);
+                }
+                self.request_redraw();
             }
-            if let Some(status) = self.status.as_mut() {
-                status.set_interrupt_hint_visible(true);
-            }
-            self.request_redraw();
         } else {
             // Hide the status indicator when a task completes, but keep other modal views.
             self.hide_status_indicator();

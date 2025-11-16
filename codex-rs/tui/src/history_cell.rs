@@ -1018,10 +1018,8 @@ fn try_new_completed_mcp_tool_call_with_image_output(
 }
 
 #[allow(clippy::disallowed_methods)]
-pub(crate) fn new_warning_event(message: String) -> PlainHistoryCell {
-    PlainHistoryCell {
-        lines: vec![vec![format!("⚠ {message}").yellow()].into()],
-    }
+pub(crate) fn new_warning_event(message: String) -> PrefixedWrappedHistoryCell {
+    PrefixedWrappedHistoryCell::new(message.yellow(), "⚠ ".yellow(), "  ")
 }
 
 #[derive(Debug)]

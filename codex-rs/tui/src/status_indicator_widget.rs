@@ -145,7 +145,6 @@ impl Renderable for StatusIndicatorWidget {
         let elapsed_duration = self.elapsed_duration_at(now);
         let pretty_elapsed = fmt_elapsed_compact(elapsed_duration.as_secs());
 
-        // Plain rendering: no borders or padding so the live cell is visually indistinguishable from terminal scrollback.
         let mut spans = Vec::with_capacity(5);
         spans.push(spinner(Some(self.last_resume_at)));
         spans.push(" ".into());
