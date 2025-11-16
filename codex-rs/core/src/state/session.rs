@@ -20,7 +20,9 @@ impl SessionState {
     pub(crate) fn new(session_configuration: SessionConfiguration) -> Self {
         Self {
             session_configuration,
-            history: ContextManager::new(),
+            history: ContextManager::with_function_output_limit(
+                session_configuration.context_manager_function_output_max_tokens(),
+            ),
             latest_rate_limits: None,
         }
     }

@@ -10,6 +10,7 @@ use codex_protocol::models::LocalShellExecAction;
 use codex_protocol::models::LocalShellStatus;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
+use codex_utils_tokenizer::Tokenizer;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 
@@ -237,6 +238,7 @@ fn normalization_retains_local_shell_outputs() {
 #[test]
 fn record_items_truncates_function_call_output_content() {
     let mut history = ContextManager::new();
+    let tok = Tokenizer::try_default().expect("load tokenizer");
     let long_line = "a very long line to trigger truncation\n";
     let long_output = long_line.repeat(2_500);
     let item = ResponseItem::FunctionCallOutput {
@@ -255,9 +257,14 @@ fn record_items_truncates_function_call_output_content() {
         ResponseItem::FunctionCallOutput { output, .. } => {
             assert_ne!(output.content, long_output);
             assert!(
-                output.content.starts_with("Total output lines:"),
-                "expected truncated summary, got {}",
+                output.content.contains("tokens truncated"),
+                "expected token-based truncation marker, got {}",
                 output.content
+            );
+            let token_count = usize::try_from(tok.count(&output.content)).unwrap_or(usize::MAX);
+            assert!(
+                token_count <= truncate::DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT,
+                "token count should not exceed limit: {token_count}"
             );
         }
         other => panic!("unexpected history item: {other:?}"),
@@ -267,6 +274,7 @@ fn record_items_truncates_function_call_output_content() {
 #[test]
 fn record_items_truncates_custom_tool_call_output_content() {
     let mut history = ContextManager::new();
+    let tok = Tokenizer::try_default().expect("load tokenizer");
     let line = "custom output that is very long\n";
     let long_output = line.repeat(2_500);
     let item = ResponseItem::CustomToolCallOutput {
@@ -281,12 +289,45 @@ fn record_items_truncates_custom_tool_call_output_content() {
         ResponseItem::CustomToolCallOutput { output, .. } => {
             assert_ne!(output, &long_output);
             assert!(
-                output.starts_with("Total output lines:"),
-                "expected truncated summary, got {output}"
+                output.contains("tokens truncated"),
+                "expected token-based truncation marker, got {output}"
+            );
+            let token_count = usize::try_from(tok.count(output)).unwrap_or(usize::MAX);
+            assert!(
+                token_count <= truncate::DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT,
+                "token count should not exceed limit: {token_count}"
             );
         }
         other => panic!("unexpected history item: {other:?}"),
     }
+}
+
+#[test]
+fn record_items_respects_custom_token_limit() {
+    let mut history = ContextManager::with_function_output_limit(8);
+    let tok = Tokenizer::try_default().expect("load tokenizer");
+    let long_output = "tokenized content repeated many times ".repeat(200);
+    let item = ResponseItem::FunctionCallOutput {
+        call_id: "call-custom-limit".to_string(),
+        output: FunctionCallOutputPayload {
+            content: long_output,
+            success: Some(true),
+            ..Default::default()
+        },
+    };
+
+    history.record_items([&item]);
+
+    let stored = match &history.items[0] {
+        ResponseItem::FunctionCallOutput { output, .. } => output,
+        other => panic!("unexpected history item: {other:?}"),
+    };
+    let stored_tokens = usize::try_from(tok.count(&stored.content)).unwrap_or(usize::MAX);
+    assert!(stored.content.contains("tokens truncated"));
+    assert!(
+        stored_tokens <= 8,
+        "stored_tokens should be <= 8, got {stored_tokens}"
+    );
 }
 
 fn assert_truncated_message_matches(message: &str, line: &str, total_lines: usize) {

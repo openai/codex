@@ -67,7 +67,7 @@ use crate::error::Result as CodexResult;
 use crate::exec::StreamOutput;
 // Removed: legacy executor wiring replaced by ToolOrchestrator flows.
 // legacy normalize_exec_result no longer used after orchestrator migration
-use crate::compact::build_compacted_history;
+use crate::compact::build_token_limited_compacted_history;
 use crate::compact::collect_user_messages;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
@@ -183,6 +183,8 @@ impl Codex {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: config.features.clone(),
+            context_manager_function_output_max_tokens: config
+                .context_manager_function_output_max_tokens,
             session_source,
         };
 
@@ -337,6 +339,8 @@ pub(crate) struct SessionConfiguration {
     /// Set of feature flags for this session
     features: Features,
 
+    context_manager_function_output_max_tokens: usize,
+
     // TODO(pakrym): Remove config from here
     original_config_do_not_use: Arc<Config>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
@@ -365,6 +369,10 @@ impl SessionConfiguration {
             next_configuration.cwd = cwd;
         }
         next_configuration
+    }
+
+    pub(crate) fn context_manager_function_output_max_tokens(&self) -> usize {
+        self.context_manager_function_output_max_tokens
     }
 }
 
@@ -987,7 +995,7 @@ impl Session {
                 RolloutItem::Compacted(compacted) => {
                     let snapshot = history.get_history();
                     let user_messages = collect_user_messages(&snapshot);
-                    let rebuilt = build_compacted_history(
+                    let rebuilt = build_token_limited_compacted_history(
                         self.build_initial_context(turn_context),
                         &user_messages,
                         &compacted.message,
@@ -2600,6 +2608,8 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
+            context_manager_function_output_max_tokens: config
+                .context_manager_function_output_max_tokens,
             session_source: SessionSource::Exec,
         };
 
@@ -2676,6 +2686,8 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
+            context_manager_function_output_max_tokens: config
+                .context_manager_function_output_max_tokens,
             session_source: SessionSource::Exec,
         };
 
@@ -2933,7 +2945,7 @@ mod tests {
         let summary1 = "summary one";
         let snapshot1 = live_history.get_history();
         let user_messages1 = collect_user_messages(&snapshot1);
-        let rebuilt1 = build_compacted_history(
+        let rebuilt1 = build_token_limited_compacted_history(
             session.build_initial_context(turn_context),
             &user_messages1,
             summary1,
@@ -2966,7 +2978,7 @@ mod tests {
         let summary2 = "summary two";
         let snapshot2 = live_history.get_history();
         let user_messages2 = collect_user_messages(&snapshot2);
-        let rebuilt2 = build_compacted_history(
+        let rebuilt2 = build_token_limited_compacted_history(
             session.build_initial_context(turn_context),
             &user_messages2,
             summary2,

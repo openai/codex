@@ -1,8 +1,8 @@
 use crate::codex::TurnContext;
 use crate::context_manager::normalize;
-use crate::truncate;
-use crate::truncate::format_output_for_model_body;
-use crate::truncate::globally_truncate_function_output_items;
+use crate::truncate::DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT;
+use crate::truncate::truncate_function_output_items_to_token_limit;
+use crate::truncate::truncate_middle;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
@@ -10,25 +10,25 @@ use codex_protocol::protocol::TokenUsageInfo;
 use codex_utils_tokenizer::Tokenizer;
 use std::ops::Deref;
 
-const CONTEXT_WINDOW_HARD_LIMIT_FACTOR: f64 = 1.1;
-const CONTEXT_WINDOW_HARD_LIMIT_BYTES: usize =
-    (truncate::MODEL_FORMAT_MAX_BYTES as f64 * CONTEXT_WINDOW_HARD_LIMIT_FACTOR) as usize;
-const CONTEXT_WINDOW_HARD_LIMIT_LINES: usize =
-    (truncate::MODEL_FORMAT_MAX_LINES as f64 * CONTEXT_WINDOW_HARD_LIMIT_FACTOR) as usize;
-
 /// Transcript of conversation history
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct ContextManager {
     /// The oldest items are at the beginning of the vector.
     items: Vec<ResponseItem>,
     token_info: Option<TokenUsageInfo>,
+    function_output_max_tokens: usize,
 }
 
 impl ContextManager {
     pub(crate) fn new() -> Self {
+        Self::with_function_output_limit(DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT)
+    }
+
+    pub(crate) fn with_function_output_limit(max_tokens: usize) -> Self {
         Self {
             items: Vec::new(),
             token_info: TokenUsageInfo::new_or_append(&None, &None, None),
+            function_output_max_tokens: max_tokens,
         }
     }
 
@@ -62,7 +62,7 @@ impl ContextManager {
                 continue;
             }
 
-            let processed = Self::process_item(&item);
+            let processed = self.process_item(item_ref);
             self.items.push(processed);
         }
     }
@@ -150,18 +150,17 @@ impl ContextManager {
         items.retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
     }
 
-    fn process_item(item: &ResponseItem) -> ResponseItem {
+    fn process_item(&self, item: &ResponseItem) -> ResponseItem {
         match item {
             ResponseItem::FunctionCallOutput { call_id, output } => {
-                let truncated = format_output_for_model_body(
-                    output.content.as_str(),
-                    CONTEXT_WINDOW_HARD_LIMIT_BYTES,
-                    CONTEXT_WINDOW_HARD_LIMIT_LINES,
-                );
-                let truncated_items = output
-                    .content_items
-                    .as_ref()
-                    .map(|items| globally_truncate_function_output_items(items));
+                let (truncated, _) =
+                    truncate_middle(output.content.as_str(), self.function_output_max_tokens);
+                let truncated_items = output.content_items.as_ref().map(|items| {
+                    truncate_function_output_items_to_token_limit(
+                        items,
+                        self.function_output_max_tokens,
+                    )
+                });
                 ResponseItem::FunctionCallOutput {
                     call_id: call_id.clone(),
                     output: FunctionCallOutputPayload {
@@ -172,11 +171,7 @@ impl ContextManager {
                 }
             }
             ResponseItem::CustomToolCallOutput { call_id, output } => {
-                let truncated = format_output_for_model_body(
-                    output,
-                    CONTEXT_WINDOW_HARD_LIMIT_BYTES,
-                    CONTEXT_WINDOW_HARD_LIMIT_LINES,
-                );
+                let (truncated, _) = truncate_middle(output, self.function_output_max_tokens);
                 ResponseItem::CustomToolCallOutput {
                     call_id: call_id.clone(),
                     output: truncated,
@@ -191,6 +186,12 @@ impl ContextManager {
             | ResponseItem::GhostSnapshot { .. }
             | ResponseItem::Other => item.clone(),
         }
+    }
+}
+
+impl Default for ContextManager {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

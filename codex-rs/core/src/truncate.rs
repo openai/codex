@@ -10,37 +10,40 @@ use codex_utils_tokenizer::Tokenizer;
 /// Model-formatting limits: clients get full streams; only content sent to the model is truncated.
 pub const MODEL_FORMAT_MAX_BYTES: usize = 10 * 1024; // 10 KiB
 pub const MODEL_FORMAT_MAX_LINES: usize = 256; // lines
+pub const DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT: usize = MODEL_FORMAT_MAX_BYTES / 4;
+const TOKENIZER_STACK_SAFE_BYTES: usize = 1024 * 1024; // 1 MiB
 
-/// Globally truncate function output items to fit within `MODEL_FORMAT_MAX_BYTES`
-/// by preserving as many text/image items as possible and appending a summary
-/// for any omitted text items.
-pub(crate) fn globally_truncate_function_output_items(
+/// Globally truncate function output items to fit within
+/// `max_tokens` tokens by preserving as many
+/// text/image items as possible and appending a summary for any omitted text
+/// items.
+pub(crate) fn truncate_function_output_items_to_token_limit(
     items: &[FunctionCallOutputContentItem],
+    max_tokens: usize,
 ) -> Vec<FunctionCallOutputContentItem> {
     let mut out: Vec<FunctionCallOutputContentItem> = Vec::with_capacity(items.len());
-    let mut remaining = MODEL_FORMAT_MAX_BYTES;
+    let mut remaining_tokens = max_tokens;
     let mut omitted_text_items = 0usize;
+    let tokenizer = Tokenizer::try_default().ok();
 
     for it in items {
         match it {
             FunctionCallOutputContentItem::InputText { text } => {
-                if remaining == 0 {
+                if remaining_tokens == 0 {
                     omitted_text_items += 1;
                     continue;
                 }
 
-                let len = text.len();
-                if len <= remaining {
+                let token_len = estimate_safe_token_count(text, tokenizer.as_ref());
+                if token_len <= remaining_tokens {
                     out.push(FunctionCallOutputContentItem::InputText { text: text.clone() });
-                    remaining -= len;
+                    remaining_tokens = remaining_tokens.saturating_sub(token_len);
                 } else {
-                    let slice = take_bytes_at_char_boundary(text, remaining);
-                    if !slice.is_empty() {
-                        out.push(FunctionCallOutputContentItem::InputText {
-                            text: slice.to_string(),
-                        });
+                    let (snippet, _) = truncate_middle(text, remaining_tokens);
+                    if !snippet.is_empty() {
+                        out.push(FunctionCallOutputContentItem::InputText { text: snippet });
                     }
-                    remaining = 0;
+                    remaining_tokens = 0;
                 }
             }
             // todo(aibrahim): handle input images; resize
@@ -155,115 +158,157 @@ fn error_on_double_truncation(content: &str) {
     }
 }
 
-/// Truncate an output string to a maximum number of “tokens”, where tokens are
-/// approximated as individual `char`s. Preserves a prefix and suffix with an
-/// elision marker describing how many tokens were omitted.
-pub(crate) fn truncate_output_to_tokens(
-    output: &str,
-    max_tokens: usize,
-) -> (String, Option<usize>) {
-    if max_tokens == 0 {
-        let total_tokens = output.chars().count();
-        let message = format!("…{total_tokens} tokens truncated…");
-        return (message, Some(total_tokens));
+fn estimate_safe_token_count(text: &str, tokenizer: Option<&Tokenizer>) -> usize {
+    if text.is_empty() {
+        return 0;
     }
 
-    let tokens: Vec<char> = output.chars().collect();
-    let total_tokens = tokens.len();
-    if total_tokens <= max_tokens {
-        return (output.to_string(), None);
+    if text.len() > TOKENIZER_STACK_SAFE_BYTES {
+        return usize::try_from(approx_token_count(text)).unwrap_or(usize::MAX);
     }
 
-    let half = max_tokens / 2;
-    if half == 0 {
-        let truncated = total_tokens.saturating_sub(max_tokens);
-        let message = format!("…{truncated} tokens truncated…");
-        return (message, Some(total_tokens));
-    }
-
-    let truncated = total_tokens.saturating_sub(half * 2);
-    let mut truncated_output = String::new();
-    truncated_output.extend(&tokens[..half]);
-    truncated_output.push_str(&format!("…{truncated} tokens truncated…"));
-    truncated_output.extend(&tokens[total_tokens - half..]);
-    (truncated_output, Some(total_tokens))
+    tokenizer
+        .map(|tok| usize::try_from(tok.count(text)).unwrap_or(usize::MAX))
+        .unwrap_or_else(|| usize::try_from(approx_token_count(text)).unwrap_or(usize::MAX))
 }
 
-/// Truncate the middle of a UTF-8 string to at most `max_bytes` bytes,
-/// preserving the beginning and the end. Returns the possibly truncated
-/// string and `Some(original_token_count)` (counted with the local tokenizer;
-/// falls back to a 4-bytes-per-token estimate if the tokenizer cannot load)
-/// if truncation occurred; otherwise returns the original string and `None`.
-pub(crate) fn truncate_middle(s: &str, max_bytes: usize) -> (String, Option<u64>) {
-    if s.len() <= max_bytes {
-        return (s.to_string(), None);
+/// Truncate the middle of a UTF-8 string to at most `max_tokens` tokens,
+/// preserving the beginning and the end. Returns the possibly truncated string
+/// and `Some(original_token_count)` if truncation occurred; otherwise returns
+/// the original string and `None`.
+pub(crate) fn truncate_middle(s: &str, max_tokens: usize) -> (String, Option<u64>) {
+    if s.is_empty() {
+        return (String::new(), None);
     }
 
-    // Build a tokenizer for counting (default to o200k_base; fall back to cl100k_base).
-    // If both fail, fall back to a 4-bytes-per-token estimate.
-    let tok = Tokenizer::try_default().ok();
-    let token_count = |text: &str| -> u64 {
-        if let Some(ref t) = tok {
-            t.count(text) as u64
-        } else {
-            (text.len() as u64).div_ceil(4)
-        }
+    if s.len() > TOKENIZER_STACK_SAFE_BYTES {
+        return truncate_middle_fallback(s, max_tokens);
+    }
+
+    let tokenizer = match Tokenizer::try_default() {
+        Ok(tok) => tok,
+        Err(_) => return truncate_middle_fallback(s, max_tokens),
     };
 
-    let total_tokens = token_count(s);
-    if max_bytes == 0 {
+    let encoded = tokenizer.encode(s, false);
+    let total_tokens = encoded.len() as u64;
+
+    if max_tokens == 0 {
         return (
             format!("…{total_tokens} tokens truncated…"),
             Some(total_tokens),
         );
     }
 
-    fn truncate_on_boundary(input: &str, max_len: usize) -> &str {
-        if input.len() <= max_len {
-            return input;
-        }
-        let mut end = max_len;
-        while end > 0 && !input.is_char_boundary(end) {
-            end -= 1;
-        }
-        &input[..end]
+    if encoded.len() <= max_tokens {
+        return (s.to_string(), None);
     }
 
-    fn pick_prefix_end(s: &str, left_budget: usize) -> usize {
-        if let Some(head) = s.get(..left_budget)
-            && let Some(i) = head.rfind('\n')
-        {
-            return i + 1;
+    let mut guess_removed = total_tokens.saturating_sub(max_tokens as u64).max(1);
+    for _ in 0..4 {
+        let marker = format!("…{guess_removed} tokens truncated…");
+        let marker_len = usize::try_from(tokenizer.count(&marker)).unwrap_or(usize::MAX);
+        if marker_len >= max_tokens {
+            return (marker, Some(total_tokens));
         }
-        truncate_on_boundary(s, left_budget).len()
+
+        let keep_budget = max_tokens - marker_len;
+        if keep_budget == 0 {
+            return (marker, Some(total_tokens));
+        }
+
+        let left_keep = keep_budget / 2;
+        let right_keep = keep_budget - left_keep;
+        let removed_tokens = encoded.len().saturating_sub(left_keep + right_keep) as u64;
+        let final_marker = format!("…{removed_tokens} tokens truncated…");
+        let final_marker_len =
+            usize::try_from(tokenizer.count(&final_marker)).unwrap_or(usize::MAX);
+        if final_marker_len == marker_len {
+            let prefix = if left_keep > 0 {
+                tokenizer.decode(&encoded[..left_keep]).unwrap_or_default()
+            } else {
+                String::new()
+            };
+            let suffix = if right_keep > 0 {
+                tokenizer
+                    .decode(&encoded[encoded.len() - right_keep..])
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            let mut out =
+                String::with_capacity(prefix.len() + final_marker.len() + suffix.len() + 1);
+            out.push_str(&prefix);
+            out.push_str(&final_marker);
+            if !suffix.is_empty() {
+                out.push('\n');
+                out.push_str(&suffix);
+            }
+            return (out, Some(total_tokens));
+        }
+
+        guess_removed = removed_tokens.max(1);
     }
 
-    fn pick_suffix_start(s: &str, right_budget: usize) -> usize {
-        let start_tail = s.len().saturating_sub(right_budget);
-        if let Some(tail) = s.get(start_tail..)
-            && let Some(i) = tail.find('\n')
-        {
-            return start_tail + i + 1;
-        }
-
-        let mut idx = start_tail.min(s.len());
-        while idx < s.len() && !s.is_char_boundary(idx) {
-            idx += 1;
-        }
-        idx
+    let marker = format!("…{guess_removed} tokens truncated…");
+    let marker_len = usize::try_from(tokenizer.count(&marker)).unwrap_or(usize::MAX);
+    if marker_len >= max_tokens {
+        return (marker, Some(total_tokens));
     }
 
-    // Iterate to stabilize marker length → keep budget → boundaries.
-    let mut guess_tokens: u64 = 1;
+    let keep_budget = max_tokens - marker_len;
+    if keep_budget == 0 {
+        return (marker, Some(total_tokens));
+    }
+    let left_keep = keep_budget / 2;
+    let right_keep = keep_budget - left_keep;
+    let prefix = if left_keep > 0 {
+        tokenizer.decode(&encoded[..left_keep]).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let suffix = if right_keep > 0 {
+        tokenizer
+            .decode(&encoded[encoded.len() - right_keep..])
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let mut out = String::with_capacity(prefix.len() + marker.len() + suffix.len() + 1);
+    out.push_str(&prefix);
+    out.push_str(&marker);
+    if !suffix.is_empty() {
+        out.push('\n');
+        out.push_str(&suffix);
+    }
+    (out, Some(total_tokens))
+}
+
+fn truncate_middle_fallback(s: &str, max_tokens: usize) -> (String, Option<u64>) {
+    let total_tokens = approx_token_count(s);
+    if max_tokens == 0 {
+        return (
+            format!("…{total_tokens} tokens truncated…"),
+            Some(total_tokens),
+        );
+    }
+
+    if total_tokens as usize <= max_tokens {
+        return (s.to_string(), None);
+    }
+
+    let max_bytes = max_tokens.saturating_mul(4);
+    if s.len() <= max_bytes {
+        return (s.to_string(), None);
+    }
+
+    let mut guess_tokens = total_tokens.saturating_sub(max_tokens as u64).max(1);
     for _ in 0..4 {
         let marker = format!("…{guess_tokens} tokens truncated…");
         let marker_len = marker.len();
         let keep_budget = max_bytes.saturating_sub(marker_len);
         if keep_budget == 0 {
-            return (
-                format!("…{total_tokens} tokens truncated…"),
-                Some(total_tokens),
-            );
+            return (marker, Some(total_tokens));
         }
 
         let left_budget = keep_budget / 2;
@@ -274,11 +319,7 @@ pub(crate) fn truncate_middle(s: &str, max_bytes: usize) -> (String, Option<u64>
             suffix_start = prefix_end;
         }
 
-        // Tokens actually removed (middle slice) using the real tokenizer.
-        let removed_tokens = token_count(&s[prefix_end..suffix_start]);
-
-        // If the number of digits in the token count does not change the marker length,
-        // we can finalize output.
+        let removed_tokens = approx_token_count(&s[prefix_end..suffix_start]);
         let final_marker = format!("…{removed_tokens} tokens truncated…");
         if final_marker.len() == marker_len {
             let kept_content_bytes = prefix_end + (s.len() - suffix_start);
@@ -290,18 +331,14 @@ pub(crate) fn truncate_middle(s: &str, max_bytes: usize) -> (String, Option<u64>
             return (out, Some(total_tokens));
         }
 
-        guess_tokens = removed_tokens;
+        guess_tokens = removed_tokens.max(1);
     }
 
-    // Fallback build after iterations: compute with the last guess.
     let marker = format!("…{guess_tokens} tokens truncated…");
     let marker_len = marker.len();
     let keep_budget = max_bytes.saturating_sub(marker_len);
     if keep_budget == 0 {
-        return (
-            format!("…{total_tokens} tokens truncated…"),
-            Some(total_tokens),
-        );
+        return (marker, Some(total_tokens));
     }
 
     let left_budget = keep_budget / 2;
@@ -320,14 +357,53 @@ pub(crate) fn truncate_middle(s: &str, max_bytes: usize) -> (String, Option<u64>
     (out, Some(total_tokens))
 }
 
+fn approx_token_count(text: &str) -> u64 {
+    (text.len() as u64).saturating_add(3) / 4
+}
+
+fn truncate_on_boundary(input: &str, max_len: usize) -> &str {
+    if input.len() <= max_len {
+        return input;
+    }
+    let mut end = max_len;
+    while end > 0 && !input.is_char_boundary(end) {
+        end -= 1;
+    }
+    &input[..end]
+}
+
+fn pick_prefix_end(s: &str, left_budget: usize) -> usize {
+    if let Some(head) = s.get(..left_budget)
+        && let Some(i) = head.rfind('\n')
+    {
+        return i + 1;
+    }
+    truncate_on_boundary(s, left_budget).len()
+}
+
+fn pick_suffix_start(s: &str, right_budget: usize) -> usize {
+    let start_tail = s.len().saturating_sub(right_budget);
+    if let Some(tail) = s.get(start_tail..)
+        && let Some(i) = tail.find('\n')
+    {
+        return start_tail + i + 1;
+    }
+
+    let mut idx = start_tail.min(s.len());
+    while idx < s.len() && !s.is_char_boundary(idx) {
+        idx += 1;
+    }
+    idx
+}
+
 #[cfg(test)]
 mod tests {
+    use super::DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT;
     use super::MODEL_FORMAT_MAX_BYTES;
     use super::MODEL_FORMAT_MAX_LINES;
     use super::format_output_for_model_body;
-    use super::globally_truncate_function_output_items;
+    use super::truncate_function_output_items_to_token_limit;
     use super::truncate_middle;
-    use super::truncate_output_to_tokens;
     use codex_protocol::models::FunctionCallOutputContentItem;
     use codex_utils_tokenizer::Tokenizer;
     use pretty_assertions::assert_eq;
@@ -350,89 +426,69 @@ mod tests {
         )
     }
 
-    #[test]
-    fn truncate_middle_no_newlines_fallback() {
-        let tok = Tokenizer::try_default().expect("load tokenizer");
-        let s = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ*";
-        let max_bytes = 32;
-        let (out, original) = truncate_middle(s, max_bytes);
-        assert!(out.starts_with("abc"));
-        assert!(out.contains("tokens truncated"));
-        assert!(out.ends_with("XYZ*"));
-        assert_eq!(original, Some(tok.count(s) as u64));
+    fn build_chunked_text(
+        tok: &Tokenizer,
+        chunk: &str,
+        chunk_tokens: usize,
+        target_tokens: usize,
+    ) -> (String, usize) {
+        let mut text = String::new();
+        let mut tokens = 0;
+        while tokens + chunk_tokens <= target_tokens {
+            text.push_str(chunk);
+            tokens += chunk_tokens;
+        }
+        if text.is_empty() {
+            text.push_str(chunk);
+            tokens = chunk_tokens;
+        }
+        (text, tokens)
     }
 
     #[test]
-    fn truncate_middle_prefers_newline_boundaries() {
+    fn truncate_middle_returns_original_when_under_limit() {
         let tok = Tokenizer::try_default().expect("load tokenizer");
-        let mut s = String::new();
-        for i in 1..=20 {
-            s.push_str(&format!("{i:03}\n"));
-        }
-        assert_eq!(s.len(), 80);
+        let s = "short output";
+        let limit = usize::try_from(tok.count(s)).unwrap_or(0) + 10;
+        let (out, original) = truncate_middle(s, limit);
+        assert_eq!(out, s);
+        assert_eq!(original, None);
+    }
 
-        let max_bytes = 64;
-        let (out, tokens) = truncate_middle(&s, max_bytes);
-        assert!(out.starts_with("001\n002\n003\n004\n"));
+    #[test]
+    fn truncate_middle_reports_truncation_at_zero_limit() {
+        let tok = Tokenizer::try_default().expect("load tokenizer");
+        let s = "abcdef";
+        let total = tok.count(s) as u64;
+        let (out, original) = truncate_middle(s, 0);
         assert!(out.contains("tokens truncated"));
-        assert!(out.ends_with("017\n018\n019\n020\n"));
-        assert_eq!(tokens, Some(tok.count(&s) as u64));
+        assert_eq!(original, Some(total));
+    }
+
+    #[test]
+    fn truncate_middle_enforces_token_budget() {
+        let tok = Tokenizer::try_default().expect("load tokenizer");
+        let s = "alpha beta gamma delta epsilon zeta eta theta iota kappa";
+        let max_tokens = 12;
+        let (out, original) = truncate_middle(s, max_tokens);
+        assert!(out.contains("tokens truncated"));
+        assert_eq!(original, Some(tok.count(s) as u64));
+        let result_tokens = tok.count(&out) as usize;
+        assert!(result_tokens <= max_tokens);
     }
 
     #[test]
     fn truncate_middle_handles_utf8_content() {
         let tok = Tokenizer::try_default().expect("load tokenizer");
         let s = "😀😀😀😀😀😀😀😀😀😀\nsecond line with ascii text\n";
-        let max_bytes = 32;
-        let (out, tokens) = truncate_middle(s, max_bytes);
+        let max_tokens = 8;
+        let (out, tokens) = truncate_middle(s, max_tokens);
 
         assert!(out.contains("tokens truncated"));
         assert!(!out.contains('\u{fffd}'));
         assert_eq!(tokens, Some(tok.count(s) as u64));
-    }
-
-    #[test]
-    fn truncate_middle_prefers_newline_boundaries_2() {
-        let tok = Tokenizer::try_default().expect("load tokenizer");
-        // Build a multi-line string of 20 numbered lines (each "NNN\n").
-        let mut s = String::new();
-        for i in 1..=20 {
-            s.push_str(&format!("{i:03}\n"));
-        }
-        assert_eq!(s.len(), 80);
-
-        let max_bytes = 64;
-        let (out, total) = truncate_middle(&s, max_bytes);
-        assert!(out.starts_with("001\n002\n003\n004\n"));
-        assert!(out.contains("tokens truncated"));
-        assert!(out.ends_with("017\n018\n019\n020\n"));
-        assert_eq!(total, Some(tok.count(&s) as u64));
-    }
-
-    #[test]
-    fn truncate_output_to_tokens_returns_original_when_under_limit() {
-        let s = "short output";
-        let (truncated, original) = truncate_output_to_tokens(s, 100);
-        assert_eq!(truncated, s);
-        assert_eq!(original, None);
-    }
-
-    #[test]
-    fn truncate_output_to_tokens_reports_truncation_at_zero_limit() {
-        let s = "abcdef";
-        let (truncated, original) = truncate_output_to_tokens(s, 0);
-        assert!(truncated.contains("tokens truncated"));
-        assert_eq!(original, Some(s.chars().count()));
-    }
-
-    #[test]
-    fn truncate_output_to_tokens_preserves_prefix_and_suffix() {
-        let s = "abcdefghijklmnopqrstuvwxyz";
-        let max_tokens = 10;
-        let (truncated, original) = truncate_output_to_tokens(s, max_tokens);
-        assert!(truncated.starts_with("abcde"));
-        assert!(truncated.ends_with("vwxyz"));
-        assert_eq!(original, Some(s.chars().count()));
+        let result_tokens = tok.count(&out) as usize;
+        assert!(result_tokens <= max_tokens);
     }
 
     #[test]
@@ -550,24 +606,37 @@ mod tests {
 
     #[test]
     fn truncates_across_multiple_under_limit_texts_and_reports_omitted() {
-        // Arrange: several text items, none exceeding per-item limit, but total exceeds budget.
-        let budget = MODEL_FORMAT_MAX_BYTES;
-        let t1_len = (budget / 2).saturating_sub(10);
-        let t2_len = (budget / 2).saturating_sub(10);
-        let remaining_after_t1_t2 = budget.saturating_sub(t1_len + t2_len);
-        let t3_len = 50; // gets truncated to remaining_after_t1_t2
-        let t4_len = 5; // omitted
-        let t5_len = 7; // omitted
+        let tok = Tokenizer::try_default().expect("load tokenizer");
+        let chunk = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega.\n";
+        let chunk_tokens = usize::try_from(tok.count(chunk)).unwrap_or(usize::MAX);
+        assert!(chunk_tokens > 0, "chunk must consume tokens");
 
-        let t1 = "a".repeat(t1_len);
-        let t2 = "b".repeat(t2_len);
-        let t3 = "c".repeat(t3_len);
-        let t4 = "d".repeat(t4_len);
-        let t5 = "e".repeat(t5_len);
+        let target_each = DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT
+            .saturating_div(2)
+            .saturating_sub(chunk_tokens);
+        let (t1, t1_tokens) = build_chunked_text(&tok, chunk, chunk_tokens, target_each);
+        let (t2, t2_tokens) = build_chunked_text(&tok, chunk, chunk_tokens, target_each);
+        let remaining_after_t1_t2 =
+            DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT.saturating_sub(t1_tokens + t2_tokens);
+        assert!(
+            remaining_after_t1_t2 > 0,
+            "expected positive token remainder after first two items"
+        );
+
+        let repeats_for_t3 = remaining_after_t1_t2 / chunk_tokens + 2;
+        let t3 = chunk.repeat(repeats_for_t3);
+        let t3_tokens = usize::try_from(tok.count(&t3)).unwrap_or(usize::MAX);
+        assert!(
+            t3_tokens > remaining_after_t1_t2,
+            "t3 must exceed remaining tokens"
+        );
+
+        let t4 = chunk.to_string();
+        let t5 = chunk.to_string();
 
         let items = vec![
-            FunctionCallOutputContentItem::InputText { text: t1 },
-            FunctionCallOutputContentItem::InputText { text: t2 },
+            FunctionCallOutputContentItem::InputText { text: t1.clone() },
+            FunctionCallOutputContentItem::InputText { text: t2.clone() },
             FunctionCallOutputContentItem::InputImage {
                 image_url: "img:mid".to_string(),
             },
@@ -576,7 +645,10 @@ mod tests {
             FunctionCallOutputContentItem::InputText { text: t5 },
         ];
 
-        let output = globally_truncate_function_output_items(&items);
+        let output = truncate_function_output_items_to_token_limit(
+            &items,
+            DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT,
+        );
 
         // Expect: t1 (full), t2 (full), image, t3 (truncated), summary mentioning 2 omitted.
         assert_eq!(output.len(), 5);
@@ -585,13 +657,13 @@ mod tests {
             FunctionCallOutputContentItem::InputText { text } => text,
             other => panic!("unexpected first item: {other:?}"),
         };
-        assert_eq!(first_text.len(), t1_len);
+        assert_eq!(first_text, &t1);
 
         let second_text = match &output[1] {
             FunctionCallOutputContentItem::InputText { text } => text,
             other => panic!("unexpected second item: {other:?}"),
         };
-        assert_eq!(second_text.len(), t2_len);
+        assert_eq!(second_text, &t2);
 
         assert_eq!(
             output[2],
@@ -604,7 +676,15 @@ mod tests {
             FunctionCallOutputContentItem::InputText { text } => text,
             other => panic!("unexpected fourth item: {other:?}"),
         };
-        assert_eq!(fourth_text.len(), remaining_after_t1_t2);
+        assert!(
+            fourth_text.contains("tokens truncated"),
+            "expected marker in truncated snippet: {fourth_text}"
+        );
+        let truncated_tokens = usize::try_from(tok.count(fourth_text)).unwrap_or(usize::MAX);
+        assert!(
+            truncated_tokens <= remaining_after_t1_t2,
+            "truncated snippet must respect remaining token budget: {truncated_tokens} > {remaining_after_t1_t2}"
+        );
 
         let summary_text = match &output[4] {
             FunctionCallOutputContentItem::InputText { text } => text,

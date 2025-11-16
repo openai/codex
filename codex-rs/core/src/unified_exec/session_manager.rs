@@ -36,7 +36,7 @@ use super::generate_chunk_id;
 use super::resolve_max_tokens;
 use super::session::OutputBuffer;
 use super::session::UnifiedExecSession;
-use crate::truncate::truncate_output_to_tokens;
+use crate::truncate::truncate_middle;
 
 impl UnifiedExecSessionManager {
     pub(crate) async fn exec_command(
@@ -70,7 +70,9 @@ impl UnifiedExecSessionManager {
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let text = String::from_utf8_lossy(&collected).to_string();
-        let (output, original_token_count) = truncate_output_to_tokens(&text, max_tokens);
+        let (output, original_token_count) = truncate_middle(&text, max_tokens);
+        let original_token_count =
+            original_token_count.and_then(|count| usize::try_from(count).ok());
         let chunk_id = generate_chunk_id();
         let has_exited = session.has_exited();
         let stored_id = self
@@ -175,7 +177,9 @@ impl UnifiedExecSessionManager {
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let text = String::from_utf8_lossy(&collected).to_string();
-        let (output, original_token_count) = truncate_output_to_tokens(&text, max_tokens);
+        let (output, original_token_count) = truncate_middle(&text, max_tokens);
+        let original_token_count =
+            original_token_count.and_then(|count| usize::try_from(count).ok());
         let chunk_id = generate_chunk_id();
 
         let status = self.refresh_session_state(session_id).await;

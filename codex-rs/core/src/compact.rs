@@ -22,6 +22,7 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
+use codex_utils_tokenizer::Tokenizer;
 use futures::prelude::*;
 use tracing::error;
 
@@ -147,7 +148,8 @@ async fn run_compact_task_inner(
     let user_messages = collect_user_messages(&history_snapshot);
 
     let initial_context = sess.build_initial_context(turn_context.as_ref());
-    let mut new_history = build_compacted_history(initial_context, &user_messages, &summary_text);
+    let mut new_history =
+        build_token_limited_compacted_history(initial_context, &user_messages, &summary_text);
     let ghost_snapshots: Vec<ResponseItem> = history_snapshot
         .iter()
         .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
@@ -220,35 +222,40 @@ pub(crate) fn is_summary_message(message: &str) -> bool {
     message.starts_with(format!("{SUMMARY_PREFIX}\n").as_str())
 }
 
-pub(crate) fn build_compacted_history(
+pub(crate) fn build_token_limited_compacted_history(
     initial_context: Vec<ResponseItem>,
     user_messages: &[String],
     summary_text: &str,
 ) -> Vec<ResponseItem> {
-    build_compacted_history_with_limit(
+    build_token_limited_compacted_history_with_limit(
         initial_context,
         user_messages,
         summary_text,
-        COMPACT_USER_MESSAGE_MAX_TOKENS * 4,
+        COMPACT_USER_MESSAGE_MAX_TOKENS,
     )
 }
 
-fn build_compacted_history_with_limit(
+fn build_token_limited_compacted_history_with_limit(
     mut history: Vec<ResponseItem>,
     user_messages: &[String],
     summary_text: &str,
-    max_bytes: usize,
+    max_tokens: usize,
 ) -> Vec<ResponseItem> {
     let mut selected_messages: Vec<String> = Vec::new();
-    if max_bytes > 0 {
-        let mut remaining = max_bytes;
+    if max_tokens > 0 {
+        let tokenizer = Tokenizer::try_default().ok();
+        let mut remaining = max_tokens;
         for message in user_messages.iter().rev() {
             if remaining == 0 {
                 break;
             }
-            if message.len() <= remaining {
+            let tokens = tokenizer
+                .as_ref()
+                .map(|tok| usize::try_from(tok.count(message)).unwrap_or(usize::MAX))
+                .unwrap_or_else(|| message.len().saturating_add(3) / 4);
+            if tokens <= remaining {
                 selected_messages.push(message.clone());
-                remaining = remaining.saturating_sub(message.len());
+                remaining = remaining.saturating_sub(tokens);
             } else {
                 let (truncated, _) = truncate_middle(message, remaining);
                 selected_messages.push(truncated);
@@ -408,16 +415,16 @@ mod tests {
     }
 
     #[test]
-    fn build_compacted_history_truncates_overlong_user_messages() {
+    fn build_token_limited_compacted_history_truncates_overlong_user_messages() {
         // Use a small truncation limit so the test remains fast while still validating
         // that oversized user content is truncated.
-        let max_bytes = 128;
-        let big = "X".repeat(max_bytes + 50);
-        let history = super::build_compacted_history_with_limit(
+        let max_tokens = 16;
+        let big = "word ".repeat(200);
+        let history = super::build_token_limited_compacted_history_with_limit(
             Vec::new(),
             std::slice::from_ref(&big),
             "SUMMARY",
-            max_bytes,
+            max_tokens,
         );
         assert_eq!(history.len(), 2);
 
@@ -450,12 +457,13 @@ mod tests {
     }
 
     #[test]
-    fn build_compacted_history_appends_summary_message() {
+    fn build_token_limited_compacted_history_appends_summary_message() {
         let initial_context: Vec<ResponseItem> = Vec::new();
         let user_messages = vec!["first user message".to_string()];
         let summary_text = "summary text";
 
-        let history = build_compacted_history(initial_context, &user_messages, summary_text);
+        let history =
+            build_token_limited_compacted_history(initial_context, &user_messages, summary_text);
         assert!(
             !history.is_empty(),
             "expected compacted history to include summary"

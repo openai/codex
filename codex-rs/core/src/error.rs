@@ -19,8 +19,8 @@ use tokio::task::JoinError;
 
 pub type Result<T> = std::result::Result<T, CodexErr>;
 
-/// Limit UI error messages to a reasonable size while keeping useful context.
-const ERROR_MESSAGE_UI_MAX_BYTES: usize = 2 * 1024; // 4 KiB
+/// Limit UI error messages to a reasonable token budget (~2 KiB of text).
+const ERROR_MESSAGE_UI_MAX_TOKENS: usize = (2 * 1024) / 4;
 
 #[derive(Error, Debug)]
 pub enum SandboxErr {
@@ -431,7 +431,7 @@ impl CodexErr {
     }
 }
 
-pub fn get_error_message_ui(e: &CodexErr) -> String {
+pub fn token_limited_error_message(e: &CodexErr) -> String {
     let message = match e {
         CodexErr::Sandbox(SandboxErr::Denied { output }) => {
             let aggregated = output.aggregated_output.text.trim();
@@ -461,7 +461,7 @@ pub fn get_error_message_ui(e: &CodexErr) -> String {
         _ => e.to_string(),
     };
 
-    truncate_middle(&message, ERROR_MESSAGE_UI_MAX_BYTES).0
+    truncate_middle(&message, ERROR_MESSAGE_UI_MAX_TOKENS).0
 }
 
 #[cfg(test)]
@@ -533,7 +533,7 @@ mod tests {
         let err = CodexErr::Sandbox(SandboxErr::Denied {
             output: Box::new(output),
         });
-        assert_eq!(get_error_message_ui(&err), "aggregate detail");
+        assert_eq!(token_limited_error_message(&err), "aggregate detail");
     }
 
     #[test]
@@ -549,7 +549,10 @@ mod tests {
         let err = CodexErr::Sandbox(SandboxErr::Denied {
             output: Box::new(output),
         });
-        assert_eq!(get_error_message_ui(&err), "stderr detail\nstdout detail");
+        assert_eq!(
+            token_limited_error_message(&err),
+            "stderr detail\nstdout detail"
+        );
     }
 
     #[test]
@@ -565,7 +568,7 @@ mod tests {
         let err = CodexErr::Sandbox(SandboxErr::Denied {
             output: Box::new(output),
         });
-        assert_eq!(get_error_message_ui(&err), "stdout only");
+        assert_eq!(token_limited_error_message(&err), "stdout only");
     }
 
     #[test]
@@ -582,7 +585,7 @@ mod tests {
             output: Box::new(output),
         });
         assert_eq!(
-            get_error_message_ui(&err),
+            token_limited_error_message(&err),
             "command failed inside sandbox with exit code 13"
         );
     }
