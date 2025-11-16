@@ -158,7 +158,7 @@ impl WidgetRef for &ModelMigrationScreen {
         column.push(
             Line::from(vec![
                 "Learn more at ".into(),
-                "https://www.openai.com/index/gpt-5-1".cyan().underlined(),
+                "https://https://www.openai.com/index/gpt-5-1".cyan().underlined(),
                 ".".into(),
             ])
             .inset(Insets::tlbr(0, 2, 0, 0)),
