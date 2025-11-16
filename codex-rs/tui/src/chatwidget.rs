@@ -2073,16 +2073,7 @@ impl ChatWidget {
                 current_approval == preset.approval && current_sandbox == preset.sandbox;
             let name = preset.label.to_string();
             let description_text = preset.description;
-            let description = if cfg!(target_os = "windows")
-                && preset.id == "auto"
-                && codex_core::get_platform_sandbox().is_none()
-            {
-                Some(format!(
-                    "{description_text}\nEnable the experimental Windows sandbox feature to use Auto mode."
-                ))
-            } else {
-                Some(description_text.to_string())
-            };
+            let description = Some(description_text.to_string());
             let requires_confirmation = preset.id == "full-access"
                 && !self
                     .config

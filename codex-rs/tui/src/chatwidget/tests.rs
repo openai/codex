@@ -1534,53 +1534,6 @@ fn approvals_selection_popup_snapshot() {
 }
 
 #[test]
-fn approvals_popup_includes_windows_sandbox_note_for_auto_mode() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
-
-    if cfg!(target_os = "windows") {
-        set_windows_sandbox_enabled(false);
-        chat.config.forced_auto_mode_downgraded_on_windows = true;
-    }
-    chat.open_approvals_popup();
-
-    let popup = render_bottom_popup(&chat, 80);
-    assert_eq!(
-        popup.contains("experimental Windows sandbox feature"),
-        cfg!(target_os = "windows"),
-        "expected auto preset description to mention Windows sandbox requirement only on Windows, popup: {popup}"
-    );
-    let downgrade_notice =
-        "Codex forced your settings back to Read Only because the Windows sandbox";
-    let downgrade_notice_present = popup.contains(downgrade_notice);
-    let expected_downgrade_notice = cfg!(target_os = "windows")
-        && chat.config.forced_auto_mode_downgraded_on_windows
-        && codex_core::get_platform_sandbox().is_none();
-    assert_eq!(
-        downgrade_notice_present, expected_downgrade_notice,
-        "expected downgrade notice only when auto mode is forced off on Windows, popup: {popup}"
-    );
-    if cfg!(target_os = "windows") {
-        set_windows_sandbox_enabled(true);
-        chat.open_approvals_popup();
-        let popup_with_sandbox = render_bottom_popup(&chat, 80);
-        assert!(
-            !popup_with_sandbox.contains(downgrade_notice),
-            "expected downgrade notice to disappear once the Windows sandbox is available, popup: {popup_with_sandbox}"
-        );
-
-        set_windows_sandbox_enabled(false);
-        chat.config.forced_auto_mode_downgraded_on_windows = true;
-        chat.set_sandbox_policy(codex_core::protocol::SandboxPolicy::DangerFullAccess);
-        chat.open_approvals_popup();
-        let popup_with_full_access = render_bottom_popup(&chat, 80);
-        assert!(
-            !popup_with_full_access.contains(downgrade_notice),
-            "expected downgrade notice to be cleared when switching to Full Access, popup: {popup_with_full_access}"
-        );
-    }
-}
-
-#[test]
 fn full_access_confirmation_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
