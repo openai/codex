@@ -1,6 +1,8 @@
 #![cfg(not(target_os = "windows"))]
 use std::collections::HashMap;
 use std::sync::OnceLock;
+use std::time::Duration;
+use std::time::Instant;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -17,6 +19,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -1598,6 +1601,100 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
         output_text.contains("ready"),
         "expected ready output, got {output_text:?}"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_stops_waiting_after_process_exit() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config.features.enable(Feature::UnifiedExec);
+    });
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let call_id = "uexec-completed";
+    let args = serde_json::json!({
+        "cmd": r#"perl -e 'print "start\n"; select undef, undef, undef, 0.25; print "end\n";'"#,
+        "yield_time_ms": 5_000,
+    });
+
+    let first_response = sse(vec![
+        ev_response_created("resp-1"),
+        ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+        ev_completed("resp-1"),
+    ]);
+    let second_response = sse(vec![
+        ev_assistant_message("msg-1", "done"),
+        ev_completed("resp-2"),
+    ]);
+    mount_sse_once(&server, first_response).await;
+    mount_sse_once(&server, second_response).await;
+
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "measure completion".into(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    let start = Instant::now();
+    let mut begin_at = None;
+    let mut end_event = None;
+
+    while start.elapsed() < Duration::from_secs(6) {
+        let event = codex.next_event().await.expect("event");
+        match event.msg {
+            EventMsg::ExecCommandBegin(ev) if ev.call_id == call_id => {
+                begin_at = Some(Instant::now());
+            }
+            EventMsg::ExecCommandEnd(ev) if ev.call_id == call_id => {
+                end_event = Some(ev);
+                break;
+            }
+            EventMsg::TaskComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    let end_event = end_event.expect("missing ExecCommandEnd event");
+    let elapsed = begin_at
+        .map(|begin| begin.elapsed())
+        .unwrap_or_else(|| start.elapsed());
+
+    assert!(
+        end_event.aggregated_output.contains("end"),
+        "expected process output to include end, got: {}",
+        end_event.aggregated_output
+    );
+
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "expected end output within 1 second, took {} ms",
+        elapsed.as_millis()
+    );
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 
     Ok(())
 }
