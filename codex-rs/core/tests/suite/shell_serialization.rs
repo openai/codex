@@ -789,6 +789,59 @@ Output:
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_command_output_is_structured() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::ShellCommandTool);
+    });
+    let test = builder.build(&server).await?;
+
+    let call_id = "shell-command";
+    let args = json!({
+        "command": "echo shell command",
+        "timeout_ms": 1_000,
+    });
+    let responses = vec![
+        sse(vec![
+            json!({"type": "response.created", "response": {"id": "resp-1"}}),
+            ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "shell_command done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    let mock = mount_sse_sequence(&server, responses).await;
+
+    test.submit_turn_with_policy(
+        "run the shell_command script in the user's shell",
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let req = mock
+        .last_request()
+        .expect("shell_command output request recorded");
+    let output_item = req.function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("shell_command output string");
+
+    let expected_pattern = r"(?s)^Exit code: 0
+Wall time: [0-9]+(?:\.[0-9]+)? seconds
+Output:
+shell command
+?$";
+    assert_regex_match(expected_pattern, output);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn local_shell_call_output_is_structured() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
