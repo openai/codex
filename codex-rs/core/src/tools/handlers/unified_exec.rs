@@ -1,13 +1,12 @@
-use std::time::Duration;
-
-use async_trait::async_trait;
-use serde::Deserialize;
-use serde::Serialize;
+use std::path::PathBuf;
 
 use crate::function_tool::FunctionCallError;
+use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandOutputDeltaEvent;
+use crate::protocol::ExecCommandSource;
 use crate::protocol::ExecOutputStream;
+use crate::shell::get_shell_by_model_provided_path;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -21,20 +20,28 @@ use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecResponse;
 use crate::unified_exec::UnifiedExecSessionManager;
 use crate::unified_exec::WriteStdinRequest;
+use async_trait::async_trait;
+use serde::Deserialize;
 
 pub struct UnifiedExecHandler;
 
 #[derive(Debug, Deserialize)]
 struct ExecCommandArgs {
     cmd: String,
+    #[serde(default)]
+    workdir: Option<String>,
     #[serde(default = "default_shell")]
     shell: String,
     #[serde(default = "default_login")]
     login: bool,
-    #[serde(default)]
-    yield_time_ms: Option<u64>,
+    #[serde(default = "default_exec_yield_time_ms")]
+    yield_time_ms: u64,
     #[serde(default)]
     max_output_tokens: Option<usize>,
+    #[serde(default)]
+    with_escalated_permissions: Option<bool>,
+    #[serde(default)]
+    justification: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -42,10 +49,18 @@ struct WriteStdinArgs {
     session_id: i32,
     #[serde(default)]
     chars: String,
-    #[serde(default)]
-    yield_time_ms: Option<u64>,
+    #[serde(default = "default_write_stdin_yield_time_ms")]
+    yield_time_ms: u64,
     #[serde(default)]
     max_output_tokens: Option<usize>,
+}
+
+fn default_exec_yield_time_ms() -> u64 {
+    10000
+}
+
+fn default_write_stdin_yield_time_ms() -> u64 {
+    250
 }
 
 fn default_shell() -> String {
@@ -67,6 +82,20 @@ impl ToolHandler for UnifiedExecHandler {
             payload,
             ToolPayload::Function { .. } | ToolPayload::UnifiedExec { .. }
         )
+    }
+
+    fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
+        let (ToolPayload::Function { arguments } | ToolPayload::UnifiedExec { arguments }) =
+            &invocation.payload
+        else {
+            return true;
+        };
+
+        let Ok(params) = serde_json::from_str::<ExecCommandArgs>(arguments) else {
+            return true;
+        };
+        let command = get_command(&params);
+        !is_known_safe_command(&command)
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
@@ -100,24 +129,57 @@ impl ToolHandler for UnifiedExecHandler {
                     ))
                 })?;
 
+                let command = get_command(&args);
+                let ExecCommandArgs {
+                    workdir,
+                    yield_time_ms,
+                    max_output_tokens,
+                    with_escalated_permissions,
+                    justification,
+                    ..
+                } = args;
+
+                if with_escalated_permissions.unwrap_or(false)
+                    && !matches!(
+                        context.turn.approval_policy,
+                        codex_protocol::protocol::AskForApproval::OnRequest
+                    )
+                {
+                    return Err(FunctionCallError::RespondToModel(format!(
+                        "approval policy is {policy:?}; reject command — you cannot ask for escalated permissions if the approval policy is {policy:?}",
+                        policy = context.turn.approval_policy
+                    )));
+                }
+
+                let workdir = workdir
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+                    .map(PathBuf::from);
+                let cwd = workdir.clone().unwrap_or_else(|| context.turn.cwd.clone());
+
                 let event_ctx = ToolEventCtx::new(
                     context.session.as_ref(),
                     context.turn.as_ref(),
                     &context.call_id,
                     None,
                 );
-                let emitter =
-                    ToolEmitter::unified_exec(args.cmd.clone(), context.turn.cwd.clone(), true);
+                let emitter = ToolEmitter::unified_exec(
+                    &command,
+                    cwd.clone(),
+                    ExecCommandSource::UnifiedExecStartup,
+                    None,
+                );
                 emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
                 manager
                     .exec_command(
                         ExecCommandRequest {
-                            command: &args.cmd,
-                            shell: &args.shell,
-                            login: args.login,
-                            yield_time_ms: args.yield_time_ms,
-                            max_output_tokens: args.max_output_tokens,
+                            command,
+                            yield_time_ms,
+                            max_output_tokens,
+                            workdir,
+                            with_escalated_permissions,
+                            justification,
                         },
                         &context,
                     )
@@ -134,6 +196,7 @@ impl ToolHandler for UnifiedExecHandler {
                 })?;
                 manager
                     .write_stdin(WriteStdinRequest {
+                        call_id: &call_id,
                         session_id: args.session_id,
                         input: &args.chars,
                         yield_time_ms: args.yield_time_ms,
@@ -163,11 +226,7 @@ impl ToolHandler for UnifiedExecHandler {
                 .await;
         }
 
-        let content = serialize_response(&response).map_err(|err| {
-            FunctionCallError::RespondToModel(format!(
-                "failed to serialize unified exec output: {err:?}"
-            ))
-        })?;
+        let content = format_response(&response);
 
         Ok(ToolOutput::Function {
             content,
@@ -177,32 +236,35 @@ impl ToolHandler for UnifiedExecHandler {
     }
 }
 
-#[derive(Serialize)]
-struct SerializedUnifiedExecResponse<'a> {
-    chunk_id: &'a str,
-    wall_time_seconds: f64,
-    output: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    session_id: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    exit_code: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    original_token_count: Option<usize>,
+fn get_command(args: &ExecCommandArgs) -> Vec<String> {
+    let shell = get_shell_by_model_provided_path(&PathBuf::from(args.shell.clone()));
+    shell.derive_exec_args(&args.cmd, args.login)
 }
 
-fn serialize_response(response: &UnifiedExecResponse) -> Result<String, serde_json::Error> {
-    let payload = SerializedUnifiedExecResponse {
-        chunk_id: &response.chunk_id,
-        wall_time_seconds: duration_to_seconds(response.wall_time),
-        output: &response.output,
-        session_id: response.session_id,
-        exit_code: response.exit_code,
-        original_token_count: response.original_token_count,
-    };
+fn format_response(response: &UnifiedExecResponse) -> String {
+    let mut sections = Vec::new();
 
-    serde_json::to_string(&payload)
-}
+    if !response.chunk_id.is_empty() {
+        sections.push(format!("Chunk ID: {}", response.chunk_id));
+    }
 
-fn duration_to_seconds(duration: Duration) -> f64 {
-    duration.as_secs_f64()
+    let wall_time_seconds = response.wall_time.as_secs_f64();
+    sections.push(format!("Wall time: {wall_time_seconds:.4} seconds"));
+
+    if let Some(exit_code) = response.exit_code {
+        sections.push(format!("Process exited with code {exit_code}"));
+    }
+
+    if let Some(session_id) = response.session_id {
+        sections.push(format!("Process running with session ID {session_id}"));
+    }
+
+    if let Some(original_token_count) = response.original_token_count {
+        sections.push(format!("Original token count: {original_token_count}"));
+    }
+
+    sections.push("Output:".to_string());
+    sections.push(response.output.clone());
+
+    sections.join("\n")
 }

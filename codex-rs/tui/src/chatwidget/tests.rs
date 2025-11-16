@@ -5,6 +5,8 @@ use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
 use codex_common::approval_presets::builtin_approval_presets;
+use codex_common::model_presets::ModelPreset;
+use codex_common::model_presets::ReasoningEffortPreset;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::config::Config;
@@ -16,16 +18,19 @@ use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
 use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
+use codex_core::protocol::BackgroundEventEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
+use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
+use codex_core::protocol::RateLimitWindow;
 use codex_core::protocol::ReviewCodeLocation;
 use codex_core::protocol::ReviewFinding;
 use codex_core::protocol::ReviewLineRange;
@@ -37,6 +42,7 @@ use codex_core::protocol::TaskStartedEvent;
 use codex_core::protocol::UndoCompletedEvent;
 use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
+use codex_core::protocol::WarningEvent;
 use codex_protocol::ConversationId;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg;
@@ -55,6 +61,8 @@ use tempfile::NamedTempFile;
 use tempfile::tempdir;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::unbounded_channel;
+
+const TEST_WARNING_MESSAGE: &str = "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start a new conversation when possible to keep conversations small and targeted.";
 
 fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
@@ -94,9 +102,51 @@ fn upgrade_event_payload_for_tests(mut payload: serde_json::Value) -> serde_json
                     serde_json::Value::String(aggregated),
                 );
             }
+        } else if ty == "patch_apply_begin"
+            && let Some(changes) = m.get_mut("changes").and_then(|v| v.as_object_mut())
+        {
+            for change in changes.values_mut() {
+                if change.get("type").is_some() {
+                    continue;
+                }
+                if let Some(change_obj) = change.as_object_mut()
+                    && change_obj.len() == 1
+                    && let Some((legacy_kind, legacy_value)) = change_obj
+                        .iter()
+                        .next()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                {
+                    change_obj.clear();
+                    change_obj.insert(
+                        "type".to_string(),
+                        serde_json::Value::String(legacy_kind.clone()),
+                    );
+                    match legacy_value {
+                        serde_json::Value::Object(payload) => {
+                            for (k, v) in payload {
+                                change_obj.insert(k, v);
+                            }
+                        }
+                        other => {
+                            change_obj.insert("content".to_string(), other);
+                        }
+                    }
+                }
+            }
         }
     }
     payload
+}
+
+fn snapshot(percent: f64) -> RateLimitSnapshot {
+    RateLimitSnapshot {
+        primary: Some(RateLimitWindow {
+            used_percent: percent,
+            window_minutes: Some(60),
+            resets_at: None,
+        }),
+        secondary: None,
+    }
 }
 
 #[test]
@@ -282,6 +332,7 @@ fn make_chatwidget_manual() -> (
         token_info: None,
         rate_limit_snapshot: None,
         rate_limit_warnings: RateLimitWarningState::default(),
+        rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
         stream_controller: None,
         running_commands: HashMap::new(),
         task_complete_pending: false,
@@ -390,6 +441,98 @@ fn test_rate_limit_warnings_monthly() {
     );
 }
 
+#[test]
+fn rate_limit_switch_prompt_skips_when_on_lower_cost_model() {
+    let (mut chat, _, _) = make_chatwidget_manual();
+    chat.auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    chat.config.model = NUDGE_MODEL_SLUG.to_string();
+
+    chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
+
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Idle
+    ));
+}
+
+#[test]
+fn rate_limit_switch_prompt_shows_once_per_session() {
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let (mut chat, _, _) = make_chatwidget_manual();
+    chat.config.model = "gpt-5".to_string();
+    chat.auth_manager = AuthManager::from_auth_for_testing(auth);
+
+    chat.on_rate_limit_snapshot(Some(snapshot(90.0)));
+    assert!(
+        chat.rate_limit_warnings.primary_index >= 1,
+        "warnings not emitted"
+    );
+    chat.maybe_show_pending_rate_limit_prompt();
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Shown
+    ));
+
+    chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Shown
+    ));
+}
+
+#[test]
+fn rate_limit_switch_prompt_respects_hidden_notice() {
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let (mut chat, _, _) = make_chatwidget_manual();
+    chat.config.model = "gpt-5".to_string();
+    chat.auth_manager = AuthManager::from_auth_for_testing(auth);
+    chat.config.notices.hide_rate_limit_model_nudge = Some(true);
+
+    chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
+
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Idle
+    ));
+}
+
+#[test]
+fn rate_limit_switch_prompt_defers_until_task_complete() {
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let (mut chat, _, _) = make_chatwidget_manual();
+    chat.config.model = "gpt-5".to_string();
+    chat.auth_manager = AuthManager::from_auth_for_testing(auth);
+
+    chat.bottom_pane.set_task_running(true);
+    chat.on_rate_limit_snapshot(Some(snapshot(90.0)));
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Pending
+    ));
+
+    chat.bottom_pane.set_task_running(false);
+    chat.maybe_show_pending_rate_limit_prompt();
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Shown
+    ));
+}
+
+#[test]
+fn rate_limit_switch_prompt_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+    chat.auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    chat.config.model = "gpt-5".to_string();
+
+    chat.on_rate_limit_snapshot(Some(snapshot(92.0)));
+    chat.maybe_show_pending_rate_limit_prompt();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("rate_limit_switch_prompt_popup", popup);
+}
+
 // (removed experimental resize snapshot test)
 
 #[test]
@@ -421,7 +564,7 @@ fn exec_approval_emits_proposed_command_and_decision_history() {
     // The approval modal should display the command snippet for user confirmation.
     let area = Rect::new(0, 0, 80, chat.desired_height(80));
     let mut buf = ratatui::buffer::Buffer::empty(area);
-    (&chat).render_ref(area, &mut buf);
+    chat.render(area, &mut buf);
     assert_snapshot!("exec_approval_modal_exec", format!("{buf:?}"));
 
     // Approve via keyboard and verify a concise decision history line is added
@@ -462,7 +605,7 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
 
     let area = Rect::new(0, 0, 80, chat.desired_height(80));
     let mut buf = ratatui::buffer::Buffer::empty(area);
-    (&chat).render_ref(area, &mut buf);
+    chat.render(area, &mut buf);
     let mut saw_first_line = false;
     for y in 0..area.height {
         let mut row = String::new();
@@ -519,7 +662,12 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
 }
 
 // --- Small helpers to tersely drive exec begin/end and snapshot active cell ---
-fn begin_exec(chat: &mut ChatWidget, call_id: &str, raw_cmd: &str) {
+fn begin_exec_with_source(
+    chat: &mut ChatWidget,
+    call_id: &str,
+    raw_cmd: &str,
+    source: ExecCommandSource,
+) {
     // Build the full command vec and parse it using core's parser,
     // then convert to protocol variants for the event payload.
     let command = vec!["bash".to_string(), "-lc".to_string(), raw_cmd.to_string()];
@@ -531,9 +679,14 @@ fn begin_exec(chat: &mut ChatWidget, call_id: &str, raw_cmd: &str) {
             command,
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             parsed_cmd,
-            is_user_shell_command: false,
+            source,
+            interaction_input: None,
         }),
     });
+}
+
+fn begin_exec(chat: &mut ChatWidget, call_id: &str, raw_cmd: &str) {
+    begin_exec_with_source(chat, call_id, raw_cmd, ExecCommandSource::Agent);
 }
 
 fn end_exec(chat: &mut ChatWidget, call_id: &str, stdout: &str, stderr: &str, exit_code: i32) {
@@ -792,6 +945,38 @@ fn exec_history_cell_shows_working_then_failed() {
     assert!(blob.to_lowercase().contains("bloop"), "expected error text");
 }
 
+#[test]
+fn exec_history_shows_unified_exec_startup_commands() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    begin_exec_with_source(
+        &mut chat,
+        "call-startup",
+        "echo unified exec startup",
+        ExecCommandSource::UnifiedExecStartup,
+    );
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "exec begin should not flush until completion"
+    );
+
+    end_exec(
+        &mut chat,
+        "call-startup",
+        "echo unified exec startup\n",
+        "",
+        0,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected finalized exec cell to flush");
+    let blob = lines_to_single_string(&cells[0]);
+    assert!(
+        blob.contains("• Ran echo unified exec startup"),
+        "expected startup command to render: {blob:?}"
+    );
+}
+
 /// Selecting the custom prompt option from the review popup sends
 /// OpenReviewCustomPrompt to the app event channel.
 #[test]
@@ -1036,7 +1221,7 @@ fn review_commit_picker_shows_subjects_without_timestamps() {
     let height = chat.desired_height(width);
     let area = ratatui::layout::Rect::new(0, 0, width, height);
     let mut buf = ratatui::buffer::Buffer::empty(area);
-    (&chat).render_ref(area, &mut buf);
+    chat.render(area, &mut buf);
 
     let mut blob = String::new();
     for y in 0..area.height {
@@ -1264,7 +1449,7 @@ fn render_bottom_first_row(chat: &ChatWidget, width: u16) -> String {
     let height = chat.desired_height(width);
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
-    (chat).render_ref(area, &mut buf);
+    chat.render(area, &mut buf);
     for y in 0..area.height {
         let mut row = String::new();
         for x in 0..area.width {
@@ -1286,7 +1471,7 @@ fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
     let height = chat.desired_height(width);
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
-    (chat).render_ref(area, &mut buf);
+    chat.render(area, &mut buf);
 
     let mut lines: Vec<String> = (0..area.height)
         .map(|row| {
@@ -1394,17 +1579,56 @@ fn windows_auto_mode_instructions_popup_lists_install_steps() {
 fn model_reasoning_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
-    chat.config.model = "gpt-5-codex".to_string();
+    chat.config.model = "gpt-5.1-codex".to_string();
     chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::High);
 
     let preset = builtin_model_presets(None)
         .into_iter()
-        .find(|preset| preset.model == "gpt-5-codex")
-        .expect("gpt-5-codex preset");
+        .find(|preset| preset.model == "gpt-5.1-codex")
+        .expect("gpt-5.1-codex preset");
     chat.open_reasoning_popup(preset);
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("model_reasoning_selection_popup", popup);
+}
+
+#[test]
+fn single_reasoning_option_skips_selection() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    static SINGLE_EFFORT: [ReasoningEffortPreset; 1] = [ReasoningEffortPreset {
+        effort: ReasoningEffortConfig::High,
+        description: "Maximizes reasoning depth for complex or ambiguous problems",
+    }];
+    let preset = ModelPreset {
+        id: "model-with-single-reasoning",
+        model: "model-with-single-reasoning",
+        display_name: "model-with-single-reasoning",
+        description: "",
+        default_reasoning_effort: ReasoningEffortConfig::High,
+        supported_reasoning_efforts: &SINGLE_EFFORT,
+        is_default: false,
+        upgrade: None,
+    };
+    chat.open_reasoning_popup(preset);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        !popup.contains("Select Reasoning Level"),
+        "expected reasoning selection popup to be skipped"
+    );
+
+    let mut events = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        events.push(ev);
+    }
+
+    assert!(
+        events
+            .iter()
+            .any(|ev| matches!(ev, AppEvent::UpdateReasoningEffort(Some(effort)) if *effort == ReasoningEffortConfig::High)),
+        "expected reasoning effort to be applied automatically; events: {events:?}"
+    );
 }
 
 #[test]
@@ -1433,13 +1657,13 @@ fn feedback_upload_consent_popup_snapshot() {
 fn reasoning_popup_escape_returns_to_model_popup() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
-    chat.config.model = "gpt-5".to_string();
+    chat.config.model = "gpt-5.1".to_string();
     chat.open_model_popup();
 
     let presets = builtin_model_presets(None)
         .into_iter()
-        .find(|preset| preset.model == "gpt-5-codex")
-        .expect("gpt-5-codex preset");
+        .find(|preset| preset.model == "gpt-5.1-codex")
+        .expect("gpt-5.1-codex preset");
     chat.open_reasoning_popup(presets);
 
     let before_escape = render_bottom_popup(&chat, 80);
@@ -1564,7 +1788,8 @@ async fn binary_size_transcript_snapshot() {
                                     command: e.command,
                                     cwd: e.cwd,
                                     parsed_cmd,
-                                    is_user_shell_command: false,
+                                    source: ExecCommandSource::Agent,
+                                    interaction_input: e.interaction_input.clone(),
                                 }),
                             }
                         }
@@ -1698,7 +1923,7 @@ fn approval_modal_exec_snapshot() {
     terminal.set_viewport_area(viewport);
 
     terminal
-        .draw(|f| f.render_widget_ref(&chat, f.area()))
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw approval modal");
     assert!(
         terminal
@@ -1739,7 +1964,7 @@ fn approval_modal_exec_without_reason_snapshot() {
         ratatui::Terminal::new(VT100Backend::new(80, height)).expect("create terminal");
     terminal.set_viewport_area(Rect::new(0, 0, 80, height));
     terminal
-        .draw(|f| f.render_widget_ref(&chat, f.area()))
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw approval modal (no reason)");
     assert_snapshot!(
         "approval_modal_exec_no_reason",
@@ -1778,7 +2003,7 @@ fn approval_modal_patch_snapshot() {
         ratatui::Terminal::new(VT100Backend::new(80, height)).expect("create terminal");
     terminal.set_viewport_area(Rect::new(0, 0, 80, height));
     terminal
-        .draw(|f| f.render_widget_ref(&chat, f.area()))
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw patch approval modal");
     assert_snapshot!(
         "approval_modal_patch",
@@ -1870,7 +2095,7 @@ fn ui_snapshots_small_heights_idle() {
         let name = format!("chat_small_idle_h{h}");
         let mut terminal = Terminal::new(TestBackend::new(40, h)).expect("create terminal");
         terminal
-            .draw(|f| f.render_widget_ref(&chat, f.area()))
+            .draw(|f| chat.render(f.area(), f.buffer_mut()))
             .expect("draw chat idle");
         assert_snapshot!(name, terminal.backend());
     }
@@ -1900,7 +2125,7 @@ fn ui_snapshots_small_heights_task_running() {
         let name = format!("chat_small_running_h{h}");
         let mut terminal = Terminal::new(TestBackend::new(40, h)).expect("create terminal");
         terminal
-            .draw(|f| f.render_widget_ref(&chat, f.area()))
+            .draw(|f| chat.render(f.area(), f.buffer_mut()))
             .expect("draw chat running");
         assert_snapshot!(name, terminal.backend());
     }
@@ -1950,7 +2175,7 @@ fn status_widget_and_approval_modal_snapshot() {
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
         .expect("create terminal");
     terminal
-        .draw(|f| f.render_widget_ref(&chat, f.area()))
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw status + approval modal");
     assert_snapshot!("status_widget_and_approval_modal", terminal.backend());
 }
@@ -1979,9 +2204,25 @@ fn status_widget_active_snapshot() {
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
         .expect("create terminal");
     terminal
-        .draw(|f| f.render_widget_ref(&chat, f.area()))
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw status widget");
     assert_snapshot!("status_widget_active", terminal.backend());
+}
+
+#[test]
+fn background_event_updates_status_header() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    chat.handle_codex_event(Event {
+        id: "bg-1".into(),
+        msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+            message: "Waiting for `vim`".to_string(),
+        }),
+    });
+
+    assert!(chat.bottom_pane.status_indicator_visible());
+    assert_eq!(chat.current_status_header, "Waiting for `vim`");
+    assert!(drain_insert_history(&mut rx).is_empty());
 }
 
 #[test]
@@ -2014,7 +2255,7 @@ fn apply_patch_events_emit_history_cells() {
 
     let area = Rect::new(0, 0, 80, chat.desired_height(80));
     let mut buf = ratatui::buffer::Buffer::empty(area);
-    (&chat).render_ref(area, &mut buf);
+    chat.render(area, &mut buf);
     let mut saw_summary = false;
     for y in 0..area.height {
         let mut row = String::new();
@@ -2301,7 +2542,7 @@ fn apply_patch_untrusted_shows_approval_modal() {
     // Render and ensure the approval modal title is present
     let area = Rect::new(0, 0, 80, 12);
     let mut buf = Buffer::empty(area);
-    (&chat).render_ref(area, &mut buf);
+    chat.render(area, &mut buf);
 
     let mut contains_title = false;
     for y in 0..area.height {
@@ -2355,7 +2596,7 @@ fn apply_patch_request_shows_diff_summary() {
 
     let area = Rect::new(0, 0, 80, chat.desired_height(80));
     let mut buf = ratatui::buffer::Buffer::empty(area);
-    (&chat).render_ref(area, &mut buf);
+    chat.render(area, &mut buf);
 
     let mut saw_header = false;
     let mut saw_line1 = false;
@@ -2443,6 +2684,25 @@ fn stream_error_updates_status_indicator() {
         .status_widget()
         .expect("status indicator should be visible");
     assert_eq!(status.header(), msg);
+}
+
+#[test]
+fn warning_event_adds_warning_history_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    chat.handle_codex_event(Event {
+        id: "sub-1".into(),
+        msg: EventMsg::Warning(WarningEvent {
+            message: TEST_WARNING_MESSAGE.to_string(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one warning history cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains(TEST_WARNING_MESSAGE),
+        "warning cell missing content: {rendered}"
+    );
 }
 
 #[test]
@@ -2616,7 +2876,8 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
                     path: "diff_render.rs".into(),
                 },
             ],
-            is_user_shell_command: false,
+            source: ExecCommandSource::Agent,
+            interaction_input: None,
         }),
     });
     chat.handle_codex_event(Event {
@@ -2661,7 +2922,7 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     }
 
     term.draw(|f| {
-        (&chat).render_ref(f.area(), f.buffer_mut());
+        chat.render(f.area(), f.buffer_mut());
     })
     .unwrap();
 
@@ -2757,5 +3018,30 @@ printf 'fenced within fenced\n'
             .expect("Failed to insert history lines in test");
     }
 
+    assert_snapshot!(term.backend().vt100().screen().contents());
+}
+
+#[test]
+fn chatwidget_tall() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+    chat.handle_codex_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window: None,
+        }),
+    });
+    for i in 0..30 {
+        chat.queue_user_message(format!("Hello, world! {i}").into());
+    }
+    let width: u16 = 80;
+    let height: u16 = 24;
+    let backend = VT100Backend::new(width, height);
+    let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+    let desired_height = chat.desired_height(width).min(height);
+    term.set_viewport_area(Rect::new(0, height - desired_height, width, desired_height));
+    term.draw(|f| {
+        chat.render(f.area(), f.buffer_mut());
+    })
+    .unwrap();
     assert_snapshot!(term.backend().vt100().screen().contents());
 }

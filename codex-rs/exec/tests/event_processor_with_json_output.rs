@@ -5,6 +5,7 @@ use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
+use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::McpToolCallBeginEvent;
@@ -12,11 +13,13 @@ use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
+use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_exec::event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
 use codex_exec::exec_events::AgentMessageItem;
 use codex_exec::exec_events::CommandExecutionItem;
 use codex_exec::exec_events::CommandExecutionStatus;
+use codex_exec::exec_events::ErrorItem;
 use codex_exec::exec_events::ItemCompletedEvent;
 use codex_exec::exec_events::ItemStartedEvent;
 use codex_exec::exec_events::ItemUpdatedEvent;
@@ -541,6 +544,28 @@ fn error_event_produces_error() {
 }
 
 #[test]
+fn warning_event_produces_error_item() {
+    let mut ep = EventProcessorWithJsonOutput::new(None);
+    let out = ep.collect_thread_events(&event(
+        "e1",
+        EventMsg::Warning(WarningEvent {
+            message: "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start a new conversation when possible to keep conversations small and targeted.".to_string(),
+        }),
+    ));
+    assert_eq!(
+        out,
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+            item: ThreadItem {
+                id: "item_0".to_string(),
+                details: ThreadItemDetails::Error(ErrorItem {
+                    message: "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start a new conversation when possible to keep conversations small and targeted.".to_string(),
+                }),
+            },
+        })]
+    );
+}
+
+#[test]
 fn stream_error_event_produces_error() {
     let mut ep = EventProcessorWithJsonOutput::new(None);
     let out = ep.collect_thread_events(&event(
@@ -602,7 +627,8 @@ fn exec_command_end_success_produces_completed_command_item() {
             command: vec!["bash".to_string(), "-lc".to_string(), "echo hi".to_string()],
             cwd: std::env::current_dir().unwrap(),
             parsed_cmd: Vec::new(),
-            is_user_shell_command: false,
+            source: ExecCommandSource::Agent,
+            interaction_input: None,
         }),
     );
     let out_begin = ep.collect_thread_events(&begin);
@@ -663,7 +689,8 @@ fn exec_command_end_failure_produces_failed_command_item() {
             command: vec!["sh".to_string(), "-c".to_string(), "exit 1".to_string()],
             cwd: std::env::current_dir().unwrap(),
             parsed_cmd: Vec::new(),
-            is_user_shell_command: false,
+            source: ExecCommandSource::Agent,
+            interaction_input: None,
         }),
     );
     assert_eq!(

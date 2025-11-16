@@ -16,6 +16,7 @@ use codex_core::auth::enforce_login_restrictions;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::find_conversation_path_by_id_str;
+use codex_core::get_platform_sandbox;
 use codex_core::protocol::AskForApproval;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
@@ -54,6 +55,7 @@ pub mod live_wrap;
 mod markdown;
 mod markdown_render;
 mod markdown_stream;
+mod model_migration;
 pub mod onboarding;
 mod pager_overlay;
 pub mod public_widgets;
@@ -71,8 +73,9 @@ mod terminal_palette;
 mod text_formatting;
 mod tui;
 mod ui_consts;
+pub mod update_action;
 mod update_prompt;
-pub mod updates;
+mod updates;
 mod version;
 
 mod wrapping;
@@ -95,7 +98,7 @@ use std::io::Write as _;
 // (tests access modules directly within the crate)
 
 pub async fn run_main(
-    cli: Cli,
+    mut cli: Cli,
     codex_linux_sandbox_exe: Option<PathBuf>,
 ) -> std::io::Result<AppExitInfo> {
     let (sandbox_mode, approval_policy) = if cli.full_auto {
@@ -114,6 +117,13 @@ pub async fn run_main(
             cli.approval_policy.map(Into::into),
         )
     };
+
+    // Map the legacy --search flag to the new feature toggle.
+    if cli.web_search {
+        cli.config_overrides
+            .raw_overrides
+            .push("features.web_search_request=true".to_string());
+    }
 
     // When using `--oss`, let the bootstrapper pick the model (defaulting to
     // gpt-oss:20b) and ensure it is present locally. Also, force the built‑in
@@ -150,7 +160,7 @@ pub async fn run_main(
         compact_prompt: None,
         include_apply_patch_tool: None,
         show_raw_agent_reasoning: cli.oss.then_some(true),
-        tools_web_search_request: cli.web_search.then_some(true),
+        tools_web_search_request: None,
         experimental_sandbox_command_assessment: None,
         additional_writable_roots: additional_dirs,
     };
@@ -349,6 +359,16 @@ async fn run_ratatui_app(
             &mut tui,
         )
         .await?;
+        if onboarding_result.should_exit {
+            restore();
+            session_log::log_session_end();
+            let _ = tui.terminal.clear();
+            return Ok(AppExitInfo {
+                token_usage: codex_core::protocol::TokenUsage::default(),
+                conversation_id: None,
+                update_action: None,
+            });
+        }
         if onboarding_result.windows_install_selected {
             restore();
             session_log::log_session_end();
@@ -362,13 +382,8 @@ async fn run_ratatui_app(
                 update_action: None,
             });
         }
-        // if the user acknowledged windows or made an explicit decision ato trust the directory, reload the config accordingly
-        if should_show_windows_wsl_screen
-            || onboarding_result
-                .directory_trust_decision
-                .map(|d| d == TrustDirectorySelection::Trust)
-                .unwrap_or(false)
-        {
+        // if the user acknowledged windows or made any trust decision, reload the config accordingly
+        if should_show_windows_wsl_screen || onboarding_result.directory_trust_decision.is_some() {
             load_config_or_exit(cli_kv_overrides, overrides).await
         } else {
             initial_config
@@ -516,16 +531,16 @@ async fn load_config_or_exit(
 /// or if the current cwd project is already trusted. If not, we need to
 /// show the trust screen.
 fn should_show_trust_screen(config: &Config) -> bool {
-    if cfg!(target_os = "windows") {
-        // Native Windows cannot enforce sandboxed write access without WSL; skip the trust prompt entirely.
+    if cfg!(target_os = "windows") && get_platform_sandbox().is_none() {
+        // If the experimental sandbox is not enabled, Native Windows cannot enforce sandboxed write access without WSL; skip the trust prompt entirely.
         return false;
     }
     if config.did_user_set_custom_approval_policy_or_sandbox_mode {
         // Respect explicit approval/sandbox overrides made by the user.
         return false;
     }
-    // otherwise, skip iff the active project is trusted
-    !config.active_project.is_trusted()
+    // otherwise, show only if no trust decision has been made
+    config.active_project.trust_level.is_none()
 }
 
 fn should_show_onboarding(
@@ -561,10 +576,13 @@ mod tests {
     use codex_core::config::ConfigOverrides;
     use codex_core::config::ConfigToml;
     use codex_core::config::ProjectConfig;
+    use codex_core::set_windows_sandbox_enabled;
+    use serial_test::serial;
     use tempfile::TempDir;
 
     #[test]
-    fn windows_skips_trust_prompt() -> std::io::Result<()> {
+    #[serial]
+    fn windows_skips_trust_prompt_without_sandbox() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let mut config = Config::load_from_base_config_with_overrides(
             ConfigToml::default(),
@@ -573,6 +591,7 @@ mod tests {
         )?;
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig { trust_level: None };
+        set_windows_sandbox_enabled(false);
 
         let should_show = should_show_trust_screen(&config);
         if cfg!(target_os = "windows") {
@@ -586,6 +605,54 @@ mod tests {
                 "Non-Windows should still show trust prompt when project is untrusted"
             );
         }
+        Ok(())
+    }
+    #[test]
+    #[serial]
+    fn windows_shows_trust_prompt_with_sandbox() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let mut config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            temp_dir.path().to_path_buf(),
+        )?;
+        config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
+        config.active_project = ProjectConfig { trust_level: None };
+        set_windows_sandbox_enabled(true);
+
+        let should_show = should_show_trust_screen(&config);
+        if cfg!(target_os = "windows") {
+            assert!(
+                should_show,
+                "Windows trust prompt should be shown on native Windows with sandbox enabled"
+            );
+        } else {
+            assert!(
+                should_show,
+                "Non-Windows should still show trust prompt when project is untrusted"
+            );
+        }
+        Ok(())
+    }
+    #[test]
+    fn untrusted_project_skips_trust_prompt() -> std::io::Result<()> {
+        use codex_protocol::config_types::TrustLevel;
+        let temp_dir = TempDir::new()?;
+        let mut config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            temp_dir.path().to_path_buf(),
+        )?;
+        config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
+        config.active_project = ProjectConfig {
+            trust_level: Some(TrustLevel::Untrusted),
+        };
+
+        let should_show = should_show_trust_screen(&config);
+        assert!(
+            !should_show,
+            "Trust prompt should not be shown for projects explicitly marked as untrusted"
+        );
         Ok(())
     }
 }

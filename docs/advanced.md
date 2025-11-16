@@ -1,6 +1,6 @@
 ## Advanced
 
-If you already lean on Codex every day and just need a little more control, this page collects the knobs you are most likely to reach for: tweak defaults in [Config](./config.md), add extra tools through [Model Context Protocol support](./advanced.md#model-context-protocol), and script full runs with [`codex exec`](./exec.md). Jump to the section you need and keep building.
+If you already lean on Codex every day and just need a little more control, this page collects the knobs you are most likely to reach for: tweak defaults in [Config](./config.md), add extra tools through [Model Context Protocol support](#model-context-protocol), and script full runs with [`codex exec`](./exec.md). Jump to the section you need and keep building.
 
 ## Config quickstart {#config-quickstart}
 
@@ -12,7 +12,7 @@ Because Codex is written in Rust, it honors the `RUST_LOG` environment variable 
 
 The TUI defaults to `RUST_LOG=codex_core=info,codex_tui=info,codex_rmcp_client=info` and log messages are written to `~/.codex/log/codex-tui.log`, so you can leave the following running in a separate terminal to monitor log messages as they are written:
 
-```
+```bash
 tail -F ~/.codex/log/codex-tui.log
 ```
 
@@ -67,7 +67,7 @@ Use the MCP inspector and `codex mcp-server` to build a simple tic-tac-toe game 
 
 **approval-policy:** never
 
-**prompt:** Implement a simple tic-tac-toe game with HTML, Javascript, and CSS. Write the game in a single file called index.html.
+**prompt:** Implement a simple tic-tac-toe game with HTML, JavaScript, and CSS. Write the game in a single file called index.html.
 
 **sandbox:** workspace-write
 
