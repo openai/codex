@@ -81,6 +81,9 @@
   (iokit-registry-entry-class "RootDomainUserClient")
 )
 
+; allow binding/listening on local addresses
+(allow network-inbound (local ip "localhost:*"))
+
 ; needed to look up user info, see https://crbug.com/792228
 (allow mach-lookup
   (global-name "com.apple.system.opendirectoryd.libinfo")
