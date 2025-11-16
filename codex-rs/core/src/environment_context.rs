@@ -106,6 +106,17 @@ impl EnvironmentContext {
             && self.operating_system == *operating_system
     }
 
+    fn new_without_operating_system(
+        cwd: Option<PathBuf>,
+        approval_policy: Option<AskForApproval>,
+        sandbox_policy: Option<SandboxPolicy>,
+        shell: Option<Shell>,
+    ) -> Self {
+        let mut ec = Self::new(cwd, approval_policy, sandbox_policy, shell);
+        ec.operating_system = None;
+        ec
+    }
+
     pub fn diff(before: &TurnContext, after: &TurnContext) -> Self {
         let cwd = if before.cwd != after.cwd {
             Some(after.cwd.clone())
@@ -122,7 +133,7 @@ impl EnvironmentContext {
         } else {
             None
         };
-        EnvironmentContext::new(cwd, approval_policy, sandbox_policy, None)
+        EnvironmentContext::new_without_operating_system(cwd, approval_policy, sandbox_policy, None)
     }
 }
 
