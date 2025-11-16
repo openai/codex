@@ -175,6 +175,25 @@ fn test_apply_patch_cli_move_overwrites_existing_destination() -> anyhow::Result
 }
 
 #[test]
+// Regression test for https://github.com/openai/codex/issues/6358
+fn test_apply_patch_cli_self_move_preserves_file() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let file_path = tmp.path().join("diary.md");
+    fs::write(&file_path, "entry\n")?;
+
+    let patch = "*** Begin Patch\n*** Update File: diary.md\n*** Move to: ./diary.md\n@@\n-entry\n+notes\n*** End Patch";
+
+    run_apply_patch_in_dir(tmp.path(), patch)?
+        .success()
+        .stdout("Success. Updated the following files:\nM ./diary.md\n");
+
+    assert!(file_path.exists());
+    assert_eq!(fs::read_to_string(&file_path)?, "notes\n");
+
+    Ok(())
+}
+
+#[test]
 fn test_apply_patch_cli_add_overwrites_existing_file() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let path = tmp.path().join("duplicate.txt");

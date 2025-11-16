@@ -609,8 +609,11 @@ fn apply_hunks_to_files(hunks: &[Hunk]) -> anyhow::Result<AffectedPaths> {
                     }
                     std::fs::write(dest, new_contents)
                         .with_context(|| format!("Failed to write file {}", dest.display()))?;
-                    std::fs::remove_file(path)
-                        .with_context(|| format!("Failed to remove original {}", path.display()))?;
+                    if !is_same_path(path, dest) {
+                        std::fs::remove_file(path).with_context(|| {
+                            format!("Failed to remove original {}", path.display())
+                        })?;
+                    }
                     modified.push(dest.clone());
                 } else {
                     std::fs::write(path, new_contents)
@@ -625,6 +628,16 @@ fn apply_hunks_to_files(hunks: &[Hunk]) -> anyhow::Result<AffectedPaths> {
         modified,
         deleted,
     })
+}
+
+fn is_same_path(path: &Path, dest: &Path) -> bool {
+    if path == dest {
+        return true;
+    }
+    match (std::fs::canonicalize(path), std::fs::canonicalize(dest)) {
+        (Ok(src), Ok(dst)) => src == dst,
+        _ => false,
+    }
 }
 
 struct AppliedPatch {
@@ -1668,5 +1681,19 @@ g
         let mut stderr = Vec::new();
         let result = apply_patch(&patch, &mut stdout, &mut stderr);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_is_same_path() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("file.md");
+        fs::write(&path, "dir\n").unwrap();
+
+        let alias = dir.path().join("./file.md");
+        assert!(is_same_path(&path, &alias));
+
+        let other = dir.path().join("other.md");
+        fs::write(&other, "other\n").unwrap();
+        assert!(!is_same_path(&path, &other));
     }
 }
