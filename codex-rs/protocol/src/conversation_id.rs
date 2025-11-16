@@ -1,8 +1,7 @@
 use std::fmt::Display;
 
-use schemars::JsonSchema;
-use schemars::r#gen::SchemaGenerator;
-use schemars::schema::Schema;
+use std::borrow::Cow;
+use schemars::{JsonSchema, SchemaGenerator};
 use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
@@ -61,11 +60,11 @@ impl<'de> Deserialize<'de> for ConversationId {
 }
 
 impl JsonSchema for ConversationId {
-    fn schema_name() -> String {
-        "ConversationId".to_string()
+    fn schema_name() -> Cow<'static, str> {
+        "ConversationId".into()
     }
 
-    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+    fn json_schema(generator: &mut SchemaGenerator) -> schemars::Schema {
         <String>::json_schema(generator)
     }
 }
