@@ -25,6 +25,7 @@ use super::UnifiedExecError;
 pub(crate) struct OutputBufferState {
     chunks: VecDeque<Vec<u8>>,
     pub(crate) total_bytes: usize,
+    completed: bool,
 }
 
 impl OutputBufferState {
@@ -53,10 +54,14 @@ impl OutputBufferState {
         }
     }
 
-    pub(super) fn drain(&mut self) -> Vec<Vec<u8>> {
+    pub(super) fn mark_completed(&mut self) {
+        self.completed = true;
+    }
+
+    pub(super) fn drain(&mut self) -> (Vec<Vec<u8>>, bool) {
         let drained: Vec<Vec<u8>> = self.chunks.drain(..).collect();
         self.total_bytes = 0;
-        drained
+        (drained, self.completed)
     }
 
     pub(super) fn snapshot(&self) -> Vec<Vec<u8>> {
@@ -92,12 +97,22 @@ impl UnifiedExecSession {
                 match receiver.recv().await {
                     Ok(chunk) => {
                         let mut guard = buffer_clone.lock().await;
-                        guard.push_chunk(chunk);
+                        if chunk.is_empty() {
+                            guard.mark_completed();
+                        } else {
+                            guard.push_chunk(chunk);
+                        }
                         drop(guard);
                         notify_clone.notify_waiters();
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        let mut guard = buffer_clone.lock().await;
+                        guard.mark_completed();
+                        drop(guard);
+                        notify_clone.notify_waiters();
+                        break;
+                    }
                 }
             }
         });

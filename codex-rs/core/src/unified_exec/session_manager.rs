@@ -470,23 +470,22 @@ impl UnifiedExecSessionManager {
     ) -> Vec<u8> {
         let mut collected: Vec<u8> = Vec::with_capacity(4096);
         loop {
-            let drained_chunks;
-            let mut wait_for_output = None;
-            {
+            let (drained_chunks, completed) = {
                 let mut guard = output_buffer.lock().await;
-                drained_chunks = guard.drain();
-                if drained_chunks.is_empty() {
-                    wait_for_output = Some(output_notify.notified());
-                }
-            }
+                guard.drain()
+            };
 
             if drained_chunks.is_empty() {
+                if completed {
+                    break;
+                }
+
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining == Duration::ZERO {
                     break;
                 }
 
-                let notified = wait_for_output.unwrap_or_else(|| output_notify.notified());
+                let notified = output_notify.notified();
                 tokio::pin!(notified);
                 tokio::select! {
                     _ = &mut notified => {}
