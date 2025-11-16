@@ -10,13 +10,13 @@
 use super::compact::COMPACT_WARNING_MESSAGE;
 use super::compact::FIRST_REPLY;
 use super::compact::SUMMARY_TEXT;
-use super::compact::TEST_COMPACT_PROMPT;
 use codex_core::CodexAuth;
 use codex_core::CodexConversation;
 use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
 use codex_core::built_in_model_providers;
+use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
 use codex_core::config::OPENAI_DEFAULT_MODEL;
 use codex_core::protocol::EventMsg;
@@ -38,11 +38,20 @@ use tempfile::TempDir;
 use wiremock::MockServer;
 
 const AFTER_SECOND_RESUME: &str = "AFTER_SECOND_RESUME";
-const COMPACT_PROMPT_MARKER: &str =
-    "You are performing a CONTEXT CHECKPOINT COMPACTION for a tool.";
 
 fn network_disabled() -> bool {
     std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok()
+}
+
+fn body_contains_text(body: &str, text: &str) -> bool {
+    body.contains(&json_fragment(text))
+}
+
+fn json_fragment(text: &str) -> String {
+    serde_json::to_string(text)
+        .expect("serialize text to JSON")
+        .trim_matches('"')
+        .to_string()
 }
 
 fn filter_out_ghost_snapshot_entries(items: &[Value]) -> Vec<Value> {
@@ -82,7 +91,8 @@ fn extract_summary_message(request: &Value, summary_text: &str) -> Value {
                         .and_then(|arr| arr.first())
                         .and_then(|entry| entry.get("text"))
                         .and_then(Value::as_str)
-                        == Some(summary_text)
+                        .map(|text| text.contains(summary_text))
+                        .unwrap_or(false)
             })
         })
         .cloned()
@@ -283,7 +293,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
           "content": [
             {
               "type": "input_text",
-              "text": TEST_COMPACT_PROMPT
+              "text": SUMMARIZATION_PROMPT
             }
           ]
         }
@@ -741,7 +751,7 @@ async fn mount_initial_flow(server: &MockServer) {
     let match_first = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains("\"text\":\"hello world\"")
-            && !body.contains(COMPACT_PROMPT_MARKER)
+            && !body_contains_text(body, SUMMARIZATION_PROMPT)
             && !body.contains(&format!("\"text\":\"{SUMMARY_TEXT}\""))
             && !body.contains("\"text\":\"AFTER_COMPACT\"")
             && !body.contains("\"text\":\"AFTER_RESUME\"")
@@ -751,7 +761,7 @@ async fn mount_initial_flow(server: &MockServer) {
 
     let match_compact = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(COMPACT_PROMPT_MARKER)
+        body_contains_text(body, SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(server, match_compact, sse2).await;
 
@@ -785,7 +795,7 @@ async fn mount_second_compact_flow(server: &MockServer) {
 
     let match_second_compact = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(COMPACT_PROMPT_MARKER) && body.contains("AFTER_FORK")
+        body_contains_text(body, SUMMARIZATION_PROMPT) && body.contains("AFTER_FORK")
     };
     mount_sse_once_match(server, match_second_compact, sse6).await;
 
@@ -806,7 +816,7 @@ async fn start_test_conversation(
     let home = TempDir::new().expect("create temp dir");
     let mut config = load_default_config_for_test(&home);
     config.model_provider = model_provider;
-    config.compact_prompt = Some(TEST_COMPACT_PROMPT.to_string());
+    config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
 
     let manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
     let NewConversation { conversation, .. } = manager
