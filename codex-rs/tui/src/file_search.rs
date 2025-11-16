@@ -19,6 +19,7 @@
 //!    the user typed, it is cancelled.
 
 use codex_file_search as file_search;
+use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -164,7 +165,8 @@ impl FileSearchManager {
     ) {
         let compute_indices = true;
         std::thread::spawn(move || {
-            let matches = file_search::run(
+            // Pass 1: Search non-ignored files first
+            let mut matches = file_search::run(
                 &query,
                 MAX_FILE_SEARCH_RESULTS,
                 &search_dir,
@@ -172,10 +174,39 @@ impl FileSearchManager {
                 NUM_FILE_SEARCH_THREADS,
                 cancellation_token.clone(),
                 compute_indices,
-                true,
+                true, // respect_gitignore
             )
             .map(|res| res.matches)
             .unwrap_or_default();
+
+            // Pass 2: Fill with ignored files if needed
+            if matches.len() < MAX_FILE_SEARCH_RESULTS.get()
+                && !cancellation_token.load(Ordering::Relaxed)
+            {
+                let remaining = MAX_FILE_SEARCH_RESULTS.get() - matches.len();
+                let pass1_paths: HashSet<String> = matches.iter().map(|m| m.path.clone()).collect();
+
+                let ignored = file_search::run(
+                    &query,
+                    MAX_FILE_SEARCH_RESULTS,
+                    &search_dir,
+                    Vec::new(),
+                    NUM_FILE_SEARCH_THREADS,
+                    cancellation_token.clone(),
+                    compute_indices,
+                    false, // respect_gitignore
+                )
+                .map(|res| res.matches)
+                .unwrap_or_default();
+
+                let unique_ignored: Vec<_> = ignored
+                    .into_iter()
+                    .filter(|m| !pass1_paths.contains(&m.path))
+                    .take(remaining)
+                    .collect();
+
+                matches.extend(unique_ignored);
+            }
 
             let is_cancelled = cancellation_token.load(Ordering::Relaxed);
             if !is_cancelled {
