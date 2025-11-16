@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::fmt;
 use std::io::IsTerminal;
 use std::io::Result;
@@ -41,9 +42,12 @@ use crate::custom_terminal::Terminal as CustomTerminal;
 use crate::tui::job_control::SUSPEND_KEY;
 #[cfg(unix)]
 use crate::tui::job_control::SuspendContext;
+use focus_sequence::FocusSequenceBuffer;
 
 #[cfg(unix)]
 mod job_control;
+
+mod focus_sequence;
 
 /// A type alias for the terminal type used in this application
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
@@ -147,7 +151,7 @@ fn set_panic_hook() {
     }));
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum TuiEvent {
     Key(KeyEvent),
     Paste(String),
@@ -245,6 +249,8 @@ impl Tui {
     pub fn event_stream(&self) -> Pin<Box<dyn Stream<Item = TuiEvent> + Send + 'static>> {
         use tokio_stream::StreamExt;
 
+        const FOCUS_SEQUENCE_TIMEOUT: Duration = Duration::from_millis(30);
+
         let mut crossterm_events = crossterm::event::EventStream::new();
         let mut draw_rx = self.draw_tx.subscribe();
 
@@ -255,9 +261,24 @@ impl Tui {
         let alt_screen_active = self.alt_screen_active.clone();
 
         let terminal_focused = self.terminal_focused.clone();
+        let mut focus_buffer = FocusSequenceBuffer::new(FOCUS_SEQUENCE_TIMEOUT);
+        let mut buffered_events: VecDeque<TuiEvent> = VecDeque::new();
         let event_stream = async_stream::stream! {
             loop {
+                if let Some(buffered) = buffered_events.pop_front() {
+                    yield buffered;
+                    continue;
+                }
+
+                let deadline = focus_buffer.deadline();
                 select! {
+                    _ = async {
+                        if let Some(wait_until) = deadline {
+                            tokio::time::sleep_until(wait_until).await;
+                        }
+                    }, if deadline.is_some() => {
+                        focus_buffer.flush_as_keys(&mut buffered_events);
+                    }
                     Some(Ok(event)) = crossterm_events.next() => {
                         match event {
                             Event::Key(key_event) => {
@@ -268,20 +289,31 @@ impl Tui {
                                     yield TuiEvent::Draw;
                                     continue;
                                 }
-                                yield TuiEvent::Key(key_event);
+                                if focus_buffer.handle_key_event(
+                                    key_event,
+                                    &mut buffered_events,
+                                    &terminal_focused,
+                                ) {
+                                    continue;
+                                }
+                                buffered_events.push_back(TuiEvent::Key(key_event));
                             }
                             Event::Resize(_, _) => {
-                                yield TuiEvent::Draw;
+                                focus_buffer.flush_as_keys(&mut buffered_events);
+                                buffered_events.push_back(TuiEvent::Draw);
                             }
                             Event::Paste(pasted) => {
-                                yield TuiEvent::Paste(pasted);
+                                focus_buffer.flush_as_keys(&mut buffered_events);
+                                buffered_events.push_back(TuiEvent::Paste(pasted));
                             }
                             Event::FocusGained => {
                                 terminal_focused.store(true, Ordering::Relaxed);
                                 crate::terminal_palette::requery_default_colors();
-                                yield TuiEvent::Draw;
+                                focus_buffer.flush_as_keys(&mut buffered_events);
+                                buffered_events.push_back(TuiEvent::Draw);
                             }
                             Event::FocusLost => {
+                                focus_buffer.flush_as_keys(&mut buffered_events);
                                 terminal_focused.store(false, Ordering::Relaxed);
                             }
                             _ => {}
@@ -290,11 +322,13 @@ impl Tui {
                     result = draw_rx.recv() => {
                         match result {
                             Ok(_) => {
-                                yield TuiEvent::Draw;
+                                focus_buffer.flush_as_keys(&mut buffered_events);
+                                buffered_events.push_back(TuiEvent::Draw);
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                                 // We dropped one or more draw notifications; coalesce to a single draw.
-                                yield TuiEvent::Draw;
+                                focus_buffer.flush_as_keys(&mut buffered_events);
+                                buffered_events.push_back(TuiEvent::Draw);
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                                 // Sender dropped; stop emitting draws from this source.
