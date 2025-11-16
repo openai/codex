@@ -256,7 +256,7 @@ impl TextArea {
             {
                 // AltGr on many keyboards reports as Ctrl+Alt; treat it as a literal char.
                 self.insert_str(&c.to_string());
-            }
+            },
             KeyEvent {
                 code: KeyCode::Backspace,
                 modifiers: KeyModifiers::ALT,
