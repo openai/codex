@@ -8,6 +8,8 @@ use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use serde::ser::Serializer;
+use serde_json::Value;
+use serde_json::json;
 use ts_rs::TS;
 
 use crate::user_input::UserInput;
@@ -120,7 +122,7 @@ pub enum ResponseItem {
     //   "action": {"type":"search","query":"weather: San Francisco, CA"}
     // }
     WebSearchCall {
-        #[serde(default, skip_serializing)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(skip)]
         id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -211,13 +213,37 @@ pub struct LocalShellExecAction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum WebSearchAction {
-    Search {
-        query: String,
-    },
-    #[serde(other)]
-    Other,
+#[serde(transparent)]
+#[ts(type = "Record<string, unknown>")]
+pub struct WebSearchAction(Value);
+
+impl WebSearchAction {
+    pub fn search(query: impl Into<String>) -> Self {
+        Self(json!({
+            "type": "search",
+            "query": query.into(),
+        }))
+    }
+
+    fn as_object(&self) -> Option<&serde_json::Map<String, Value>> {
+        self.0.as_object()
+    }
+
+    pub fn action_type(&self) -> Option<&str> {
+        self.as_object()
+            .and_then(|map| map.get("type"))
+            .and_then(Value::as_str)
+    }
+
+    pub fn is_search(&self) -> bool {
+        matches!(self.action_type(), Some("search"))
+    }
+
+    pub fn query(&self) -> Option<&str> {
+        self.as_object()
+            .and_then(|map| map.get("query"))
+            .and_then(Value::as_str)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
@@ -701,6 +727,19 @@ mod tests {
             other => panic!("expected message response but got {other:?}"),
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn web_search_call_serializes_id() -> Result<()> {
+        let item = ResponseItem::WebSearchCall {
+            id: Some("search-1".into()),
+            status: Some("completed".into()),
+            action: WebSearchAction::search("weather"),
+        };
+
+        let json = serde_json::to_value(&item)?;
+        assert_eq!(json.get("id").and_then(|v| v.as_str()), Some("search-1"));
         Ok(())
     }
 }

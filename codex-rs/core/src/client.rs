@@ -263,7 +263,11 @@ impl ModelClient {
 
         let mut payload_json = serde_json::to_value(&payload)?;
         if azure_workaround {
-            attach_item_ids(&mut payload_json, &input_with_instructions);
+            attach_item_ids(
+                &mut payload_json,
+                &input_with_instructions,
+                &self.conversation_id,
+            );
         }
 
         let max_attempts = self.provider.request_max_retries();
@@ -607,7 +611,11 @@ struct ResponseCompletedOutputTokensDetails {
     reasoning_tokens: i64,
 }
 
-fn attach_item_ids(payload_json: &mut Value, original_items: &[ResponseItem]) {
+fn attach_item_ids(
+    payload_json: &mut Value,
+    original_items: &[ResponseItem],
+    conversation_id: &ConversationId,
+) {
     let Some(input_value) = payload_json.get_mut("input") else {
         return;
     };
@@ -615,22 +623,44 @@ fn attach_item_ids(payload_json: &mut Value, original_items: &[ResponseItem]) {
         return;
     };
 
-    for (value, item) in items.iter_mut().zip(original_items.iter()) {
-        if let ResponseItem::Reasoning { id, .. }
-        | ResponseItem::Message { id: Some(id), .. }
-        | ResponseItem::WebSearchCall { id: Some(id), .. }
-        | ResponseItem::FunctionCall { id: Some(id), .. }
-        | ResponseItem::LocalShellCall { id: Some(id), .. }
-        | ResponseItem::CustomToolCall { id: Some(id), .. } = item
-        {
-            if id.is_empty() {
-                continue;
-            }
-
-            if let Some(obj) = value.as_object_mut() {
-                obj.insert("id".to_string(), Value::String(id.clone()));
-            }
+    for (index, (value, item)) in items.iter_mut().zip(original_items.iter()).enumerate() {
+        if let Some(obj) = value.as_object_mut() {
+            let item_id = response_item_id(item)
+                .filter(|id| !id.is_empty())
+                .unwrap_or_else(|| format!("{conversation_id}-input-{index}"));
+            obj.insert("id".to_string(), Value::String(item_id));
         }
+    }
+}
+
+fn response_item_id(item: &ResponseItem) -> Option<String> {
+    match item {
+        ResponseItem::Reasoning { id, .. } => (!id.is_empty()).then_some(id.clone()),
+        ResponseItem::Message { id, .. } => id.as_ref().filter(|v| !v.is_empty()).cloned(),
+        ResponseItem::WebSearchCall { id, .. } => id.as_ref().filter(|v| !v.is_empty()).cloned(),
+        ResponseItem::FunctionCall { id, call_id, .. } => id
+            .as_ref()
+            .filter(|v| !v.is_empty())
+            .cloned()
+            .or_else(|| (!call_id.is_empty()).then_some(call_id.clone())),
+        ResponseItem::LocalShellCall { id, call_id, .. } => id
+            .as_ref()
+            .filter(|v| !v.is_empty())
+            .cloned()
+            .or_else(|| call_id.as_ref().filter(|v| !v.is_empty()).cloned()),
+        ResponseItem::CustomToolCall { id, call_id, .. } => id
+            .as_ref()
+            .filter(|v| !v.is_empty())
+            .cloned()
+            .or_else(|| (!call_id.is_empty()).then_some(call_id.clone())),
+        ResponseItem::FunctionCallOutput { call_id, .. } => {
+            (!call_id.is_empty()).then_some(call_id.clone())
+        }
+        ResponseItem::CustomToolCallOutput { call_id, .. } => {
+            (!call_id.is_empty()).then_some(call_id.clone())
+        }
+        ResponseItem::GhostSnapshot { .. } => None,
+        ResponseItem::Other => None,
     }
 }
 

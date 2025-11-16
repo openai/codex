@@ -991,9 +991,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     prompt.input.push(ResponseItem::WebSearchCall {
         id: Some("web-search-id".into()),
         status: Some("completed".into()),
-        action: WebSearchAction::Search {
-            query: "weather".into(),
-        },
+        action: WebSearchAction::search("weather"),
     });
     prompt.input.push(ResponseItem::FunctionCall {
         id: Some("function-id".into()),
@@ -1020,6 +1018,13 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         name: "custom_tool".into(),
         input: "{}".into(),
     });
+    prompt.input.push(ResponseItem::Message {
+        id: None,
+        role: "user".into(),
+        content: vec![ContentItem::InputText {
+            text: "follow up question".into(),
+        }],
+    });
 
     let mut stream = client
         .stream(&prompt)
@@ -1043,13 +1048,18 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
 
     assert_eq!(body["store"], serde_json::Value::Bool(true));
     assert_eq!(body["stream"], serde_json::Value::Bool(true));
-    assert_eq!(body["input"].as_array().map(Vec::len), Some(6));
+    assert_eq!(body["input"].as_array().map(Vec::len), Some(7));
     assert_eq!(body["input"][0]["id"].as_str(), Some("reasoning-id"));
     assert_eq!(body["input"][1]["id"].as_str(), Some("message-id"));
     assert_eq!(body["input"][2]["id"].as_str(), Some("web-search-id"));
     assert_eq!(body["input"][3]["id"].as_str(), Some("function-id"));
     assert_eq!(body["input"][4]["id"].as_str(), Some("local-shell-id"));
     assert_eq!(body["input"][5]["id"].as_str(), Some("custom-tool-id"));
+    let expected_user_id = format!("{conversation_id}-input-6");
+    assert_eq!(
+        body["input"][6]["id"].as_str(),
+        Some(expected_user_id.as_str())
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

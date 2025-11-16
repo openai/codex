@@ -8,7 +8,6 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::models::WebSearchAction;
 use codex_protocol::user_input::UserInput;
 use tracing::warn;
 use uuid::Uuid;
@@ -111,14 +110,17 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
                 raw_content,
             }))
         }
-        ResponseItem::WebSearchCall {
-            id,
-            action: WebSearchAction::Search { query },
-            ..
-        } => Some(TurnItem::WebSearch(WebSearchItem {
-            id: id.clone().unwrap_or_default(),
-            query: query.clone(),
-        })),
+        ResponseItem::WebSearchCall { id, action, .. } => {
+            if action.is_search()
+                && let Some(query) = action.query()
+            {
+                return Some(TurnItem::WebSearch(WebSearchItem {
+                    id: id.clone().unwrap_or_default(),
+                    query: query.to_string(),
+                }));
+            }
+            None
+        }
         _ => None,
     }
 }
@@ -305,9 +307,7 @@ mod tests {
         let item = ResponseItem::WebSearchCall {
             id: Some("ws_1".to_string()),
             status: Some("completed".to_string()),
-            action: WebSearchAction::Search {
-                query: "weather".to_string(),
-            },
+            action: WebSearchAction::search("weather"),
         };
 
         let turn_item = parse_turn_item(&item).expect("expected web search turn item");
