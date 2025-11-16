@@ -36,7 +36,7 @@ use super::generate_chunk_id;
 use super::resolve_max_tokens;
 use super::session::OutputBuffer;
 use super::session::UnifiedExecSession;
-use super::truncate_output_to_tokens;
+use crate::truncate::truncate_output_to_tokens;
 
 impl UnifiedExecSessionManager {
     pub(crate) async fn exec_command(

@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
-use codex_core::config::set_project_trusted;
+use codex_core::config::set_project_trust_level;
 use codex_core::git_info::resolve_root_git_project_for_trust;
+use codex_protocol::config_types::TrustLevel;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -153,7 +154,7 @@ impl TrustDirectoryWidget {
     fn handle_trust(&mut self) {
         let target =
             resolve_root_git_project_for_trust(&self.cwd).unwrap_or_else(|| self.cwd.clone());
-        if let Err(e) = set_project_trusted(&self.codex_home, &target) {
+        if let Err(e) = set_project_trust_level(&self.codex_home, &target, TrustLevel::Trusted) {
             tracing::error!("Failed to set project trusted: {e:?}");
             self.error = Some(format!("Failed to set trust for {}: {e}", target.display()));
         }
@@ -163,6 +164,16 @@ impl TrustDirectoryWidget {
 
     fn handle_dont_trust(&mut self) {
         self.highlighted = TrustDirectorySelection::DontTrust;
+        let target =
+            resolve_root_git_project_for_trust(&self.cwd).unwrap_or_else(|| self.cwd.clone());
+        if let Err(e) = set_project_trust_level(&self.codex_home, &target, TrustLevel::Untrusted) {
+            tracing::error!("Failed to set project untrusted: {e:?}");
+            self.error = Some(format!(
+                "Failed to set untrusted for {}: {e}",
+                target.display()
+            ));
+        }
+
         self.selection = Some(TrustDirectorySelection::DontTrust);
     }
 }
