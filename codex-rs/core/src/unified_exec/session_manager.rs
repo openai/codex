@@ -93,21 +93,43 @@ impl UnifiedExecSessionManager {
             deadline,
         )
         .await;
+        let output_completed = output_buffer.lock().await.is_completed();
+
+        let mut exit_code = None;
+        let mut has_exited = false;
+        if output_completed {
+            // If output completed (PTY closed stdout) then we expect the process to
+            // have exited or exit real soon.
+            let now = Instant::now();
+            // Enforce a minimum wait of 1000 ms; if by then it still didn't finish
+            // assume that the process closed its own stdout but is still alive.
+            let remaining = deadline
+                .saturating_duration_since(now)
+                .max(Duration::from_millis(1000));
+            let deadline = now + remaining;
+            has_exited = Self::wait_for_exited_until_deadline(&session, deadline).await;
+            if has_exited {
+                exit_code = session.exit_code();
+            }
+        }
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let text = String::from_utf8_lossy(&collected).to_string();
         let output = formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
         let chunk_id = generate_chunk_id();
-        let has_exited = session.has_exited();
+
         let stored_id = self
             .store_session(session, context, &request.command, cwd.clone(), start)
             .await;
-        let exit_code = self
-            .sessions
-            .lock()
-            .await
-            .get(&stored_id)
-            .map(|entry| entry.session.exit_code());
+        let exit_code = if exit_code.is_some() {
+            exit_code
+        } else {
+            self.sessions
+                .lock()
+                .await
+                .get(&stored_id)
+                .and_then(|entry| entry.session.exit_code())
+        };
         // Only include a session_id in the response if the process is still alive.
         let session_id = if has_exited { None } else { Some(stored_id) };
 
@@ -119,7 +141,7 @@ impl UnifiedExecSessionManager {
             wall_time,
             output,
             session_id,
-            exit_code: exit_code.flatten(),
+            exit_code,
             original_token_count: Some(original_token_count),
             session_command: Some(request.command.clone()),
         };
@@ -206,6 +228,22 @@ impl UnifiedExecSessionManager {
             deadline,
         )
         .await;
+        let output_completed = output_buffer.lock().await.is_completed();
+
+        if output_completed {
+            // If output completed (PTY closed stdout) then we expect the process to
+            // have exited or exit real soon.
+            let now = Instant::now();
+            // Enforce a minimum wait of 1000 ms; if by then it still didn't finish
+            // assume that the process closed its own stdout but is still alive.
+            let remaining = (start + Duration::from_millis(yield_time_ms))
+                .saturating_duration_since(now)
+                .max(Duration::from_millis(1000));
+            let deadline = now + remaining;
+            if let Some(entry) = self.sessions.lock().await.get(&session_id) {
+                Self::wait_for_exited_until_deadline(&entry.session, deadline).await;
+            }
+        }
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let text = String::from_utf8_lossy(&collected).to_string();
@@ -499,24 +537,24 @@ impl UnifiedExecSessionManager {
         let mut collected: Vec<u8> = Vec::with_capacity(4096);
         let mut exit_signal_received = cancellation_token.is_cancelled();
         loop {
-            let drained_chunks;
-            let mut wait_for_output = None;
-            {
+            let (drained_chunks, completed) = {
                 let mut guard = output_buffer.lock().await;
-                drained_chunks = guard.drain();
-                if drained_chunks.is_empty() {
-                    wait_for_output = Some(output_notify.notified());
-                }
-            }
+                guard.drain()
+            };
 
             if drained_chunks.is_empty() {
                 exit_signal_received |= cancellation_token.is_cancelled();
+
+                if completed {
+                    break;
+                }
+
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining == Duration::ZERO {
                     break;
                 }
 
-                let notified = wait_for_output.unwrap_or_else(|| output_notify.notified());
+                let notified = output_notify.notified();
                 if exit_signal_received {
                     let grace = remaining.min(POST_EXIT_OUTPUT_GRACE);
                     if tokio::time::timeout(grace, notified).await.is_err() {
@@ -547,6 +585,13 @@ impl UnifiedExecSessionManager {
         }
 
         collected
+    }
+
+    async fn wait_for_exited_until_deadline(
+        session: &UnifiedExecSession,
+        deadline: Instant,
+    ) -> bool {
+        session.wait_for_exited_until(deadline).await
     }
 }
 

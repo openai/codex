@@ -27,6 +27,7 @@ use super::UnifiedExecError;
 pub(crate) struct OutputBufferState {
     chunks: VecDeque<Vec<u8>>,
     pub(crate) total_bytes: usize,
+    completed: bool,
 }
 
 impl OutputBufferState {
@@ -55,10 +56,18 @@ impl OutputBufferState {
         }
     }
 
-    pub(super) fn drain(&mut self) -> Vec<Vec<u8>> {
+    pub(super) fn mark_completed(&mut self) {
+        self.completed = true;
+    }
+
+    pub(super) fn is_completed(&self) -> bool {
+        self.completed
+    }
+
+    pub(super) fn drain(&mut self) -> (Vec<Vec<u8>>, bool) {
         let drained: Vec<Vec<u8>> = self.chunks.drain(..).collect();
         self.total_bytes = 0;
-        drained
+        (drained, self.completed)
     }
 
     pub(super) fn snapshot(&self) -> Vec<Vec<u8>> {
@@ -78,6 +87,7 @@ pub(crate) struct UnifiedExecSession {
     session: ExecCommandSession,
     output_buffer: OutputBuffer,
     output_notify: Arc<Notify>,
+    exit_notify: Arc<Notify>,
     cancellation_token: CancellationToken,
     output_task: JoinHandle<()>,
     sandbox_type: SandboxType,
@@ -88,6 +98,7 @@ impl UnifiedExecSession {
         session: ExecCommandSession,
         initial_output_rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
         sandbox_type: SandboxType,
+        exit_notify: Arc<Notify>,
     ) -> Self {
         let output_buffer = Arc::new(Mutex::new(OutputBufferState::default()));
         let output_notify = Arc::new(Notify::new());
@@ -100,10 +111,19 @@ impl UnifiedExecSession {
             loop {
                 match receiver.recv().await {
                     Ok(chunk) => {
+                        let mut finished = false;
                         let mut guard = buffer_clone.lock().await;
-                        guard.push_chunk(chunk);
+                        if chunk.is_empty() {
+                            guard.mark_completed();
+                            finished = true;
+                        } else {
+                            guard.push_chunk(chunk);
+                        }
                         drop(guard);
                         notify_clone.notify_waiters();
+                        if finished {
+                            break;
+                        }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
@@ -118,6 +138,7 @@ impl UnifiedExecSession {
             session,
             output_buffer,
             output_notify,
+            exit_notify,
             cancellation_token,
             output_task,
             sandbox_type,
@@ -142,6 +163,20 @@ impl UnifiedExecSession {
 
     pub(super) fn exit_code(&self) -> Option<i32> {
         self.session.exit_code()
+    }
+
+    pub(super) async fn wait_for_exited_until(&self, deadline: tokio::time::Instant) -> bool {
+        if self.has_exited() {
+            return true;
+        }
+
+        let sleep = tokio::time::sleep_until(deadline);
+        tokio::pin!(sleep);
+
+        tokio::select! {
+            _ = self.exit_notify.notified() => true,
+            _ = &mut sleep => false,
+        }
     }
 
     async fn snapshot_output(&self) -> Vec<Vec<u8>> {
@@ -202,8 +237,9 @@ impl UnifiedExecSession {
             session,
             output_rx,
             mut exit_rx,
+            exit_notify,
         } = spawned;
-        let managed = Self::new(session, output_rx, sandbox_type);
+        let managed = Self::new(session, output_rx, sandbox_type, exit_notify);
 
         let exit_ready = match exit_rx.try_recv() {
             Ok(_) | Err(TryRecvError::Closed) => true,

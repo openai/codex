@@ -14,6 +14,7 @@ use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex as TokioMutex;
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
 #[derive(Debug)]
@@ -26,6 +27,7 @@ pub struct ExecCommandSession {
     wait_handle: StdMutex<Option<JoinHandle<()>>>,
     exit_status: Arc<AtomicBool>,
     exit_code: Arc<StdMutex<Option<i32>>>,
+    exit_notify: Arc<Notify>,
 }
 
 impl ExecCommandSession {
@@ -39,6 +41,7 @@ impl ExecCommandSession {
         wait_handle: JoinHandle<()>,
         exit_status: Arc<AtomicBool>,
         exit_code: Arc<StdMutex<Option<i32>>>,
+        exit_notify: Arc<Notify>,
     ) -> (Self, broadcast::Receiver<Vec<u8>>) {
         let initial_output_rx = output_tx.subscribe();
         (
@@ -51,6 +54,7 @@ impl ExecCommandSession {
                 wait_handle: StdMutex::new(Some(wait_handle)),
                 exit_status,
                 exit_code,
+                exit_notify,
             },
             initial_output_rx,
         )
@@ -70,6 +74,10 @@ impl ExecCommandSession {
 
     pub fn exit_code(&self) -> Option<i32> {
         self.exit_code.lock().ok().and_then(|guard| *guard)
+    }
+
+    pub fn exit_notify(&self) -> Arc<Notify> {
+        Arc::clone(&self.exit_notify)
     }
 }
 
@@ -104,6 +112,7 @@ pub struct SpawnedPty {
     pub session: ExecCommandSession,
     pub output_rx: broadcast::Receiver<Vec<u8>>,
     pub exit_rx: oneshot::Receiver<i32>,
+    pub exit_notify: Arc<Notify>,
 }
 
 pub async fn spawn_pty_process(
@@ -159,6 +168,8 @@ pub async fn spawn_pty_process(
                 Err(_) => break,
             }
         }
+        // Let collect_output_until_deadline know that no more output will follow (completed).
+        let _ = output_tx_clone.send(Vec::new());
     });
 
     let writer = pair.master.take_writer()?;
@@ -180,16 +191,19 @@ pub async fn spawn_pty_process(
     let wait_exit_status = Arc::clone(&exit_status);
     let exit_code = Arc::new(StdMutex::new(None));
     let wait_exit_code = Arc::clone(&exit_code);
+    let exit_notify = Arc::new(Notify::new());
+    let wait_exit_notify = Arc::clone(&exit_notify);
     let wait_handle: JoinHandle<()> = tokio::task::spawn_blocking(move || {
         let code = match child.wait() {
             Ok(status) => status.exit_code() as i32,
             Err(_) => -1,
         };
-        wait_exit_status.store(true, std::sync::atomic::Ordering::SeqCst);
         if let Ok(mut guard) = wait_exit_code.lock() {
             *guard = Some(code);
         }
+        wait_exit_status.store(true, std::sync::atomic::Ordering::SeqCst);
         let _ = exit_tx.send(code);
+        wait_exit_notify.notify_waiters();
     });
 
     let (session, output_rx) = ExecCommandSession::new(
@@ -201,11 +215,14 @@ pub async fn spawn_pty_process(
         wait_handle,
         exit_status,
         exit_code,
+        exit_notify,
     );
+    let session_exit_notify = session.exit_notify();
 
     Ok(SpawnedPty {
         session,
         output_rx,
         exit_rx,
+        exit_notify: session_exit_notify,
     })
 }
