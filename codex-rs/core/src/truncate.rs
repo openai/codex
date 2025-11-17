@@ -13,7 +13,6 @@ pub const MODEL_FORMAT_MAX_LINES: usize = 256; // lines
 pub const DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT: usize = MODEL_FORMAT_MAX_BYTES / 4;
 const TOKENIZER_STACK_SAFE_BYTES: usize = 1024 * 1024; // 1 MiB
 const APPROX_BYTES_PER_TOKEN: usize = 4;
-const TOKEN_ROUTER_MIN_ESTIMATE_BYTES: usize = 4 * 1024; // 4 KiB guard for byte-path routing
 
 /// Format a block of exec/tool output for model consumption, truncating by
 /// lines and bytes while preserving head and tail segments.
@@ -54,9 +53,8 @@ pub(crate) fn truncate_with_token_budget(
     }
 
     let exceeds_stack_limit = byte_len > TOKENIZER_STACK_SAFE_BYTES;
-    let exceeds_large_threshold = max_budget > 0
-        && byte_len >= TOKEN_ROUTER_MIN_ESTIMATE_BYTES
-        && byte_len > approx_bytes_for_tokens(max_budget.saturating_mul(2));
+    let exceeds_large_threshold =
+        max_budget > 0 && byte_len > approx_bytes_for_tokens(max_budget.saturating_mul(2));
     if exceeds_stack_limit || exceeds_large_threshold {
         return truncate_with_byte_estimate(s, max_budget, model);
     }
