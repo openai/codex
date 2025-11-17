@@ -147,7 +147,7 @@ impl ContextManager {
                     }
                 }
             }
-            _ => {},
+            _ => {}
         }
     }
 

@@ -1906,6 +1906,13 @@ pub(crate) async fn run_task(
                 if error.contains("The image data you provided does not represent a valid image") {
                     let mut state = sess.state.lock().await;
                     state.history.replace_last_turn_images("Invalid image");
+                } else {
+                    info!("Invalid data error: {}", error);
+                    let event = EventMsg::Error(ErrorEvent {
+                        message: error.to_string(),
+                    });
+                    sess.send_event(&turn_context, event).await;
+                    break;
                 }
             }
             Err(e) => {
