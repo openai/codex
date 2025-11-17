@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::Prompt;
-use crate::client_common::ResponseEvent;
+use crate::ResponseEvent;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex::get_last_assistant_message_from_turn;

@@ -5,7 +5,7 @@ use crate::types::RateLimitWindowSnapshot;
 use crate::types::TurnAttemptsSiblingTurnsResponse;
 use anyhow::Result;
 use codex_core::auth::CodexAuth;
-use codex_core::default_client::get_codex_user_agent;
+use codex_core::client::http::get_codex_user_agent;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
 use reqwest::header::AUTHORIZATION;

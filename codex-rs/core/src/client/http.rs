@@ -154,11 +154,13 @@ impl CodexRequestBuilder {
             .collect()
     }
 }
+
 #[derive(Debug, Clone)]
 pub struct Originator {
     pub value: String,
     pub header_value: HeaderValue,
 }
+
 static ORIGINATOR: OnceLock<Originator> = OnceLock::new();
 
 #[derive(Debug)]
