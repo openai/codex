@@ -112,7 +112,7 @@ impl ToolCallRuntime {
 
     fn abort_message(call: &ToolCall, secs: f32) -> String {
         match call.tool_name.as_str() {
-            "shell" | "container.exec" | "local_shell" | "unified_exec" => {
+            "shell" | "container.exec" | "local_shell" | "shell_command" | "unified_exec" => {
                 format!("Wall time: {secs:.1} seconds\naborted by user")
             }
             _ => format!("aborted by user after {secs:.1}s"),
