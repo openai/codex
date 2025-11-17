@@ -103,6 +103,18 @@ jobs:
           echo "NDK setup completed at: $ANDROID_NDK_ROOT"
           echo "NDK version: $(cat $ANDROID_NDK_ROOT/source.properties | grep Pkg.Revision | cut -d= -f2)"
 
+          # Create symlinks for compiler tools to match expected names
+          NDK_BIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          cd "$NDK_BIN"
+
+          # Create symlinks for compilers without API level suffix (needed by some crates)
+          for tool in clang clang++ cpp; do
+            if [[ -f "aarch64-linux-android33-$tool" ]] && [[ ! -f "aarch64-linux-android-$tool" ]]; then
+              ln -sf "aarch64-linux-android33-$tool" "aarch64-linux-android-$tool"
+              echo "Created symlink: aarch64-linux-android-$tool -> aarch64-linux-android33-$tool"
+            fi
+          done
+
       - name: Restore NDK cache
         uses: actions/cache@v4
         with:
