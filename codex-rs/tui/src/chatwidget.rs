@@ -1732,8 +1732,7 @@ impl ChatWidget {
                 Some(ti.last_token_usage.clone()),
             )
         } else {
-            let usage = TokenUsage::default();
-            (usage.clone(), Some(usage))
+            (TokenUsage::default(), Some(TokenUsage::default()))
         };
 
         let snapshot_for_display = self
