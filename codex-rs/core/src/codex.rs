@@ -983,6 +983,7 @@ impl Session {
                 }
                 RolloutItem::Compacted(compacted) => {
                     let snapshot = history.get_history();
+                    // TODO(jif) clean
                     if let Some(replacement) = &compacted.replacement_history {
                         let mut rebuilt = self.build_initial_context(turn_context);
                         rebuilt.extend(replacement.clone());
