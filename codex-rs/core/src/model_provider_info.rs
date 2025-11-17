@@ -110,21 +110,7 @@ impl ModelProviderInfo {
         client: &'a CodexHttpClient,
         auth: &Option<CodexAuth>,
     ) -> crate::error::Result<CodexRequestBuilder> {
-        let effective_auth = if let Some(secret_key) = &self.experimental_bearer_token {
-            Some(CodexAuth::from_api_key(secret_key))
-        } else {
-            match self.api_key() {
-                Ok(Some(key)) => Some(CodexAuth::from_api_key(&key)),
-                Ok(None) => auth.clone(),
-                Err(err) => {
-                    if auth.is_some() {
-                        auth.clone()
-                    } else {
-                        return Err(err);
-                    }
-                }
-            }
-        };
+        let effective_auth = self.effective_auth(auth)?;
 
         let url = self.get_full_url(&effective_auth);
 
@@ -147,21 +133,7 @@ impl ModelProviderInfo {
                 "Compaction endpoint requires Responses API providers".to_string(),
             ));
         }
-        let effective_auth = if let Some(secret_key) = &self.experimental_bearer_token {
-            Some(CodexAuth::from_api_key(secret_key))
-        } else {
-            match self.api_key() {
-                Ok(Some(key)) => Some(CodexAuth::from_api_key(&key)),
-                Ok(None) => auth.clone(),
-                Err(err) => {
-                    if auth.is_some() {
-                        auth.clone()
-                    } else {
-                        return Err(err);
-                    }
-                }
-            }
-        };
+        let effective_auth = self.effective_auth(auth)?;
 
         let url = self.get_compact_url(&effective_auth).ok_or_else(|| {
             CodexErr::UnsupportedOperation(
@@ -176,6 +148,24 @@ impl ModelProviderInfo {
         }
 
         Ok(self.apply_http_headers(builder))
+    }
+
+    fn effective_auth(&self, auth: &Option<CodexAuth>) -> crate::error::Result<Option<CodexAuth>> {
+        if let Some(secret_key) = &self.experimental_bearer_token {
+            return Ok(Some(CodexAuth::from_api_key(secret_key)));
+        }
+
+        match self.api_key() {
+            Ok(Some(key)) => Ok(Some(CodexAuth::from_api_key(&key))),
+            Ok(None) => Ok(auth.clone()),
+            Err(err) => {
+                if auth.is_some() {
+                    Ok(auth.clone())
+                } else {
+                    Err(err)
+                }
+            }
+        }
     }
 
     fn get_query_string(&self) -> String {
