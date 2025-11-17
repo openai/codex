@@ -1350,6 +1350,7 @@ pub fn find_codex_home() -> std::io::Result<PathBuf> {
     Ok(p)
 }
 
+
 /// Returns the path to the folder where Codex logs are stored. Does not verify
 /// that the directory exists.
 pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {

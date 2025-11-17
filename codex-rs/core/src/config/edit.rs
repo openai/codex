@@ -15,6 +15,18 @@ use toml_edit::Item as TomlItem;
 use toml_edit::Table as TomlTable;
 use toml_edit::value;
 
+pub fn ensure_codex_home_exists(codex_home: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(codex_home).map_err(|err| {
+        std::io::Error::new(
+            err.kind(),
+            format!(
+                "failed to create Codex home directory at {}: {err}",
+                codex_home.display()
+            ),
+        )
+    })
+}
+
 /// Discrete config mutations supported by the persistence engine.
 #[derive(Clone, Debug)]
 pub enum ConfigEdit {
@@ -437,12 +449,7 @@ pub fn apply_blocking(
         return Ok(());
     }
 
-    std::fs::create_dir_all(codex_home).with_context(|| {
-        format!(
-            "failed to create Codex home directory at {}",
-            codex_home.display()
-        )
-    })?;
+    ensure_codex_home_exists(codex_home)?;
 
     let tmp = NamedTempFile::new_in(codex_home)?;
     std::fs::write(tmp.path(), document.doc.to_string()).with_context(|| {

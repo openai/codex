@@ -10,7 +10,6 @@ use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
 use windows_sys::Win32::Security::AclSizeInformation;
 use windows_sys::Win32::Security::Authorization::GetNamedSecurityInfoW;
-use windows_sys::Win32::Security::Authorization::GetSecurityInfo;
 use windows_sys::Win32::Security::Authorization::SetEntriesInAclW;
 use windows_sys::Win32::Security::Authorization::SetNamedSecurityInfoW;
 use windows_sys::Win32::Security::Authorization::SetSecurityInfo;
