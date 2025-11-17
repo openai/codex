@@ -294,9 +294,26 @@ fn create_shell_tool() -> ToolSpec {
         },
     );
 
+    let description  = if cfg!(windows) {
+        r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most terminal commands should be prefixed with ["powershell.exe", "-Command"].
+        
+Examples of valid command strings:
+
+- ls -a (show hidden): "Get-ChildItem -Force"
+- recursive find by name: "Get-ChildItem -Recurse -Filter *.py"
+- recursive grep: "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"
+- ps aux | grep python: "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"
+- setting an env var: "$env:FOO='bar'; echo $env:FOO"
+- running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -"#
+    } else {
+        r#"Runs a shell command and returns its output.
+- The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with ["bash", "-lc"].
+- Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary."#
+    }.to_string();
+
     ToolSpec::Function(ResponsesApiTool {
         name: "shell".to_string(),
-        description: get_shell_tool_description(),
+        description,
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -341,22 +358,8 @@ fn create_shell_command_tool() -> ToolSpec {
         },
     );
 
-    ToolSpec::Function(ResponsesApiTool {
-        name: "shell_command".to_string(),
-        description: get_shell_tool_description(),
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["command".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-    })
-}
-
-/// Returns OS-specific descriptions for the shell / shell_commandtool.
-fn get_shell_tool_description() -> String {
-    if cfg!(windows) {
-        r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most terminal commands should be prefixed with ["powershell.exe", "-Command"].
+    let description = if cfg!(windows) {
+        r#"Runs a Powershell command (Windows) and returns its output.
         
 Examples of valid command strings:
 
@@ -368,9 +371,19 @@ Examples of valid command strings:
 - running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -"#
     } else {
         r#"Runs a shell command and returns its output.
-- The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with ["bash", "-lc"].
-- Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary."#
-    }.to_string()
+- Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary."#
+    }.to_string();
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "shell_command".to_string(),
+        description,
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["command".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
 }
 
 fn create_view_image_tool() -> ToolSpec {
