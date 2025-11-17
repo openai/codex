@@ -260,7 +260,6 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                             image_url: image.into_data_url(),
                         },
                         Err(err) => {
-                            tracing::warn!("Failed to resize image {}: {}", path.display(), err);
                             if matches!(&err, ImageProcessingError::Read { .. }) {
                                 local_image_error_placeholder(&path, &err)
                             } else if err.is_invalid_image() {
