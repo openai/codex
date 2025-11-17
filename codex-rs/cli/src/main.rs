@@ -417,6 +417,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             handle_app_exit(exit_info)?;
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
+            merge_interactive_flags_into_exec(&mut exec_cli, &interactive);
             prepend_config_flags(
                 &mut exec_cli.config_overrides,
                 root_config_overrides.clone(),
@@ -605,6 +606,42 @@ fn prepend_config_flags(
         .splice(0..0, cli_config_overrides.raw_overrides);
 }
 
+/// Propagate top-level flags (parsed into the interactive CLI) into the exec subcommand
+/// unless the exec-specific flags were explicitly set.
+fn merge_interactive_flags_into_exec(exec_cli: &mut ExecCli, interactive: &TuiCli) {
+    if exec_cli.model.is_none() {
+        exec_cli.model = interactive.model.clone();
+    }
+    if !exec_cli.oss {
+        exec_cli.oss = interactive.oss;
+    }
+    if exec_cli.oss_provider.is_none() {
+        exec_cli.oss_provider = interactive.oss_provider.clone();
+    }
+    if exec_cli.config_profile.is_none() {
+        exec_cli.config_profile = interactive.config_profile.clone();
+    }
+    if exec_cli.sandbox_mode.is_none() {
+        exec_cli.sandbox_mode = interactive.sandbox_mode;
+    }
+    if !exec_cli.full_auto {
+        exec_cli.full_auto = interactive.full_auto;
+    }
+    if !exec_cli.dangerously_bypass_approvals_and_sandbox {
+        exec_cli.dangerously_bypass_approvals_and_sandbox =
+            interactive.dangerously_bypass_approvals_and_sandbox;
+    }
+    if exec_cli.cwd.is_none() {
+        exec_cli.cwd = interactive.cwd.clone();
+    }
+    if exec_cli.images.is_empty() {
+        exec_cli.images = interactive.images.clone();
+    }
+    if exec_cli.add_dir.is_empty() {
+        exec_cli.add_dir = interactive.add_dir.clone();
+    }
+}
+
 /// Build the final `TuiCli` for a `codex resume` invocation.
 fn finalize_resume_interactive(
     mut interactive: TuiCli,
@@ -757,6 +794,27 @@ mod tests {
         let lines = format_exit_messages(exit_info, true);
         assert_eq!(lines.len(), 2);
         assert!(lines[1].contains("\u{1b}[36m"));
+    }
+
+    #[test]
+    fn exec_inherits_root_model_flag() {
+        let cli = MultitoolCli::try_parse_from(["codex", "-m", "codex-rapidash-300", "exec", "hi"])
+            .expect("parse");
+        let MultitoolCli {
+            interactive,
+            config_overrides: root_overrides,
+            subcommand,
+            feature_toggles: _,
+        } = cli;
+
+        let Subcommand::Exec(mut exec_cli) = subcommand.expect("exec present") else {
+            unreachable!()
+        };
+        merge_interactive_flags_into_exec(&mut exec_cli, &interactive);
+        prepend_config_flags(&mut exec_cli.config_overrides, root_overrides);
+
+        assert_eq!(exec_cli.model.as_deref(), Some("codex-rapidash-300"));
+        assert_eq!(exec_cli.prompt.as_deref(), Some("hi"));
     }
 
     #[test]
