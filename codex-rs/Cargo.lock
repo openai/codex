@@ -1427,6 +1427,7 @@ dependencies = [
  "tracing",
  "urlencoding",
  "webbrowser",
+ "which",
 ]
 
 [[package]]
