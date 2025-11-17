@@ -431,7 +431,7 @@ impl CodexErr {
     }
 }
 
-pub fn token_limited_error_message(e: &CodexErr, model: Option<&str>) -> String {
+pub fn get_error_message_ui(e: &CodexErr, model: Option<&str>) -> String {
     let message = match e {
         CodexErr::Sandbox(SandboxErr::Denied { output }) => {
             let aggregated = output.aggregated_output.text.trim();
@@ -535,7 +535,7 @@ mod tests {
             output: Box::new(output),
         });
         assert_eq!(
-            token_limited_error_message(&err, Some(OPENAI_DEFAULT_MODEL)),
+            get_error_message_ui(&err, Some(OPENAI_DEFAULT_MODEL)),
             "aggregate detail"
         );
     }
@@ -554,7 +554,7 @@ mod tests {
             output: Box::new(output),
         });
         assert_eq!(
-            token_limited_error_message(&err, Some(OPENAI_DEFAULT_MODEL)),
+            get_error_message_ui(&err, Some(OPENAI_DEFAULT_MODEL)),
             "stderr detail\nstdout detail"
         );
     }
@@ -573,7 +573,7 @@ mod tests {
             output: Box::new(output),
         });
         assert_eq!(
-            token_limited_error_message(&err, Some(OPENAI_DEFAULT_MODEL)),
+            get_error_message_ui(&err, Some(OPENAI_DEFAULT_MODEL)),
             "stdout only"
         );
     }
@@ -592,7 +592,7 @@ mod tests {
             output: Box::new(output),
         });
         assert_eq!(
-            token_limited_error_message(&err, Some(OPENAI_DEFAULT_MODEL)),
+            get_error_message_ui(&err, Some(OPENAI_DEFAULT_MODEL)),
             "command failed inside sandbox with exit code 13"
         );
     }

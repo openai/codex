@@ -7,7 +7,7 @@ retry without sandbox on denial (no re‑approval thanks to caching).
 */
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
-use crate::error::token_limited_error_message;
+use crate::error::get_error_message_ui;
 use crate::exec::ExecToolCallOutput;
 use crate::sandboxing::SandboxManager;
 use crate::tools::sandboxing::ApprovalCtx;
@@ -129,7 +129,7 @@ impl ToolOrchestrator {
                         let err = SandboxErr::Denied {
                             output: output.clone(),
                         };
-                        let friendly = token_limited_error_message(
+                        let friendly = get_error_message_ui(
                             &CodexErr::Sandbox(err),
                             Some(turn_ctx.client.get_model().as_str()),
                         );
