@@ -40,6 +40,7 @@ pub enum ApplyPatchModelOutput {
 
 pub struct TestCodexBuilder {
     config_mutators: Vec<Box<ConfigMutator>>,
+    auth: CodexAuth,
 }
 
 impl TestCodexBuilder {
@@ -48,6 +49,11 @@ impl TestCodexBuilder {
         T: FnOnce(&mut Config) + Send + 'static,
     {
         self.config_mutators.push(Box::new(mutator));
+        self
+    }
+
+    pub fn with_auth(mut self, auth: CodexAuth) -> Self {
+        self.auth = auth;
         self
     }
 
@@ -81,13 +87,12 @@ impl TestCodexBuilder {
     ) -> anyhow::Result<TestCodex> {
         let (config, cwd) = self.prepare_config(server, &home).await?;
 
-        let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+        let auth = self.auth.clone();
+        let conversation_manager = ConversationManager::with_auth(auth.clone());
 
         let new_conversation = match resume_from {
             Some(path) => {
-                let auth_manager = codex_core::AuthManager::from_auth_for_testing(
-                    CodexAuth::from_api_key("dummy"),
-                );
+                let auth_manager = codex_core::AuthManager::from_auth_for_testing(auth);
                 conversation_manager
                     .resume_conversation_from_rollout(config.clone(), path, auth_manager)
                     .await?
@@ -336,5 +341,6 @@ fn function_call_output<'a>(bodies: &'a [Value], call_id: &str) -> &'a Value {
 pub fn test_codex() -> TestCodexBuilder {
     TestCodexBuilder {
         config_mutators: vec![],
+        auth: CodexAuth::from_api_key("dummy"),
     }
 }

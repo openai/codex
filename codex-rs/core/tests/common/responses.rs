@@ -499,6 +499,14 @@ fn base_mock() -> (MockBuilder, ResponseMock) {
     (mock, response_mock)
 }
 
+fn compact_mock() -> (MockBuilder, ResponseMock) {
+    let response_mock = ResponseMock::new();
+    let mock = Mock::given(method("POST"))
+        .and(path_regex(".*/responses/compact$"))
+        .and(response_mock.clone());
+    (mock, response_mock)
+}
+
 pub async fn mount_sse_once_match<M>(server: &MockServer, matcher: M, body: String) -> ResponseMock
 where
     M: wiremock::Match + Send + Sync + 'static,
@@ -518,6 +526,40 @@ pub async fn mount_sse_once(server: &MockServer, body: String) -> ResponseMock {
         .up_to_n_times(1)
         .mount(server)
         .await;
+    response_mock
+}
+
+pub async fn mount_compact_json_once_match<M>(
+    server: &MockServer,
+    matcher: M,
+    body: serde_json::Value,
+) -> ResponseMock
+where
+    M: wiremock::Match + Send + Sync + 'static,
+{
+    let (mock, response_mock) = compact_mock();
+    mock.and(matcher)
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_json(body.clone()),
+        )
+        .up_to_n_times(1)
+        .mount(server)
+        .await;
+    response_mock
+}
+
+pub async fn mount_compact_json_once(server: &MockServer, body: serde_json::Value) -> ResponseMock {
+    let (mock, response_mock) = compact_mock();
+    mock.respond_with(
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "application/json")
+            .set_body_json(body.clone()),
+    )
+    .up_to_n_times(1)
+    .mount(server)
+    .await;
     response_mock
 }
 
