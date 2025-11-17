@@ -2,7 +2,7 @@ use crate::codex::TurnContext;
 use crate::context_manager::normalize;
 use crate::truncate::DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT;
 use crate::truncate::truncate_function_output_items_to_token_limit;
-use crate::truncate::truncate_middle;
+use crate::truncate::truncate_with_token_budget;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
@@ -153,8 +153,10 @@ impl ContextManager {
     fn process_item(&self, item: &ResponseItem) -> ResponseItem {
         match item {
             ResponseItem::FunctionCallOutput { call_id, output } => {
-                let (truncated, _) =
-                    truncate_middle(output.content.as_str(), self.function_output_max_tokens);
+                let (truncated, _) = truncate_with_token_budget(
+                    output.content.as_str(),
+                    self.function_output_max_tokens,
+                );
                 let truncated_items = output.content_items.as_ref().map(|items| {
                     truncate_function_output_items_to_token_limit(
                         items,
@@ -171,7 +173,8 @@ impl ContextManager {
                 }
             }
             ResponseItem::CustomToolCallOutput { call_id, output } => {
-                let (truncated, _) = truncate_middle(output, self.function_output_max_tokens);
+                let (truncated, _) =
+                    truncate_with_token_budget(output, self.function_output_max_tokens);
                 ResponseItem::CustomToolCallOutput {
                     call_id: call_id.clone(),
                     output: truncated,

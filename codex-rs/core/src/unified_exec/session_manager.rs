@@ -36,7 +36,7 @@ use super::generate_chunk_id;
 use super::resolve_max_tokens;
 use super::session::OutputBuffer;
 use super::session::UnifiedExecSession;
-use crate::truncate::truncate_middle;
+use crate::truncate::truncate_with_token_budget;
 
 impl UnifiedExecSessionManager {
     pub(crate) async fn exec_command(
@@ -70,7 +70,7 @@ impl UnifiedExecSessionManager {
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let text = String::from_utf8_lossy(&collected).to_string();
-        let (output, original_token_count) = truncate_middle(&text, max_tokens);
+        let (output, original_token_count) = truncate_with_token_budget(&text, max_tokens);
         let original_token_count =
             original_token_count.and_then(|count| usize::try_from(count).ok());
         let chunk_id = generate_chunk_id();
@@ -177,7 +177,7 @@ impl UnifiedExecSessionManager {
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let text = String::from_utf8_lossy(&collected).to_string();
-        let (output, original_token_count) = truncate_middle(&text, max_tokens);
+        let (output, original_token_count) = truncate_with_token_budget(&text, max_tokens);
         let original_token_count =
             original_token_count.and_then(|count| usize::try_from(count).ok());
         let chunk_id = generate_chunk_id();

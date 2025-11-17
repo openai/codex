@@ -372,7 +372,7 @@ fn format_exec_output_truncates_large_error() {
     let line = "very long execution error line that should trigger truncation\n";
     let large_error = line.repeat(2_500); // way beyond both byte and line limits
 
-    let truncated = truncate::format_output_for_model_body(
+    let truncated = truncate::truncate_with_line_bytes_budget(
         &large_error,
         truncate::MODEL_FORMAT_MAX_BYTES,
         truncate::MODEL_FORMAT_MAX_LINES,
@@ -386,7 +386,7 @@ fn format_exec_output_truncates_large_error() {
 #[test]
 fn format_exec_output_marks_byte_truncation_without_omitted_lines() {
     let long_line = "a".repeat(truncate::MODEL_FORMAT_MAX_BYTES + 50);
-    let truncated = truncate::format_output_for_model_body(
+    let truncated = truncate::truncate_with_line_bytes_budget(
         &long_line,
         truncate::MODEL_FORMAT_MAX_BYTES,
         truncate::MODEL_FORMAT_MAX_LINES,
@@ -412,7 +412,7 @@ fn format_exec_output_returns_original_when_within_limits() {
     let content = "example output\n".repeat(10);
 
     assert_eq!(
-        truncate::format_output_for_model_body(
+        truncate::truncate_with_line_bytes_budget(
             &content,
             truncate::MODEL_FORMAT_MAX_BYTES,
             truncate::MODEL_FORMAT_MAX_LINES
@@ -428,7 +428,7 @@ fn format_exec_output_reports_omitted_lines_and_keeps_head_and_tail() {
         .map(|idx| format!("line-{idx}\n"))
         .collect();
 
-    let truncated = truncate::format_output_for_model_body(
+    let truncated = truncate::truncate_with_line_bytes_budget(
         &content,
         truncate::MODEL_FORMAT_MAX_BYTES,
         truncate::MODEL_FORMAT_MAX_LINES,
@@ -460,7 +460,7 @@ fn format_exec_output_prefers_line_marker_when_both_limits_exceeded() {
         .map(|idx| format!("line-{idx}-{long_line}\n"))
         .collect();
 
-    let truncated = truncate::format_output_for_model_body(
+    let truncated = truncate::truncate_with_line_bytes_budget(
         &content,
         truncate::MODEL_FORMAT_MAX_BYTES,
         truncate::MODEL_FORMAT_MAX_LINES,

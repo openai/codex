@@ -14,7 +14,7 @@ use crate::protocol::EventMsg;
 use crate::protocol::TaskStartedEvent;
 use crate::protocol::TurnContextItem;
 use crate::protocol::WarningEvent;
-use crate::truncate::truncate_middle;
+use crate::truncate::truncate_with_token_budget;
 use crate::util::backoff;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
@@ -257,7 +257,7 @@ fn build_token_limited_compacted_history_with_limit(
                 selected_messages.push(message.clone());
                 remaining = remaining.saturating_sub(tokens);
             } else {
-                let (truncated, _) = truncate_middle(message, remaining);
+                let (truncated, _) = truncate_with_token_budget(message, remaining);
                 selected_messages.push(truncated);
                 break;
             }

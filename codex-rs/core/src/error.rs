@@ -2,7 +2,7 @@ use crate::codex::ProcessedResponseItem;
 use crate::exec::ExecToolCallOutput;
 use crate::token_data::KnownPlan;
 use crate::token_data::PlanType;
-use crate::truncate::truncate_middle;
+use crate::truncate::truncate_with_token_budget;
 use chrono::DateTime;
 use chrono::Datelike;
 use chrono::Local;
@@ -461,7 +461,7 @@ pub fn token_limited_error_message(e: &CodexErr) -> String {
         _ => e.to_string(),
     };
 
-    truncate_middle(&message, ERROR_MESSAGE_UI_MAX_TOKENS).0
+    truncate_with_token_budget(&message, ERROR_MESSAGE_UI_MAX_TOKENS).0
 }
 
 #[cfg(test)]

@@ -11,7 +11,7 @@ pub mod spec;
 
 use crate::context_manager::MODEL_FORMAT_MAX_BYTES;
 use crate::context_manager::MODEL_FORMAT_MAX_LINES;
-use crate::context_manager::format_output_for_model_body;
+use crate::context_manager::truncate_with_line_bytes_budget;
 use crate::exec::ExecToolCallOutput;
 pub use router::ToolRouter;
 use serde::Serialize;
@@ -77,5 +77,5 @@ pub fn format_exec_output_str(exec_output: &ExecToolCallOutput) -> String {
     };
 
     // Truncate for model consumption before serialization.
-    format_output_for_model_body(&body, MODEL_FORMAT_MAX_BYTES, MODEL_FORMAT_MAX_LINES)
+    truncate_with_line_bytes_budget(&body, MODEL_FORMAT_MAX_BYTES, MODEL_FORMAT_MAX_LINES)
 }
