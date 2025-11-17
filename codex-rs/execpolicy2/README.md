@@ -53,6 +53,7 @@ cargo run -p codex-execpolicy2 -- check --policy path/to/policy.codexpolicy git 
 ```bash
 cargo run -p codex-execpolicy2 -- check --policy base.codexpolicy --policy overrides.codexpolicy git status
 ```
+- Output is newline-delimited JSON by default; pass `--pretty` for pretty-printed JSON if desired.
 - Example outcomes:
   - Match: `{"match": { ... "decision": "allow" ... }}`
   - No match: `"noMatch"`
