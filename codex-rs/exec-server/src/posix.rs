@@ -430,7 +430,7 @@ struct EscalateArgs {
 impl EscalateArgs {
     /// This is the escalate client. It talks to the escalate server to determine whether to exec()
     /// the command directly or to proxy to the escalate server.
-    async fn run(self) -> anyhow::Result<()> {
+    async fn run(self) -> anyhow::Result<i32> {
         let EscalateArgs { file, argv } = self;
         let handshake_client = get_escalate_client()?;
         let (server, client) = AsyncSocket::pair()?;
@@ -479,7 +479,7 @@ impl EscalateArgs {
                     .await
                     .context("failed to send SuperExecMessage")?;
                 let SuperExecResult { exit_code } = client.receive::<SuperExecResult>().await?;
-                std::process::exit(exit_code);
+                Ok(exit_code)
             }
             EscalateAction::RunInSandbox => {
                 // We avoid std::process::Command here because we want to be as transparent as
@@ -497,12 +497,12 @@ impl EscalateArgs {
                     argv_cstrs.iter().map(|s| s.as_ptr()).collect();
                 argv.push(std::ptr::null());
 
-                unsafe {
+                let err = unsafe {
                     libc::execv(file.as_ptr(), argv.as_ptr());
-                    let err = std::io::Error::last_os_error();
-                    tracing::error!("failed to execute command: {err}");
-                    std::process::exit(127);
-                }
+                    std::io::Error::last_os_error()
+                };
+
+                Err(err.into())
             }
         }
     }
@@ -526,7 +526,7 @@ pub async fn main() -> anyhow::Result<()> {
     if let Some(subcommand) = cli.subcommand {
         match subcommand {
             Commands::Escalate(args) => {
-                args.run().await?;
+                std::process::exit(args.run().await?);
             }
             Commands::ShellExec(args) => {
                 let result = shell_exec(ExecParams {
