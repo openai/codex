@@ -1937,7 +1937,7 @@ Examples of valid command strings:
         assert_eq!(name, "shell_command");
 
         let expected = if cfg!(windows) {
-            r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most terminal commands should be prefixed with ["powershell.exe", "-Command"].
+            r#"Runs a Powershell command (Windows) and returns its output.
         
 Examples of valid command strings:
 
@@ -1949,8 +1949,7 @@ Examples of valid command strings:
 - running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -"#.to_string()
         } else {
             r#"Runs a shell command and returns its output.
-- The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with ["bash", "-lc"].
-- Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary."#.to_string()
+- Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary."#.to_string()
         };
         assert_eq!(description, &expected);
     }
