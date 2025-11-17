@@ -33,7 +33,7 @@ model_provider = "openai"
 # model_context_window = 128000       # tokens; default: auto for model
 # model_max_output_tokens = 8192      # tokens; default: auto for model
 # model_auto_compact_token_limit = 0  # disable/override auto; default: model family specific
-# context_manager_function_output_max_tokens = 2560  # tokens stored per tool output; default: 2560
+# output_max_tokens = 2560  # tokens stored per tool output; default: 2560
 
 ################################################################################
 # Reasoning & Verbosity (Responses API capable models)

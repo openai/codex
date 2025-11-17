@@ -183,8 +183,7 @@ impl Codex {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: config.features.clone(),
-            context_manager_function_output_max_tokens: config
-                .context_manager_function_output_max_tokens,
+            output_max_tokens: config.output_max_tokens,
             session_source,
         };
 
@@ -339,7 +338,7 @@ pub(crate) struct SessionConfiguration {
     /// Set of feature flags for this session
     features: Features,
 
-    context_manager_function_output_max_tokens: usize,
+    output_max_tokens: usize,
 
     // TODO(pakrym): Remove config from here
     original_config_do_not_use: Arc<Config>,
@@ -371,8 +370,8 @@ impl SessionConfiguration {
         next_configuration
     }
 
-    pub(crate) fn context_manager_function_output_max_tokens(&self) -> usize {
-        self.context_manager_function_output_max_tokens
+    pub(crate) fn output_max_tokens(&self) -> usize {
+        self.output_max_tokens
     }
 
     pub(crate) fn model(&self) -> &str {
@@ -2617,8 +2616,7 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
-            context_manager_function_output_max_tokens: config
-                .context_manager_function_output_max_tokens,
+            output_max_tokens: config.output_max_tokens,
             session_source: SessionSource::Exec,
         };
 
@@ -2695,8 +2693,7 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
-            context_manager_function_output_max_tokens: config
-                .context_manager_function_output_max_tokens,
+            output_max_tokens: config.output_max_tokens,
             session_source: SessionSource::Exec,
         };
 
