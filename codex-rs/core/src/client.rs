@@ -556,7 +556,7 @@ impl ModelClient {
             model: &self.config.model,
             input: history,
             store: true,
-            instructions: REMOTE_SUMMARIZATION_PROMPT
+            instructions: REMOTE_SUMMARIZATION_PROMPT,
         };
         let response = req_builder
             .json(&payload)

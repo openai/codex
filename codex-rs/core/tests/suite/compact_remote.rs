@@ -60,7 +60,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     }];
     let compact_mock = responses::mount_compact_json_once(
         harness.server(),
-        serde_json::json!({ "input": compacted_history.clone() }),
+        serde_json::json!({ "output": compacted_history.clone() }),
     )
     .await;
 
@@ -181,7 +181,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
     ];
     let compact_mock = responses::mount_compact_json_once(
         harness.server(),
-        serde_json::json!({ "input": compacted_history.clone() }),
+        serde_json::json!({ "output": compacted_history.clone() }),
     )
     .await;
 
