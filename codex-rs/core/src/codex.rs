@@ -56,6 +56,7 @@ use crate::ModelProviderInfo;
 use crate::client::ModelClient;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
+use crate::compact::collect_user_messages;
 use crate::config::Config;
 use crate::config::types::McpServerTransportConfig;
 use crate::config::types::ShellEnvironmentPolicy;
@@ -65,7 +66,6 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 #[cfg(test)]
 use crate::exec::StreamOutput;
-use crate::compact::collect_user_messages;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::model_family::find_family_for_model;
@@ -1028,6 +1028,15 @@ impl Session {
         self.persist_rollout_items(&rollout_items).await;
     }
 
+    pub async fn enabled(&self, feature: Feature) -> bool {
+        self.state
+            .lock()
+            .await
+            .session_configuration
+            .features
+            .enabled(feature)
+    }
+
     async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {
         for item in items {
             self.send_event(
@@ -1205,14 +1214,7 @@ impl Session {
         turn_context: Arc<TurnContext>,
         cancellation_token: CancellationToken,
     ) {
-        if !self
-            .state
-            .lock()
-            .await
-            .session_configuration
-            .features
-            .enabled(Feature::GhostCommit)
-        {
+        if !self.enabled(Feature::GhostCommit).await {
             return;
         }
         let token = match turn_context.tool_call_gate.subscribe().await {
