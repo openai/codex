@@ -1,3 +1,5 @@
+use codex_core::environment_context::get_operating_system_info;
+use codex_core::environment_context::try_map_windows_drive_to_wsl_path;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::Builder;
@@ -119,19 +121,94 @@ pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageErro
 /// Convenience: write to a temp file and return its path + info.
 #[cfg(not(target_os = "android"))]
 pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImageError> {
-    let (png, info) = paste_image_as_png()?;
-    // Create a unique temporary file with a .png suffix to avoid collisions.
-    let tmp = Builder::new()
-        .prefix("codex-clipboard-")
-        .suffix(".png")
-        .tempfile()
-        .map_err(|e| PasteImageError::IoError(e.to_string()))?;
-    std::fs::write(tmp.path(), &png).map_err(|e| PasteImageError::IoError(e.to_string()))?;
-    // Persist the file (so it remains after the handle is dropped) and return its PathBuf.
-    let (_file, path) = tmp
-        .keep()
-        .map_err(|e| PasteImageError::IoError(e.error.to_string()))?;
-    Ok((path, info))
+    // First attempt: read image from system clipboard via arboard (native paths or image data).
+    match paste_image_as_png() {
+        Ok((png, info)) => {
+            // Create a unique temporary file with a .png suffix to avoid collisions.
+            let tmp = Builder::new()
+                .prefix("codex-clipboard-")
+                .suffix(".png")
+                .tempfile()
+                .map_err(|e| PasteImageError::IoError(e.to_string()))?;
+            std::fs::write(tmp.path(), &png)
+                .map_err(|e| PasteImageError::IoError(e.to_string()))?;
+            // Persist the file (so it remains after the handle is dropped) and return its PathBuf.
+            let (_file, path) = tmp
+                .keep()
+                .map_err(|e| PasteImageError::IoError(e.error.to_string()))?;
+            Ok((path, info))
+        }
+        Err(e) => {
+            // If clipboard is unavailable (common under WSL because arboard cannot access
+            // the Windows clipboard), attempt a WSL fallback that calls PowerShell on the
+            // Windows side to write the clipboard image to a temporary file, then return
+            // the corresponding WSL path.
+            use PasteImageError::ClipboardUnavailable;
+            use PasteImageError::NoImage;
+
+            let is_wsl = get_operating_system_info()
+                .and_then(|info| info.is_likely_windows_subsystem_for_linux)
+                .unwrap_or(false);
+
+            if is_wsl && matches!(&e, ClipboardUnavailable(_) | NoImage(_)) {
+                tracing::debug!("attempting Windows PowerShell clipboard fallback");
+                if let Some(win_path) = try_dump_windows_clipboard_image() {
+                    tracing::debug!("powershell produced path: {}", win_path);
+                    if let Some(mapped_path) = try_map_windows_drive_to_wsl_path(&win_path)
+                        && let Ok((w, h)) = image::image_dimensions(&mapped_path)
+                    {
+                        // Return the mapped path directly without copying.
+                        // The file will be read and base64-encoded during serialization.
+                        return Ok((
+                            mapped_path,
+                            PastedImageInfo {
+                                width: w,
+                                height: h,
+                                encoded_format: EncodedImageFormat::Png,
+                            },
+                        ));
+                    }
+                }
+            }
+            // If we reach here, fall through to returning the original error.
+            Err(e)
+        }
+    }
+}
+
+/// Try to call a Windows PowerShell command (several common names) to save the
+/// clipboard image to a temporary PNG and return the Windows path to that file.
+/// Returns None if no command succeeded or no image was present.
+fn try_dump_windows_clipboard_image() -> Option<String> {
+    // Powershell script: save image from clipboard to a temp png and print the path.
+    // Force UTF-8 output to avoid encoding issues between powershell.exe (UTF-16LE default)
+    // and pwsh (UTF-8 default).
+    let script = r#"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $img = Get-Clipboard -Format Image; if ($img -ne $null) { $p=[System.IO.Path]::GetTempFileName(); $p = [System.IO.Path]::ChangeExtension($p,'png'); $img.Save($p,[System.Drawing.Imaging.ImageFormat]::Png); Write-Output $p } else { exit 1 }"#;
+
+    for cmd in ["powershell.exe", "pwsh", "powershell"] {
+        match std::process::Command::new(cmd)
+            .args(["-NoProfile", "-Command", script])
+            .output()
+        {
+            // Executing PowerShell command
+            Ok(output) => {
+                if output.status.success() {
+                    // Decode as UTF-8 (forced by the script above).
+                    let win_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    if !win_path.is_empty() {
+                        tracing::debug!("{} saved clipboard image to {}", cmd, win_path);
+                        return Some(win_path);
+                    }
+                } else {
+                    tracing::debug!("{} returned non-zero status", cmd);
+                }
+            }
+            Err(err) => {
+                tracing::debug!("{} not executable: {}", cmd, err);
+            }
+        }
+    }
+    None
 }
 
 #[cfg(target_os = "android")]

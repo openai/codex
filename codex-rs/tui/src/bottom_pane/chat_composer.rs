@@ -41,6 +41,7 @@ use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
 use crate::style::user_message_style;
+use base64::Engine;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 
@@ -49,9 +50,12 @@ use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
 use crate::clipboard_paste::normalize_pasted_path;
+use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::clipboard_paste::pasted_image_format;
 use crate::history_cell;
 use crate::ui_consts::LIVE_PREFIX_COLS;
+use codex_core::environment_context::get_operating_system_info;
+use codex_core::environment_context::try_map_windows_drive_to_wsl_path;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -241,10 +245,70 @@ impl ChatComposer {
     }
 
     pub fn handle_paste_image_path(&mut self, pasted: String) -> bool {
+        // Support data: URLs (base64) pasted from some terminals/clients.
+        // If the pasted text is a data URL, decode it into a project-local
+        // ./.codex/tmp file and attach that file as an image.
+        let pasted_trim = pasted.trim();
+        if pasted_trim.starts_with("data:") {
+            if let Some(comma) = pasted_trim.find(',') {
+                let header = &pasted_trim[5..comma]; // after "data:"
+                let b64 = &pasted_trim[comma + 1..];
+                if header.contains("base64")
+                    && let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(b64)
+                {
+                    // Try to determine extension from mime type
+                    let ext = if header.contains("image/png") {
+                        "png"
+                    } else if header.contains("image/jpeg") || header.contains("image/jpg") {
+                        "jpg"
+                    } else {
+                        "png"
+                    };
+
+                    if let Ok(cwd) = std::env::current_dir() {
+                        let tmp_dir = cwd.join(".codex").join("tmp");
+                        if std::fs::create_dir_all(&tmp_dir).is_ok() {
+                            let uniq = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .ok()
+                                .map(|d| d.as_millis().to_string())
+                                .unwrap_or_else(|| "0".to_string());
+                            let dest = tmp_dir.join(format!("pasted-{uniq}.{ext}"));
+                            if std::fs::write(&dest, &decoded).is_ok()
+                                && let Ok((w, h)) = image::image_dimensions(&dest)
+                            {
+                                tracing::info!("OK (data URL pasted): {}", dest.display());
+                                let format_label = pasted_image_format(&dest).label();
+                                self.attach_image(dest, w, h, format_label);
+                                return true;
+                            }
+                        }
+                    }
+                    // Fallthrough: if project-local write failed, try a system tempfile
+                    if let Ok(tmp) = tempfile::Builder::new()
+                        .suffix(&format!(".{ext}"))
+                        .tempfile()
+                        && std::fs::write(tmp.path(), &decoded).is_ok()
+                        && let Ok((w, h)) = image::image_dimensions(tmp.path())
+                        && let Ok((_f, pathbuf)) = tmp.keep()
+                    {
+                        let format_label = pasted_image_format(&pathbuf).label();
+                        self.attach_image(pathbuf, w, h, format_label);
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
         let Some(path_buf) = normalize_pasted_path(&pasted) else {
             return false;
         };
 
+        // Try to read image dimensions for the normalized path. If that fails,
+        // attempt a WSL-style mapping for pasted Windows drive-letter paths
+        // (e.g. C:\Users\...) → /mnt/c/... which occurs when pasting from
+        // Windows into a WSL terminal.
         match image::image_dimensions(&path_buf) {
             Ok((w, h)) => {
                 tracing::info!("OK: {pasted}");
@@ -253,6 +317,16 @@ impl ChatComposer {
                 true
             }
             Err(err) => {
+                // Attempt simple Windows drive → /mnt mapping (only if it looks like a Windows path).
+                if let Some(mapped) = try_map_windows_drive_to_wsl_path(&path_buf.to_string_lossy())
+                    && let Ok((w, h)) = image::image_dimensions(&mapped)
+                {
+                    tracing::info!("OK (WSL mapped): {}", mapped.display());
+                    let format_label = pasted_image_format(&mapped).label();
+                    self.attach_image(mapped, w, h, format_label);
+                    return true;
+                }
+
                 tracing::info!("ERR: {err}");
                 false
             }
@@ -860,6 +934,37 @@ impl ChatComposer {
     fn handle_key_event_without_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         if self.handle_shortcut_overlay_key(&key_event) {
             return (InputResult::None, true);
+        }
+        // Support an explicit keyboard shortcut to paste image from clipboard
+        // using the native clipboard reader (arboard) or Windows PowerShell
+        // fallback when running under WSL. This avoids relying on the terminal
+        // to forward Ctrl+V as text. Shortcut: Ctrl+Alt+V.
+        if let KeyEvent {
+            code: KeyCode::Char('v'),
+            modifiers,
+            ..
+        } = key_event
+            && modifiers.contains(KeyModifiers::CONTROL)
+            && modifiers.contains(KeyModifiers::ALT)
+            && get_operating_system_info()
+                .and_then(|info| info.is_likely_windows_subsystem_for_linux)
+                .unwrap_or(false)
+        {
+            match paste_image_to_temp_png() {
+                Ok((path, info)) => {
+                    let format_label = pasted_image_format(&path).label();
+                    self.attach_image(path, info.width, info.height, format_label);
+                    return (InputResult::None, true);
+                }
+                Err(e) => {
+                    tracing::warn!("paste_image_to_temp_png failed: {}", e.to_string());
+                    let msg = format!("Failed to paste image from clipboard: {e}");
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_info_event(msg, None),
+                    )));
+                    return (InputResult::None, true);
+                }
+            }
         }
         if key_event.code == KeyCode::Esc {
             if self.is_empty() {

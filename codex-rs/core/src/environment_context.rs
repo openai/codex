@@ -20,6 +20,14 @@ pub enum NetworkAccess {
     Restricted,
     Enabled,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OperatingSystemInfo {
+    pub name: String,
+    pub version: String,
+    pub is_likely_windows_subsystem_for_linux: Option<bool>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename = "environment_context", rename_all = "snake_case")]
 pub(crate) struct EnvironmentContext {
@@ -29,6 +37,7 @@ pub(crate) struct EnvironmentContext {
     pub network_access: Option<NetworkAccess>,
     pub writable_roots: Option<Vec<PathBuf>>,
     pub shell: Option<Shell>,
+    pub operating_system: Option<OperatingSystemInfo>,
 }
 
 impl EnvironmentContext {
@@ -70,6 +79,7 @@ impl EnvironmentContext {
                 _ => None,
             },
             shell,
+            operating_system: Self::operating_system_info(),
         }
     }
 
@@ -83,6 +93,7 @@ impl EnvironmentContext {
             sandbox_mode,
             network_access,
             writable_roots,
+            operating_system,
             // should compare all fields except shell
             shell: _,
         } = other;
@@ -92,6 +103,18 @@ impl EnvironmentContext {
             && self.sandbox_mode == *sandbox_mode
             && self.network_access == *network_access
             && self.writable_roots == *writable_roots
+            && self.operating_system == *operating_system
+    }
+
+    fn new_without_operating_system(
+        cwd: Option<PathBuf>,
+        approval_policy: Option<AskForApproval>,
+        sandbox_policy: Option<SandboxPolicy>,
+        shell: Option<Shell>,
+    ) -> Self {
+        let mut ec = Self::new(cwd, approval_policy, sandbox_policy, shell);
+        ec.operating_system = None;
+        ec
     }
 
     pub fn diff(before: &TurnContext, after: &TurnContext) -> Self {
@@ -110,7 +133,7 @@ impl EnvironmentContext {
         } else {
             None
         };
-        EnvironmentContext::new(cwd, approval_policy, sandbox_policy, None)
+        EnvironmentContext::new_without_operating_system(cwd, approval_policy, sandbox_policy, None)
     }
 }
 
@@ -174,8 +197,26 @@ impl EnvironmentContext {
         {
             lines.push(format!("  <shell>{shell_name}</shell>"));
         }
+        if let Some(operating_system) = self.operating_system {
+            lines.push("  <operating_system>".to_string());
+            lines.push(format!("    <name>{}</name>", operating_system.name));
+            lines.push(format!(
+                "    <version>{}</version>",
+                operating_system.version
+            ));
+            if let Some(is_wsl) = operating_system.is_likely_windows_subsystem_for_linux {
+                lines.push(format!(
+                    "    <is_likely_windows_subsystem_for_linux>{is_wsl}</is_likely_windows_subsystem_for_linux>"
+                ));
+            }
+            lines.push("  </operating_system>".to_string());
+        }
         lines.push(ENVIRONMENT_CONTEXT_CLOSE_TAG.to_string());
         lines.join("\n")
+    }
+
+    fn operating_system_info() -> Option<OperatingSystemInfo> {
+        operating_system_info_impl()
     }
 }
 
@@ -191,6 +232,69 @@ impl From<EnvironmentContext> for ResponseItem {
     }
 }
 
+/// Returns information about the current operating system for the running process, if available.
+pub fn get_operating_system_info() -> Option<OperatingSystemInfo> {
+    operating_system_info_impl()
+}
+
+/// Map a Windows drive-letter path (e.g., `C:\Users\Alice`) to a `/mnt/<drive>` WSL path.
+/// Returns `None` if the input does not look like a drive-letter path.
+pub fn try_map_windows_drive_to_wsl_path(win_path: &str) -> Option<PathBuf> {
+    let trimmed = win_path.trim();
+    let mut chars = trimmed.chars();
+    let drive = chars.next()?;
+    if !drive.is_ascii_alphabetic() {
+        return None;
+    }
+    if chars.next()? != ':' {
+        return None;
+    }
+
+    let remainder = chars.as_str().trim_start_matches(['\\', '/']);
+    let sanitized = remainder.replace('\\', "/");
+    let drive_lower = drive.to_ascii_lowercase();
+    if sanitized.is_empty() {
+        Some(PathBuf::from(format!("/mnt/{drive_lower}")))
+    } else {
+        Some(PathBuf::from(format!("/mnt/{drive_lower}/{sanitized}")))
+    }
+}
+
+// Restrict Operating System Info to Windows and Linux inside WSL for now
+#[cfg(target_os = "windows")]
+fn operating_system_info_impl() -> Option<OperatingSystemInfo> {
+    let os_info = os_info::get();
+    Some(OperatingSystemInfo {
+        name: os_info.os_type().to_string(),
+        version: os_info.version().to_string(),
+        is_likely_windows_subsystem_for_linux: Some(has_wsl_env_markers()),
+    })
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn operating_system_info_impl() -> Option<OperatingSystemInfo> {
+    match has_wsl_env_markers() {
+        true => Some(OperatingSystemInfo {
+            name: "Windows Subsystem for Linux".to_string(),
+            version: "".to_string(),
+            is_likely_windows_subsystem_for_linux: Some(true),
+        }),
+        false => None,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn operating_system_info_impl() -> Option<OperatingSystemInfo> {
+    None
+}
+
+#[cfg(not(target_os = "macos"))]
+fn has_wsl_env_markers() -> bool {
+    std::env::var_os("WSL_INTEROP").is_some()
+        || std::env::var_os("WSLENV").is_some()
+        || std::env::var_os("WSL_DISTRO_NAME").is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use crate::shell::BashShell;
@@ -198,6 +302,57 @@ mod tests {
 
     use super::*;
     use pretty_assertions::assert_eq;
+    fn expected_environment_context(mut body_lines: Vec<String>) -> String {
+        let mut lines = vec!["<environment_context>".to_string()];
+        lines.append(&mut body_lines);
+        if let Some(os) = EnvironmentContext::operating_system_info() {
+            lines.push("  <operating_system>".to_string());
+            lines.push(format!("    <name>{}</name>", os.name));
+            lines.push(format!("    <version>{}</version>", os.version));
+            if let Some(is_wsl) = os.is_likely_windows_subsystem_for_linux {
+                lines.push(format!(
+                    "    <is_likely_windows_subsystem_for_linux>{is_wsl}</is_likely_windows_subsystem_for_linux>"
+                ));
+            }
+            lines.push("  </operating_system>".to_string());
+        }
+        lines.push("</environment_context>".to_string());
+        lines.join("\n")
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn operating_system_info_on_windows_includes_os_details() {
+        let info = operating_system_info_impl().expect("expected Windows operating system info");
+        let os_details = os_info::get();
+
+        assert_eq!(info.name, os_details.os_type().to_string());
+        assert_eq!(info.version, os_details.version().to_string());
+        assert_eq!(
+            info.is_likely_windows_subsystem_for_linux,
+            Some(has_wsl_env_markers())
+        );
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn operating_system_info_matches_wsl_detection_on_unix() {
+        let info = operating_system_info_impl();
+        if has_wsl_env_markers() {
+            let info = info.expect("expected WSL operating system info");
+            assert_eq!(info.name, "Windows Subsystem for Linux");
+            assert_eq!(info.version, "");
+            assert_eq!(info.is_likely_windows_subsystem_for_linux, Some(true));
+        } else {
+            assert_eq!(info, None);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn operating_system_info_is_none_on_macos() {
+        assert_eq!(operating_system_info_impl(), None);
+    }
 
     fn workspace_write_policy(writable_roots: Vec<&str>, network_access: bool) -> SandboxPolicy {
         SandboxPolicy::WorkspaceWrite {
@@ -217,16 +372,16 @@ mod tests {
             None,
         );
 
-        let expected = r#"<environment_context>
-  <cwd>/repo</cwd>
-  <approval_policy>on-request</approval_policy>
-  <sandbox_mode>workspace-write</sandbox_mode>
-  <network_access>restricted</network_access>
-  <writable_roots>
-    <root>/repo</root>
-    <root>/tmp</root>
-  </writable_roots>
-</environment_context>"#;
+        let expected = expected_environment_context(vec![
+            "  <cwd>/repo</cwd>".to_string(),
+            "  <approval_policy>on-request</approval_policy>".to_string(),
+            "  <sandbox_mode>workspace-write</sandbox_mode>".to_string(),
+            "  <network_access>restricted</network_access>".to_string(),
+            "  <writable_roots>".to_string(),
+            "    <root>/repo</root>".to_string(),
+            "    <root>/tmp</root>".to_string(),
+            "  </writable_roots>".to_string(),
+        ]);
 
         assert_eq!(context.serialize_to_xml(), expected);
     }
@@ -240,11 +395,11 @@ mod tests {
             None,
         );
 
-        let expected = r#"<environment_context>
-  <approval_policy>never</approval_policy>
-  <sandbox_mode>read-only</sandbox_mode>
-  <network_access>restricted</network_access>
-</environment_context>"#;
+        let expected = expected_environment_context(vec![
+            "  <approval_policy>never</approval_policy>".to_string(),
+            "  <sandbox_mode>read-only</sandbox_mode>".to_string(),
+            "  <network_access>restricted</network_access>".to_string(),
+        ]);
 
         assert_eq!(context.serialize_to_xml(), expected);
     }
@@ -258,11 +413,11 @@ mod tests {
             None,
         );
 
-        let expected = r#"<environment_context>
-  <approval_policy>on-failure</approval_policy>
-  <sandbox_mode>danger-full-access</sandbox_mode>
-  <network_access>enabled</network_access>
-</environment_context>"#;
+        let expected = expected_environment_context(vec![
+            "  <approval_policy>on-failure</approval_policy>".to_string(),
+            "  <sandbox_mode>danger-full-access</sandbox_mode>".to_string(),
+            "  <network_access>enabled</network_access>".to_string(),
+        ]);
 
         assert_eq!(context.serialize_to_xml(), expected);
     }
@@ -341,5 +496,21 @@ mod tests {
         );
 
         assert!(context1.equals_except_shell(&context2));
+    }
+
+    #[test]
+    fn try_map_windows_drive_path_to_wsl() {
+        let mapped =
+            try_map_windows_drive_to_wsl_path(r"C:\Users\Alice\Pictures\example.png").unwrap();
+        assert_eq!(
+            mapped,
+            PathBuf::from("/mnt/c/Users/Alice/Pictures/example.png")
+        );
+    }
+
+    #[test]
+    fn try_map_windows_drive_rejects_non_drive_paths() {
+        assert!(try_map_windows_drive_to_wsl_path("/tmp/example.png").is_none());
+        assert!(try_map_windows_drive_to_wsl_path("drive").is_none());
     }
 }
