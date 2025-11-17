@@ -14,13 +14,17 @@ pub const DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT: usize = MODEL_FORMAT_MAX_BYTES / 
 const TOKENIZER_STACK_SAFE_BYTES: usize = 1024 * 1024; // 1 MiB
 const APPROX_BYTES_PER_TOKEN: usize = 4;
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TruncationMode {
+    Bytes(usize),
+    Tokens(usize),
+}
+
 /// Format a block of exec/tool output for model consumption, truncating by
 /// lines and bytes while preserving head and tail segments.
-pub(crate) fn truncate_with_line_bytes_budget(
-    content: &str,
-    bytes_budget: usize,
-    lines_budget: usize,
-) -> String {
+pub(crate) fn truncate_with_line_bytes_budget(content: &str, bytes_budget: usize) -> String {
+    // TODO(aibrahim): to be removed
+    let lines_budget = MODEL_FORMAT_MAX_LINES;
     // Head+tail truncation for the model: show the beginning and end with an elision.
     // Clients still receive full streams; only this formatted summary is capped.
     let total_lines = content.lines().count();
@@ -586,11 +590,7 @@ mod tests {
         let line = "very long execution error line that should trigger truncation\n";
         let large_error = line.repeat(2_500); // way beyond both byte and line limits
 
-        let truncated = truncate_with_line_bytes_budget(
-            &large_error,
-            MODEL_FORMAT_MAX_BYTES,
-            MODEL_FORMAT_MAX_LINES,
-        );
+        let truncated = truncate_with_line_bytes_budget(&large_error, MODEL_FORMAT_MAX_BYTES);
 
         let total_lines = large_error.lines().count();
         let pattern = truncated_message_pattern(line, total_lines);
@@ -615,11 +615,7 @@ mod tests {
     #[test]
     fn format_exec_output_marks_byte_truncation_without_omitted_lines() {
         let long_line = "a".repeat(MODEL_FORMAT_MAX_BYTES + 50);
-        let truncated = truncate_with_line_bytes_budget(
-            &long_line,
-            MODEL_FORMAT_MAX_BYTES,
-            MODEL_FORMAT_MAX_LINES,
-        );
+        let truncated = truncate_with_line_bytes_budget(&long_line, MODEL_FORMAT_MAX_BYTES);
 
         assert_ne!(truncated, long_line);
         let marker_line =
@@ -639,11 +635,7 @@ mod tests {
         let content = "example output\n".repeat(10);
 
         assert_eq!(
-            truncate_with_line_bytes_budget(
-                &content,
-                MODEL_FORMAT_MAX_BYTES,
-                MODEL_FORMAT_MAX_LINES
-            ),
+            truncate_with_line_bytes_budget(&content, MODEL_FORMAT_MAX_BYTES),
             content
         );
     }
@@ -655,11 +647,7 @@ mod tests {
             .map(|idx| format!("line-{idx}\n"))
             .collect();
 
-        let truncated = truncate_with_line_bytes_budget(
-            &content,
-            MODEL_FORMAT_MAX_BYTES,
-            MODEL_FORMAT_MAX_LINES,
-        );
+        let truncated = truncate_with_line_bytes_budget(&content, MODEL_FORMAT_MAX_BYTES);
 
         let omitted = total_lines - MODEL_FORMAT_MAX_LINES;
         let expected_marker = format!("[... omitted {omitted} of {total_lines} lines ...]");
@@ -688,11 +676,7 @@ mod tests {
             .map(|idx| format!("line-{idx}-{long_line}\n"))
             .collect();
 
-        let truncated = truncate_with_line_bytes_budget(
-            &content,
-            MODEL_FORMAT_MAX_BYTES,
-            MODEL_FORMAT_MAX_LINES,
-        );
+        let truncated = truncate_with_line_bytes_budget(&content, MODEL_FORMAT_MAX_BYTES);
 
         assert!(
             truncated.contains("[... omitted 42 of 298 lines ...]"),
