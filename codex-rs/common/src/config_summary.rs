@@ -1,9 +1,8 @@
 use std::time::Duration;
 
+use crate::sandbox_summary::summarize_sandbox_policy;
 use codex_core::WireApi;
 use codex_core::config::Config;
-
-use crate::sandbox_summary::summarize_sandbox_policy;
 
 /// Build a list of key/value pairs summarizing the effective configuration.
 pub fn create_config_summary_entries(config: &Config) -> Vec<(&'static str, String)> {
