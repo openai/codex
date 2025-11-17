@@ -520,7 +520,6 @@ mod tests {
     }
 
     fn build_chunked_text(
-        tok: &Tokenizer,
         chunk: &str,
         chunk_tokens: usize,
         target_tokens: usize,
@@ -717,8 +716,8 @@ mod tests {
         let target_each = DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT
             .saturating_div(2)
             .saturating_sub(chunk_tokens);
-        let (t1, t1_tokens) = build_chunked_text(&tok, chunk, chunk_tokens, target_each);
-        let (t2, t2_tokens) = build_chunked_text(&tok, chunk, chunk_tokens, target_each);
+        let (t1, t1_tokens) = build_chunked_text(chunk, chunk_tokens, target_each);
+        let (t2, t2_tokens) = build_chunked_text(chunk, chunk_tokens, target_each);
         let remaining_after_t1_t2 =
             DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT.saturating_sub(t1_tokens + t2_tokens);
         assert!(
@@ -754,7 +753,6 @@ mod tests {
         );
 
         // Expect: t1 (full), t2 (full), image, t3 (truncated), summary mentioning 2 omitted.
-        eprintln!("output: {:?}", output);
         assert_eq!(output.len(), 5);
 
         let first_text = match &output[0] {

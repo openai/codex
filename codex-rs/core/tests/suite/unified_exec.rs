@@ -1596,6 +1596,7 @@ PY
     let original_tokens = large_output
         .original_token_count
         .expect("missing original_token_count for large output summary");
+    assert!(original_tokens > 0);
 
     Ok(())
 }

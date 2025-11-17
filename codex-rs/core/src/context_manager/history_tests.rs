@@ -3,7 +3,6 @@ use crate::context_manager::MODEL_FORMAT_MAX_LINES;
 use crate::truncate;
 use codex_git::GhostCommit;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::LocalShellExecAction;

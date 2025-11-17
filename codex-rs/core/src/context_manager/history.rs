@@ -35,7 +35,7 @@ impl ContextManager {
     }
 
     pub(crate) fn set_model(&mut self, model: Option<&str>) {
-        self.model = model.map(|m| m.to_string());
+        self.model = model.map(ToString::to_string);
     }
 
     pub(crate) fn token_info(&self) -> Option<TokenUsageInfo> {
