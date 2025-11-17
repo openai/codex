@@ -14,7 +14,6 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::sse;
-use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
@@ -25,11 +24,8 @@ use image::ImageBuffer;
 use image::Rgba;
 use image::load_from_memory;
 use serde_json::Value;
-use wiremock::Mock;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::body_string_contains;
-use wiremock::matchers::method;
-use wiremock::matchers::path_regex;
 
 fn find_image_message(body: &Value) -> Option<&Value> {
     body.get("input")
@@ -48,20 +44,6 @@ fn find_image_message(body: &Value) -> Option<&Value> {
                         .unwrap_or(false)
             })
         })
-}
-
-fn user_message_texts(body: &Value) -> Vec<String> {
-    body.get("input")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|item| item.get("type").and_then(Value::as_str) == Some("message"))
-        .filter(|item| item.get("role").and_then(Value::as_str) == Some("user"))
-        .filter_map(|item| item.get("content").and_then(Value::as_array))
-        .flatten()
-        .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_text"))
-        .filter_map(|span| span.get("text").and_then(Value::as_str).map(str::to_string))
-        .collect()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -504,17 +486,14 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
     const INVALID_IMAGE_ERROR: &str =
         "The image data you provided does not represent a valid image";
 
-    Mock::given(method("POST"))
-        .and(path_regex(".*/responses$"))
-        .and(body_string_contains("\"input_image\""))
-        .respond_with(
-            ResponseTemplate::new(400)
-                .insert_header("content-type", "text/plain")
-                .set_body_string(INVALID_IMAGE_ERROR),
-        )
-        .expect(1)
-        .mount(&server)
-        .await;
+    let invalid_image_mock = responses::mount_response_once_match(
+        &server,
+        body_string_contains("\"input_image\""),
+        ResponseTemplate::new(400)
+            .insert_header("content-type", "text/plain")
+            .set_body_string(INVALID_IMAGE_ERROR),
+    )
+    .await;
 
     let success_response = sse(vec![
         ev_response_created("resp-2"),
@@ -522,12 +501,7 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
         ev_completed("resp-2"),
     ]);
 
-    Mock::given(method("POST"))
-        .and(path_regex(".*/responses$"))
-        .respond_with(sse_response(success_response))
-        .expect(1)
-        .mount(&server)
-        .await;
+    let completion_mock = responses::mount_sse_once(&server, success_response).await;
 
     let TestCodex {
         codex,
@@ -563,29 +537,19 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 
-    let requests = server.received_requests().await.expect("requests captured");
-    let responses_requests: Vec<_> = requests
-        .into_iter()
-        .filter(|req| req.url.path().ends_with("/responses"))
-        .collect();
-    assert_eq!(responses_requests.len(), 2);
-
-    let first_body = responses_requests[0]
-        .body_json::<Value>()
-        .expect("first request body json");
+    let first_body = invalid_image_mock.single_request().body_json();
     assert!(
         find_image_message(&first_body).is_some(),
         "initial request should include the uploaded image"
     );
 
-    let second_body = responses_requests[1]
-        .body_json::<Value>()
-        .expect("second request body json");
+    let second_request = completion_mock.single_request();
+    let second_body = second_request.body_json();
     assert!(
         find_image_message(&second_body).is_none(),
         "second request should replace the invalid image"
     );
-    let user_texts = user_message_texts(&second_body);
+    let user_texts = second_request.message_input_texts("user");
     assert!(user_texts.iter().any(|text| text == "Invalid image"));
 
     Ok(())
