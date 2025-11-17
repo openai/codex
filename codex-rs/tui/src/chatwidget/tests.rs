@@ -67,9 +67,6 @@ fn set_windows_sandbox_enabled(enabled: bool) {
     codex_core::set_windows_sandbox_enabled(enabled);
 }
 
-#[cfg(not(target_os = "windows"))]
-fn set_windows_sandbox_enabled(_enabled: bool) {}
-
 const TEST_WARNING_MESSAGE: &str = "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start a new conversation when possible to keep conversations small and targeted.";
 
 fn test_config() -> Config {
