@@ -24,6 +24,13 @@ const PRCTL_FAILED_EXIT_CODE: i32 = 5;
 #[cfg(target_os = "macos")]
 const PTRACE_DENY_ATTACH_FAILED_EXIT_CODE: i32 = 6;
 
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "openbsd"
+))]
 const SET_RLIMIT_CORE_FAILED_EXIT_CODE: i32 = 7;
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
