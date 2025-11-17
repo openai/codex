@@ -7,11 +7,11 @@ use additional_dirs::add_dir_warning_message;
 use app::App;
 pub use app::AppExitInfo;
 use codex_app_server_protocol::AuthMode;
+use codex_common::oss::ensure_oss_provider_ready;
+use codex_common::oss::get_default_model_for_oss_provider;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
-use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
-use codex_core::OLLAMA_OSS_PROVIDER_ID;
 use codex_core::RolloutRecorder;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::config::Config;
@@ -22,8 +22,6 @@ use codex_core::config::resolve_oss_provider;
 use codex_core::find_conversation_path_by_id_str;
 use codex_core::get_platform_sandbox;
 use codex_core::protocol::AskForApproval;
-use codex_lmstudio::DEFAULT_OSS_MODEL as LMSTUDIO_DEFAULT_OSS_MODEL;
-use codex_ollama::DEFAULT_OSS_MODEL as OLLAMA_DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use std::fs::OpenOptions;
@@ -191,15 +189,10 @@ pub async fn run_main(
         Some(model.clone())
     } else if cli.oss {
         // Use the provider from model_provider_override
-        if let Some(provider_id) = &model_provider_override {
-            match provider_id.as_str() {
-                LMSTUDIO_OSS_PROVIDER_ID => Some(LMSTUDIO_DEFAULT_OSS_MODEL.to_owned()),
-                OLLAMA_OSS_PROVIDER_ID => Some(OLLAMA_DEFAULT_OSS_MODEL.to_owned()),
-                _ => None,
-            }
-        } else {
-            None
-        }
+        model_provider_override
+            .as_ref()
+            .and_then(|provider_id| get_default_model_for_oss_provider(provider_id))
+            .map(std::borrow::ToOwned::to_owned)
     } else {
         None // No model specified, will use the default.
     };
@@ -299,21 +292,7 @@ pub async fn run_main(
                 ));
             }
         };
-        match provider_id.as_str() {
-            LMSTUDIO_OSS_PROVIDER_ID => {
-                codex_lmstudio::ensure_oss_ready(&config)
-                    .await
-                    .map_err(|e| std::io::Error::other(format!("OSS setup failed: {e}")))?;
-            }
-            OLLAMA_OSS_PROVIDER_ID => {
-                codex_ollama::ensure_oss_ready(&config)
-                    .await
-                    .map_err(|e| std::io::Error::other(format!("OSS setup failed: {e}")))?;
-            }
-            _ => {
-                // Unknown OSS provider, skip setup
-            }
-        }
+        ensure_oss_provider_ready(provider_id, &config).await?;
     }
 
     let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"));

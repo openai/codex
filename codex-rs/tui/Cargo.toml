@@ -37,9 +37,7 @@ codex-common = { workspace = true, features = [
 codex-core = { workspace = true }
 codex-feedback = { workspace = true }
 codex-file-search = { workspace = true }
-codex-lmstudio = { workspace = true }
 codex-login = { workspace = true }
-codex-ollama = { workspace = true }
 codex-protocol = { workspace = true }
 color-eyre = { workspace = true }
 crossterm = { workspace = true, features = ["bracketed-paste", "event-stream"] }

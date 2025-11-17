@@ -11,6 +11,8 @@ pub mod event_processor_with_jsonl_output;
 pub mod exec_events;
 
 pub use cli::Cli;
+use codex_common::oss::ensure_oss_provider_ready;
+use codex_common::oss::get_default_model_for_oss_provider;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
@@ -28,8 +30,6 @@ use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
-use codex_lmstudio::DEFAULT_OSS_MODEL as LMSTUDIO_DEFAULT_OSS_MODEL;
-use codex_ollama::DEFAULT_OSS_MODEL as OLLAMA_DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::user_input::UserInput;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
@@ -204,15 +204,10 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     let model = if let Some(model) = model_cli_arg {
         Some(model)
     } else if oss {
-        if let Some(provider_id) = &model_provider {
-            match provider_id.as_str() {
-                LMSTUDIO_OSS_PROVIDER_ID => Some(LMSTUDIO_DEFAULT_OSS_MODEL.to_owned()),
-                OLLAMA_OSS_PROVIDER_ID => Some(OLLAMA_DEFAULT_OSS_MODEL.to_owned()),
-                _ => None,
-            }
-        } else {
-            None
-        }
+        model_provider
+            .as_ref()
+            .and_then(|provider_id| get_default_model_for_oss_provider(provider_id))
+            .map(std::borrow::ToOwned::to_owned)
     } else {
         None // No model specified, will use the default.
     };
@@ -290,21 +285,9 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 ));
             }
         };
-        match provider_id.as_str() {
-            LMSTUDIO_OSS_PROVIDER_ID => {
-                codex_lmstudio::ensure_oss_ready(&config)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("OSS setup failed: {e}"))?;
-            }
-            OLLAMA_OSS_PROVIDER_ID => {
-                codex_ollama::ensure_oss_ready(&config)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("OSS setup failed: {e}"))?;
-            }
-            _ => {
-                // Unknown OSS provider, skip setup
-            }
-        }
+        ensure_oss_provider_ready(provider_id, &config)
+            .await
+            .map_err(|e| anyhow::anyhow!("OSS setup failed: {e}"))?;
     }
 
     let default_cwd = config.cwd.to_path_buf();
