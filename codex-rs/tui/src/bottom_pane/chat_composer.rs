@@ -1,4 +1,4 @@
-use crate::bottom_pane::is_altgr;
+use crate::key_hint::is_altgr;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;

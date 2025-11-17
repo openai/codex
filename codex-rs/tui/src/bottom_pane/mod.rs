@@ -31,7 +31,6 @@ pub(crate) use list_selection_view::SelectionViewParams;
 mod feedback_view;
 pub(crate) use feedback_view::feedback_selection_params;
 pub(crate) use feedback_view::feedback_upload_consent_params;
-mod key_event_utils;
 mod paste_burst;
 pub mod popup_consts;
 mod queued_user_messages;
@@ -39,7 +38,6 @@ mod scroll_state;
 mod selection_popup_common;
 mod textarea;
 pub(crate) use feedback_view::FeedbackNoteView;
-pub(crate) use key_event_utils::is_altgr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CancellationEvent {
