@@ -2158,9 +2158,7 @@ impl ChatWidget {
         })]
     }
 
-    #[cfg(target_os = "windows")]
     pub(crate) fn world_writable_warning_details(&self) -> Option<(Vec<String>, usize, bool)> {
-        use std::collections::HashMap;
         if self
             .config
             .notices
@@ -2169,38 +2167,7 @@ impl ChatWidget {
         {
             return None;
         }
-
-        let mut env_map: HashMap<String, String> = HashMap::new();
-        for (k, v) in std::env::vars() {
-            env_map.insert(k, v);
-        }
-        match codex_windows_sandbox::preflight_audit_everyone_writable(
-            &self.config.cwd,
-            &env_map,
-            Some(self.config.codex_home.as_path()),
-        ) {
-            Ok(paths) if paths.is_empty() => None,
-            Ok(paths) => {
-                fn normalize_windows_path_for_display(p: &Path) -> String {
-                    let canon = dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-                    canon.display().to_string().replace('/', "\\")
-                }
-                let as_strings: Vec<String> = paths
-                    .iter()
-                    .map(|p| normalize_windows_path_for_display(p))
-                    .collect();
-                let sample_paths: Vec<String> = as_strings.iter().take(3).cloned().collect();
-                let extra_count = as_strings.len().saturating_sub(sample_paths.len());
-                Some((sample_paths, extra_count, false))
-            }
-            Err(_) => Some((Vec::new(), 0, true)),
-        }
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    #[allow(dead_code)]
-    pub(crate) fn world_writable_warning_details(&self) -> Option<(Vec<String>, usize, bool)> {
-        None
+        codex_windows_sandbox::world_writable_warning_details(self.config.codex_home.as_path())
     }
 
     pub(crate) fn open_full_access_confirmation(&mut self, preset: ApprovalPreset) {
