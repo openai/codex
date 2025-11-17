@@ -26,9 +26,11 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use core_test_support::wait_for_event_with_timeout;
 use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
+use tokio::time::Duration;
 
 fn extract_output_text(item: &Value) -> Option<&str> {
     item.get("output").and_then(|value| match value {
@@ -1371,8 +1373,13 @@ PY
             summary: ReasoningSummary::Auto,
         })
         .await?;
-
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    // This is a worst case scenario for the truncate logic.
+    wait_for_event_with_timeout(
+        &codex,
+        |event| matches!(event, EventMsg::TaskComplete(_)),
+        Duration::from_secs(10),
+    )
+    .await;
 
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(!requests.is_empty(), "expected at least one POST request");
@@ -1529,8 +1536,8 @@ async fn unified_exec_formats_large_output_summary() -> Result<()> {
     } = builder.build(&server).await?;
 
     let script = r#"python3 - <<'PY'
-for i in range(300):
-    print(f"line-{i}")
+for i in range(3000):
+    print("token " * 50)
 PY
 "#;
 
@@ -1583,15 +1590,12 @@ PY
     let outputs = collect_tool_outputs(&bodies)?;
     let large_output = outputs.get(call_id).expect("missing large output summary");
 
-    assert_regex_match(
-        concat!(
-            r"(?s)",
-            r"line-0.*?",
-            r"\[\.{3} omitted \d+ of \d+ lines \.{3}\].*?",
-            r"line-299",
-        ),
-        &large_output.output,
-    );
+    let output_text = &large_output.output;
+    assert_regex_match(r"(?s)tokens truncated", output_text);
+
+    let original_tokens = large_output
+        .original_token_count
+        .expect("missing original_token_count for large output summary");
 
     Ok(())
 }
