@@ -40,6 +40,7 @@ use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::client_common::ResponsesApiRequest;
 use crate::client_common::create_text_param_for_request;
+use crate::compact_remote::REMOTE_SUMMARIZATION_PROMPT;
 use crate::config::Config;
 use crate::default_client::CodexHttpClient;
 use crate::default_client::create_client;
@@ -82,12 +83,13 @@ struct Error {
 struct CompactHistoryRequest<'a> {
     model: &'a str,
     input: &'a [ResponseItem],
+    instructions: &'a str,
     store: bool,
 }
 
 #[derive(Debug, Deserialize)]
 struct CompactHistoryResponse {
-    input: Vec<ResponseItem>,
+    output: Vec<ResponseItem>,
 }
 
 #[derive(Debug, Clone)]
@@ -554,6 +556,7 @@ impl ModelClient {
             model: &self.config.model,
             input: history,
             store: true,
+            instructions: REMOTE_SUMMARIZATION_PROMPT
         };
         let response = req_builder
             .json(&payload)
@@ -572,8 +575,8 @@ impl ModelClient {
                 request_id: None,
             }));
         }
-        let CompactHistoryResponse { input } = serde_json::from_str(&body)?;
-        Ok(input)
+        let CompactHistoryResponse { output } = serde_json::from_str(&body)?;
+        Ok(output)
     }
 }
 

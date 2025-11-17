@@ -14,6 +14,9 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 
+/// Duplicate in order to be able to have custom instructions for remote compact.
+pub const REMOTE_SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt.md");
+
 pub(crate) async fn run_remote_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
