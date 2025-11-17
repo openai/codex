@@ -314,13 +314,17 @@ jobs:
           zstd -T0 -19 --rm codex-responses-api-proxy-termux-aarch64
 
           echo "=== Termux Build Artifacts ==="
-          ls -la "$DEST_DIR"
+          ls -la .
           echo "=============================="
+
+          # Change back to project root for subsequent steps
+          cd "${{ github.workspace }}/codex-rs"
 
       - name: Create Termux installation script
         shell: bash
         run: |
           set -euo pipefail
+          cd "${{ github.workspace }}/codex-rs"
           cat > dist/termux-install.sh << 'EOF'
           #!/data/data/com.termux/files/usr/bin/bash
           # Termux installation script for codex-rs
@@ -398,8 +402,8 @@ jobs:
         with:
           name: termux-aarch64-linux-android
           path: |
-            codex-rs/dist/termux-aarch64-linux-android/*
-            codex-rs/dist/termux-install.sh
+            ${{ github.workspace }}/codex-rs/dist/termux-aarch64-linux-android/*
+            ${{ github.workspace }}/codex-rs/dist/termux-install.sh
           retention-days: 30
 
       - name: Build summary
