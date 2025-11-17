@@ -1738,7 +1738,6 @@ impl ChatWidget {
             self.rate_limit_snapshot = Some(snapshot);
         }
 
-        let now = Local::now();
         self.add_to_history(crate::status::new_status_output(
             &self.config,
             self.auth_manager.as_ref(),
@@ -1746,7 +1745,7 @@ impl ChatWidget {
             context_usage,
             &self.conversation_id,
             rate_limit_snapshot.as_ref(),
-            now,
+            Local::now(),
         ));
     }
     fn fetch_rate_limits_from_usage(&self) -> Option<RateLimitSnapshotDisplay> {
