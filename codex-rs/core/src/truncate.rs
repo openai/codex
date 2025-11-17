@@ -7,6 +7,10 @@ use codex_utils_string::take_bytes_at_char_boundary;
 use codex_utils_string::take_last_bytes_at_char_boundary;
 use codex_utils_tokenizer::Tokenizer;
 
+use crate::model_family::ModelFamily;
+use crate::model_family::derive_default_model_family;
+use crate::model_family::find_family_for_model;
+
 /// Model-formatting limits: clients get full streams; only content sent to the model is truncated.
 pub const MODEL_FORMAT_MAX_BYTES: usize = 10 * 1024; // 10 KiB
 pub const MODEL_FORMAT_MAX_LINES: usize = 256; // lines
@@ -35,48 +39,42 @@ pub(crate) fn truncate_with_line_bytes_budget(content: &str, bytes_budget: usize
     format!("Total output lines: {total_lines}\n\n{output}")
 }
 
-/// Truncate the middle of a UTF-8 string to at most `max_tokens` tokens,
-/// preserving the beginning and the end. Returns the possibly truncated string
-/// and `Some(original_token_count)` if truncation occurred; otherwise returns
-/// the original string and `None`.
-pub(crate) fn truncate_with_token_budget(
-    s: &str,
-    max_budget: usize,
+pub(crate) async fn truncate_with_mode(
+    content: &str,
     model: Option<&str>,
+    tokens_budget: Option<usize>,
 ) -> (String, Option<u64>) {
-    if s.is_empty() {
-        return (String::new(), None);
-    }
-
-    let byte_len = s.len();
-    if max_budget > 0 {
-        let small_threshold = approx_bytes_for_tokens(max_budget / 4);
-        if small_threshold > 0 && byte_len <= small_threshold {
-            return (s.to_string(), None);
+    let mode = model
+        .map(|m| {
+            find_family_for_model(m)
+                .unwrap_or(derive_default_model_family(m))
+                .truncation_mode
+        })
+        .unwrap_or(TruncationMode::Bytes(MODEL_FORMAT_MAX_BYTES));
+    match mode {
+        TruncationMode::Bytes(bytes) => {
+            let max_tokens = if let Some(tokens) = tokens_budget {
+                tokens
+            } else {
+                bytes / APPROX_BYTES_PER_TOKEN
+            };
+            truncate_with_byte_estimate(content, max_tokens, model)
+        }
+        TruncationMode::Tokens(tokens) => {
+            if let Some(tokens) = tokens_budget {
+                truncate_with_token_budget(content, tokens, model).await
+            } else {
+                truncate_with_token_budget(content, tokens, model).await
+            }
         }
     }
-
-    let exceeds_stack_limit = byte_len > TOKENIZER_STACK_SAFE_BYTES;
-    let exceeds_large_threshold =
-        max_budget > 0 && byte_len > approx_bytes_for_tokens(max_budget.saturating_mul(2));
-    if exceeds_stack_limit || exceeds_large_threshold {
-        return truncate_with_byte_estimate(s, max_budget, model);
-    }
-
-    let tokenizer = match select_tokenizer(model) {
-        Some(tok) => tok,
-        None => return truncate_with_byte_estimate(s, max_budget, model),
-    };
-    let encoded = tokenizer.encode(s, false);
-    let total_tokens = encoded.len() as u64;
-    truncate_with_tokenizer_path(tokenizer, encoded, max_budget, s, total_tokens)
 }
 
 /// Globally truncate function output items to fit within
 /// `max_tokens` tokens by preserving as many
 /// text/image items as possible and appending a summary for any omitted text
 /// items.
-pub(crate) fn truncate_function_output_items_to_token_limit(
+pub(crate) async fn truncate_function_output_items_to_token_limit(
     items: &[FunctionCallOutputContentItem],
     max_tokens: usize,
 ) -> Vec<FunctionCallOutputContentItem> {
@@ -98,7 +96,8 @@ pub(crate) fn truncate_function_output_items_to_token_limit(
                     out.push(FunctionCallOutputContentItem::InputText { text: text.clone() });
                     remaining_tokens = remaining_tokens.saturating_sub(token_len);
                 } else {
-                    let (snippet, _) = truncate_with_token_budget(text, remaining_tokens, None);
+                    let (snippet, _) =
+                        truncate_with_token_budget(text, remaining_tokens, None).await;
                     if snippet.is_empty() {
                         omitted_text_items += 1;
                     } else {
@@ -122,6 +121,43 @@ pub(crate) fn truncate_function_output_items_to_token_limit(
     }
 
     out
+}
+
+/// Truncate the middle of a UTF-8 string to at most `max_tokens` tokens,
+/// preserving the beginning and the end. Returns the possibly truncated string
+/// and `Some(original_token_count)` if truncation occurred; otherwise returns
+/// the original string and `None`.
+async fn truncate_with_token_budget(
+    s: &str,
+    max_tokens: usize,
+    model: Option<&str>,
+) -> (String, Option<u64>) {
+    if s.is_empty() {
+        return (String::new(), None);
+    }
+
+    let byte_len = s.len();
+    if max_tokens > 0 {
+        let small_threshold = approx_bytes_for_tokens(max_tokens / 4);
+        if small_threshold > 0 && byte_len <= small_threshold {
+            return (s.to_string(), None);
+        }
+    }
+
+    let exceeds_stack_limit = byte_len > TOKENIZER_STACK_SAFE_BYTES;
+    let exceeds_large_threshold =
+        max_tokens > 0 && byte_len > approx_bytes_for_tokens(max_tokens.saturating_mul(2));
+    if exceeds_stack_limit || exceeds_large_threshold {
+        return truncate_with_byte_estimate(s, max_tokens, model);
+    }
+
+    let tokenizer = match select_tokenizer(model) {
+        Some(tok) => tok,
+        None => return truncate_with_byte_estimate(s, max_tokens, model),
+    };
+    let encoded = tokenizer.encode(s, false);
+    let total_tokens = encoded.len() as u64;
+    truncate_with_tokenizer_path(tokenizer, encoded, max_tokens, s, total_tokens)
 }
 
 fn truncate_with_tokenizer_path(

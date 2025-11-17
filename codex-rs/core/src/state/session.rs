@@ -30,12 +30,12 @@ impl SessionState {
     }
 
     // History helpers
-    pub(crate) fn record_items<I>(&mut self, items: I)
+    pub(crate) async fn record_items<I>(&mut self, items: I)
     where
         I: IntoIterator,
         I::Item: std::ops::Deref<Target = ResponseItem>,
     {
-        self.history.record_items(items)
+        self.history.record_items(items).await;
     }
 
     pub(crate) fn clone_history(&self) -> ContextManager {

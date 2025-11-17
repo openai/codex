@@ -56,7 +56,7 @@ impl ContextManager {
     }
 
     /// `items` is ordered from oldest to newest.
-    pub(crate) fn record_items<I>(&mut self, items: I)
+    pub(crate) async fn record_items<I>(&mut self, items: I)
     where
         I: IntoIterator,
         I::Item: std::ops::Deref<Target = ResponseItem>,
@@ -68,7 +68,7 @@ impl ContextManager {
                 continue;
             }
 
-            let processed = self.process_item(item_ref);
+            let processed = self.process_item(item_ref).await;
             self.items.push(processed);
         }
     }
@@ -156,7 +156,7 @@ impl ContextManager {
         items.retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
     }
 
-    fn process_item(&self, item: &ResponseItem) -> ResponseItem {
+    async fn process_item(&self, item: &ResponseItem) -> ResponseItem {
         match item {
             ResponseItem::FunctionCallOutput { call_id, output } => {
                 let (truncated, _) = truncate_with_token_budget(
@@ -164,12 +164,16 @@ impl ContextManager {
                     self.function_output_max_tokens,
                     self.model.as_deref(),
                 );
-                let truncated_items = output.content_items.as_ref().map(|items| {
-                    truncate_function_output_items_to_token_limit(
-                        items,
-                        self.function_output_max_tokens,
-                    )
-                });
+                let truncated_items = match output.content_items.as_ref() {
+                    Some(items) => Some(
+                        truncate_function_output_items_to_token_limit(
+                            items,
+                            self.function_output_max_tokens,
+                        )
+                        .await,
+                    ),
+                    None => None,
+                };
                 ResponseItem::FunctionCallOutput {
                     call_id: call_id.clone(),
                     output: FunctionCallOutputPayload {
