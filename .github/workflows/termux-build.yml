@@ -264,6 +264,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          cd codex-rs
           RECIPE="${RUNNER_TEMP}/chef-recipe.json"
           cargo chef prepare --recipe-path "$RECIPE"
           cargo chef cook --recipe-path "$RECIPE" --target aarch64-linux-android --release --all-features
@@ -271,17 +272,23 @@ jobs:
       - name: Lint with clippy
         id: clippy
         continue-on-error: true
-        run: cargo clippy --target aarch64-linux-android --all-features --profile release -- -D warnings
+        run: |
+          cd codex-rs
+          cargo clippy --target aarch64-linux-android --all-features --profile release -- -D warnings
         env:
           RUSTC_WRAPPER: sccache
 
       - name: Build codex binary for Termux
-        run: cargo build --target aarch64-linux-android --release --bin codex
+        run: |
+          cd codex-rs
+          cargo build --target aarch64-linux-android --release --bin codex
         env:
           RUSTC_WRAPPER: sccache
 
       - name: Build codex-responses-api-proxy for Termux
-        run: cargo build --target aarch64-linux-android --release --bin codex-responses-api-proxy
+        run: |
+          cd codex-rs
+          cargo build --target aarch64-linux-android --release --bin codex-responses-api-proxy
         env:
           RUSTC_WRAPPER: sccache
 
