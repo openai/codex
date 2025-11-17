@@ -1763,15 +1763,11 @@ impl ChatWidget {
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
 
-            if let Some(snapshot) = fetch_rate_limits(base_url.clone(), auth.clone()).await {
-                app_event_tx.send(AppEvent::RateLimitSnapshotFetched(snapshot));
-            }
-
             loop {
-                interval.tick().await;
                 if let Some(snapshot) = fetch_rate_limits(base_url.clone(), auth.clone()).await {
                     app_event_tx.send(AppEvent::RateLimitSnapshotFetched(snapshot));
                 }
+                interval.tick().await;
             }
         });
     }
