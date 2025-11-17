@@ -65,6 +65,7 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::oneshot;
 use tracing::debug;
 
 use crate::app_event::AppEvent;
@@ -119,6 +120,7 @@ use codex_common::approval_presets::builtin_approval_presets;
 use codex_common::model_presets::ModelPreset;
 use codex_common::model_presets::builtin_model_presets;
 use codex_core::AuthManager;
+use codex_core::CodexAuth;
 use codex_core::ConversationManager;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
@@ -497,7 +499,7 @@ impl ChatWidget {
         }
     }
 
-    fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshot>) {
+    pub(crate) fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshot>) {
         if let Some(snapshot) = snapshot {
             let warnings = self.rate_limit_warnings.take_warnings(
                 snapshot
@@ -1724,62 +1726,61 @@ impl ChatWidget {
     }
 
     pub(crate) fn add_status_output(&mut self) {
-        let default_usage = TokenUsage::default();
         let (total_usage, context_usage) = if let Some(ti) = &self.token_info {
-            (&ti.total_token_usage, Some(&ti.last_token_usage))
+            (
+                ti.total_token_usage.clone(),
+                Some(ti.last_token_usage.clone()),
+            )
         } else {
-            (&default_usage, Some(&default_usage))
+            let usage = TokenUsage::default();
+            (usage.clone(), Some(usage))
         };
 
-        self.rate_limit_snapshot = self
-            .fetch_rate_limits_from_usage()
-            .or(self.rate_limit_snapshot.clone());
+        let snapshot_for_display = self
+            .refresh_rate_limits_from_usage()
+            .or_else(|| self.rate_limit_snapshot.clone());
 
         self.add_to_history(crate::status::new_status_output(
             &self.config,
             self.auth_manager.as_ref(),
-            total_usage,
-            context_usage,
+            &total_usage,
+            context_usage.as_ref(),
             &self.conversation_id,
-            self.rate_limit_snapshot.as_ref(),
+            snapshot_for_display.as_ref(),
             Local::now(),
         ));
     }
-    fn fetch_rate_limits_from_usage(&self) -> Option<RateLimitSnapshotDisplay> {
+    fn refresh_rate_limits_from_usage(&mut self) -> Option<RateLimitSnapshotDisplay> {
         let auth = self.auth_manager.auth()?;
         if auth.mode != AuthMode::ChatGPT {
             return None;
         }
 
         let base_url = self.config.chatgpt_base_url.clone();
-        let auth = auth;
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                let fetch = async {
-                    let client = BackendClient::from_auth(base_url, &auth).await?;
-                    client.get_rate_limits().await
-                };
-                tokio::time::timeout(Duration::from_secs(1), fetch).await
-            })
+        let app_event_tx = self.app_event_tx.clone();
+        let (tx, rx) = oneshot::channel();
+
+        tokio::spawn(async move {
+            let snapshot = fetch_rate_limits(base_url, auth).await;
+            if let Some(snapshot) = snapshot {
+                app_event_tx.send(AppEvent::RateLimitSnapshotFetched(snapshot.clone()));
+                let _ = tx.send(Some(snapshot));
+            } else {
+                let _ = tx.send(None);
+            }
         });
 
-        match result {
-            Ok(Ok(snapshot)) => Some(crate::status::rate_limit_snapshot_display(
-                &snapshot,
-                Local::now(),
-            )),
-            Ok(Err(err)) => {
-                tracing::debug!(
-                    error = ?err,
-                    "failed to fetch rate limits from /usage within timeout"
-                );
-                None
-            }
-            Err(_) => {
-                tracing::debug!("timed out fetching rate limits from /usage");
-                None
-            }
-        }
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                match tokio::time::timeout(Duration::from_secs(1), rx).await {
+                    Ok(Ok(Some(snapshot))) => Some(crate::status::rate_limit_snapshot_display(
+                        &snapshot,
+                        Local::now(),
+                    )),
+                    Ok(Ok(None)) | Ok(Err(_)) | Err(_) => None,
+                }
+            })
+        })
     }
 
     fn lower_cost_preset(&self) -> Option<ModelPreset> {
@@ -2934,6 +2935,22 @@ fn extract_first_bold(s: &str) -> Option<String> {
         i += 1;
     }
     None
+}
+
+async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Option<RateLimitSnapshot> {
+    match BackendClient::from_auth(base_url, &auth).await {
+        Ok(client) => match client.get_rate_limits().await {
+            Ok(snapshot) => Some(snapshot),
+            Err(err) => {
+                debug!(error = ?err, "failed to fetch rate limits from /usage");
+                None
+            }
+        },
+        Err(err) => {
+            debug!(error = ?err, "failed to construct backend client for rate limits");
+            None
+        }
+    }
 }
 
 #[cfg(test)]
