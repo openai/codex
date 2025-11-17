@@ -73,6 +73,11 @@ mod windows_impl {
         Ok(())
     }
 
+    fn ensure_codex_home_exists(p: &Path) -> Result<()> {
+        std::fs::create_dir_all(p)?;
+        Ok(())
+    }
+
     fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
         let mut items: Vec<(String, String)> =
             env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
@@ -189,12 +194,13 @@ mod windows_impl {
         normalize_null_device_env(&mut env_map);
         ensure_non_interactive_pager(&mut env_map);
         apply_no_network_to_env(&mut env_map)?;
-        crate::config::edit::ensure_codex_home_exists(codex_home)?;
+        ensure_codex_home_exists(codex_home)?;
 
         let current_dir = cwd.to_path_buf();
         // for now, don't fail if we detect world-writable directories
         // audit::audit_everyone_writable(&current_dir, &env_map)?;
-        log_start(&command, Some(codex_home));
+        let logs_base_dir = Some(codex_home);
+        log_start(&command, logs_base_dir);
         let cap_sid_path = cap_sid_file(codex_home);
         let (h_token, psid_to_use): (HANDLE, *mut c_void) = unsafe {
             match &policy.0 {
