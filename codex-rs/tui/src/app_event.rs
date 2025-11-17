@@ -42,7 +42,7 @@ pub(crate) enum AppEvent {
         matches: Vec<FileMatch>,
     },
 
-    /// Result of refreshing rate limits (e.g., after `/status`).
+    /// Result of refreshing rate limits
     RateLimitSnapshotFetched(RateLimitSnapshot),
 
     /// Result of computing a `/diff` command.
