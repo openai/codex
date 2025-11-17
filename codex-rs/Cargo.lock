@@ -1203,6 +1203,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-execpolicy2"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "multimap",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "shlex",
+ "starlark",
+ "thiserror 2.0.17",
+]
+
+[[package]]
 name = "codex-feedback"
 version = "0.0.0"
 dependencies = [
