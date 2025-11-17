@@ -2046,26 +2046,21 @@ impl ChatWidget {
         let mut items: Vec<SelectionItem> = Vec::new();
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
         #[cfg(target_os = "windows")]
-        let header_renderable: Box<dyn Renderable> = if self
-            .config
-            .forced_auto_mode_downgraded_on_windows
-            && codex_core::get_platform_sandbox().is_none()
-        {
-            use ratatui_macros::line;
+        let header_renderable: Box<dyn Renderable> =
+            if self.config.forced_auto_mode_downgraded_on_windows
+                && codex_core::get_platform_sandbox().is_none()
+            {
+                use ratatui_macros::line;
 
-            let mut header = ColumnRenderable::new();
-            header.push(line![
+                let mut header = ColumnRenderable::new();
+                header.push(line![
                 "Codex forced your settings back to Read Only because the Windows sandbox is off."
                     .bold()
             ]);
-            header.push(line![
-                "Enable the experimental Windows sandbox to re-enable Auto mode, or switch to Full Access manually."
-                    .dim()
-                ]);
-            Box::new(header)
-        } else {
-            Box::new(())
-        };
+                Box::new(header)
+            } else {
+                Box::new(())
+            };
         #[cfg(not(target_os = "windows"))]
         let header_renderable: Box<dyn Renderable> = Box::new(());
         for preset in presets.into_iter() {
