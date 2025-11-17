@@ -160,6 +160,19 @@ fn local_image_error_placeholder(
     }
 }
 
+fn invalid_image_error_placeholder(
+    path: &std::path::Path,
+    error: impl std::fmt::Display,
+) -> ContentItem {
+    ContentItem::InputText {
+        text: format!(
+            "Image located at `{}` is invalid: {}",
+            path.display(),
+            error
+        ),
+    }
+}
+
 impl From<ResponseInputItem> for ResponseItem {
     fn from(item: ResponseInputItem) -> Self {
         match item {
@@ -273,9 +286,10 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                             image_url: image.into_data_url(),
                         },
                         Err(err) => {
-                            tracing::warn!("Failed to resize image {}: {}", path.display(), err);
                             if matches!(&err, ImageProcessingError::Read { .. }) {
                                 local_image_error_placeholder(&path, &err)
+                            } else if err.is_invalid_image() {
+                                invalid_image_error_placeholder(&path, &err)
                             } else {
                                 match std::fs::read(&path) {
                                     Ok(bytes) => {
@@ -391,6 +405,7 @@ impl Serialize for FunctionCallOutputPayload {
     where
         S: Serializer,
     {
+        tracing::error!("Payload: {:?}", self);
         if let Some(items) = &self.content_items {
             items.serialize(serializer)
         } else {
@@ -478,7 +493,7 @@ fn convert_content_blocks_to_items(
 ) -> Option<Vec<FunctionCallOutputContentItem>> {
     let mut saw_image = false;
     let mut items = Vec::with_capacity(blocks.len());
-
+    tracing::warn!("Blocks: {:?}", blocks);
     for block in blocks {
         match block {
             ContentBlock::TextContent(text) => {
