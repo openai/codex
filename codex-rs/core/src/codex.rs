@@ -602,7 +602,8 @@ impl Session {
                 auth_statuses.clone(),
                 tx_event.clone(),
                 sess.services.mcp_startup_cancellation_token.clone(),
-            );
+            )
+            .await;
 
         // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
         sess.record_initial_history(initial_history).await;
