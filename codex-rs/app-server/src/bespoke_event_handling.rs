@@ -5,6 +5,10 @@ use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
 use codex_app_server_protocol::ApplyPatchApprovalResponse;
+use codex_app_server_protocol::CommandExecutionOutputDeltaNotification;
+use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
+use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
+use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
 use codex_app_server_protocol::InterruptConversationResponse;
@@ -13,9 +17,12 @@ use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::McpToolCallError;
 use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus;
+use codex_app_server_protocol::ParsedCommand as V2ParsedCommand;
 use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
 use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
 use codex_app_server_protocol::ReasoningTextDeltaNotification;
+use codex_app_server_protocol::ReviewDecision as V2ReviewDecision;
+use codex_app_server_protocol::SandboxCommandAssessment as V2SandboxCommandAssessment;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::ThreadItem;
@@ -25,16 +32,18 @@ use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
+use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
 use codex_protocol::ConversationId;
+use std::convert::TryFrom;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use tracing::error;
 
-type JsonRpcResult = serde_json::Value;
+type JsonValue = serde_json::Value;
 
 pub(crate) async fn apply_bespoke_event_handling(
     event: Event,
@@ -42,6 +51,7 @@ pub(crate) async fn apply_bespoke_event_handling(
     conversation: Arc<CodexConversation>,
     outgoing: Arc<OutgoingMessageSender>,
     pending_interrupts: PendingInterrupts,
+    api_version: ApiVersion,
 ) {
     let Event { id: event_id, msg } = event;
     match msg {
@@ -61,11 +71,58 @@ pub(crate) async fn apply_bespoke_event_handling(
             let rx = outgoing
                 .send_request(ServerRequestPayload::ApplyPatchApproval(params))
                 .await;
-            // TODO(mbolin): Enforce a timeout so this task does not live indefinitely?
             tokio::spawn(async move {
                 on_patch_approval_response(event_id, rx, conversation).await;
             });
         }
+        EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
+            call_id,
+            turn_id,
+            command,
+            cwd,
+            reason,
+            risk,
+            parsed_cmd,
+        }) => match api_version {
+            ApiVersion::V1 => {
+                let params = ExecCommandApprovalParams {
+                    conversation_id,
+                    call_id,
+                    command,
+                    cwd,
+                    reason,
+                    risk,
+                    parsed_cmd,
+                };
+                let rx = outgoing
+                    .send_request(ServerRequestPayload::ExecCommandApproval(params))
+                    .await;
+                tokio::spawn(async move {
+                    on_exec_approval_response(event_id, rx, conversation).await;
+                });
+            }
+            ApiVersion::V2 => {
+                let params = CommandExecutionRequestApprovalParams {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: turn_id.clone(),
+                    // Until we migrate the core to be aware of a first class CommandExecutionItem
+                    // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
+                    item_id: call_id.clone(),
+                    reason,
+                    risk: risk.map(V2SandboxCommandAssessment::from),
+                    parsed_cmd: parsed_cmd.into_iter().map(V2ParsedCommand::from).collect(),
+                };
+                let rx = outgoing
+                    .send_request(ServerRequestPayload::CommandExecutionRequestApproval(
+                        params,
+                    ))
+                    .await;
+                tokio::spawn(async move {
+                    on_command_execution_request_approval_response(event_id, rx, conversation)
+                        .await;
+                });
+            }
+        },
         // TODO(celia): properly construct McpToolCall TurnItem in core.
         EventMsg::McpToolCallBegin(begin_event) => {
             let notification = construct_mcp_tool_call_notification(begin_event).await;
@@ -121,32 +178,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 ))
                 .await;
         }
-        EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
-            call_id,
-            command,
-            cwd,
-            reason,
-            risk,
-            parsed_cmd,
-        }) => {
-            let params = ExecCommandApprovalParams {
-                conversation_id,
-                call_id,
-                command,
-                cwd,
-                reason,
-                risk,
-                parsed_cmd,
-            };
-            let rx = outgoing
-                .send_request(ServerRequestPayload::ExecCommandApproval(params))
-                .await;
-
-            // TODO(mbolin): Enforce a timeout so this task does not live indefinitely?
-            tokio::spawn(async move {
-                on_exec_approval_response(event_id, rx, conversation).await;
-            });
-        }
         EventMsg::TokenCount(token_count_event) => {
             if let Some(rate_limits) = token_count_event.rate_limits {
                 outgoing
@@ -167,6 +198,79 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::ItemCompleted(item_completed_event) => {
             let item: ThreadItem = item_completed_event.item.clone().into();
+            let notification = ItemCompletedNotification { item };
+            outgoing
+                .send_server_notification(ServerNotification::ItemCompleted(notification))
+                .await;
+        }
+        EventMsg::ExecCommandBegin(exec_command_begin_event) => {
+            let item = ThreadItem::CommandExecution {
+                id: exec_command_begin_event.call_id.clone(),
+                command: exec_command_begin_event.command.join(" "),
+                cwd: exec_command_begin_event.cwd,
+                status: CommandExecutionStatus::InProgress,
+                parsed_cmd: exec_command_begin_event
+                    .parsed_cmd
+                    .into_iter()
+                    .map(V2ParsedCommand::from)
+                    .collect(),
+                aggregated_output: None,
+                exit_code: None,
+                duration_ms: None,
+            };
+            let notification = ItemStartedNotification { item };
+            outgoing
+                .send_server_notification(ServerNotification::ItemStarted(notification))
+                .await;
+        }
+        EventMsg::ExecCommandOutputDelta(exec_command_output_delta_event) => {
+            let notification = CommandExecutionOutputDeltaNotification {
+                item_id: exec_command_output_delta_event.call_id.clone(),
+                delta: String::from_utf8_lossy(&exec_command_output_delta_event.chunk).to_string(),
+            };
+            outgoing
+                .send_server_notification(ServerNotification::CommandExecutionOutputDelta(
+                    notification,
+                ))
+                .await;
+        }
+        EventMsg::ExecCommandEnd(exec_command_end_event) => {
+            let ExecCommandEndEvent {
+                call_id,
+                command,
+                cwd,
+                parsed_cmd,
+                aggregated_output,
+                exit_code,
+                duration,
+                ..
+            } = exec_command_end_event;
+
+            let status = if exit_code == 0 {
+                CommandExecutionStatus::Completed
+            } else {
+                CommandExecutionStatus::Failed
+            };
+
+            let aggregated_output = if aggregated_output.is_empty() {
+                None
+            } else {
+                Some(aggregated_output)
+            };
+
+            let duration_ms = i64::try_from(duration.as_millis()).unwrap_or(i64::MAX);
+
+            let item = ThreadItem::CommandExecution {
+                id: call_id,
+                command: command.join(" "),
+                cwd,
+                status,
+                parsed_cmd: parsed_cmd.into_iter().map(V2ParsedCommand::from).collect(),
+                aggregated_output,
+                exit_code: Some(exit_code),
+                duration_ms: Some(duration_ms),
+            };
+
             let notification = ItemCompletedNotification { item };
             outgoing
                 .send_server_notification(ServerNotification::ItemCompleted(notification))
@@ -202,7 +306,7 @@ pub(crate) async fn apply_bespoke_event_handling(
 
 async fn on_patch_approval_response(
     event_id: String,
-    receiver: oneshot::Receiver<JsonRpcResult>,
+    receiver: oneshot::Receiver<JsonValue>,
     codex: Arc<CodexConversation>,
 ) {
     let response = receiver.await;
@@ -244,7 +348,7 @@ async fn on_patch_approval_response(
 
 async fn on_exec_approval_response(
     event_id: String,
-    receiver: oneshot::Receiver<JsonRpcResult>,
+    receiver: oneshot::Receiver<JsonValue>,
     conversation: Arc<CodexConversation>,
 ) {
     let response = receiver.await;
@@ -278,6 +382,40 @@ async fn on_exec_approval_response(
     }
 }
 
+async fn on_command_execution_request_approval_response(
+    event_id: String,
+    receiver: oneshot::Receiver<JsonValue>,
+    conversation: Arc<CodexConversation>,
+) {
+    let response = receiver.await;
+    let value = match response {
+        Ok(value) => value,
+        Err(err) => {
+            error!("request failed: {err:?}");
+            return;
+        }
+    };
+
+    let response = serde_json::from_value::<CommandExecutionRequestApprovalResponse>(value)
+        .unwrap_or_else(|err| {
+            error!("failed to deserialize CommandExecutionRequestApprovalResponse: {err}");
+            CommandExecutionRequestApprovalResponse {
+                decision: V2ReviewDecision::Denied,
+            }
+        });
+
+    let decision = response.decision.to_core();
+    if let Err(err) = conversation
+        .submit(Op::ExecApproval {
+            id: event_id,
+            decision,
+        })
+        .await
+    {
+        error!("failed to submit ExecApproval: {err}");
+    }
+}
+
 /// similar to handle_mcp_tool_call_begin in exec
 async fn construct_mcp_tool_call_notification(
     begin_event: McpToolCallBeginEvent,
@@ -287,10 +425,7 @@ async fn construct_mcp_tool_call_notification(
         server: begin_event.invocation.server,
         tool: begin_event.invocation.tool,
         status: McpToolCallStatus::InProgress,
-        arguments: begin_event
-            .invocation
-            .arguments
-            .unwrap_or(JsonRpcResult::Null),
+        arguments: begin_event.invocation.arguments.unwrap_or(JsonValue::Null),
         result: None,
         error: None,
     };
@@ -328,10 +463,7 @@ async fn construct_mcp_tool_call_end_notification(
         server: end_event.invocation.server,
         tool: end_event.invocation.tool,
         status,
-        arguments: end_event
-            .invocation
-            .arguments
-            .unwrap_or(JsonRpcResult::Null),
+        arguments: end_event.invocation.arguments.unwrap_or(JsonValue::Null),
         result,
         error,
     };

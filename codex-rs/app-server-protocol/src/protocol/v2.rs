@@ -4,11 +4,13 @@ use std::path::PathBuf;
 use crate::protocol::common::AuthMode;
 use codex_protocol::ConversationId;
 use codex_protocol::account::PlanType;
+use codex_protocol::approvals::SandboxCommandAssessment as CoreSandboxCommandAssessment;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::user_input::UserInput as CoreUserInput;
@@ -20,7 +22,7 @@ use serde_json::Value as JsonValue;
 use ts_rs::TS;
 
 // Macro to declare a camelCased API v2 enum mirroring a core enum which
-// tends to use kebab-case.
+// tends to use either snake_case or kebab-case.
 macro_rules! v2_enum_from_core {
     (
         pub enum $Name:ident from $Src:path { $( $Variant:ident ),+ $(,)? }
@@ -53,6 +55,23 @@ v2_enum_from_core!(
 v2_enum_from_core!(
     pub enum SandboxMode from codex_protocol::config_types::SandboxMode {
         ReadOnly, WorkspaceWrite, DangerFullAccess
+    }
+);
+
+v2_enum_from_core!(
+    pub enum ReviewDecision from codex_protocol::protocol::ReviewDecision {
+        Approved,
+        ApprovedForSession,
+        Denied,
+        Abort
+    }
+);
+
+v2_enum_from_core!(
+    pub enum SandboxRiskLevel from codex_protocol::approvals::SandboxRiskLevel {
+        Low,
+        Medium,
+        High
     }
 );
 
@@ -117,6 +136,82 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             },
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SandboxCommandAssessment {
+    pub description: String,
+    pub risk_level: SandboxRiskLevel,
+}
+
+impl SandboxCommandAssessment {
+    pub fn into_core(self) -> CoreSandboxCommandAssessment {
+        CoreSandboxCommandAssessment {
+            description: self.description,
+            risk_level: self.risk_level.to_core(),
+        }
+    }
+}
+
+impl From<CoreSandboxCommandAssessment> for SandboxCommandAssessment {
+    fn from(value: CoreSandboxCommandAssessment) -> Self {
+        Self {
+            description: value.description,
+            risk_level: SandboxRiskLevel::from(value.risk_level),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+#[ts(export_to = "v2/")]
+pub enum ParsedCommand {
+    Read {
+        cmd: String,
+        name: String,
+        path: PathBuf,
+    },
+    ListFiles {
+        cmd: String,
+        path: Option<String>,
+    },
+    Search {
+        cmd: String,
+        query: Option<String>,
+        path: Option<String>,
+    },
+    Unknown {
+        cmd: String,
+    },
+}
+
+impl ParsedCommand {
+    pub fn into_core(self) -> CoreParsedCommand {
+        match self {
+            ParsedCommand::Read { cmd, name, path } => CoreParsedCommand::Read { cmd, name, path },
+            ParsedCommand::ListFiles { cmd, path } => CoreParsedCommand::ListFiles { cmd, path },
+            ParsedCommand::Search { cmd, query, path } => {
+                CoreParsedCommand::Search { cmd, query, path }
+            }
+            ParsedCommand::Unknown { cmd } => CoreParsedCommand::Unknown { cmd },
+        }
+    }
+}
+
+impl From<CoreParsedCommand> for ParsedCommand {
+    fn from(value: CoreParsedCommand) -> Self {
+        match value {
+            CoreParsedCommand::Read { cmd, name, path } => ParsedCommand::Read { cmd, name, path },
+            CoreParsedCommand::ListFiles { cmd, path } => ParsedCommand::ListFiles { cmd, path },
+            CoreParsedCommand::Search { cmd, query, path } => {
+                ParsedCommand::Search { cmd, query, path }
+            }
+            CoreParsedCommand::Unknown { cmd } => ParsedCommand::Unknown { cmd },
         }
     }
 }
@@ -281,7 +376,7 @@ pub struct ThreadStartParams {
     pub cwd: Option<String>,
     pub approval_policy: Option<AskForApproval>,
     pub sandbox: Option<SandboxMode>,
-    pub config: Option<HashMap<String, serde_json::Value>>,
+    pub config: Option<HashMap<String, JsonValue>>,
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
 }
@@ -527,10 +622,18 @@ pub enum ThreadItem {
     #[ts(rename_all = "camelCase")]
     CommandExecution {
         id: String,
+        /// The command to be executed.
         command: String,
-        aggregated_output: String,
-        exit_code: Option<i32>,
+        /// The command's working directory if not the default cwd for the agent.
+        cwd: PathBuf,
         status: CommandExecutionStatus,
+        /// A best-effort parsing of the command to identify the type of command and its arguments.
+        parsed_cmd: Vec<ParsedCommand>,
+        /// The command's output, aggregated from stdout and stderr.
+        aggregated_output: Option<String>,
+        /// The command's exit code.
+        exit_code: Option<i32>,
+        /// The duration of the command execution in milliseconds.
         duration_ms: Option<i64>,
     },
     #[serde(rename_all = "camelCase")]
@@ -760,6 +863,27 @@ pub struct CommandExecutionOutputDeltaNotification {
 pub struct McpToolCallProgressNotification {
     pub item_id: String,
     pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CommandExecutionRequestApprovalParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    /// Optional explanatory reason (e.g. request for network access).
+    pub reason: Option<String>,
+    /// Optional model-provided risk assessment describing the blocked command.
+    pub risk: Option<SandboxCommandAssessment>,
+    /// A best-effort parsing of the command to identify the type of command and its arguments.
+    pub parsed_cmd: Vec<ParsedCommand>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[ts(export_to = "v2/")]
+pub struct CommandExecutionRequestApprovalResponse {
+    pub decision: ReviewDecision,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
