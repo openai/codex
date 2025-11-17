@@ -336,7 +336,7 @@ enum NewlineMode {
 }
 
 fn format_truncation_marker(removed_tokens: u64) -> String {
-    format!("…{removed_tokens} tokens truncated…")
+    format!("[…{removed_tokens} tokens truncated…]")
 }
 
 fn split_budget(budget: usize) -> (usize, usize) {
