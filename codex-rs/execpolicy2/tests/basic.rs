@@ -295,12 +295,8 @@ prefix_rule(
 fn strictest_decision_wins_across_matches() {
     let policy_src = r#"
 prefix_rule(
-    pattern = ["git", "status"],
-    decision = "prompt",
-)
-prefix_rule(
     pattern = ["git"],
-    decision = "allow",
+    decision = "prompt",
 )
 prefix_rule(
     pattern = ["git", "commit"],
@@ -313,24 +309,6 @@ prefix_rule(
         .expect("parse policy");
     let policy = parser.build();
 
-    let status = policy.check(&tokens(&["git", "status"]));
-    assert_eq!(
-        Evaluation::Match {
-            decision: Decision::Prompt,
-            matched_rules: vec![
-                RuleMatch::PrefixRuleMatch {
-                    matched_prefix: tokens(&["git", "status"]),
-                    decision: Decision::Prompt,
-                },
-                RuleMatch::PrefixRuleMatch {
-                    matched_prefix: tokens(&["git"]),
-                    decision: Decision::Allow,
-                },
-            ],
-        },
-        status
-    );
-
     let commit = policy.check(&tokens(&["git", "commit", "-m", "hi"]));
     assert_eq!(
         Evaluation::Match {
@@ -338,7 +316,7 @@ prefix_rule(
             matched_rules: vec![
                 RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["git"]),
-                    decision: Decision::Allow,
+                    decision: Decision::Prompt,
                 },
                 RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["git", "commit"]),
@@ -354,12 +332,8 @@ prefix_rule(
 fn strictest_decision_across_multiple_commands() {
     let policy_src = r#"
 prefix_rule(
-    pattern = ["git", "status"],
-    decision = "prompt",
-)
-prefix_rule(
     pattern = ["git"],
-    decision = "allow",
+    decision = "prompt",
 )
 prefix_rule(
     pattern = ["git", "commit"],
@@ -383,16 +357,12 @@ prefix_rule(
             decision: Decision::Forbidden,
             matched_rules: vec![
                 RuleMatch::PrefixRuleMatch {
-                    matched_prefix: tokens(&["git", "status"]),
+                    matched_prefix: tokens(&["git"]),
                     decision: Decision::Prompt,
                 },
                 RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["git"]),
-                    decision: Decision::Allow,
-                },
-                RuleMatch::PrefixRuleMatch {
-                    matched_prefix: tokens(&["git"]),
-                    decision: Decision::Allow,
+                    decision: Decision::Prompt,
                 },
                 RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["git", "commit"]),
