@@ -1730,13 +1730,10 @@ impl ChatWidget {
         } else {
             (&default_usage, Some(&default_usage))
         };
-        let rate_limit_snapshot = self
-            .fetch_rate_limits_from_usage()
-            .or_else(|| self.rate_limit_snapshot.clone());
 
-        if let Some(snapshot) = rate_limit_snapshot.clone() {
-            self.rate_limit_snapshot = Some(snapshot);
-        }
+        self.rate_limit_snapshot = self
+            .fetch_rate_limits_from_usage()
+            .or(self.rate_limit_snapshot.clone());
 
         self.add_to_history(crate::status::new_status_output(
             &self.config,
@@ -1744,7 +1741,7 @@ impl ChatWidget {
             total_usage,
             context_usage,
             &self.conversation_id,
-            rate_limit_snapshot.as_ref(),
+            self.rate_limit_snapshot.as_ref(),
             Local::now(),
         ));
     }
