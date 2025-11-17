@@ -65,6 +65,7 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::task::JoinHandle;
 use tracing::debug;
 
 use crate::app_event::AppEvent;
@@ -259,6 +260,7 @@ pub(crate) struct ChatWidget {
     rate_limit_snapshot: Option<RateLimitSnapshotDisplay>,
     rate_limit_warnings: RateLimitWarningState,
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
+    rate_limit_poller: Option<JoinHandle<()>>,
     // Stream lifecycle controller
     stream_controller: Option<StreamController>,
     running_commands: HashMap<String, RunningCommand>,
@@ -1038,7 +1040,7 @@ impl ChatWidget {
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
 
-        let widget = Self {
+        let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_tx,
@@ -1062,6 +1064,7 @@ impl ChatWidget {
             rate_limit_snapshot: None,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
+            rate_limit_poller: None,
             stream_controller: None,
             running_commands: HashMap::new(),
             task_complete_pending: false,
@@ -1109,7 +1112,7 @@ impl ChatWidget {
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
 
-        let widget = Self {
+        let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_tx,
@@ -1133,6 +1136,7 @@ impl ChatWidget {
             rate_limit_snapshot: None,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
+            rate_limit_poller: None,
             stream_controller: None,
             running_commands: HashMap::new(),
             task_complete_pending: false,
@@ -1749,7 +1753,15 @@ impl ChatWidget {
             Local::now(),
         ));
     }
-    fn prefetch_rate_limits(&self) {
+    fn stop_rate_limit_poller(&mut self) {
+        if let Some(handle) = self.rate_limit_poller.take() {
+            handle.abort();
+        }
+    }
+
+    fn prefetch_rate_limits(&mut self) {
+        self.stop_rate_limit_poller();
+
         let Some(auth) = self.auth_manager.auth() else {
             return;
         };
@@ -1760,7 +1772,7 @@ impl ChatWidget {
         let base_url = self.config.chatgpt_base_url.clone();
         let app_event_tx = self.app_event_tx.clone();
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
 
             loop {
@@ -1770,6 +1782,8 @@ impl ChatWidget {
                 interval.tick().await;
             }
         });
+
+        self.rate_limit_poller = Some(handle);
     }
 
     fn lower_cost_preset(&self) -> Option<ModelPreset> {
@@ -2805,6 +2819,12 @@ impl ChatWidget {
             RenderableItem::Borrowed(&self.bottom_pane).inset(Insets::tlbr(1, 0, 0, 0)),
         );
         RenderableItem::Owned(Box::new(flex))
+    }
+}
+
+impl Drop for ChatWidget {
+    fn drop(&mut self) {
+        self.stop_rate_limit_poller();
     }
 }
 

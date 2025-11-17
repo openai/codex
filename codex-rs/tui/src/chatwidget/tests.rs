@@ -333,6 +333,7 @@ fn make_chatwidget_manual() -> (
         rate_limit_snapshot: None,
         rate_limit_warnings: RateLimitWarningState::default(),
         rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
+        rate_limit_poller: None,
         stream_controller: None,
         running_commands: HashMap::new(),
         task_complete_pending: false,
