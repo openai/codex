@@ -450,7 +450,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
         unreachable!("loop ensures we break on command execution items");
     };
     assert_eq!(cwd, second_cwd);
-    assert_eq!(command, "bash -lc echo second turn");
+    assert_eq!(command, "bash -lc 'echo second turn'");
     assert_eq!(status, CommandExecutionStatus::InProgress);
 
     timeout(

@@ -5,6 +5,7 @@ use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
 use codex_app_server_protocol::ApplyPatchApprovalResponse;
+use codex_app_server_protocol::ApprovalDecision;
 use codex_app_server_protocol::CommandExecutionOutputDeltaNotification;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
@@ -21,7 +22,6 @@ use codex_app_server_protocol::ParsedCommand as V2ParsedCommand;
 use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
 use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
 use codex_app_server_protocol::ReasoningTextDeltaNotification;
-use codex_app_server_protocol::ReviewDecision as V2ReviewDecision;
 use codex_app_server_protocol::SandboxCommandAssessment as V2SandboxCommandAssessment;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
@@ -401,11 +401,24 @@ async fn on_command_execution_request_approval_response(
         .unwrap_or_else(|err| {
             error!("failed to deserialize CommandExecutionRequestApprovalResponse: {err}");
             CommandExecutionRequestApprovalResponse {
-                decision: V2ReviewDecision::Denied,
+                decision: ApprovalDecision::Decline,
+                accept_settings: None,
             }
         });
 
-    let decision = response.decision.to_core();
+    let CommandExecutionRequestApprovalResponse {
+        decision,
+        accept_settings,
+    } = response;
+
+    let decision = match (decision, accept_settings) {
+        (ApprovalDecision::Accept, Some(settings)) if settings.for_session => {
+            ReviewDecision::ApprovedForSession
+        }
+        (ApprovalDecision::Accept, _) => ReviewDecision::Approved,
+        (ApprovalDecision::Decline, _) => ReviewDecision::Denied,
+        (ApprovalDecision::Cancel, _) => ReviewDecision::Abort,
+    };
     if let Err(err) = conversation
         .submit(Op::ExecApproval {
             id: event_id,

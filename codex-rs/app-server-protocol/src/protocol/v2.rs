@@ -59,21 +59,21 @@ v2_enum_from_core!(
 );
 
 v2_enum_from_core!(
-    pub enum ReviewDecision from codex_protocol::protocol::ReviewDecision {
-        Approved,
-        ApprovedForSession,
-        Denied,
-        Abort
-    }
-);
-
-v2_enum_from_core!(
-    pub enum SandboxRiskLevel from codex_protocol::approvals::SandboxRiskLevel {
+    pub enum CommandRiskLevel from codex_protocol::approvals::SandboxRiskLevel {
         Low,
         Medium,
         High
     }
 );
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ApprovalDecision {
+    Accept,
+    Decline,
+    Cancel,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -145,7 +145,7 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
 #[ts(export_to = "v2/")]
 pub struct SandboxCommandAssessment {
     pub description: String,
-    pub risk_level: SandboxRiskLevel,
+    pub risk_level: CommandRiskLevel,
 }
 
 impl SandboxCommandAssessment {
@@ -161,7 +161,7 @@ impl From<CoreSandboxCommandAssessment> for SandboxCommandAssessment {
     fn from(value: CoreSandboxCommandAssessment) -> Self {
         Self {
             description: value.description,
-            risk_level: SandboxRiskLevel::from(value.risk_level),
+            risk_level: CommandRiskLevel::from(value.risk_level),
         }
     }
 }
@@ -883,8 +883,16 @@ pub struct CommandExecutionRequestApprovalParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct CommandExecutionRequestAcceptSettings {
+    pub for_session: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct CommandExecutionRequestApprovalResponse {
-    pub decision: ReviewDecision,
+    pub decision: ApprovalDecision,
+    pub accept_settings: Option<CommandExecutionRequestAcceptSettings>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
