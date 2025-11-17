@@ -992,8 +992,8 @@ pub(crate) fn build_specs(
         // Always register shell aliases so older prompts remain compatible.
         builder.register_handler("shell", shell_handler.clone());
         builder.register_handler("container.exec", shell_handler.clone());
-        builder.register_handler("local_shell", shell_handler.clone());
-        builder.register_handler("shell_command", shell_command_handler.clone());
+        builder.register_handler("local_shell", shell_handler);
+        builder.register_handler("shell_command", shell_command_handler);
     }
 
     builder.push_spec_with_parallel_support(create_list_mcp_resources_tool(), true);
