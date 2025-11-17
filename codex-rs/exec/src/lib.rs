@@ -21,6 +21,7 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
+use codex_core::config::resolve_oss_provider;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
@@ -182,34 +183,18 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     };
 
     let model_provider = if oss {
-        if let Some(provider) = &oss_provider {
-            // Explicit provider specified with --oss-provider
-            Some(provider.clone())
+        let resolved = resolve_oss_provider(
+            oss_provider.as_deref(),
+            &config_toml,
+            config_profile.clone(),
+        );
+
+        if let Some(provider) = resolved {
+            Some(provider)
         } else {
-            // Check profile config first, then global config, finally error
-            let config_profile = config_toml.get_config_profile(config_profile.clone()).ok();
-            if let Some(profile) = &config_profile {
-                // Check if profile has an oss provider
-                if let Some(profile_oss_provider) = &profile.oss_provider {
-                    Some(profile_oss_provider.clone())
-                }
-                // If not then check if the toml has an oss provider
-                else if let Some(default) = &config_toml.oss_provider {
-                    Some(default.clone())
-                }
-                // Or else error
-                else {
-                    return Err(anyhow::anyhow!(
-                        "No default OSS provider configured. Use --local-provider=provider or set oss_provider to either {LMSTUDIO_OSS_PROVIDER_ID} or {OLLAMA_OSS_PROVIDER_ID} in config.toml"
-                    ));
-                }
-            } else if let Some(default) = &config_toml.oss_provider {
-                Some(default.clone())
-            } else {
-                return Err(anyhow::anyhow!(
-                    "No default OSS provider configured. Use --local-provider=provider or set oss_provider to either {LMSTUDIO_OSS_PROVIDER_ID} or {OLLAMA_OSS_PROVIDER_ID} in config.toml"
-                ));
-            }
+            return Err(anyhow::anyhow!(
+                "No default OSS provider configured. Use --local-provider=provider or set oss_provider to either {LMSTUDIO_OSS_PROVIDER_ID} or {OLLAMA_OSS_PROVIDER_ID} in config.toml"
+            ));
         }
     } else {
         None // No OSS mode enabled

@@ -18,6 +18,7 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
+use codex_core::config::resolve_oss_provider;
 use codex_core::find_conversation_path_by_id_str;
 use codex_core::get_platform_sandbox;
 use codex_core::protocol::AskForApproval;
@@ -163,46 +164,23 @@ pub async fn run_main(
         };
 
     let model_provider_override = if cli.oss {
-        if let Some(provider) = &cli.oss_provider {
-            // Explicit provider specified with --oss-provider
-            Some(provider.clone())
+        let resolved = resolve_oss_provider(
+            cli.oss_provider.as_deref(),
+            &config_toml,
+            cli.config_profile.clone(),
+        );
+
+        if let Some(provider) = resolved {
+            Some(provider)
         } else {
-            // Check profile config first, then global config, finally show selection UI
-            let config_profile = config_toml
-                .get_config_profile(cli.config_profile.clone())
-                .ok();
-            if let Some(profile) = &config_profile {
-                // Check if profile has an oss provider
-                if let Some(profile_oss_provider) = &profile.oss_provider {
-                    Some(profile_oss_provider.clone())
-                }
-                // If not then check if the toml has an oss provider
-                else if let Some(default) = &config_toml.oss_provider {
-                    Some(default.clone())
-                }
-                // Or else prompt the user
-                else {
-                    let provider = oss_selection::select_oss_provider(&codex_home).await?;
-                    if provider == "__CANCELLED__" {
-                        // If user cancelled the OSS selection, we should exit gracefully rather than fail
-                        return Err(std::io::Error::other(
-                            "OSS provider selection was cancelled by user",
-                        ));
-                    }
-                    Some(provider)
-                }
-            } else if let Some(default) = &config_toml.oss_provider {
-                Some(default.clone())
-            } else {
-                let provider = oss_selection::select_oss_provider(&codex_home).await?;
-                if provider == "__CANCELLED__" {
-                    // If user cancelled the OSS selection, we should exit gracefully rather than fail
-                    return Err(std::io::Error::other(
-                        "OSS provider selection was cancelled by user",
-                    ));
-                }
-                Some(provider)
+            // No provider configured, prompt the user
+            let provider = oss_selection::select_oss_provider(&codex_home).await?;
+            if provider == "__CANCELLED__" {
+                return Err(std::io::Error::other(
+                    "OSS provider selection was cancelled by user",
+                ));
             }
+            Some(provider)
         }
     } else {
         None

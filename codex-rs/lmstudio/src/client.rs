@@ -9,7 +9,7 @@ pub struct LMStudioClient {
     base_url: String,
 }
 
-const LMSTUDIO_CONNECTION_ERROR: &str = "Can't reach LM Studio. Is it running with the server on?  If you don't have it yet, try to run `lms server start` after installation https://lmstudio.ai/download";
+const LMSTUDIO_CONNECTION_ERROR: &str = "LM Studio is not responding. Install from https://lmstudio.ai/download and run 'lms server start'.";
 
 impl LMStudioClient {
     pub async fn try_from_provider(config: &Config) -> std::io::Result<Self> {
