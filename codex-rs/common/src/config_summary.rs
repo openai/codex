@@ -1,7 +1,8 @@
+use std::time::Duration;
+
 use codex_core::WireApi;
 use codex_core::config::Config;
 
-use crate::elapsed::format_duration;
 use crate::sandbox_summary::summarize_sandbox_policy;
 
 /// Build a list of key/value pairs summarizing the effective configuration.
@@ -41,7 +42,7 @@ pub fn create_config_summary_entries(config: &Config) -> Vec<(&'static str, Stri
             details.push(format!("max {} turn(s)", limit.get()));
         }
         if let Some(duration) = config.auto_continue.max_duration {
-            details.push(format!("max {}", format_duration(duration)));
+            details.push(format!("max {}", format_auto_continue_duration(duration)));
         }
         let summary = if details.is_empty() {
             "enabled".to_string()
@@ -52,4 +53,28 @@ pub fn create_config_summary_entries(config: &Config) -> Vec<(&'static str, Stri
     }
 
     entries
+}
+
+#[cfg(feature = "elapsed")]
+fn format_auto_continue_duration(duration: Duration) -> String {
+    crate::elapsed::format_duration(duration)
+}
+
+#[cfg(not(feature = "elapsed"))]
+fn format_auto_continue_duration(duration: Duration) -> String {
+    let secs = duration.as_secs();
+    let millis = duration.subsec_millis();
+    if secs >= 60 {
+        let mins = secs / 60;
+        let rem = secs % 60;
+        format!("{mins}m {rem:02}s")
+    } else if secs > 0 {
+        if millis == 0 {
+            format!("{secs}s")
+        } else {
+            format!("{secs}.{millis:03}s")
+        }
+    } else {
+        format!("{millis}ms")
+    }
 }

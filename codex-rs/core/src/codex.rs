@@ -3521,7 +3521,7 @@ mod tests {
         use crate::protocol::AskForApproval;
         use crate::turn_diff_tracker::TurnDiffTracker;
 
-        let (session, mut turn_context_raw) = make_session_and_context();
+        let (session, mut turn_context_raw, _rx_submission) = make_session_and_context();
         turn_context_raw.approval_policy = AskForApproval::OnFailure;
         let session = Arc::new(session);
         let turn_context = Arc::new(turn_context_raw);
