@@ -5,7 +5,6 @@ use std::sync::OnceLock;
 use anyhow::Context;
 use anyhow::Result;
 use codex_core::features::Feature;
-use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecCommandSource;
