@@ -303,6 +303,11 @@ impl ShellHandler {
             env: exec_params.env.clone(),
             with_escalated_permissions: exec_params.with_escalated_permissions,
             justification: exec_params.justification.clone(),
+            exec_policy: if is_user_shell_command {
+                None
+            } else {
+                turn.exec_policy_v2.clone()
+            },
         };
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = ShellRuntime::new();

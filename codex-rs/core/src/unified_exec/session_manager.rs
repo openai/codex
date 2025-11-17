@@ -442,6 +442,7 @@ impl UnifiedExecSessionManager {
             command.to_vec(),
             cwd,
             create_env(&context.turn.shell_environment_policy),
+            context.turn.exec_policy_v2.clone(),
             with_escalated_permissions,
             justification,
         );
