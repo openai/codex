@@ -2944,7 +2944,7 @@ mod tests {
         let summary1 = "summary one";
         let snapshot1 = live_history.get_history();
         let user_messages1 = collect_user_messages(&snapshot1);
-        let rebuilt1 = build_compacted_history(
+        let rebuilt1 = compact::build_compacted_history(
             session.build_initial_context(turn_context),
             &user_messages1,
             summary1,
@@ -2978,7 +2978,7 @@ mod tests {
         let summary2 = "summary two";
         let snapshot2 = live_history.get_history();
         let user_messages2 = collect_user_messages(&snapshot2);
-        let rebuilt2 = build_compacted_history(
+        let rebuilt2 = compact::build_compacted_history(
             session.build_initial_context(turn_context),
             &user_messages2,
             summary2,
