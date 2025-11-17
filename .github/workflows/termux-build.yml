@@ -85,23 +85,67 @@ jobs:
           restore-keys: |
             cargo-home-termux-
 
+      - name: Restore NDK cache
+        uses: actions/cache@v4
+        id: cache-ndk
+        with:
+          path: android-ndk
+          key: android-ndk-v26b-${{ runner.os }}
+
       - name: Download Android NDK
         shell: bash
         run: |
           set -euo pipefail
 
-          # Download Android NDK (latest stable version)
-          NDK_VERSION="r26b"
-          NDK_URL="https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip"
+          # Check if cached NDK exists and is valid
+          if [[ -d "$ANDROID_NDK_ROOT" ]]; then
+            echo "Found cached NDK at $ANDROID_NDK_ROOT"
 
-          echo "Downloading Android NDK ${NDK_VERSION}..."
-          wget -q --timeout=300 --tries=3 "$NDK_URL" -O android-ndk.zip
-          unzip -q android-ndk.zip
-          mv android-ndk-${NDK_VERSION} android-ndk
-          rm android-ndk.zip
+            # Verify cached NDK is complete
+            if [[ -f "$ANDROID_NDK_ROOT/source.properties" ]] && [[ -d "$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin" ]]; then
+              echo "Cached NDK is complete and valid"
+              echo "NDK version: $(cat $ANDROID_NDK_ROOT/source.properties | grep Pkg.Revision | cut -d= -f2)"
+            else
+              echo "Cached NDK is incomplete or corrupted, redownloading..."
+              rm -rf "$ANDROID_NDK_ROOT"
 
-          echo "NDK setup completed at: $ANDROID_NDK_ROOT"
-          echo "NDK version: $(cat $ANDROID_NDK_ROOT/source.properties | grep Pkg.Revision | cut -d= -f2)"
+              # Download Android NDK (latest stable version)
+              NDK_VERSION="r26b"
+              NDK_URL="https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip"
+
+              echo "Downloading Android NDK ${NDK_VERSION}..."
+              wget --progress=bar:force:noscroll --timeout=300 --tries=3 "$NDK_URL" -O android-ndk.zip
+              echo "Extracting NDK..."
+              unzip -q android-ndk.zip
+              mv android-ndk-${NDK_VERSION} android-ndk
+              rm android-ndk.zip
+
+              echo "NDK setup completed at: $ANDROID_NDK_ROOT"
+              echo "NDK version: $(cat $ANDROID_NDK_ROOT/source.properties | grep Pkg.Revision | cut -d= -f2)"
+            fi
+          else
+            # Download Android NDK (latest stable version)
+            NDK_VERSION="r26b"
+            NDK_URL="https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip"
+
+            echo "Downloading Android NDK ${NDK_VERSION}..."
+            wget --progress=bar:force:noscroll --timeout=300 --tries=3 "$NDK_URL" -O android-ndk.zip
+            echo "Extracting NDK..."
+            unzip -q android-ndk.zip
+            mv android-ndk-${NDK_VERSION} android-ndk
+            rm android-ndk.zip
+
+            echo "NDK setup completed at: $ANDROID_NDK_ROOT"
+            echo "NDK version: $(cat $ANDROID_NDK_ROOT/source.properties | grep Pkg.Revision | cut -d= -f2)"
+          fi
+
+          # Verify NDK structure exists before proceeding
+          if [[ ! -d "$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin" ]]; then
+            echo "Error: NDK bin directory not found at $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
+            echo "NDK structure:"
+            ls -la "$ANDROID_NDK_ROOT/"
+            exit 1
+          fi
 
           # Create symlinks for compiler tools to match expected names
           NDK_BIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
@@ -114,12 +158,6 @@ jobs:
               echo "Created symlink: aarch64-linux-android-$tool -> aarch64-linux-android33-$tool"
             fi
           done
-
-      - name: Restore NDK cache
-        uses: actions/cache@v4
-        with:
-          path: android-ndk
-          key: android-ndk-v26b-${{ runner.os }}
 
       - name: Configure Android cross-compilation environment
         shell: bash
