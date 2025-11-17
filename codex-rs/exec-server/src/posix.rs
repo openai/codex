@@ -55,8 +55,6 @@
 //!   |      |
 //!   o<-----x
 //!
-use crate::socket::AsyncDatagramSocket;
-use crate::socket::AsyncSocket;
 use anyhow::Context as _;
 use anyhow::Result;
 use clap::Parser;
@@ -94,6 +92,9 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::{self};
 
 mod socket;
+
+use socket::AsyncDatagramSocket;
+use socket::AsyncSocket;
 
 // C->S on the escalate socket
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -507,7 +508,7 @@ struct ShellExecArgs {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+pub async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
