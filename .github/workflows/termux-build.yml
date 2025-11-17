@@ -1,0 +1,303 @@
+# Termux-compatible build workflow for codex-rs
+# Builds codex-rs binaries that work in Termux environment on Android
+
+name: Termux Build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request: {}
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Force build even if no changes detected'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  termux-build:
+    name: Termux Build - aarch64-linux-android
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    defaults:
+      run:
+        working-directory: codex-rs
+
+    env:
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_CACHE_SIZE: 5G
+      # Environment variables for Android cross-compilation
+      CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: aarch64-linux-android33-clang
+      ANDROID_NDK_ROOT: ${{ github.workspace }}/android-ndk
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@1.90
+        with:
+          targets: aarch64-linux-android
+          components: clippy
+
+      - name: Install sccache for caching
+        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
+        with:
+          tool: sccache
+          version: 0.7.5
+
+      - name: Configure sccache backend
+        shell: bash
+        run: |
+          if [[ -n "${ACTIONS_CACHE_URL:-}" && -n "${ACTIONS_RUNTIME_TOKEN:-}" ]]; then
+            echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+          else
+            echo "SCCACHE_GHA_ENABLED=false" >> "$GITHUB_ENV"
+            echo "SCCACHE_DIR=${{ github.workspace }}/.sccache" >> "$GITHUB_ENV"
+          fi
+
+      - name: Restore sccache cache
+        if: env.SCCACHE_GHA_ENABLED != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.sccache/
+          key: sccache-termux-aarch64-linux-android-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-termux-aarch64-linux-android-${{ hashFiles('**/Cargo.lock') }}-
+            sccache-termux-aarch64-linux-android-
+
+      - name: Restore cargo home cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-home-termux-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('codex-rs/rust-toolchain.toml') }}
+          restore-keys: |
+            cargo-home-termux-
+
+      - name: Download Android NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Download Android NDK (latest stable version)
+          NDK_VERSION="r26b"
+          NDK_URL="https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip"
+
+          echo "Downloading Android NDK ${NDK_VERSION}..."
+          wget -q --timeout=300 --tries=3 "$NDK_URL" -O android-ndk.zip
+          unzip -q android-ndk.zip
+          mv android-ndk-${NDK_VERSION} android-ndk
+          rm android-ndk.zip
+
+          echo "NDK setup completed at: $ANDROID_NDK_ROOT"
+          echo "NDK version: $(cat $ANDROID_NDK_ROOT/source.properties | grep Pkg.Revision | cut -d= -f2)"
+
+      - name: Restore NDK cache
+        uses: actions/cache@v4
+        with:
+          path: android-ndk
+          key: android-ndk-v26b-${{ runner.os }}
+
+      - name: Configure Android cross-compilation environment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Add NDK to PATH
+          echo "$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
+
+          # Set Android API level and target triple
+          echo "ANDROID_API_LEVEL=33" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang" >> "$GITHUB_ENV"
+
+          # Configure pkg-config for Android
+          echo "PKG_CONFIG_ALLOW_CROSS=1" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/pkgconfig" >> "$GITHUB_ENV"
+
+          # Set environment for openssl-sys and other system dependencies
+          echo "OPENSSL_DIR=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr" >> "$GITHUB_ENV"
+          echo "OPENSSL_LIB_DIR=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib" >> "$GITHUB_ENV"
+          echo "OPENSSL_INCLUDE_DIR=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include" >> "$GITHUB_ENV"
+
+          # Rust-specific environment for cross-compilation
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_AR=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_RANLIB=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib" >> "$GITHUB_ENV"
+
+          # Show environment for debugging
+          echo "=== Android NDK Configuration ==="
+          echo "NDK Root: $ANDROID_NDK_ROOT"
+          echo "Target: aarch64-linux-android33"
+          echo "Linker: $CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER"
+          echo "=================================="
+
+      - name: Install cargo-chef for optimized builds
+        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
+        with:
+          tool: cargo-chef
+          version: 0.1.71
+
+      - name: Pre-warm dependency cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          RECIPE="${RUNNER_TEMP}/chef-recipe.json"
+          cargo chef prepare --recipe-path "$RECIPE"
+          cargo chef cook --recipe-path "$RECIPE" --target aarch64-linux-android --release --all-features
+
+      - name: Lint with clippy
+        id: clippy
+        continue-on-error: true
+        run: cargo clippy --target aarch64-linux-android --all-features --profile release -- -D warnings
+        env:
+          RUSTC_WRAPPER: sccache
+
+      - name: Build codex binary for Termux
+        run: cargo build --target aarch64-linux-android --release --bin codex
+        env:
+          RUSTC_WRAPPER: sccache
+
+      - name: Build codex-responses-api-proxy for Termux
+        run: cargo build --target aarch64-linux-android --release --bin codex-responses-api-proxy
+        env:
+          RUSTC_WRAPPER: sccache
+
+      - name: Create Termux distribution artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          DEST_DIR="dist/termux-aarch64-linux-android"
+          mkdir -p "$DEST_DIR"
+
+          # Copy binaries with descriptive names
+          cp target/aarch64-linux-android/release/codex "$DEST_DIR/codex-termux-aarch64"
+          cp target/aarch64-linux-android/release/codex-responses-api-proxy "$DEST_DIR/codex-responses-api-proxy-termux-aarch64"
+
+          # Create tarball for Termux distribution
+          cd "$DEST_DIR"
+          tar -czf "codex-termux-aarch64-linux-android.tar.gz" codex-termux-aarch64 codex-responses-api-proxy-termux-aarch64
+
+          # Create individual compressed binaries
+          zstd -T0 -19 --rm codex-termux-aarch64
+          zstd -T0 -19 --rm codex-responses-api-proxy-termux-aarch64
+
+          echo "=== Termux Build Artifacts ==="
+          ls -la "$DEST_DIR"
+          echo "=============================="
+
+      - name: Create Termux installation script
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > dist/termux-install.sh << 'EOF'
+          #!/data/data/com.termux/files/usr/bin/bash
+          # Termux installation script for codex-rs
+
+          set -e
+
+          INSTALL_DIR="$HOME/.local/bin"
+          TEMP_DIR="/tmp/codex-install-$$"
+
+          # Create directories
+          mkdir -p "$INSTALL_DIR"
+          mkdir -p "$TEMP_DIR"
+
+          echo "Installing codex-rs for Termux..."
+          echo "Install directory: $INSTALL_DIR"
+
+          # Download and extract binaries
+          wget -q "https://github.com/${GITHUB_REPOSITORY}/releases/download/${{ github.ref_name || 'latest' }}/codex-termux-aarch64-linux-android.tar.gz" -O "$TEMP_DIR/codex.tar.gz"
+          tar -xzf "$TEMP_DIR/codex.tar.gz" -C "$TEMP_DIR"
+
+          # Install binaries
+          cp "$TEMP_DIR/codex-termux-aarch64" "$INSTALL_DIR/codex"
+          cp "$TEMP_DIR/codex-responses-api-proxy-termux-aarch64" "$INSTALL_DIR/codex-responses-api-proxy"
+          chmod +x "$INSTALL_DIR/codex" "$INSTALL_DIR/codex-responses-api-proxy"
+
+          # Cleanup
+          rm -rf "$TEMP_DIR"
+
+          # Add to PATH if not already present
+          if ! echo "$PATH" | grep -q "$INSTALL_DIR"; then
+              echo "export PATH=\"\$PATH:$INSTALL_DIR\"" >> "$HOME/.bashrc"
+              echo "Added $INSTALL_DIR to PATH. Run: source ~/.bashrc"
+          fi
+
+          echo "✅ Installation completed!"
+          echo "Run 'codex' to start using codex-rs"
+          EOF
+
+          chmod +x dist/termux-install.sh
+
+      - name: Save sccache cache
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.sccache/
+          key: sccache-termux-aarch64-linux-android-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+
+      - name: Save cargo home cache
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-home-termux-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('codex-rs/rust-toolchain.toml') }}
+
+      - name: Show sccache statistics
+        if: always()
+        continue-on-error: true
+        run: |
+          {
+            echo "### sccache stats — Termux Build";
+            echo;
+            echo '```';
+            sccache --show-stats || true;
+            echo '```';
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Termux artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: termux-aarch64-linux-android
+          path: |
+            codex-rs/dist/termux-aarch64-linux-android/*
+            codex-rs/dist/termux-install.sh
+          retention-days: 30
+
+      - name: Build summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### 🤖 Termux Build Summary";
+            echo;
+            echo "**Status**: ${{ job.status }}";
+            echo "**Target**: \`aarch64-linux-android\`";
+            echo "**Android API Level**: 33";
+            echo "**NDK Version**: r26b";
+            echo;
+            echo "**Built Binaries**:";
+            echo "- \`codex-termux-aarch64\`";
+            echo "- \`codex-responses-api-proxy-termux-aarch64\`";
+            echo;
+            echo "**Installation**:";
+            echo "Download the \`termux-install.sh\` script from artifacts and run it in Termux.";
+            echo "Or manually extract binaries from the tarball.";
+          } >> "$GITHUB_STEP_SUMMARY"
