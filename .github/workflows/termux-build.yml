@@ -115,13 +115,40 @@ jobs:
 
               echo "Downloading Android NDK ${NDK_VERSION}..."
               wget --progress=bar:force:noscroll --timeout=300 --tries=3 "$NDK_URL" -O android-ndk.zip
+
+              echo "Validating downloaded zip file..."
+              if [[ ! -f "android-ndk.zip" ]]; then
+                echo "Error: android-ndk.zip not found after download"
+                exit 1
+              fi
+
+              echo "Downloaded zip file size: $(ls -lh android-ndk.zip | awk '{print $5}')"
+
               echo "Extracting NDK..."
-              unzip -q android-ndk.zip
+              unzip android-ndk.zip
+
+              echo "Checking extraction results..."
+              if [[ ! -d "android-ndk-${NDK_VERSION}" ]]; then
+                echo "Error: Expected directory 'android-ndk-${NDK_VERSION}' not found after extraction"
+                echo "Current directory contents:"
+                ls -la
+                exit 1
+              fi
+
               mv android-ndk-${NDK_VERSION} android-ndk
+
+              echo "Cleaning up zip file..."
               rm android-ndk.zip
 
               echo "NDK setup completed at: $ANDROID_NDK_ROOT"
-              echo "NDK version: $(cat $ANDROID_NDK_ROOT/source.properties | grep Pkg.Revision | cut -d= -f2)"
+              echo "NDK root contents:"
+              ls -la "$ANDROID_NDK_ROOT/"
+
+              if [[ -f "$ANDROID_NDK_ROOT/source.properties" ]]; then
+                echo "NDK version: $(cat $ANDROID_NDK_ROOT/source.properties | grep Pkg.Revision | cut -d= -f2)"
+              else
+                echo "Warning: source.properties not found"
+              fi
             fi
           else
             # Download Android NDK (latest stable version)
@@ -130,13 +157,40 @@ jobs:
 
             echo "Downloading Android NDK ${NDK_VERSION}..."
             wget --progress=bar:force:noscroll --timeout=300 --tries=3 "$NDK_URL" -O android-ndk.zip
+
+            echo "Validating downloaded zip file..."
+            if [[ ! -f "android-ndk.zip" ]]; then
+              echo "Error: android-ndk.zip not found after download"
+              exit 1
+            fi
+
+            echo "Downloaded zip file size: $(ls -lh android-ndk.zip | awk '{print $5}')"
+
             echo "Extracting NDK..."
-            unzip -q android-ndk.zip
+            unzip android-ndk.zip
+
+            echo "Checking extraction results..."
+            if [[ ! -d "android-ndk-${NDK_VERSION}" ]]; then
+              echo "Error: Expected directory 'android-ndk-${NDK_VERSION}' not found after extraction"
+              echo "Current directory contents:"
+              ls -la
+              exit 1
+            fi
+
             mv android-ndk-${NDK_VERSION} android-ndk
+
+            echo "Cleaning up zip file..."
             rm android-ndk.zip
 
             echo "NDK setup completed at: $ANDROID_NDK_ROOT"
-            echo "NDK version: $(cat $ANDROID_NDK_ROOT/source.properties | grep Pkg.Revision | cut -d= -f2)"
+            echo "NDK root contents:"
+            ls -la "$ANDROID_NDK_ROOT/"
+
+            if [[ -f "$ANDROID_NDK_ROOT/source.properties" ]]; then
+              echo "NDK version: $(cat $ANDROID_NDK_ROOT/source.properties | grep Pkg.Revision | cut -d= -f2)"
+            else
+              echo "Warning: source.properties not found"
+            fi
           fi
 
           # Verify NDK structure exists before proceeding
