@@ -248,11 +248,6 @@ impl TextArea {
             } if modifiers == (KeyModifiers::CONTROL | KeyModifiers::ALT) => {
                 self.delete_backward_word()
             },
-            KeyEvent {
-                code: KeyCode::Backspace,
-                modifiers: KeyModifiers::ALT,
-                ..
-            } => self.delete_backward_word(),
             // Windows AltGr generates ALT|CONTROL; treat as a plain character input unless
             // we match a specific Control+Alt binding above.
             KeyEvent {
@@ -260,6 +255,11 @@ impl TextArea {
                 modifiers,
                 ..
             } if is_altgr(modifiers) => self.insert_str(&c.to_string()),
+            KeyEvent {
+                code: KeyCode::Backspace,
+                modifiers: KeyModifiers::ALT,
+                ..
+            } => self.delete_backward_word(),
             KeyEvent {
                 code: KeyCode::Backspace,
                 ..
