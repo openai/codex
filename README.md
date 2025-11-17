@@ -1,4 +1,4 @@
-<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install --cask codex</code></p>
+<p align="center"><code>npm i -g @openai/codex</code><br />or <code>bun install -g @openai/codex</code><br />or <code>brew install --cask codex</code></p>
 
 <p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
 </br>
@@ -15,14 +15,19 @@
 
 ### Installing and running Codex CLI
 
-Install globally with your preferred package manager. If you use npm:
+Install globally with your preferred package manager:
 
+**With npm:**
 ```shell
 npm install -g @openai/codex
 ```
 
-Alternatively, if you use Homebrew:
+**With bun:**
+```shell
+bun install -g @openai/codex
+```
 
+**With Homebrew:**
 ```shell
 brew install --cask codex
 ```

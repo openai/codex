@@ -14,8 +14,11 @@ This project has been migrated from npm to pnpm to improve dependency management
 ### Installation
 
 ```bash
-# Global installation of pnpm
+# Global installation of pnpm with npm
 npm install -g pnpm@10.8.1
+
+# Or with bun
+bun install -g pnpm@10.8.1
 
 # Or with corepack (available with Node.js 22+)
 corepack enable
