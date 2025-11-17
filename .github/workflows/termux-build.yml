@@ -89,13 +89,22 @@ jobs:
         uses: actions/cache@v4
         id: cache-ndk
         with:
-          path: android-ndk
+          path: ../android-ndk
           key: android-ndk-v26b-${{ runner.os }}
 
       - name: Download Android NDK
         shell: bash
         run: |
           set -euo pipefail
+
+          # Change to parent directory for NDK setup since ANDROID_NDK_ROOT is in parent
+          echo "Current working directory: $(pwd)"
+          echo "ANDROID_NDK_ROOT should be at: $ANDROID_NDK_ROOT"
+          echo "ANDROID_NDK_ROOT parent directory: $(dirname "$ANDROID_NDK_ROOT")"
+
+          cd "$(dirname "$ANDROID_NDK_ROOT")"
+          echo "Changed to directory: $(pwd)"
+          echo "ANDROID_NDK_ROOT should be at: $ANDROID_NDK_ROOT"
 
           # Check if cached NDK exists and is valid
           if [[ -d "$ANDROID_NDK_ROOT" ]]; then
