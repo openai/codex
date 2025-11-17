@@ -426,7 +426,7 @@ fn format_exec_output_prefers_line_marker_when_both_limits_exceeded() {
     );
 
     assert!(
-        truncated.contains("[... omitted 42 of 298 lines ...]"),
+        truncated.contains(&format!("[... omitted 42 of {total_lines} lines ...]")),
         "expected omitted marker when line count exceeds limit: {truncated}"
     );
     assert!(

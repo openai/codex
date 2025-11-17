@@ -95,10 +95,18 @@ If you don’t have the tool:
       responses::ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
       responses::ev_completed("resp-1"),
   ])).await;
-
   codex.submit(Op::UserTurn { ... }).await?;
 
   // Assert request body if needed.
   let request = mock.single_request();
   // assert using request.function_call_output(call_id) or request.json_body() or other helpers.
   ```
+
+## codex-cli フォークの背景
+
+- このリポジトリは OpenAI の Codex CLI（GitHub: openai/codex）のフォークです。
+- フォークした主目的は、エージェントがシェルコマンドの出力やファイル内容を読み込むときに使う truncate ロジックの閾値（現在は「最大約 10KB または 256 行」）を変更・拡張できるようにすることです。
+- 現状、この truncate 閾値は CLI 側のトランケーション用ユーティリティでハードコードされており、`~/.codex/config.toml` などの設定ファイルからは変更できません。
+- 関連コードは主に `codex-cli/src/utils/agent/sandbox/create-truncating-collector.ts`（およびそれを利用している `raw-exec.ts` など）にあります。truncate 関連の変更を行う場合は、まずここを確認してください。
+- グローバルにインストールされている `@openai/codex` パッケージ内の Rust バイナリを直接書き換えるのではなく、このフォークを修正・ビルドした CLI バイナリを PATH 上で優先して使う方針です。
+- `codex-cli` 配下を変更する際は、「truncate 閾値／挙動の改善」という目的を意識しつつ、Upstream（openai/codex）との差分を必要最小限に保ってください。

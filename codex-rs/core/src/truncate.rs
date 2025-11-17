@@ -8,8 +8,8 @@ use codex_utils_string::take_last_bytes_at_char_boundary;
 use codex_utils_tokenizer::Tokenizer;
 
 /// Model-formatting limits: clients get full streams; only content sent to the model is truncated.
-pub const MODEL_FORMAT_MAX_BYTES: usize = 10 * 1024; // 10 KiB
-pub const MODEL_FORMAT_MAX_LINES: usize = 256; // lines
+pub const MODEL_FORMAT_MAX_BYTES: usize = 100 * 1024; // 100 KiB
+pub const MODEL_FORMAT_MAX_LINES: usize = 2_000; // lines
 
 /// Globally truncate function output items to fit within `MODEL_FORMAT_MAX_BYTES`
 /// by preserving as many text/image items as possible and appending a summary
@@ -539,7 +539,7 @@ mod tests {
             format_output_for_model_body(&content, MODEL_FORMAT_MAX_BYTES, MODEL_FORMAT_MAX_LINES);
 
         assert!(
-            truncated.contains("[... omitted 42 of 298 lines ...]"),
+            truncated.contains(&format!("[... omitted 42 of {total_lines} lines ...]")),
             "expected omitted marker when line count exceeds limit: {truncated}"
         );
         assert!(

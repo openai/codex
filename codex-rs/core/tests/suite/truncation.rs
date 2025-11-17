@@ -48,7 +48,7 @@ async fn truncate_function_error_trims_respond_to_model() -> Result<()> {
     let test = builder.build(&server).await?;
 
     // Construct a very long, non-existent path to force a RespondToModel error with a large message
-    let long_path = "a".repeat(20_000);
+    let long_path = "a".repeat(200_000);
     let call_id = "grep-huge-error";
     let args = json!({
         "pattern": "alpha",
@@ -85,7 +85,7 @@ async fn truncate_function_error_trims_respond_to_model() -> Result<()> {
         serde_json::from_str::<serde_json::Value>(&output).is_err(),
         "expected error output to be plain text",
     );
-    let truncated_pattern = r#"(?s)^Total output lines: 1\s+.*\[\.\.\. output truncated to fit 11264 bytes \.\.\.\]\s*$"#;
+    let truncated_pattern = r#"(?s)^Total output lines: 1\s+.*\[\.\.\. output truncated to fit 112640 bytes \.\.\.\]\s*$"#;
     assert_regex_match(truncated_pattern, &output);
     assert!(
         !output.contains("omitted"),
@@ -117,13 +117,13 @@ async fn tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> {
             "command": [
                 "powershell",
                 "-Command",
-                "for ($i=1; $i -le 400; $i++) { Write-Output $i }"
+                "for ($i=1; $i -le 4000; $i++) { Write-Output $i }"
             ],
             "timeout_ms": 5_000,
         })
     } else {
         serde_json::json!({
-            "command": ["/bin/sh", "-c", "seq 1 400"],
+            "command": ["/bin/sh", "-c", "seq 1 4000"],
             "timeout_ms": 5_000,
         })
     };
@@ -166,7 +166,7 @@ async fn tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> {
     );
     let truncated_pattern = r#"(?s)^Exit code: 0
 Wall time: .* seconds
-Total output lines: 400
+Total output lines: 4000
 Output:
 1
 2
@@ -175,14 +175,14 @@ Output:
 5
 6
 .*
-\[\.{3} omitted 144 of 400 lines \.{3}\]
+\[\.{3} omitted 2000 of 4000 lines \.{3}\]
 
 .*
-396
-397
-398
-399
-400
+3996
+3997
+3998
+3999
+4000
 $"#;
     assert_regex_match(truncated_pattern, &output);
 
@@ -208,13 +208,13 @@ async fn tool_call_output_truncated_only_once() -> Result<()> {
             "command": [
                 "powershell",
                 "-Command",
-                "for ($i=1; $i -le 2000; $i++) { Write-Output $i }"
+                "for ($i=1; $i -le 4000; $i++) { Write-Output $i }"
             ],
             "timeout_ms": 5_000,
         })
     } else {
         serde_json::json!({
-            "command": ["/bin/sh", "-c", "seq 1 2000"],
+            "command": ["/bin/sh", "-c", "seq 1 4000"],
             "timeout_ms": 5_000,
         })
     };
@@ -268,8 +268,8 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
     let server_name = "rmcp";
     let tool_name = format!("mcp__{server_name}__echo");
 
-    // Build a very large message to exceed 10KiB once serialized.
-    let large_msg = "long-message-with-newlines-".repeat(600);
+    // Build a very large message to exceed 100KiB once serialized.
+    let large_msg = "long-message-with-newlines-".repeat(6_000);
     let args_json = serde_json::json!({ "message": large_msg });
 
     mount_sse_once(
@@ -344,7 +344,7 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
         "expected total line header and JSON head, got: {output}"
     );
 
-    let byte_marker = Regex::new(r"\[\.\.\. output truncated to fit 11264 bytes \.\.\.\]")
+    let byte_marker = Regex::new(r"\[\.\.\. output truncated to fit 112640 bytes \.\.\.\]")
         .expect("compile regex");
     assert!(
         byte_marker.is_match(&output),
