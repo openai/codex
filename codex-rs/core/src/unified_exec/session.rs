@@ -166,7 +166,8 @@ impl UnifiedExecSession {
         };
 
         if is_likely_sandbox_denied(self.sandbox_type(), &exec_output) {
-            let (snippet, _) = truncate_with_token_budget(&aggregated_text, UNIFIED_EXEC_OUTPUT_MAX_TOKENS);
+            let (snippet, _) =
+                truncate_with_token_budget(&aggregated_text, UNIFIED_EXEC_OUTPUT_MAX_TOKENS, None);
             let message = if snippet.is_empty() {
                 format!("exit code {exit_code}")
             } else {

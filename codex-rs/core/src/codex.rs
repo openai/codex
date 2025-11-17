@@ -374,6 +374,10 @@ impl SessionConfiguration {
     pub(crate) fn context_manager_function_output_max_tokens(&self) -> usize {
         self.context_manager_function_output_max_tokens
     }
+
+    pub(crate) fn model(&self) -> &str {
+        self.model.as_str()
+    }
 }
 
 #[derive(Default, Clone)]
@@ -737,6 +741,8 @@ impl Session {
         let mut state = self.state.lock().await;
 
         state.session_configuration = state.session_configuration.apply(&updates);
+        let model = state.session_configuration.model().to_string();
+        state.history.set_model(Some(model.as_str()));
     }
 
     pub(crate) async fn new_turn(&self, updates: SessionSettingsUpdate) -> Arc<TurnContext> {
@@ -753,6 +759,8 @@ impl Session {
             let mut state = self.state.lock().await;
             let session_configuration = state.session_configuration.clone().apply(&updates);
             state.session_configuration = session_configuration.clone();
+            let model = state.session_configuration.model().to_string();
+            state.history.set_model(Some(model.as_str()));
             session_configuration
         };
 

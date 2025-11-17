@@ -522,6 +522,32 @@ fn truncates_across_multiple_under_limit_texts_and_reports_omitted() {
         .as_array()
         .expect("array output");
 
+    for (idx, entry) in output.iter().enumerate() {
+        if let Some(obj) = entry.as_object() {
+            let kind = obj
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            if kind == "input_text" {
+                if let Some(text) = obj.get("text").and_then(|t| t.as_str()) {
+                    let preview: String = text.chars().take(40).collect();
+                    println!(
+                        "entry {idx}: {kind} len={} preview={preview:?}",
+                        text.len()
+                    );
+                } else {
+                    println!("entry {idx}: {kind} (missing text)");
+                }
+            } else if kind == "input_image" {
+                println!("entry {idx}: {kind}");
+            } else {
+                println!("entry {idx}: {kind}");
+            }
+        } else {
+            println!("entry {idx}: non-object {entry:?}");
+        }
+    }
+
     // Expect: t1 (full), t2 (full), image, t3 (truncated), summary mentioning 2 omitted.
     assert_eq!(output.len(), 5);
 

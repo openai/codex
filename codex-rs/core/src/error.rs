@@ -461,7 +461,7 @@ pub fn token_limited_error_message(e: &CodexErr) -> String {
         _ => e.to_string(),
     };
 
-    truncate_with_token_budget(&message, ERROR_MESSAGE_UI_MAX_TOKENS).0
+    truncate_with_token_budget(&message, ERROR_MESSAGE_UI_MAX_TOKENS, None).0
 }
 
 #[cfg(test)]

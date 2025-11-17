@@ -70,7 +70,9 @@ impl UnifiedExecSessionManager {
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let text = String::from_utf8_lossy(&collected).to_string();
-        let (output, original_token_count) = truncate_with_token_budget(&text, max_tokens);
+        let model = context.turn.client.get_model();
+        let (output, original_token_count) =
+            truncate_with_token_budget(&text, max_tokens, Some(model.as_str()));
         let original_token_count =
             original_token_count.and_then(|count| usize::try_from(count).ok());
         let chunk_id = generate_chunk_id();
@@ -177,7 +179,9 @@ impl UnifiedExecSessionManager {
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let text = String::from_utf8_lossy(&collected).to_string();
-        let (output, original_token_count) = truncate_with_token_budget(&text, max_tokens);
+        let model = turn_ref.client.get_model();
+        let (output, original_token_count) =
+            truncate_with_token_budget(&text, max_tokens, Some(model.as_str()));
         let original_token_count =
             original_token_count.and_then(|count| usize::try_from(count).ok());
         let chunk_id = generate_chunk_id();

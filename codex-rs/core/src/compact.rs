@@ -257,7 +257,7 @@ fn build_token_limited_compacted_history_with_limit(
                 selected_messages.push(message.clone());
                 remaining = remaining.saturating_sub(tokens);
             } else {
-                let (truncated, _) = truncate_with_token_budget(message, remaining);
+                let (truncated, _) = truncate_with_token_budget(message, remaining, None);
                 selected_messages.push(truncated);
                 break;
             }

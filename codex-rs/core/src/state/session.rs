@@ -18,11 +18,13 @@ pub(crate) struct SessionState {
 impl SessionState {
     /// Create a new session state mirroring previous `State::default()` semantics.
     pub(crate) fn new(session_configuration: SessionConfiguration) -> Self {
+        let mut history = ContextManager::with_function_output_limit(
+            session_configuration.context_manager_function_output_max_tokens(),
+        );
+        history.set_model(Some(session_configuration.model()));
         Self {
-            session_configuration,
-            history: ContextManager::with_function_output_limit(
-                session_configuration.context_manager_function_output_max_tokens(),
-            ),
+            session_configuration: session_configuration.clone(),
+            history,
             latest_rate_limits: None,
         }
     }

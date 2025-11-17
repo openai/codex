@@ -17,6 +17,7 @@ pub(crate) struct ContextManager {
     items: Vec<ResponseItem>,
     token_info: Option<TokenUsageInfo>,
     function_output_max_tokens: usize,
+    model: Option<String>,
 }
 
 impl ContextManager {
@@ -29,7 +30,12 @@ impl ContextManager {
             items: Vec::new(),
             token_info: TokenUsageInfo::new_or_append(&None, &None, None),
             function_output_max_tokens: max_tokens,
+            model: None,
         }
+    }
+
+    pub(crate) fn set_model(&mut self, model: Option<&str>) {
+        self.model = model.map(|m| m.to_string());
     }
 
     pub(crate) fn token_info(&self) -> Option<TokenUsageInfo> {
@@ -156,11 +162,13 @@ impl ContextManager {
                 let (truncated, _) = truncate_with_token_budget(
                     output.content.as_str(),
                     self.function_output_max_tokens,
+                    self.model.as_deref(),
                 );
                 let truncated_items = output.content_items.as_ref().map(|items| {
                     truncate_function_output_items_to_token_limit(
                         items,
                         self.function_output_max_tokens,
+                        self.model.as_deref(),
                     )
                 });
                 ResponseItem::FunctionCallOutput {
@@ -173,8 +181,11 @@ impl ContextManager {
                 }
             }
             ResponseItem::CustomToolCallOutput { call_id, output } => {
-                let (truncated, _) =
-                    truncate_with_token_budget(output, self.function_output_max_tokens);
+                let (truncated, _) = truncate_with_token_budget(
+                    output,
+                    self.function_output_max_tokens,
+                    self.model.as_deref(),
+                );
                 ResponseItem::CustomToolCallOutput {
                     call_id: call_id.clone(),
                     output: truncated,
