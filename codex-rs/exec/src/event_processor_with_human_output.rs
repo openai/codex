@@ -346,6 +346,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 call_id,
                 auto_approved,
                 changes,
+                ..
             }) => {
                 // Store metadata so we can calculate duration later when we
                 // receive the corresponding PatchApplyEnd event.

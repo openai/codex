@@ -910,6 +910,7 @@ impl Session {
 
         let event = EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id,
+            turn_id: turn_context.sub_id.clone(),
             changes,
             reason,
             grant_root,
