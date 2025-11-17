@@ -48,6 +48,8 @@ pub enum Feature {
     WindowsSandbox,
     /// Remote compaction enabled (only for ChatGPT auth)
     RemoteCompaction,
+    /// Enable the default shell tool.
+    ShellTool,
 }
 
 impl Feature {
@@ -308,5 +310,11 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "remote_compaction",
         stage: Stage::Experimental,
         default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ShellTool,
+        key: "shell_tool",
+        stage: Stage::Stable,
+        default_enabled: true,
     },
 ];

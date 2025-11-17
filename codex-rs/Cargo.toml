@@ -17,9 +17,11 @@ members = [
     "core",
     "exec",
     "execpolicy",
+    "execpolicy2",
     "keyring-store",
     "file-search",
     "linux-sandbox",
+    "lmstudio",
     "login",
     "mcp-server",
     "mcp-types",
@@ -69,6 +71,7 @@ codex-file-search = { path = "file-search" }
 codex-git = { path = "utils/git" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
+codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
 codex-mcp-server = { path = "mcp-server" }
 codex-ollama = { path = "ollama" }

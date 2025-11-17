@@ -253,6 +253,20 @@ This is analogous to `model_context_window`, but for the maximum number of outpu
 
 > See also [`codex exec`](./exec.md) to see how these model settings influence non-interactive runs.
 
+### oss_provider
+
+Specifies the default OSS provider to use when running Codex. This is used when the `--oss` flag is provided without a specific provider.
+
+Valid values are:
+
+- `"lmstudio"` - Use LM Studio as the local model provider
+- `"ollama"` - Use Ollama as the local model provider
+
+```toml
+# Example: Set default OSS provider to LM Studio
+oss_provider = "lmstudio"
+```
+
 ## Execution environment
 
 ### approval_policy
