@@ -1,3 +1,4 @@
+use crate::bottom_pane::is_altgr;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -231,6 +232,12 @@ impl TextArea {
                 modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
                 ..
             } => self.insert_str(&c.to_string()),
+            // Windows AltGr generates ALT|CONTROL; treat as a plain character input
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers,
+                ..
+            } if is_altgr(modifiers) => self.insert_str(&c.to_string()),
             KeyEvent {
                 code: KeyCode::Char('j' | 'm'),
                 modifiers: KeyModifiers::CONTROL,
@@ -246,16 +253,6 @@ impl TextArea {
                 ..
             } if modifiers == (KeyModifiers::CONTROL | KeyModifiers::ALT) => {
                 self.delete_backward_word()
-            },
-            KeyEvent {
-                code: KeyCode::Char(c),
-                modifiers,
-                ..
-            } if modifiers.contains(KeyModifiers::ALT)
-                && modifiers.contains(KeyModifiers::CONTROL) =>
-            {
-                // AltGr on many keyboards reports as Ctrl+Alt; treat it as a literal char.
-                self.insert_str(&c.to_string());
             },
             KeyEvent {
                 code: KeyCode::Backspace,
