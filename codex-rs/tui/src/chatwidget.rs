@@ -65,7 +65,6 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::oneshot;
 use tracing::debug;
 
 use crate::app_event::AppEvent;
@@ -1743,9 +1742,7 @@ impl ChatWidget {
             (TokenUsage::default(), Some(TokenUsage::default()))
         };
 
-        let snapshot_for_display = self
-            .refresh_rate_limits_from_usage()
-            .or_else(|| self.rate_limit_snapshot.clone());
+        let snapshot_for_display = self.rate_limit_snapshot.clone();
 
         self.add_to_history(crate::status::new_status_output(
             &self.config,
@@ -1757,39 +1754,6 @@ impl ChatWidget {
             Local::now(),
         ));
     }
-    fn refresh_rate_limits_from_usage(&mut self) -> Option<RateLimitSnapshotDisplay> {
-        let auth = self.auth_manager.auth()?;
-        if auth.mode != AuthMode::ChatGPT {
-            return None;
-        }
-
-        let base_url = self.config.chatgpt_base_url.clone();
-        let app_event_tx = self.app_event_tx.clone();
-        let (tx, rx) = oneshot::channel();
-
-        tokio::spawn(async move {
-            let snapshot = fetch_rate_limits(base_url, auth).await;
-            if let Some(snapshot) = snapshot {
-                app_event_tx.send(AppEvent::RateLimitSnapshotFetched(snapshot.clone()));
-                let _ = tx.send(Some(snapshot));
-            } else {
-                let _ = tx.send(None);
-            }
-        });
-
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                match tokio::time::timeout(Duration::from_secs(1), rx).await {
-                    Ok(Ok(Some(snapshot))) => Some(crate::status::rate_limit_snapshot_display(
-                        &snapshot,
-                        Local::now(),
-                    )),
-                    Ok(Ok(None)) | Ok(Err(_)) | Err(_) => None,
-                }
-            })
-        })
-    }
-
     fn prefetch_rate_limits(&self) {
         let Some(auth) = self.auth_manager.auth() else {
             return;
@@ -1802,8 +1766,17 @@ impl ChatWidget {
         let app_event_tx = self.app_event_tx.clone();
 
         tokio::spawn(async move {
-            if let Some(snapshot) = fetch_rate_limits(base_url, auth).await {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+
+            if let Some(snapshot) = fetch_rate_limits(base_url.clone(), auth.clone()).await {
                 app_event_tx.send(AppEvent::RateLimitSnapshotFetched(snapshot));
+            }
+
+            loop {
+                interval.tick().await;
+                if let Some(snapshot) = fetch_rate_limits(base_url.clone(), auth.clone()).await {
+                    app_event_tx.send(AppEvent::RateLimitSnapshotFetched(snapshot));
+                }
             }
         });
     }
