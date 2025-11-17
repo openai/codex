@@ -7,10 +7,17 @@ version = { workspace = true }
 workspace = true
 
 [dependencies]
-keyring = { workspace = true, features = [
-    "apple-native",
-    "crypto-rust",
-    "linux-native-async-persistent",
-    "windows-native",
-] }
+keyring = { workspace = true, features = ["crypto-rust"] }
 tracing = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { workspace = true, features = ["linux-native-async-persistent"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { workspace = true, features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { workspace = true, features = ["windows-native"] }
+
+[target.'cfg(any(target_os = "freebsd", target_os = "openbsd"))'.dependencies]
+keyring = { workspace = true, features = ["sync-secret-service"] }
