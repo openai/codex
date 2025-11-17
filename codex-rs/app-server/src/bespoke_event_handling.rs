@@ -28,6 +28,7 @@ use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::TurnInterruptResponse;
 use codex_core::CodexConversation;
+use codex_core::parse_command::shlex_join;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -206,7 +207,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::ExecCommandBegin(exec_command_begin_event) => {
             let item = ThreadItem::CommandExecution {
                 id: exec_command_begin_event.call_id.clone(),
-                command: exec_command_begin_event.command.join(" "),
+                command: shlex_join(&exec_command_begin_event.command),
                 cwd: exec_command_begin_event.cwd,
                 status: CommandExecutionStatus::InProgress,
                 parsed_cmd: exec_command_begin_event
@@ -262,7 +263,7 @@ pub(crate) async fn apply_bespoke_event_handling(
 
             let item = ThreadItem::CommandExecution {
                 id: call_id,
-                command: command.join(" "),
+                command: shlex_join(&command),
                 cwd,
                 status,
                 parsed_cmd: parsed_cmd.into_iter().map(V2ParsedCommand::from).collect(),
