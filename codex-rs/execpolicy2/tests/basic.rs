@@ -296,11 +296,11 @@ fn strictest_decision_wins_across_matches() {
     let policy_src = r#"
 prefix_rule(
     pattern = ["git", "status"],
-    decision = "allow",
+    decision = "prompt",
 )
 prefix_rule(
     pattern = ["git"],
-    decision = "prompt",
+    decision = "allow",
 )
 prefix_rule(
     pattern = ["git", "commit"],
@@ -320,11 +320,11 @@ prefix_rule(
             matched_rules: vec![
                 RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["git", "status"]),
-                    decision: Decision::Allow,
+                    decision: Decision::Prompt,
                 },
                 RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["git"]),
-                    decision: Decision::Prompt,
+                    decision: Decision::Allow,
                 },
             ],
         },
@@ -338,7 +338,7 @@ prefix_rule(
             matched_rules: vec![
                 RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["git"]),
-                    decision: Decision::Prompt,
+                    decision: Decision::Allow,
                 },
                 RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["git", "commit"]),
