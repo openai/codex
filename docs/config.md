@@ -856,7 +856,7 @@ Options that are specific to the TUI.
 ```toml
 [tui]
 # Send desktop notifications when approvals are required or a turn completes.
-# Defaults to false.
+# Defaults to true.
 notifications = true
 
 # You can optionally filter to specific notification types.
@@ -947,7 +947,7 @@ Valid values:
 | `history.max_bytes`                              | number                                                            | Currently ignored (not enforced).                                                                                          |
 | `file_opener`                                    | `vscode` \| `vscode-insiders` \| `windsurf` \| `cursor` \| `none` | URI scheme for clickable citations (default: `vscode`).                                                                    |
 | `tui`                                            | table                                                             | TUI‑specific options.                                                                                                      |
-| `tui.notifications`                              | boolean \| array<string>                                          | Enable desktop notifications in the tui (default: false).                                                                  |
+| `tui.notifications`                              | boolean \| array<string>                                          | Enable desktop notifications in the tui (default: true).                                                                   |
 | `hide_agent_reasoning`                           | boolean                                                           | Hide model reasoning events.                                                                                               |
 | `show_raw_agent_reasoning`                       | boolean                                                           | Show raw reasoning (when available).                                                                                       |
 | `model_reasoning_effort`                         | `minimal` \| `low` \| `medium` \| `high`                          | Responses API reasoning effort.                                                                                            |

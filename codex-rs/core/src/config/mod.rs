@@ -38,6 +38,7 @@ use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use dirs::home_dir;
@@ -382,15 +383,16 @@ fn ensure_no_inline_bearer_tokens(value: &TomlValue) -> std::io::Result<()> {
     Ok(())
 }
 
-pub(crate) fn set_project_trusted_inner(
+pub(crate) fn set_project_trust_level_inner(
     doc: &mut DocumentMut,
     project_path: &Path,
+    trust_level: TrustLevel,
 ) -> anyhow::Result<()> {
     // Ensure we render a human-friendly structure:
     //
     // [projects]
     // [projects."/path/to/project"]
-    // trust_level = "trusted"
+    // trust_level = "trusted" or "untrusted"
     //
     // rather than inline tables like:
     //
@@ -446,17 +448,21 @@ pub(crate) fn set_project_trusted_inner(
         return Err(anyhow::anyhow!("project table missing for {project_key}"));
     };
     proj_tbl.set_implicit(false);
-    proj_tbl["trust_level"] = toml_edit::value("trusted");
+    proj_tbl["trust_level"] = toml_edit::value(trust_level.to_string());
     Ok(())
 }
 
-/// Patch `CODEX_HOME/config.toml` project state.
+/// Patch `CODEX_HOME/config.toml` project state to set trust level.
 /// Use with caution.
-pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Result<()> {
+pub fn set_project_trust_level(
+    codex_home: &Path,
+    project_path: &Path,
+    trust_level: TrustLevel,
+) -> anyhow::Result<()> {
     use crate::config::edit::ConfigEditsBuilder;
 
     ConfigEditsBuilder::new(codex_home)
-        .set_project_trusted(project_path)
+        .set_project_trust_level(project_path, trust_level)
         .apply_blocking()
 }
 
@@ -686,15 +692,16 @@ impl From<ConfigToml> for UserSavedConfig {
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ProjectConfig {
-    pub trust_level: Option<String>,
+    pub trust_level: Option<TrustLevel>,
 }
 
 impl ProjectConfig {
     pub fn is_trusted(&self) -> bool {
-        match &self.trust_level {
-            Some(trust_level) => trust_level == "trusted",
-            None => false,
-        }
+        matches!(self.trust_level, Some(TrustLevel::Trusted))
+    }
+
+    pub fn is_untrusted(&self) -> bool {
+        matches!(self.trust_level, Some(TrustLevel::Untrusted))
     }
 }
 
@@ -735,9 +742,9 @@ impl ConfigToml {
             .or(profile_sandbox_mode)
             .or(self.sandbox_mode)
             .or_else(|| {
-                // if no sandbox_mode is set, but user has marked directory as trusted, use WorkspaceWrite
+                // if no sandbox_mode is set, but user has marked directory as trusted or untrusted, use WorkspaceWrite
                 self.get_active_project(resolved_cwd).and_then(|p| {
-                    if p.is_trusted() {
+                    if p.is_trusted() || p.is_untrusted() {
                         Some(SandboxMode::WorkspaceWrite)
                     } else {
                         None
@@ -958,6 +965,9 @@ impl Config {
                 if active_project.is_trusted() {
                     // If no explicit approval policy is set, but we trust cwd, default to OnRequest
                     AskForApproval::OnRequest
+                } else if active_project.is_untrusted() {
+                    // If project is explicitly marked untrusted, require approval for non-safe commands
+                    AskForApproval::UnlessTrusted
                 } else {
                     AskForApproval::default()
                 }
@@ -1323,7 +1333,7 @@ persistence = "none"
     }
 
     #[test]
-    fn tui_config_missing_notifications_field_defaults_to_disabled() {
+    fn tui_config_missing_notifications_field_defaults_to_enabled() {
         let cfg = r#"
 [tui]
 "#;
@@ -1332,7 +1342,7 @@ persistence = "none"
             .expect("TUI config without notifications should succeed");
         let tui = parsed.tui.expect("config should include tui section");
 
-        assert_eq!(tui.notifications, Notifications::Enabled(false));
+        assert_eq!(tui.notifications, Notifications::Enabled(true));
     }
 
     #[test]
@@ -3164,7 +3174,7 @@ model_verbosity = "high"
         let project_dir = Path::new("/some/path");
         let mut doc = DocumentMut::new();
 
-        set_project_trusted_inner(&mut doc, project_dir)?;
+        set_project_trust_level_inner(&mut doc, project_dir, TrustLevel::Trusted)?;
 
         let contents = doc.to_string();
 
@@ -3204,7 +3214,7 @@ trust_level = "trusted"
         let mut doc = initial.parse::<DocumentMut>()?;
 
         // Run the function; it should convert to explicit tables and set trusted
-        set_project_trusted_inner(&mut doc, project_dir)?;
+        set_project_trust_level_inner(&mut doc, project_dir, TrustLevel::Trusted)?;
 
         let contents = doc.to_string();
 
@@ -3231,7 +3241,7 @@ model = "foo""#;
 
         // Approve a new directory
         let new_project = Path::new("/Users/mbolin/code/codex2");
-        set_project_trusted_inner(&mut doc, new_project)?;
+        set_project_trust_level_inner(&mut doc, new_project, TrustLevel::Trusted)?;
 
         let contents = doc.to_string();
 
@@ -3251,6 +3261,87 @@ trust_level = "trusted"
 trust_level = "trusted"
 "#;
         assert_eq!(contents, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_untrusted_project_gets_workspace_write_sandbox() -> anyhow::Result<()> {
+        let config_with_untrusted = r#"
+[projects."/tmp/test"]
+trust_level = "untrusted"
+"#;
+
+        let cfg = toml::from_str::<ConfigToml>(config_with_untrusted)
+            .expect("TOML deserialization should succeed");
+
+        let resolution = cfg.derive_sandbox_policy(None, None, &PathBuf::from("/tmp/test"));
+
+        // Verify that untrusted projects get WorkspaceWrite (or ReadOnly on Windows due to downgrade)
+        if cfg!(target_os = "windows") {
+            assert!(
+                matches!(resolution.policy, SandboxPolicy::ReadOnly),
+                "Expected ReadOnly on Windows, got {:?}",
+                resolution.policy
+            );
+        } else {
+            assert!(
+                matches!(resolution.policy, SandboxPolicy::WorkspaceWrite { .. }),
+                "Expected WorkspaceWrite for untrusted project, got {:?}",
+                resolution.policy
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_untrusted_project_gets_unless_trusted_approval_policy() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let test_project_dir = TempDir::new()?;
+        let test_path = test_project_dir.path();
+
+        let mut projects = std::collections::HashMap::new();
+        projects.insert(
+            test_path.to_string_lossy().to_string(),
+            ProjectConfig {
+                trust_level: Some(TrustLevel::Untrusted),
+            },
+        );
+
+        let cfg = ConfigToml {
+            projects: Some(projects),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides {
+                cwd: Some(test_path.to_path_buf()),
+                ..Default::default()
+            },
+            codex_home.path().to_path_buf(),
+        )?;
+
+        // Verify that untrusted projects get UnlessTrusted approval policy
+        assert_eq!(
+            config.approval_policy,
+            AskForApproval::UnlessTrusted,
+            "Expected UnlessTrusted approval policy for untrusted project"
+        );
+
+        // Verify that untrusted projects still get WorkspaceWrite sandbox (or ReadOnly on Windows)
+        if cfg!(target_os = "windows") {
+            assert!(
+                matches!(config.sandbox_policy, SandboxPolicy::ReadOnly),
+                "Expected ReadOnly on Windows"
+            );
+        } else {
+            assert!(
+                matches!(config.sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }),
+                "Expected WorkspaceWrite sandbox for untrusted project"
+            );
+        }
 
         Ok(())
     }

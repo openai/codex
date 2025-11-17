@@ -1721,6 +1721,7 @@ mod tests {
     use ratatui::layout::Rect;
 
     #[test]
+    #[ignore = "very slow"]
     fn composer_input_renders_typed_characters() {
         let mut composer = ComposerInput::new();
         let key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);

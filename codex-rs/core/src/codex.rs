@@ -133,6 +133,7 @@ use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
+use codex_utils_tokenizer::warm_model_cache;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -589,6 +590,9 @@ impl Session {
 
         // Create the mutable state for the Session.
         let state = SessionState::new(session_configuration.clone());
+
+        // Warm the tokenizer cache for the session model without blocking startup.
+        warm_model_cache(&session_configuration.model);
 
         let services = SessionServices {
             mcp_connection_manager,
@@ -1815,7 +1819,6 @@ pub(crate) async fn run_task(
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    let mut auto_compact_recently_attempted = false;
 
     loop {
         // Note that pending_input would be something like a message the user
@@ -1870,26 +1873,11 @@ pub(crate) async fn run_task(
                 let (responses, items_to_record_in_conversation_history) =
                     process_items(processed_items, &sess, &turn_context).await;
 
+                // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached {
-                    if auto_compact_recently_attempted {
-                        let limit_str = limit.to_string();
-                        let current_tokens = total_usage_tokens
-                            .map(|tokens| tokens.to_string())
-                            .unwrap_or_else(|| "unknown".to_string());
-                        let event = EventMsg::Error(ErrorEvent {
-                            message: format!(
-                                "Conversation is still above the token limit after automatic summarization (limit {limit_str}, current {current_tokens}). Please start a new session or trim your input."
-                            ),
-                        });
-                        sess.send_event(&turn_context, event).await;
-                        break;
-                    }
-                    auto_compact_recently_attempted = true;
                     compact::run_inline_auto_compact_task(sess.clone(), turn_context.clone()).await;
                     continue;
                 }
-
-                auto_compact_recently_attempted = false;
 
                 if responses.is_empty() {
                     last_agent_message = get_last_assistant_message_from_turn(

@@ -5,6 +5,7 @@ use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
+use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::McpToolCallBeginEvent;
@@ -626,7 +627,8 @@ fn exec_command_end_success_produces_completed_command_item() {
             command: vec!["bash".to_string(), "-lc".to_string(), "echo hi".to_string()],
             cwd: std::env::current_dir().unwrap(),
             parsed_cmd: Vec::new(),
-            is_user_shell_command: false,
+            source: ExecCommandSource::Agent,
+            interaction_input: None,
         }),
     );
     let out_begin = ep.collect_thread_events(&begin);
@@ -687,7 +689,8 @@ fn exec_command_end_failure_produces_failed_command_item() {
             command: vec!["sh".to_string(), "-c".to_string(), "exit 1".to_string()],
             cwd: std::env::current_dir().unwrap(),
             parsed_cmd: Vec::new(),
-            is_user_shell_command: false,
+            source: ExecCommandSource::Agent,
+            interaction_input: None,
         }),
     );
     assert_eq!(

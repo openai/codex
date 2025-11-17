@@ -5,6 +5,7 @@ members = [
     "async-utils",
     "app-server",
     "app-server-protocol",
+    "app-server-test-client",
     "apply-patch",
     "arg0",
     "feedback",
@@ -129,7 +130,7 @@ image = { version = "^0.25.8", default-features = false }
 indexmap = "2.12.0"
 insta = "1.43.2"
 itertools = "0.14.0"
-keyring = "3.6"
+keyring = { version = "3.6", default-features = false }
 landlock = "0.4.1"
 lazy_static = "1"
 libc = "0.2.175"
@@ -182,6 +183,7 @@ tempfile = "3.23.0"
 test-log = "0.2.18"
 textwrap = "0.16.2"
 thiserror = "2.0.17"
+tiktoken-rs = "0.9"
 time = "0.3"
 tiny_http = "0.12"
 tokio = "1"

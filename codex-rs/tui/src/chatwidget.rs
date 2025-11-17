@@ -23,6 +23,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
+use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::ListCustomPromptsResponseEvent;
 use codex_core::protocol::McpListToolsResponseEvent;
@@ -85,6 +86,7 @@ use crate::history_cell;
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
+use crate::history_cell::PlainHistoryCell;
 use crate::markdown::append_markdown;
 #[cfg(target_os = "windows")]
 use crate::onboarding::WSL_INSTRUCTIONS;
@@ -128,7 +130,7 @@ const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
 struct RunningCommand {
     command: Vec<String>,
     parsed_cmd: Vec<ParsedCommand>,
-    is_user_shell_command: bool,
+    source: ExecCommandSource,
 }
 
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
@@ -723,6 +725,9 @@ impl ChatWidget {
 
     fn on_background_event(&mut self, message: String) {
         debug!("BackgroundEvent: {message}");
+        self.bottom_pane.ensure_status_indicator();
+        self.bottom_pane.set_interrupt_hint_visible(true);
+        self.set_status_header(message);
     }
 
     fn on_undo_started(&mut self, event: UndoStartedEvent) {
@@ -832,10 +837,16 @@ impl ChatWidget {
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
         let running = self.running_commands.remove(&ev.call_id);
-        let (command, parsed, is_user_shell_command) = match running {
-            Some(rc) => (rc.command, rc.parsed_cmd, rc.is_user_shell_command),
-            None => (vec![ev.call_id.clone()], Vec::new(), false),
+        let (command, parsed, source) = match running {
+            Some(rc) => (rc.command, rc.parsed_cmd, rc.source),
+            None => (
+                vec![ev.call_id.clone()],
+                Vec::new(),
+                ExecCommandSource::Agent,
+            ),
         };
+        let is_unified_exec_interaction =
+            matches!(source, ExecCommandSource::UnifiedExecInteraction);
 
         let needs_new = self
             .active_cell
@@ -848,7 +859,8 @@ impl ChatWidget {
                 ev.call_id.clone(),
                 command,
                 parsed,
-                is_user_shell_command,
+                source,
+                None,
             )));
         }
 
@@ -857,15 +869,20 @@ impl ChatWidget {
             .as_mut()
             .and_then(|c| c.as_any_mut().downcast_mut::<ExecCell>())
         {
-            cell.complete_call(
-                &ev.call_id,
+            let output = if is_unified_exec_interaction {
+                CommandOutput {
+                    exit_code: ev.exit_code,
+                    formatted_output: String::new(),
+                    aggregated_output: String::new(),
+                }
+            } else {
                 CommandOutput {
                     exit_code: ev.exit_code,
                     formatted_output: ev.formatted_output.clone(),
                     aggregated_output: ev.aggregated_output.clone(),
-                },
-                ev.duration,
-            );
+                }
+            };
+            cell.complete_call(&ev.call_id, output, ev.duration);
             if cell.should_flush() {
                 self.flush_active_cell();
             }
@@ -927,9 +944,10 @@ impl ChatWidget {
             RunningCommand {
                 command: ev.command.clone(),
                 parsed_cmd: ev.parsed_cmd.clone(),
-                is_user_shell_command: ev.is_user_shell_command,
+                source: ev.source,
             },
         );
+        let interaction_input = ev.interaction_input.clone();
         if let Some(cell) = self
             .active_cell
             .as_mut()
@@ -938,7 +956,8 @@ impl ChatWidget {
                 ev.call_id.clone(),
                 ev.command.clone(),
                 ev.parsed_cmd.clone(),
-                ev.is_user_shell_command,
+                ev.source,
+                interaction_input.clone(),
             )
         {
             *cell = new_exec;
@@ -949,7 +968,8 @@ impl ChatWidget {
                 ev.call_id.clone(),
                 ev.command.clone(),
                 ev.parsed_cmd,
-                ev.is_user_shell_command,
+                ev.source,
+                interaction_input,
             )));
         }
 
@@ -2459,6 +2479,11 @@ impl ChatWidget {
 
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
         self.add_to_history(history_cell::new_info_event(message, hint));
+        self.request_redraw();
+    }
+
+    pub(crate) fn add_plain_history_lines(&mut self, lines: Vec<Line<'static>>) {
+        self.add_boxed_history(Box::new(PlainHistoryCell::new(lines)));
         self.request_redraw();
     }
 

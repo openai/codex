@@ -4,6 +4,7 @@ use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandOutputDeltaEvent;
+use crate::protocol::ExecCommandSource;
 use crate::protocol::ExecOutputStream;
 use crate::shell::get_shell_by_model_provided_path;
 use crate::tools::context::ToolInvocation;
@@ -162,8 +163,12 @@ impl ToolHandler for UnifiedExecHandler {
                     &context.call_id,
                     None,
                 );
-
-                let emitter = ToolEmitter::unified_exec(&command, cwd.clone(), true);
+                let emitter = ToolEmitter::unified_exec(
+                    &command,
+                    cwd.clone(),
+                    ExecCommandSource::UnifiedExecStartup,
+                    None,
+                );
                 emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
                 manager
@@ -191,6 +196,7 @@ impl ToolHandler for UnifiedExecHandler {
                 })?;
                 manager
                     .write_stdin(WriteStdinRequest {
+                        call_id: &call_id,
                         session_id: args.session_id,
                         input: &args.chars,
                         yield_time_ms: args.yield_time_ms,

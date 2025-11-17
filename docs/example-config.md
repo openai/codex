@@ -136,8 +136,8 @@ file_opener = "vscode"
 ################################################################################
 
 [tui]
-# Desktop notifications from the TUI: boolean or filtered list. Default: false
-# Examples: true | ["agent-turn-complete", "approval-requested"]
+# Desktop notifications from the TUI: boolean or filtered list. Default: true
+# Examples: false | ["agent-turn-complete", "approval-requested"]
 notifications = false
 
 # Suppress internal reasoning events from output (default: false)
