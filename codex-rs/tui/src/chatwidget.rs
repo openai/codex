@@ -1733,16 +1733,14 @@ impl ChatWidget {
     }
 
     pub(crate) fn add_status_output(&mut self) {
+        let default_usage = TokenUsage::default();
         let (total_usage, context_usage) = if let Some(ti) = &self.token_info {
-            (
-                ti.total_token_usage.clone(),
-                Some(ti.last_token_usage.clone()),
-            )
+            (&ti.total_token_usage, Some(&ti.last_token_usage))
         } else {
-            (TokenUsage::default(), Some(TokenUsage::default()))
+            (&default_usage, Some(&default_usage))
         };
 
-        let snapshot_for_display = self.rate_limit_snapshot.clone();
+        let snapshot_for_display = self.rate_limit_snapshot.as_ref();
 
         self.add_to_history(crate::status::new_status_output(
             &self.config,
@@ -1750,7 +1748,7 @@ impl ChatWidget {
             &total_usage,
             context_usage.as_ref(),
             &self.conversation_id,
-            snapshot_for_display.as_ref(),
+            snapshot_for_display,
             Local::now(),
         ));
     }
