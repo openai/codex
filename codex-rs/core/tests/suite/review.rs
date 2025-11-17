@@ -23,7 +23,6 @@ use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id_from_str;
 use core_test_support::skip_if_no_network;
 use core_test_support::wait_for_event;
-use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -246,37 +245,31 @@ async fn review_filters_agent_message_related_events() {
     let mut saw_exited = false;
 
     // Drain until TaskComplete; assert filtered events never surface.
-    wait_for_event_with_timeout(
-        &codex,
-        |event| match event {
-            EventMsg::TaskComplete(_) => true,
-            EventMsg::EnteredReviewMode(_) => {
-                saw_entered = true;
-                false
+    wait_for_event(&codex, |event| match event {
+        EventMsg::TaskComplete(_) => true,
+        EventMsg::EnteredReviewMode(_) => {
+            saw_entered = true;
+            false
+        }
+        EventMsg::ExitedReviewMode(_) => {
+            saw_exited = true;
+            false
+        }
+        // The following must be filtered by review flow
+        EventMsg::AgentMessageContentDelta(_) => {
+            panic!("unexpected AgentMessageContentDelta surfaced during review")
+        }
+        EventMsg::AgentMessageDelta(_) => {
+            panic!("unexpected AgentMessageDelta surfaced during review")
+        }
+        EventMsg::ItemCompleted(ev) => match &ev.item {
+            codex_protocol::items::TurnItem::AgentMessage(_) => {
+                panic!("unexpected ItemCompleted for TurnItem::AgentMessage surfaced during review")
             }
-            EventMsg::ExitedReviewMode(_) => {
-                saw_exited = true;
-                false
-            }
-            // The following must be filtered by review flow
-            EventMsg::AgentMessageContentDelta(_) => {
-                panic!("unexpected AgentMessageContentDelta surfaced during review")
-            }
-            EventMsg::AgentMessageDelta(_) => {
-                panic!("unexpected AgentMessageDelta surfaced during review")
-            }
-            EventMsg::ItemCompleted(ev) => match &ev.item {
-                codex_protocol::items::TurnItem::AgentMessage(_) => {
-                    panic!(
-                        "unexpected ItemCompleted for TurnItem::AgentMessage surfaced during review"
-                    )
-                }
-                _ => false,
-            },
             _ => false,
         },
-        tokio::time::Duration::from_secs(5),
-    )
+        _ => false,
+    })
     .await;
     assert!(saw_entered && saw_exited, "missing review lifecycle events");
 
@@ -335,25 +328,21 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
     // Drain events until TaskComplete; ensure none are AgentMessage.
     let mut saw_entered = false;
     let mut saw_exited = false;
-    wait_for_event_with_timeout(
-        &codex,
-        |event| match event {
-            EventMsg::TaskComplete(_) => true,
-            EventMsg::AgentMessage(_) => {
-                panic!("unexpected AgentMessage during review with structured output")
-            }
-            EventMsg::EnteredReviewMode(_) => {
-                saw_entered = true;
-                false
-            }
-            EventMsg::ExitedReviewMode(_) => {
-                saw_exited = true;
-                false
-            }
-            _ => false,
-        },
-        tokio::time::Duration::from_secs(5),
-    )
+    wait_for_event(&codex, |event| match event {
+        EventMsg::TaskComplete(_) => true,
+        EventMsg::AgentMessage(_) => {
+            panic!("unexpected AgentMessage during review with structured output")
+        }
+        EventMsg::EnteredReviewMode(_) => {
+            saw_entered = true;
+            false
+        }
+        EventMsg::ExitedReviewMode(_) => {
+            saw_exited = true;
+            false
+        }
+        _ => false,
+    })
     .await;
     assert!(saw_entered && saw_exited, "missing review lifecycle events");
 

@@ -9,6 +9,7 @@ use tokio::sync::Mutex;
 use tokio::sync::MutexGuard;
 
 /// A minimal LRU cache protected by a Tokio mutex.
+/// Calls outside a Tokio runtime are no-ops.
 pub struct BlockingLruCache<K, V> {
     inner: Mutex<LruCache<K, V>>,
 }
@@ -30,14 +31,16 @@ where
     where
         V: Clone,
     {
-        let mut guard = lock_blocking(&self.inner);
-        if let Some(v) = guard.get(&key) {
-            return v.clone();
+        if let Some(mut guard) = lock_if_runtime(&self.inner) {
+            if let Some(v) = guard.get(&key) {
+                return v.clone();
+            }
+            let v = value();
+            // Insert and return a clone to keep ownership in the cache.
+            guard.put(key, v.clone());
+            return v;
         }
-        let v = value();
-        // Insert and return a clone to keep ownership in the cache.
-        guard.put(key, v.clone());
-        v
+        value()
     }
 
     /// Like `get_or_insert_with`, but the value factory may fail.
@@ -49,13 +52,15 @@ where
     where
         V: Clone,
     {
-        let mut guard = lock_blocking(&self.inner);
-        if let Some(v) = guard.get(&key) {
-            return Ok(v.clone());
+        if let Some(mut guard) = lock_if_runtime(&self.inner) {
+            if let Some(v) = guard.get(&key) {
+                return Ok(v.clone());
+            }
+            let v = value()?;
+            guard.put(key, v.clone());
+            return Ok(v);
         }
-        let v = value()?;
-        guard.put(key, v.clone());
-        Ok(v)
+        value()
     }
 
     /// Builds a cache if `capacity` is non-zero, returning `None` otherwise.
@@ -71,12 +76,14 @@ where
         Q: Hash + Eq + ?Sized,
         V: Clone,
     {
-        lock_blocking(&self.inner).get(key).cloned()
+        let mut guard = lock_if_runtime(&self.inner)?;
+        guard.get(key).cloned()
     }
 
     /// Inserts `value` for `key`, returning the previous entry if it existed.
     pub fn insert(&self, key: K, value: V) -> Option<V> {
-        lock_blocking(&self.inner).put(key, value)
+        let mut guard = lock_if_runtime(&self.inner)?;
+        guard.put(key, value)
     }
 
     /// Removes the entry for `key` if it exists, returning it.
@@ -85,34 +92,39 @@ where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        lock_blocking(&self.inner).pop(key)
+        let mut guard = lock_if_runtime(&self.inner)?;
+        guard.pop(key)
     }
 
     /// Clears all entries from the cache.
     pub fn clear(&self) {
-        lock_blocking(&self.inner).clear();
+        if let Some(mut guard) = lock_if_runtime(&self.inner) {
+            guard.clear();
+        }
     }
 
     /// Executes `callback` with a mutable reference to the underlying cache.
     pub fn with_mut<R>(&self, callback: impl FnOnce(&mut LruCache<K, V>) -> R) -> R {
-        let mut guard = lock_blocking(&self.inner);
-        callback(&mut guard)
+        if let Some(mut guard) = lock_if_runtime(&self.inner) {
+            callback(&mut guard)
+        } else {
+            let mut disabled = LruCache::unbounded();
+            callback(&mut disabled)
+        }
     }
 
-    /// Provides direct access to the cache guard for advanced use cases.
-    pub fn blocking_lock(&self) -> MutexGuard<'_, LruCache<K, V>> {
-        lock_blocking(&self.inner)
+    /// Provides direct access to the cache guard when a Tokio runtime is available.
+    pub fn blocking_lock(&self) -> Option<MutexGuard<'_, LruCache<K, V>>> {
+        lock_if_runtime(&self.inner)
     }
 }
 
-fn lock_blocking<K, V>(m: &Mutex<LruCache<K, V>>) -> MutexGuard<'_, LruCache<K, V>>
+fn lock_if_runtime<K, V>(m: &Mutex<LruCache<K, V>>) -> Option<MutexGuard<'_, LruCache<K, V>>>
 where
     K: Eq + Hash,
 {
-    match tokio::runtime::Handle::try_current() {
-        Ok(_) => tokio::task::block_in_place(|| m.blocking_lock()),
-        Err(_) => m.blocking_lock(),
-    }
+    tokio::runtime::Handle::try_current().ok()?;
+    Some(tokio::task::block_in_place(|| m.blocking_lock()))
 }
 
 /// Computes the SHA-1 digest of `bytes`.
@@ -155,5 +167,27 @@ mod tests {
         assert!(cache.get(&"b").is_none());
         assert_eq!(cache.get(&"a"), Some(1));
         assert_eq!(cache.get(&"c"), Some(3));
+    }
+
+    #[test]
+    fn disabled_without_runtime() {
+        let cache = BlockingLruCache::new(NonZeroUsize::new(2).expect("capacity"));
+        cache.insert("first", 1);
+        assert!(cache.get(&"first").is_none());
+
+        assert_eq!(cache.get_or_insert_with("first", || 2), 2);
+        assert!(cache.get(&"first").is_none());
+
+        assert!(cache.remove(&"first").is_none());
+        cache.clear();
+
+        let result = cache.with_mut(|inner| {
+            inner.put("tmp", 3);
+            inner.get(&"tmp").cloned()
+        });
+        assert_eq!(result, Some(3));
+        assert!(cache.get(&"tmp").is_none());
+
+        assert!(cache.blocking_lock().is_none());
     }
 }

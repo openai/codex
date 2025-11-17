@@ -42,6 +42,15 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
     .await??;
     let ThreadStartResponse { thread } = to_response::<ThreadStartResponse>(resp)?;
     assert!(!thread.id.is_empty(), "thread id should not be empty");
+    assert!(
+        thread.preview.is_empty(),
+        "new threads should start with an empty preview"
+    );
+    assert_eq!(thread.model_provider, "mock_provider");
+    assert!(
+        thread.created_at > 0,
+        "created_at should be a positive UNIX timestamp"
+    );
 
     // A corresponding thread/started notification should arrive.
     let notif: JSONRPCNotification = timeout(
@@ -51,7 +60,7 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
     .await??;
     let started: ThreadStartedNotification =
         serde_json::from_value(notif.params.expect("params must be present"))?;
-    assert_eq!(started.thread.id, thread.id);
+    assert_eq!(started.thread, thread);
 
     Ok(())
 }

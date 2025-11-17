@@ -6,6 +6,7 @@ use std::sync::atomic::AtomicU64;
 
 use crate::AuthManager;
 use crate::client_common::REVIEW_PROMPT;
+use crate::compact;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::mcp::auth::McpAuthStatusEntry;
@@ -66,6 +67,8 @@ use crate::error::Result as CodexResult;
 use crate::exec::StreamOutput;
 // Removed: legacy executor wiring replaced by ToolOrchestrator flows.
 // legacy normalize_exec_result no longer used after orchestrator migration
+use crate::compact::build_compacted_history;
+use crate::compact::collect_user_messages;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::model_family::find_family_for_model;
@@ -93,7 +96,9 @@ use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
+use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnDiffEvent;
+use crate::protocol::WarningEvent;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
 use crate::shell;
@@ -128,10 +133,7 @@ use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
-
-pub mod compact;
-use self::compact::build_compacted_history;
-use self::compact::collect_user_messages;
+use codex_utils_tokenizer::warm_model_cache;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -589,6 +591,9 @@ impl Session {
         // Create the mutable state for the Session.
         let state = SessionState::new(session_configuration.clone());
 
+        // Warm the tokenizer cache for the session model without blocking startup.
+        warm_model_cache(&session_configuration.model);
+
         let services = SessionServices {
             mcp_connection_manager,
             unified_exec_manager: UnifiedExecSessionManager::default(),
@@ -674,6 +679,34 @@ impl Session {
             InitialHistory::Resumed(_) | InitialHistory::Forked(_) => {
                 let rollout_items = conversation_history.get_rollout_items();
                 let persist = matches!(conversation_history, InitialHistory::Forked(_));
+
+                // If resuming, warn when the last recorded model differs from the current one.
+                if let InitialHistory::Resumed(_) = conversation_history
+                    && let Some(prev) = rollout_items.iter().rev().find_map(|it| {
+                        if let RolloutItem::TurnContext(ctx) = it {
+                            Some(ctx.model.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                {
+                    let curr = turn_context.client.get_model();
+                    if prev != curr {
+                        warn!(
+                            "resuming session with different model: previous={prev}, current={curr}"
+                        );
+                        self.send_event(
+                                &turn_context,
+                                EventMsg::Warning(WarningEvent {
+                                    message: format!(
+                                        "This session was recorded with model `{prev}` but is resuming with `{curr}`. \
+                         Consider switching back to `{prev}` as it may affect Codex performance."
+                                    ),
+                                }),
+                            )
+                                .await;
+                    }
+                }
 
                 // Always add response items to conversation history
                 let reconstructed_history =
@@ -968,7 +1001,7 @@ impl Session {
     }
 
     /// Append ResponseItems to the in-memory conversation history only.
-    async fn record_into_history(&self, items: &[ResponseItem]) {
+    pub(crate) async fn record_into_history(&self, items: &[ResponseItem]) {
         let mut state = self.state.lock().await;
         state.record_items(items.iter());
     }
@@ -1020,7 +1053,7 @@ impl Session {
         items
     }
 
-    async fn persist_rollout_items(&self, items: &[RolloutItem]) {
+    pub(crate) async fn persist_rollout_items(&self, items: &[RolloutItem]) {
         let recorder = {
             let guard = self.services.rollout.lock().await;
             guard.clone()
@@ -1037,7 +1070,7 @@ impl Session {
         state.clone_history()
     }
 
-    async fn update_token_usage_info(
+    pub(crate) async fn update_token_usage_info(
         &self,
         turn_context: &TurnContext,
         token_usage: Option<&TokenUsage>,
@@ -1054,7 +1087,37 @@ impl Session {
         self.send_token_count_event(turn_context).await;
     }
 
-    async fn update_rate_limits(
+    pub(crate) async fn override_last_token_usage_estimate(
+        &self,
+        turn_context: &TurnContext,
+        estimated_total_tokens: i64,
+    ) {
+        {
+            let mut state = self.state.lock().await;
+            let mut info = state.token_info().unwrap_or(TokenUsageInfo {
+                total_token_usage: TokenUsage::default(),
+                last_token_usage: TokenUsage::default(),
+                model_context_window: None,
+            });
+
+            info.last_token_usage = TokenUsage {
+                input_tokens: 0,
+                cached_input_tokens: 0,
+                output_tokens: 0,
+                reasoning_output_tokens: 0,
+                total_tokens: estimated_total_tokens.max(0),
+            };
+
+            if info.model_context_window.is_none() {
+                info.model_context_window = turn_context.client.get_model_context_window();
+            }
+
+            state.set_token_info(Some(info));
+        }
+        self.send_token_count_event(turn_context).await;
+    }
+
+    pub(crate) async fn update_rate_limits(
         &self,
         turn_context: &TurnContext,
         new_rate_limits: RateLimitSnapshot,
@@ -1075,7 +1138,7 @@ impl Session {
         self.send_event(turn_context, event).await;
     }
 
-    async fn set_total_tokens_full(&self, turn_context: &TurnContext) {
+    pub(crate) async fn set_total_tokens_full(&self, turn_context: &TurnContext) {
         let context_window = turn_context.client.get_model_context_window();
         if let Some(context_window) = context_window {
             {
@@ -1118,7 +1181,11 @@ impl Session {
         self.send_event(turn_context, event).await;
     }
 
-    async fn notify_stream_error(&self, turn_context: &TurnContext, message: impl Into<String>) {
+    pub(crate) async fn notify_stream_error(
+        &self,
+        turn_context: &TurnContext,
+        message: impl Into<String>,
+    ) {
         let event = EventMsg::StreamError(StreamErrorEvent {
             message: message.into(),
         });
@@ -1643,8 +1710,7 @@ async fn spawn_review_thread(
     let mut review_features = config.features.clone();
     review_features
         .disable(crate::features::Feature::WebSearchRequest)
-        .disable(crate::features::Feature::ViewImageTool)
-        .disable(crate::features::Feature::StreamableShell);
+        .disable(crate::features::Feature::ViewImageTool);
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_family: &review_model_family,
         features: &review_features,
@@ -1753,7 +1819,6 @@ pub(crate) async fn run_task(
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    let mut auto_compact_recently_attempted = false;
 
     loop {
         // Note that pending_input would be something like a message the user
@@ -1808,26 +1873,11 @@ pub(crate) async fn run_task(
                 let (responses, items_to_record_in_conversation_history) =
                     process_items(processed_items, &sess, &turn_context).await;
 
+                // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached {
-                    if auto_compact_recently_attempted {
-                        let limit_str = limit.to_string();
-                        let current_tokens = total_usage_tokens
-                            .map(|tokens| tokens.to_string())
-                            .unwrap_or_else(|| "unknown".to_string());
-                        let event = EventMsg::Error(ErrorEvent {
-                            message: format!(
-                                "Conversation is still above the token limit after automatic summarization (limit {limit_str}, current {current_tokens}). Please start a new session or trim your input."
-                            ),
-                        });
-                        sess.send_event(&turn_context, event).await;
-                        break;
-                    }
-                    auto_compact_recently_attempted = true;
                     compact::run_inline_auto_compact_task(sess.clone(), turn_context.clone()).await;
                     continue;
                 }
-
-                auto_compact_recently_attempted = false;
 
                 if responses.is_empty() {
                     last_agent_message = get_last_assistant_message_from_turn(
@@ -1928,6 +1978,7 @@ async fn run_turn(
                 return Err(CodexErr::UsageLimitReached(e));
             }
             Err(CodexErr::UsageNotIncluded) => return Err(CodexErr::UsageNotIncluded),
+            Err(e @ CodexErr::QuotaExceeded) => return Err(e),
             Err(e @ CodexErr::RefreshTokenFailed(_)) => return Err(e),
             Err(e) => {
                 // Use the configured provider-specific stream retry budget.
@@ -2169,13 +2220,17 @@ async fn try_run_turn(
                     error_or_panic("ReasoningSummaryDelta without active item".to_string());
                 }
             }
-            ResponseEvent::ReasoningSummaryDelta(delta) => {
+            ResponseEvent::ReasoningSummaryDelta {
+                delta,
+                summary_index,
+            } => {
                 if let Some(active) = active_item.as_ref() {
                     let event = ReasoningContentDeltaEvent {
                         thread_id: sess.conversation_id.to_string(),
                         turn_id: turn_context.sub_id.clone(),
                         item_id: active.id(),
-                        delta: delta.clone(),
+                        delta,
+                        summary_index,
                     };
                     sess.send_event(&turn_context, EventMsg::ReasoningContentDelta(event))
                         .await;
@@ -2183,18 +2238,29 @@ async fn try_run_turn(
                     error_or_panic("ReasoningSummaryDelta without active item".to_string());
                 }
             }
-            ResponseEvent::ReasoningSummaryPartAdded => {
-                let event =
-                    EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {});
-                sess.send_event(&turn_context, event).await;
+            ResponseEvent::ReasoningSummaryPartAdded { summary_index } => {
+                if let Some(active) = active_item.as_ref() {
+                    let event =
+                        EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {
+                            item_id: active.id(),
+                            summary_index,
+                        });
+                    sess.send_event(&turn_context, event).await;
+                } else {
+                    error_or_panic("ReasoningSummaryPartAdded without active item".to_string());
+                }
             }
-            ResponseEvent::ReasoningContentDelta(delta) => {
+            ResponseEvent::ReasoningContentDelta {
+                delta,
+                content_index,
+            } => {
                 if let Some(active) = active_item.as_ref() {
                     let event = ReasoningRawContentDeltaEvent {
                         thread_id: sess.conversation_id.to_string(),
                         turn_id: turn_context.sub_id.clone(),
                         item_id: active.id(),
-                        delta: delta.clone(),
+                        delta,
+                        content_index,
                     };
                     sess.send_event(&turn_context, EventMsg::ReasoningRawContentDelta(event))
                         .await;
@@ -2320,6 +2386,7 @@ mod tests {
     use crate::tools::context::ToolOutput;
     use crate::tools::context::ToolPayload;
     use crate::tools::handlers::ShellHandler;
+    use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::registry::ToolHandler;
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_app_server_protocol::AuthMode;
@@ -3057,6 +3124,48 @@ mod tests {
 
         pretty_assertions::assert_eq!(exec_output.metadata, ResponseExecMetadata { exit_code: 0 });
         assert!(exec_output.output.contains("hi"));
+    }
+
+    #[tokio::test]
+    async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request() {
+        use crate::protocol::AskForApproval;
+        use crate::turn_diff_tracker::TurnDiffTracker;
+
+        let (session, mut turn_context_raw) = make_session_and_context();
+        turn_context_raw.approval_policy = AskForApproval::OnFailure;
+        let session = Arc::new(session);
+        let turn_context = Arc::new(turn_context_raw);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+
+        let handler = UnifiedExecHandler;
+        let resp = handler
+            .handle(ToolInvocation {
+                session: Arc::clone(&session),
+                turn: Arc::clone(&turn_context),
+                tracker: Arc::clone(&tracker),
+                call_id: "exec-call".to_string(),
+                tool_name: "exec_command".to_string(),
+                payload: ToolPayload::Function {
+                    arguments: serde_json::json!({
+                        "cmd": "echo hi",
+                        "with_escalated_permissions": true,
+                        "justification": "need unsandboxed execution",
+                    })
+                    .to_string(),
+                },
+            })
+            .await;
+
+        let Err(FunctionCallError::RespondToModel(output)) = resp else {
+            panic!("expected error result");
+        };
+
+        let expected = format!(
+            "approval policy is {policy:?}; reject command — you cannot ask for escalated permissions if the approval policy is {policy:?}",
+            policy = turn_context.approval_policy
+        );
+
+        pretty_assertions::assert_eq!(output, expected);
     }
 
     #[test]

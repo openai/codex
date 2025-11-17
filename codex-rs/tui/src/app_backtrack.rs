@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::app::App;
-use crate::history_cell::CompositeHistoryCell;
+use crate::history_cell::SessionInfoCell;
 use crate::history_cell::UserHistoryCell;
 use crate::pager_overlay::Overlay;
 use crate::tui;
@@ -394,13 +394,13 @@ fn nth_user_position(
 fn user_positions_iter(
     cells: &[Arc<dyn crate::history_cell::HistoryCell>],
 ) -> impl Iterator<Item = usize> + '_ {
-    let header_type = TypeId::of::<CompositeHistoryCell>();
+    let session_start_type = TypeId::of::<SessionInfoCell>();
     let user_type = TypeId::of::<UserHistoryCell>();
     let type_of = |cell: &Arc<dyn crate::history_cell::HistoryCell>| cell.as_any().type_id();
 
     let start = cells
         .iter()
-        .rposition(|cell| type_of(cell) == header_type)
+        .rposition(|cell| type_of(cell) == session_start_type)
         .map_or(0, |idx| idx + 1);
 
     cells

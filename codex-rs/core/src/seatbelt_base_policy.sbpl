@@ -49,6 +49,7 @@
   (sysctl-name "hw.packages")
   (sysctl-name "hw.pagesize_compat")
   (sysctl-name "hw.pagesize")
+  (sysctl-name "hw.physicalcpu")
   (sysctl-name "hw.physicalcpu_max")
   (sysctl-name "hw.tbfrequency_compat")
   (sysctl-name "hw.vectorunit")

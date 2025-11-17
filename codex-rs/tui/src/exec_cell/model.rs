@@ -1,6 +1,7 @@
 use std::time::Duration;
 use std::time::Instant;
 
+use codex_core::protocol::ExecCommandSource;
 use codex_protocol::parse_command::ParsedCommand;
 
 #[derive(Clone, Debug, Default)]
@@ -18,9 +19,10 @@ pub(crate) struct ExecCall {
     pub(crate) command: Vec<String>,
     pub(crate) parsed: Vec<ParsedCommand>,
     pub(crate) output: Option<CommandOutput>,
-    pub(crate) is_user_shell_command: bool,
+    pub(crate) source: ExecCommandSource,
     pub(crate) start_time: Option<Instant>,
     pub(crate) duration: Option<Duration>,
+    pub(crate) interaction_input: Option<String>,
 }
 
 #[derive(Debug)]
@@ -38,16 +40,18 @@ impl ExecCell {
         call_id: String,
         command: Vec<String>,
         parsed: Vec<ParsedCommand>,
-        is_user_shell_command: bool,
+        source: ExecCommandSource,
+        interaction_input: Option<String>,
     ) -> Option<Self> {
         let call = ExecCall {
             call_id,
             command,
             parsed,
             output: None,
-            is_user_shell_command,
+            source,
             start_time: Some(Instant::now()),
             duration: None,
+            interaction_input,
         };
         if self.is_exploring_cell() && Self::is_exploring_call(&call) {
             Some(Self {
@@ -122,5 +126,15 @@ impl ExecCell {
                         | ParsedCommand::Search { .. }
                 )
             })
+    }
+}
+
+impl ExecCall {
+    pub(crate) fn is_user_shell_command(&self) -> bool {
+        matches!(self.source, ExecCommandSource::UserShell)
+    }
+
+    pub(crate) fn is_unified_exec_interaction(&self) -> bool {
+        matches!(self.source, ExecCommandSource::UnifiedExecInteraction)
     }
 }

@@ -21,6 +21,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Print the version that would be used and exit before making changes.",
     )
+    parser.add_argument(
+        "--promote-alpha",
+        metavar="VERSION",
+        help="Promote an existing alpha tag (e.g., 0.56.0-alpha.5) by using its merge-base with main as the base commit.",
+    )
 
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
@@ -43,26 +48,43 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         args.publish_alpha
         or args.publish_release
         or args.emergency_version_override
+        or args.promote_alpha
     ):
         parser.error(
-            "Must specify --publish-alpha, --publish-release, or --emergency-version-override."
+            "Must specify --publish-alpha, --publish-release, --promote-alpha, or --emergency-version-override."
         )
     return args
 
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
+
+    # Strip the leading "v" if present.
+    promote_alpha = args.promote_alpha
+    if promote_alpha and promote_alpha.startswith("v"):
+        promote_alpha = promote_alpha[1:]
+
     try:
-        if args.emergency_version_override:
+        if promote_alpha:
+            version = derive_release_version_from_alpha(promote_alpha)
+        elif args.emergency_version_override:
             version = args.emergency_version_override
         else:
             version = determine_version(args)
         print(f"Publishing version {version}")
-        if args.dry_run:
+        if promote_alpha:
+            base_commit = get_promote_alpha_base_commit(promote_alpha)
+            if args.dry_run:
+                print(
+                    f"Would publish version {version} using base commit {base_commit} derived from rust-v{promote_alpha}."
+                )
+                return 0
+        elif args.dry_run:
             return 0
 
-        print("Fetching branch head...")
-        base_commit = get_branch_head()
+        if not promote_alpha:
+            print("Fetching branch head...")
+            base_commit = get_branch_head()
         print(f"Base commit: {base_commit}")
         print("Fetching commit tree...")
         base_tree = get_commit_tree(base_commit)
@@ -128,6 +150,39 @@ def get_branch_head() -> str:
         return response["object"]["sha"]
     except KeyError as error:
         raise ReleaseError("Unable to determine branch head.") from error
+
+
+def get_promote_alpha_base_commit(alpha_version: str) -> str:
+    tag_name = f"rust-v{alpha_version}"
+    tag_commit_sha = get_tag_commit_sha(tag_name)
+    return get_merge_base_with_main(tag_commit_sha)
+
+
+def get_tag_commit_sha(tag_name: str) -> str:
+    response = run_gh_api(f"/repos/{REPO}/git/refs/tags/{tag_name}")
+    try:
+        sha = response["object"]["sha"]
+        obj_type = response["object"]["type"]
+    except KeyError as error:
+        raise ReleaseError(f"Unable to resolve tag {tag_name}.") from error
+    while obj_type == "tag":
+        tag_response = run_gh_api(f"/repos/{REPO}/git/tags/{sha}")
+        try:
+            sha = tag_response["object"]["sha"]
+            obj_type = tag_response["object"]["type"]
+        except KeyError as error:
+            raise ReleaseError(f"Unable to resolve annotated tag {tag_name}.") from error
+    if obj_type != "commit":
+        raise ReleaseError(f"Tag {tag_name} does not reference a commit.")
+    return sha
+
+
+def get_merge_base_with_main(commit_sha: str) -> str:
+    response = run_gh_api(f"/repos/{REPO}/compare/main...{commit_sha}")
+    try:
+        return response["merge_base_commit"]["sha"]
+    except KeyError as error:
+        raise ReleaseError("Unable to determine merge base with main.") from error
 
 
 def get_commit_tree(commit_sha: str) -> str:
@@ -307,6 +362,13 @@ def parse_semver(version: str) -> tuple[int, int, int]:
 
 def format_version(major: int, minor: int, patch: int) -> str:
     return f"{major}.{minor}.{patch}"
+
+
+def derive_release_version_from_alpha(alpha_version: str) -> str:
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)-alpha\.(\d+)$", alpha_version)
+    if match is None:
+        raise ReleaseError(f"Unexpected alpha version format: {alpha_version}")
+    return f"{match.group(1)}.{match.group(2)}.{match.group(3)}"
 
 
 if __name__ == "__main__":

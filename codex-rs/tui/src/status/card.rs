@@ -33,6 +33,7 @@ use super::rate_limits::format_status_limit_summary;
 use super::rate_limits::render_status_limit_progress_bar;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_lines;
+use codex_core::AuthManager;
 
 #[derive(Debug, Clone)]
 struct StatusContextWindowData {
@@ -65,6 +66,7 @@ struct StatusHistoryCell {
 
 pub(crate) fn new_status_output(
     config: &Config,
+    auth_manager: &AuthManager,
     total_usage: &TokenUsage,
     context_usage: Option<&TokenUsage>,
     session_id: &Option<ConversationId>,
@@ -74,6 +76,7 @@ pub(crate) fn new_status_output(
     let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
     let card = StatusHistoryCell::new(
         config,
+        auth_manager,
         total_usage,
         context_usage,
         session_id,
@@ -87,6 +90,7 @@ pub(crate) fn new_status_output(
 impl StatusHistoryCell {
     fn new(
         config: &Config,
+        auth_manager: &AuthManager,
         total_usage: &TokenUsage,
         context_usage: Option<&TokenUsage>,
         session_id: &Option<ConversationId>,
@@ -106,7 +110,7 @@ impl StatusHistoryCell {
             SandboxPolicy::WorkspaceWrite { .. } => "workspace-write".to_string(),
         };
         let agents_summary = compose_agents_summary(config);
-        let account = compose_account_display(config);
+        let account = compose_account_display(auth_manager);
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
         let context_window = config.model_context_window.and_then(|window| {
             context_usage.map(|usage| StatusContextWindowData {
@@ -211,10 +215,11 @@ impl StatusHistoryCell {
         let mut lines = Vec::with_capacity(rows.len().saturating_mul(2));
 
         for row in rows {
+            let percent_remaining = (100.0 - row.percent_used).clamp(0.0, 100.0);
             let value_spans = vec![
-                Span::from(render_status_limit_progress_bar(row.percent_used)),
+                Span::from(render_status_limit_progress_bar(percent_remaining)),
                 Span::from(" "),
-                Span::from(format_status_limit_summary(row.percent_used)),
+                Span::from(format_status_limit_summary(percent_remaining)),
             ];
             let base_spans = formatter.full_spans(row.label.as_str(), value_spans);
             let base_line = Line::from(base_spans.clone());

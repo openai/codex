@@ -248,6 +248,16 @@ impl TextArea {
                 self.delete_backward_word()
             },
             KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers,
+                ..
+            } if modifiers.contains(KeyModifiers::ALT)
+                && modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                // AltGr on many keyboards reports as Ctrl+Alt; treat it as a literal char.
+                self.insert_str(&c.to_string());
+            },
+            KeyEvent {
                 code: KeyCode::Backspace,
                 modifiers: KeyModifiers::ALT,
                 ..
@@ -1452,6 +1462,17 @@ mod tests {
         t.input(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
         assert_eq!(t.text(), "124");
         assert_eq!(t.cursor(), 3);
+    }
+
+    #[test]
+    fn altgr_ctrl_alt_char_inserts_literal() {
+        let mut t = ta_with("");
+        t.input(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        ));
+        assert_eq!(t.text(), "c");
+        assert_eq!(t.cursor(), 1);
     }
 
     #[test]

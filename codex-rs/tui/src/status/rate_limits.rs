@@ -124,8 +124,8 @@ pub(crate) fn compose_rate_limit_data(
     }
 }
 
-pub(crate) fn render_status_limit_progress_bar(percent_used: f64) -> String {
-    let ratio = (percent_used / 100.0).clamp(0.0, 1.0);
+pub(crate) fn render_status_limit_progress_bar(percent_remaining: f64) -> String {
+    let ratio = (percent_remaining / 100.0).clamp(0.0, 1.0);
     let filled = (ratio * STATUS_LIMIT_BAR_SEGMENTS as f64).round() as usize;
     let filled = filled.min(STATUS_LIMIT_BAR_SEGMENTS);
     let empty = STATUS_LIMIT_BAR_SEGMENTS.saturating_sub(filled);
@@ -136,8 +136,8 @@ pub(crate) fn render_status_limit_progress_bar(percent_used: f64) -> String {
     )
 }
 
-pub(crate) fn format_status_limit_summary(percent_used: f64) -> String {
-    format!("{percent_used:.0}% used")
+pub(crate) fn format_status_limit_summary(percent_remaining: f64) -> String {
+    format!("{percent_remaining:.0}% left")
 }
 
 fn capitalize_first(label: &str) -> String {

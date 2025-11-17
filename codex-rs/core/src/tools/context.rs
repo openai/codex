@@ -4,17 +4,13 @@ use crate::tools::TELEMETRY_PREVIEW_MAX_BYTES;
 use crate::tools::TELEMETRY_PREVIEW_MAX_LINES;
 use crate::tools::TELEMETRY_PREVIEW_TRUNCATION_NOTICE;
 use crate::turn_diff_tracker::TurnDiffTracker;
-use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ShellToolCallParams;
-use codex_protocol::protocol::FileChange;
 use codex_utils_string::take_bytes_at_char_boundary;
 use mcp_types::CallToolResult;
 use std::borrow::Cow;
-use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -243,26 +239,4 @@ mod tests {
         assert!(lines.len() <= TELEMETRY_PREVIEW_MAX_LINES + 1);
         assert_eq!(lines.last(), Some(&TELEMETRY_PREVIEW_TRUNCATION_NOTICE));
     }
-}
-
-#[derive(Clone, Debug)]
-#[allow(dead_code)]
-pub(crate) struct ExecCommandContext {
-    pub(crate) turn: Arc<TurnContext>,
-    pub(crate) call_id: String,
-    pub(crate) command_for_display: Vec<String>,
-    pub(crate) cwd: PathBuf,
-    pub(crate) apply_patch: Option<ApplyPatchCommandContext>,
-    pub(crate) tool_name: String,
-    pub(crate) otel_event_manager: OtelEventManager,
-    // TODO(abhisek-oai): Find a better way to track this.
-    // https://github.com/openai/codex/pull/2471/files#r2470352242
-    pub(crate) is_user_shell_command: bool,
-}
-
-#[derive(Clone, Debug)]
-#[allow(dead_code)]
-pub(crate) struct ApplyPatchCommandContext {
-    pub(crate) user_explicitly_approved_this_action: bool,
-    pub(crate) changes: HashMap<PathBuf, FileChange>,
 }

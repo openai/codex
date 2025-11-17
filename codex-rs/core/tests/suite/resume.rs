@@ -6,14 +6,13 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_reasoning_item;
 use core_test_support::responses::ev_response_created;
-use core_test_support::responses::mount_sse_once_match;
+use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use std::sync::Arc;
-use wiremock::matchers::any;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resume_includes_initial_messages_from_rollout_events() -> Result<()> {
@@ -31,7 +30,7 @@ async fn resume_includes_initial_messages_from_rollout_events() -> Result<()> {
         ev_assistant_message("msg-1", "Completed first turn"),
         ev_completed("resp-initial"),
     ]);
-    mount_sse_once_match(&server, any(), initial_sse).await;
+    mount_sse_once(&server, initial_sse).await;
 
     codex
         .submit(Op::UserInput {
@@ -83,7 +82,7 @@ async fn resume_includes_initial_messages_from_reasoning_events() -> Result<()> 
         ev_assistant_message("msg-1", "Completed reasoning turn"),
         ev_completed("resp-initial"),
     ]);
-    mount_sse_once_match(&server, any(), initial_sse).await;
+    mount_sse_once(&server, initial_sse).await;
 
     codex
         .submit(Op::UserInput {

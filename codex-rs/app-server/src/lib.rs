@@ -28,6 +28,7 @@ use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
+mod bespoke_event_handling;
 mod codex_message_processor;
 mod error_code;
 mod fuzzy_file_search;

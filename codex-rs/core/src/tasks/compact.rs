@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
 use crate::codex::TurnContext;
-use crate::codex::compact;
+use crate::compact;
 use crate::state::TaskKind;
 use codex_protocol::user_input::UserInput;
 

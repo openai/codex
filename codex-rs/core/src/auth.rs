@@ -26,10 +26,12 @@ use crate::config::Config;
 use crate::default_client::CodexHttpClient;
 use crate::error::RefreshTokenFailedError;
 use crate::error::RefreshTokenFailedReason;
-use crate::token_data::PlanType;
+use crate::token_data::KnownPlan as InternalKnownPlan;
+use crate::token_data::PlanType as InternalPlanType;
 use crate::token_data::TokenData;
 use crate::token_data::parse_id_token;
 use crate::util::try_parse_error_message;
+use codex_protocol::account::PlanType as AccountPlanType;
 use serde_json::Value;
 use thiserror::Error;
 
@@ -202,7 +204,42 @@ impl CodexAuth {
         self.get_current_token_data().and_then(|t| t.id_token.email)
     }
 
-    pub(crate) fn get_plan_type(&self) -> Option<PlanType> {
+    /// Account-facing plan classification derived from the current token.
+    /// Returns a high-level `AccountPlanType` (e.g., Free/Plus/Pro/Team/…)
+    /// mapped from the ID token's internal plan value. Prefer this when you
+    /// need to make UI or product decisions based on the user's subscription.
+    pub fn account_plan_type(&self) -> Option<AccountPlanType> {
+        let map_known = |kp: &InternalKnownPlan| match kp {
+            InternalKnownPlan::Free => AccountPlanType::Free,
+            InternalKnownPlan::Plus => AccountPlanType::Plus,
+            InternalKnownPlan::Pro => AccountPlanType::Pro,
+            InternalKnownPlan::Team => AccountPlanType::Team,
+            InternalKnownPlan::Business => AccountPlanType::Business,
+            InternalKnownPlan::Enterprise => AccountPlanType::Enterprise,
+            InternalKnownPlan::Edu => AccountPlanType::Edu,
+        };
+
+        self.get_current_token_data()
+            .and_then(|t| t.id_token.chatgpt_plan_type)
+            .map(|pt| match pt {
+                InternalPlanType::Known(k) => map_known(&k),
+                InternalPlanType::Unknown(_) => AccountPlanType::Unknown,
+            })
+    }
+
+    /// Raw plan string from the ID token (including unknown/new plan types).
+    pub fn raw_plan_type(&self) -> Option<String> {
+        self.get_plan_type().map(|plan| match plan {
+            InternalPlanType::Known(k) => format!("{k:?}"),
+            InternalPlanType::Unknown(raw) => raw,
+        })
+    }
+
+    /// Raw internal plan value from the ID token.
+    /// Exposes the underlying `token_data::PlanType` without mapping it to the
+    /// public `AccountPlanType`. Use this when downstream code needs to inspect
+    /// internal/unknown plan strings exactly as issued in the token.
+    pub(crate) fn get_plan_type(&self) -> Option<InternalPlanType> {
         self.get_current_token_data()
             .and_then(|t| t.id_token.chatgpt_plan_type)
     }
@@ -306,7 +343,10 @@ pub fn save_auth(
 }
 
 /// Load CLI auth data using the configured credential store backend.
-/// Returns `None` when no credentials are stored.
+/// Returns `None` when no credentials are stored. This function is
+/// provided only for tests. Production code should not directly load
+/// from the auth.json storage. It should use the AuthManager abstraction
+/// instead.
 pub fn load_auth_dot_json(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
@@ -609,8 +649,9 @@ mod tests {
     use crate::config::ConfigOverrides;
     use crate::config::ConfigToml;
     use crate::token_data::IdTokenInfo;
-    use crate::token_data::KnownPlan;
-    use crate::token_data::PlanType;
+    use crate::token_data::KnownPlan as InternalKnownPlan;
+    use crate::token_data::PlanType as InternalPlanType;
+    use codex_protocol::account::PlanType as AccountPlanType;
 
     use base64::Engine;
     use codex_protocol::config_types::ForcedLoginMethod;
@@ -727,7 +768,7 @@ mod tests {
                 tokens: Some(TokenData {
                     id_token: IdTokenInfo {
                         email: Some("user@example.com".to_string()),
-                        chatgpt_plan_type: Some(PlanType::Known(KnownPlan::Pro)),
+                        chatgpt_plan_type: Some(InternalPlanType::Known(InternalKnownPlan::Pro)),
                         chatgpt_account_id: None,
                         raw_jwt: fake_jwt,
                     },
@@ -979,6 +1020,54 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("ChatGPT login is required, but an API key is currently being used.")
+        );
+    }
+
+    #[test]
+    fn plan_type_maps_known_plan() {
+        let codex_home = tempdir().unwrap();
+        let _jwt = write_auth_file(
+            AuthFileParams {
+                openai_api_key: None,
+                chatgpt_plan_type: "pro".to_string(),
+                chatgpt_account_id: None,
+            },
+            codex_home.path(),
+        )
+        .expect("failed to write auth file");
+
+        let auth = super::load_auth(codex_home.path(), false, AuthCredentialsStoreMode::File)
+            .expect("load auth")
+            .expect("auth available");
+
+        pretty_assertions::assert_eq!(auth.account_plan_type(), Some(AccountPlanType::Pro));
+        pretty_assertions::assert_eq!(
+            auth.get_plan_type(),
+            Some(InternalPlanType::Known(InternalKnownPlan::Pro))
+        );
+    }
+
+    #[test]
+    fn plan_type_maps_unknown_to_unknown() {
+        let codex_home = tempdir().unwrap();
+        let _jwt = write_auth_file(
+            AuthFileParams {
+                openai_api_key: None,
+                chatgpt_plan_type: "mystery-tier".to_string(),
+                chatgpt_account_id: None,
+            },
+            codex_home.path(),
+        )
+        .expect("failed to write auth file");
+
+        let auth = super::load_auth(codex_home.path(), false, AuthCredentialsStoreMode::File)
+            .expect("load auth")
+            .expect("auth available");
+
+        pretty_assertions::assert_eq!(auth.account_plan_type(), Some(AccountPlanType::Unknown));
+        pretty_assertions::assert_eq!(
+            auth.get_plan_type(),
+            Some(InternalPlanType::Unknown("mystery-tier".to_string()))
         );
     }
 }

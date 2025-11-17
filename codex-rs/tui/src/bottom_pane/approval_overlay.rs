@@ -117,7 +117,9 @@ impl ApprovalOverlay {
             .iter()
             .map(|opt| SelectionItem {
                 name: opt.label.clone(),
-                display_shortcut: opt.display_shortcut,
+                display_shortcut: opt
+                    .display_shortcut
+                    .or_else(|| opt.additional_shortcuts.first().copied()),
                 dismiss_on_select: false,
                 ..Default::default()
             })

@@ -1,3 +1,4 @@
+use crate::bash::extract_bash_command;
 use crate::bash::try_parse_shell;
 use crate::bash::try_parse_word_only_commands_sequence;
 use codex_protocol::parse_command::ParsedCommand;
@@ -853,6 +854,29 @@ mod tests {
             }],
         );
     }
+
+    #[test]
+    fn bin_bash_lc_sed() {
+        assert_parsed(
+            &shlex_split_safe("/bin/bash -lc 'sed -n '1,10p' Cargo.toml'"),
+            vec![ParsedCommand::Read {
+                cmd: "sed -n '1,10p' Cargo.toml".to_string(),
+                name: "Cargo.toml".to_string(),
+                path: PathBuf::from("Cargo.toml"),
+            }],
+        );
+    }
+    #[test]
+    fn bin_zsh_lc_sed() {
+        assert_parsed(
+            &shlex_split_safe("/bin/zsh -lc 'sed -n '1,10p' Cargo.toml'"),
+            vec![ParsedCommand::Read {
+                cmd: "sed -n '1,10p' Cargo.toml".to_string(),
+                name: "Cargo.toml".to_string(),
+                path: PathBuf::from("Cargo.toml"),
+            }],
+        );
+    }
 }
 
 pub fn parse_command_impl(command: &[String]) -> Vec<ParsedCommand> {
@@ -1166,18 +1190,13 @@ fn parse_find_query_and_path(tail: &[String]) -> (Option<String>, Option<String>
 }
 
 fn parse_shell_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
-    let [shell, flag, script] = original else {
-        return None;
-    };
-    if flag != "-lc" || !(shell == "bash" || shell == "zsh") {
-        return None;
-    }
+    let (_, script) = extract_bash_command(original)?;
+
     if let Some(tree) = try_parse_shell(script)
         && let Some(all_commands) = try_parse_word_only_commands_sequence(&tree, script)
         && !all_commands.is_empty()
     {
-        let script_tokens = shlex_split(script)
-            .unwrap_or_else(|| vec![shell.clone(), flag.clone(), script.clone()]);
+        let script_tokens = shlex_split(script).unwrap_or_else(|| vec![script.to_string()]);
         // Strip small formatting helpers (e.g., head/tail/awk/wc/etc) so we
         // bias toward the primary command when pipelines are present.
         // First, drop obvious small formatting helpers (e.g., wc/awk/etc).
@@ -1186,7 +1205,7 @@ fn parse_shell_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
         let filtered_commands = drop_small_formatting_commands(all_commands);
         if filtered_commands.is_empty() {
             return Some(vec![ParsedCommand::Unknown {
-                cmd: script.clone(),
+                cmd: script.to_string(),
             }]);
         }
         // Build parsed commands, tracking `cd` segments to compute effective file paths.
@@ -1250,7 +1269,7 @@ fn parse_shell_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
                             });
                             if has_pipe && has_sed_n {
                                 ParsedCommand::Read {
-                                    cmd: script.clone(),
+                                    cmd: script.to_string(),
                                     name,
                                     path,
                                 }
@@ -1295,7 +1314,7 @@ fn parse_shell_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
         return Some(commands);
     }
     Some(vec![ParsedCommand::Unknown {
-        cmd: script.clone(),
+        cmd: script.to_string(),
     }])
 }
 

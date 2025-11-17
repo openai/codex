@@ -46,7 +46,7 @@ macro_rules! client_request_definitions {
     (
         $(
             $(#[$variant_meta:meta])*
-            $variant:ident {
+            $variant:ident $(=> $wire:literal)? {
                 params: $(#[$params_meta:meta])* $params:ty,
                 response: $response:ty,
             }
@@ -58,6 +58,7 @@ macro_rules! client_request_definitions {
         pub enum ClientRequest {
             $(
                 $(#[$variant_meta])*
+                $(#[serde(rename = $wire)] #[ts(rename = $wire)])?
                 $variant {
                     #[serde(rename = "id")]
                     request_id: RequestId,
@@ -101,105 +102,78 @@ macro_rules! client_request_definitions {
 }
 
 client_request_definitions! {
-    /// NEW APIs
-    // Thread lifecycle
-    #[serde(rename = "thread/start")]
-    #[ts(rename = "thread/start")]
-    ThreadStart {
-        params: v2::ThreadStartParams,
-        response: v2::ThreadStartResponse,
-    },
-    #[serde(rename = "thread/resume")]
-    #[ts(rename = "thread/resume")]
-    ThreadResume {
-        params: v2::ThreadResumeParams,
-        response: v2::ThreadResumeResponse,
-    },
-    #[serde(rename = "thread/archive")]
-    #[ts(rename = "thread/archive")]
-    ThreadArchive {
-        params: v2::ThreadArchiveParams,
-        response: v2::ThreadArchiveResponse,
-    },
-    #[serde(rename = "thread/list")]
-    #[ts(rename = "thread/list")]
-    ThreadList {
-        params: v2::ThreadListParams,
-        response: v2::ThreadListResponse,
-    },
-    #[serde(rename = "thread/compact")]
-    #[ts(rename = "thread/compact")]
-    ThreadCompact {
-        params: v2::ThreadCompactParams,
-        response: v2::ThreadCompactResponse,
-    },
-    #[serde(rename = "turn/start")]
-    #[ts(rename = "turn/start")]
-    TurnStart {
-        params: v2::TurnStartParams,
-        response: v2::TurnStartResponse,
-    },
-    #[serde(rename = "turn/interrupt")]
-    #[ts(rename = "turn/interrupt")]
-    TurnInterrupt {
-        params: v2::TurnInterruptParams,
-        response: v2::TurnInterruptResponse,
-    },
-
-    #[serde(rename = "model/list")]
-    #[ts(rename = "model/list")]
-    ModelList {
-        params: v2::ModelListParams,
-        response: v2::ModelListResponse,
-    },
-
-    #[serde(rename = "account/login/start")]
-    #[ts(rename = "account/login/start")]
-    LoginAccount {
-        params: v2::LoginAccountParams,
-        response: v2::LoginAccountResponse,
-    },
-
-    #[serde(rename = "account/login/cancel")]
-    #[ts(rename = "account/login/cancel")]
-    CancelLoginAccount {
-        params: v2::CancelLoginAccountParams,
-        response: v2::CancelLoginAccountResponse,
-    },
-
-    #[serde(rename = "account/logout")]
-    #[ts(rename = "account/logout")]
-    LogoutAccount {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
-        response: v2::LogoutAccountResponse,
-    },
-
-    #[serde(rename = "account/rateLimits/read")]
-    #[ts(rename = "account/rateLimits/read")]
-    GetAccountRateLimits {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
-        response: v2::GetAccountRateLimitsResponse,
-    },
-
-    #[serde(rename = "feedback/upload")]
-    #[ts(rename = "feedback/upload")]
-    FeedbackUpload {
-        params: v2::FeedbackUploadParams,
-        response: v2::FeedbackUploadResponse,
-    },
-
-    #[serde(rename = "account/read")]
-    #[ts(rename = "account/read")]
-    GetAccount {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
-        response: v2::GetAccountResponse,
-    },
-
-    /// DEPRECATED APIs below
     Initialize {
         params: v1::InitializeParams,
         response: v1::InitializeResponse,
     },
+
+    /// NEW APIs
+    // Thread lifecycle
+    ThreadStart => "thread/start" {
+        params: v2::ThreadStartParams,
+        response: v2::ThreadStartResponse,
+    },
+    ThreadResume => "thread/resume" {
+        params: v2::ThreadResumeParams,
+        response: v2::ThreadResumeResponse,
+    },
+    ThreadArchive => "thread/archive" {
+        params: v2::ThreadArchiveParams,
+        response: v2::ThreadArchiveResponse,
+    },
+    ThreadList => "thread/list" {
+        params: v2::ThreadListParams,
+        response: v2::ThreadListResponse,
+    },
+    ThreadCompact => "thread/compact" {
+        params: v2::ThreadCompactParams,
+        response: v2::ThreadCompactResponse,
+    },
+    TurnStart => "turn/start" {
+        params: v2::TurnStartParams,
+        response: v2::TurnStartResponse,
+    },
+    TurnInterrupt => "turn/interrupt" {
+        params: v2::TurnInterruptParams,
+        response: v2::TurnInterruptResponse,
+    },
+
+    ModelList => "model/list" {
+        params: v2::ModelListParams,
+        response: v2::ModelListResponse,
+    },
+
+    LoginAccount => "account/login/start" {
+        params: v2::LoginAccountParams,
+        response: v2::LoginAccountResponse,
+    },
+
+    CancelLoginAccount => "account/login/cancel" {
+        params: v2::CancelLoginAccountParams,
+        response: v2::CancelLoginAccountResponse,
+    },
+
+    LogoutAccount => "account/logout" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: v2::LogoutAccountResponse,
+    },
+
+    GetAccountRateLimits => "account/rateLimits/read" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: v2::GetAccountRateLimitsResponse,
+    },
+
+    FeedbackUpload => "feedback/upload" {
+        params: v2::FeedbackUploadParams,
+        response: v2::FeedbackUploadResponse,
+    },
+
+    GetAccount => "account/read" {
+        params: v2::GetAccountParams,
+        response: v2::GetAccountResponse,
+    },
+
+    /// DEPRECATED APIs below
     NewConversation {
         params: v1::NewConversationParams,
         response: v1::NewConversationResponse,
@@ -263,6 +237,7 @@ client_request_definitions! {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         response: v1::LogoutChatGptResponse,
     },
+    /// DEPRECATED in favor of GetAccount
     GetAuthStatus {
         params: v1::GetAuthStatusParams,
         response: v1::GetAuthStatusResponse,
@@ -533,6 +508,9 @@ server_notification_definitions! {
     McpToolCallProgress => "item/mcpToolCall/progress" (v2::McpToolCallProgressNotification),
     AccountUpdated => "account/updated" (v2::AccountUpdatedNotification),
     AccountRateLimitsUpdated => "account/rateLimits/updated" (v2::AccountRateLimitsUpdatedNotification),
+    ReasoningSummaryTextDelta => "item/reasoning/summaryTextDelta" (v2::ReasoningSummaryTextDeltaNotification),
+    ReasoningSummaryPartAdded => "item/reasoning/summaryPartAdded" (v2::ReasoningSummaryPartAddedNotification),
+    ReasoningTextDelta => "item/reasoning/textDelta" (v2::ReasoningTextDeltaNotification),
 
     #[serde(rename = "account/login/completed")]
     #[ts(rename = "account/login/completed")]
@@ -758,12 +736,17 @@ mod tests {
     fn serialize_get_account() -> Result<()> {
         let request = ClientRequest::GetAccount {
             request_id: RequestId::Integer(5),
-            params: None,
+            params: v2::GetAccountParams {
+                refresh_token: false,
+            },
         };
         assert_eq!(
             json!({
                 "method": "account/read",
                 "id": 5,
+                "params": {
+                    "refreshToken": false
+                }
             }),
             serde_json::to_value(&request)?,
         );
@@ -772,19 +755,16 @@ mod tests {
 
     #[test]
     fn account_serializes_fields_in_camel_case() -> Result<()> {
-        let api_key = v2::Account::ApiKey {
-            api_key: "secret".to_string(),
-        };
+        let api_key = v2::Account::ApiKey {};
         assert_eq!(
             json!({
                 "type": "apiKey",
-                "apiKey": "secret",
             }),
             serde_json::to_value(&api_key)?,
         );
 
         let chatgpt = v2::Account::Chatgpt {
-            email: Some("user@example.com".to_string()),
+            email: "user@example.com".to_string(),
             plan_type: PlanType::Plus,
         };
         assert_eq!(

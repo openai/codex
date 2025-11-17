@@ -11,7 +11,7 @@ expression: terminal.backend().vt100().screen().contents()
     1 +hello
     2 +world
 
-› 1. Yes, proceed
-  2. No, and tell Codex what to do differently esc
+› 1. Yes, proceed (y)
+  2. No, and tell Codex what to do differently (esc)
 
   Press enter to confirm or esc to cancel

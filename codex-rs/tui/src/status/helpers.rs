@@ -2,7 +2,8 @@ use crate::exec_command::relativize_to_home;
 use crate::text_formatting;
 use chrono::DateTime;
 use chrono::Local;
-use codex_core::auth::load_auth_dot_json;
+use codex_app_server_protocol::AuthMode;
+use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::project_doc::discover_project_doc_paths;
 use std::path::Path;
@@ -82,24 +83,17 @@ pub(crate) fn compose_agents_summary(config: &Config) -> String {
     }
 }
 
-pub(crate) fn compose_account_display(config: &Config) -> Option<StatusAccountDisplay> {
-    let auth =
-        load_auth_dot_json(&config.codex_home, config.cli_auth_credentials_store_mode).ok()??;
+pub(crate) fn compose_account_display(auth_manager: &AuthManager) -> Option<StatusAccountDisplay> {
+    let auth = auth_manager.auth()?;
 
-    if let Some(tokens) = auth.tokens.as_ref() {
-        let info = &tokens.id_token;
-        let email = info.email.clone();
-        let plan = info.get_chatgpt_plan_type().as_deref().map(title_case);
-        return Some(StatusAccountDisplay::ChatGpt { email, plan });
+    match auth.mode {
+        AuthMode::ChatGPT => {
+            let email = auth.get_account_email();
+            let plan = auth.raw_plan_type().map(|plan| title_case(plan.as_str()));
+            Some(StatusAccountDisplay::ChatGpt { email, plan })
+        }
+        AuthMode::ApiKey => Some(StatusAccountDisplay::ApiKey),
     }
-
-    if let Some(key) = auth.openai_api_key
-        && !key.is_empty()
-    {
-        return Some(StatusAccountDisplay::ApiKey);
-    }
-
-    None
 }
 
 pub(crate) fn format_tokens_compact(value: i64) -> String {

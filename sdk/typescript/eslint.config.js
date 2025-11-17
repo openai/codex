@@ -10,5 +10,12 @@ export default defineConfig(eslint.configs.recommended, tseslint.configs.recomme
 
   rules: {
     "node-import/prefer-node-protocol": 2,
+    "@typescript-eslint/no-unused-vars": [
+      "error",
+      {
+        argsIgnorePattern: "^_",
+        varsIgnorePattern: "^_",
+      },
+    ],
   },
 });
