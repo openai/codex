@@ -467,6 +467,7 @@ pub fn token_limited_error_message(e: &CodexErr, model: Option<&str>) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::OPENAI_DEFAULT_MODEL;
     use crate::exec::StreamOutput;
     use chrono::DateTime;
     use chrono::Duration as ChronoDuration;
