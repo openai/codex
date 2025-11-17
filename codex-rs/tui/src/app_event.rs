@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
+use codex_backend_client::RateLimitStatus;
 use codex_common::approval_presets::ApprovalPreset;
 use codex_common::model_presets::ModelPreset;
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::Event;
-use codex_core::protocol::RateLimitSnapshot;
 use codex_file_search::FileMatch;
 
 use crate::bottom_pane::ApprovalRequest;
@@ -43,7 +43,7 @@ pub(crate) enum AppEvent {
     },
 
     /// Result of refreshing rate limits
-    RateLimitSnapshotFetched(RateLimitSnapshot),
+    RateLimitSnapshotFetched(RateLimitStatus),
 
     /// Result of computing a `/diff` command.
     DiffResult(String),

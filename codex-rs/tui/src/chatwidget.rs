@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use codex_app_server_protocol::AuthMode;
 use codex_backend_client::Client as BackendClient;
+use codex_backend_client::RateLimitStatus;
 use codex_core::config::Config;
 use codex_core::config::types::Notifications;
 use codex_core::git_info::current_branch_name;
@@ -261,6 +262,7 @@ pub(crate) struct ChatWidget {
     rate_limit_warnings: RateLimitWarningState,
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
     rate_limit_poller: Option<JoinHandle<()>>,
+    last_plan_refresh_attempt: Option<String>,
     // Stream lifecycle controller
     stream_controller: Option<StreamController>,
     running_commands: HashMap<String, RunningCommand>,
@@ -552,6 +554,51 @@ impl ChatWidget {
         } else {
             self.rate_limit_snapshot = None;
         }
+    }
+
+    pub(crate) fn reconcile_plan_type_from_usage(&mut self, backend_plan: String) {
+        let trimmed = backend_plan.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+
+        let plan_lower = trimmed.to_ascii_lowercase();
+        let Some(auth) = self.auth_manager.auth() else {
+            self.last_plan_refresh_attempt = None;
+            return;
+        };
+        if auth.mode != AuthMode::ChatGPT {
+            self.last_plan_refresh_attempt = None;
+            return;
+        }
+
+        let current_plan = auth
+            .raw_plan_type()
+            .map(|plan| plan.to_ascii_lowercase());
+
+        if current_plan
+            .as_deref()
+            .is_some_and(|plan| plan == plan_lower)
+        {
+            self.last_plan_refresh_attempt = None;
+            return;
+        }
+
+        if self
+            .last_plan_refresh_attempt
+            .as_deref()
+            .is_some_and(|attempt| attempt == plan_lower)
+        {
+            return;
+        }
+
+        self.last_plan_refresh_attempt = Some(plan_lower);
+        let auth_manager = self.auth_manager.clone();
+        tokio::spawn(async move {
+            if let Err(err) = auth_manager.refresh_token().await {
+                debug!(?err, "failed to refresh auth after plan mismatch");
+            }
+        });
     }
     /// Finalize any active exec as failed and stop/clear running UI state.
     fn finalize_turn(&mut self) {
@@ -1065,6 +1112,7 @@ impl ChatWidget {
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             rate_limit_poller: None,
+            last_plan_refresh_attempt: None,
             stream_controller: None,
             running_commands: HashMap::new(),
             task_complete_pending: false,
@@ -1137,6 +1185,7 @@ impl ChatWidget {
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             rate_limit_poller: None,
+            last_plan_refresh_attempt: None,
             stream_controller: None,
             running_commands: HashMap::new(),
             task_complete_pending: false,
@@ -1776,8 +1825,8 @@ impl ChatWidget {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
 
             loop {
-                if let Some(snapshot) = fetch_rate_limits(base_url.clone(), auth.clone()).await {
-                    app_event_tx.send(AppEvent::RateLimitSnapshotFetched(snapshot));
+                if let Some(status) = fetch_rate_limits(base_url.clone(), auth.clone()).await {
+                    app_event_tx.send(AppEvent::RateLimitSnapshotFetched(status));
                 }
                 interval.tick().await;
             }
@@ -2946,7 +2995,7 @@ fn extract_first_bold(s: &str) -> Option<String> {
     None
 }
 
-async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Option<RateLimitSnapshot> {
+async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Option<RateLimitStatus> {
     match BackendClient::from_auth(base_url, &auth).await {
         Ok(client) => match client.get_rate_limits().await {
             Ok(snapshot) => Some(snapshot),

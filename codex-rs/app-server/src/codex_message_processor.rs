@@ -967,6 +967,7 @@ impl CodexMessageProcessor {
         client
             .get_rate_limits()
             .await
+            .map(|status| status.snapshot)
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
                 message: format!("failed to fetch codex rate limits: {err}"),

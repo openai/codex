@@ -1,5 +1,6 @@
 use crate::types::CodeTaskDetailsResponse;
 use crate::types::PaginatedListTaskListItem;
+use crate::types::PlanType;
 use crate::types::RateLimitStatusPayload;
 use crate::types::RateLimitWindowSnapshot;
 use crate::types::TurnAttemptsSiblingTurnsResponse;
@@ -42,6 +43,12 @@ pub struct Client {
     user_agent: Option<HeaderValue>,
     chatgpt_account_id: Option<String>,
     path_style: PathStyle,
+}
+
+#[derive(Clone, Debug)]
+pub struct RateLimitStatus {
+    pub plan_type: String,
+    pub snapshot: RateLimitSnapshot,
 }
 
 impl Client {
@@ -155,7 +162,7 @@ impl Client {
         }
     }
 
-    pub async fn get_rate_limits(&self) -> Result<RateLimitSnapshot> {
+    pub async fn get_rate_limits(&self) -> Result<RateLimitStatus> {
         let url = match self.path_style {
             PathStyle::CodexApi => format!("{}/api/codex/usage", self.base_url),
             PathStyle::ChatGptApi => format!("{}/wham/usage", self.base_url),
@@ -163,7 +170,9 @@ impl Client {
         let req = self.http.get(&url).headers(self.headers());
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         let payload: RateLimitStatusPayload = self.decode_json(&url, &ct, &body)?;
-        Ok(Self::rate_limit_snapshot_from_payload(payload))
+        let plan_type = Self::plan_type_to_string(payload.plan_type);
+        let snapshot = Self::rate_limit_snapshot_from_payload(payload);
+        Ok(RateLimitStatus { plan_type, snapshot })
     }
 
     pub async fn list_tasks(
@@ -286,6 +295,22 @@ impl Client {
             primary: Self::map_rate_limit_window(details.primary_window),
             secondary: Self::map_rate_limit_window(details.secondary_window),
         }
+    }
+
+    fn plan_type_to_string(plan_type: PlanType) -> String {
+        match plan_type {
+            PlanType::Free => "free",
+            PlanType::Go => "go",
+            PlanType::Plus => "plus",
+            PlanType::Pro => "pro",
+            PlanType::Team => "team",
+            PlanType::Business => "business",
+            PlanType::Education => "education",
+            PlanType::Quorum => "quorum",
+            PlanType::Enterprise => "enterprise",
+            PlanType::Edu => "edu",
+        }
+        .to_string()
     }
 
     fn map_rate_limit_window(

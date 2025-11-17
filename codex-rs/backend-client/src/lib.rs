@@ -2,6 +2,7 @@ mod client;
 pub mod types;
 
 pub use client::Client;
+pub use client::RateLimitStatus;
 pub use types::CodeTaskDetailsResponse;
 pub use types::CodeTaskDetailsResponseExt;
 pub use types::PaginatedListTaskListItem;
