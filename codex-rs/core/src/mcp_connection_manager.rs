@@ -120,7 +120,7 @@ struct ManagedClient {
 
 #[derive(Clone)]
 struct AsyncManagedClient {
-    client: Shared<BoxFuture<'static, StartupOutcome>>,
+    client: Shared<BoxFuture<'static, Result<ManagedClient, StartupOutcomeError>>>,
 }
 
 impl AsyncManagedClient {
@@ -147,18 +147,8 @@ impl AsyncManagedClient {
         }
     }
 
-    async fn outcome(&self) -> StartupOutcome {
+    async fn client(&self) -> Result<ManagedClient, StartupOutcomeError> {
         self.client.clone().await
-    }
-
-    async fn client(&self) -> core::result::Result<ManagedClient, StartupOutcomeError> {
-        match self.client.clone().await {
-            StartupOutcome::Ready { managed } => Ok(managed),
-            StartupOutcome::Failed { error } => Err(error),
-            StartupOutcome::Cancelled => Err(StartupOutcomeError {
-                error: "startup cancelled".to_string(),
-            }),
-        }
     }
 }
 
@@ -169,7 +159,7 @@ pub(crate) struct McpConnectionManager {
 }
 
 impl McpConnectionManager {
-    pub fn initialize(
+    pub async fn initialize(
         &mut self,
         mcp_servers: HashMap<String, McpServerConfig>,
         store_mode: OAuthCredentialsStoreMode,
@@ -184,13 +174,14 @@ impl McpConnectionManager {
         let mut join_set = JoinSet::new();
         for (server_name, cfg) in mcp_servers.into_iter().filter(|(_, cfg)| cfg.enabled) {
             let cancel_token = cancel_token.child_token();
-            let _ = tx_event.try_send(Event {
-                id: INITIAL_SUBMIT_ID.to_owned(),
-                msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
+            let _ = emit_update(
+                &tx_event,
+                McpStartupUpdateEvent {
                     server: server_name.clone(),
                     status: McpStartupStatus::Starting,
-                }),
-            });
+                },
+            )
+            .await;
             let async_managed_client =
                 AsyncManagedClient::new(server_name.clone(), cfg, store_mode, cancel_token.clone());
             clients.insert(server_name.clone(), async_managed_client.clone());
@@ -199,15 +190,15 @@ impl McpConnectionManager {
             join_set.spawn(async move {
                 let outcome = async_managed_client.client().await;
                 if cancel_token.is_cancelled() {
-                    return (server_name, StartupOutcome::Cancelled);
+                    return (server_name, Err(StartupOutcomeError::Cancelled));
                 }
-                let status = match outcome {
+                let status = match &outcome {
                     Ok(_) => McpStartupStatus::Ready,
                     Err(error) => {
                         let error_str = mcp_init_error_display(
                             server_name.as_str(),
                             auth_entry.as_ref(),
-                            &error,
+                            error,
                         );
                         McpStartupStatus::Failed { error: error_str }
                     }
@@ -222,24 +213,22 @@ impl McpConnectionManager {
                 )
                 .await;
 
-                (server_name, async_managed_client.outcome().await)
+                (server_name, outcome)
             });
         }
         self.clients = clients;
         tokio::spawn(async move {
-            let res = join_set.join_all().or_cancel(&cancel_token).await;
+            let outcomes = join_set.join_all().await;
             let mut summary = McpStartupCompleteEvent::default();
-            if let Ok(outcomes) = res {
-                for (server_name, outcome) in outcomes {
-                    match outcome {
-                        StartupOutcome::Ready { .. } => summary.ready.push(server_name),
-                        StartupOutcome::Failed { error } => {
-                            summary.failed.push(McpStartupFailure {
-                                server: server_name,
-                                error: error.error.clone(),
-                            })
-                        }
-                        StartupOutcome::Cancelled => summary.cancelled.push(server_name),
+            for (server_name, outcome) in outcomes {
+                match outcome {
+                    Ok(_) => summary.ready.push(server_name),
+                    Err(StartupOutcomeError::Cancelled) => summary.cancelled.push(server_name),
+                    Err(StartupOutcomeError::Failed { error }) => {
+                        summary.failed.push(McpStartupFailure {
+                            server: server_name,
+                            error,
+                        })
                     }
                 }
             }
@@ -571,36 +560,22 @@ fn resolve_bearer_token(
     }
 }
 
-#[derive(Debug, Clone)]
-struct StartupOutcomeError {
-    error: String,
-}
-
-impl std::error::Error for StartupOutcomeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        None
-    }
-}
-
-impl std::fmt::Display for StartupOutcomeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.error)
-    }
+#[derive(Debug, Clone, thiserror::Error)]
+enum StartupOutcomeError {
+    #[error("MCP startup cancelled")]
+    Cancelled,
+    // We can't store the original error here because anyhow::Error doesn't implement
+    // `Clone`.
+    #[error("MCP startup failed: {error}")]
+    Failed { error: String },
 }
 
 impl From<anyhow::Error> for StartupOutcomeError {
     fn from(error: anyhow::Error) -> Self {
-        Self {
+        Self::Failed {
             error: error.to_string(),
         }
     }
-}
-
-#[derive(Clone)]
-enum StartupOutcome {
-    Ready { managed: ManagedClient },
-    Failed { error: StartupOutcomeError },
-    Cancelled,
 }
 
 async fn start_server_task(
@@ -611,14 +586,12 @@ async fn start_server_task(
     tool_timeout: Duration,
     tool_filter: ToolFilter,
     cancel_token: CancellationToken,
-) -> StartupOutcome {
+) -> Result<ManagedClient, StartupOutcomeError> {
     if cancel_token.is_cancelled() {
-        return StartupOutcome::Cancelled;
+        return Err(StartupOutcomeError::Cancelled);
     }
     if let Err(error) = validate_mcp_server_name(&server_name) {
-        return StartupOutcome::Failed {
-            error: error.into(),
-        };
+        return Err(error.into());
     }
 
     match start_server_work(
@@ -633,7 +606,7 @@ async fn start_server_task(
     .await
     {
         Ok(result) => result,
-        Err(CancelErr::Cancelled) => StartupOutcome::Cancelled,
+        Err(CancelErr::Cancelled) => Err(StartupOutcomeError::Cancelled),
     }
 }
 
@@ -644,7 +617,7 @@ async fn start_server_work(
     startup_timeout: Duration,
     tool_timeout: Duration,
     tool_filter: ToolFilter,
-) -> StartupOutcome {
+) -> Result<ManagedClient, StartupOutcomeError> {
     let params = mcp_types::InitializeRequestParams {
         capabilities: ClientCapabilities {
             experimental: None,
@@ -696,11 +669,7 @@ async fn start_server_work(
             let resolved_bearer_token =
                 match resolve_bearer_token(&server_name, bearer_token_env_var.as_deref()) {
                     Ok(token) => token,
-                    Err(error) => {
-                        return StartupOutcome::Failed {
-                            error: error.into(),
-                        };
-                    }
+                    Err(error) => return Err(error.into()),
                 };
             match RmcpClient::new_streamable_http_client(
                 &server_name,
@@ -727,18 +696,14 @@ async fn start_server_work(
     let client = match client_result {
         Ok(client) => client,
         Err(error) => {
-            return StartupOutcome::Failed {
-                error: error.into(),
-            };
+            return Err(error.into());
         }
     };
 
     let tools = match list_tools_for_client(&server_name, &client, startup_timeout).await {
         Ok(tools) => tools,
         Err(error) => {
-            return StartupOutcome::Failed {
-                error: error.into(),
-            };
+            return Err(error.into());
         }
     };
 
@@ -749,7 +714,7 @@ async fn start_server_work(
         tool_filter,
     };
 
-    StartupOutcome::Ready { managed }
+    Ok(managed)
 }
 
 async fn list_tools_for_client(
@@ -798,11 +763,11 @@ fn mcp_init_error_display(
         format!(
             "GitHub MCP does not support OAuth. Log in by adding a personal access token (https://github.com/settings/personal-access-tokens) to your environment and config.toml:\n[mcp_servers.{server_name}]\nbearer_token_env_var = CODEX_GITHUB_PERSONAL_ACCESS_TOKEN"
         )
-    } else if is_mcp_client_auth_required_error(&err.error) {
+    } else if is_mcp_client_auth_required_error(err) {
         format!(
             "The {server_name} MCP server is not logged in. Run `codex mcp login {server_name}`."
         )
-    } else if is_mcp_client_startup_timeout_error(&err.error) {
+    } else if is_mcp_client_startup_timeout_error(err) {
         let startup_timeout_secs = match entry {
             Some(entry) => match entry.config.startup_timeout_sec {
                 Some(timeout) => timeout,
@@ -819,14 +784,21 @@ fn mcp_init_error_display(
     }
 }
 
-fn is_mcp_client_auth_required_error(error: &String) -> bool {
-    error.to_string().contains("Auth required")
+fn is_mcp_client_auth_required_error(error: &StartupOutcomeError) -> bool {
+    match error {
+        StartupOutcomeError::Failed { error } => error.contains("Auth required"),
+        _ => false,
+    }
 }
 
-fn is_mcp_client_startup_timeout_error(error: &String) -> bool {
-    let error_message = error.to_string();
-    error_message.contains("request timed out")
-        || error_message.contains("timed out handshaking with MCP server")
+fn is_mcp_client_startup_timeout_error(error: &StartupOutcomeError) -> bool {
+    match error {
+        StartupOutcomeError::Failed { error } => {
+            error.contains("request timed out")
+                || error.contains("timed out handshaking with MCP server")
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]
