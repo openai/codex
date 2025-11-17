@@ -1461,6 +1461,7 @@ mod tests {
         assert_eq!(t.cursor(), 3);
     }
 
+    #[cfg_attr(not(windows), ignore = "AltGr modifier only applies on Windows")]
     #[test]
     fn altgr_ctrl_alt_char_inserts_literal() {
         let mut t = ta_with("");
