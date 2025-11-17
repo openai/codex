@@ -80,33 +80,26 @@ pub(crate) fn truncate_function_output_items_to_token_limit(
 ) -> Vec<FunctionCallOutputContentItem> {
     let mut out: Vec<FunctionCallOutputContentItem> = Vec::with_capacity(items.len());
     let mut remaining_tokens = max_tokens;
-    let mut remaining_bytes = approx_bytes_for_tokens(max_tokens);
     let mut omitted_text_items = 0usize;
     let tokenizer = Tokenizer::try_default().ok();
 
     for it in items {
         match it {
             FunctionCallOutputContentItem::InputText { text } => {
-                if remaining_tokens == 0 || remaining_bytes == 0 {
+                if remaining_tokens == 0 {
                     omitted_text_items += 1;
                     continue;
                 }
 
                 let token_len = estimate_safe_token_count(text, tokenizer.as_ref());
-                if token_len <= remaining_tokens && text.len() <= remaining_bytes {
+                if token_len <= remaining_tokens {
                     out.push(FunctionCallOutputContentItem::InputText { text: text.clone() });
                     remaining_tokens = remaining_tokens.saturating_sub(token_len);
-                    remaining_bytes = remaining_bytes.saturating_sub(text.len());
                 } else {
-                    let (mut snippet, _) = truncate_with_token_budget(text, remaining_tokens, None);
-                    if snippet.len() > remaining_bytes {
-                        snippet =
-                            take_bytes_at_char_boundary(&snippet, remaining_bytes).to_string();
-                    }
+                    let (snippet, _) = truncate_with_token_budget(text, remaining_tokens, None);
                     if snippet.is_empty() {
                         omitted_text_items += 1;
                     } else {
-                        remaining_bytes = remaining_bytes.saturating_sub(snippet.len());
                         out.push(FunctionCallOutputContentItem::InputText { text: snippet });
                     }
                     remaining_tokens = 0;
@@ -761,6 +754,7 @@ mod tests {
         );
 
         // Expect: t1 (full), t2 (full), image, t3 (truncated), summary mentioning 2 omitted.
+        eprintln!("output: {:?}", output);
         assert_eq!(output.len(), 5);
 
         let first_text = match &output[0] {
