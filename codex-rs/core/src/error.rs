@@ -100,6 +100,10 @@ pub enum CodexErr {
     #[error("{0}")]
     UnexpectedStatus(UnexpectedResponseError),
 
+    /// Invalid request.
+    #[error("{0}")]
+    InvalidRequest(String),
+
     #[error("{0}")]
     UsageLimitReached(UsageLimitReachedError),
 
