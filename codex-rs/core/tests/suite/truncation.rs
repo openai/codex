@@ -27,7 +27,6 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use escargot::CargoBuild;
-use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
@@ -48,7 +47,7 @@ async fn truncate_function_error_trims_respond_to_model() -> Result<()> {
     let test = builder.build(&server).await?;
 
     // Construct a very long, non-existent path to force a RespondToModel error with a large message
-    let long_path = "a".repeat(20_000);
+    let long_path = "axyzldg".repeat(20_000);
     let call_id = "grep-huge-error";
     let args = json!({
         "pattern": "alpha",
@@ -80,12 +79,16 @@ async fn truncate_function_error_trims_respond_to_model() -> Result<()> {
 
     tracing::debug!(output = %output, "truncated function error output");
 
-    // Expect plaintext with byte-truncation marker and no omitted-lines marker
+    // Expect plaintext with token-based truncation marker and no omitted-lines marker
     assert!(
         serde_json::from_str::<serde_json::Value>(&output).is_err(),
         "expected error output to be plain text",
     );
-    let truncated_pattern = r#"(?s)^Total output lines: 1\s+.*\[\.\.\. output truncated to fit 11264 bytes \.\.\.\]\s*$"#;
+    assert!(
+        !output.contains("Total output lines:"),
+        "error output should not include line-based truncation header: {output}",
+    );
+    let truncated_pattern = r"(?s)^unable to access `.*tokens truncated.*$";
     assert_regex_match(truncated_pattern, &output);
     assert!(
         !output.contains("omitted"),
@@ -334,22 +337,19 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
         .function_call_output_text(call_id)
         .context("function_call_output present for rmcp call")?;
 
-    // Expect plain text with byte-based truncation marker.
+    // Expect plain text with token-based truncation marker; the original JSON body
+    // is truncated in the middle of the echo string.
     assert!(
         serde_json::from_str::<Value>(&output).is_err(),
         "expected truncated MCP output to be plain text"
     );
     assert!(
-        output.starts_with("Total output lines: 1\n\n{"),
-        "expected total line header and JSON head, got: {output}"
+        !output.contains("Total output lines:"),
+        "MCP output should not include line-based truncation header: {output}"
     );
 
-    let byte_marker = Regex::new(r"\[\.\.\. output truncated to fit 11264 bytes \.\.\.\]")
-        .expect("compile regex");
-    assert!(
-        byte_marker.is_match(&output),
-        "expected byte truncation marker, got: {output}"
-    );
+    let truncated_pattern = r#"(?s)^\{"echo":\s*"ECHOING: long-message-with-newlines-.*tokens truncated.*long-message-with-newlines-.*$"#;
+    assert_regex_match(truncated_pattern, &output);
 
     Ok(())
 }
