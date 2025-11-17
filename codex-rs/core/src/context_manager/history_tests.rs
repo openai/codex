@@ -531,10 +531,7 @@ fn truncates_across_multiple_under_limit_texts_and_reports_omitted() {
             if kind == "input_text" {
                 if let Some(text) = obj.get("text").and_then(|t| t.as_str()) {
                     let preview: String = text.chars().take(40).collect();
-                    println!(
-                        "entry {idx}: {kind} len={} preview={preview:?}",
-                        text.len()
-                    );
+                    println!("entry {idx}: {kind} len={} preview={preview:?}", text.len());
                 } else {
                     println!("entry {idx}: {kind} (missing text)");
                 }

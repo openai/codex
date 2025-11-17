@@ -77,34 +77,41 @@ pub(crate) fn truncate_with_token_budget(
 pub(crate) fn truncate_function_output_items_to_token_limit(
     items: &[FunctionCallOutputContentItem],
     max_tokens: usize,
-    model: Option<&str>,
 ) -> Vec<FunctionCallOutputContentItem> {
     let mut out: Vec<FunctionCallOutputContentItem> = Vec::with_capacity(items.len());
     let mut remaining_tokens = max_tokens;
+    let mut remaining_bytes = approx_bytes_for_tokens(max_tokens);
     let mut omitted_text_items = 0usize;
-    let tokenizer = select_tokenizer(model);
+    let tokenizer = Tokenizer::try_default().ok();
 
     for it in items {
         match it {
             FunctionCallOutputContentItem::InputText { text } => {
-                if remaining_tokens == 0 {
+                if remaining_tokens == 0 || remaining_bytes == 0 {
                     omitted_text_items += 1;
                     continue;
                 }
 
                 let token_len = estimate_safe_token_count(text, tokenizer.as_ref());
-                if token_len <= remaining_tokens {
+                if token_len <= remaining_tokens && text.len() <= remaining_bytes {
                     out.push(FunctionCallOutputContentItem::InputText { text: text.clone() });
                     remaining_tokens = remaining_tokens.saturating_sub(token_len);
+                    remaining_bytes = remaining_bytes.saturating_sub(text.len());
                 } else {
-                    let (snippet, _) = truncate_with_token_budget(text, remaining_tokens, model);
-                    if !snippet.is_empty() {
+                    let (mut snippet, _) = truncate_with_token_budget(text, remaining_tokens, None);
+                    if snippet.len() > remaining_bytes {
+                        snippet =
+                            take_bytes_at_char_boundary(&snippet, remaining_bytes).to_string();
+                    }
+                    if snippet.is_empty() {
+                        omitted_text_items += 1;
+                    } else {
+                        remaining_bytes = remaining_bytes.saturating_sub(snippet.len());
                         out.push(FunctionCallOutputContentItem::InputText { text: snippet });
                     }
                     remaining_tokens = 0;
                 }
             }
-            // todo(aibrahim): handle input images; resize
             FunctionCallOutputContentItem::InputImage { image_url } => {
                 out.push(FunctionCallOutputContentItem::InputImage {
                     image_url: image_url.clone(),
@@ -751,7 +758,6 @@ mod tests {
         let output = truncate_function_output_items_to_token_limit(
             &items,
             DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT,
-            None,
         );
 
         // Expect: t1 (full), t2 (full), image, t3 (truncated), summary mentioning 2 omitted.

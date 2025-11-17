@@ -168,7 +168,6 @@ impl ContextManager {
                     truncate_function_output_items_to_token_limit(
                         items,
                         self.function_output_max_tokens,
-                        self.model.as_deref(),
                     )
                 });
                 ResponseItem::FunctionCallOutput {
