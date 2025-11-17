@@ -52,7 +52,6 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
-use std::fs::File;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
 use tempfile::tempdir;
@@ -649,30 +648,6 @@ fn active_blob(chat: &ChatWidget) -> String {
         .expect("active cell present")
         .display_lines(80);
     lines_to_single_string(&lines)
-}
-
-fn open_fixture(name: &str) -> File {
-    // 1) Prefer fixtures within this crate
-    {
-        let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        p.push("tests");
-        p.push("fixtures");
-        p.push(name);
-        if let Ok(f) = File::open(&p) {
-            return f;
-        }
-    }
-    // 2) Fallback to parent (workspace root)
-    {
-        let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        p.push("..");
-        p.push(name);
-        if let Ok(f) = File::open(&p) {
-            return f;
-        }
-    }
-    // 3) Last resort: CWD
-    File::open(name).expect("open fixture file")
 }
 
 #[test]
