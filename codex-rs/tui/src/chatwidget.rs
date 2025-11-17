@@ -2158,6 +2158,7 @@ impl ChatWidget {
         })]
     }
 
+    #[cfg(target_os = "windows")]
     pub(crate) fn world_writable_warning_details(&self) -> Option<(Vec<String>, usize, bool)> {
         if self
             .config
@@ -2168,6 +2169,12 @@ impl ChatWidget {
             return None;
         }
         codex_windows_sandbox::world_writable_warning_details(self.config.codex_home.as_path())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[allow(dead_code)]
+    pub(crate) fn world_writable_warning_details(&self) -> Option<(Vec<String>, usize, bool)> {
+        None
     }
 
     pub(crate) fn open_full_access_confirmation(&mut self, preset: ApprovalPreset) {
