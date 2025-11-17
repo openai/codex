@@ -63,6 +63,8 @@ v2_enum_from_core!(
 pub enum SandboxPolicy {
     DangerFullAccess,
     ReadOnly,
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     WorkspaceWrite {
         #[serde(default)]
         writable_roots: Vec<PathBuf>,
@@ -506,14 +508,14 @@ impl From<CoreUserInput> for UserInput {
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum ThreadItem {
-    UserMessage {
-        id: String,
-        content: Vec<UserInput>,
-    },
-    AgentMessage {
-        id: String,
-        text: String,
-    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    UserMessage { id: String, content: Vec<UserInput> },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    AgentMessage { id: String, text: String },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     Reasoning {
         id: String,
         #[serde(default)]
@@ -521,6 +523,8 @@ pub enum ThreadItem {
         #[serde(default)]
         content: Vec<String>,
     },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     CommandExecution {
         id: String,
         command: String,
@@ -529,11 +533,15 @@ pub enum ThreadItem {
         status: CommandExecutionStatus,
         duration_ms: Option<i64>,
     },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     FileChange {
         id: String,
         changes: Vec<FileUpdateChange>,
         status: PatchApplyStatus,
     },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     McpToolCall {
         id: String,
         server: String,
@@ -543,22 +551,18 @@ pub enum ThreadItem {
         result: Option<McpToolCallResult>,
         error: Option<McpToolCallError>,
     },
-    WebSearch {
-        id: String,
-        query: String,
-    },
-    TodoList {
-        id: String,
-        items: Vec<TodoItem>,
-    },
-    ImageView {
-        id: String,
-        path: String,
-    },
-    CodeReview {
-        id: String,
-        review: String,
-    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    WebSearch { id: String, query: String },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    TodoList { id: String, items: Vec<TodoItem> },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    ImageView { id: String, path: String },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    CodeReview { id: String, review: String },
 }
 
 impl From<CoreTurnItem> for ThreadItem {
