@@ -38,6 +38,15 @@ pub enum ApplyPatchModelOutput {
     ShellViaHeredoc,
 }
 
+/// A collection of different ways the model can output an apply_patch call
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ShellModelOutput {
+    Shell,
+    ShellCommand,
+    LocalShell,
+    // UnifiedExec has its own set of tests
+}
+
 pub struct TestCodexBuilder {
     config_mutators: Vec<Box<ConfigMutator>>,
 }
@@ -289,6 +298,15 @@ impl TestCodexHarness {
             .to_string()
     }
 
+    pub async fn local_shell_call_output(&self, call_id: &str) -> String {
+        let bodies = self.request_bodies().await;
+        local_shell_call_output(&bodies, call_id)
+            .get("output")
+            .and_then(Value::as_str)
+            .expect("output string")
+            .to_string()
+    }
+
     pub async fn apply_patch_output(
         &self,
         call_id: &str,
@@ -299,6 +317,14 @@ impl TestCodexHarness {
             ApplyPatchModelOutput::Function
             | ApplyPatchModelOutput::Shell
             | ApplyPatchModelOutput::ShellViaHeredoc => self.function_call_stdout(call_id).await,
+        }
+    }
+
+    pub async fn shell_output(&self, call_id: &str, output_type: ShellModelOutput) -> String {
+        match output_type {
+            ShellModelOutput::LocalShell => self.local_shell_call_output(call_id).await,
+            ShellModelOutput::Shell
+            | ShellModelOutput::ShellCommand => self.function_call_stdout(call_id).await,
         }
     }
 }
@@ -331,6 +357,21 @@ fn function_call_output<'a>(bodies: &'a [Value], call_id: &str) -> &'a Value {
         }
     }
     panic!("function_call_output {call_id} not found");
+}
+
+fn local_shell_call_output<'a>(bodies: &'a [Value], call_id: &str) -> &'a Value {
+    for body in bodies {
+        if let Some(items) = body.get("input").and_then(Value::as_array) {
+            for item in items {
+                if item.get("type").and_then(Value::as_str) == Some("local_shell_call_output")
+                    && item.get("call_id").and_then(Value::as_str) == Some(call_id)
+                {
+                    return item;
+                }
+            }
+        }
+    }
+    panic!("local_shell_call_output {call_id} not found");
 }
 
 pub fn test_codex() -> TestCodexBuilder {
