@@ -368,6 +368,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use serde::Deserialize;
     use serde::Serialize;
+    use std::os::fd::AsFd;
     use std::os::fd::AsRawFd;
     use tempfile::NamedTempFile;
 
@@ -377,19 +378,11 @@ mod tests {
         label: String,
     }
 
-    fn duplicate_fd(fd: RawFd) -> std::io::Result<OwnedFd> {
-        let dup_fd = unsafe { libc::dup(fd) };
-        if dup_fd < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        Ok(unsafe { OwnedFd::from_raw_fd(dup_fd) })
-    }
-
     fn fd_list(count: usize) -> std::io::Result<Vec<OwnedFd>> {
         let file = NamedTempFile::new()?;
         let mut fds = Vec::new();
         for _ in 0..count {
-            fds.push(duplicate_fd(file.as_file().as_raw_fd())?);
+            fds.push(file.as_fd().try_clone_to_owned()?);
         }
         Ok(fds)
     }

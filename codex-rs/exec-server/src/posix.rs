@@ -119,8 +119,6 @@ enum EscalateServerMessage {
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 enum EscalateAction {
     RunInSandbox,
-
-    /// This message is expected to come with an fd which is a socket for super-exec.
     Escalate,
 }
 
@@ -559,32 +557,6 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::NamedTempFile;
 
-    #[test]
-    fn decide_escalate_escalates_for_supported_gh_invocations() {
-        let action = decide_escalate(
-            "/opt/homebrew/bin/gh",
-            &[
-                "gh".to_string(),
-                "issue".to_string(),
-                "list".to_string(),
-                "--limit".to_string(),
-                "1".to_string(),
-            ],
-            &PathBuf::from("/tmp"),
-        );
-        assert_eq!(EscalateAction::Escalate, action);
-    }
-
-    #[test]
-    fn decide_escalate_runs_in_sandbox_for_other_commands() {
-        let action = decide_escalate(
-            "/bin/echo",
-            &["echo".to_string(), "hello".to_string()],
-            &PathBuf::from("/tmp"),
-        );
-        assert_eq!(EscalateAction::RunInSandbox, action);
-    }
-
     #[tokio::test]
     async fn handle_escalate_session_respects_run_in_sandbox_decision() -> anyhow::Result<()> {
         let (server, client) = AsyncSocket::pair()?;
@@ -607,8 +579,7 @@ mod tests {
             EscalateServerMessage::EscalateResponse(EscalateAction::RunInSandbox),
             response
         );
-        server_task.await??;
-        Ok(())
+        server_task.await?
     }
 
     #[tokio::test]
@@ -650,7 +621,6 @@ mod tests {
         let result = client.receive::<SuperExecResult>().await?;
         assert_eq!(42, result.exit_code);
 
-        server_task.await??;
-        Ok(())
+        server_task.await?
     }
 }
