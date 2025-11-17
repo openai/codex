@@ -96,6 +96,9 @@ mod socket;
 use socket::AsyncDatagramSocket;
 use socket::AsyncSocket;
 
+const ESCALATE_SOCKET_ENV_VAR: &str = "CODEX_ESCALATE_SOCKET";
+const BASH_PATH_ENV_VAR: &str = "CODEX_BASH_PATH";
+
 // C->S on the escalate socket
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 enum EscalateClientMessage {
@@ -263,7 +266,7 @@ async fn escalate_task(socket: AsyncDatagramSocket) -> anyhow::Result<()> {
 }
 
 fn get_bash_path() -> Result<String> {
-    std::env::var("CODEX_BASH_PATH").context("CODEX_BASH_PATH must be set")
+    std::env::var(BASH_PATH_ENV_VAR).context(format!("{BASH_PATH_ENV_VAR} must be set"))
 }
 
 async fn shell_exec(params: ExecParams) -> anyhow::Result<ExecResult> {
@@ -280,7 +283,7 @@ async fn shell_exec(params: ExecParams) -> anyhow::Result<ExecResult> {
     let escalate_task = tokio::spawn(escalate_task(escalate_server));
     let mut env = std::env::vars().collect::<HashMap<String, String>>();
     env.insert(
-        "CODEX_ESCALATE_SOCKET".to_string(),
+        ESCALATE_SOCKET_ENV_VAR.to_string(),
         client_socket.as_raw_fd().to_string(),
     );
     env.insert(
@@ -406,10 +409,10 @@ enum Commands {
 
 fn get_escalate_client() -> anyhow::Result<AsyncDatagramSocket> {
     // TODO: we should defensively require only calling this once, since AsyncSocket will take ownership of the fd.
-    let client_fd = std::env::var("CODEX_ESCALATE_SOCKET")?.parse::<i32>()?;
+    let client_fd = std::env::var(ESCALATE_SOCKET_ENV_VAR)?.parse::<i32>()?;
     if client_fd < 0 {
         return Err(anyhow::anyhow!(
-            "CODEX_ESCALATE_SOCKET is not a valid file descriptor: {client_fd}"
+            "{ESCALATE_SOCKET_ENV_VAR} is not a valid file descriptor: {client_fd}"
         ));
     }
     Ok(unsafe { AsyncDatagramSocket::from_raw_fd(client_fd) }?)
@@ -427,23 +430,29 @@ struct EscalateArgs {
 impl EscalateArgs {
     /// This is the escalate client. It talks to the escalate server to determine whether to exec()
     /// the command directly or to proxy to the escalate server.
-    async fn run(&self) -> anyhow::Result<()> {
+    async fn run(self) -> anyhow::Result<()> {
         let EscalateArgs { file, argv } = self;
         let handshake_client = get_escalate_client()?;
-        let (server_stream, client_stream) = AsyncSocket::pair()?;
-        let server_fd = server_stream.into_inner();
+        let (server, client) = AsyncSocket::pair()?;
         const HANDSHAKE_MESSAGE: [u8; 1] = [0];
         handshake_client
-            .send_with_fds(&HANDSHAKE_MESSAGE, &[server_fd.into()])
+            .send_with_fds(&HANDSHAKE_MESSAGE, &[server.into_inner().into()])
             .await
             .context("failed to send handshake datagram")?;
-        let client = client_stream;
+        let env = std::env::vars()
+            .filter(|(k, _)| {
+                !matches!(
+                    k.as_str(),
+                    ESCALATE_SOCKET_ENV_VAR | "BASH_EXEC_WRAPPER" | BASH_PATH_ENV_VAR
+                )
+            })
+            .collect();
         client
             .send(EscalateClientMessage::EscalateRequest {
                 file: file.clone(),
                 argv: argv.clone(),
                 workdir: std::env::current_dir()?,
-                env: std::env::vars().collect(),
+                env,
             })
             .await
             .context("failed to send EscalateRequest")?;
@@ -477,7 +486,7 @@ impl EscalateArgs {
                 // possible. std::os::unix::process::CommandExt has .exec() but it does some funky
                 // stuff with signal masks and dup2() on its standard FDs, which we don't want.
                 use std::ffi::CString;
-                let file = CString::new(file.as_str()).context("NUL in file")?;
+                let file = CString::new(file).context("NUL in file")?;
 
                 let argv_cstrs: Vec<CString> = argv
                     .iter()
@@ -552,10 +561,7 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
-    use std::io::Write as _;
-    use std::os::unix::fs::PermissionsExt as _;
     use std::path::PathBuf;
-    use tempfile::NamedTempFile;
 
     #[tokio::test]
     async fn handle_escalate_session_respects_run_in_sandbox_decision() -> anyhow::Result<()> {
@@ -590,19 +596,14 @@ mod tests {
             |_file, _argv, _workdir| EscalateAction::Escalate,
         ));
 
-        let mut script = NamedTempFile::new()?;
-        script
-            .write_all(b"#!/bin/sh\nexit 42\n")
-            .context("failed to write test script")?;
-        let mut perms = script.as_file().metadata()?.permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(script.path(), perms)?;
-        let script_path = script.path().to_string_lossy().to_string();
-
         client
             .send(EscalateClientMessage::EscalateRequest {
-                file: script_path.clone(),
-                argv: vec!["test-cmd".to_string()],
+                file: "/bin/sh".to_string(),
+                argv: vec![
+                    "sh".to_string(),
+                    "-c".to_string(),
+                    r#"if [ "$KEY" = VALUE ]; then exit 42; else exit 1; fi"#.to_string(),
+                ],
                 workdir: std::env::current_dir()?,
                 env: HashMap::from([("KEY".to_string(), "VALUE".to_string())]),
             })
