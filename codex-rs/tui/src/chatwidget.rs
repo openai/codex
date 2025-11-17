@@ -1739,7 +1739,6 @@ impl ChatWidget {
         } else {
             (&default_usage, Some(&default_usage))
         };
-
         self.add_to_history(crate::status::new_status_output(
             &self.config,
             self.auth_manager.as_ref(),
