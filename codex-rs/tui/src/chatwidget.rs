@@ -1740,15 +1740,13 @@ impl ChatWidget {
             (&default_usage, Some(&default_usage))
         };
 
-        let snapshot_for_display = self.rate_limit_snapshot.as_ref();
-
         self.add_to_history(crate::status::new_status_output(
             &self.config,
             self.auth_manager.as_ref(),
-            &total_usage,
-            context_usage.as_ref(),
+            total_usage,
+            context_usage,
             &self.conversation_id,
-            snapshot_for_display,
+            self.rate_limit_snapshot.as_ref(),
             Local::now(),
         ));
     }
