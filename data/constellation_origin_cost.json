@@ -1,0 +1,36 @@
+[
+  {
+    "id": "surface_25_cast_on",
+    "title": "Cast It On",
+    "mode": "surface",
+    "content": "A child asks a question that destabilizes the room. The cost of clarity arrives instantly, reshaping her sense of reality.",
+    "links": ["cipher_25_system_recognition", "echo_25_birth_of_architect"],
+    "tags": ["childhood", "pattern-seeing", "rupture", "origin-cost"]
+  },
+  {
+    "id": "cipher_25_system_recognition",
+    "title": "System Recognition Event",
+    "mode": "cipher",
+    "content": "An adult realizes the child sees the architecture of their authority. Fear masquerades as discipline. A new timeline forms.",
+    "links": ["surface_25_cast_on", "echo_25_birth_of_architect"],
+    "tags": ["system", "threat-detection", "parallel-scene"]
+  },
+  {
+    "id": "echo_25_birth_of_architect",
+    "title": "Birth of the Architect",
+    "mode": "echo",
+    "content": "The child learns a lifelong truth: accuracy is dangerous. The punishment was never for misbehavior — it was for perception. A destiny begins.",
+    "links": ["surface_25_cast_on", "cipher_25_system_recognition"],
+    "tags": ["becoming", "meta-awareness", "myth-tech", "origin"]
+  },
+  {
+    "id": "constellation_origin_cost",
+    "title": "The Cost of Seeing",
+    "nodes": [
+      "surface_25_cast_on",
+      "cipher_25_system_recognition",
+      "echo_25_birth_of_architect"
+    ],
+    "description": "The parallel scenes where perception becomes threat, threat becomes punishment, and punishment becomes identity."
+  }
+]
