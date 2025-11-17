@@ -13,6 +13,7 @@ mod client;
 mod client_common;
 pub mod codex;
 mod codex_conversation;
+mod compact_remote;
 pub use codex_conversation::CodexConversation;
 mod codex_delegate;
 mod command_safety;

@@ -27,7 +27,8 @@ pub(crate) fn should_persist_response_item(item: &ResponseItem) -> bool {
         | ResponseItem::CustomToolCall { .. }
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::WebSearchCall { .. }
-        | ResponseItem::GhostSnapshot { .. } => true,
+        | ResponseItem::GhostSnapshot { .. }
+        | ResponseItem::CompactionSummary { .. } => true,
         ResponseItem::Other => false,
     }
 }

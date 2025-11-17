@@ -65,9 +65,6 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 #[cfg(test)]
 use crate::exec::StreamOutput;
-// Removed: legacy executor wiring replaced by ToolOrchestrator flows.
-// legacy normalize_exec_result no longer used after orchestrator migration
-use crate::compact::build_compacted_history;
 use crate::compact::collect_user_messages;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
@@ -986,13 +983,24 @@ impl Session {
                 }
                 RolloutItem::Compacted(compacted) => {
                     let snapshot = history.get_history();
-                    let user_messages = collect_user_messages(&snapshot);
-                    let rebuilt = build_compacted_history(
-                        self.build_initial_context(turn_context),
-                        &user_messages,
-                        &compacted.message,
-                    );
-                    history.replace(rebuilt);
+                    if let Some(replacement) = &compacted.replacement_history {
+                        let mut rebuilt = self.build_initial_context(turn_context);
+                        rebuilt.extend(replacement.clone());
+                        let ghost_snapshots = snapshot
+                            .iter()
+                            .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
+                            .cloned();
+                        rebuilt.extend(ghost_snapshots);
+                        history.replace(rebuilt);
+                    } else {
+                        let user_messages = collect_user_messages(&snapshot);
+                        let rebuilt = compact::build_compacted_history(
+                            self.build_initial_context(turn_context),
+                            &user_messages,
+                            &compacted.message,
+                        );
+                        history.replace(rebuilt);
+                    }
                 }
                 _ => {}
             }
@@ -2941,6 +2949,7 @@ mod tests {
         live_history.replace(rebuilt1);
         rollout_items.push(RolloutItem::Compacted(CompactedItem {
             message: summary1.to_string(),
+            replacement_history: None,
         }));
 
         let user2 = ResponseItem::Message {
@@ -2974,6 +2983,7 @@ mod tests {
         live_history.replace(rebuilt2);
         rollout_items.push(RolloutItem::Compacted(CompactedItem {
             message: summary2.to_string(),
+            replacement_history: None,
         }));
 
         let user3 = ResponseItem::Message {

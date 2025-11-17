@@ -132,6 +132,9 @@ pub enum ResponseItem {
     GhostSnapshot {
         ghost_commit: GhostCommit,
     },
+    CompactionSummary {
+        encrypted_content: String,
+    },
     #[serde(other)]
     Other,
 }

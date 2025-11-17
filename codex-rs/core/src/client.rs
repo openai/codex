@@ -78,6 +78,18 @@ struct Error {
     resets_at: Option<i64>,
 }
 
+#[derive(Debug, Serialize)]
+struct CompactHistoryRequest<'a> {
+    model: &'a str,
+    input: &'a [ResponseItem],
+    store: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct CompactHistoryResponse {
+    input: Vec<ResponseItem>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ModelClient {
     config: Arc<Config>,
@@ -506,6 +518,56 @@ impl ModelClient {
 
     pub fn get_auth_manager(&self) -> Option<Arc<AuthManager>> {
         self.auth_manager.clone()
+    }
+
+    pub async fn compact_conversation_history(
+        &self,
+        history: &[ResponseItem],
+    ) -> Result<Vec<ResponseItem>> {
+        if history.is_empty() {
+            return Ok(Vec::new());
+        }
+        let auth_manager = self.auth_manager.clone();
+        let auth = auth_manager.as_ref().and_then(|m| m.auth());
+        let mut req_builder = self
+            .provider
+            .create_compact_request_builder(&self.client, &auth)
+            .await?;
+        if let SessionSource::SubAgent(sub) = &self.session_source {
+            let subagent = if let crate::protocol::SubAgentSource::Other(label) = sub {
+                label.clone()
+            } else {
+                serde_json::to_value(sub)
+                    .ok()
+                    .and_then(|v| v.as_str().map(std::string::ToString::to_string))
+                    .unwrap_or_else(|| "other".to_string())
+            };
+            req_builder = req_builder.header("x-openai-subagent", subagent);
+        }
+        let payload = CompactHistoryRequest {
+            model: &self.config.model,
+            input: history,
+            store: true,
+        };
+        let response = req_builder
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|source| CodexErr::ConnectionFailed(ConnectionFailedError { source }))?;
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|source| CodexErr::ConnectionFailed(ConnectionFailedError { source }))?;
+        if !status.is_success() {
+            return Err(CodexErr::UnexpectedStatus(UnexpectedResponseError {
+                status,
+                body,
+                request_id: None,
+            }));
+        }
+        let CompactHistoryResponse { input } = serde_json::from_str(&body)?;
+        Ok(input)
     }
 }
 

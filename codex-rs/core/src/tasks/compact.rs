@@ -1,15 +1,13 @@
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use tokio_util::sync::CancellationToken;
-
-use crate::codex::TurnContext;
-use crate::compact;
-use crate::state::TaskKind;
-use codex_protocol::user_input::UserInput;
-
 use super::SessionTask;
 use super::SessionTaskContext;
+use crate::codex::TurnContext;
+use crate::state::TaskKind;
+use async_trait::async_trait;
+use codex_app_server_protocol::AuthMode;
+use codex_protocol::user_input::UserInput;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Copy, Default)]
 pub(crate) struct CompactTask;
@@ -27,6 +25,17 @@ impl SessionTask for CompactTask {
         input: Vec<UserInput>,
         _cancellation_token: CancellationToken,
     ) -> Option<String> {
-        compact::run_compact_task(session.clone_session(), ctx, input).await
+        if session
+            .session
+            .services
+            .auth_manager
+            .auth()
+            .is_some_and(|auth| auth.mode == AuthMode::ChatGPT)
+        {
+            crate::compact_remote::run_remote_compact_task(session.clone_session(), ctx, input)
+                .await
+        } else {
+            crate::compact::run_compact_task(session.clone_session(), ctx, input).await
+        }
     }
 }
