@@ -2046,23 +2046,10 @@ impl ChatWidget {
         let mut items: Vec<SelectionItem> = Vec::new();
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
         #[cfg(target_os = "windows")]
-        let header_renderable: Box<dyn Renderable> =
-            if self.config.forced_auto_mode_downgraded_on_windows
-                && codex_core::get_platform_sandbox().is_none()
-            {
-                use ratatui_macros::line;
-
-                let mut header = ColumnRenderable::new();
-                header.push(line![
-                "Codex forced your settings back to Read Only because the Windows sandbox is off."
-                    .bold()
-            ]);
-                Box::new(header)
-            } else {
-                Box::new(())
-            };
+        let forced_windows_read_only = self.config.forced_auto_mode_downgraded_on_windows
+            && codex_core::get_platform_sandbox().is_none();
         #[cfg(not(target_os = "windows"))]
-        let header_renderable: Box<dyn Renderable> = Box::new(());
+        let forced_windows_read_only = false;
         for preset in presets.into_iter() {
             let is_current =
                 current_approval == preset.approval && current_sandbox == preset.sandbox;
@@ -2126,10 +2113,17 @@ impl ChatWidget {
         }
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Select Approval Mode".to_string()),
+            title: Some(
+                if forced_windows_read_only {
+                    "Select approval mode (Codex changed your permissions to Read Only because the Windows sandbox is off)"
+                        .to_string()
+                } else {
+                    "Select Approval Mode".to_string()
+                },
+            ),
             footer_hint: Some(standard_popup_hint_line()),
             items,
-            header: header_renderable,
+            header: Box::new(()),
             ..Default::default()
         });
     }
@@ -2254,7 +2248,6 @@ impl ChatWidget {
             SandboxPolicy::ReadOnly => "Read-Only mode",
             _ => "Auto mode",
         };
-        let title_line = Line::from("Unprotected directories found").bold();
         let info_line = if failed_scan {
             Line::from(vec![
                 "We couldn't complete the world-writable scan, so protections cannot be verified. "
@@ -2271,7 +2264,6 @@ impl ChatWidget {
                 .fg(Color::Red),
             ])
         };
-        header_children.push(Box::new(title_line));
         header_children.push(Box::new(
             Paragraph::new(vec![info_line]).wrap(Wrap { trim: false }),
         ));
@@ -2280,8 +2272,9 @@ impl ChatWidget {
             // Show up to three examples and optionally an "and X more" line.
             let mut lines: Vec<Line> = Vec::new();
             lines.push(Line::from("Examples:").bold());
+            lines.push(Line::from(""));
             for p in &sample_paths {
-                lines.push(Line::from(format!(" - {p}")));
+                lines.push(Line::from(format!("  - {p}")));
             }
             if extra_count > 0 {
                 lines.push(Line::from(format!("and {extra_count} more")));
@@ -2354,9 +2347,9 @@ impl ChatWidget {
 
         let mut header = ColumnRenderable::new();
         header.push(line![
-            "Auto mode requires the experimental Windows sandbox.".bold()
+            "Auto mode requires the experimental Windows sandbox.".bold(),
+            " Turn it on to enable sandboxed commands on Windows."
         ]);
-        header.push(line!["Turn it on to enable sandboxed commands on Windows."]);
 
         let preset_clone = preset;
         let items = vec![SelectionItem {
