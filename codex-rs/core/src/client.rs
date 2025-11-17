@@ -544,6 +544,12 @@ impl ModelClient {
             };
             req_builder = req_builder.header("x-openai-subagent", subagent);
         }
+        if let Some(auth) = auth.as_ref()
+            && auth.mode == AuthMode::ChatGPT
+            && let Some(account_id) = auth.get_account_id()
+        {
+            req_builder = req_builder.header("chatgpt-account-id", account_id);
+        }
         let payload = CompactHistoryRequest {
             model: &self.config.model,
             input: history,
