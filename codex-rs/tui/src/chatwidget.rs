@@ -2,7 +2,10 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
+use codex_app_server_protocol::AuthMode;
+use codex_backend_client::Client as BackendClient;
 use codex_core::config::Config;
 use codex_core::config::types::Notifications;
 use codex_core::git_info::current_branch_name;
@@ -1727,15 +1730,60 @@ impl ChatWidget {
         } else {
             (&default_usage, Some(&default_usage))
         };
+        let rate_limit_snapshot = self
+            .fetch_rate_limits_from_usage()
+            .or_else(|| self.rate_limit_snapshot.clone());
+
+        if let Some(snapshot) = rate_limit_snapshot.clone() {
+            self.rate_limit_snapshot = Some(snapshot);
+        }
+
+        let now = Local::now();
         self.add_to_history(crate::status::new_status_output(
             &self.config,
             self.auth_manager.as_ref(),
             total_usage,
             context_usage,
             &self.conversation_id,
-            self.rate_limit_snapshot.as_ref(),
-            Local::now(),
+            rate_limit_snapshot.as_ref(),
+            now,
         ));
+    }
+    fn fetch_rate_limits_from_usage(&self) -> Option<RateLimitSnapshotDisplay> {
+        let auth = self.auth_manager.auth()?;
+        if auth.mode != AuthMode::ChatGPT {
+            return None;
+        }
+
+        let base_url = self.config.chatgpt_base_url.clone();
+        let auth = auth;
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                let fetch = async {
+                    let client = BackendClient::from_auth(base_url, &auth).await?;
+                    client.get_rate_limits().await
+                };
+                tokio::time::timeout(Duration::from_secs(1), fetch).await
+            })
+        });
+
+        match result {
+            Ok(Ok(snapshot)) => Some(crate::status::rate_limit_snapshot_display(
+                &snapshot,
+                Local::now(),
+            )),
+            Ok(Err(err)) => {
+                tracing::debug!(
+                    error = ?err,
+                    "failed to fetch rate limits from /usage within timeout"
+                );
+                None
+            }
+            Err(_) => {
+                tracing::debug!("timed out fetching rate limits from /usage");
+                None
+            }
+        }
     }
 
     fn lower_cost_preset(&self) -> Option<ModelPreset> {
