@@ -1,8 +1,8 @@
 use crate::codex::TurnContext;
 use crate::context_manager::normalize;
-use crate::context_manager::truncate;
-use crate::context_manager::truncate::format_output_for_model_body;
-use crate::context_manager::truncate::globally_truncate_function_output_items;
+use crate::truncate;
+use crate::truncate::format_output_for_model_body;
+use crate::truncate::globally_truncate_function_output_items;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
