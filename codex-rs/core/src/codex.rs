@@ -1007,6 +1007,7 @@ impl Session {
                         self.build_initial_context(turn_context),
                         &user_messages,
                         &compacted.message,
+                        Some(turn_context.client.get_model().as_str()),
                     );
                     history.replace(rebuilt);
                 }
@@ -2957,6 +2958,7 @@ mod tests {
             session.build_initial_context(turn_context),
             &user_messages1,
             summary1,
+            Some(turn_context.client.get_model().as_str()),
         );
         live_history.replace(rebuilt1);
         rollout_items.push(RolloutItem::Compacted(CompactedItem {
@@ -2990,6 +2992,7 @@ mod tests {
             session.build_initial_context(turn_context),
             &user_messages2,
             summary2,
+            Some(turn_context.client.get_model().as_str()),
         );
         live_history.replace(rebuilt2);
         rollout_items.push(RolloutItem::Compacted(CompactedItem {

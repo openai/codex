@@ -36,7 +36,7 @@ use super::generate_chunk_id;
 use super::resolve_max_tokens;
 use super::session::OutputBuffer;
 use super::session::UnifiedExecSession;
-use crate::truncate::truncate_with_token_budget;
+use crate::truncate::truncate_text;
 
 impl UnifiedExecSessionManager {
     pub(crate) async fn exec_command(
@@ -72,7 +72,7 @@ impl UnifiedExecSessionManager {
         let text = String::from_utf8_lossy(&collected).to_string();
         let model = context.turn.client.get_model();
         let (output, original_token_count) =
-            truncate_with_token_budget(&text, max_tokens, Some(model.as_str()));
+            truncate_text(&text, Some(max_tokens), Some(model.as_str()));
         let original_token_count =
             original_token_count.and_then(|count| usize::try_from(count).ok());
         let chunk_id = generate_chunk_id();
@@ -181,7 +181,7 @@ impl UnifiedExecSessionManager {
         let text = String::from_utf8_lossy(&collected).to_string();
         let model = turn_ref.client.get_model();
         let (output, original_token_count) =
-            truncate_with_token_budget(&text, max_tokens, Some(model.as_str()));
+            truncate_text(&text, Some(max_tokens), Some(model.as_str()));
         let original_token_count =
             original_token_count.and_then(|count| usize::try_from(count).ok());
         let chunk_id = generate_chunk_id();
@@ -418,6 +418,7 @@ impl UnifiedExecSessionManager {
     pub(crate) async fn open_session_with_exec_env(
         &self,
         env: &ExecEnv,
+        ctx: &ToolCtx<'_>,
     ) -> Result<UnifiedExecSession, UnifiedExecError> {
         let (program, args) = env
             .command
@@ -433,7 +434,7 @@ impl UnifiedExecSessionManager {
         )
         .await
         .map_err(|err| UnifiedExecError::create_session(err.to_string()))?;
-        UnifiedExecSession::from_spawned(spawned, env.sandbox).await
+        UnifiedExecSession::from_spawned(spawned, env.sandbox, ctx).await
     }
 
     pub(super) async fn open_session_with_sandbox(

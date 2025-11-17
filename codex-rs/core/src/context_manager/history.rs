@@ -2,7 +2,7 @@ use crate::codex::TurnContext;
 use crate::context_manager::normalize;
 use crate::truncate::DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT;
 use crate::truncate::truncate_function_output_items_to_token_limit;
-use crate::truncate::truncate_with_token_budget;
+use crate::truncate::truncate_text;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
@@ -56,7 +56,7 @@ impl ContextManager {
     }
 
     /// `items` is ordered from oldest to newest.
-    pub(crate) async fn record_items<I>(&mut self, items: I)
+    pub(crate) fn record_items<I>(&mut self, items: I)
     where
         I: IntoIterator,
         I::Item: std::ops::Deref<Target = ResponseItem>,
@@ -68,7 +68,7 @@ impl ContextManager {
                 continue;
             }
 
-            let processed = self.process_item(item_ref).await;
+            let processed = self.process_item(item_ref);
             self.items.push(processed);
         }
     }
@@ -156,24 +156,20 @@ impl ContextManager {
         items.retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
     }
 
-    async fn process_item(&self, item: &ResponseItem) -> ResponseItem {
+    fn process_item(&self, item: &ResponseItem) -> ResponseItem {
         match item {
             ResponseItem::FunctionCallOutput { call_id, output } => {
-                let (truncated, _) = truncate_with_token_budget(
+                let (truncated, _) = truncate_text(
                     output.content.as_str(),
-                    self.function_output_max_tokens,
+                    Some(self.function_output_max_tokens),
                     self.model.as_deref(),
                 );
-                let truncated_items = match output.content_items.as_ref() {
-                    Some(items) => Some(
-                        truncate_function_output_items_to_token_limit(
-                            items,
-                            self.function_output_max_tokens,
-                        )
-                        .await,
-                    ),
-                    None => None,
-                };
+                let truncated_items = output.content_items.as_ref().map(|items| {
+                    truncate_function_output_items_to_token_limit(
+                        items,
+                        self.function_output_max_tokens,
+                    )
+                });
                 ResponseItem::FunctionCallOutput {
                     call_id: call_id.clone(),
                     output: FunctionCallOutputPayload {
@@ -184,9 +180,9 @@ impl ContextManager {
                 }
             }
             ResponseItem::CustomToolCallOutput { call_id, output } => {
-                let (truncated, _) = truncate_with_token_budget(
+                let (truncated, _) = truncate_text(
                     output,
-                    self.function_output_max_tokens,
+                    Some(self.function_output_max_tokens),
                     self.model.as_deref(),
                 );
                 ResponseItem::CustomToolCallOutput {

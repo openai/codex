@@ -14,7 +14,7 @@ use crate::protocol::EventMsg;
 use crate::protocol::TaskStartedEvent;
 use crate::protocol::TurnContextItem;
 use crate::protocol::WarningEvent;
-use crate::truncate::truncate_with_token_budget;
+use crate::truncate::truncate_text;
 use crate::util::backoff;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
@@ -148,8 +148,12 @@ async fn run_compact_task_inner(
     let user_messages = collect_user_messages(&history_snapshot);
 
     let initial_context = sess.build_initial_context(turn_context.as_ref());
-    let mut new_history =
-        build_token_limited_compacted_history(initial_context, &user_messages, &summary_text);
+    let mut new_history = build_token_limited_compacted_history(
+        initial_context,
+        &user_messages,
+        &summary_text,
+        Some(turn_context.client.get_model().as_str()),
+    );
     let ghost_snapshots: Vec<ResponseItem> = history_snapshot
         .iter()
         .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
@@ -226,12 +230,14 @@ pub(crate) fn build_token_limited_compacted_history(
     initial_context: Vec<ResponseItem>,
     user_messages: &[String],
     summary_text: &str,
+    model: Option<&str>,
 ) -> Vec<ResponseItem> {
     build_token_limited_compacted_history_with_limit(
         initial_context,
         user_messages,
         summary_text,
         COMPACT_USER_MESSAGE_MAX_TOKENS,
+        model,
     )
 }
 
@@ -240,6 +246,7 @@ fn build_token_limited_compacted_history_with_limit(
     user_messages: &[String],
     summary_text: &str,
     max_tokens: usize,
+    model: Option<&str>,
 ) -> Vec<ResponseItem> {
     let mut selected_messages: Vec<String> = Vec::new();
     if max_tokens > 0 {
@@ -257,7 +264,7 @@ fn build_token_limited_compacted_history_with_limit(
                 selected_messages.push(message.clone());
                 remaining = remaining.saturating_sub(tokens);
             } else {
-                let (truncated, _) = truncate_with_token_budget(message, remaining, None);
+                let (truncated, _) = truncate_text(message, Some(remaining), model);
                 selected_messages.push(truncated);
                 break;
             }
@@ -324,6 +331,8 @@ async fn drain_to_completed(
 
 #[cfg(test)]
 mod tests {
+    use crate::config::OPENAI_DEFAULT_MODEL;
+
     use super::*;
     use pretty_assertions::assert_eq;
 
@@ -420,11 +429,13 @@ mod tests {
         // that oversized user content is truncated.
         let max_tokens = 16;
         let big = "word ".repeat(200);
+        let model = OPENAI_DEFAULT_MODEL;
         let history = super::build_token_limited_compacted_history_with_limit(
             Vec::new(),
             std::slice::from_ref(&big),
             "SUMMARY",
             max_tokens,
+            Some(model),
         );
         assert_eq!(history.len(), 2);
 
@@ -462,8 +473,12 @@ mod tests {
         let user_messages = vec!["first user message".to_string()];
         let summary_text = "summary text";
 
-        let history =
-            build_token_limited_compacted_history(initial_context, &user_messages, summary_text);
+        let history = build_token_limited_compacted_history(
+            initial_context,
+            &user_messages,
+            summary_text,
+            Some(OPENAI_DEFAULT_MODEL),
+        );
         assert!(
             !history.is_empty(),
             "expected compacted history to include summary"

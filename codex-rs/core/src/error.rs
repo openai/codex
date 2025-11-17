@@ -2,7 +2,7 @@ use crate::codex::ProcessedResponseItem;
 use crate::exec::ExecToolCallOutput;
 use crate::token_data::KnownPlan;
 use crate::token_data::PlanType;
-use crate::truncate::truncate_with_token_budget;
+use crate::truncate::truncate_text;
 use chrono::DateTime;
 use chrono::Datelike;
 use chrono::Local;
@@ -431,7 +431,7 @@ impl CodexErr {
     }
 }
 
-pub fn token_limited_error_message(e: &CodexErr) -> String {
+pub fn token_limited_error_message(e: &CodexErr, model: Option<&str>) -> String {
     let message = match e {
         CodexErr::Sandbox(SandboxErr::Denied { output }) => {
             let aggregated = output.aggregated_output.text.trim();
@@ -461,7 +461,7 @@ pub fn token_limited_error_message(e: &CodexErr) -> String {
         _ => e.to_string(),
     };
 
-    truncate_with_token_budget(&message, ERROR_MESSAGE_UI_MAX_TOKENS, None).0
+    truncate_text(&message, Some(ERROR_MESSAGE_UI_MAX_TOKENS), model).0
 }
 
 #[cfg(test)]
@@ -533,7 +533,10 @@ mod tests {
         let err = CodexErr::Sandbox(SandboxErr::Denied {
             output: Box::new(output),
         });
-        assert_eq!(token_limited_error_message(&err), "aggregate detail");
+        assert_eq!(
+            token_limited_error_message(&err, Some(OPENAI_DEFAULT_MODEL)),
+            "aggregate detail"
+        );
     }
 
     #[test]
@@ -550,7 +553,7 @@ mod tests {
             output: Box::new(output),
         });
         assert_eq!(
-            token_limited_error_message(&err),
+            token_limited_error_message(&err, Some(OPENAI_DEFAULT_MODEL)),
             "stderr detail\nstdout detail"
         );
     }
@@ -568,7 +571,10 @@ mod tests {
         let err = CodexErr::Sandbox(SandboxErr::Denied {
             output: Box::new(output),
         });
-        assert_eq!(token_limited_error_message(&err), "stdout only");
+        assert_eq!(
+            token_limited_error_message(&err, Some(OPENAI_DEFAULT_MODEL)),
+            "stdout only"
+        );
     }
 
     #[test]
@@ -585,7 +591,7 @@ mod tests {
             output: Box::new(output),
         });
         assert_eq!(
-            token_limited_error_message(&err),
+            token_limited_error_message(&err, Some(OPENAI_DEFAULT_MODEL)),
             "command failed inside sandbox with exit code 13"
         );
     }

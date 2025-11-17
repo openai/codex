@@ -7,7 +7,6 @@ use codex_utils_string::take_bytes_at_char_boundary;
 use codex_utils_string::take_last_bytes_at_char_boundary;
 use codex_utils_tokenizer::Tokenizer;
 
-use crate::model_family::ModelFamily;
 use crate::model_family::derive_default_model_family;
 use crate::model_family::find_family_for_model;
 
@@ -39,10 +38,10 @@ pub(crate) fn truncate_with_line_bytes_budget(content: &str, bytes_budget: usize
     format!("Total output lines: {total_lines}\n\n{output}")
 }
 
-pub(crate) async fn truncate_with_mode(
+pub(crate) fn truncate_text(
     content: &str,
-    model: Option<&str>,
     tokens_budget: Option<usize>,
+    model: Option<&str>,
 ) -> (String, Option<u64>) {
     let mode = model
         .map(|m| {
@@ -62,9 +61,9 @@ pub(crate) async fn truncate_with_mode(
         }
         TruncationMode::Tokens(tokens) => {
             if let Some(tokens) = tokens_budget {
-                truncate_with_token_budget(content, tokens, model).await
+                truncate_with_token_budget(content, tokens, model)
             } else {
-                truncate_with_token_budget(content, tokens, model).await
+                truncate_with_token_budget(content, tokens, model)
             }
         }
     }
@@ -74,7 +73,7 @@ pub(crate) async fn truncate_with_mode(
 /// `max_tokens` tokens by preserving as many
 /// text/image items as possible and appending a summary for any omitted text
 /// items.
-pub(crate) async fn truncate_function_output_items_to_token_limit(
+pub(crate) fn truncate_function_output_items_to_token_limit(
     items: &[FunctionCallOutputContentItem],
     max_tokens: usize,
 ) -> Vec<FunctionCallOutputContentItem> {
@@ -96,8 +95,7 @@ pub(crate) async fn truncate_function_output_items_to_token_limit(
                     out.push(FunctionCallOutputContentItem::InputText { text: text.clone() });
                     remaining_tokens = remaining_tokens.saturating_sub(token_len);
                 } else {
-                    let (snippet, _) =
-                        truncate_with_token_budget(text, remaining_tokens, None).await;
+                    let (snippet, _) = truncate_with_token_budget(text, remaining_tokens, None);
                     if snippet.is_empty() {
                         omitted_text_items += 1;
                     } else {
@@ -127,7 +125,7 @@ pub(crate) async fn truncate_function_output_items_to_token_limit(
 /// preserving the beginning and the end. Returns the possibly truncated string
 /// and `Some(original_token_count)` if truncation occurred; otherwise returns
 /// the original string and `None`.
-async fn truncate_with_token_budget(
+fn truncate_with_token_budget(
     s: &str,
     max_tokens: usize,
     model: Option<&str>,

@@ -14,7 +14,8 @@ use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StreamOutput;
 use crate::exec::is_likely_sandbox_denied;
-use crate::truncate::truncate_with_token_budget;
+use crate::tools::sandboxing::ToolCtx;
+use crate::truncate::truncate_text;
 use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::SpawnedPty;
 
@@ -140,7 +141,10 @@ impl UnifiedExecSession {
         self.sandbox_type
     }
 
-    pub(super) async fn check_for_sandbox_denial(&self) -> Result<(), UnifiedExecError> {
+    pub(super) async fn check_for_sandbox_denial(
+        &self,
+        ctx: &ToolCtx<'_>,
+    ) -> Result<(), UnifiedExecError> {
         if self.sandbox_type() == SandboxType::None || !self.has_exited() {
             return Ok(());
         }
@@ -166,8 +170,11 @@ impl UnifiedExecSession {
         };
 
         if is_likely_sandbox_denied(self.sandbox_type(), &exec_output) {
-            let (snippet, _) =
-                truncate_with_token_budget(&aggregated_text, UNIFIED_EXEC_OUTPUT_MAX_TOKENS, None);
+            let (snippet, _) = truncate_text(
+                &aggregated_text,
+                Some(UNIFIED_EXEC_OUTPUT_MAX_TOKENS),
+                Some(ctx.turn.client.get_model().as_str()),
+            );
             let message = if snippet.is_empty() {
                 format!("exit code {exit_code}")
             } else {
@@ -182,6 +189,7 @@ impl UnifiedExecSession {
     pub(super) async fn from_spawned(
         spawned: SpawnedPty,
         sandbox_type: SandboxType,
+        ctx: &ToolCtx<'_>,
     ) -> Result<Self, UnifiedExecError> {
         let SpawnedPty {
             session,
@@ -196,7 +204,7 @@ impl UnifiedExecSession {
         };
 
         if exit_ready {
-            managed.check_for_sandbox_denial().await?;
+            managed.check_for_sandbox_denial(ctx).await?;
             return Ok(managed);
         }
 
@@ -205,7 +213,7 @@ impl UnifiedExecSession {
             .await
             .is_ok()
         {
-            managed.check_for_sandbox_denial().await?;
+            managed.check_for_sandbox_denial(ctx).await?;
         }
 
         Ok(managed)
