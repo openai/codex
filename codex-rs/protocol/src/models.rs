@@ -382,7 +382,7 @@ impl Serialize for FunctionCallOutputPayload {
     where
         S: Serializer,
     {
-        tracing::debug!("Function call output payload: {:?}", self);
+        tracing::error!("Payload: {:?}", self);
         if let Some(items) = &self.content_items {
             items.serialize(serializer)
         } else {

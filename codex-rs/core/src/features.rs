@@ -42,6 +42,8 @@ pub enum Feature {
     ViewImageTool,
     /// Allow the model to request web searches.
     WebSearchRequest,
+    /// Gate the execpolicy2 enforcement for shell/unified exec.
+    ExecPolicyV2,
     /// Enable the model-based risk assessments for sandboxed commands.
     SandboxCommandAssessment,
     /// Enable Windows sandbox (restricted token) on Windows.
@@ -295,6 +297,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::WebSearchRequest,
         key: "web_search_request",
         stage: Stage::Stable,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ExecPolicyV2,
+        key: "exec_policy_v2",
+        stage: Stage::Experimental,
         default_enabled: false,
     },
     FeatureSpec {

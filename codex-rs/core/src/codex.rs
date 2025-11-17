@@ -118,6 +118,7 @@ use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
 use codex_async_utils::OrCancelExt;
+use codex_execpolicy2::Policy as ExecPolicyV2;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -163,6 +164,10 @@ impl Codex {
 
         let user_instructions = get_user_instructions(&config).await;
 
+        let exec_policy_v2 =
+            crate::exec_policy::exec_policy_for(&config.features, &config.codex_home)
+                .map_err(|err| CodexErr::Fatal(format!("failed to load execpolicy2: {err}")))?;
+
         let config = Arc::new(config);
 
         let session_configuration = SessionConfiguration {
@@ -179,6 +184,7 @@ impl Codex {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: config.features.clone(),
+            exec_policy_v2,
             session_source,
         };
 
@@ -276,6 +282,7 @@ pub(crate) struct TurnContext {
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
+    pub(crate) exec_policy_v2: Option<Arc<ExecPolicyV2>>,
     pub(crate) truncation_policy: TruncationPolicy,
 }
 
@@ -333,6 +340,8 @@ pub(crate) struct SessionConfiguration {
 
     /// Set of feature flags for this session
     features: Features,
+    /// Optional execpolicy2 policy, applied only when enabled by feature flag.
+    exec_policy_v2: Option<Arc<ExecPolicyV2>>,
 
     // TODO(pakrym): Remove config from here
     original_config_do_not_use: Arc<Config>,
@@ -433,6 +442,7 @@ impl Session {
             final_output_json_schema: None,
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
+            exec_policy_v2: session_configuration.exec_policy_v2.clone(),
             truncation_policy: TruncationPolicy::new(&per_turn_config),
         }
     }
@@ -1766,6 +1776,7 @@ async fn spawn_review_thread(
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
+        exec_policy_v2: parent_turn_context.exec_policy_v2.clone(),
         truncation_policy: TruncationPolicy::new(&per_turn_config),
     };
 
@@ -2573,6 +2584,7 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
+            exec_policy_v2: None,
             session_source: SessionSource::Exec,
         };
 
@@ -2650,6 +2662,7 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
+            exec_policy_v2: None,
             session_source: SessionSource::Exec,
         };
 

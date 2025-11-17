@@ -86,6 +86,13 @@ pub(crate) struct ApprovalCtx<'a> {
     pub risk: Option<SandboxCommandAssessment>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ApprovalRequirement {
+    Skip,
+    NeedsApproval { reason: Option<String> },
+    Forbidden { reason: String },
+}
+
 pub(crate) trait Approvable<Req> {
     type ApprovalKey: Hash + Eq + Clone + Debug + Serialize;
 
@@ -111,16 +118,22 @@ pub(crate) trait Approvable<Req> {
     /// - Never, OnFailure: do not ask
     /// - OnRequest: ask unless sandbox policy is DangerFullAccess
     /// - UnlessTrusted: always ask
-    fn wants_initial_approval(
+    fn approval_requirement(
         &self,
         _req: &Req,
         policy: AskForApproval,
         sandbox_policy: &SandboxPolicy,
-    ) -> bool {
-        match policy {
+    ) -> ApprovalRequirement {
+        let needs_approval = match policy {
             AskForApproval::Never | AskForApproval::OnFailure => false,
             AskForApproval::OnRequest => !matches!(sandbox_policy, SandboxPolicy::DangerFullAccess),
             AskForApproval::UnlessTrusted => true,
+        };
+
+        if needs_approval {
+            ApprovalRequirement::NeedsApproval { reason: None }
+        } else {
+            ApprovalRequirement::Skip
         }
     }
 
