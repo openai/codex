@@ -73,11 +73,11 @@ impl SlashCommand {
             | SlashCommand::Undo
             | SlashCommand::Model
             | SlashCommand::Approvals
-            | SlashCommand::AutoContinueOn
-            | SlashCommand::AutoContinueOff
             | SlashCommand::Review
             | SlashCommand::Logout => false,
-            SlashCommand::Diff
+            SlashCommand::AutoContinueOn
+            | SlashCommand::AutoContinueOff
+            | SlashCommand::Diff
             | SlashCommand::Mention
             | SlashCommand::Status
             | SlashCommand::Mcp
