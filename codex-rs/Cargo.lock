@@ -1086,6 +1086,7 @@ dependencies = [
  "codex-apply-patch",
  "codex-arg0",
  "codex-async-utils",
+ "codex-execpolicy2",
  "codex-file-search",
  "codex-git",
  "codex-keyring-store",

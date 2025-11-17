@@ -1,4 +1,5 @@
 use crate::command_safety::is_dangerous_command::requires_initial_appoval;
+use crate::exec_policy::evaluate_with_policy;
 /*
 Runtime: unified exec
 
@@ -10,6 +11,7 @@ use crate::error::SandboxErr;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
+use crate::tools::sandboxing::ApprovalRequirement;
 use crate::tools::sandboxing::ProvidesSandboxRetryData;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::SandboxRetryData;
@@ -22,18 +24,21 @@ use crate::tools::sandboxing::with_cached_approval;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecSession;
 use crate::unified_exec::UnifiedExecSessionManager;
+use codex_execpolicy2::Policy as ExecPolicyV2;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub struct UnifiedExecRequest {
     pub command: Vec<String>,
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
+    pub exec_policy: Option<Arc<ExecPolicyV2>>,
     pub with_escalated_permissions: Option<bool>,
     pub justification: Option<String>,
 }
@@ -63,6 +68,7 @@ impl UnifiedExecRequest {
         command: Vec<String>,
         cwd: PathBuf,
         env: HashMap<String, String>,
+        exec_policy: Option<Arc<ExecPolicyV2>>,
         with_escalated_permissions: Option<bool>,
         justification: Option<String>,
     ) -> Self {
@@ -70,6 +76,7 @@ impl UnifiedExecRequest {
             command,
             cwd,
             env,
+            exec_policy,
             with_escalated_permissions,
             justification,
         }
@@ -129,18 +136,26 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         })
     }
 
-    fn wants_initial_approval(
+    fn approval_requirement(
         &self,
         req: &UnifiedExecRequest,
         policy: AskForApproval,
         sandbox_policy: &SandboxPolicy,
-    ) -> bool {
-        requires_initial_appoval(
+    ) -> ApprovalRequirement {
+        if let Some(exec_policy) = &req.exec_policy
+            && let Some(requirement) = evaluate_with_policy(exec_policy, &req.command, policy)
+        {
+            requirement
+        } else if requires_initial_appoval(
             policy,
             sandbox_policy,
             &req.command,
             req.with_escalated_permissions.unwrap_or(false),
-        )
+        ) {
+            ApprovalRequirement::NeedsApproval { reason: None }
+        } else {
+            ApprovalRequirement::Skip
+        }
     }
 
     fn wants_escalated_first_attempt(&self, req: &UnifiedExecRequest) -> bool {
