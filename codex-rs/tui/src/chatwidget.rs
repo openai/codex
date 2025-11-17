@@ -1039,7 +1039,7 @@ impl ChatWidget {
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
 
-        Self {
+        let widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_tx,
@@ -1081,7 +1081,11 @@ impl ChatWidget {
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
-        }
+        };
+
+        widget.prefetch_rate_limits();
+
+        widget
     }
 
     /// Create a ChatWidget attached to an existing conversation (e.g., a fork).
@@ -1106,7 +1110,7 @@ impl ChatWidget {
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
 
-        Self {
+        let widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_tx,
@@ -1148,7 +1152,11 @@ impl ChatWidget {
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
-        }
+        };
+
+        widget.prefetch_rate_limits();
+
+        widget
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
@@ -1780,6 +1788,24 @@ impl ChatWidget {
                 }
             })
         })
+    }
+
+    fn prefetch_rate_limits(&self) {
+        let Some(auth) = self.auth_manager.auth() else {
+            return;
+        };
+        if auth.mode != AuthMode::ChatGPT {
+            return;
+        }
+
+        let base_url = self.config.chatgpt_base_url.clone();
+        let app_event_tx = self.app_event_tx.clone();
+
+        tokio::spawn(async move {
+            if let Some(snapshot) = fetch_rate_limits(base_url, auth).await {
+                app_event_tx.send(AppEvent::RateLimitSnapshotFetched(snapshot));
+            }
+        });
     }
 
     fn lower_cost_preset(&self) -> Option<ModelPreset> {
