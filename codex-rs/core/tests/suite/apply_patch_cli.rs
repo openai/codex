@@ -87,8 +87,8 @@ async fn apply_patch_cli_multiple_operations_integration(
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness_with(|config| {
-        config.model = "gpt-5".to_string();
-        config.model_family = find_family_for_model("gpt-5").expect("gpt-5 is valid");
+        config.model = "gpt-5.1".to_string();
+        config.model_family = find_family_for_model("gpt-5.1").expect("gpt-5.1 is valid");
     })
     .await?;
 
@@ -671,8 +671,8 @@ async fn apply_patch_shell_heredoc_with_cd_updates_relative_workdir() -> Result<
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness_with(|config| {
-        config.model = "gpt-5".to_string();
-        config.model_family = find_family_for_model("gpt-5").expect("gpt-5 is valid");
+        config.model = "gpt-5.1".to_string();
+        config.model_family = find_family_for_model("gpt-5.1").expect("gpt-5.1 is valid");
     })
     .await?;
 
@@ -717,8 +717,8 @@ async fn apply_patch_shell_failure_propagates_error_and_skips_diff() -> Result<(
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness_with(|config| {
-        config.model = "gpt-5".to_string();
-        config.model_family = find_family_for_model("gpt-5").expect("gpt-5 is valid");
+        config.model = "gpt-5.1".to_string();
+        config.model_family = find_family_for_model("gpt-5.1").expect("gpt-5.1 is valid");
     })
     .await?;
     let test = harness.test();

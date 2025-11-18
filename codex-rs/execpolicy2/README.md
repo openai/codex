@@ -45,10 +45,15 @@ prefix_rule(
 - The effective `decision` is the strictest severity across all matches (`forbidden` > `prompt` > `allow`).
 
 ## CLI
-- Provide a policy file (for example `src/default.codexpolicy`) to check a command:
+- Provide one or more policy files (for example `src/default.codexpolicy`) to check a command:
 ```bash
 cargo run -p codex-execpolicy2 -- check --policy path/to/policy.codexpolicy git status
 ```
+- Pass multiple `--policy` flags to merge rules, evaluated in the order provided:
+```bash
+cargo run -p codex-execpolicy2 -- check --policy base.codexpolicy --policy overrides.codexpolicy git status
+```
+- Output is newline-delimited JSON by default; pass `--pretty` for pretty-printed JSON if desired.
 - Example outcomes:
   - Match: `{"match": { ... "decision": "allow" ... }}`
   - No match: `"noMatch"`

@@ -376,9 +376,9 @@ async fn shell_output_reserializes_truncated_content() -> Result<()> {
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
-        config.model = "gpt-5-codex".to_string();
+        config.model = "gpt-5.1-codex".to_string();
         config.model_family =
-            find_family_for_model("gpt-5-codex").expect("gpt-5 is a model family");
+            find_family_for_model("gpt-5.1-codex").expect("gpt-5.1 is a model family");
     });
     let test = builder.build(&server).await?;
 
@@ -741,9 +741,9 @@ async fn shell_output_is_structured_for_nonzero_exit() -> Result<()> {
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
-        config.model = "gpt-5-codex".to_string();
+        config.model = "gpt-5.1-codex".to_string();
         config.model_family =
-            find_family_for_model("gpt-5-codex").expect("gpt-5-codex is a model family");
+            find_family_for_model("gpt-5.1-codex").expect("gpt-5.1-codex is a model family");
         config.include_apply_patch_tool = true;
     });
     let test = builder.build(&server).await?;
@@ -847,9 +847,9 @@ async fn local_shell_call_output_is_structured() -> Result<()> {
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
-        config.model = "gpt-5-codex".to_string();
+        config.model = "gpt-5.1-codex".to_string();
         config.model_family =
-            find_family_for_model("gpt-5-codex").expect("gpt-5-codex is a model family");
+            find_family_for_model("gpt-5.1-codex").expect("gpt-5.1-codex is a model family");
         config.include_apply_patch_tool = true;
     });
     let test = builder.build(&server).await?;

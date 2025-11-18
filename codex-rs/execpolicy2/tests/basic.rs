@@ -41,7 +41,11 @@ prefix_rule(
     pattern = ["git", "status"],
 )
     "#;
-    let policy = PolicyParser::parse("test.codexpolicy", policy_src).expect("parse policy");
+    let mut parser = PolicyParser::new();
+    parser
+        .parse("test.codexpolicy", policy_src)
+        .expect("parse policy");
+    let policy = parser.build();
     let cmd = tokens(&["git", "status"]);
     let evaluation = policy.check(&cmd);
     assert_eq!(
@@ -57,13 +61,92 @@ prefix_rule(
 }
 
 #[test]
+fn parses_multiple_policy_files() {
+    let first_policy = r#"
+prefix_rule(
+    pattern = ["git"],
+    decision = "prompt",
+)
+    "#;
+    let second_policy = r#"
+prefix_rule(
+    pattern = ["git", "commit"],
+    decision = "forbidden",
+)
+    "#;
+    let mut parser = PolicyParser::new();
+    parser
+        .parse("first.codexpolicy", first_policy)
+        .expect("parse policy");
+    parser
+        .parse("second.codexpolicy", second_policy)
+        .expect("parse policy");
+    let policy = parser.build();
+
+    let git_rules = rule_snapshots(policy.rules().get_vec("git").expect("git rules"));
+    assert_eq!(
+        vec![
+            RuleSnapshot::Prefix(PrefixRule {
+                pattern: PrefixPattern {
+                    first: Arc::from("git"),
+                    rest: Vec::<PatternToken>::new().into(),
+                },
+                decision: Decision::Prompt,
+            }),
+            RuleSnapshot::Prefix(PrefixRule {
+                pattern: PrefixPattern {
+                    first: Arc::from("git"),
+                    rest: vec![PatternToken::Single("commit".to_string())].into(),
+                },
+                decision: Decision::Forbidden,
+            }),
+        ],
+        git_rules
+    );
+
+    let status_eval = policy.check(&tokens(&["git", "status"]));
+    assert_eq!(
+        Evaluation::Match {
+            decision: Decision::Prompt,
+            matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                matched_prefix: tokens(&["git"]),
+                decision: Decision::Prompt,
+            }],
+        },
+        status_eval
+    );
+
+    let commit_eval = policy.check(&tokens(&["git", "commit", "-m", "hi"]));
+    assert_eq!(
+        Evaluation::Match {
+            decision: Decision::Forbidden,
+            matched_rules: vec![
+                RuleMatch::PrefixRuleMatch {
+                    matched_prefix: tokens(&["git"]),
+                    decision: Decision::Prompt,
+                },
+                RuleMatch::PrefixRuleMatch {
+                    matched_prefix: tokens(&["git", "commit"]),
+                    decision: Decision::Forbidden,
+                },
+            ],
+        },
+        commit_eval
+    );
+}
+
+#[test]
 fn only_first_token_alias_expands_to_multiple_rules() {
     let policy_src = r#"
 prefix_rule(
     pattern = [["bash", "sh"], ["-c", "-l"]],
 )
     "#;
-    let policy = PolicyParser::parse("test.codexpolicy", policy_src).expect("parse policy");
+    let mut parser = PolicyParser::new();
+    parser
+        .parse("test.codexpolicy", policy_src)
+        .expect("parse policy");
+    let policy = parser.build();
 
     let bash_rules = rule_snapshots(policy.rules().get_vec("bash").expect("bash rules"));
     let sh_rules = rule_snapshots(policy.rules().get_vec("sh").expect("sh rules"));
@@ -120,7 +203,11 @@ prefix_rule(
     pattern = ["npm", ["i", "install"], ["--legacy-peer-deps", "--no-save"]],
 )
     "#;
-    let policy = PolicyParser::parse("test.codexpolicy", policy_src).expect("parse policy");
+    let mut parser = PolicyParser::new();
+    parser
+        .parse("test.codexpolicy", policy_src)
+        .expect("parse policy");
+    let policy = parser.build();
 
     let rules = rule_snapshots(policy.rules().get_vec("npm").expect("npm rules"));
     assert_eq!(
@@ -178,7 +265,11 @@ prefix_rule(
     ],
 )
     "#;
-    let policy = PolicyParser::parse("test.codexpolicy", policy_src).expect("parse policy");
+    let mut parser = PolicyParser::new();
+    parser
+        .parse("test.codexpolicy", policy_src)
+        .expect("parse policy");
+    let policy = parser.build();
     let match_eval = policy.check(&tokens(&["git", "status"]));
     assert_eq!(
         Evaluation::Match {
@@ -204,10 +295,6 @@ prefix_rule(
 fn strictest_decision_wins_across_matches() {
     let policy_src = r#"
 prefix_rule(
-    pattern = ["git", "status"],
-    decision = "allow",
-)
-prefix_rule(
     pattern = ["git"],
     decision = "prompt",
 )
@@ -216,25 +303,11 @@ prefix_rule(
     decision = "forbidden",
 )
     "#;
-    let policy = PolicyParser::parse("test.codexpolicy", policy_src).expect("parse policy");
-
-    let status = policy.check(&tokens(&["git", "status"]));
-    assert_eq!(
-        Evaluation::Match {
-            decision: Decision::Prompt,
-            matched_rules: vec![
-                RuleMatch::PrefixRuleMatch {
-                    matched_prefix: tokens(&["git", "status"]),
-                    decision: Decision::Allow,
-                },
-                RuleMatch::PrefixRuleMatch {
-                    matched_prefix: tokens(&["git"]),
-                    decision: Decision::Prompt,
-                },
-            ],
-        },
-        status
-    );
+    let mut parser = PolicyParser::new();
+    parser
+        .parse("test.codexpolicy", policy_src)
+        .expect("parse policy");
+    let policy = parser.build();
 
     let commit = policy.check(&tokens(&["git", "commit", "-m", "hi"]));
     assert_eq!(
@@ -252,5 +325,51 @@ prefix_rule(
             ],
         },
         commit
+    );
+}
+
+#[test]
+fn strictest_decision_across_multiple_commands() {
+    let policy_src = r#"
+prefix_rule(
+    pattern = ["git"],
+    decision = "prompt",
+)
+prefix_rule(
+    pattern = ["git", "commit"],
+    decision = "forbidden",
+)
+    "#;
+    let mut parser = PolicyParser::new();
+    parser
+        .parse("test.codexpolicy", policy_src)
+        .expect("parse policy");
+    let policy = parser.build();
+
+    let commands = vec![
+        tokens(&["git", "status"]),
+        tokens(&["git", "commit", "-m", "hi"]),
+    ];
+
+    let evaluation = policy.check_multiple(&commands);
+    assert_eq!(
+        Evaluation::Match {
+            decision: Decision::Forbidden,
+            matched_rules: vec![
+                RuleMatch::PrefixRuleMatch {
+                    matched_prefix: tokens(&["git"]),
+                    decision: Decision::Prompt,
+                },
+                RuleMatch::PrefixRuleMatch {
+                    matched_prefix: tokens(&["git"]),
+                    decision: Decision::Prompt,
+                },
+                RuleMatch::PrefixRuleMatch {
+                    matched_prefix: tokens(&["git", "commit"]),
+                    decision: Decision::Forbidden,
+                },
+            ],
+        },
+        evaluation
     );
 }

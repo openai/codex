@@ -524,7 +524,7 @@ mod tests {
         let request = ClientRequest::NewConversation {
             request_id: RequestId::Integer(42),
             params: v1::NewConversationParams {
-                model: Some("gpt-5-codex".to_string()),
+                model: Some("gpt-5.1-codex".to_string()),
                 model_provider: None,
                 profile: None,
                 cwd: None,
@@ -542,7 +542,7 @@ mod tests {
                 "method": "newConversation",
                 "id": 42,
                 "params": {
-                    "model": "gpt-5-codex",
+                    "model": "gpt-5.1-codex",
                     "modelProvider": null,
                     "profile": null,
                     "cwd": null,
