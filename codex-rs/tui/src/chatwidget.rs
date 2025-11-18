@@ -1975,7 +1975,7 @@ impl ChatWidget {
                 all_models,
                 "Select Model and Effort",
                 Some(
-                    "Access all models by running codex -m <model_name> or in your config.toml"
+                    "Access legacy models by running codex -m <model_name> or in your config.toml"
                         .to_string(),
                 ),
             );
