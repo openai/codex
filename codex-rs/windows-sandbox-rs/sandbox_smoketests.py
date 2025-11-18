@@ -435,12 +435,23 @@ def main() -> int:
     rc, out, err = run_sbx("workspace-write", ["cmd", "/c", f"echo leak > {outside_after_timeout}"], WS_ROOT)
     add("WS: post-timeout outside write still denied", rc != 0 and assert_not_exists(outside_after_timeout), f"rc={rc}")
 
-    # 41. WS: additional protected path variation (.ssh)
-    ssh_var = WS_ROOT / ".SsH" / "config"
-    remove_if_exists(ssh_var.parent)
-    ssh_var.parent.mkdir(exist_ok=True)
-    rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "echo key > .SsH\\config"], WS_ROOT)
-    add("WS: protected path variation (.ssh) denied", rc != 0 and assert_not_exists(ssh_var), f"rc={rc}")
+    # 41. RO: Start-Process https blocked (KNOWN FAIL until GUI escape fixed)
+    rc, out, err = run_sbx(
+        "read-only",
+        [
+            "powershell",
+            "-NoLogo",
+            "-NoProfile",
+            "-Command",
+            "Start-Process 'https://codex-invalid.local/smoke'",
+        ],
+        WS_ROOT,
+    )
+    add(
+        "RO: Start-Process https denied (KNOWN FAIL)",
+        rc != 0,
+        f"rc={rc}, stdout={out}, stderr={err}",
+    )
 
     return summarize(results)
 
