@@ -2441,35 +2441,33 @@ mod tests {
         assert_eq!(expected, reconstructed);
     }
 
-    #[test]
-    fn record_initial_history_reconstructs_resumed_transcript() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn record_initial_history_reconstructs_resumed_transcript() {
         let (session, turn_context) = make_session_and_context();
         let (rollout_items, expected) = sample_rollout(&session, &turn_context);
 
-        tokio_test::block_on(session.record_initial_history(InitialHistory::Resumed(
-            ResumedHistory {
+        session
+            .record_initial_history(InitialHistory::Resumed(ResumedHistory {
                 conversation_id: ConversationId::default(),
                 history: rollout_items,
                 rollout_path: PathBuf::from("/tmp/resume.jsonl"),
-            },
-        )));
+            }))
+            .await;
 
-        let actual = tokio_test::block_on(async {
-            session.state.lock().await.clone_history().get_history()
-        });
+        let actual = session.state.lock().await.clone_history().get_history();
         assert_eq!(expected, actual);
     }
 
-    #[test]
-    fn record_initial_history_reconstructs_forked_transcript() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn record_initial_history_reconstructs_forked_transcript() {
         let (session, turn_context) = make_session_and_context();
         let (rollout_items, expected) = sample_rollout(&session, &turn_context);
 
-        tokio_test::block_on(session.record_initial_history(InitialHistory::Forked(rollout_items)));
+        session
+            .record_initial_history(InitialHistory::Forked(rollout_items))
+            .await;
 
-        let actual = tokio_test::block_on(async {
-            session.state.lock().await.clone_history().get_history()
-        });
+        let actual = session.state.lock().await.clone_history().get_history();
         assert_eq!(expected, actual);
     }
 
@@ -2801,7 +2799,7 @@ mod tests {
         assert!(rx.try_recv().is_err());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn abort_gracefuly_emits_turn_aborted_only() {
         let (sess, tc, rx) = make_session_and_context_with_rx();
         let input = vec![UserInput::Text {
@@ -2888,7 +2886,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn fatal_tool_error_stops_turn_and_reports_error() {
         let (session, turn_context, _rx) = make_session_and_context_with_rx();
         let router = ToolRouter::from_config(
@@ -3039,7 +3037,7 @@ mod tests {
         (rollout_items, live_history.get_history())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn rejects_escalated_permissions_when_policy_not_on_request() {
         use crate::exec::ExecParams;
         use crate::protocol::AskForApproval;
@@ -3166,7 +3164,7 @@ mod tests {
         assert!(exec_output.output.contains("hi"));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request() {
         use crate::protocol::AskForApproval;
         use crate::turn_diff_tracker::TurnDiffTracker;
