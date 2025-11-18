@@ -1431,6 +1431,7 @@ mod handlers {
     use codex_protocol::protocol::ReviewRequest;
     use codex_protocol::protocol::TurnAbortReason;
 
+    use codex_protocol::user_input::UserInput;
     use std::sync::Arc;
     use tracing::info;
     use tracing::warn;
@@ -1639,8 +1640,14 @@ mod handlers {
             .new_turn_with_sub_id(sub_id, SessionSettingsUpdate::default())
             .await;
 
-        sess.spawn_task(Arc::clone(&turn_context), vec![], CompactTask)
-            .await;
+        sess.spawn_task(
+            Arc::clone(&turn_context),
+            vec![UserInput::Text {
+                text: turn_context.compact_prompt().to_string(),
+            }],
+            CompactTask,
+        )
+        .await;
     }
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {

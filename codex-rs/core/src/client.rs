@@ -258,6 +258,7 @@ impl ModelClient {
         //
         // For Azure, we send `store: true` and preserve reasoning item IDs.
         let azure_workaround = self.provider.is_azure_responses_endpoint();
+        tracing::warn!("Input: {input_with_instructions:#?}");
 
         let payload = ResponsesApiRequest {
             model: &self.config.model,
