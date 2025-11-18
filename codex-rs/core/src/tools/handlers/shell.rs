@@ -304,17 +304,13 @@ impl ShellHandler {
             env: exec_params.env.clone(),
             with_escalated_permissions: exec_params.with_escalated_permissions,
             justification: exec_params.justification.clone(),
-            approval_requirement: if is_user_shell_command {
-                ApprovalRequirement::Skip
-            } else {
-                approval_requirement_for_command(
-                    turn.exec_policy.as_deref(),
-                    &exec_params.command,
-                    turn.approval_policy,
-                    &turn.sandbox_policy,
-                    exec_params.with_escalated_permissions.unwrap_or(false),
-                )
-            },
+            approval_requirement: approval_requirement_for_command(
+                turn.exec_policy.as_deref(),
+                &exec_params.command,
+                turn.approval_policy,
+                &turn.sandbox_policy,
+                exec_params.with_escalated_permissions.unwrap_or(false),
+            ),
         };
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = ShellRuntime::new();
