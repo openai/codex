@@ -11,6 +11,7 @@ pub mod event_processor_with_jsonl_output;
 pub mod exec_events;
 
 pub use cli::Cli;
+use codex_common::CommonCli;
 use codex_common::oss::ensure_oss_provider_ready;
 use codex_common::oss::get_default_model_for_oss_provider;
 use codex_core::AuthManager;
@@ -59,6 +60,17 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     let Cli {
         command,
+        common,
+        skip_git_repo_check,
+        color,
+        last_message_file,
+        json: json_mode,
+        prompt,
+        output_schema: output_schema_path,
+        config_overrides,
+    } = cli;
+
+    let CommonCli {
         images,
         model: model_cli_arg,
         oss,
@@ -67,16 +79,10 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         full_auto,
         dangerously_bypass_approvals_and_sandbox,
         cwd,
-        skip_git_repo_check,
         add_dir,
-        color,
-        last_message_file,
-        json: json_mode,
         sandbox_mode: sandbox_mode_cli_arg,
-        prompt,
-        output_schema: output_schema_path,
-        config_overrides,
-    } = cli;
+        ..
+    } = common;
 
     // Determine the prompt source (parent or subcommand) and read from stdin if needed.
     let prompt_arg = match &command {

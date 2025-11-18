@@ -4,7 +4,12 @@ use codex_common::CliConfigOverrides;
 
 fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
-        run_main(codex_linux_sandbox_exe, CliConfigOverrides::default()).await?;
+        run_main(
+            codex_linux_sandbox_exe,
+            CliConfigOverrides::default(),
+            codex_core::config::ConfigOverrides::default(),
+        )
+        .await?;
         Ok(())
     })
 }

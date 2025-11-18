@@ -11,6 +11,9 @@ pub use approval_mode_cli_arg::ApprovalModeCliArg;
 mod sandbox_mode_cli_arg;
 
 #[cfg(feature = "cli")]
+mod common_cli;
+
+#[cfg(feature = "cli")]
 pub use sandbox_mode_cli_arg::SandboxModeCliArg;
 
 #[cfg(feature = "cli")]
@@ -21,6 +24,9 @@ mod config_override;
 
 #[cfg(feature = "cli")]
 pub use config_override::CliConfigOverrides;
+
+#[cfg(feature = "cli")]
+pub use common_cli::CommonCli;
 
 mod sandbox_summary;
 
