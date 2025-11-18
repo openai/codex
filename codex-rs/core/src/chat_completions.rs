@@ -81,6 +81,7 @@ pub(crate) async fn stream_chat_completions(
             ResponseItem::CustomToolCallOutput { .. } => {}
             ResponseItem::WebSearchCall { .. } => {}
             ResponseItem::GhostSnapshot { .. } => {}
+            ResponseItem::CompactionSummary { .. } => {}
         }
     }
 
@@ -320,7 +321,8 @@ pub(crate) async fn stream_chat_completions(
             }
             ResponseItem::Reasoning { .. }
             | ResponseItem::WebSearchCall { .. }
-            | ResponseItem::Other => {
+            | ResponseItem::Other
+            | ResponseItem::CompactionSummary { .. } => {
                 // Omit these items from the conversation history.
                 continue;
             }
