@@ -9,10 +9,11 @@ use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::codex::TurnContext;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
-use crate::exec_policy::approval_requirement_for_command;
+use crate::exec_policy::create_approval_requirement_for_command;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
+use crate::sandboxing::SandboxPermissions;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -303,12 +304,12 @@ impl ShellHandler {
             env: exec_params.env.clone(),
             with_escalated_permissions: exec_params.with_escalated_permissions,
             justification: exec_params.justification.clone(),
-            approval_requirement: approval_requirement_for_command(
+            approval_requirement: create_approval_requirement_for_command(
                 &turn.exec_policy,
                 &exec_params.command,
                 turn.approval_policy,
                 &turn.sandbox_policy,
-                exec_params.with_escalated_permissions.unwrap_or(false),
+                SandboxPermissions::from(exec_params.with_escalated_permissions.unwrap_or(false)),
             ),
         };
         let mut orchestrator = ToolOrchestrator::new();
