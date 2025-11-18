@@ -1,7 +1,4 @@
-use std::fs;
-use std::fs::OpenOptions;
 use std::io::ErrorKind;
-use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -14,6 +11,9 @@ use codex_execpolicy2::PolicyParser;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use thiserror::Error;
+use tokio::fs;
+use tokio::fs::OpenOptions;
+use tokio::io::AsyncWriteExt;
 
 use crate::bash::parse_shell_lc_plain_commands;
 use crate::features::Feature;
@@ -60,7 +60,7 @@ pub enum ExecPolicyError {
     },
 }
 
-pub(crate) fn exec_policy_for(
+pub(crate) async fn exec_policy_for(
     features: &Features,
     codex_home: &Path,
 ) -> Result<Arc<Policy>, ExecPolicyError> {
@@ -69,18 +69,20 @@ pub(crate) fn exec_policy_for(
     }
 
     let policy_dir = codex_home.join(POLICY_DIR_NAME);
-    ensure_policy_dir(&policy_dir)?;
-    ensure_default_policy_file(&policy_dir)?;
+    ensure_policy_dir(&policy_dir).await?;
+    ensure_default_policy_file(&policy_dir).await?;
 
-    let policy_paths = collect_policy_files(&policy_dir)?;
+    let policy_paths = collect_policy_files(&policy_dir).await?;
 
     let mut parser = PolicyParser::new();
     for policy_path in &policy_paths {
         let contents =
-            fs::read_to_string(policy_path).map_err(|source| ExecPolicyError::ReadFile {
-                path: policy_path.clone(),
-                source,
-            })?;
+            fs::read_to_string(policy_path)
+                .await
+                .map_err(|source| ExecPolicyError::ReadFile {
+                    path: policy_path.clone(),
+                    source,
+                })?;
         let identifier = policy_path.to_string_lossy().to_string();
         parser
             .parse(&identifier, &contents)
@@ -152,42 +154,50 @@ pub(crate) fn approval_requirement_for_command(
     }
 }
 
-fn collect_policy_files(dir: &Path) -> Result<Vec<PathBuf>, ExecPolicyError> {
-    let entries = fs::read_dir(dir).map_err(|source| ExecPolicyError::ReadDir {
-        dir: dir.to_path_buf(),
-        source,
-    })?;
+async fn collect_policy_files(dir: &Path) -> Result<Vec<PathBuf>, ExecPolicyError> {
+    let mut read_dir = fs::read_dir(dir)
+        .await
+        .map_err(|source| ExecPolicyError::ReadDir {
+            dir: dir.to_path_buf(),
+            source,
+        })?;
 
-    let mut policy_paths = entries
-        .map(|entry| {
-            let entry = entry.map_err(|source| ExecPolicyError::ReadDir {
+    let mut policy_paths = Vec::new();
+    while let Some(entry) =
+        read_dir
+            .next_entry()
+            .await
+            .map_err(|source| ExecPolicyError::ReadDir {
+                dir: dir.to_path_buf(),
+                source,
+            })?
+    {
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .await
+            .map_err(|source| ExecPolicyError::ReadDir {
                 dir: dir.to_path_buf(),
                 source,
             })?;
-            let path = entry.path();
-            if path
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| ext == POLICY_EXTENSION)
-                && path.is_file()
-            {
-                Ok(Some(path))
-            } else {
-                Ok(None)
-            }
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
+
+        if path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext == POLICY_EXTENSION)
+            && file_type.is_file()
+        {
+            policy_paths.push(path);
+        }
+    }
 
     policy_paths.sort();
 
     Ok(policy_paths)
 }
 
-fn ensure_policy_dir(policy_dir: &Path) -> Result<(), ExecPolicyError> {
-    match fs::create_dir_all(policy_dir) {
+async fn ensure_policy_dir(policy_dir: &Path) -> Result<(), ExecPolicyError> {
+    match fs::create_dir_all(policy_dir).await {
         Ok(()) => Ok(()),
         Err(source) => Err(ExecPolicyError::CreatePolicyDir {
             path: policy_dir.to_path_buf(),
@@ -196,15 +206,17 @@ fn ensure_policy_dir(policy_dir: &Path) -> Result<(), ExecPolicyError> {
     }
 }
 
-fn ensure_default_policy_file(policy_dir: &Path) -> Result<(), ExecPolicyError> {
+async fn ensure_default_policy_file(policy_dir: &Path) -> Result<(), ExecPolicyError> {
     let default_path = policy_dir.join(DEFAULT_POLICY_FILENAME);
     let maybe_file = OpenOptions::new()
         .create_new(true)
         .write(true)
-        .open(&default_path);
+        .open(&default_path)
+        .await;
     match maybe_file {
         Ok(mut file) => file
             .write_all(DEFAULT_POLICY_CONTENT.as_bytes())
+            .await
             .map_err(|source| ExecPolicyError::CreateDefaultPolicy {
                 path: default_path.clone(),
                 source,
@@ -225,15 +237,18 @@ mod tests {
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::SandboxPolicy;
     use pretty_assertions::assert_eq;
+    use std::fs;
     use tempfile::tempdir;
 
-    #[test]
-    fn returns_empty_policy_when_feature_disabled() {
+    #[tokio::test]
+    async fn returns_empty_policy_when_feature_disabled() {
         let mut features = Features::with_defaults();
         features.disable(Feature::ExecPolicy);
         let temp_dir = tempdir().expect("create temp dir");
 
-        let policy = exec_policy_for(&features, temp_dir.path()).expect("policy result");
+        let policy = exec_policy_for(&features, temp_dir.path())
+            .await
+            .expect("policy result");
 
         let commands = [vec!["rm".to_string()]];
         assert!(matches!(
@@ -243,20 +258,21 @@ mod tests {
         assert!(!temp_dir.path().join(POLICY_DIR_NAME).exists());
     }
 
-    #[test]
-    fn creates_policy_dir_and_default_file_when_missing() {
+    #[tokio::test]
+    async fn creates_policy_dir_and_default_file_when_missing() {
         let temp_dir = tempdir().expect("create temp dir");
 
-        let _policy =
-            exec_policy_for(&Features::with_defaults(), temp_dir.path()).expect("policy result");
+        let _policy = exec_policy_for(&Features::with_defaults(), temp_dir.path())
+            .await
+            .expect("policy result");
 
         let policy_dir = temp_dir.path().join(POLICY_DIR_NAME);
         assert!(policy_dir.exists());
         assert!(policy_dir.join(DEFAULT_POLICY_FILENAME).exists());
     }
 
-    #[test]
-    fn loads_policies_from_policy_subdirectory() {
+    #[tokio::test]
+    async fn loads_policies_from_policy_subdirectory() {
         let temp_dir = tempdir().expect("create temp dir");
         let policy_dir = temp_dir.path().join(POLICY_DIR_NAME);
         fs::create_dir_all(&policy_dir).expect("create policy dir");
@@ -266,8 +282,9 @@ mod tests {
         )
         .expect("write policy file");
 
-        let policy =
-            exec_policy_for(&Features::with_defaults(), temp_dir.path()).expect("policy result");
+        let policy = exec_policy_for(&Features::with_defaults(), temp_dir.path())
+            .await
+            .expect("policy result");
         let command = [vec!["rm".to_string()]];
         assert!(matches!(
             policy.check_multiple(command.iter()),
@@ -275,8 +292,8 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn ignores_policies_outside_policy_dir() {
+    #[tokio::test]
+    async fn ignores_policies_outside_policy_dir() {
         let temp_dir = tempdir().expect("create temp dir");
         fs::write(
             temp_dir.path().join("root.codexpolicy"),
@@ -284,8 +301,9 @@ mod tests {
         )
         .expect("write policy file");
 
-        let policy =
-            exec_policy_for(&Features::with_defaults(), temp_dir.path()).expect("policy result");
+        let policy = exec_policy_for(&Features::with_defaults(), temp_dir.path())
+            .await
+            .expect("policy result");
         let command = [vec!["ls".to_string()]];
         assert!(matches!(
             policy.check_multiple(command.iter()),
