@@ -27,7 +27,7 @@ use regex_lite::escape;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
     // Create a temporary working directory with a known file.
     let cwd = TempDir::new().unwrap();
@@ -95,7 +95,7 @@ async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
     assert_eq!(stdout, contents);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn user_shell_cmd_can_be_interrupted() {
     // Set up isolated config and conversation.
     let codex_home = TempDir::new().unwrap();
