@@ -478,6 +478,12 @@ pub enum EventMsg {
     /// Ack the client's configure message.
     SessionConfigured(SessionConfiguredEvent),
 
+    /// Incremental MCP startup progress updates.
+    McpStartupUpdate(McpStartupUpdateEvent),
+
+    /// Aggregate MCP startup completion summary.
+    McpStartupComplete(McpStartupCompleteEvent),
+
     McpToolCallBegin(McpToolCallBeginEvent),
 
     McpToolCallEnd(McpToolCallEndEvent),
@@ -1235,6 +1241,8 @@ impl Default for ExecCommandSource {
 pub struct ExecCommandBeginEvent {
     /// Identifier so this can be paired with the ExecCommandEnd event.
     pub call_id: String,
+    /// Turn ID that this command belongs to.
+    pub turn_id: String,
     /// The command to be executed.
     pub command: Vec<String>,
     /// The command's working directory if not the default cwd for the agent.
@@ -1253,6 +1261,21 @@ pub struct ExecCommandBeginEvent {
 pub struct ExecCommandEndEvent {
     /// Identifier for the ExecCommandBegin that finished.
     pub call_id: String,
+    /// Turn ID that this command belongs to.
+    pub turn_id: String,
+    /// The command that was executed.
+    pub command: Vec<String>,
+    /// The command's working directory if not the default cwd for the agent.
+    pub cwd: PathBuf,
+    pub parsed_cmd: Vec<ParsedCommand>,
+    /// Where the command originated. Defaults to Agent for backward compatibility.
+    #[serde(default)]
+    pub source: ExecCommandSource,
+    /// Raw input sent to a unified exec session (if this is an interaction event).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub interaction_input: Option<String>,
+
     /// Captured stdout
     pub stdout: String,
     /// Captured stderr
@@ -1381,6 +1404,37 @@ pub struct McpListToolsResponseEvent {
     pub resource_templates: std::collections::HashMap<String, Vec<McpResourceTemplate>>,
     /// Authentication status for each configured MCP server.
     pub auth_statuses: std::collections::HashMap<String, McpAuthStatus>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct McpStartupUpdateEvent {
+    /// Server name being started.
+    pub server: String,
+    /// Current startup status.
+    pub status: McpStartupStatus,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case", tag = "state")]
+#[ts(rename_all = "snake_case", tag = "state")]
+pub enum McpStartupStatus {
+    Starting,
+    Ready,
+    Failed { error: String },
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, Default)]
+pub struct McpStartupCompleteEvent {
+    pub ready: Vec<String>,
+    pub failed: Vec<McpStartupFailure>,
+    pub cancelled: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct McpStartupFailure {
+    pub server: String,
+    pub error: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
@@ -1587,6 +1641,49 @@ mod tests {
 
         let deserialized: ExecCommandOutputDeltaEvent = serde_json::from_str(&serialized)?;
         assert_eq!(deserialized, event);
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_mcp_startup_update_event() -> Result<()> {
+        let event = Event {
+            id: "init".to_string(),
+            msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
+                server: "srv".to_string(),
+                status: McpStartupStatus::Failed {
+                    error: "boom".to_string(),
+                },
+            }),
+        };
+
+        let value = serde_json::to_value(&event)?;
+        assert_eq!(value["msg"]["type"], "mcp_startup_update");
+        assert_eq!(value["msg"]["server"], "srv");
+        assert_eq!(value["msg"]["status"]["state"], "failed");
+        assert_eq!(value["msg"]["status"]["error"], "boom");
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_mcp_startup_complete_event() -> Result<()> {
+        let event = Event {
+            id: "init".to_string(),
+            msg: EventMsg::McpStartupComplete(McpStartupCompleteEvent {
+                ready: vec!["a".to_string()],
+                failed: vec![McpStartupFailure {
+                    server: "b".to_string(),
+                    error: "bad".to_string(),
+                }],
+                cancelled: vec!["c".to_string()],
+            }),
+        };
+
+        let value = serde_json::to_value(&event)?;
+        assert_eq!(value["msg"]["type"], "mcp_startup_complete");
+        assert_eq!(value["msg"]["ready"][0], "a");
+        assert_eq!(value["msg"]["failed"][0]["server"], "b");
+        assert_eq!(value["msg"]["failed"][0]["error"], "bad");
+        assert_eq!(value["msg"]["cancelled"][0], "c");
         Ok(())
     }
 }
