@@ -190,10 +190,8 @@ fn truncate_with_token_budget(
     }
 
     let exceeds_stack_limit = byte_len > TOKENIZER_STACK_SAFE_BYTES;
-    let exceeds_large_threshold =
-        max_tokens > 0 && byte_len > approx_bytes_for_tokens(max_tokens.saturating_mul(2));
 
-    if exceeds_stack_limit || exceeds_large_threshold {
+    if exceeds_stack_limit {
         let truncated =
             truncate_with_byte_estimate(s, max_tokens.saturating_mul(APPROX_BYTES_PER_TOKEN));
         let approx_total = approx_token_count(s);
