@@ -594,8 +594,8 @@ mod tests {
 
     #[test]
     fn truncate_middle_handles_utf8_content() {
-        let tok = Tokenizer::try_default().expect("load tokenizer");
-        let s = "😀😀😀😀😀😀😀😀😀😀\nsecond line with ascii text\n";
+        let tok = Tokenizer::for_model(OPENAI_DEFAULT_MODEL).expect("load tokenizer");
+        let s = "😀😀😀😀😀😀😀😀😀😀\nsecond line with text\n";
         let max_tokens = 8;
         let (out, tokens) = truncate_with_token_budget(s, max_tokens, OPENAI_DEFAULT_MODEL);
 
