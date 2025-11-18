@@ -196,7 +196,7 @@ fn exec_resume_preserves_cli_configuration_overrides() -> anyhow::Result<()> {
         .arg("--sandbox")
         .arg("workspace-write")
         .arg("--model")
-        .arg("gpt-5")
+        .arg("gpt-5.1")
         .arg("-C")
         .arg(env!("CARGO_MANIFEST_DIR"))
         .arg(&prompt)
@@ -218,7 +218,7 @@ fn exec_resume_preserves_cli_configuration_overrides() -> anyhow::Result<()> {
         .arg("--sandbox")
         .arg("workspace-write")
         .arg("--model")
-        .arg("gpt-5-high")
+        .arg("gpt-5.1-high")
         .arg("-C")
         .arg(env!("CARGO_MANIFEST_DIR"))
         .arg(&prompt2)
@@ -231,7 +231,7 @@ fn exec_resume_preserves_cli_configuration_overrides() -> anyhow::Result<()> {
 
     let stderr = String::from_utf8(output.stderr)?;
     assert!(
-        stderr.contains("model: gpt-5-high"),
+        stderr.contains("model: gpt-5.1-high"),
         "stderr missing model override: {stderr}"
     );
     if cfg!(target_os = "windows") {

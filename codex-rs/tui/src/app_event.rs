@@ -4,6 +4,7 @@ use codex_common::approval_presets::ApprovalPreset;
 use codex_common::model_presets::ModelPreset;
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::Event;
+use codex_core::protocol::RateLimitSnapshot;
 use codex_file_search::FileMatch;
 
 use crate::bottom_pane::ApprovalRequest;
@@ -40,6 +41,9 @@ pub(crate) enum AppEvent {
         query: String,
         matches: Vec<FileMatch>,
     },
+
+    /// Result of refreshing rate limits
+    RateLimitSnapshotFetched(RateLimitSnapshot),
 
     /// Result of computing a `/diff` command.
     DiffResult(String),

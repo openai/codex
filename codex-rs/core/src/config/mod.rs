@@ -62,11 +62,11 @@ pub mod profile;
 pub mod types;
 
 #[cfg(target_os = "windows")]
-pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5";
+pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5.1";
 #[cfg(not(target_os = "windows"))]
-pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5-codex";
-const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5-codex";
-pub const GPT_5_CODEX_MEDIUM_MODEL: &str = "gpt-5-codex";
+pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5.1-codex";
+const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5.1-codex";
+pub const GPT_5_CODEX_MEDIUM_MODEL: &str = "gpt-5.1-codex";
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
@@ -81,7 +81,7 @@ pub struct Config {
     /// Optional override of model selection.
     pub model: String,
 
-    /// Model used specifically for review sessions. Defaults to "gpt-5-codex".
+    /// Model used specifically for review sessions. Defaults to "gpt-5.1-codex".
     pub review_model: String,
 
     pub model_family: ModelFamily,
@@ -2616,7 +2616,7 @@ url = "https://example.com/mcp"
         let codex_home = TempDir::new()?;
 
         ConfigEditsBuilder::new(codex_home.path())
-            .set_model(Some("gpt-5-codex"), Some(ReasoningEffort::High))
+            .set_model(Some("gpt-5.1-codex"), Some(ReasoningEffort::High))
             .apply()
             .await?;
 
@@ -2624,7 +2624,7 @@ url = "https://example.com/mcp"
             tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
         let parsed: ConfigToml = toml::from_str(&serialized)?;
 
-        assert_eq!(parsed.model.as_deref(), Some("gpt-5-codex"));
+        assert_eq!(parsed.model.as_deref(), Some("gpt-5.1-codex"));
         assert_eq!(parsed.model_reasoning_effort, Some(ReasoningEffort::High));
 
         Ok(())
@@ -2638,7 +2638,7 @@ url = "https://example.com/mcp"
         tokio::fs::write(
             &config_path,
             r#"
-model = "gpt-5-codex"
+model = "gpt-5.1-codex"
 model_reasoning_effort = "medium"
 
 [profiles.dev]
@@ -2674,7 +2674,7 @@ model = "gpt-4.1"
 
         ConfigEditsBuilder::new(codex_home.path())
             .with_profile(Some("dev"))
-            .set_model(Some("gpt-5-codex"), Some(ReasoningEffort::Medium))
+            .set_model(Some("gpt-5.1-codex"), Some(ReasoningEffort::Medium))
             .apply()
             .await?;
 
@@ -2686,7 +2686,7 @@ model = "gpt-4.1"
             .get("dev")
             .expect("profile should be created");
 
-        assert_eq!(profile.model.as_deref(), Some("gpt-5-codex"));
+        assert_eq!(profile.model.as_deref(), Some("gpt-5.1-codex"));
         assert_eq!(
             profile.model_reasoning_effort,
             Some(ReasoningEffort::Medium)
@@ -2708,7 +2708,7 @@ model = "gpt-4"
 model_reasoning_effort = "medium"
 
 [profiles.prod]
-model = "gpt-5-codex"
+model = "gpt-5.1-codex"
 "#,
         )
         .await?;
@@ -2737,7 +2737,7 @@ model = "gpt-5-codex"
                 .profiles
                 .get("prod")
                 .and_then(|profile| profile.model.as_deref()),
-            Some("gpt-5-codex"),
+            Some("gpt-5.1-codex"),
         );
 
         Ok(())
@@ -2852,7 +2852,7 @@ model_provider = "openai"
 approval_policy = "on-failure"
 
 [profiles.gpt5]
-model = "gpt-5"
+model = "gpt-5.1"
 model_provider = "openai"
 approval_policy = "on-failure"
 model_reasoning_effort = "high"
@@ -3168,9 +3168,9 @@ model_verbosity = "high"
             fixture.codex_home(),
         )?;
         let expected_gpt5_profile_config = Config {
-            model: "gpt-5".to_string(),
+            model: "gpt-5.1".to_string(),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-            model_family: find_family_for_model("gpt-5").expect("known model slug"),
+            model_family: find_family_for_model("gpt-5.1").expect("known model slug"),
             model_context_window: Some(272_000),
             model_max_output_tokens: Some(128_000),
             model_auto_compact_token_limit: Some(244_800),
