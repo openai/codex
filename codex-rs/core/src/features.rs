@@ -303,7 +303,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::ExecPolicy,
         key: "exec_policy",
         stage: Stage::Experimental,
-        default_enabled: false,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::SandboxCommandAssessment,

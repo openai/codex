@@ -177,7 +177,8 @@ mod tests {
 
     #[test]
     fn returns_none_when_feature_disabled() {
-        let features = Features::with_defaults();
+        let mut features = Features::with_defaults();
+        features.disable(Feature::ExecPolicy);
         let temp_dir = tempdir().expect("create temp dir");
 
         let policy = exec_policy_for(&features, temp_dir.path()).expect("policy result");
