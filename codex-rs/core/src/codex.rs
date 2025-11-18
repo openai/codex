@@ -351,6 +351,8 @@ impl SessionConfiguration {
         let mut next_configuration = self.clone();
         if let Some(model) = updates.model.clone() {
             next_configuration.model = model;
+            // TODO (aibrahim): recompute output_max_tokens/calls_output_max_tokens when the model changes so
+            // truncation budgets keep matching the current model.
         }
         if let Some(effort) = updates.reasoning_effort {
             next_configuration.model_reasoning_effort = effort;

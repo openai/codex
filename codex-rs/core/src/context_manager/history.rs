@@ -34,7 +34,8 @@ impl ContextManager {
 
     pub(crate) fn set_model(&mut self, model: &str) {
         self.model = model.to_string();
-        // intentionally not updating the function output max tokens here.
+        // TODO (aibrahim): recompute output_max_tokens/calls_output_max_tokens when the model changes so
+        // truncation budgets keep matching the current model.
     }
 
     pub(crate) fn token_info(&self) -> Option<TokenUsageInfo> {
