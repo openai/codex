@@ -26,7 +26,9 @@ fn model_from_preset(preset: ModelPreset) -> Model {
     }
 }
 
-fn reasoning_efforts_from_preset(efforts: &[ReasoningEffortPreset]) -> Vec<ReasoningEffortOption> {
+fn reasoning_efforts_from_preset(
+    efforts: &'static [ReasoningEffortPreset],
+) -> Vec<ReasoningEffortOption> {
     efforts
         .iter()
         .map(|preset| ReasoningEffortOption {
