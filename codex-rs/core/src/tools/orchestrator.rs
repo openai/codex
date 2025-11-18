@@ -17,6 +17,7 @@ use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
+use crate::tools::sandboxing::default_approval_requirement;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 
@@ -52,7 +53,10 @@ impl ToolOrchestrator {
         // 1) Approval
         let mut already_approved = false;
 
-        match tool.approval_requirement(req, approval_policy, &turn_ctx.sandbox_policy) {
+        let requirement = tool.approval_requirement(req).unwrap_or_else(|| {
+            default_approval_requirement(approval_policy, &turn_ctx.sandbox_policy)
+        });
+        match requirement {
             ApprovalRequirement::Skip => {
                 otel.tool_decision(otel_tn, otel_ci, ReviewDecision::Approved, otel_cfg);
             }
