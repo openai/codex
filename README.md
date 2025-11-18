@@ -73,6 +73,7 @@ Codex CLI supports a rich set of configuration options, with preferences stored 
 
 ### Docs & FAQ
 
+- [**Key Features**](./docs/key-features.md) / [**주요 특장점 (한국어)**](./docs/features-ko.md)
 - [**Getting started**](./docs/getting-started.md)
   - [CLI usage](./docs/getting-started.md#cli-usage)
   - [Slash Commands](./docs/slash_commands.md)
