@@ -1297,7 +1297,7 @@ async fn unified_exec_streams_after_lagged_output() -> Result<()> {
 import sys
 import time
 
-chunk = b'x' * (1 << 20)
+chunk = b'long content here to trigger truncation' * (1 << 10)
 for _ in range(4):
     sys.stdout.buffer.write(chunk)
     sys.stdout.flush()
