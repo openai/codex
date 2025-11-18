@@ -1419,7 +1419,7 @@ mod handlers {
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
     use codex_protocol::protocol::TurnAbortReason;
-    
+
     use std::sync::Arc;
     use tracing::info;
     use tracing::warn;
