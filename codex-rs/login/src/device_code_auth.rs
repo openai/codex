@@ -8,6 +8,7 @@ use std::time::Instant;
 
 use crate::pkce::PkceCodes;
 use crate::server::ServerOptions;
+use crate::server::build_login_http_client;
 use std::io;
 
 const ANSI_BLUE: &str = "\x1b[94m";
@@ -158,7 +159,7 @@ fn print_device_code_prompt(verification_url: &str, code: &str) {
 }
 
 pub async fn request_device_code(opts: &ServerOptions) -> std::io::Result<DeviceCode> {
-    let client = reqwest::Client::new();
+    let client = build_login_http_client()?;
     let base_url = opts.issuer.trim_end_matches('/');
     let api_base_url = format!("{base_url}/api/accounts");
     let uc = request_user_code(&client, &api_base_url, &opts.client_id).await?;
@@ -175,7 +176,7 @@ pub async fn complete_device_code_login(
     opts: ServerOptions,
     device_code: DeviceCode,
 ) -> std::io::Result<()> {
-    let client = reqwest::Client::new();
+    let client = build_login_http_client()?;
     let base_url = opts.issuer.trim_end_matches('/');
     let api_base_url = format!("{base_url}/api/accounts");
 
