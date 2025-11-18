@@ -47,7 +47,7 @@ async fn truncate_function_error_trims_respond_to_model() -> Result<()> {
     let test = builder.build(&server).await?;
 
     // Construct a very long, non-existent path to force a RespondToModel error with a large message
-    let long_path = "long path text should trigger truncation".repeat(10_000);
+    let long_path = "long path text should trigger truncation".repeat(8_000);
     let call_id = "grep-huge-error";
     let args = json!({
         "pattern": "alpha",
