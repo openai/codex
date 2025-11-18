@@ -11,7 +11,6 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
-
 const EXEC_FORMAT_MAX_LINES: usize = 256;
 const EXEC_FORMAT_MAX_BYTES: usize = 10_000;
 
@@ -54,6 +53,10 @@ fn reasoning_msg(text: &str) -> ResponseItem {
         }]),
         encrypted_content: None,
     }
+}
+
+fn truncate_exec_output(content: &str) -> String {
+    truncate::truncate_text(content, TruncationPolicy::Bytes(EXEC_FORMAT_MAX_BYTES))
 }
 
 #[test]
@@ -365,13 +368,12 @@ fn truncated_message_pattern(line: &str, total_lines: usize) -> String {
         r"(?s)^Total output lines: {total_lines}\n\n(?P<body>{escaped_line}.*\n\[\.{{3}} omitted {omitted} of {total_lines} lines \.{{3}}]\n\n.*)$",
     )
 }
-
 #[test]
 fn format_exec_output_truncates_large_error() {
     let line = "very long execution error line that should trigger truncation\n";
     let large_error = line.repeat(2_500); // way beyond both byte and line limits
 
-    let truncated = truncate::truncate_with_line_bytes_budget(&large_error, EXEC_FORMAT_MAX_BYTES);
+    let truncated = truncate_exec_output(&large_error);
 
     let total_lines = large_error.lines().count();
     assert_truncated_message_matches(&truncated, line, total_lines);
@@ -381,7 +383,7 @@ fn format_exec_output_truncates_large_error() {
 #[test]
 fn format_exec_output_marks_byte_truncation_without_omitted_lines() {
     let long_line = "a".repeat(EXEC_FORMAT_MAX_BYTES + 50);
-    let truncated = truncate::truncate_with_line_bytes_budget(&long_line, EXEC_FORMAT_MAX_BYTES);
+    let truncated = truncate_exec_output(&long_line);
 
     assert_ne!(truncated, long_line);
     let removed_bytes = long_line.len().saturating_sub(EXEC_FORMAT_MAX_BYTES);
@@ -402,10 +404,7 @@ fn format_exec_output_marks_byte_truncation_without_omitted_lines() {
 fn format_exec_output_returns_original_when_within_limits() {
     let content = "example output\n".repeat(10);
 
-    assert_eq!(
-        truncate::truncate_with_line_bytes_budget(&content, EXEC_FORMAT_MAX_BYTES),
-        content
-    );
+    assert_eq!(truncate_exec_output(&content), content);
 }
 
 #[test]
@@ -415,7 +414,7 @@ fn format_exec_output_reports_omitted_lines_and_keeps_head_and_tail() {
         .map(|idx| format!("line-{idx}\n"))
         .collect();
 
-    let truncated = truncate::truncate_with_line_bytes_budget(&content, EXEC_FORMAT_MAX_BYTES);
+    let truncated = truncate_exec_output(&content);
     let omitted = total_lines - EXEC_FORMAT_MAX_LINES;
     let expected_marker = format!("[... omitted {omitted} of {total_lines} lines ...]");
 
@@ -443,7 +442,7 @@ fn format_exec_output_prefers_line_marker_when_both_limits_exceeded() {
         .map(|idx| format!("line-{idx}-{long_line}\n"))
         .collect();
 
-    let truncated = truncate::truncate_with_line_bytes_budget(&content, EXEC_FORMAT_MAX_BYTES);
+    let truncated = truncate_exec_output(&content);
 
     assert!(
         truncated.contains("[... omitted 42 of 298 lines ...]"),

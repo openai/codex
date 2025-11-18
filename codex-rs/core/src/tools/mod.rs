@@ -9,8 +9,9 @@ pub mod runtimes;
 pub mod sandboxing;
 pub mod spec;
 
-use crate::context_manager::truncate_with_line_bytes_budget;
+use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
+use crate::truncate::truncate_text;
 pub use router::ToolRouter;
 use serde::Serialize;
 
@@ -20,12 +21,12 @@ pub(crate) const TELEMETRY_PREVIEW_MAX_LINES: usize = 64; // lines
 pub(crate) const TELEMETRY_PREVIEW_TRUNCATION_NOTICE: &str =
     "[... telemetry preview truncated ...]";
 
-// TODO(aibrahim): migrate shell tool to use truncate text and respect config value
-const SHELL_OUTPUT_MAX_BYTES: usize = 10_000;
-
 /// Format the combined exec output for sending back to the model.
 /// Includes exit code and duration metadata; truncates large bodies safely.
-pub fn format_exec_output_for_model(exec_output: &ExecToolCallOutput) -> String {
+pub fn format_exec_output_for_model(
+    exec_output: &ExecToolCallOutput,
+    turn_context: &TurnContext,
+) -> String {
     let ExecToolCallOutput {
         exit_code,
         duration,
@@ -47,7 +48,7 @@ pub fn format_exec_output_for_model(exec_output: &ExecToolCallOutput) -> String 
     // round to 1 decimal place
     let duration_seconds = ((duration.as_secs_f32()) * 10.0).round() / 10.0;
 
-    let formatted_output = format_exec_output_str(exec_output);
+    let formatted_output = format_exec_output_str(exec_output, turn_context);
 
     let payload = ExecOutput {
         output: &formatted_output,
@@ -61,7 +62,10 @@ pub fn format_exec_output_for_model(exec_output: &ExecToolCallOutput) -> String 
     serde_json::to_string(&payload).expect("serialize ExecOutput")
 }
 
-pub fn format_exec_output_str(exec_output: &ExecToolCallOutput) -> String {
+pub fn format_exec_output_str(
+    exec_output: &ExecToolCallOutput,
+    turn_context: &TurnContext,
+) -> String {
     let ExecToolCallOutput {
         aggregated_output, ..
     } = exec_output;
@@ -78,5 +82,5 @@ pub fn format_exec_output_str(exec_output: &ExecToolCallOutput) -> String {
     };
 
     // Truncate for model consumption before serialization.
-    truncate_with_line_bytes_budget(&body, SHELL_OUTPUT_MAX_BYTES)
+    truncate_text(&body, turn_context.truncation_policy)
 }
