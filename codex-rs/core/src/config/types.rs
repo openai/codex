@@ -338,7 +338,7 @@ pub enum Notifications {
 
 impl Default for Notifications {
     fn default() -> Self {
-        Self::Enabled(false)
+        Self::Enabled(true)
     }
 }
 
@@ -346,7 +346,7 @@ impl Default for Notifications {
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct Tui {
     /// Enable desktop notifications from the TUI when the terminal is unfocused.
-    /// Defaults to `false`.
+    /// Defaults to `true`.
     #[serde(default)]
     pub notifications: Notifications,
 }

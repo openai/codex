@@ -46,6 +46,8 @@ pub enum Feature {
     GhostCommit,
     /// Enable Windows sandbox (restricted token) on Windows.
     WindowsSandbox,
+    /// Enable the default shell tool.
+    ShellTool,
 }
 
 impl Feature {
@@ -300,5 +302,11 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "enable_experimental_windows_sandbox",
         stage: Stage::Experimental,
         default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ShellTool,
+        key: "shell_tool",
+        stage: Stage::Stable,
+        default_enabled: true,
     },
 ];

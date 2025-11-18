@@ -155,11 +155,11 @@ async fn run_command_under_sandbox(
                 run_windows_sandbox_capture(
                     policy_str,
                     &sandbox_cwd,
+                    base_dir.as_path(),
                     command_vec,
                     &cwd_clone,
                     env_map,
                     None,
-                    Some(base_dir.as_path()),
                 )
             })
             .await;

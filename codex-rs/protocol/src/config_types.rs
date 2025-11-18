@@ -98,3 +98,13 @@ pub enum ForcedLoginMethod {
     Chatgpt,
     Api,
 }
+
+/// Represents the trust level for a project directory.
+/// This determines the approval policy and sandbox mode applied.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum TrustLevel {
+    Trusted,
+    Untrusted,
+}

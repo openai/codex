@@ -9,6 +9,8 @@ pub mod runtimes;
 pub mod sandboxing;
 pub mod spec;
 
+use crate::context_manager::MODEL_FORMAT_MAX_BYTES;
+use crate::context_manager::MODEL_FORMAT_MAX_LINES;
 use crate::context_manager::format_output_for_model_body;
 use crate::exec::ExecToolCallOutput;
 pub use router::ToolRouter;
@@ -75,5 +77,5 @@ pub fn format_exec_output_str(exec_output: &ExecToolCallOutput) -> String {
     };
 
     // Truncate for model consumption before serialization.
-    format_output_for_model_body(&body)
+    format_output_for_model_body(&body, MODEL_FORMAT_MAX_BYTES, MODEL_FORMAT_MAX_LINES)
 }

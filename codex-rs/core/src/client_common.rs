@@ -136,7 +136,7 @@ fn reserialize_shell_outputs(items: &mut [ResponseItem]) {
 }
 
 fn is_shell_tool_name(name: &str) -> bool {
-    matches!(name, "shell" | "container.exec")
+    matches!(name, "shell" | "container.exec" | "shell_command")
 }
 
 #[derive(Deserialize)]
@@ -203,9 +203,17 @@ pub enum ResponseEvent {
         token_usage: Option<TokenUsage>,
     },
     OutputTextDelta(String),
-    ReasoningSummaryDelta(String),
-    ReasoningContentDelta(String),
-    ReasoningSummaryPartAdded,
+    ReasoningSummaryDelta {
+        delta: String,
+        summary_index: i64,
+    },
+    ReasoningContentDelta {
+        delta: String,
+        content_index: i64,
+    },
+    ReasoningSummaryPartAdded {
+        summary_index: i64,
+    },
     RateLimits(RateLimitSnapshot),
 }
 
@@ -419,7 +427,7 @@ mod tests {
                 expects_apply_patch_instructions: false,
             },
             InstructionsTestCase {
-                slug: "gpt-5-codex",
+                slug: "gpt-5.1-codex",
                 expects_apply_patch_instructions: false,
             },
             InstructionsTestCase {
@@ -449,7 +457,7 @@ mod tests {
         let input: Vec<ResponseItem> = vec![];
         let tools: Vec<serde_json::Value> = vec![];
         let req = ResponsesApiRequest {
-            model: "gpt-5",
+            model: "gpt-5.1",
             instructions: "i",
             input: &input,
             tools: &tools,
@@ -490,7 +498,7 @@ mod tests {
             create_text_param_for_request(None, &Some(schema.clone())).expect("text controls");
 
         let req = ResponsesApiRequest {
-            model: "gpt-5",
+            model: "gpt-5.1",
             instructions: "i",
             input: &input,
             tools: &tools,
@@ -526,7 +534,7 @@ mod tests {
         let input: Vec<ResponseItem> = vec![];
         let tools: Vec<serde_json::Value> = vec![];
         let req = ResponsesApiRequest {
-            model: "gpt-5",
+            model: "gpt-5.1",
             instructions: "i",
             input: &input,
             tools: &tools,

@@ -17,6 +17,7 @@ use urlencoding::decode;
 use crate::OAuthCredentialsStoreMode;
 use crate::StoredOAuthTokens;
 use crate::WrappedOAuthTokenResponse;
+use crate::oauth::compute_expires_at_millis;
 use crate::save_oauth_tokens;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
@@ -91,11 +92,13 @@ pub async fn perform_oauth_login(
     let credentials =
         credentials_opt.ok_or_else(|| anyhow!("OAuth provider did not return credentials"))?;
 
+    let expires_at = compute_expires_at_millis(&credentials);
     let stored = StoredOAuthTokens {
         server_name: server_name.to_string(),
         url: server_url.to_string(),
         client_id,
         token_response: WrappedOAuthTokenResponse(credentials),
+        expires_at,
     };
     save_oauth_tokens(server_name, &stored, store_mode)?;
 
