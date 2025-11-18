@@ -9,6 +9,7 @@ use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::codex::TurnContext;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
+use crate::exec_policy::approval_requirement_for_command;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
@@ -24,6 +25,7 @@ use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
 use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
 use crate::tools::runtimes::shell::ShellRequest;
 use crate::tools::runtimes::shell::ShellRuntime;
+use crate::tools::sandboxing::ApprovalRequirement;
 use crate::tools::sandboxing::ToolCtx;
 
 pub struct ShellHandler;
@@ -302,10 +304,16 @@ impl ShellHandler {
             env: exec_params.env.clone(),
             with_escalated_permissions: exec_params.with_escalated_permissions,
             justification: exec_params.justification.clone(),
-            exec_policy: if is_user_shell_command {
-                None
+            approval_requirement: if is_user_shell_command {
+                ApprovalRequirement::Skip
             } else {
-                turn.exec_policy_v2.clone()
+                approval_requirement_for_command(
+                    turn.exec_policy_v2.as_deref(),
+                    &exec_params.command,
+                    turn.approval_policy,
+                    &turn.sandbox_policy,
+                    exec_params.with_escalated_permissions.unwrap_or(false),
+                )
             },
         };
         let mut orchestrator = ToolOrchestrator::new();

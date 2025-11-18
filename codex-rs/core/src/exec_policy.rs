@@ -3,11 +3,13 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::command_safety::is_dangerous_command::requires_initial_appoval;
 use codex_execpolicy2::Decision;
 use codex_execpolicy2::Evaluation;
 use codex_execpolicy2::Policy;
 use codex_execpolicy2::PolicyParser;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SandboxPolicy;
 use thiserror::Error;
 
 use crate::bash::parse_shell_lc_plain_commands;
@@ -133,12 +135,38 @@ pub(crate) fn evaluate_with_policy(
     }
 }
 
+pub(crate) fn approval_requirement_for_command(
+    policy: Option<&Policy>,
+    command: &[String],
+    approval_policy: AskForApproval,
+    sandbox_policy: &SandboxPolicy,
+    with_escalated_permissions: bool,
+) -> ApprovalRequirement {
+    if let Some(policy) = policy
+        && let Some(requirement) = evaluate_with_policy(policy, command, approval_policy)
+    {
+        return requirement;
+    }
+
+    if requires_initial_appoval(
+        approval_policy,
+        sandbox_policy,
+        command,
+        with_escalated_permissions,
+    ) {
+        ApprovalRequirement::NeedsApproval { reason: None }
+    } else {
+        ApprovalRequirement::Skip
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::features::Feature;
     use crate::features::Features;
     use codex_protocol::protocol::AskForApproval;
+    use codex_protocol::protocol::SandboxPolicy;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
@@ -190,6 +218,50 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             ApprovalRequirement::Forbidden {
                 reason: FORBIDDEN_REASON.to_string()
             }
+        );
+    }
+
+    #[test]
+    fn approval_requirement_prefers_execpolicy_match() {
+        let policy_src = r#"prefix_rule(pattern=["rm"], decision="prompt")"#;
+        let mut parser = PolicyParser::new();
+        parser
+            .parse("test.codexpolicy", policy_src)
+            .expect("parse policy");
+        let policy = parser.build();
+        let command = vec!["rm".to_string()];
+
+        let requirement = approval_requirement_for_command(
+            Some(&policy),
+            &command,
+            AskForApproval::OnRequest,
+            &SandboxPolicy::DangerFullAccess,
+            false,
+        );
+
+        assert_eq!(
+            requirement,
+            ApprovalRequirement::NeedsApproval {
+                reason: Some(PROMPT_REASON.to_string())
+            }
+        );
+    }
+
+    #[test]
+    fn approval_requirement_falls_back_to_heuristics() {
+        let command = vec!["ls".to_string()];
+
+        let requirement = approval_requirement_for_command(
+            None,
+            &command,
+            AskForApproval::UnlessTrusted,
+            &SandboxPolicy::ReadOnly,
+            false,
+        );
+
+        assert_eq!(
+            requirement,
+            ApprovalRequirement::NeedsApproval { reason: None }
         );
     }
 }
