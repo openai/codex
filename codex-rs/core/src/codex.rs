@@ -374,14 +374,6 @@ impl SessionConfiguration {
         }
         next_configuration
     }
-
-    pub(crate) fn output_max_tokens(&self) -> Option<usize> {
-        self.output_max_tokens
-    }
-
-    pub(crate) fn model(&self) -> &str {
-        self.model.as_str()
-    }
 }
 
 #[derive(Default, Clone)]

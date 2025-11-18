@@ -262,6 +262,7 @@ fn build_compacted_history_with_limit(
             }
             let tokens = tokenizer
                 .as_ref()
+                .as_ref()
                 .map(|tok| usize::try_from(tok.count(message)).unwrap_or(usize::MAX))
                 .unwrap_or_else(|| message.len().saturating_add(3) / 4);
             if tokens <= remaining {

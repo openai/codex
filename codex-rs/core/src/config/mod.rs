@@ -1102,7 +1102,7 @@ impl Config {
         let config = Self {
             model,
             review_model,
-            model_family: model_family.clone(),
+            model_family,
             model_context_window,
             model_max_output_tokens,
             model_auto_compact_token_limit,
