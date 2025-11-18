@@ -102,10 +102,16 @@ pub(crate) fn truncate_with_line_bytes_budget(content: &str, bytes_budget: usize
 
 pub(crate) fn truncate_text(content: &str, truncation_settings: &TruncationSettings) -> String {
     match truncation_settings.policy {
-        TruncationPolicy::Bytes(bytes) => truncate_with_byte_estimate(content, bytes),
+        TruncationPolicy::Bytes(bytes) => {
+            truncate_with_byte_estimate(content, bytes, TruncationSource::Bytes)
+        }
         TruncationPolicy::Tokens(tokens) => {
-            let (truncated, _) =
-                truncate_with_token_budget(content, tokens, truncation_settings.tokenizer_ref());
+            let (truncated, _) = truncate_with_token_budget(
+                content,
+                tokens,
+                truncation_settings.tokenizer_ref(),
+                TruncationSource::Tokens,
+            );
             truncated
         }
     }
@@ -176,6 +182,7 @@ fn truncate_with_token_budget(
     s: &str,
     max_tokens: usize,
     tokenizer: Option<&Tokenizer>,
+    source: TruncationSource,
 ) -> (String, Option<u64>) {
     if s.is_empty() {
         return (String::new(), None);
@@ -192,8 +199,11 @@ fn truncate_with_token_budget(
     let exceeds_stack_limit = byte_len > TOKENIZER_STACK_SAFE_BYTES;
 
     if exceeds_stack_limit {
-        let truncated =
-            truncate_with_byte_estimate(s, max_tokens.saturating_mul(APPROX_BYTES_PER_TOKEN));
+        let truncated = truncate_with_byte_estimate(
+            s,
+            max_tokens.saturating_mul(APPROX_BYTES_PER_TOKEN),
+            source,
+        );
         let approx_total = approx_token_count(s);
         if truncated == s {
             (truncated, None)
@@ -211,8 +221,11 @@ fn truncate_with_token_budget(
             (truncated, Some(total_tokens))
         }
     } else {
-        let truncated =
-            truncate_with_byte_estimate(s, max_tokens.saturating_mul(APPROX_BYTES_PER_TOKEN));
+        let truncated = truncate_with_byte_estimate(
+            s,
+            max_tokens.saturating_mul(APPROX_BYTES_PER_TOKEN),
+            source,
+        );
         let approx_total = approx_token_count(s);
         if truncated == s {
             (truncated, None)
@@ -230,7 +243,7 @@ fn truncate_with_tokenizer_path(
     total_tokens: u64,
 ) -> String {
     if max_budget == 0 {
-        return format_truncation_marker(total_tokens);
+        return format_truncation_marker(TruncationSource::Tokens, total_tokens);
     }
 
     if encoded.len() <= max_budget {
@@ -239,7 +252,7 @@ fn truncate_with_tokenizer_path(
 
     let mut guess_removed = total_tokens.saturating_sub(max_budget as u64).max(1);
     for _ in 0..4 {
-        let marker = format_truncation_marker(guess_removed);
+        let marker = format_truncation_marker(TruncationSource::Tokens, guess_removed);
         let marker_len = usize::try_from(tokenizer.count(&marker)).unwrap_or(usize::MAX);
         if marker_len >= max_budget {
             return marker;
@@ -252,7 +265,7 @@ fn truncate_with_tokenizer_path(
 
         let (left_keep, right_keep) = split_budget(keep_budget);
         let removed_tokens = encoded.len().saturating_sub(left_keep + right_keep) as u64;
-        let final_marker = format_truncation_marker(removed_tokens);
+        let final_marker = format_truncation_marker(TruncationSource::Tokens, removed_tokens);
         let final_marker_len =
             usize::try_from(tokenizer.count(&final_marker)).unwrap_or(usize::MAX);
         if final_marker_len == marker_len {
@@ -270,7 +283,7 @@ fn truncate_with_tokenizer_path(
         guess_removed = removed_tokens.max(1);
     }
 
-    let marker = format_truncation_marker(guess_removed);
+    let marker = format_truncation_marker(TruncationSource::Tokens, guess_removed);
     let marker_len = usize::try_from(tokenizer.count(&marker)).unwrap_or(usize::MAX);
     if marker_len >= max_budget {
         return marker;
@@ -288,14 +301,14 @@ fn truncate_with_tokenizer_path(
 /// Truncate a string using a byte budget derived from the token budget, without
 /// performing any real tokenization. This keeps the logic purely byte-based and
 /// uses a bytes placeholder in the truncated output.
-fn truncate_with_byte_estimate(s: &str, max_bytes: usize) -> String {
+fn truncate_with_byte_estimate(s: &str, max_bytes: usize, source: TruncationSource) -> String {
     if s.is_empty() {
         return String::new();
     }
 
     if max_bytes == 0 {
         // No budget to show content; just report that everything was truncated.
-        let marker = format!("[…{} bytes truncated…]", s.len());
+        let marker = format_truncation_marker(source, u64::try_from(s.len()).unwrap_or(u64::MAX));
         return marker;
     }
 
@@ -305,7 +318,7 @@ fn truncate_with_byte_estimate(s: &str, max_bytes: usize) -> String {
 
     let total_bytes = s.len();
     let removed_bytes = total_bytes.saturating_sub(max_bytes);
-    let marker = format!("[…{removed_bytes} bytes truncated…]");
+    let marker = format_truncation_marker(source, u64::try_from(removed_bytes).unwrap_or(u64::MAX));
     let marker_len = marker.len();
 
     if marker_len >= max_bytes {
@@ -372,13 +385,17 @@ fn truncate_formatted_exec_output(
     let truncated_by_bytes = content.len() > limit_bytes;
     // this is a bit wrong. We are counting metadata lines and not just shell output lines.
     let marker = if omitted > 0 {
-        Some(format!(
-            "\n[... omitted {omitted} of {total_lines} lines ...]\n\n"
-        ))
+        let marker_text = format_truncation_marker(
+            TruncationSource::LineOmission { total_lines },
+            u64::try_from(omitted).unwrap_or(u64::MAX),
+        );
+        Some(format!("\n{marker_text}\n\n"))
     } else if truncated_by_bytes {
-        Some(format!(
-            "\n[... output truncated to fit {limit_bytes} bytes ...]\n\n"
-        ))
+        let removed_bytes =
+            u64::try_from(content.len().saturating_sub(limit_bytes)).unwrap_or(u64::MAX);
+        let marker_text =
+            format_truncation_marker(TruncationSource::ByteLimit { limit_bytes }, removed_bytes);
+        Some(format!("\n{marker_text}\n\n"))
     } else {
         None
     };
@@ -411,8 +428,26 @@ enum NewlineMode {
     WhenSuffixPresent,
 }
 
-fn format_truncation_marker(removed_tokens: u64) -> String {
-    format!("[…{removed_tokens} tokens truncated…]")
+#[derive(Clone, Copy)]
+pub enum TruncationSource {
+    Tokens,
+    Bytes,
+    LineOmission { total_lines: usize },
+    ByteLimit { limit_bytes: usize },
+}
+
+fn format_truncation_marker(source: TruncationSource, removed_count: u64) -> String {
+    match source {
+        TruncationSource::Tokens => format!("[…{removed_count} tokens truncated…]"),
+        TruncationSource::Bytes => format!("[…{removed_count} bytes truncated…]"),
+        // will clean this up later
+        TruncationSource::LineOmission { total_lines } => {
+            format!("[... omitted {removed_count} of {total_lines} lines ...]")
+        }
+        TruncationSource::ByteLimit { limit_bytes } => {
+            format!("[... removed {removed_count} bytes to fit {limit_bytes} byte limit ...]")
+        }
+    }
 }
 
 fn split_budget(budget: usize) -> (usize, usize) {
@@ -563,7 +598,7 @@ mod tests {
         let escaped_line = regex_lite::escape(line);
         if omitted == 0 {
             return format!(
-                r"(?s)^Total output lines: {total_lines}\n\n(?P<body>{escaped_line}.*\n\[\.{{3}} output truncated to fit {max_bytes} bytes \.{{3}}]\n\n.*)$",
+                r"(?s)^Total output lines: {total_lines}\n\n(?P<body>{escaped_line}.*\n\[\.{{3}} removed \d+ bytes to fit {max_bytes} byte limit \.{{3}}]\n\n.*)$",
                 max_bytes = model_format_max_bytes(),
             );
         }
@@ -595,7 +630,8 @@ mod tests {
         let tok = Tokenizer::try_default().expect("load tokenizer");
         let s = "short output";
         let limit = usize::try_from(tok.count(s)).unwrap_or(0) + 10;
-        let (out, original) = truncate_with_token_budget(s, limit, Some(&tok));
+        let (out, original) =
+            truncate_with_token_budget(s, limit, Some(&tok), TruncationSource::Tokens);
         assert_eq!(out, s);
         assert_eq!(original, None);
     }
@@ -605,7 +641,8 @@ mod tests {
         let tok = Tokenizer::try_default().expect("load tokenizer");
         let s = "abcdef";
         let total = tok.count(s) as u64;
-        let (out, original) = truncate_with_token_budget(s, 0, Some(&tok));
+        let (out, original) =
+            truncate_with_token_budget(s, 0, Some(&tok), TruncationSource::Tokens);
         assert!(out.contains("tokens truncated"));
         assert_eq!(original, Some(total));
     }
@@ -615,7 +652,8 @@ mod tests {
         let tok = Tokenizer::try_default().expect("load tokenizer");
         let s = "alpha beta gamma delta epsilon zeta eta theta iota kappa";
         let max_tokens = 12;
-        let (out, original) = truncate_with_token_budget(s, max_tokens, Some(&tok));
+        let (out, original) =
+            truncate_with_token_budget(s, max_tokens, Some(&tok), TruncationSource::Tokens);
         assert!(out.contains("tokens truncated"));
         assert_eq!(original, Some(tok.count(s) as u64));
         let result_tokens = tok.count(&out) as usize;
@@ -627,7 +665,8 @@ mod tests {
         let tok = Tokenizer::for_model(OPENAI_DEFAULT_MODEL).expect("load tokenizer");
         let s = "😀😀😀😀😀😀😀😀😀😀\nsecond line with text\n";
         let max_tokens = 8;
-        let (out, tokens) = truncate_with_token_budget(s, max_tokens, Some(&tok));
+        let (out, tokens) =
+            truncate_with_token_budget(s, max_tokens, Some(&tok), TruncationSource::Tokens);
 
         assert!(out.contains("tokens truncated"));
         assert!(!out.contains('\u{fffd}'));
@@ -670,7 +709,9 @@ mod tests {
         let truncated = truncate_with_line_bytes_budget(&long_line, max_bytes);
 
         assert_ne!(truncated, long_line);
-        let marker_line = format!("[... output truncated to fit {max_bytes} bytes ...]");
+        let removed_bytes = long_line.len().saturating_sub(max_bytes);
+        let marker_line =
+            format!("[... removed {removed_bytes} bytes to fit {max_bytes} byte limit ...]");
         assert!(
             truncated.contains(&marker_line),
             "missing byte truncation marker: {truncated}"
@@ -734,7 +775,7 @@ mod tests {
             "expected omitted marker when line count exceeds limit: {truncated}"
         );
         assert!(
-            !truncated.contains("output truncated to fit"),
+            !truncated.contains("byte limit"),
             "line omission marker should take precedence over byte marker: {truncated}"
         );
     }

@@ -397,7 +397,7 @@ fn truncated_message_pattern(line: &str, total_lines: usize) -> String {
     let escaped_line = regex_lite::escape(line);
     if omitted == 0 {
         return format!(
-            r"(?s)^Total output lines: {total_lines}\n\n(?P<body>{escaped_line}.*\n\[\.{{3}} output truncated to fit {max_bytes} bytes \.{{3}}]\n\n.*)$",
+            r"(?s)^Total output lines: {total_lines}\n\n(?P<body>{escaped_line}.*\n\[\.{{3}} removed \d+ bytes to fit {max_bytes} byte limit \.{{3}}]\n\n.*)$",
             max_bytes = exec_format_max_bytes(),
         );
     }
@@ -426,7 +426,9 @@ fn format_exec_output_marks_byte_truncation_without_omitted_lines() {
     let truncated = truncate::truncate_with_line_bytes_budget(&long_line, max_bytes);
 
     assert_ne!(truncated, long_line);
-    let marker_line = format!("[... output truncated to fit {max_bytes} bytes ...]");
+    let removed_bytes = long_line.len().saturating_sub(max_bytes);
+    let marker_line =
+        format!("[... removed {removed_bytes} bytes to fit {max_bytes} byte limit ...]");
     assert!(
         truncated.contains(&marker_line),
         "missing byte truncation marker: {truncated}"
@@ -489,7 +491,7 @@ fn format_exec_output_prefers_line_marker_when_both_limits_exceeded() {
         "expected omitted marker when line count exceeds limit: {truncated}"
     );
     assert!(
-        !truncated.contains("output truncated to fit"),
+        !truncated.contains("byte limit"),
         "line omission marker should take precedence over byte marker: {truncated}"
     );
 }
