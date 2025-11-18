@@ -2458,7 +2458,7 @@ mod tests {
         };
         let (_, turn_context) = make_session_and_context();
 
-        let out = format_exec_output_str(&exec, &turn_context);
+        let out = format_exec_output_str(&exec, turn_context.truncation_policy);
 
         assert_eq!(
             out,
