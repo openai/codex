@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use codex_utils_tokenizer::Tokenizer;
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::time::Duration;
@@ -75,9 +76,7 @@ impl UnifiedExecSessionManager {
         let model = context.turn.client.get_model();
         let truncation_settings =
             TruncationSettings::new(TruncationPolicy::Tokens(max_tokens), &model);
-        let (output, original_token_count) = truncate_text(&text, &truncation_settings);
-        let original_token_count =
-            original_token_count.and_then(|count| usize::try_from(count).ok());
+        let output = truncate_text(&text, &truncation_settings);
         let chunk_id = generate_chunk_id();
         let has_exited = session.has_exited();
         let stored_id = self
@@ -91,6 +90,9 @@ impl UnifiedExecSessionManager {
             .map(|entry| entry.session.exit_code());
         // Only include a session_id in the response if the process is still alive.
         let session_id = if has_exited { None } else { Some(stored_id) };
+
+        let tokenizer = Tokenizer::for_model(&model).ok();
+        let original_token_count = tokenizer.map(|tok| tok.count(&text) as usize);
 
         let response = UnifiedExecResponse {
             event_call_id: context.call_id.clone(),
@@ -185,9 +187,9 @@ impl UnifiedExecSessionManager {
         let model = turn_ref.client.get_model();
         let truncation_settings =
             TruncationSettings::new(TruncationPolicy::Tokens(max_tokens), &model);
-        let (output, original_token_count) = truncate_text(&text, &truncation_settings);
-        let original_token_count =
-            original_token_count.and_then(|count| usize::try_from(count).ok());
+        let output = truncate_text(&text, &truncation_settings);
+        let tokenizer = Tokenizer::for_model(&model).ok();
+        let original_token_count = tokenizer.map(|tok| tok.count(&text) as usize);
         let chunk_id = generate_chunk_id();
 
         let status = self.refresh_session_state(session_id).await;

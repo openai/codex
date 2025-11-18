@@ -151,7 +151,7 @@ impl ContextManager {
     ) -> ResponseItem {
         match item {
             ResponseItem::FunctionCallOutput { call_id, output } => {
-                let (truncated, _) = truncate_text(output.content.as_str(), truncation_settings);
+                let truncated = truncate_text(output.content.as_str(), truncation_settings);
                 let truncated_items = output.content_items.as_ref().map(|items| {
                     truncate_function_output_items_to_token_limit(items, truncation_settings)
                 });
@@ -165,7 +165,7 @@ impl ContextManager {
                 }
             }
             ResponseItem::CustomToolCallOutput { call_id, output } => {
-                let (truncated, _) = truncate_text(output, truncation_settings);
+                let truncated = truncate_text(output, truncation_settings);
                 ResponseItem::CustomToolCallOutput {
                     call_id: call_id.clone(),
                     output: truncated,

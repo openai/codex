@@ -272,7 +272,7 @@ fn build_compacted_history_with_limit(
                     policy: TruncationPolicy::Tokens(remaining),
                     tokenizer,
                 };
-                let (truncated, _) = truncate_text(message, &truncation_settings);
+                let truncated = truncate_text(message, &truncation_settings);
                 selected_messages.push(truncated);
                 break;
             }

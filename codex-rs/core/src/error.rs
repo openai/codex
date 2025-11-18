@@ -468,7 +468,7 @@ pub fn get_error_message_ui(e: &CodexErr) -> String {
         policy: TruncationPolicy::Bytes(ERROR_MESSAGE_UI_MAX_TOKENS),
         tokenizer: Arc::new(None),
     };
-    truncate_text(&message, &truncation_settings).0
+    truncate_text(&message, &truncation_settings)
 }
 
 #[cfg(test)]
