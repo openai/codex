@@ -569,7 +569,7 @@ pub struct ReviewStartParams {
     pub thread_id: String,
     pub target: ReviewTarget,
 
-    /// When true (default), also append the final review message to the original thread.
+    /// When true, also append the final review message to the original thread.
     #[serde(default)]
     pub append_to_original_thread: bool,
 }

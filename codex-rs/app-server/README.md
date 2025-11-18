@@ -182,7 +182,7 @@ You can cancel a running Turn with `turn/interrupt`.
 
 The server requests cancellations for running subprocesses, then emits a `turn/completed` event with `status: "interrupted"`. Rely on the `turn/completed` to know when Codex-side cleanup is done.
 
-### 5) Request a code review
+### 6) Request a code review
 
 Use `review/start` to run Codex’s reviewer on the currently checked-out project. The request takes the thread id plus a `target` describing what should be reviewed:
 
