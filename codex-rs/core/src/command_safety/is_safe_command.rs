@@ -1,4 +1,5 @@
 use crate::bash::parse_shell_lc_plain_commands;
+use crate::command_safety::windows_safe_commands::is_safe_command_windows;
 
 pub fn is_known_safe_command(command: &[String]) -> bool {
     let command: Vec<String> = command
@@ -11,12 +12,9 @@ pub fn is_known_safe_command(command: &[String]) -> bool {
             }
         })
         .collect();
-    #[cfg(target_os = "windows")]
-    {
-        use super::windows_safe_commands::is_safe_command_windows;
-        if is_safe_command_windows(&command) {
-            return true;
-        }
+
+    if is_safe_command_windows(&command) {
+        return true;
     }
 
     if is_safe_to_call_with_exec(&command) {

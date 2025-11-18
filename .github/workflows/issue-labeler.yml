@@ -26,21 +26,36 @@ jobs:
           prompt: |
             You are an assistant that reviews GitHub issues for the repository.
 
-            Your job is to choose the most appropriate existing labels for the issue described later in this prompt.
+            Your job is to choose the most appropriate labels for the issue described later in this prompt.
             Follow these rules:
-            - Only pick labels out of the list below.
-            - Prefer a small set of precise labels over many broad ones.
 
-            Labels to apply:
+            - Add one (and only one) of the following three labels to distinguish the type of issue. Default to "bug" if unsure.
             1. bug — Reproducible defects in Codex products (CLI, VS Code extension, web, auth).
             2. enhancement — Feature requests or usability improvements that ask for new capabilities, better ergonomics, or quality-of-life tweaks.
-            3. extension — VS Code (or other IDE) extension-specific issues.
-            4. windows-os — Bugs or friction specific to Windows environments (always when PowerShell is mentioned, path handling, copy/paste, OS-specific auth or tooling failures).
-            5. mcp — Topics involving Model Context Protocol servers/clients.
-            6. codex-web — Issues targeting the Codex web UI/Cloud experience.
-            8. azure — Problems or requests tied to Azure OpenAI deployments.
-            9. documentation — Updates or corrections needed in docs/README/config references (broken links, missing examples, outdated keys, clarification requests).
-            10. model-behavior — Undesirable LLM behavior: forgetting goals, refusing work, hallucinating environment details, quota misreports, or other reasoning/performance anomalies.
+            3. documentation — Updates or corrections needed in docs/README/config references (broken links, missing examples, outdated keys, clarification requests).
+
+            - If applicable, add one of the following labels to specify which sub-product or product surface the issue relates to.
+            1. CLI — the Codex command line interface.
+            2. extension — VS Code (or other IDE) extension-specific issues.
+            3. codex-web — Issues targeting the Codex web UI/Cloud experience.
+            4. github-action — Issues with the Codex GitHub action.
+            5. iOS — Issues with the Codex iOS app.
+
+            - Additionally add zero or more of the following labels that are relevant to the issue content. Prefer a small set of precise labels over many broad ones.
+            1. windows-os — Bugs or friction specific to Windows environments (always when PowerShell is mentioned, path handling, copy/paste, OS-specific auth or tooling failures).
+            2. mcp — Topics involving Model Context Protocol servers/clients.
+            3. mcp-server — Problems related to the codex mcp-server command, where codex runs as an MCP server.
+            4. azure — Problems or requests tied to Azure OpenAI deployments.
+            5. model-behavior — Undesirable LLM behavior: forgetting goals, refusing work, hallucinating environment details, quota misreports, or other reasoning/performance anomalies.
+            6. code-review — Issues related to the code review feature or functionality.
+            7. auth - Problems related to authentication, login, or access tokens.
+            8. codex-exec - Problems related to the "codex exec" command or functionality.
+            9. context-management - Problems related to compaction, context windows, or available context reporting.
+            10. custom-model - Problems that involve using custom model providers, local models, or OSS models.
+            11. rate-limits - Problems related to token limits, rate limits, or token usage reporting.
+            12. sandbox - Issues related to local sandbox environments or tool call approvals to override sandbox restrictions.
+            13. tool-calls - Problems related to specific tool call invocations including unexpected errors, failures, or hangs.
+            14. TUI - Problems with the terminal user interface (TUI) including keyboard shortcuts, copy & pasting, menus, or screen update issues.
 
             Issue number: ${{ github.event.issue.number }}
 

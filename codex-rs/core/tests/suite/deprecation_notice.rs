@@ -18,12 +18,11 @@ async fn emits_deprecation_notice_for_legacy_feature_flag() -> anyhow::Result<()
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::StreamableShell);
-        config.features.record_legacy_usage_force(
-            "experimental_use_exec_command_tool",
-            Feature::StreamableShell,
-        );
-        config.use_experimental_streamable_shell_tool = true;
+        config.features.enable(Feature::UnifiedExec);
+        config
+            .features
+            .record_legacy_usage_force("use_experimental_unified_exec_tool", Feature::UnifiedExec);
+        config.use_experimental_unified_exec_tool = true;
     });
 
     let TestCodex { codex, .. } = builder.build(&server).await?;
@@ -37,13 +36,13 @@ async fn emits_deprecation_notice_for_legacy_feature_flag() -> anyhow::Result<()
     let DeprecationNoticeEvent { summary, details } = notice;
     assert_eq!(
         summary,
-        "`experimental_use_exec_command_tool` is deprecated. Use `streamable_shell` instead."
+        "`use_experimental_unified_exec_tool` is deprecated. Use `unified_exec` instead."
             .to_string(),
     );
     assert_eq!(
         details.as_deref(),
         Some(
-            "You can either enable it using the CLI with `--enable streamable_shell` or through the config.toml file with `[features].streamable_shell`"
+            "Enable it with `--enable unified_exec` or `[features].unified_exec` in config.toml. See https://github.com/openai/codex/blob/main/docs/config.md#feature-flags for details."
         ),
     );
 

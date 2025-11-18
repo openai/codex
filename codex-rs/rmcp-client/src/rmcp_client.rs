@@ -47,6 +47,7 @@ use crate::logging_client_handler::LoggingClientHandler;
 use crate::oauth::OAuthCredentialsStoreMode;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::StoredOAuthTokens;
+use crate::program_resolver;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
 use crate::utils::convert_call_tool_result;
@@ -91,13 +92,20 @@ impl RmcpClient {
         cwd: Option<PathBuf>,
     ) -> io::Result<Self> {
         let program_name = program.to_string_lossy().into_owned();
-        let mut command = Command::new(&program);
+
+        // Build environment for program resolution and subprocess
+        let envs = create_env_for_mcp_server(env, env_vars);
+
+        // Resolve program to executable path (platform-specific)
+        let resolved_program = program_resolver::resolve(program, &envs)?;
+
+        let mut command = Command::new(resolved_program);
         command
             .kill_on_drop(true)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .env_clear()
-            .envs(create_env_for_mcp_server(env, env_vars))
+            .envs(envs)
             .args(&args);
         if let Some(cwd) = cwd {
             command.current_dir(cwd);

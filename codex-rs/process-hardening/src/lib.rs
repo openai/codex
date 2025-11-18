@@ -10,6 +10,10 @@ pub fn pre_main_hardening() {
     #[cfg(target_os = "macos")]
     pre_main_hardening_macos();
 
+    // On FreeBSD and OpenBSD, apply similar hardening to Linux/macOS:
+    #[cfg(any(target_os = "freebsd", target_os = "openbsd"))]
+    pre_main_hardening_bsd();
+
     #[cfg(windows)]
     pre_main_hardening_windows();
 }
@@ -20,7 +24,13 @@ const PRCTL_FAILED_EXIT_CODE: i32 = 5;
 #[cfg(target_os = "macos")]
 const PTRACE_DENY_ATTACH_FAILED_EXIT_CODE: i32 = 6;
 
-#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "openbsd"
+))]
 const SET_RLIMIT_CORE_FAILED_EXIT_CODE: i32 = 7;
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -50,6 +60,27 @@ pub(crate) fn pre_main_hardening_linux() {
         })
         .collect();
 
+    for key in ld_keys {
+        unsafe {
+            std::env::remove_var(key);
+        }
+    }
+}
+
+#[cfg(any(target_os = "freebsd", target_os = "openbsd"))]
+pub(crate) fn pre_main_hardening_bsd() {
+    // FreeBSD/OpenBSD: set RLIMIT_CORE to 0 and clear LD_* env vars
+    set_core_file_size_limit_to_zero();
+
+    let ld_keys: Vec<String> = std::env::vars()
+        .filter_map(|(key, _)| {
+            if key.starts_with("LD_") {
+                Some(key)
+            } else {
+                None
+            }
+        })
+        .collect();
     for key in ld_keys {
         unsafe {
             std::env::remove_var(key);

@@ -4,7 +4,6 @@
 use core_test_support::responses;
 use core_test_support::test_codex_exec::test_codex_exec;
 use serde_json::Value;
-use wiremock::matchers::any;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_includes_output_schema_in_request() -> anyhow::Result<()> {
@@ -28,7 +27,7 @@ async fn exec_includes_output_schema_in_request() -> anyhow::Result<()> {
         responses::ev_assistant_message("m1", "fixture hello"),
         responses::ev_completed("resp1"),
     ]);
-    let response_mock = responses::mount_sse_once_match(&server, any(), body).await;
+    let response_mock = responses::mount_sse_once(&server, body).await;
 
     test.cmd_with_server(&server)
         .arg("--skip-git-repo-check")

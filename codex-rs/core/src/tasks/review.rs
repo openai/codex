@@ -75,12 +75,12 @@ async fn start_review_conversation(
     // Avoid loading project docs; reviewer only needs findings
     sub_agent_config.project_doc_max_bytes = 0;
     // Carry over review-only feature restrictions so the delegate cannot
-    // re-enable blocked tools (web search, view image, streamable shell).
+    // re-enable blocked tools (web search, view image).
     sub_agent_config
         .features
         .disable(crate::features::Feature::WebSearchRequest)
-        .disable(crate::features::Feature::ViewImageTool)
-        .disable(crate::features::Feature::StreamableShell);
+        .disable(crate::features::Feature::ViewImageTool);
+
     // Set explicit review rubric for the sub-agent
     sub_agent_config.base_instructions = Some(crate::REVIEW_PROMPT.to_string());
     (run_codex_conversation_one_shot(

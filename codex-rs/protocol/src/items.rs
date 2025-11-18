@@ -11,6 +11,8 @@ use serde::Serialize;
 use ts_rs::TS;
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+#[serde(tag = "type")]
+#[ts(tag = "type")]
 pub enum TurnItem {
     UserMessage(UserMessageItem),
     AgentMessage(AgentMessageItem),
@@ -25,6 +27,8 @@ pub struct UserMessageItem {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+#[serde(tag = "type")]
+#[ts(tag = "type")]
 pub enum AgentMessageContent {
     Text { text: String },
 }

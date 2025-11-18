@@ -31,13 +31,14 @@ use tracing::warn;
 
 use crate::AuthManager;
 use crate::auth::CodexAuth;
+use crate::auth::RefreshTokenError;
 use crate::chat_completions::AggregateStreamExt;
 use crate::chat_completions::stream_chat_completions;
 use crate::client_common::Prompt;
+use crate::client_common::Reasoning;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::client_common::ResponsesApiRequest;
-use crate::client_common::create_reasoning_param_for_request;
 use crate::client_common::create_text_param_for_request;
 use crate::config::Config;
 use crate::default_client::CodexHttpClient;
@@ -198,12 +199,18 @@ impl ModelClient {
         let auth_manager = self.auth_manager.clone();
 
         let full_instructions = prompt.get_full_instructions(&self.config.model_family);
-        let tools_json = create_tools_json_for_responses_api(&prompt.tools)?;
-        let reasoning = create_reasoning_param_for_request(
-            &self.config.model_family,
-            self.effort,
-            self.summary,
-        );
+        let tools_json: Vec<Value> = create_tools_json_for_responses_api(&prompt.tools)?;
+
+        let reasoning = if self.config.model_family.supports_reasoning_summaries {
+            Some(Reasoning {
+                effort: self
+                    .effort
+                    .or(self.config.model_family.default_reasoning_effort),
+                summary: Some(self.summary),
+            })
+        } else {
+            None
+        };
 
         let include: Vec<String> = if reasoning.is_some() {
             vec!["reasoning.encrypted_content".to_string()]
@@ -214,7 +221,9 @@ impl ModelClient {
         let input_with_instructions = prompt.get_formatted_input();
 
         let verbosity = if self.config.model_family.support_verbosity {
-            self.config.model_verbosity
+            self.config
+                .model_verbosity
+                .or(self.config.model_family.default_verbosity)
         } else {
             if self.config.model_verbosity.is_some() {
                 warn!(
@@ -293,10 +302,9 @@ impl ModelClient {
         let auth = auth_manager.as_ref().and_then(|m| m.auth());
 
         trace!(
-            "POST to {}: {:?}",
+            "POST to {}: {}",
             self.provider.get_full_url(&auth),
-            serde_json::to_string(payload_json)
-                .unwrap_or("<unable to serialize payload>".to_string())
+            payload_json.to_string()
         );
 
         let mut req_builder = self
@@ -389,12 +397,17 @@ impl ModelClient {
                     && let Some(manager) = auth_manager.as_ref()
                     && let Some(auth) = auth.as_ref()
                     && auth.mode == AuthMode::ChatGPT
+                    && let Err(err) = manager.refresh_token().await
                 {
-                    manager.refresh_token().await.map_err(|err| {
-                        StreamAttemptError::Fatal(CodexErr::Fatal(format!(
-                            "Failed to refresh ChatGPT credentials: {err}"
-                        )))
-                    })?;
+                    let stream_error = match err {
+                        RefreshTokenError::Permanent(failed) => {
+                            StreamAttemptError::Fatal(CodexErr::RefreshTokenFailed(failed))
+                        }
+                        RefreshTokenError::Transient(other) => {
+                            StreamAttemptError::RetryableTransportError(CodexErr::Io(other))
+                        }
+                    };
+                    return Err(stream_error);
                 }
 
                 // The OpenAI Responses endpoint returns structured JSON bodies even for 4xx/5xx
@@ -441,6 +454,8 @@ impl ModelClient {
                             return Err(StreamAttemptError::Fatal(codex_err));
                         } else if error.r#type.as_deref() == Some("usage_not_included") {
                             return Err(StreamAttemptError::Fatal(CodexErr::UsageNotIncluded));
+                        } else if is_quota_exceeded_error(&error) {
+                            return Err(StreamAttemptError::Fatal(CodexErr::QuotaExceeded));
                         }
                     }
                 }
@@ -545,6 +560,8 @@ struct SseEvent {
     response: Option<Value>,
     item: Option<Value>,
     delta: Option<String>,
+    summary_index: Option<i64>,
+    content_index: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -804,16 +821,22 @@ async fn process_sse<S>(
                 }
             }
             "response.reasoning_summary_text.delta" => {
-                if let Some(delta) = event.delta {
-                    let event = ResponseEvent::ReasoningSummaryDelta(delta);
+                if let (Some(delta), Some(summary_index)) = (event.delta, event.summary_index) {
+                    let event = ResponseEvent::ReasoningSummaryDelta {
+                        delta,
+                        summary_index,
+                    };
                     if tx_event.send(Ok(event)).await.is_err() {
                         return;
                     }
                 }
             }
             "response.reasoning_text.delta" => {
-                if let Some(delta) = event.delta {
-                    let event = ResponseEvent::ReasoningContentDelta(delta);
+                if let (Some(delta), Some(content_index)) = (event.delta, event.content_index) {
+                    let event = ResponseEvent::ReasoningContentDelta {
+                        delta,
+                        content_index,
+                    };
                     if tx_event.send(Ok(event)).await.is_err() {
                         return;
                     }
@@ -838,6 +861,8 @@ async fn process_sse<S>(
                             Ok(error) => {
                                 if is_context_window_error(&error) {
                                     response_error = Some(CodexErr::ContextWindowExceeded);
+                                } else if is_quota_exceeded_error(&error) {
+                                    response_error = Some(CodexErr::QuotaExceeded);
                                 } else {
                                     let delay = try_parse_retry_after(&error);
                                     let message = error.message.clone().unwrap_or_default();
@@ -888,10 +913,12 @@ async fn process_sse<S>(
                 }
             }
             "response.reasoning_summary_part.added" => {
-                // Boundary between reasoning summary sections (e.g., titles).
-                let event = ResponseEvent::ReasoningSummaryPartAdded;
-                if tx_event.send(Ok(event)).await.is_err() {
-                    return;
+                if let Some(summary_index) = event.summary_index {
+                    // Boundary between reasoning summary sections (e.g., titles).
+                    let event = ResponseEvent::ReasoningSummaryPartAdded { summary_index };
+                    if tx_event.send(Ok(event)).await.is_err() {
+                        return;
+                    }
                 }
             }
             "response.reasoning_summary_text.done" => {}
@@ -967,6 +994,10 @@ fn try_parse_retry_after(err: &Error) -> Option<Duration> {
 
 fn is_context_window_error(error: &Error) -> bool {
     error.code.as_deref() == Some("context_length_exceeded")
+}
+
+fn is_quota_exceeded_error(error: &Error) -> bool {
+    error.code.as_deref() == Some("insufficient_quota")
 }
 
 #[cfg(test)]
@@ -1298,6 +1329,41 @@ mod tests {
                 assert_eq!(err.to_string(), CodexErr::ContextWindowExceeded.to_string());
             }
             other => panic!("unexpected context window event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn quota_exceeded_error_is_fatal() {
+        let raw_error = r#"{"type":"response.failed","sequence_number":3,"response":{"id":"resp_fatal_quota","object":"response","created_at":1759771626,"status":"failed","background":false,"error":{"code":"insufficient_quota","message":"You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors."},"incomplete_details":null}}"#;
+
+        let sse1 = format!("event: response.failed\ndata: {raw_error}\n\n");
+        let provider = ModelProviderInfo {
+            name: "test".to_string(),
+            base_url: Some("https://test.com".to_string()),
+            env_key: Some("TEST_API_KEY".to_string()),
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: Some(0),
+            stream_max_retries: Some(0),
+            stream_idle_timeout_ms: Some(1000),
+            requires_openai_auth: false,
+        };
+
+        let otel_event_manager = otel_event_manager();
+
+        let events = collect_events(&[sse1.as_bytes()], provider, otel_event_manager).await;
+
+        assert_eq!(events.len(), 1);
+
+        match &events[0] {
+            Err(err @ CodexErr::QuotaExceeded) => {
+                assert_eq!(err.to_string(), CodexErr::QuotaExceeded.to_string());
+            }
+            other => panic!("unexpected quota exceeded event: {other:?}"),
         }
     }
 

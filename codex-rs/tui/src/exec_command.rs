@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_core::bash::extract_bash_command;
 use dirs::home_dir;
 use shlex::try_join;
 
@@ -8,19 +9,11 @@ pub(crate) fn escape_command(command: &[String]) -> String {
     try_join(command.iter().map(String::as_str)).unwrap_or_else(|_| command.join(" "))
 }
 
-fn is_login_shell_with_lc(shell: &str) -> bool {
-    let shell_name = std::path::Path::new(shell)
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or(shell);
-    matches!(shell_name, "bash" | "zsh")
-}
-
 pub(crate) fn strip_bash_lc_and_escape(command: &[String]) -> String {
-    match command {
-        [first, second, third] if is_login_shell_with_lc(first) && second == "-lc" => third.clone(),
-        _ => escape_command(command),
+    if let Some((_, script)) = extract_bash_command(command) {
+        return script.to_string();
     }
+    escape_command(command)
 }
 
 /// If `path` is absolute and inside $HOME, return the part *after* the home

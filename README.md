@@ -81,6 +81,7 @@ Codex CLI supports a rich set of configuration options, with preferences stored 
   - [Custom prompts](./docs/prompts.md)
   - [Memory with AGENTS.md](./docs/getting-started.md#memory-with-agentsmd)
 - [**Configuration**](./docs/config.md)
+  - [Example config](./docs/example-config.md)
 - [**Sandbox & approvals**](./docs/sandbox.md)
 - [**Authentication**](./docs/authentication.md)
   - [Auth methods](./docs/authentication.md#forcing-a-specific-auth-method-advanced)
