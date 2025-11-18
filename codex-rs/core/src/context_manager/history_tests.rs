@@ -294,7 +294,7 @@ fn record_items_truncates_function_call_output_content() {
         ResponseItem::FunctionCallOutput { output, .. } => {
             assert_ne!(output.content, long_output);
             assert!(
-                output.content.contains("bytes truncated"),
+                output.content.contains("tokens truncated"),
                 "expected token-based truncation marker, got {}",
                 output.content
             );
@@ -350,7 +350,6 @@ fn record_items_respects_custom_token_limit() {
     let model = OPENAI_DEFAULT_MODEL;
     let mut history = ContextManager::new();
     let truncation_settings = TruncationSettings::new(TruncationPolicy::Tokens(10), model);
-    let tok = Tokenizer::try_default().expect("load tokenizer");
     let long_output = "tokenized content repeated many times ".repeat(200);
     let item = ResponseItem::FunctionCallOutput {
         call_id: "call-custom-limit".to_string(),
@@ -367,8 +366,7 @@ fn record_items_respects_custom_token_limit() {
         ResponseItem::FunctionCallOutput { output, .. } => output,
         other => panic!("unexpected history item: {other:?}"),
     };
-    let stored_tokens = usize::try_from(tok.count(&stored.content)).unwrap_or(usize::MAX);
-    assert!(stored.content.contains("bytes truncated"));
+    assert!(stored.content.contains("tokens truncated"));
 }
 
 fn assert_truncated_message_matches(message: &str, line: &str, total_lines: usize) {
