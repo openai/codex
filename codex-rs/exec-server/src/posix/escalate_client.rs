@@ -5,6 +5,7 @@ use std::os::fd::OwnedFd;
 
 use anyhow::Context as _;
 
+use crate::posix::escalate_protocol::BASH_EXEC_WRAPPER_ENV_VAR;
 use crate::posix::escalate_protocol::ESCALATE_SOCKET_ENV_VAR;
 use crate::posix::escalate_protocol::EscalateAction;
 use crate::posix::escalate_protocol::EscalateClientMessage;
@@ -37,7 +38,7 @@ pub(crate) async fn run(file: String, argv: Vec<String>) -> anyhow::Result<i32> 
         .filter(|(k, _)| {
             !matches!(
                 k.as_str(),
-                ESCALATE_SOCKET_ENV_VAR // | BASH_EXEC_WRAPPER_ENV_VAR | BASH_PATH_ENV_VAR
+                ESCALATE_SOCKET_ENV_VAR | BASH_EXEC_WRAPPER_ENV_VAR
             )
         })
         .collect();
