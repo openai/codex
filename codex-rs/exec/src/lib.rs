@@ -47,6 +47,7 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
 use crate::cli::Command as ExecCommand;
+use crate::cli::ReviewArgs;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 use codex_core::default_client::set_default_originator;
@@ -78,46 +79,51 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         config_overrides,
     } = cli;
 
-    // Determine the prompt source (parent or subcommand) and read from stdin if needed.
-    let prompt_arg = match &command {
-        // Allow prompt before the subcommand by falling back to the parent-level prompt
-        // when the Resume subcommand did not provide its own prompt.
-        Some(ExecCommand::Resume(args)) => args.prompt.clone().or(prompt),
-        None => prompt,
+    // Helper: read a prompt from stdin when '-' was passed or when required.
+    fn read_prompt_from_stdin_or_exit(force: bool) -> String {
+        if !force && std::io::stdin().is_terminal() {
+            eprintln!(
+                "No prompt provided. Either specify one as an argument or pipe the prompt into stdin."
+            );
+            std::process::exit(1);
+        }
+        if !force {
+            eprintln!("Reading prompt from stdin...");
+        }
+        let mut buffer = String::new();
+        if let Err(e) = std::io::stdin().read_to_string(&mut buffer) {
+            eprintln!("Failed to read prompt from stdin: {e}");
+            std::process::exit(1);
+        } else if buffer.trim().is_empty() {
+            eprintln!("No prompt provided via stdin.");
+            std::process::exit(1);
+        }
+        buffer
+    }
+
+    // Determine prompt or review args input.
+    let parent_or_resume_prompt_arg = match &command {
+        Some(ExecCommand::Resume(args)) => args.prompt.clone().or(prompt.clone()),
+        Some(ExecCommand::Review(_)) => None, // handled separately below
+        None => prompt.clone(),
     };
 
-    let prompt = match prompt_arg {
-        Some(p) if p != "-" => p,
-        // Either `-` was passed or no positional arg.
-        maybe_dash => {
-            // When no arg (None) **and** stdin is a TTY, bail out early – unless the
-            // user explicitly forced reading via `-`.
-            let force_stdin = matches!(maybe_dash.as_deref(), Some("-"));
-
-            if std::io::stdin().is_terminal() && !force_stdin {
-                eprintln!(
-                    "No prompt provided. Either specify one as an argument or pipe the prompt into stdin."
-                );
-                std::process::exit(1);
+    // Determine the regular prompt. If explicitly "-", read from stdin.
+    // If omitted, read from stdin when non‑TTY; otherwise exit with a message.
+    let regular_prompt_opt = match parent_or_resume_prompt_arg {
+        Some(p) => {
+            if p == "-" {
+                Some(read_prompt_from_stdin_or_exit(true))
+            } else {
+                Some(p)
             }
-
-            // Ensure the user knows we are waiting on stdin, as they may
-            // have gotten into this state by mistake. If so, and they are not
-            // writing to stdin, Codex will hang indefinitely, so this should
-            // help them debug in that case.
-            if !force_stdin {
-                eprintln!("Reading prompt from stdin...");
-            }
-            let mut buffer = String::new();
-            if let Err(e) = std::io::stdin().read_to_string(&mut buffer) {
-                eprintln!("Failed to read prompt from stdin: {e}");
-                std::process::exit(1);
-            } else if buffer.trim().is_empty() {
-                eprintln!("No prompt provided via stdin.");
-                std::process::exit(1);
-            }
-            buffer
         }
+        None => match &command {
+            // Review subcommand handles its own inputs later.
+            Some(ExecCommand::Review(_)) => None,
+            // Default/Resume flows: honor piped stdin or exit if TTY.
+            _ => Some(read_prompt_from_stdin_or_exit(false)),
+        },
     };
 
     let output_schema = load_output_schema(output_schema_path);
@@ -213,9 +219,15 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     };
 
     // Load configuration and determine approval policy
+    // Allow --review-model override only when review subcommand is present.
+    let review_model_override: Option<String> = match &command {
+        Some(ExecCommand::Review(ReviewArgs { review_model, .. })) => review_model.clone(),
+        _ => None,
+    };
+
     let overrides = ConfigOverrides {
         model,
-        review_model: None,
+        review_model: review_model_override,
         config_profile,
         // Default to never ask for approvals in headless mode. Feature flags can override.
         approval_policy: Some(AskForApproval::Never),
@@ -314,8 +326,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         conversation_id: _,
         conversation,
         session_configured,
-    } = if let Some(ExecCommand::Resume(args)) = command {
-        let resume_path = resolve_resume_path(&config, &args).await?;
+    } = if let Some(ExecCommand::Resume(args)) = &command {
+        let resume_path = resolve_resume_path(&config, args).await?;
 
         if let Some(path) = resume_path {
             conversation_manager
@@ -331,9 +343,12 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             .new_conversation(config.clone())
             .await?
     };
-    // Print the effective configuration and prompt so users can see what Codex
-    // is using.
-    event_processor.print_config_summary(&config, &prompt, &session_configured);
+    // Echo the effective configuration and the text that will be sent first.
+    let mut echo_prompt = String::new();
+    if let Some(p) = &regular_prompt_opt {
+        echo_prompt = p.clone();
+    }
+    event_processor.print_config_summary(&config, &echo_prompt, &session_configured);
 
     info!("Codex initialized with event: {session_configured:?}");
 
@@ -376,25 +391,77 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         });
     }
 
-    // Package images and prompt into a single user input turn.
-    let mut items: Vec<UserInput> = images
-        .into_iter()
-        .map(|path| UserInput::LocalImage { path })
-        .collect();
-    items.push(UserInput::Text { text: prompt });
-    let initial_prompt_task_id = conversation
-        .submit(Op::UserTurn {
-            items,
-            cwd: default_cwd,
-            approval_policy: default_approval_policy,
-            sandbox_policy: default_sandbox_policy,
-            model: default_model,
-            effort: default_effort,
-            summary: default_summary,
-            final_output_json_schema: output_schema,
-        })
-        .await?;
-    info!("Sent prompt with event ID: {initial_prompt_task_id}");
+    let _initial_prompt_task_id = match &command {
+        Some(ExecCommand::Review(args)) => {
+            use codex_core::protocol::ReviewRequest;
+
+            // Compute prompt + hint.
+            let (review_prompt, mut review_hint) = if let Some(custom) = args.prompt.as_deref() {
+                let text = if custom == "-" {
+                    read_prompt_from_stdin_or_exit(true)
+                } else {
+                    custom.to_string()
+                };
+                codex_core::review_prompts::review_custom_prompt(&text)
+            } else if let Some(branch) = &args.branch {
+                codex_core::review_prompts::review_branch_prompt(branch)
+            } else if let Some(sha) = &args.commit {
+                // Try to enrich with subject; fall back gracefully.
+                let mut subject: Option<String> = None;
+                let entries = codex_core::git_info::recent_commits(&default_cwd, 200).await;
+                for e in entries {
+                    if e.sha.starts_with(sha) {
+                        if !e.subject.trim().is_empty() {
+                            subject = Some(e.subject);
+                        }
+                        break;
+                    }
+                }
+                codex_core::review_prompts::review_commit_prompt(sha, subject.as_deref())
+            } else {
+                // Default to reviewing uncommitted changes if nothing else specified.
+                codex_core::review_prompts::review_uncommitted_prompt()
+            };
+
+            if let Some(hint_override) = &args.hint {
+                review_hint = hint_override.clone();
+            }
+
+            let review_request = ReviewRequest {
+                prompt: review_prompt,
+                user_facing_hint: review_hint,
+            };
+            let id = conversation.submit(Op::Review { review_request }).await?;
+            info!("Sent review request with event ID: {id}");
+            id
+        }
+        _ => {
+            // Package images and prompt into a single user input turn.
+            let mut items: Vec<UserInput> = images
+                .into_iter()
+                .map(|path| UserInput::LocalImage { path })
+                .collect();
+            let text = match regular_prompt_opt {
+                Some(t) => t,
+                None => read_prompt_from_stdin_or_exit(false),
+            };
+            items.push(UserInput::Text { text });
+            let id = conversation
+                .submit(Op::UserTurn {
+                    items,
+                    cwd: default_cwd,
+                    approval_policy: default_approval_policy,
+                    sandbox_policy: default_sandbox_policy,
+                    model: default_model,
+                    effort: default_effort,
+                    summary: default_summary,
+                    final_output_json_schema: output_schema,
+                })
+                .await?;
+            info!("Sent prompt with event ID: {id}");
+            id
+        }
+    };
 
     // Run the loop until the task is complete.
     // Track whether a fatal error was reported by the server so we can
