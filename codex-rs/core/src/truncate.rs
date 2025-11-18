@@ -25,7 +25,7 @@ impl TruncationPolicy {
                 if let Some(token_limit) = config_token_limit {
                     Self::Bytes(approx_bytes_for_tokens(token_limit))
                 } else {
-                    Self::Bytes(approx_bytes_for_tokens(family_bytes))
+                    Self::Bytes(family_bytes)
                 }
             }
             TruncationPolicy::Tokens(family_tokens) => {
