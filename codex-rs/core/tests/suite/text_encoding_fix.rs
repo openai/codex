@@ -51,13 +51,13 @@ fn test_smart_decoding_improves_over_lossy_utf8() {
 #[test]
 fn test_mixed_ascii_and_legacy_encoding() {
     // Commands tend to mix ASCII status text with Latin-1 bytes (e.g. café).
-    assert_eq!(decode_shell_output(b"Output: caf\xE9"), "Output: café");
+    assert_eq!(decode_shell_output(b"Output: caf\xE9"), "Output: café"); // codespell:ignore caf
 }
 
 #[test]
 fn test_pure_latin1_shell_output() {
     // Latin-1 by itself should still decode correctly (regression coverage for the older tests).
-    assert_eq!(decode_shell_output(b"caf\xE9"), "café");
+    assert_eq!(decode_shell_output(b"caf\xE9"), "café"); // codespell:ignore caf
 }
 
 #[test]

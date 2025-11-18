@@ -137,7 +137,7 @@ mod tests {
     #[test]
     fn test_latin1_cafe() {
         // Latin-1 bytes remain common in Western-European locales; decode them directly.
-        let bytes = b"caf\xE9";
+        let bytes = b"caf\xE9"; // codespell:ignore caf
         assert_eq!(bytes_to_string_smart(bytes), "café");
     }
 
