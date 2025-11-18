@@ -34,10 +34,7 @@ impl ContextManager {
 
     pub(crate) fn set_model(&mut self, model: &str) {
         self.model = model.to_string();
-        self.function_output_max_tokens = find_family_for_model(model)
-            .unwrap_or_else(|| derive_default_model_family(model))
-            .truncation_policy
-            .tokens_budget;
+        // intentionally not updating the function output max tokens here.
     }
 
     pub(crate) fn token_info(&self) -> Option<TokenUsageInfo> {
