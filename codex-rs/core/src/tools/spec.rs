@@ -1413,11 +1413,7 @@ mod tests {
             "gpt-5.1",
             &Features::with_defaults(),
             &[
-                if cfg!(windows) {
-                    "shell_command"
-                } else {
-                    "shell"
-                },
+                "shell",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",

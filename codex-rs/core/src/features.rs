@@ -259,7 +259,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::ShellCommandTool,
         key: "shell_command_tool",
         stage: Stage::Experimental,
-        default_enabled: cfg!(windows),
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::RmcpClient,
