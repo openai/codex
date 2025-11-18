@@ -18,6 +18,7 @@ use tokio::io::AsyncWriteExt;
 use crate::bash::parse_shell_lc_plain_commands;
 use crate::features::Feature;
 use crate::features::Features;
+use crate::sandboxing::SandboxPermissions;
 use crate::tools::sandboxing::ApprovalRequirement;
 
 const FORBIDDEN_REASON: &str = "execpolicy forbids this command";
@@ -131,12 +132,12 @@ fn evaluate_with_policy(
     }
 }
 
-pub(crate) fn approval_requirement_for_command(
+pub(crate) fn create_approval_requirement_for_command(
     policy: &Policy,
     command: &[String],
     approval_policy: AskForApproval,
     sandbox_policy: &SandboxPolicy,
-    with_escalated_permissions: bool,
+    sandbox_permissions: SandboxPermissions,
 ) -> ApprovalRequirement {
     if let Some(requirement) = evaluate_with_policy(policy, command, approval_policy) {
         return requirement;
@@ -146,7 +147,7 @@ pub(crate) fn approval_requirement_for_command(
         approval_policy,
         sandbox_policy,
         command,
-        with_escalated_permissions,
+        sandbox_permissions,
     ) {
         ApprovalRequirement::NeedsApproval { reason: None }
     } else {
@@ -350,12 +351,12 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         let policy = parser.build();
         let command = vec!["rm".to_string()];
 
-        let requirement = approval_requirement_for_command(
+        let requirement = create_approval_requirement_for_command(
             &policy,
             &command,
             AskForApproval::OnRequest,
             &SandboxPolicy::DangerFullAccess,
-            false,
+            SandboxPermissions::UseDefault,
         );
 
         assert_eq!(
@@ -376,12 +377,12 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         let policy = parser.build();
         let command = vec!["rm".to_string()];
 
-        let requirement = approval_requirement_for_command(
+        let requirement = create_approval_requirement_for_command(
             &policy,
             &command,
             AskForApproval::Never,
             &SandboxPolicy::DangerFullAccess,
-            false,
+            SandboxPermissions::UseDefault,
         );
 
         assert_eq!(
@@ -397,12 +398,12 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         let command = vec!["python".to_string()];
 
         let empty_policy = Policy::empty();
-        let requirement = approval_requirement_for_command(
+        let requirement = create_approval_requirement_for_command(
             &empty_policy,
             &command,
             AskForApproval::UnlessTrusted,
             &SandboxPolicy::ReadOnly,
-            false,
+            SandboxPermissions::UseDefault,
         );
 
         assert_eq!(
