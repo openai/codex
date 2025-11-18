@@ -76,6 +76,14 @@ fn is_ghost_snapshot_message(item: &Value) -> bool {
         .is_some_and(|text| text.trim_start().starts_with("<ghost_snapshot>"))
 }
 
+fn normalize_line_endings_str(text: &str) -> String {
+    if text.contains('\r') {
+        text.replace("\r\n", "\n").replace('\r', "\n")
+    } else {
+        text.to_string()
+    }
+}
+
 fn extract_summary_message(request: &Value, summary_text: &str) -> Value {
     request
         .get("input")
@@ -99,6 +107,7 @@ fn extract_summary_message(request: &Value, summary_text: &str) -> Value {
 }
 
 fn normalize_compact_prompts(requests: &mut [Value]) {
+    let normalized_summary_prompt = normalize_line_endings_str(SUMMARIZATION_PROMPT);
     for request in requests {
         if let Some(input) = request.get_mut("input").and_then(Value::as_array_mut) {
             input.retain(|item| {
@@ -117,7 +126,8 @@ fn normalize_compact_prompts(requests: &mut [Value]) {
                         .get("text")
                         .and_then(Value::as_str)
                         .unwrap_or_default();
-                    !(text.is_empty() || text == SUMMARIZATION_PROMPT)
+                    let normalized_text = normalize_line_endings_str(text);
+                    !(text.is_empty() || normalized_text == normalized_summary_prompt)
                 } else {
                     false
                 }
