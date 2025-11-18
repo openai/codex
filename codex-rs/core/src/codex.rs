@@ -295,7 +295,6 @@ impl TurnContext {
             .as_deref()
             .unwrap_or(compact::SUMMARIZATION_PROMPT)
     }
-
 }
 
 #[allow(dead_code)]

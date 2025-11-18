@@ -462,7 +462,10 @@ pub fn get_error_message_ui(e: &CodexErr) -> String {
         _ => e.to_string(),
     };
 
-    truncate_text(&message, TruncationPolicy::Bytes(ERROR_MESSAGE_UI_MAX_TOKENS))
+    truncate_text(
+        &message,
+        TruncationPolicy::Bytes(ERROR_MESSAGE_UI_MAX_TOKENS),
+    )
 }
 
 #[cfg(test)]

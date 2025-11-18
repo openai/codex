@@ -142,10 +142,7 @@ impl UnifiedExecSession {
         self.sandbox_type
     }
 
-    pub(super) async fn check_for_sandbox_denial(
-        &self,
-        ctx: &ToolCtx<'_>,
-    ) -> Result<(), UnifiedExecError> {
+    pub(super) async fn check_for_sandbox_denial(&self) -> Result<(), UnifiedExecError> {
         if self.sandbox_type() == SandboxType::None || !self.has_exited() {
             return Ok(());
         }
@@ -189,7 +186,6 @@ impl UnifiedExecSession {
     pub(super) async fn from_spawned(
         spawned: SpawnedPty,
         sandbox_type: SandboxType,
-        ctx: &ToolCtx<'_>,
     ) -> Result<Self, UnifiedExecError> {
         let SpawnedPty {
             session,
@@ -204,7 +200,7 @@ impl UnifiedExecSession {
         };
 
         if exit_ready {
-            managed.check_for_sandbox_denial(ctx).await?;
+            managed.check_for_sandbox_denial().await?;
             return Ok(managed);
         }
 
@@ -213,7 +209,7 @@ impl UnifiedExecSession {
             .await
             .is_ok()
         {
-            managed.check_for_sandbox_denial(ctx).await?;
+            managed.check_for_sandbox_denial().await?;
         }
 
         Ok(managed)

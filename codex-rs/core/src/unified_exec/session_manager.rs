@@ -39,7 +39,6 @@ use super::generate_chunk_id;
 use super::resolve_max_tokens;
 use super::session::OutputBuffer;
 use super::session::UnifiedExecSession;
-use crate::truncate::truncate_text;
 
 impl UnifiedExecSessionManager {
     pub(crate) async fn exec_command(
@@ -420,7 +419,6 @@ impl UnifiedExecSessionManager {
     pub(crate) async fn open_session_with_exec_env(
         &self,
         env: &ExecEnv,
-        ctx: &ToolCtx<'_>,
     ) -> Result<UnifiedExecSession, UnifiedExecError> {
         let (program, args) = env
             .command
@@ -436,7 +434,7 @@ impl UnifiedExecSessionManager {
         )
         .await
         .map_err(|err| UnifiedExecError::create_session(err.to_string()))?;
-        UnifiedExecSession::from_spawned(spawned, env.sandbox, ctx).await
+        UnifiedExecSession::from_spawned(spawned, env.sandbox).await
     }
 
     pub(super) async fn open_session_with_sandbox(

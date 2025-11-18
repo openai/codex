@@ -153,7 +153,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecSession> for UnifiedExecRunt
         &mut self,
         req: &UnifiedExecRequest,
         attempt: &SandboxAttempt<'_>,
-        ctx: &ToolCtx<'_>,
+        _ctx: &ToolCtx<'_>,
     ) -> Result<UnifiedExecSession, ToolError> {
         let spec = build_command_spec(
             &req.command,
@@ -168,7 +168,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecSession> for UnifiedExecRunt
             .env_for(&spec)
             .map_err(|err| ToolError::Codex(err.into()))?;
         self.manager
-            .open_session_with_exec_env(&exec_env, ctx)
+            .open_session_with_exec_env(&exec_env)
             .await
             .map_err(|err| match err {
                 UnifiedExecError::SandboxDenied { output, .. } => {

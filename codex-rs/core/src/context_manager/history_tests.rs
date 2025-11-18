@@ -325,8 +325,7 @@ fn record_items_truncates_custom_tool_call_output_content() {
                 "expected token-based truncation marker, got {output}"
             );
             assert!(
-                output.contains("tokens truncated")
-                    || output.contains("bytes truncated"),
+                output.contains("tokens truncated") || output.contains("bytes truncated"),
                 "expected truncation marker, got {output}"
             );
         }
@@ -336,7 +335,6 @@ fn record_items_truncates_custom_tool_call_output_content() {
 
 #[test]
 fn record_items_respects_custom_token_limit() {
-    let model = OPENAI_DEFAULT_MODEL;
     let mut history = ContextManager::new();
     let policy = TruncationPolicy::Tokens(10);
     let long_output = "tokenized content repeated many times ".repeat(200);

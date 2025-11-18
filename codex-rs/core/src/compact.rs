@@ -60,7 +60,10 @@ async fn run_compact_task_inner(
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
 
     let mut history = sess.clone_history().await;
-    history.record_items(&[initial_input_for_turn.into()], turn_context.truncation_policy);
+    history.record_items(
+        &[initial_input_for_turn.into()],
+        turn_context.truncation_policy,
+    );
 
     let mut truncated_count = 0usize;
 
@@ -324,7 +327,6 @@ async fn drain_to_completed(
 
 #[cfg(test)]
 mod tests {
-    use crate::config::OPENAI_DEFAULT_MODEL;
 
     use super::*;
     use pretty_assertions::assert_eq;

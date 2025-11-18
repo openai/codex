@@ -120,8 +120,7 @@ pub(crate) fn truncate_function_output_items_to_token_limit(
                     out.push(FunctionCallOutputContentItem::InputText { text: text.clone() });
                     remaining_tokens = remaining_tokens.saturating_sub(token_len);
                 } else {
-                    let snippet =
-                        truncate_text(text, TruncationPolicy::Tokens(remaining_tokens));
+                    let snippet = truncate_text(text, TruncationPolicy::Tokens(remaining_tokens));
                     if snippet.is_empty() {
                         omitted_text_items += 1;
                     } else {
@@ -168,11 +167,8 @@ fn truncate_with_token_budget(
         }
     }
 
-    let truncated = truncate_with_byte_estimate(
-        s,
-        max_tokens.saturating_mul(APPROX_BYTES_PER_TOKEN),
-        source,
-    );
+    let truncated =
+        truncate_with_byte_estimate(s, max_tokens.saturating_mul(APPROX_BYTES_PER_TOKEN), source);
     let approx_total = approx_token_count(s);
     if truncated == s {
         (truncated, None)
@@ -191,10 +187,7 @@ fn truncate_with_byte_estimate(s: &str, max_bytes: usize, source: TruncationSour
 
     if max_bytes == 0 {
         // No budget to show content; just report that everything was truncated.
-        let marker = format_truncation_marker(
-            source,
-            removed_units_for_source(source, s.len()),
-        );
+        let marker = format_truncation_marker(source, removed_units_for_source(source, s.len()));
         return marker;
     }
 
@@ -220,12 +213,7 @@ fn truncate_with_byte_estimate(s: &str, max_bytes: usize, source: TruncationSour
         suffix_start = prefix_end;
     }
 
-    let mut out = assemble_truncated_output(
-        &s[..prefix_end],
-        &s[suffix_start..],
-        &marker,
-        NewlineMode::Always,
-    );
+    let mut out = assemble_truncated_output(&s[..prefix_end], &s[suffix_start..], &marker);
 
     if out.len() > max_bytes {
         let boundary = truncate_on_boundary(&out, max_bytes);
@@ -309,12 +297,6 @@ fn truncate_formatted_exec_output(
 }
 
 #[derive(Clone, Copy)]
-enum NewlineMode {
-    Always,
-    WhenSuffixPresent,
-}
-
-#[derive(Clone, Copy)]
 pub enum TruncationSource {
     Policy(TruncationPolicy),
     LineOmission { total_lines: usize },
@@ -352,26 +334,12 @@ fn removed_units_for_source(source: TruncationSource, removed_bytes: usize) -> u
     }
 }
 
-fn assemble_truncated_output(
-    prefix: &str,
-    suffix: &str,
-    marker: &str,
-    newline_mode: NewlineMode,
-) -> String {
-    let newline_needed = match newline_mode {
-        NewlineMode::Always => true,
-        NewlineMode::WhenSuffixPresent => !suffix.is_empty(),
-    };
-    let newline_len = if newline_needed { 1 } else { 0 };
-    let mut out = String::with_capacity(prefix.len() + marker.len() + suffix.len() + newline_len);
+fn assemble_truncated_output(prefix: &str, suffix: &str, marker: &str) -> String {
+    let mut out = String::with_capacity(prefix.len() + marker.len() + suffix.len() + 1);
     out.push_str(prefix);
     out.push_str(marker);
-    if newline_needed {
-        out.push('\n');
-    }
-    if !suffix.is_empty() {
-        out.push_str(suffix);
-    }
+    out.push('\n');
+    out.push_str(suffix);
     out
 }
 
@@ -440,9 +408,9 @@ mod tests {
     use crate::model_family::derive_default_model_family;
     use crate::model_family::find_family_for_model;
 
-    use super::approx_token_count;
     use super::TruncationPolicy;
     use super::TruncationSource;
+    use super::approx_token_count;
     use super::truncate_function_output_items_to_token_limit;
     use super::truncate_with_line_bytes_budget;
     use super::truncate_with_token_budget;
