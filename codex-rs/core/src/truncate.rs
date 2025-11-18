@@ -572,6 +572,7 @@ mod tests {
 
     use super::TruncationPolicy;
     use super::TruncationSettings;
+    use super::TruncationSource;
     use super::truncate_function_output_items_to_token_limit;
     use super::truncate_with_line_bytes_budget;
     use super::truncate_with_token_budget;
