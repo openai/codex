@@ -74,6 +74,7 @@ pub(crate) struct ExecCommandRequest {
 
 #[derive(Debug)]
 pub(crate) struct WriteStdinRequest<'a> {
+    pub call_id: &'a str,
     pub session_id: i32,
     pub input: &'a str,
     pub yield_time_ms: u64,
@@ -89,6 +90,7 @@ pub(crate) struct UnifiedExecResponse {
     pub session_id: Option<i32>,
     pub exit_code: Option<i32>,
     pub original_token_count: Option<usize>,
+    pub session_command: Option<Vec<String>>,
 }
 
 #[derive(Default)]
@@ -120,37 +122,6 @@ pub(crate) fn generate_chunk_id() -> String {
     (0..6)
         .map(|_| format!("{:x}", rng.random_range(0..16)))
         .collect()
-}
-
-pub(crate) fn truncate_output_to_tokens(
-    output: &str,
-    max_tokens: usize,
-) -> (String, Option<usize>) {
-    if max_tokens == 0 {
-        let total_tokens = output.chars().count();
-        let message = format!("…{total_tokens} tokens truncated…");
-        return (message, Some(total_tokens));
-    }
-
-    let tokens: Vec<char> = output.chars().collect();
-    let total_tokens = tokens.len();
-    if total_tokens <= max_tokens {
-        return (output.to_string(), None);
-    }
-
-    let half = max_tokens / 2;
-    if half == 0 {
-        let truncated = total_tokens.saturating_sub(max_tokens);
-        let message = format!("…{truncated} tokens truncated…");
-        return (message, Some(total_tokens));
-    }
-
-    let truncated = total_tokens.saturating_sub(half * 2);
-    let mut truncated_output = String::new();
-    truncated_output.extend(&tokens[..half]);
-    truncated_output.push_str(&format!("…{truncated} tokens truncated…"));
-    truncated_output.extend(&tokens[total_tokens - half..]);
-    (truncated_output, Some(total_tokens))
 }
 
 #[cfg(test)]
@@ -213,6 +184,7 @@ mod tests {
             .services
             .unified_exec_manager
             .write_stdin(WriteStdinRequest {
+                call_id: "write-stdin",
                 session_id,
                 input,
                 yield_time_ms,

@@ -1,6 +1,6 @@
 use super::*;
 use crate::context_manager::MODEL_FORMAT_MAX_LINES;
-use crate::context_manager::truncate;
+use crate::truncate;
 use codex_git::GhostCommit;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;

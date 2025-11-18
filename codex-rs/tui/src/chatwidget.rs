@@ -2,7 +2,10 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
+use codex_app_server_protocol::AuthMode;
+use codex_backend_client::Client as BackendClient;
 use codex_core::config::Config;
 use codex_core::config::types::Notifications;
 use codex_core::git_info::current_branch_name;
@@ -23,9 +26,13 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
+use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::ListCustomPromptsResponseEvent;
 use codex_core::protocol::McpListToolsResponseEvent;
+use codex_core::protocol::McpStartupCompleteEvent;
+use codex_core::protocol::McpStartupStatus;
+use codex_core::protocol::McpStartupUpdateEvent;
 use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
@@ -61,6 +68,7 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::task::JoinHandle;
 use tracing::debug;
 
 use crate::app_event::AppEvent;
@@ -85,6 +93,7 @@ use crate::history_cell;
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
+use crate::history_cell::PlainHistoryCell;
 use crate::markdown::append_markdown;
 #[cfg(target_os = "windows")]
 use crate::onboarding::WSL_INSTRUCTIONS;
@@ -114,6 +123,7 @@ use codex_common::approval_presets::builtin_approval_presets;
 use codex_common::model_presets::ModelPreset;
 use codex_common::model_presets::builtin_model_presets;
 use codex_core::AuthManager;
+use codex_core::CodexAuth;
 use codex_core::ConversationManager;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
@@ -128,7 +138,7 @@ const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
 struct RunningCommand {
     command: Vec<String>,
     parsed_cmd: Vec<ParsedCommand>,
-    is_user_shell_command: bool,
+    source: ExecCommandSource,
 }
 
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
@@ -253,10 +263,12 @@ pub(crate) struct ChatWidget {
     rate_limit_snapshot: Option<RateLimitSnapshotDisplay>,
     rate_limit_warnings: RateLimitWarningState,
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
+    rate_limit_poller: Option<JoinHandle<()>>,
     // Stream lifecycle controller
     stream_controller: Option<StreamController>,
     running_commands: HashMap<String, RunningCommand>,
     task_complete_pending: bool,
+    mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
     // Accumulates the current reasoning block text to extract a header
@@ -492,7 +504,7 @@ impl ChatWidget {
         }
     }
 
-    fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshot>) {
+    pub(crate) fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshot>) {
         if let Some(snapshot) = snapshot {
             let warnings = self.rate_limit_warnings.take_warnings(
                 snapshot
@@ -565,8 +577,76 @@ impl ChatWidget {
         self.maybe_send_next_queued_input();
     }
 
-    fn on_warning(&mut self, message: String) {
-        self.add_to_history(history_cell::new_warning_event(message));
+    fn on_warning(&mut self, message: impl Into<String>) {
+        self.add_to_history(history_cell::new_warning_event(message.into()));
+        self.request_redraw();
+    }
+
+    fn on_mcp_startup_update(&mut self, ev: McpStartupUpdateEvent) {
+        let mut status = self.mcp_startup_status.take().unwrap_or_default();
+        if let McpStartupStatus::Failed { error } = &ev.status {
+            self.on_warning(error);
+        }
+        status.insert(ev.server, ev.status);
+        self.mcp_startup_status = Some(status);
+        self.bottom_pane.set_task_running(true);
+        if let Some(current) = &self.mcp_startup_status {
+            let total = current.len();
+            let mut starting: Vec<_> = current
+                .iter()
+                .filter_map(|(name, state)| {
+                    if matches!(state, McpStartupStatus::Starting) {
+                        Some(name)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            starting.sort();
+            if let Some(first) = starting.first() {
+                let completed = total.saturating_sub(starting.len());
+                let max_to_show = 3;
+                let mut to_show: Vec<String> = starting
+                    .iter()
+                    .take(max_to_show)
+                    .map(ToString::to_string)
+                    .collect();
+                if starting.len() > max_to_show {
+                    to_show.push("…".to_string());
+                }
+                let header = if total > 1 {
+                    format!(
+                        "Starting MCP servers ({completed}/{total}): {}",
+                        to_show.join(", ")
+                    )
+                } else {
+                    format!("Booting MCP server: {first}")
+                };
+                self.set_status_header(header);
+            }
+        }
+        self.request_redraw();
+    }
+
+    fn on_mcp_startup_complete(&mut self, ev: McpStartupCompleteEvent) {
+        let mut parts = Vec::new();
+        if !ev.failed.is_empty() {
+            let failed_servers: Vec<_> = ev.failed.iter().map(|f| f.server.clone()).collect();
+            parts.push(format!("failed: {}", failed_servers.join(", ")));
+        }
+        if !ev.cancelled.is_empty() {
+            self.on_warning(format!(
+                "MCP startup interrupted. The following servers were not initialized: {}",
+                ev.cancelled.join(", ")
+            ));
+        }
+        if !parts.is_empty() {
+            self.on_warning(format!("MCP startup incomplete ({})", parts.join("; ")));
+        }
+
+        self.mcp_startup_status = None;
+        self.bottom_pane.set_task_running(false);
+        self.maybe_send_next_queued_input();
         self.request_redraw();
     }
 
@@ -723,6 +803,9 @@ impl ChatWidget {
 
     fn on_background_event(&mut self, message: String) {
         debug!("BackgroundEvent: {message}");
+        self.bottom_pane.ensure_status_indicator();
+        self.bottom_pane.set_interrupt_hint_visible(true);
+        self.set_status_header(message);
     }
 
     fn on_undo_started(&mut self, event: UndoStartedEvent) {
@@ -832,10 +915,16 @@ impl ChatWidget {
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
         let running = self.running_commands.remove(&ev.call_id);
-        let (command, parsed, is_user_shell_command) = match running {
-            Some(rc) => (rc.command, rc.parsed_cmd, rc.is_user_shell_command),
-            None => (vec![ev.call_id.clone()], Vec::new(), false),
+        let (command, parsed, source) = match running {
+            Some(rc) => (rc.command, rc.parsed_cmd, rc.source),
+            None => (
+                vec![ev.call_id.clone()],
+                Vec::new(),
+                ExecCommandSource::Agent,
+            ),
         };
+        let is_unified_exec_interaction =
+            matches!(source, ExecCommandSource::UnifiedExecInteraction);
 
         let needs_new = self
             .active_cell
@@ -848,7 +937,8 @@ impl ChatWidget {
                 ev.call_id.clone(),
                 command,
                 parsed,
-                is_user_shell_command,
+                source,
+                None,
             )));
         }
 
@@ -857,15 +947,20 @@ impl ChatWidget {
             .as_mut()
             .and_then(|c| c.as_any_mut().downcast_mut::<ExecCell>())
         {
-            cell.complete_call(
-                &ev.call_id,
+            let output = if is_unified_exec_interaction {
+                CommandOutput {
+                    exit_code: ev.exit_code,
+                    formatted_output: String::new(),
+                    aggregated_output: String::new(),
+                }
+            } else {
                 CommandOutput {
                     exit_code: ev.exit_code,
                     formatted_output: ev.formatted_output.clone(),
                     aggregated_output: ev.aggregated_output.clone(),
-                },
-                ev.duration,
-            );
+                }
+            };
+            cell.complete_call(&ev.call_id, output, ev.duration);
             if cell.should_flush() {
                 self.flush_active_cell();
             }
@@ -927,9 +1022,10 @@ impl ChatWidget {
             RunningCommand {
                 command: ev.command.clone(),
                 parsed_cmd: ev.parsed_cmd.clone(),
-                is_user_shell_command: ev.is_user_shell_command,
+                source: ev.source,
             },
         );
+        let interaction_input = ev.interaction_input.clone();
         if let Some(cell) = self
             .active_cell
             .as_mut()
@@ -938,7 +1034,8 @@ impl ChatWidget {
                 ev.call_id.clone(),
                 ev.command.clone(),
                 ev.parsed_cmd.clone(),
-                ev.is_user_shell_command,
+                ev.source,
+                interaction_input.clone(),
             )
         {
             *cell = new_exec;
@@ -949,7 +1046,8 @@ impl ChatWidget {
                 ev.call_id.clone(),
                 ev.command.clone(),
                 ev.parsed_cmd,
-                ev.is_user_shell_command,
+                ev.source,
+                interaction_input,
             )));
         }
 
@@ -1014,7 +1112,7 @@ impl ChatWidget {
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
 
-        Self {
+        let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_tx,
@@ -1038,9 +1136,11 @@ impl ChatWidget {
             rate_limit_snapshot: None,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
+            rate_limit_poller: None,
             stream_controller: None,
             running_commands: HashMap::new(),
             task_complete_pending: false,
+            mcp_startup_status: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -1056,7 +1156,11 @@ impl ChatWidget {
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
-        }
+        };
+
+        widget.prefetch_rate_limits();
+
+        widget
     }
 
     /// Create a ChatWidget attached to an existing conversation (e.g., a fork).
@@ -1081,7 +1185,7 @@ impl ChatWidget {
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
 
-        Self {
+        let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_tx,
@@ -1105,9 +1209,11 @@ impl ChatWidget {
             rate_limit_snapshot: None,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
+            rate_limit_poller: None,
             stream_controller: None,
             running_commands: HashMap::new(),
             task_complete_pending: false,
+            mcp_startup_status: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -1123,7 +1229,11 @@ impl ChatWidget {
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
-        }
+        };
+
+        widget.prefetch_rate_limits();
+
+        widget
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
@@ -1520,6 +1630,8 @@ impl ChatWidget {
             }
             EventMsg::Warning(WarningEvent { message }) => self.on_warning(message),
             EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
+            EventMsg::McpStartupUpdate(ev) => self.on_mcp_startup_update(ev),
+            EventMsg::McpStartupComplete(ev) => self.on_mcp_startup_complete(ev),
             EventMsg::TurnAborted(ev) => match ev.reason {
                 TurnAbortReason::Interrupted => {
                     self.on_interrupted_turn(ev.reason);
@@ -1716,6 +1828,38 @@ impl ChatWidget {
             self.rate_limit_snapshot.as_ref(),
             Local::now(),
         ));
+    }
+    fn stop_rate_limit_poller(&mut self) {
+        if let Some(handle) = self.rate_limit_poller.take() {
+            handle.abort();
+        }
+    }
+
+    fn prefetch_rate_limits(&mut self) {
+        self.stop_rate_limit_poller();
+
+        let Some(auth) = self.auth_manager.auth() else {
+            return;
+        };
+        if auth.mode != AuthMode::ChatGPT {
+            return;
+        }
+
+        let base_url = self.config.chatgpt_base_url.clone();
+        let app_event_tx = self.app_event_tx.clone();
+
+        let handle = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+
+            loop {
+                if let Some(snapshot) = fetch_rate_limits(base_url.clone(), auth.clone()).await {
+                    app_event_tx.send(AppEvent::RateLimitSnapshotFetched(snapshot));
+                }
+                interval.tick().await;
+            }
+        });
+
+        self.rate_limit_poller = Some(handle);
     }
 
     fn lower_cost_preset(&self) -> Option<ModelPreset> {
@@ -2462,6 +2606,11 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn add_plain_history_lines(&mut self, lines: Vec<Line<'static>>) {
+        self.add_boxed_history(Box::new(PlainHistoryCell::new(lines)));
+        self.request_redraw();
+    }
+
     pub(crate) fn add_error_message(&mut self, message: String) {
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
@@ -2749,6 +2898,12 @@ impl ChatWidget {
     }
 }
 
+impl Drop for ChatWidget {
+    fn drop(&mut self) {
+        self.stop_rate_limit_poller();
+    }
+}
+
 impl Renderable for ChatWidget {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         self.as_renderable().render(area, buf);
@@ -2865,6 +3020,22 @@ fn extract_first_bold(s: &str) -> Option<String> {
         i += 1;
     }
     None
+}
+
+async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Option<RateLimitSnapshot> {
+    match BackendClient::from_auth(base_url, &auth).await {
+        Ok(client) => match client.get_rate_limits().await {
+            Ok(snapshot) => Some(snapshot),
+            Err(err) => {
+                debug!(error = ?err, "failed to fetch rate limits from /usage");
+                None
+            }
+        },
+        Err(err) => {
+            debug!(error = ?err, "failed to construct backend client for rate limits");
+            None
+        }
+    }
 }
 
 #[cfg(test)]

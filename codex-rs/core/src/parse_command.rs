@@ -1,14 +1,20 @@
 use crate::bash::extract_bash_command;
 use crate::bash::try_parse_shell;
 use crate::bash::try_parse_word_only_commands_sequence;
+use crate::powershell::extract_powershell_command;
 use codex_protocol::parse_command::ParsedCommand;
 use shlex::split as shlex_split;
 use shlex::try_join as shlex_try_join;
 use std::path::PathBuf;
 
-fn shlex_join(tokens: &[String]) -> String {
+pub fn shlex_join(tokens: &[String]) -> String {
     shlex_try_join(tokens.iter().map(String::as_str))
         .unwrap_or_else(|_| "<command included NUL byte>".to_string())
+}
+
+/// Extracts the shell and script from a command, regardless of platform
+pub fn extract_shell_command(command: &[String]) -> Option<(&str, &str)> {
+    extract_bash_command(command).or_else(|| extract_powershell_command(command))
 }
 
 /// DO NOT REVIEW THIS CODE BY HAND
@@ -877,11 +883,53 @@ mod tests {
             }],
         );
     }
+
+    #[test]
+    fn powershell_command_is_stripped() {
+        assert_parsed(
+            &vec_str(&["powershell", "-Command", "Get-ChildItem"]),
+            vec![ParsedCommand::Unknown {
+                cmd: "Get-ChildItem".to_string(),
+            }],
+        );
+    }
+
+    #[test]
+    fn pwsh_with_noprofile_and_c_alias_is_stripped() {
+        assert_parsed(
+            &vec_str(&["pwsh", "-NoProfile", "-c", "Write-Host hi"]),
+            vec![ParsedCommand::Unknown {
+                cmd: "Write-Host hi".to_string(),
+            }],
+        );
+    }
+
+    #[test]
+    fn powershell_with_path_is_stripped() {
+        let command = if cfg!(windows) {
+            "C:\\windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        } else {
+            "/usr/local/bin/powershell.exe"
+        };
+
+        assert_parsed(
+            &vec_str(&[command, "-NoProfile", "-c", "Write-Host hi"]),
+            vec![ParsedCommand::Unknown {
+                cmd: "Write-Host hi".to_string(),
+            }],
+        );
+    }
 }
 
 pub fn parse_command_impl(command: &[String]) -> Vec<ParsedCommand> {
     if let Some(commands) = parse_shell_lc_commands(command) {
         return commands;
+    }
+
+    if let Some((_, script)) = extract_powershell_command(command) {
+        return vec![ParsedCommand::Unknown {
+            cmd: script.to_string(),
+        }];
     }
 
     let normalized = normalize_tokens(command);
@@ -1190,6 +1238,7 @@ fn parse_find_query_and_path(tail: &[String]) -> (Option<String>, Option<String>
 }
 
 fn parse_shell_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
+    // Only handle bash/zsh here; PowerShell is stripped separately without bash parsing.
     let (_, script) = extract_bash_command(original)?;
 
     if let Some(tree) = try_parse_shell(script)

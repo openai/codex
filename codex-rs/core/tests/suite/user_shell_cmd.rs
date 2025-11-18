@@ -4,6 +4,7 @@ use codex_core::NewConversation;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecCommandEndEvent;
+use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::ExecOutputStream;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
@@ -150,7 +151,7 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
         _ => None,
     })
     .await;
-    assert!(begin_event.is_user_shell_command);
+    assert_eq!(begin_event.source, ExecCommandSource::UserShell);
     let matches_last_arg = begin_event.command.last() == Some(&command);
     let matches_split = shlex::split(&command).is_some_and(|split| split == begin_event.command);
     assert!(
@@ -269,9 +270,9 @@ async fn user_shell_command_is_truncated_only_once() -> anyhow::Result<()> {
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.model = "gpt-5-codex".to_string();
+        config.model = "gpt-5.1-codex".to_string();
         config.model_family =
-            find_family_for_model("gpt-5-codex").expect("gpt-5-codex is a model family");
+            find_family_for_model("gpt-5.1-codex").expect("gpt-5.1-codex is a model family");
     });
     let fixture = builder.build(&server).await?;
 
