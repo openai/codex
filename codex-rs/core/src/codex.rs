@@ -1431,6 +1431,7 @@ mod handlers {
     use codex_protocol::protocol::ReviewRequest;
     use codex_protocol::protocol::TurnAbortReason;
 
+    use codex_protocol::user_input::UserInput;
     use std::sync::Arc;
     use tracing::info;
     use tracing::warn;
@@ -1639,8 +1640,14 @@ mod handlers {
             .new_turn_with_sub_id(sub_id, SessionSettingsUpdate::default())
             .await;
 
-        sess.spawn_task(Arc::clone(&turn_context), vec![], CompactTask)
-            .await;
+        sess.spawn_task(
+            Arc::clone(&turn_context),
+            vec![UserInput::Text {
+                text: turn_context.compact_prompt().to_string(),
+            }],
+            CompactTask,
+        )
+        .await;
     }
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
@@ -1774,7 +1781,12 @@ async fn spawn_review_thread(
         text: review_prompt,
     }];
     let tc = Arc::new(review_turn_context);
-    sess.spawn_task(tc.clone(), input, ReviewTask).await;
+    sess.spawn_task(
+        tc.clone(),
+        input,
+        ReviewTask::new(review_request.append_to_original_thread),
+    )
+    .await;
 
     // Announce entering review mode so UIs can switch modes.
     sess.send_event(&tc, EventMsg::EnteredReviewMode(review_request))
@@ -2780,7 +2792,8 @@ mod tests {
         let input = vec![UserInput::Text {
             text: "start review".to_string(),
         }];
-        sess.spawn_task(Arc::clone(&tc), input, ReviewTask).await;
+        sess.spawn_task(Arc::clone(&tc), input, ReviewTask::new(true))
+            .await;
 
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 

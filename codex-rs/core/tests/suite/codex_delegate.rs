@@ -70,6 +70,7 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
             review_request: ReviewRequest {
                 prompt: "Please review".to_string(),
                 user_facing_hint: "review".to_string(),
+                append_to_original_thread: true,
             },
         })
         .await
@@ -145,6 +146,7 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
             review_request: ReviewRequest {
                 prompt: "Please review".to_string(),
                 user_facing_hint: "review".to_string(),
+                append_to_original_thread: true,
             },
         })
         .await
@@ -199,6 +201,7 @@ async fn codex_delegate_ignores_legacy_deltas() {
             review_request: ReviewRequest {
                 prompt: "Please review".to_string(),
                 user_facing_hint: "review".to_string(),
+                append_to_original_thread: true,
             },
         })
         .await

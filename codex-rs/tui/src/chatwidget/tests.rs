@@ -145,6 +145,7 @@ fn entered_review_mode_uses_request_hint() {
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
             prompt: "Review the latest changes".to_string(),
             user_facing_hint: "feature branch".to_string(),
+            append_to_original_thread: true,
         }),
     });
 
@@ -164,6 +165,7 @@ fn entered_review_mode_defaults_to_current_changes_banner() {
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
             prompt: "Review the current changes".to_string(),
             user_facing_hint: "current changes".to_string(),
+            append_to_original_thread: true,
         }),
     });
 
