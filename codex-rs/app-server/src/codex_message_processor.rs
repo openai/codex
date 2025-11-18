@@ -1210,6 +1210,12 @@ impl CodexMessageProcessor {
             }
         };
 
+        let model = config.model.clone();
+        let model_provider = config.model_provider_id.clone();
+        let cwd = config.cwd.clone();
+        let approval_policy = config.approval_policy;
+        let sandbox_policy = config.sandbox_policy.clone();
+
         match self.conversation_manager.new_conversation(config).await {
             Ok(new_conv) => {
                 let conversation_id = new_conv.conversation_id;
@@ -1224,7 +1230,7 @@ impl CodexMessageProcessor {
                 )
                 .await
                 {
-                    Ok(summary) => summary_to_thread(summary),
+                    Ok(summary) => summary_to_thread(&summary),
                     Err(err) => {
                         self.send_internal_error(
                             request_id,
@@ -1240,6 +1246,11 @@ impl CodexMessageProcessor {
 
                 let response = ThreadStartResponse {
                     thread: thread.clone(),
+                    model,
+                    model_provider,
+                    cwd,
+                    approval_policy: approval_policy.into(),
+                    sandbox: sandbox_policy.into(),
                 };
 
                 // Auto-attach a conversation listener when starting a thread.
@@ -1373,7 +1384,7 @@ impl CodexMessageProcessor {
             }
         };
 
-        let data = summaries.into_iter().map(summary_to_thread).collect();
+        let data = summaries.iter().map(summary_to_thread).collect();
 
         let response = ThreadListResponse { data, next_cursor };
         self.outgoing.send_response(request_id, response).await;
@@ -1506,6 +1517,8 @@ impl CodexMessageProcessor {
         };
 
         let fallback_model_provider = config.model_provider_id.clone();
+        let approval_policy = config.approval_policy;
+        let sandbox_policy = config.sandbox_policy.clone();
 
         match self
             .conversation_manager
@@ -1533,13 +1546,13 @@ impl CodexMessageProcessor {
                     );
                 }
 
-                let thread = match read_summary_from_rollout(
+                let summary = match read_summary_from_rollout(
                     session_configured.rollout_path.as_path(),
                     fallback_model_provider.as_str(),
                 )
                 .await
                 {
-                    Ok(summary) => summary_to_thread(summary),
+                    Ok(summary) => summary,
                     Err(err) => {
                         self.send_internal_error(
                             request_id,
@@ -1552,7 +1565,15 @@ impl CodexMessageProcessor {
                         return;
                     }
                 };
-                let response = ThreadResumeResponse { thread };
+                let thread = summary_to_thread(&summary);
+                let response = ThreadResumeResponse {
+                    thread,
+                    model: session_configured.model,
+                    model_provider: summary.model_provider,
+                    cwd: summary.cwd,
+                    approval_policy: approval_policy.into(),
+                    sandbox: sandbox_policy.into(),
+                };
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(err) => {
@@ -2773,13 +2794,12 @@ fn parse_datetime(timestamp: Option<&str>) -> Option<DateTime<Utc>> {
     })
 }
 
-fn summary_to_thread(summary: ConversationSummary) -> Thread {
+fn summary_to_thread(summary: &ConversationSummary) -> Thread {
     let ConversationSummary {
         conversation_id,
         path,
         preview,
         timestamp,
-        model_provider,
         ..
     } = summary;
 
@@ -2787,10 +2807,9 @@ fn summary_to_thread(summary: ConversationSummary) -> Thread {
 
     Thread {
         id: conversation_id.to_string(),
-        preview,
-        model_provider,
+        preview: preview.clone(),
         created_at: created_at.map(|dt| dt.timestamp()).unwrap_or(0),
-        path,
+        path: path.clone(),
     }
 }
 

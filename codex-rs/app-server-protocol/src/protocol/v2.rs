@@ -402,6 +402,11 @@ pub struct ThreadStartParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadStartResponse {
     pub thread: Thread,
+    pub model: String,
+    pub model_provider: String,
+    pub cwd: PathBuf,
+    pub approval_policy: AskForApproval,
+    pub sandbox: SandboxPolicy,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
@@ -444,6 +449,11 @@ pub struct ThreadResumeParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadResumeResponse {
     pub thread: Thread,
+    pub model: String,
+    pub model_provider: String,
+    pub cwd: PathBuf,
+    pub approval_policy: AskForApproval,
+    pub sandbox: SandboxPolicy,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -500,7 +510,6 @@ pub struct Thread {
     pub id: String,
     /// Usually the first user message in the thread, if available.
     pub preview: String,
-    pub model_provider: String,
     /// Unix timestamp (in seconds) when the thread was created.
     pub created_at: i64,
     /// [UNSTABLE] Path to the thread on disk.
