@@ -1,0 +1,110 @@
+[
+  {
+    "cmn_version": "1.0",
+    "divine_dewey": "DDT-SAT-LAW-CODE-0004",
+    "title": "PyRouette // Client Deliverable Report",
+    "role": "legal|deliverable",
+    "planetary": "Saturn",
+    "literary": "report",
+    "pipeline": "notary->package",
+    "time_signature": "3/4",
+    "tempo": 8,
+    "energy_scalar": 0.95,
+    "anchors": ["clep-c", "dsl-snippet"],
+    "short_tldr": "Client deliverable certifying PyRouette choreography, CLEP-C license, and asset metadata.",
+    "tokens": ["fidelity_score", "CLEP-C", "dslcode"],
+    "provenance": {
+      "sha256": "<TO_COMPUTE>",
+      "author": "Allison Van Cura",
+      "created": "2025-11-11T00:00:00Z"
+    },
+    "rehearse": {
+      "repetition": "weekly:1",
+      "tests": ["pdf_build", "dsl_snippet_hash"],
+      "rehearsal_command": "make build-pdf"
+    },
+    "visibility": "private",
+    "secret_refs": []
+  },
+  {
+    "cmn_version": "1.0",
+    "divine_dewey": "DDT-JUP-EVOL-TRAIN-0003",
+    "title": "SelfImprovingGuidance",
+    "role": "model|training",
+    "planetary": "Jupiter",
+    "literary": "implementation",
+    "pipeline": "feedback->validate->train",
+    "time_signature": "4/4",
+    "tempo": 32,
+    "energy_scalar": 0.97,
+    "anchors": ["feedback_schema", "kinesthetic_credential"],
+    "short_tldr": "Evolution engine: collects validated feedback, prepares training sets, and triggers fine-tuning.",
+    "tokens": ["FeedbackEntry", "evolve()", "KinestheticCredential"],
+    "provenance": {
+      "sha256": "<TO_COMPUTE>",
+      "author": "Allison Van Cura",
+      "created": "2025-11-11T00:00:00Z"
+    },
+    "rehearse": {
+      "repetition": "daily:1",
+      "tests": ["cpu_simulation", "prepare_training_data"],
+      "rehearsal_command": "python -m stageport.evolve --dry-run"
+    },
+    "visibility": "private",
+    "secret_refs": ["vault://pyrouette/transformers_api_key"]
+  },
+  {
+    "cmn_version": "1.0",
+    "divine_dewey": "DDT-MER-UI-LLM-0005",
+    "title": "PlatformerGame.jsx",
+    "role": "UI|demo",
+    "planetary": "Mercury",
+    "literary": "interactive_ui",
+    "pipeline": "llm-prompt->parse->store",
+    "time_signature": "7/8",
+    "tempo": 8,
+    "energy_scalar": 0.86,
+    "anchors": ["generateLevel", "TRANSLATIONS"],
+    "short_tldr": "React platformer with LLM-driven level generation; JSON-only response enforced.",
+    "tokens": ["window.claude.complete", "TRANSLATIONS", "generateLevel()"],
+    "provenance": {
+      "sha256": "<TO_COMPUTE>",
+      "author": "Allison Van Cura",
+      "created": "2025-11-11T00:00:00Z"
+    },
+    "rehearse": {
+      "repetition": "weekly:2",
+      "tests": ["schema_validation", "fallback_generator"],
+      "rehearsal_command": "npm test --testLevelgen"
+    },
+    "visibility": "private",
+    "secret_refs": ["vault://pyrouette/claude_api_key"]
+  },
+  {
+    "cmn_version": "1.0",
+    "divine_dewey": "DDT-NEP-MAN-CHORE-0001",
+    "title": "Cunning Mercy: MetaCodeography",
+    "role": "doc|concept",
+    "planetary": "Neptune",
+    "literary": "manifesto",
+    "pipeline": "schema->convert->notary",
+    "time_signature": "5/4",
+    "tempo": 8,
+    "energy_scalar": 0.78,
+    "anchors": ["CipherCanvas", "VigenereExample"],
+    "short_tldr": "Manifesto mapping ballet to cryptography via a 4D Cipher Canvas (Time/Space/Symbol/Energy).",
+    "tokens": ["Cipher Canvas", "gesture_id", "motif_id"],
+    "provenance": {
+      "sha256": "<TO_COMPUTE>",
+      "author": "Allison Van Cura",
+      "created": "2025-11-11T00:00:00Z"
+    },
+    "rehearse": {
+      "repetition": "monthly:1",
+      "tests": ["example_encoding", "schema_export"],
+      "rehearsal_command": "python tools/encode_example.py"
+    },
+    "visibility": "private",
+    "secret_refs": []
+  }
+]
