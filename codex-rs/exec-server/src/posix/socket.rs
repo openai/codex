@@ -45,11 +45,10 @@ fn control_space_for_fds(count: usize) -> usize {
 /// Extracts the FDs from a SCM_RIGHTS control message.
 fn extract_fds(control: &[u8]) -> Vec<OwnedFd> {
     let mut fds = Vec::new();
-    let hdr = libc::msghdr {
-        msg_control: control.as_ptr() as *mut libc::c_void,
-        msg_controllen: control.len() as _,
-        ..unsafe { std::mem::zeroed() }
-    };
+    let mut hdr: libc::msghdr = unsafe { std::mem::zeroed() };
+    hdr.msg_control = control.as_ptr() as *mut libc::c_void;
+    hdr.msg_controllen = control.len() as _;
+    let hdr = hdr; // drop mut
 
     let mut cmsg = unsafe { libc::CMSG_FIRSTHDR(&hdr) as *const libc::cmsghdr };
     while !cmsg.is_null() {
