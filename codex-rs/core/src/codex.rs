@@ -403,7 +403,7 @@ impl Session {
         );
 
         let client = ModelClient::new(
-            Arc::new(per_turn_config),
+            Arc::new(per_turn_config.clone()),
             auth_manager,
             otel_event_manager,
             provider,
@@ -433,7 +433,7 @@ impl Session {
             final_output_json_schema: None,
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
-            truncation_policy: TruncationPolicy::new(&config),
+            truncation_policy: TruncationPolicy::new(&per_turn_config),
         }
     }
 
@@ -1766,7 +1766,7 @@ async fn spawn_review_thread(
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
-        truncation_policy: TruncationPolicy::new(&config),
+        truncation_policy: TruncationPolicy::new(&per_turn_config),
     };
 
     // Seed the child task with the review prompt as the initial user message.
