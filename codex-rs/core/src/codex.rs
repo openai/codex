@@ -281,7 +281,7 @@ pub(crate) struct TurnContext {
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
-    pub(crate) exec_policy: Option<Arc<ExecPolicy>>,
+    pub(crate) exec_policy: Arc<ExecPolicy>,
     pub(crate) truncation_policy: TruncationPolicy,
 }
 
@@ -339,8 +339,8 @@ pub(crate) struct SessionConfiguration {
 
     /// Set of feature flags for this session
     features: Features,
-    /// Optional execpolicy policy, applied only when enabled by feature flag.
-    exec_policy: Option<Arc<ExecPolicy>>,
+    /// Execpolicy policy, applied only when enabled by feature flag.
+    exec_policy: Arc<ExecPolicy>,
 
     // TODO(pakrym): Remove config from here
     original_config_do_not_use: Arc<Config>,
@@ -2583,7 +2583,7 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
-            exec_policy: None,
+            exec_policy: Arc::new(codex_execpolicy2::PolicyParser::new().build()),
             session_source: SessionSource::Exec,
         };
 
@@ -2661,7 +2661,7 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
-            exec_policy: None,
+            exec_policy: Arc::new(codex_execpolicy2::PolicyParser::new().build()),
             session_source: SessionSource::Exec,
         };
 

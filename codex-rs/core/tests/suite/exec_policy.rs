@@ -1,7 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::Result;
-use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -23,8 +22,13 @@ use std::fs;
 #[tokio::test]
 async fn execpolicy_blocks_shell_invocation() -> Result<()> {
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::ExecPolicy);
-        let policy_path = config.codex_home.join("policy.codexpolicy");
+        let policy_path = config.codex_home.join("policy").join("policy.codexpolicy");
+        fs::create_dir_all(
+            policy_path
+                .parent()
+                .expect("policy directory must have a parent"),
+        )
+        .expect("create policy directory");
         fs::write(
             &policy_path,
             r#"prefix_rule(pattern=["echo"], decision="forbidden")"#,
