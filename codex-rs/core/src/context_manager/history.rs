@@ -1,8 +1,6 @@
 use crate::codex::TurnContext;
-use crate::config::OPENAI_DEFAULT_MODEL;
 use crate::context_manager::normalize;
-use crate::model_family::derive_default_model_family;
-use crate::model_family::find_family_for_model;
+use crate::truncate::TruncationSettings;
 use crate::truncate::truncate_function_output_items_to_token_limit;
 use crate::truncate::truncate_text;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -18,24 +16,14 @@ pub(crate) struct ContextManager {
     /// The oldest items are at the beginning of the vector.
     items: Vec<ResponseItem>,
     token_info: Option<TokenUsageInfo>,
-    function_output_max_tokens: usize,
-    model: String,
 }
 
 impl ContextManager {
-    pub(crate) fn new(model: &str, function_output_max_tokens: usize) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             items: Vec::new(),
             token_info: TokenUsageInfo::new_or_append(&None, &None, None),
-            function_output_max_tokens,
-            model: model.to_string(),
         }
-    }
-
-    pub(crate) fn set_model(&mut self, model: &str) {
-        self.model = model.to_string();
-        // TODO (aibrahim): recompute output_max_tokens/calls_output_max_tokens when the model changes so
-        // truncation budgets keep matching the current model.
     }
 
     pub(crate) fn token_info(&self) -> Option<TokenUsageInfo> {
@@ -56,7 +44,7 @@ impl ContextManager {
     }
 
     /// `items` is ordered from oldest to newest.
-    pub(crate) fn record_items<I>(&mut self, items: I)
+    pub(crate) fn record_items<I>(&mut self, items: I, truncation_settings: &TruncationSettings)
     where
         I: IntoIterator,
         I::Item: std::ops::Deref<Target = ResponseItem>,
@@ -68,7 +56,7 @@ impl ContextManager {
                 continue;
             }
 
-            let processed = self.process_item(item_ref);
+            let processed = self.process_item(item_ref, truncation_settings);
             self.items.push(processed);
         }
     }
@@ -156,20 +144,16 @@ impl ContextManager {
         items.retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
     }
 
-    fn process_item(&self, item: &ResponseItem) -> ResponseItem {
+    fn process_item(
+        &self,
+        item: &ResponseItem,
+        truncation_settings: &TruncationSettings,
+    ) -> ResponseItem {
         match item {
             ResponseItem::FunctionCallOutput { call_id, output } => {
-                let (truncated, _) = truncate_text(
-                    output.content.as_str(),
-                    self.function_output_max_tokens,
-                    &self.model,
-                );
+                let (truncated, _) = truncate_text(output.content.as_str(), truncation_settings);
                 let truncated_items = output.content_items.as_ref().map(|items| {
-                    truncate_function_output_items_to_token_limit(
-                        items,
-                        self.function_output_max_tokens,
-                        &self.model,
-                    )
+                    truncate_function_output_items_to_token_limit(items, truncation_settings)
                 });
                 ResponseItem::FunctionCallOutput {
                     call_id: call_id.clone(),
@@ -181,8 +165,7 @@ impl ContextManager {
                 }
             }
             ResponseItem::CustomToolCallOutput { call_id, output } => {
-                let (truncated, _) =
-                    truncate_text(output, self.function_output_max_tokens, &self.model);
+                let (truncated, _) = truncate_text(output, truncation_settings);
                 ResponseItem::CustomToolCallOutput {
                     call_id: call_id.clone(),
                     output: truncated,
@@ -197,16 +180,6 @@ impl ContextManager {
             | ResponseItem::GhostSnapshot { .. }
             | ResponseItem::Other => item.clone(),
         }
-    }
-}
-
-impl Default for ContextManager {
-    fn default() -> Self {
-        let default_function_output_max_tokens = find_family_for_model(OPENAI_DEFAULT_MODEL)
-            .unwrap_or_else(|| derive_default_model_family(OPENAI_DEFAULT_MODEL))
-            .truncation_policy
-            .tokens_budget;
-        Self::new(OPENAI_DEFAULT_MODEL, default_function_output_max_tokens)
     }
 }
 

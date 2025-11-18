@@ -122,6 +122,11 @@ impl Tokenizer {
     }
 }
 
+impl fmt::Debug for Tokenizer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Tokenizer {{ inner: <CoreBPE> }}")
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

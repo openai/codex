@@ -194,7 +194,7 @@ pub struct Config {
     pub project_doc_fallback_filenames: Vec<String>,
 
     /// Token budget applied when storing tool/function outputs in the context manager.
-    pub calls_output_max_tokens: usize,
+    pub calls_output_max_tokens: Option<usize>,
 
     /// Directory containing all Codex state (defaults to `~/.codex` but can be
     /// overridden by the `CODEX_HOME` environment variable).
@@ -1141,9 +1141,7 @@ impl Config {
                     }
                 })
                 .collect(),
-            calls_output_max_tokens: cfg
-                .calls_output_max_tokens
-                .unwrap_or(model_family.truncation_policy.tokens_budget),
+            calls_output_max_tokens: cfg.calls_output_max_tokens,
             codex_home,
             history,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),

@@ -2,6 +2,8 @@ use crate::codex::ProcessedResponseItem;
 use crate::exec::ExecToolCallOutput;
 use crate::token_data::KnownPlan;
 use crate::token_data::PlanType;
+use crate::truncate::TruncationPolicy;
+use crate::truncate::TruncationSettings;
 use crate::truncate::truncate_text;
 use chrono::DateTime;
 use chrono::Datelike;
@@ -13,6 +15,7 @@ use codex_protocol::protocol::RateLimitSnapshot;
 use reqwest::StatusCode;
 use serde_json;
 use std::io;
+use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::task::JoinError;
@@ -431,7 +434,7 @@ impl CodexErr {
     }
 }
 
-pub fn get_error_message_ui(e: &CodexErr, model: &str) -> String {
+pub fn get_error_message_ui(e: &CodexErr) -> String {
     let message = match e {
         CodexErr::Sandbox(SandboxErr::Denied { output }) => {
             let aggregated = output.aggregated_output.text.trim();
@@ -461,7 +464,11 @@ pub fn get_error_message_ui(e: &CodexErr, model: &str) -> String {
         _ => e.to_string(),
     };
 
-    truncate_text(&message, ERROR_MESSAGE_UI_MAX_TOKENS, model).0
+    let truncation_settings = TruncationSettings {
+        policy: TruncationPolicy::Bytes(ERROR_MESSAGE_UI_MAX_TOKENS),
+        tokenizer: Arc::new(None),
+    };
+    truncate_text(&message, &truncation_settings).0
 }
 
 #[cfg(test)]
@@ -534,10 +541,7 @@ mod tests {
         let err = CodexErr::Sandbox(SandboxErr::Denied {
             output: Box::new(output),
         });
-        assert_eq!(
-            get_error_message_ui(&err, OPENAI_DEFAULT_MODEL),
-            "aggregate detail"
-        );
+        assert_eq!(get_error_message_ui(&err), "aggregate detail");
     }
 
     #[test]
@@ -553,10 +557,7 @@ mod tests {
         let err = CodexErr::Sandbox(SandboxErr::Denied {
             output: Box::new(output),
         });
-        assert_eq!(
-            get_error_message_ui(&err, OPENAI_DEFAULT_MODEL),
-            "stderr detail\nstdout detail"
-        );
+        assert_eq!(get_error_message_ui(&err), "stderr detail\nstdout detail");
     }
 
     #[test]
@@ -572,10 +573,7 @@ mod tests {
         let err = CodexErr::Sandbox(SandboxErr::Denied {
             output: Box::new(output),
         });
-        assert_eq!(
-            get_error_message_ui(&err, OPENAI_DEFAULT_MODEL),
-            "stdout only"
-        );
+        assert_eq!(get_error_message_ui(&err), "stdout only");
     }
 
     #[test]
@@ -592,7 +590,7 @@ mod tests {
             output: Box::new(output),
         });
         assert_eq!(
-            get_error_message_ui(&err, OPENAI_DEFAULT_MODEL),
+            get_error_message_ui(&err),
             "command failed inside sandbox with exit code 13"
         );
     }

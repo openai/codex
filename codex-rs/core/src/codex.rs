@@ -15,6 +15,8 @@ use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::response_processing::process_items;
 use crate::terminal;
+use crate::truncate::TruncationPolicy;
+use crate::truncate::TruncationSettings;
 use crate::user_notification::UserNotifier;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
@@ -281,6 +283,7 @@ pub(crate) struct TurnContext {
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
+    pub(crate) truncation_settings: TruncationSettings,
 }
 
 impl TurnContext {
@@ -338,7 +341,7 @@ pub(crate) struct SessionConfiguration {
     /// Set of feature flags for this session
     features: Features,
 
-    output_max_tokens: usize,
+    output_max_tokens: Option<usize>,
 
     // TODO(pakrym): Remove config from here
     original_config_do_not_use: Arc<Config>,
@@ -372,7 +375,7 @@ impl SessionConfiguration {
         next_configuration
     }
 
-    pub(crate) fn output_max_tokens(&self) -> usize {
+    pub(crate) fn output_max_tokens(&self) -> Option<usize> {
         self.output_max_tokens
     }
 
@@ -449,6 +452,10 @@ impl Session {
             final_output_json_schema: None,
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
+            truncation_settings: TruncationSettings::new(
+                TruncationPolicy::new(&config),
+                &session_configuration.model,
+            ),
         }
     }
 
@@ -725,7 +732,11 @@ impl Session {
                 let reconstructed_history =
                     self.reconstruct_history_from_rollout(&turn_context, &rollout_items);
                 if !reconstructed_history.is_empty() {
-                    self.record_into_history(&reconstructed_history).await;
+                    self.record_into_history(
+                        &reconstructed_history,
+                        &turn_context.truncation_settings,
+                    )
+                    .await;
                 }
 
                 // If persisting, persist all rollout items as-is (recorder filters)
@@ -742,8 +753,6 @@ impl Session {
         let mut state = self.state.lock().await;
 
         state.session_configuration = state.session_configuration.apply(&updates);
-        let model = state.session_configuration.model().to_string();
-        state.history.set_model(&model);
     }
 
     pub(crate) async fn new_turn(&self, updates: SessionSettingsUpdate) -> Arc<TurnContext> {
@@ -760,8 +769,6 @@ impl Session {
             let mut state = self.state.lock().await;
             let session_configuration = state.session_configuration.clone().apply(&updates);
             state.session_configuration = session_configuration.clone();
-            let model = state.session_configuration.model().to_string();
-            state.history.set_model(&model);
             session_configuration
         };
 
@@ -985,7 +992,8 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) {
-        self.record_into_history(items).await;
+        self.record_into_history(items, &turn_context.truncation_settings)
+            .await;
         self.persist_rollout_response_items(items).await;
         self.send_raw_response_items(turn_context, items).await;
     }
@@ -995,14 +1003,14 @@ impl Session {
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
     ) -> Vec<ResponseItem> {
-        let mut history = ContextManager::new(
-            turn_context.client.get_model().as_str(),
-            turn_context.client.get_max_calls_output_tokens(),
-        );
+        let mut history = ContextManager::new();
         for item in rollout_items {
             match item {
                 RolloutItem::ResponseItem(response_item) => {
-                    history.record_items(std::iter::once(response_item));
+                    history.record_items(
+                        std::iter::once(response_item),
+                        &turn_context.truncation_settings,
+                    );
                 }
                 RolloutItem::Compacted(compacted) => {
                     let snapshot = history.get_history();
@@ -1011,7 +1019,7 @@ impl Session {
                         self.build_initial_context(turn_context),
                         &user_messages,
                         &compacted.message,
-                        turn_context.client.get_model().as_str(),
+                        turn_context.truncation_settings.tokenizer.clone(),
                     );
                     history.replace(rebuilt);
                 }
@@ -1022,9 +1030,13 @@ impl Session {
     }
 
     /// Append ResponseItems to the in-memory conversation history only.
-    pub(crate) async fn record_into_history(&self, items: &[ResponseItem]) {
+    pub(crate) async fn record_into_history(
+        &self,
+        items: &[ResponseItem],
+        truncation_settings: &TruncationSettings,
+    ) {
         let mut state = self.state.lock().await;
-        state.record_items(items.iter());
+        state.record_items(items.iter(), truncation_settings);
     }
 
     pub(crate) async fn replace_history(&self, items: Vec<ResponseItem>) {
@@ -1788,6 +1800,7 @@ async fn spawn_review_thread(
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
+        truncation_settings: TruncationSettings::new(TruncationPolicy::new(&config), &model),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -2925,16 +2938,13 @@ mod tests {
         turn_context: &TurnContext,
     ) -> (Vec<RolloutItem>, Vec<ResponseItem>) {
         let mut rollout_items = Vec::new();
-        let mut live_history = ContextManager::new(
-            turn_context.client.get_model().as_str(),
-            turn_context.client.get_max_calls_output_tokens(),
-        );
+        let mut live_history = ContextManager::new();
 
         let initial_context = session.build_initial_context(turn_context);
         for item in &initial_context {
             rollout_items.push(RolloutItem::ResponseItem(item.clone()));
         }
-        live_history.record_items(initial_context.iter());
+        live_history.record_items(initial_context.iter(), &turn_context.truncation_settings);
 
         let user1 = ResponseItem::Message {
             id: None,
@@ -2943,7 +2953,7 @@ mod tests {
                 text: "first user".to_string(),
             }],
         };
-        live_history.record_items(std::iter::once(&user1));
+        live_history.record_items(std::iter::once(&user1), &turn_context.truncation_settings);
         rollout_items.push(RolloutItem::ResponseItem(user1.clone()));
 
         let assistant1 = ResponseItem::Message {
@@ -2953,7 +2963,10 @@ mod tests {
                 text: "assistant reply one".to_string(),
             }],
         };
-        live_history.record_items(std::iter::once(&assistant1));
+        live_history.record_items(
+            std::iter::once(&assistant1),
+            &turn_context.truncation_settings,
+        );
         rollout_items.push(RolloutItem::ResponseItem(assistant1.clone()));
 
         let summary1 = "summary one";
@@ -2977,7 +2990,7 @@ mod tests {
                 text: "second user".to_string(),
             }],
         };
-        live_history.record_items(std::iter::once(&user2));
+        live_history.record_items(std::iter::once(&user2), &turn_context.truncation_settings);
         rollout_items.push(RolloutItem::ResponseItem(user2.clone()));
 
         let assistant2 = ResponseItem::Message {
@@ -2987,7 +3000,10 @@ mod tests {
                 text: "assistant reply two".to_string(),
             }],
         };
-        live_history.record_items(std::iter::once(&assistant2));
+        live_history.record_items(
+            std::iter::once(&assistant2),
+            &turn_context.truncation_settings,
+        );
         rollout_items.push(RolloutItem::ResponseItem(assistant2.clone()));
 
         let summary2 = "summary two";
@@ -3011,7 +3027,7 @@ mod tests {
                 text: "third user".to_string(),
             }],
         };
-        live_history.record_items(std::iter::once(&user3));
+        live_history.record_items(std::iter::once(&user3), &turn_context.truncation_settings);
         rollout_items.push(RolloutItem::ResponseItem(user3.clone()));
 
         let assistant3 = ResponseItem::Message {
@@ -3021,7 +3037,10 @@ mod tests {
                 text: "assistant reply three".to_string(),
             }],
         };
-        live_history.record_items(std::iter::once(&assistant3));
+        live_history.record_items(
+            std::iter::once(&assistant3),
+            &turn_context.truncation_settings,
+        );
         rollout_items.push(RolloutItem::ResponseItem(assistant3.clone()));
 
         (rollout_items, live_history.get_history())

@@ -129,10 +129,7 @@ impl ToolOrchestrator {
                         let err = SandboxErr::Denied {
                             output: output.clone(),
                         };
-                        let friendly = get_error_message_ui(
-                            &CodexErr::Sandbox(err),
-                            turn_ctx.client.get_model().as_str(),
-                        );
+                        let friendly = get_error_message_ui(&CodexErr::Sandbox(err));
                         let failure_summary = format!("failed in sandbox: {friendly}");
 
                         risk = tool_ctx

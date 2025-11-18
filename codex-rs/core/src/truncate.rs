@@ -2,11 +2,14 @@
 //! and suffix on UTF-8 boundaries, and helpers for line/token‑based truncation
 //! used across the core crate.
 
+use std::sync::Arc;
+
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_utils_string::take_bytes_at_char_boundary;
 use codex_utils_string::take_last_bytes_at_char_boundary;
 use codex_utils_tokenizer::Tokenizer;
 
+use crate::config::Config;
 use crate::model_family::derive_default_model_family;
 use crate::model_family::find_family_for_model;
 
@@ -15,15 +18,39 @@ const TOKENIZER_STACK_SAFE_BYTES: usize = 1024 * 1024; // 1 MiB
 const APPROX_BYTES_PER_TOKEN: usize = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TruncationPolicy {
-    pub mode: TruncationMode,
-    pub tokens_budget: usize,
+pub enum TruncationPolicy {
+    Bytes(usize),
+    Tokens(usize),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum TruncationMode {
-    Bytes,
-    Tokens,
+impl TruncationPolicy {
+    pub fn new(config: &Config) -> Self {
+        let token_limit = config.calls_output_max_tokens.unwrap_or_else(
+            find_family_for_model(config.model.as_str())
+                .unwrap_or_else(|| derive_default_model_family(config.model.as_str()))
+                .truncation_policy,
+        );
+
+        match config.model_family.truncation_policy {
+            TruncationPolicy::Bytes(_) => {
+                Self::Bytes(token_limit.saturating_mul(APPROX_BYTES_PER_TOKEN))
+            }
+            TruncationPolicy::Tokens(_) => Self::Tokens(token_limit),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TruncationSettings {
+    pub policy: TruncationPolicy,
+    pub tokenizer: Arc<Option<Tokenizer>>,
+}
+
+impl TruncationSettings {
+    pub fn new(policy: TruncationPolicy, model: &str) -> Self {
+        let tokenizer = Arc::new(Tokenizer::for_model(model).ok());
+        Self { policy, tokenizer }
+    }
 }
 
 /// Format a block of exec/tool output for model consumption, truncating by
@@ -43,8 +70,7 @@ pub(crate) fn truncate_with_line_bytes_budget(content: &str, bytes_budget: usize
 
 pub(crate) fn truncate_text(
     content: &str,
-    tokens_budget: usize,
-    model: &str,
+    truncation_settings: &TruncationSettings,
 ) -> (String, Option<u64>) {
     let mode = find_family_for_model(model)
         .unwrap_or_else(|| derive_default_model_family(model))
@@ -62,8 +88,7 @@ pub(crate) fn truncate_text(
 /// items.
 pub(crate) fn truncate_function_output_items_to_token_limit(
     items: &[FunctionCallOutputContentItem],
-    max_tokens: usize,
-    model: &str,
+    truncation_settings: &TruncationSettings,
 ) -> Vec<FunctionCallOutputContentItem> {
     let mut out: Vec<FunctionCallOutputContentItem> = Vec::with_capacity(items.len());
     let mut remaining_tokens = max_tokens;
@@ -206,60 +231,38 @@ fn truncate_with_tokenizer_path(
     (out, Some(total_tokens))
 }
 
-/// estimate the number of tokens in a string based on the length of the string
-fn truncate_with_byte_estimate(s: &str, max_tokens: usize, model: &str) -> (String, Option<u64>) {
+/// Truncate a string using a byte budget derived from the token budget, without
+/// performing any real tokenization. This keeps the logic purely byte-based and
+/// uses a bytes placeholder in the truncated output.
+fn truncate_with_byte_estimate(s: &str, max_tokens: usize, _model: &str) -> (String, Option<u64>) {
+    if s.is_empty() {
+        return (String::new(), None);
+    }
+
     let total_tokens = approx_token_count(s);
-    if max_tokens == 0 {
-        return (format_truncation_marker(total_tokens), Some(total_tokens));
-    }
-
-    if total_tokens as usize <= max_tokens {
-        return (s.to_string(), None);
-    }
-
     let max_bytes = approx_bytes_for_tokens(max_tokens);
+
+    if max_bytes == 0 {
+        // No budget to show content; just report that everything was truncated.
+        let marker = format!("[…{} bytes truncated…]", s.len());
+        return (marker, Some(total_tokens));
+    }
+
     if s.len() <= max_bytes {
         return (s.to_string(), None);
     }
 
-    let mut guess_tokens = total_tokens.saturating_sub(max_tokens as u64).max(1);
-    for _ in 0..4 {
-        let marker = format_truncation_marker(guess_tokens);
-        let marker_len = marker.len();
-        let keep_budget = max_bytes.saturating_sub(marker_len);
-        if keep_budget == 0 {
-            return (marker, Some(total_tokens));
-        }
-
-        let (left_budget, right_budget) = split_budget(keep_budget);
-        let prefix_end = pick_prefix_end(s, left_budget);
-        let mut suffix_start = pick_suffix_start(s, right_budget);
-        if suffix_start < prefix_end {
-            suffix_start = prefix_end;
-        }
-
-        let removed_tokens = approx_token_count(&s[prefix_end..suffix_start]);
-        let final_marker = format_truncation_marker(removed_tokens);
-        if final_marker.len() == marker_len {
-            let out = assemble_truncated_output(
-                &s[..prefix_end],
-                &s[suffix_start..],
-                &final_marker,
-                NewlineMode::Always,
-            );
-            return ensure_candidate_within_token_budget(out, max_tokens, total_tokens, model);
-        }
-
-        guess_tokens = removed_tokens.max(1);
-    }
-
-    let marker = format_truncation_marker(guess_tokens);
+    let total_bytes = s.len();
+    let removed_bytes = total_bytes.saturating_sub(max_bytes);
+    let marker = format!("[…{removed_bytes} bytes truncated…]");
     let marker_len = marker.len();
-    let keep_budget = max_bytes.saturating_sub(marker_len);
-    if keep_budget == 0 {
-        return (marker, Some(total_tokens));
+
+    if marker_len >= max_bytes {
+        let truncated_marker = truncate_on_boundary(&marker, max_bytes);
+        return (truncated_marker.to_string(), Some(total_tokens));
     }
 
+    let keep_budget = max_bytes - marker_len;
     let (left_budget, right_budget) = split_budget(keep_budget);
     let prefix_end = pick_prefix_end(s, left_budget);
     let mut suffix_start = pick_suffix_start(s, right_budget);
@@ -267,13 +270,19 @@ fn truncate_with_byte_estimate(s: &str, max_tokens: usize, model: &str) -> (Stri
         suffix_start = prefix_end;
     }
 
-    let out = assemble_truncated_output(
+    let mut out = assemble_truncated_output(
         &s[..prefix_end],
         &s[suffix_start..],
         &marker,
         NewlineMode::Always,
     );
-    ensure_candidate_within_token_budget(out, max_tokens, total_tokens, model)
+
+    if out.len() > max_bytes {
+        let boundary = truncate_on_boundary(&out, max_bytes);
+        out.truncate(boundary.len());
+    }
+
+    (out, Some(total_tokens))
 }
 
 fn truncate_formatted_exec_output(

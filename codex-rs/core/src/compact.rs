@@ -14,6 +14,8 @@ use crate::protocol::EventMsg;
 use crate::protocol::TaskStartedEvent;
 use crate::protocol::TurnContextItem;
 use crate::protocol::WarningEvent;
+use crate::truncate::TruncationPolicy;
+use crate::truncate::TruncationSettings;
 use crate::truncate::truncate_text;
 use crate::util::backoff;
 use codex_protocol::items::TurnItem;
@@ -60,7 +62,10 @@ async fn run_compact_task_inner(
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
 
     let mut history = sess.clone_history().await;
-    history.record_items(&[initial_input_for_turn.into()]);
+    history.record_items(
+        &[initial_input_for_turn.into()],
+        &turn_context.truncation_settings,
+    );
 
     let mut truncated_count = 0usize;
 
@@ -152,7 +157,7 @@ async fn run_compact_task_inner(
         initial_context,
         &user_messages,
         &summary_text,
-        turn_context.client.get_model().as_str(),
+        turn_context.truncation_settings.tokenizer.clone(),
     );
     let ghost_snapshots: Vec<ResponseItem> = history_snapshot
         .iter()
@@ -230,14 +235,14 @@ pub(crate) fn build_compacted_history(
     initial_context: Vec<ResponseItem>,
     user_messages: &[String],
     summary_text: &str,
-    model: &str,
+    tokenizer: Arc<Option<Tokenizer>>,
 ) -> Vec<ResponseItem> {
     build_compacted_history_with_limit(
         initial_context,
         user_messages,
         summary_text,
         COMPACT_USER_MESSAGE_MAX_TOKENS,
-        model,
+        tokenizer,
     )
 }
 
@@ -246,11 +251,10 @@ fn build_compacted_history_with_limit(
     user_messages: &[String],
     summary_text: &str,
     max_tokens: usize,
-    model: &str,
+    tokenizer: Arc<Option<Tokenizer>>,
 ) -> Vec<ResponseItem> {
     let mut selected_messages: Vec<String> = Vec::new();
     if max_tokens > 0 {
-        let tokenizer = Tokenizer::try_default().ok();
         let mut remaining = max_tokens;
         for message in user_messages.iter().rev() {
             if remaining == 0 {
@@ -264,7 +268,11 @@ fn build_compacted_history_with_limit(
                 selected_messages.push(message.clone());
                 remaining = remaining.saturating_sub(tokens);
             } else {
-                let (truncated, _) = truncate_text(message, remaining, model);
+                let truncation_settings = TruncationSettings {
+                    policy: TruncationPolicy::Tokens(remaining),
+                    tokenizer,
+                };
+                let (truncated, _) = truncate_text(message, &truncation_settings);
                 selected_messages.push(truncated);
                 break;
             }
@@ -313,7 +321,11 @@ async fn drain_to_completed(
         };
         match event {
             Ok(ResponseEvent::OutputItemDone(item)) => {
-                sess.record_into_history(std::slice::from_ref(&item)).await;
+                sess.record_into_history(
+                    std::slice::from_ref(&item),
+                    &turn_context.truncation_settings,
+                )
+                .await;
             }
             Ok(ResponseEvent::RateLimits(snapshot)) => {
                 sess.update_rate_limits(turn_context, snapshot).await;

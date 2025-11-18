@@ -15,6 +15,8 @@ use crate::exec::SandboxType;
 use crate::exec::StreamOutput;
 use crate::exec::is_likely_sandbox_denied;
 use crate::tools::sandboxing::ToolCtx;
+use crate::truncate::TruncationPolicy;
+use crate::truncate::TruncationSettings;
 use crate::truncate::truncate_text;
 use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::SpawnedPty;
@@ -170,11 +172,11 @@ impl UnifiedExecSession {
         };
 
         if is_likely_sandbox_denied(self.sandbox_type(), &exec_output) {
-            let (snippet, _) = truncate_text(
-                &aggregated_text,
-                UNIFIED_EXEC_OUTPUT_MAX_TOKENS,
-                ctx.turn.client.get_model().as_str(),
+            let truncation_settings = TruncationSettings::new(
+                TruncationPolicy::Tokens(UNIFIED_EXEC_OUTPUT_MAX_TOKENS),
+                &ctx.turn.client.get_model(),
             );
+            let (snippet, _) = truncate_text(&aggregated_text, &truncation_settings);
             let message = if snippet.is_empty() {
                 format!("exit code {exit_code}")
             } else {

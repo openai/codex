@@ -132,10 +132,6 @@ impl ModelClient {
         })
     }
 
-    pub fn get_max_calls_output_tokens(&self) -> usize {
-        self.config.calls_output_max_tokens
-    }
-
     pub fn config(&self) -> Arc<Config> {
         Arc::clone(&self.config)
     }
