@@ -67,7 +67,7 @@ use crate::error::Result as CodexResult;
 use crate::exec::StreamOutput;
 // Removed: legacy executor wiring replaced by ToolOrchestrator flows.
 // legacy normalize_exec_result no longer used after orchestrator migration
-use crate::compact::build_token_limited_compacted_history;
+use crate::compact::build_compacted_history;
 use crate::compact::collect_user_messages;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
@@ -1005,7 +1005,7 @@ impl Session {
                 RolloutItem::Compacted(compacted) => {
                     let snapshot = history.get_history();
                     let user_messages = collect_user_messages(&snapshot);
-                    let rebuilt = build_token_limited_compacted_history(
+                    let rebuilt = build_compacted_history(
                         self.build_initial_context(turn_context),
                         &user_messages,
                         &compacted.message,
@@ -2957,7 +2957,7 @@ mod tests {
         let summary1 = "summary one";
         let snapshot1 = live_history.get_history();
         let user_messages1 = collect_user_messages(&snapshot1);
-        let rebuilt1 = build_token_limited_compacted_history(
+        let rebuilt1 = build_compacted_history(
             session.build_initial_context(turn_context),
             &user_messages1,
             summary1,
@@ -2991,7 +2991,7 @@ mod tests {
         let summary2 = "summary two";
         let snapshot2 = live_history.get_history();
         let user_messages2 = collect_user_messages(&snapshot2);
-        let rebuilt2 = build_token_limited_compacted_history(
+        let rebuilt2 = build_compacted_history(
             session.build_initial_context(turn_context),
             &user_messages2,
             summary2,

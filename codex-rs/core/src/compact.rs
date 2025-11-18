@@ -148,7 +148,7 @@ async fn run_compact_task_inner(
     let user_messages = collect_user_messages(&history_snapshot);
 
     let initial_context = sess.build_initial_context(turn_context.as_ref());
-    let mut new_history = build_token_limited_compacted_history(
+    let mut new_history = build_compacted_history(
         initial_context,
         &user_messages,
         &summary_text,
@@ -226,13 +226,13 @@ pub(crate) fn is_summary_message(message: &str) -> bool {
     message.starts_with(format!("{SUMMARY_PREFIX}\n").as_str())
 }
 
-pub(crate) fn build_token_limited_compacted_history(
+pub(crate) fn build_compacted_history(
     initial_context: Vec<ResponseItem>,
     user_messages: &[String],
     summary_text: &str,
     model: &str,
 ) -> Vec<ResponseItem> {
-    build_token_limited_compacted_history_with_limit(
+    build_compacted_history_with_limit(
         initial_context,
         user_messages,
         summary_text,
@@ -241,7 +241,7 @@ pub(crate) fn build_token_limited_compacted_history(
     )
 }
 
-fn build_token_limited_compacted_history_with_limit(
+fn build_compacted_history_with_limit(
     mut history: Vec<ResponseItem>,
     user_messages: &[String],
     summary_text: &str,
@@ -430,7 +430,7 @@ mod tests {
         let max_tokens = 16;
         let big = "word ".repeat(200);
         let model = OPENAI_DEFAULT_MODEL;
-        let history = super::build_token_limited_compacted_history_with_limit(
+        let history = super::build_compacted_history_with_limit(
             Vec::new(),
             std::slice::from_ref(&big),
             "SUMMARY",
@@ -473,7 +473,7 @@ mod tests {
         let user_messages = vec!["first user message".to_string()];
         let summary_text = "summary text";
 
-        let history = build_token_limited_compacted_history(
+        let history = build_compacted_history(
             initial_context,
             &user_messages,
             summary_text,
