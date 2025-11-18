@@ -12,7 +12,7 @@ use codex_utils_tokenizer::Tokenizer;
 use crate::config::Config;
 
 /// Model-formatting limits: clients get full streams; only content sent to the model is truncated.
-const TOKENIZER_STACK_SAFE_BYTES: usize = 1024 * 1024; // 1 MiB
+const TOKENIZER_STACK_SAFE_BYTES: usize = 1024 * 512; // 512 KiB
 const APPROX_BYTES_PER_TOKEN: usize = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
