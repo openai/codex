@@ -1,6 +1,16 @@
+use crate::spawn::CODEX_SANDBOX_ENV_VAR;
+use http::Error as HttpError;
+use reqwest::IntoUrl;
+use reqwest::Method;
+use reqwest::Response;
+use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
+use serde::Serialize;
+use std::collections::HashMap;
+use std::fmt::Display;
 use std::sync::LazyLock;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 
 /// Set this to add a suffix to the User-Agent string.
 ///
@@ -18,19 +28,150 @@ use std::sync::Mutex;
 /// The full user agent string is returned from the mcp initialize response.
 /// Parenthesis will be added by Codex. This should only specify what goes inside of the parenthesis.
 pub static USER_AGENT_SUFFIX: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
-
+pub const DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
 pub const CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
 
+#[derive(Clone, Debug)]
+pub struct CodexHttpClient {
+    inner: reqwest::Client,
+}
+
+impl CodexHttpClient {
+    fn new(inner: reqwest::Client) -> Self {
+        Self { inner }
+    }
+
+    pub fn get<U>(&self, url: U) -> CodexRequestBuilder
+    where
+        U: IntoUrl,
+    {
+        self.request(Method::GET, url)
+    }
+
+    pub fn post<U>(&self, url: U) -> CodexRequestBuilder
+    where
+        U: IntoUrl,
+    {
+        self.request(Method::POST, url)
+    }
+
+    pub fn request<U>(&self, method: Method, url: U) -> CodexRequestBuilder
+    where
+        U: IntoUrl,
+    {
+        let url_str = url.as_str().to_string();
+        CodexRequestBuilder::new(self.inner.request(method.clone(), url), method, url_str)
+    }
+}
+
+#[must_use = "requests are not sent unless `send` is awaited"]
+#[derive(Debug)]
+pub struct CodexRequestBuilder {
+    builder: reqwest::RequestBuilder,
+    method: Method,
+    url: String,
+}
+
+impl CodexRequestBuilder {
+    fn new(builder: reqwest::RequestBuilder, method: Method, url: String) -> Self {
+        Self {
+            builder,
+            method,
+            url,
+        }
+    }
+
+    fn map(self, f: impl FnOnce(reqwest::RequestBuilder) -> reqwest::RequestBuilder) -> Self {
+        Self {
+            builder: f(self.builder),
+            method: self.method,
+            url: self.url,
+        }
+    }
+
+    pub fn header<K, V>(self, key: K, value: V) -> Self
+    where
+        HeaderName: TryFrom<K>,
+        <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
+        HeaderValue: TryFrom<V>,
+        <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
+    {
+        self.map(|builder| builder.header(key, value))
+    }
+
+    pub fn bearer_auth<T>(self, token: T) -> Self
+    where
+        T: Display,
+    {
+        self.map(|builder| builder.bearer_auth(token))
+    }
+
+    pub fn json<T>(self, value: &T) -> Self
+    where
+        T: ?Sized + Serialize,
+    {
+        self.map(|builder| builder.json(value))
+    }
+
+    pub async fn send(self) -> Result<Response, reqwest::Error> {
+        match self.builder.send().await {
+            Ok(response) => {
+                let request_ids = Self::extract_request_ids(&response);
+                tracing::debug!(
+                    method = %self.method,
+                    url = %self.url,
+                    status = %response.status(),
+                    request_ids = ?request_ids,
+                    version = ?response.version(),
+                    "Request completed"
+                );
+
+                Ok(response)
+            }
+            Err(error) => {
+                let status = error.status();
+                tracing::debug!(
+                    method = %self.method,
+                    url = %self.url,
+                    status = status.map(|s| s.as_u16()),
+                    error = %error,
+                    "Request failed"
+                );
+                Err(error)
+            }
+        }
+    }
+
+    fn extract_request_ids(response: &Response) -> HashMap<String, String> {
+        ["cf-ray", "x-request-id", "x-oai-request-id"]
+            .iter()
+            .filter_map(|&name| {
+                let header_name = HeaderName::from_static(name);
+                let value = response.headers().get(header_name)?;
+                let value = value.to_str().ok()?.to_owned();
+                Some((name.to_owned(), value))
+            })
+            .collect()
+    }
+}
 #[derive(Debug, Clone)]
 pub struct Originator {
     pub value: String,
     pub header_value: HeaderValue,
 }
+static ORIGINATOR: OnceLock<Originator> = OnceLock::new();
 
-pub static ORIGINATOR: LazyLock<Originator> = LazyLock::new(|| {
-    let default = "codex_cli_rs";
+#[derive(Debug)]
+pub enum SetOriginatorError {
+    InvalidHeaderValue,
+    AlreadyInitialized,
+}
+
+fn get_originator_value(provided: Option<String>) -> Originator {
     let value = std::env::var(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR)
-        .unwrap_or_else(|_| default.to_string());
+        .ok()
+        .or(provided)
+        .unwrap_or(DEFAULT_ORIGINATOR.to_string());
 
     match HeaderValue::from_str(&value) {
         Ok(header_value) => Originator {
@@ -40,19 +181,30 @@ pub static ORIGINATOR: LazyLock<Originator> = LazyLock::new(|| {
         Err(e) => {
             tracing::error!("Unable to turn originator override {value} into header value: {e}");
             Originator {
-                value: default.to_string(),
-                header_value: HeaderValue::from_static(default),
+                value: DEFAULT_ORIGINATOR.to_string(),
+                header_value: HeaderValue::from_static(DEFAULT_ORIGINATOR),
             }
         }
     }
-});
+}
+
+pub fn set_default_originator(value: String) -> Result<(), SetOriginatorError> {
+    let originator = get_originator_value(Some(value));
+    ORIGINATOR
+        .set(originator)
+        .map_err(|_| SetOriginatorError::AlreadyInitialized)
+}
+
+pub fn originator() -> &'static Originator {
+    ORIGINATOR.get_or_init(|| get_originator_value(None))
+}
 
 pub fn get_codex_user_agent() -> String {
     let build_version = env!("CARGO_PKG_VERSION");
     let os_info = os_info::get();
     let prefix = format!(
         "{}/{build_version} ({} {}; {}) {}",
-        ORIGINATOR.value.as_str(),
+        originator().value.as_str(),
         os_info.os_type(),
         os_info.version(),
         os_info.architecture().unwrap_or("unknown"),
@@ -100,29 +252,38 @@ fn sanitize_user_agent(candidate: String, fallback: &str) -> String {
         tracing::warn!(
             "Falling back to default Codex originator because base user agent string is invalid"
         );
-        ORIGINATOR.value.clone()
+        originator().value.clone()
     }
 }
 
-/// Create a reqwest client with default `originator` and `User-Agent` headers set.
-pub fn create_client() -> reqwest::Client {
+/// Create an HTTP client with default `originator` and `User-Agent` headers set.
+pub fn create_client() -> CodexHttpClient {
     use reqwest::header::HeaderMap;
 
     let mut headers = HeaderMap::new();
-    headers.insert("originator", ORIGINATOR.header_value.clone());
+    headers.insert("originator", originator().header_value.clone());
     let ua = get_codex_user_agent();
 
-    reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder()
         // Set UA via dedicated helper to avoid header validation pitfalls
         .user_agent(ua)
-        .default_headers(headers)
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+        .default_headers(headers);
+    if is_sandboxed() {
+        builder = builder.no_proxy();
+    }
+
+    let inner = builder.build().unwrap_or_else(|_| reqwest::Client::new());
+    CodexHttpClient::new(inner)
+}
+
+fn is_sandboxed() -> bool {
+    std::env::var(CODEX_SANDBOX_ENV_VAR).as_deref() == Ok("seatbelt")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core_test_support::skip_if_no_network;
 
     #[test]
     fn test_get_codex_user_agent() {
@@ -132,6 +293,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_client_sets_default_headers() {
+        skip_if_no_network!();
+
         use wiremock::Mock;
         use wiremock::MockServer;
         use wiremock::ResponseTemplate;

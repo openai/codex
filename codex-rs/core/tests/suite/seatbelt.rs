@@ -169,6 +169,12 @@ async fn python_getpwuid_works_under_seatbelt() {
         return;
     }
 
+    // For local dev.
+    if which::which("python3").is_err() {
+        eprintln!("python3 not found in PATH, skipping test.");
+        return;
+    }
+
     // ReadOnly is sufficient here since we are only exercising user lookup.
     let policy = SandboxPolicy::ReadOnly;
     let command_cwd = std::env::current_dir().expect("getcwd");
@@ -195,6 +201,69 @@ async fn python_getpwuid_works_under_seatbelt() {
         .await
         .expect("should be able to wait for child process");
     assert!(status.success(), "python exited with {status:?}");
+}
+
+#[tokio::test]
+async fn java_home_finds_runtime_under_seatbelt() {
+    if std::env::var(CODEX_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {
+        eprintln!("{CODEX_SANDBOX_ENV_VAR} is set to 'seatbelt', skipping test.");
+        return;
+    }
+
+    let java_home_path = Path::new("/usr/libexec/java_home");
+    if !java_home_path.exists() {
+        eprintln!("/usr/libexec/java_home is not present, skipping test.");
+        return;
+    }
+
+    let baseline_output = tokio::process::Command::new(java_home_path)
+        .env_remove("JAVA_HOME")
+        .output()
+        .await
+        .expect("should be able to invoke java_home outside seatbelt");
+    if !baseline_output.status.success() {
+        eprintln!(
+            "java_home exited with {:?} outside seatbelt, skipping test",
+            baseline_output.status
+        );
+        return;
+    }
+
+    let policy = SandboxPolicy::ReadOnly;
+    let command_cwd = std::env::current_dir().expect("getcwd");
+    let sandbox_cwd = command_cwd.clone();
+
+    let mut env: HashMap<String, String> = std::env::vars().collect();
+    env.remove("JAVA_HOME");
+    env.remove(CODEX_SANDBOX_ENV_VAR);
+
+    let child = spawn_command_under_seatbelt(
+        vec![java_home_path.to_string_lossy().to_string()],
+        command_cwd,
+        &policy,
+        sandbox_cwd.as_path(),
+        StdioPolicy::RedirectForShellTool,
+        env,
+    )
+    .await
+    .expect("should be able to spawn java_home under seatbelt");
+
+    let output = child
+        .wait_with_output()
+        .await
+        .expect("should be able to wait for java_home child");
+    assert!(
+        output.status.success(),
+        "java_home under seatbelt exited with {:?}, stderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.trim().is_empty(),
+        "java_home stdout unexpectedly empty under seatbelt"
+    );
 }
 
 #[expect(clippy::expect_used)]

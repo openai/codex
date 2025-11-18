@@ -13,7 +13,8 @@ pub(crate) async fn chatgpt_get_request<T: DeserializeOwned>(
     path: String,
 ) -> anyhow::Result<T> {
     let chatgpt_base_url = &config.chatgpt_base_url;
-    init_chatgpt_token_from_auth(&config.codex_home).await?;
+    init_chatgpt_token_from_auth(&config.codex_home, config.cli_auth_credentials_store_mode)
+        .await?;
 
     // Make direct HTTP request to ChatGPT backend API with the token
     let client = create_client();
@@ -44,6 +45,6 @@ pub(crate) async fn chatgpt_get_request<T: DeserializeOwned>(
     } else {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Request failed with status {}: {}", status, body)
+        anyhow::bail!("Request failed with status {status}: {body}")
     }
 }

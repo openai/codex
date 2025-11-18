@@ -11,7 +11,7 @@ pub struct PkceCodes {
 
 pub fn generate_pkce() -> PkceCodes {
     let mut bytes = [0u8; 64];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
 
     // Verifier: URL-safe base64 without padding (43..128 chars)
     let code_verifier = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);

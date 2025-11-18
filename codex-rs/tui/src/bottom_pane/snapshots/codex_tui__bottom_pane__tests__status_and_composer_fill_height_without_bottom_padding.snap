@@ -1,0 +1,10 @@
+---
+source: tui/src/bottom_pane/mod.rs
+expression: "render_snapshot(&pane, area)"
+---
+• Working (0s • esc to interru
+                              
+                              
+› Ask Codex to do anything    
+                              
+  100% context left · ? for sh

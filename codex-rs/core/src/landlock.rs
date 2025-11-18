@@ -40,7 +40,7 @@ where
 }
 
 /// Converts the sandbox policy into the CLI invocation for `codex-linux-sandbox`.
-fn create_linux_sandbox_command_args(
+pub(crate) fn create_linux_sandbox_command_args(
     command: Vec<String>,
     sandbox_policy: &SandboxPolicy,
     sandbox_policy_cwd: &Path,
@@ -56,7 +56,9 @@ fn create_linux_sandbox_command_args(
         serde_json::to_string(sandbox_policy).expect("Failed to serialize SandboxPolicy to JSON");
 
     let mut linux_cmd: Vec<String> = vec![
+        "--sandbox-policy-cwd".to_string(),
         sandbox_policy_cwd,
+        "--sandbox-policy".to_string(),
         sandbox_policy_json,
         // Separator so that command arguments starting with `-` are not parsed as
         // options of the helper itself.

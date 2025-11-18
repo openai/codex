@@ -56,6 +56,7 @@ async fn spawn_command_under_sandbox(
 
 #[tokio::test]
 async fn python_multiprocessing_lock_works_under_sandbox() {
+    core_test_support::skip_if_sandbox!();
     #[cfg(target_os = "macos")]
     let writable_roots = Vec::<PathBuf>::new();
 
@@ -110,6 +111,7 @@ if __name__ == '__main__':
 
 #[tokio::test]
 async fn sandbox_distinguishes_command_and_policy_cwds() {
+    core_test_support::skip_if_sandbox!();
     let temp = tempfile::tempdir().expect("should be able to create temp dir");
     let sandbox_root = temp.path().join("sandbox");
     let command_root = temp.path().join("command");

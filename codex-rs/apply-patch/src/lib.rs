@@ -6,10 +6,10 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::Utf8Error;
+use std::sync::LazyLock;
 
 use anyhow::Context;
 use anyhow::Result;
-use once_cell::sync::Lazy;
 pub use parser::Hunk;
 pub use parser::ParseError;
 use parser::ParseError::*;
@@ -288,7 +288,7 @@ pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApp
                             path,
                             ApplyPatchFileChange::Update {
                                 unified_diff,
-                                move_path: move_path.map(|p| cwd.join(p)),
+                                move_path: move_path.map(|p| effective_cwd.join(p)),
                                 new_content: contents,
                             },
                         );
@@ -351,7 +351,7 @@ fn extract_apply_patch_from_bash(
     // also run an arbitrary query against the AST. This is useful for understanding
     // how tree-sitter parses the script and whether the query syntax is correct. Be sure
     // to test both positive and negative cases.
-    static APPLY_PATCH_QUERY: Lazy<Query> = Lazy::new(|| {
+    static APPLY_PATCH_QUERY: LazyLock<Query> = LazyLock::new(|| {
         let language = BASH.into();
         #[expect(clippy::expect_used)]
         Query::new(
@@ -678,14 +678,14 @@ fn derive_new_contents_from_chunks(
 
     // Drop the trailing empty element that results from the final newline so
     // that line counts match the behaviour of standard `diff`.
-    if original_lines.last().is_some_and(|s| s.is_empty()) {
+    if original_lines.last().is_some_and(String::is_empty) {
         original_lines.pop();
     }
 
     let replacements = compute_replacements(&original_lines, path, chunks)?;
     let new_lines = apply_replacements(original_lines, &replacements);
     let mut new_lines = new_lines;
-    if !new_lines.last().is_some_and(|s| s.is_empty()) {
+    if !new_lines.last().is_some_and(String::is_empty) {
         new_lines.push(String::new());
     }
     let new_contents = if uses_crlf {
@@ -733,7 +733,7 @@ fn compute_replacements(
         if chunk.old_lines.is_empty() {
             // Pure addition (no old lines). We'll add them at the end or just
             // before the final empty line if one exists.
-            let insertion_idx = if original_lines.last().is_some_and(|s| s.is_empty()) {
+            let insertion_idx = if original_lines.last().is_some_and(String::is_empty) {
                 original_lines.len() - 1
             } else {
                 original_lines.len()
@@ -759,11 +759,11 @@ fn compute_replacements(
 
         let mut new_slice: &[String] = &chunk.new_lines;
 
-        if found.is_none() && pattern.last().is_some_and(|s| s.is_empty()) {
+        if found.is_none() && pattern.last().is_some_and(String::is_empty) {
             // Retry without the trailing empty line which represents the final
             // newline in the file.
             pattern = &pattern[..pattern.len() - 1];
-            if new_slice.last().is_some_and(|s| s.is_empty()) {
+            if new_slice.last().is_some_and(String::is_empty) {
                 new_slice = &new_slice[..new_slice.len() - 1];
             }
 
@@ -873,8 +873,10 @@ pub fn print_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use assert_matches::assert_matches;
     use pretty_assertions::assert_eq;
     use std::fs;
+    use std::string::ToString;
     use tempfile::tempdir;
 
     /// Helper to construct a patch with the given body.
@@ -883,7 +885,7 @@ mod tests {
     }
 
     fn strs_to_strings(strs: &[&str]) -> Vec<String> {
-        strs.iter().map(|s| s.to_string()).collect()
+        strs.iter().map(ToString::to_string).collect()
     }
 
     // Test helpers to reduce repetition when building bash -lc heredoc scripts
@@ -923,10 +925,10 @@ mod tests {
 
     fn assert_not_match(script: &str) {
         let args = args_bash(script);
-        assert!(matches!(
+        assert_matches!(
             maybe_parse_apply_patch(&args),
             MaybeApplyPatch::NotApplyPatch
-        ));
+        );
     }
 
     #[test]
@@ -934,10 +936,10 @@ mod tests {
         let patch = "*** Begin Patch\n*** Add File: foo\n+hi\n*** End Patch".to_string();
         let args = vec![patch];
         let dir = tempdir().unwrap();
-        assert!(matches!(
+        assert_matches!(
             maybe_parse_apply_patch_verified(&args, dir.path()),
             MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation)
-        ));
+        );
     }
 
     #[test]
@@ -945,10 +947,10 @@ mod tests {
         let script = "*** Begin Patch\n*** Add File: foo\n+hi\n*** End Patch";
         let args = args_bash(script);
         let dir = tempdir().unwrap();
-        assert!(matches!(
+        assert_matches!(
             maybe_parse_apply_patch_verified(&args, dir.path()),
             MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation)
-        ));
+        );
     }
 
     #[test]
@@ -1666,6 +1668,53 @@ g
                 cwd: session_dir.path().to_path_buf(),
             })
         );
+    }
+
+    #[test]
+    fn test_apply_patch_resolves_move_path_with_effective_cwd() {
+        let session_dir = tempdir().unwrap();
+        let worktree_rel = "alt";
+        let worktree_dir = session_dir.path().join(worktree_rel);
+        fs::create_dir_all(&worktree_dir).unwrap();
+
+        let source_name = "old.txt";
+        let dest_name = "renamed.txt";
+        let source_path = worktree_dir.join(source_name);
+        fs::write(&source_path, "before\n").unwrap();
+
+        let patch = wrap_patch(&format!(
+            r#"*** Update File: {source_name}
+*** Move to: {dest_name}
+@@
+-before
++after"#
+        ));
+
+        let shell_script = format!("cd {worktree_rel} && apply_patch <<'PATCH'\n{patch}\nPATCH");
+        let argv = vec!["bash".into(), "-lc".into(), shell_script];
+
+        let result = maybe_parse_apply_patch_verified(&argv, session_dir.path());
+        let action = match result {
+            MaybeApplyPatchVerified::Body(action) => action,
+            other => panic!("expected verified body, got {other:?}"),
+        };
+
+        assert_eq!(action.cwd, worktree_dir);
+
+        let change = action
+            .changes()
+            .get(&worktree_dir.join(source_name))
+            .expect("source file change present");
+
+        match change {
+            ApplyPatchFileChange::Update { move_path, .. } => {
+                assert_eq!(
+                    move_path.as_deref(),
+                    Some(worktree_dir.join(dest_name).as_path())
+                );
+            }
+            other => panic!("expected update change, got {other:?}"),
+        }
     }
 
     #[test]

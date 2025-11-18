@@ -1,0 +1,14 @@
+[package]
+edition.workspace = true
+name = "codex-utils-json-to-toml"
+version.workspace = true
+
+[dependencies]
+serde_json = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+
+[lints]
+workspace = true

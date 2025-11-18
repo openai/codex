@@ -15,14 +15,14 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
-anyhow = "1"
-similar = "2.7.0"
-thiserror = "2.0.16"
-tree-sitter = "0.25.9"
-tree-sitter-bash = "0.25.0"
-once_cell = "1"
+anyhow = { workspace = true }
+similar = { workspace = true }
+thiserror = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-bash = { workspace = true }
 
 [dev-dependencies]
-assert_cmd = "2"
-pretty_assertions = "1.4.1"
-tempfile = "3.13.0"
+assert_cmd = { workspace = true }
+assert_matches = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
