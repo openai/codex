@@ -137,6 +137,13 @@ mod tests {
     }
 
     #[test]
+    fn test_cp1251_privet_word() {
+        // Regression: CP1251 words like "Привет" must not be mis-identified as Windows-1252.
+        let bytes = b"\xCF\xF0\xE8\xE2\xE5\xF2"; // "Привет" encoded with Windows-1251
+        assert_eq!(bytes_to_string_smart(bytes), "Привет");
+    }
+
+    #[test]
     fn test_cp866_russian_text() {
         // Legacy consoles (cmd.exe) commonly emit CP866 bytes for Cyrillic content.
         let bytes = b"\xAF\xE0\xA8\xAC\xA5\xE0"; // "пример" encoded with CP866
@@ -173,6 +180,13 @@ mod tests {
             bytes_to_string_smart(bytes),
             "\u{201C}foo\u{201D} \u{2013} \u{201C}bar\u{201D}"
         );
+    }
+
+    #[test]
+    fn test_windows_1252_privet_gibberish_is_preserved() {
+        // Windows-1252 cannot encode Cyrillic; if the input literally contains "ÐŸÑ..." we should not "fix" it.
+        let bytes = "ÐŸÑ€Ð¸Ð²ÐµÑ‚".as_bytes();
+        assert_eq!(bytes_to_string_smart(bytes), "ÐŸÑ€Ð¸Ð²ÐµÑ‚");
     }
 
     #[test]
