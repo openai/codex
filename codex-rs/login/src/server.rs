@@ -1,3 +1,5 @@
+use std::env;
+use std::fs;
 use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
@@ -30,6 +32,8 @@ use tiny_http::StatusCode;
 
 const DEFAULT_ISSUER: &str = "https://auth.openai.com";
 const DEFAULT_PORT: u16 = 1455;
+const CODEX_CA_CERT_ENV: &str = "CODEX_CA_CERTIFICATE";
+const SSL_CERT_FILE_ENV: &str = "SSL_CERT_FILE";
 
 #[derive(Debug, Clone)]
 pub struct ServerOptions {
@@ -491,6 +495,35 @@ pub(crate) struct ExchangedTokens {
     pub refresh_token: String,
 }
 
+fn login_ca_certificate_path() -> Option<PathBuf> {
+    let from_codex = env::var(CODEX_CA_CERT_ENV).ok();
+    if let Some(path) = from_codex.filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(path));
+    }
+
+    env::var(SSL_CERT_FILE_ENV)
+        .ok()
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+pub(crate) fn build_login_http_client() -> io::Result<reqwest::Client> {
+    let mut builder = reqwest::Client::builder();
+
+    if let Some(path) = login_ca_certificate_path() {
+        let pem = fs::read(&path)?;
+        let certificate = reqwest::Certificate::from_pem(&pem).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("failed to parse certificate {}: {error}", path.display()),
+            )
+        })?;
+        builder = builder.add_root_certificate(certificate);
+    }
+
+    builder.build().map_err(io::Error::other)
+}
+
 pub(crate) async fn exchange_code_for_tokens(
     issuer: &str,
     client_id: &str,
@@ -505,7 +538,7 @@ pub(crate) async fn exchange_code_for_tokens(
         refresh_token: String,
     }
 
-    let client = reqwest::Client::new();
+    let client = build_login_http_client()?;
     let resp = client
         .post(format!("{issuer}/oauth/token"))
         .header("Content-Type", "application/x-www-form-urlencoded")
@@ -695,7 +728,7 @@ pub(crate) async fn obtain_api_key(
     struct ExchangeResp {
         access_token: String,
     }
-    let client = reqwest::Client::new();
+    let client = build_login_http_client()?;
     let resp = client
         .post(format!("{issuer}/oauth/token"))
         .header("Content-Type", "application/x-www-form-urlencoded")
@@ -718,4 +751,102 @@ pub(crate) async fn obtain_api_key(
     }
     let body: ExchangeResp = resp.json().await.map_err(io::Error::other)?;
     Ok(body.access_token)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+    use std::env;
+    use std::ffi::OsStr;
+    use tempfile::TempDir;
+
+    const TEST_CERT: &str = "-----BEGIN CERTIFICATE-----\nMIIDBTCCAe2gAwIBAgIUZYhGvBUG7SucNzYh9VIeZ7b9zHowDQYJKoZIhvcNAQEL\nBQAwEjEQMA4GA1UEAwwHdGVzdC1jYTAeFw0yNTEyMTEyMzEyNTFaFw0zNTEyMDky\nMzEyNTFaMBIxEDAOBgNVBAMMB3Rlc3QtY2EwggEiMA0GCSqGSIb3DQEBAQUAA4IB\nDwAwggEKAoIBAQC+NJRZAdn15FFBN8eR1HTAe+LMVpO19kKtiCsQjyqHONfhfHcF\n7zQfwmH6MqeNpC/5k5m8V1uSIhyHBskQm83Jv8/vHlffNxE/hl0Na/Yd1bc+2kxH\ntwIAsF32GKnSKnFva/iGczV81+/ETgG6RXfTfy/Xs6fXL8On8SRRmTcMw0bEfwko\nziid87VOHg2JfdRKN5QpS9lvQ8q4q2M3jMftolpUTpwlR0u8j9OXnZfn+ja33X0l\nkjkoCbXE2fVbAzO/jhUHQX1H5RbTGGUnrrCWAj84Rq/E80KK1nrRF91K+vgZmilM\ngOZosLMMI1PeqTakwg1yIRngpTyk0eJP+haxAgMBAAGjUzBRMB0GA1UdDgQWBBT6\nsqvfjMIl0DFZkeu8LU577YqMVDAfBgNVHSMEGDAWgBT6sqvfjMIl0DFZkeu8LU57\n7YqMVDAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQBQ1sYs2RvB\nTZ+xSBglLwH/S7zXVJIDwQ23Rlj11dgnVvcilSJCX24Rr+pfIVLpYNDdZzc/DIJd\nS1dt2JuLnvXnle29rU7cxuzYUkUkRtaeY2Sj210vsE3lqUFyIy8XCc/lteb+FiJ7\nzo/gPk7P+y4ihK9Mm6SBqkDVEYSFSn9bgoemK+0e93jGe2182PyuTwfTmZgENSBO\n2f9dSuay4C7e5UO8bhVccQJg6f4d70zUNG0oPHrnVxJLjwCd++jx25Gh4U7+ek13\nCW57pxJrpPMDWb2YK64rT2juHMKF73YuplW92SInd+QLpI2ekTLc+bRw8JvqzXg+\nSprtRUBjlWzj\n-----END CERTIFICATE-----\n";
+
+    fn write_test_cert(temp_dir: &TempDir, file_name: &str) -> PathBuf {
+        let path = temp_dir.path().join(file_name);
+        fs::write(&path, TEST_CERT).expect("write cert fixture");
+        path
+    }
+
+    fn set_env_var<K: AsRef<OsStr>, V: AsRef<OsStr>>(key: K, val: V) {
+        unsafe {
+            env::set_var(key, val);
+        }
+    }
+
+    fn remove_env_var<K: AsRef<OsStr>>(key: K) {
+        unsafe {
+            env::remove_var(key);
+        }
+    }
+
+    fn restore_env(key: &str, value: Option<String>) {
+        match value {
+            Some(val) => set_env_var(key, val),
+            None => remove_env_var(key),
+        }
+    }
+
+    fn capture_env() -> (Option<String>, Option<String>) {
+        (
+            env::var(CODEX_CA_CERT_ENV).ok(),
+            env::var(SSL_CERT_FILE_ENV).ok(),
+        )
+    }
+
+    #[serial(login_cert_env)]
+    #[test]
+    fn build_client_uses_codex_ca_cert_env() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let cert_path = write_test_cert(&temp_dir, "ca.pem");
+        let (codex_env_before, ssl_env_before) = capture_env();
+
+        set_env_var(CODEX_CA_CERT_ENV, &cert_path);
+        remove_env_var(SSL_CERT_FILE_ENV);
+
+        let client = build_login_http_client();
+
+        restore_env(CODEX_CA_CERT_ENV, codex_env_before);
+        restore_env(SSL_CERT_FILE_ENV, ssl_env_before);
+
+        assert!(client.is_ok());
+    }
+
+    #[serial(login_cert_env)]
+    #[test]
+    fn build_client_uses_ssl_cert_file_fallback() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let cert_path = write_test_cert(&temp_dir, "ssl-cert.pem");
+        let (codex_env_before, ssl_env_before) = capture_env();
+
+        remove_env_var(CODEX_CA_CERT_ENV);
+        set_env_var(SSL_CERT_FILE_ENV, &cert_path);
+
+        let client = build_login_http_client();
+
+        restore_env(CODEX_CA_CERT_ENV, codex_env_before);
+        restore_env(SSL_CERT_FILE_ENV, ssl_env_before);
+
+        assert!(client.is_ok());
+    }
+
+    #[serial(login_cert_env)]
+    #[test]
+    fn build_client_rejects_invalid_certificate_data() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let cert_path = temp_dir.path().join("invalid.pem");
+        fs::write(&cert_path, "not-a-certificate").expect("write invalid cert");
+        let (codex_env_before, ssl_env_before) = capture_env();
+
+        set_env_var(CODEX_CA_CERT_ENV, &cert_path);
+        remove_env_var(SSL_CERT_FILE_ENV);
+
+        let client = build_login_http_client();
+
+        restore_env(CODEX_CA_CERT_ENV, codex_env_before);
+        restore_env(SSL_CERT_FILE_ENV, ssl_env_before);
+
+        assert!(client.is_err());
+    }
 }
