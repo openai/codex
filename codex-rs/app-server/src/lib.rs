@@ -44,6 +44,7 @@ const CHANNEL_CAPACITY: usize = 128;
 pub async fn run_main(
     codex_linux_sandbox_exe: Option<PathBuf>,
     cli_config_overrides: CliConfigOverrides,
+    config_overrides: ConfigOverrides,
 ) -> IoResult<()> {
     // Set up channels.
     let (incoming_tx, mut incoming_rx) = mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
@@ -80,7 +81,7 @@ pub async fn run_main(
             format!("error parsing -c overrides: {e}"),
         )
     })?;
-    let config = Config::load_with_cli_overrides(cli_kv_overrides, ConfigOverrides::default())
+    let config = Config::load_with_cli_overrides(cli_kv_overrides, config_overrides)
         .await
         .map_err(|e| {
             std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))

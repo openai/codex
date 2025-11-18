@@ -102,19 +102,19 @@ pub async fn run_main(
     mut cli: Cli,
     codex_linux_sandbox_exe: Option<PathBuf>,
 ) -> std::io::Result<AppExitInfo> {
-    let (sandbox_mode, approval_policy) = if cli.full_auto {
+    let (sandbox_mode, approval_policy) = if cli.common.full_auto {
         (
             Some(SandboxMode::WorkspaceWrite),
             Some(AskForApproval::OnRequest),
         )
-    } else if cli.dangerously_bypass_approvals_and_sandbox {
+    } else if cli.common.dangerously_bypass_approvals_and_sandbox {
         (
             Some(SandboxMode::DangerFullAccess),
             Some(AskForApproval::Never),
         )
     } else {
         (
-            cli.sandbox_mode.map(Into::<SandboxMode>::into),
+            cli.common.sandbox_mode.map(Into::<SandboxMode>::into),
             cli.approval_policy.map(Into::into),
         )
     };
@@ -161,11 +161,11 @@ pub async fn run_main(
             }
         };
 
-    let model_provider_override = if cli.oss {
+    let model_provider_override = if cli.common.oss {
         let resolved = resolve_oss_provider(
-            cli.oss_provider.as_deref(),
+            cli.common.oss_provider.as_deref(),
             &config_toml,
-            cli.config_profile.clone(),
+            cli.common.config_profile.clone(),
         );
 
         if let Some(provider) = resolved {
@@ -185,9 +185,9 @@ pub async fn run_main(
     };
 
     // When using `--oss`, let the bootstrapper pick the model based on selected provider
-    let model = if let Some(model) = &cli.model {
+    let model = if let Some(model) = &cli.common.model {
         Some(model.clone())
-    } else if cli.oss {
+    } else if cli.common.oss {
         // Use the provider from model_provider_override
         model_provider_override
             .as_ref()
@@ -198,8 +198,12 @@ pub async fn run_main(
     };
 
     // canonicalize the cwd
-    let cwd = cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p));
-    let additional_dirs = cli.add_dir.clone();
+    let cwd = cli
+        .common
+        .cwd
+        .clone()
+        .map(|p| p.canonicalize().unwrap_or(p));
+    let additional_dirs = cli.common.add_dir.clone();
 
     let overrides = ConfigOverrides {
         model,
@@ -208,13 +212,13 @@ pub async fn run_main(
         sandbox_mode,
         cwd,
         model_provider: model_provider_override.clone(),
-        config_profile: cli.config_profile.clone(),
+        config_profile: cli.common.config_profile.clone(),
         codex_linux_sandbox_exe,
         base_instructions: None,
         developer_instructions: None,
         compact_prompt: None,
         include_apply_patch_tool: None,
-        show_raw_agent_reasoning: cli.oss.then_some(true),
+        show_raw_agent_reasoning: cli.common.oss.then_some(true),
         tools_web_search_request: None,
         experimental_sandbox_command_assessment: None,
         additional_writable_roots: additional_dirs,
@@ -222,7 +226,7 @@ pub async fn run_main(
 
     let config = load_config_or_exit(cli_kv_overrides.clone(), overrides.clone()).await;
 
-    if let Some(warning) = add_dir_warning_message(&cli.add_dir, &config.sandbox_policy) {
+    if let Some(warning) = add_dir_warning_message(&cli.common.add_dir, &config.sandbox_policy) {
         #[allow(clippy::print_stderr)]
         {
             eprintln!("Error adding directories: {warning}");
@@ -280,7 +284,7 @@ pub async fn run_main(
         .with_target(false)
         .with_filter(targets);
 
-    if cli.oss && model_provider_override.is_some() {
+    if cli.common.oss && model_provider_override.is_some() {
         // We're in the oss section, so provider_id should be Some
         // Let's handle None case gracefully though just in case
         let provider_id = match model_provider_override.as_ref() {
@@ -508,7 +512,8 @@ async fn run_ratatui_app(
         resume_picker::ResumeSelection::StartFresh
     };
 
-    let Cli { prompt, images, .. } = cli;
+    let Cli { prompt, common, .. } = cli;
+    let images = common.images;
 
     let app_result = App::run(
         &mut tui,

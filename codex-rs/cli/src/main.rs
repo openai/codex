@@ -16,7 +16,10 @@ use codex_cli::login::run_login_with_chatgpt;
 use codex_cli::login::run_login_with_device_code;
 use codex_cli::login::run_logout;
 use codex_cloud_tasks::Cli as CloudTasksCli;
+use codex_common::ApprovalModeCliArg;
 use codex_common::CliConfigOverrides;
+use codex_common::CommonCli;
+use codex_common::oss::get_default_model_for_oss_provider;
 use codex_exec::Cli as ExecCli;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_tui::AppExitInfo;
@@ -32,9 +35,16 @@ mod wsl_paths;
 
 use crate::mcp_cmd::McpCli;
 
+use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
+use codex_core::OLLAMA_OSS_PROVIDER_ID;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::find_codex_home;
+use codex_core::config::load_config_as_toml_with_cli_overrides;
+use codex_core::config::resolve_oss_provider;
 use codex_core::features::is_known_feature_key;
+use codex_core::protocol::AskForApproval;
+use codex_protocol::config_types::SandboxMode;
 
 /// Codex CLI
 ///
@@ -207,6 +217,20 @@ struct LogoutCommand {
 
 #[derive(Debug, Parser)]
 struct AppServerCommand {
+    #[clap(flatten)]
+    common: CommonCli,
+
+    #[clap(flatten)]
+    config_overrides: CliConfigOverrides,
+
+    /// Configure when the model requires human approval before executing a command.
+    #[arg(long = "ask-for-approval", short = 'a')]
+    approval_policy: Option<codex_common::ApprovalModeCliArg>,
+
+    /// Enable web search (off by default). When enabled, the native Responses `web_search` tool is available to the model (no per‑call approval).
+    #[arg(long = "search", default_value_t = false)]
+    web_search: bool,
+
     /// Omit to run the app server; specify a subcommand for tooling.
     #[command(subcommand)]
     subcommand: Option<AppServerSubcommand>,
@@ -417,7 +441,6 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             handle_app_exit(exit_info)?;
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
-            merge_interactive_flags_into_exec(&mut exec_cli, &interactive);
             prepend_config_flags(
                 &mut exec_cli.config_overrides,
                 root_config_overrides.clone(),
@@ -434,7 +457,29 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         }
         Some(Subcommand::AppServer(app_server_cli)) => match app_server_cli.subcommand {
             None => {
-                codex_app_server::run_main(codex_linux_sandbox_exe, root_config_overrides).await?;
+                let mut cli_config_overrides = app_server_cli.config_overrides;
+                if app_server_cli.web_search {
+                    cli_config_overrides
+                        .raw_overrides
+                        .push("features.web_search_request=true".to_string());
+                }
+                prepend_config_flags(&mut cli_config_overrides, root_config_overrides.clone());
+                let cli_kv_overrides = cli_config_overrides
+                    .parse_overrides()
+                    .map_err(anyhow::Error::msg)?;
+                let config_overrides = app_server_config_overrides_from_common(
+                    &app_server_cli.common,
+                    app_server_cli.approval_policy,
+                    cli_kv_overrides,
+                    codex_linux_sandbox_exe.clone(),
+                )
+                .await?;
+                codex_app_server::run_main(
+                    codex_linux_sandbox_exe,
+                    cli_config_overrides,
+                    config_overrides,
+                )
+                .await?;
             }
             Some(AppServerSubcommand::GenerateTs(gen_cli)) => {
                 codex_app_server_protocol::generate_ts(
@@ -577,7 +622,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
 
                 // Thread through relevant top-level flags (at minimum, `--profile`).
                 let overrides = ConfigOverrides {
-                    config_profile: interactive.config_profile.clone(),
+                    config_profile: interactive.common.config_profile.clone(),
                     ..Default::default()
                 };
 
@@ -606,40 +651,83 @@ fn prepend_config_flags(
         .splice(0..0, cli_config_overrides.raw_overrides);
 }
 
-/// Propagate top-level flags (parsed into the interactive CLI) into the exec subcommand
-/// unless the exec-specific flags were explicitly set.
-fn merge_interactive_flags_into_exec(exec_cli: &mut ExecCli, interactive: &TuiCli) {
-    if exec_cli.model.is_none() {
-        exec_cli.model = interactive.model.clone();
-    }
-    if !exec_cli.oss {
-        exec_cli.oss = interactive.oss;
-    }
-    if exec_cli.oss_provider.is_none() {
-        exec_cli.oss_provider = interactive.oss_provider.clone();
-    }
-    if exec_cli.config_profile.is_none() {
-        exec_cli.config_profile = interactive.config_profile.clone();
-    }
-    if exec_cli.sandbox_mode.is_none() {
-        exec_cli.sandbox_mode = interactive.sandbox_mode;
-    }
-    if !exec_cli.full_auto {
-        exec_cli.full_auto = interactive.full_auto;
-    }
-    if !exec_cli.dangerously_bypass_approvals_and_sandbox {
-        exec_cli.dangerously_bypass_approvals_and_sandbox =
-            interactive.dangerously_bypass_approvals_and_sandbox;
-    }
-    if exec_cli.cwd.is_none() {
-        exec_cli.cwd = interactive.cwd.clone();
-    }
-    if exec_cli.images.is_empty() {
-        exec_cli.images = interactive.images.clone();
-    }
-    if exec_cli.add_dir.is_empty() {
-        exec_cli.add_dir = interactive.add_dir.clone();
-    }
+async fn app_server_config_overrides_from_common(
+    common: &CommonCli,
+    approval_policy: Option<ApprovalModeCliArg>,
+    cli_kv_overrides: Vec<(String, toml::Value)>,
+    codex_linux_sandbox_exe: Option<PathBuf>,
+) -> anyhow::Result<ConfigOverrides> {
+    let (sandbox_mode, approval_policy) = if common.full_auto {
+        (
+            Some(SandboxMode::WorkspaceWrite),
+            Some(AskForApproval::OnRequest),
+        )
+    } else if common.dangerously_bypass_approvals_and_sandbox {
+        (
+            Some(SandboxMode::DangerFullAccess),
+            Some(AskForApproval::Never),
+        )
+    } else {
+        (
+            common.sandbox_mode.map(Into::into),
+            approval_policy.map(Into::into),
+        )
+    };
+
+    let model_provider = if common.oss {
+        let codex_home = find_codex_home()?;
+        let config_toml =
+            load_config_as_toml_with_cli_overrides(&codex_home, cli_kv_overrides).await?;
+        Some(
+            resolve_oss_provider(
+                common.oss_provider.as_deref(),
+                &config_toml,
+                common.config_profile.clone(),
+            )
+            .ok_or_else(|| {
+                anyhow::anyhow!(format!(
+                    "No default OSS provider configured. Use --local-provider=provider or set oss_provider to either {LMSTUDIO_OSS_PROVIDER_ID} or {OLLAMA_OSS_PROVIDER_ID} in config.toml"
+                ))
+            })?,
+        )
+    } else {
+        None
+    };
+
+    let model = if let Some(model) = &common.model {
+        Some(model.clone())
+    } else if common.oss {
+        model_provider
+            .as_deref()
+            .and_then(get_default_model_for_oss_provider)
+            .map(std::borrow::ToOwned::to_owned)
+    } else {
+        None
+    };
+
+    let cwd = common
+        .cwd
+        .as_ref()
+        .map(|p| p.canonicalize().unwrap_or_else(|_| p.to_path_buf()));
+
+    Ok(ConfigOverrides {
+        model,
+        review_model: None,
+        cwd,
+        approval_policy,
+        sandbox_mode,
+        model_provider,
+        config_profile: common.config_profile.clone(),
+        codex_linux_sandbox_exe,
+        base_instructions: None,
+        developer_instructions: None,
+        compact_prompt: None,
+        include_apply_patch_tool: None,
+        show_raw_agent_reasoning: common.oss.then_some(true),
+        tools_web_search_request: None,
+        experimental_sandbox_command_assessment: None,
+        additional_writable_roots: common.add_dir.clone(),
+    })
 }
 
 /// Build the final `TuiCli` for a `codex resume` invocation.
@@ -670,38 +758,12 @@ fn finalize_resume_interactive(
 /// root-level flags. Only overrides fields explicitly set on the resume-scoped
 /// CLI. Also appends `-c key=value` overrides with highest precedence.
 fn merge_resume_cli_flags(interactive: &mut TuiCli, resume_cli: TuiCli) {
-    if let Some(model) = resume_cli.model {
-        interactive.model = Some(model);
-    }
-    if resume_cli.oss {
-        interactive.oss = true;
-    }
-    if let Some(profile) = resume_cli.config_profile {
-        interactive.config_profile = Some(profile);
-    }
-    if let Some(sandbox) = resume_cli.sandbox_mode {
-        interactive.sandbox_mode = Some(sandbox);
-    }
+    interactive.common.apply_overrides(&resume_cli.common);
     if let Some(approval) = resume_cli.approval_policy {
         interactive.approval_policy = Some(approval);
     }
-    if resume_cli.full_auto {
-        interactive.full_auto = true;
-    }
-    if resume_cli.dangerously_bypass_approvals_and_sandbox {
-        interactive.dangerously_bypass_approvals_and_sandbox = true;
-    }
-    if let Some(cwd) = resume_cli.cwd {
-        interactive.cwd = Some(cwd);
-    }
     if resume_cli.web_search {
         interactive.web_search = true;
-    }
-    if !resume_cli.images.is_empty() {
-        interactive.images = resume_cli.images;
-    }
-    if !resume_cli.add_dir.is_empty() {
-        interactive.add_dir.extend(resume_cli.add_dir);
     }
     if let Some(prompt) = resume_cli.prompt {
         interactive.prompt = Some(prompt);
@@ -800,28 +862,51 @@ mod tests {
     fn exec_inherits_root_model_flag() {
         let cli = MultitoolCli::try_parse_from(["codex", "-m", "codex-rapidash-300", "exec", "hi"])
             .expect("parse");
-        let MultitoolCli {
-            interactive,
-            config_overrides: root_overrides,
-            subcommand,
-            feature_toggles: _,
-        } = cli;
+        let MultitoolCli { subcommand, .. } = cli;
 
-        let Subcommand::Exec(mut exec_cli) = subcommand.expect("exec present") else {
+        let Subcommand::Exec(exec_cli) = subcommand.expect("exec present") else {
             unreachable!()
         };
-        merge_interactive_flags_into_exec(&mut exec_cli, &interactive);
-        prepend_config_flags(&mut exec_cli.config_overrides, root_overrides);
 
-        assert_eq!(exec_cli.model.as_deref(), Some("codex-rapidash-300"));
+        assert_eq!(exec_cli.common.model.as_deref(), Some("codex-rapidash-300"));
         assert_eq!(exec_cli.prompt.as_deref(), Some("hi"));
+    }
+
+    #[tokio::test]
+    async fn app_server_inherits_root_model_flag() {
+        let cli = MultitoolCli::try_parse_from(["codex", "-m", "codex-rapidash-300", "app-server"])
+            .expect("parse");
+        let MultitoolCli { subcommand, .. } = cli;
+
+        let Subcommand::AppServer(app_server_cli) = subcommand.expect("app-server present") else {
+            unreachable!()
+        };
+        assert!(app_server_cli.subcommand.is_none());
+
+        let cli_kv_overrides = app_server_cli
+            .config_overrides
+            .parse_overrides()
+            .expect("parse");
+        let config_overrides = app_server_config_overrides_from_common(
+            &app_server_cli.common,
+            app_server_cli.approval_policy,
+            cli_kv_overrides,
+            None,
+        )
+        .await
+        .expect("merge");
+
+        assert_eq!(
+            config_overrides.model.as_deref(),
+            Some("codex-rapidash-300")
+        );
     }
 
     #[test]
     fn resume_model_flag_applies_when_no_root_flags() {
         let interactive = finalize_from_args(["codex", "resume", "-m", "gpt-5-test"].as_ref());
 
-        assert_eq!(interactive.model.as_deref(), Some("gpt-5-test"));
+        assert_eq!(interactive.common.model.as_deref(), Some("gpt-5-test"));
         assert!(interactive.resume_picker);
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
@@ -877,28 +962,33 @@ mod tests {
             .as_ref(),
         );
 
-        assert_eq!(interactive.model.as_deref(), Some("gpt-5-test"));
-        assert!(interactive.oss);
-        assert_eq!(interactive.config_profile.as_deref(), Some("my-profile"));
+        assert_eq!(interactive.common.model.as_deref(), Some("gpt-5-test"));
+        assert!(interactive.common.oss);
+        assert_eq!(
+            interactive.common.config_profile.as_deref(),
+            Some("my-profile")
+        );
         assert_matches!(
-            interactive.sandbox_mode,
+            interactive.common.sandbox_mode,
             Some(codex_common::SandboxModeCliArg::WorkspaceWrite)
         );
         assert_matches!(
             interactive.approval_policy,
             Some(codex_common::ApprovalModeCliArg::OnRequest)
         );
-        assert!(interactive.full_auto);
+        assert!(interactive.common.full_auto);
         assert_eq!(
-            interactive.cwd.as_deref(),
+            interactive.common.cwd.as_deref(),
             Some(std::path::Path::new("/tmp"))
         );
         assert!(interactive.web_search);
         let has_a = interactive
+            .common
             .images
             .iter()
             .any(|p| p == std::path::Path::new("/tmp/a.png"));
         let has_b = interactive
+            .common
             .images
             .iter()
             .any(|p| p == std::path::Path::new("/tmp/b.png"));
@@ -918,7 +1008,7 @@ mod tests {
             ]
             .as_ref(),
         );
-        assert!(interactive.dangerously_bypass_approvals_and_sandbox);
+        assert!(interactive.common.dangerously_bypass_approvals_and_sandbox);
         assert!(interactive.resume_picker);
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
