@@ -130,7 +130,7 @@ impl ToolHandler for ShellHandler {
                     turn,
                     tracker,
                     call_id,
-                    true,
+                    false,
                 )
                 .await
             }
