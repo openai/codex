@@ -1538,6 +1538,7 @@ PY
     let call_id = "uexec-large-output";
     let args = serde_json::json!({
         "cmd": script,
+        "max_output_tokens": 100,
         "yield_time_ms": 500,
     });
 
