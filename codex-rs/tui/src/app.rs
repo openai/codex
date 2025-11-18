@@ -496,6 +496,9 @@ impl App {
             AppEvent::FileSearchResult { query, matches } => {
                 self.chat_widget.apply_file_search_result(query, matches);
             }
+            AppEvent::RateLimitSnapshotFetched(snapshot) => {
+                self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
+            }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort);
             }

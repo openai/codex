@@ -340,7 +340,13 @@ def main() -> int:
     add("WS: protected path case-variation denied", rc != 0 and assert_not_exists(git_variation), f"rc={rc}")
 
     # 34. WS: policy tamper (.codex artifacts) denied
-    rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "echo tamper > .codex\\cap_sid"], WS_ROOT)
+    codex_home = Path(os.environ["USERPROFILE"]) / ".codex"
+    cap_sid_target = codex_home / "cap_sid"
+    rc, out, err = run_sbx(
+        "workspace-write",
+        ["cmd", "/c", f"echo tamper > \"{cap_sid_target}\""],
+        WS_ROOT,
+    )
     rc2, out2, err2 = run_sbx("workspace-write", ["cmd", "/c", "echo tamper > .codex\\policy.json"], WS_ROOT)
     add("WS: .codex cap_sid tamper denied", rc != 0, f"rc={rc}, err={err}")
     add("WS: .codex policy tamper denied", rc2 != 0, f"rc={rc2}, err={err2}")

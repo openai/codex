@@ -46,6 +46,8 @@ pub enum Feature {
     GhostCommit,
     /// Enable Windows sandbox (restricted token) on Windows.
     WindowsSandbox,
+    /// Enable the default shell tool.
+    ShellTool,
     /// Allow model to call multiple tools in parallel (only for models supporting it).
     ParallelToolCalls,
 }
@@ -308,5 +310,11 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "parallel",
         stage: Stage::Experimental,
         default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ShellTool,
+        key: "shell_tool",
+        stage: Stage::Stable,
+        default_enabled: true,
     },
 ];
