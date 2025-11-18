@@ -1,4 +1,5 @@
 #![cfg(not(target_os = "windows"))]
+#![allow(clippy::expect_used)]
 
 use anyhow::Result;
 use codex_core::features::Feature;
@@ -37,6 +38,65 @@ const FIXTURE_JSON: &str = r#"{
 }
 "#;
 
+fn shell_responses(
+    call_id: &str,
+    command: Vec<&str>,
+    output_type: ShellModelOutput,
+) -> Result<Vec<String>> {
+    match output_type {
+        ShellModelOutput::ShellCommand => {
+            let command = shlex::try_join(command)?;
+            let parameters = json!({
+                "command": command,
+                "timeout_ms": 2_000,
+            });
+            Ok(vec![
+                sse(vec![
+                    ev_response_created("resp-1"),
+                    ev_function_call(
+                        call_id,
+                        "shell_command",
+                        &serde_json::to_string(&parameters)?,
+                    ),
+                    ev_completed("resp-1"),
+                ]),
+                sse(vec![
+                    ev_assistant_message("msg-1", "done"),
+                    ev_completed("resp-2"),
+                ]),
+            ])
+        }
+        ShellModelOutput::Shell => {
+            let parameters = json!({
+                "command": command,
+                "timeout_ms": 2_000,
+            });
+            Ok(vec![
+                sse(vec![
+                    ev_response_created("resp-1"),
+                    ev_function_call(call_id, "shell", &serde_json::to_string(&parameters)?),
+                    ev_completed("resp-1"),
+                ]),
+                sse(vec![
+                    ev_assistant_message("msg-1", "done"),
+                    ev_completed("resp-2"),
+                ]),
+            ])
+        }
+        ShellModelOutput::LocalShell => Ok(vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_local_shell_call(call_id, "completed", command),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ]),
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ShellModelOutput::Shell)]
 #[test_case(ShellModelOutput::ShellCommand)]
@@ -59,53 +119,7 @@ async fn shell_output_stays_json_without_freeform_apply_patch(
     let test = builder.build(&server).await?;
 
     let call_id = "shell-json";
-    let responses = match output_type {
-        ShellModelOutput::Shell | ShellModelOutput::ShellCommand => {
-            let command = if matches!(output_type, ShellModelOutput::ShellCommand) {
-                json!({
-                    "command": "echo shell json",
-                    "timeout_ms": 1_000,
-                })
-            } else {
-                json!({
-                    "command": ["/bin/echo", "shell json"],
-                    "timeout_ms": 1_000,
-                })
-            };
-            vec![
-                sse(vec![
-                    ev_response_created("resp-1"),
-                    ev_function_call(
-                        call_id,
-                        if matches!(output_type, ShellModelOutput::ShellCommand) {
-                            "shell_command"
-                        } else {
-                            "shell"
-                        },
-                        &serde_json::to_string(&command)?,
-                    ),
-                    ev_completed("resp-1"),
-                ]),
-                sse(vec![
-                    ev_assistant_message("msg-1", "done"),
-                    ev_completed("resp-2"),
-                ]),
-            ]
-        }
-        ShellModelOutput::LocalShell => {
-            vec![
-                sse(vec![
-                    ev_response_created("resp-1"),
-                    ev_local_shell_call(call_id, "completed", vec!["/bin/echo", "shell json"]),
-                    ev_completed("resp-1"),
-                ]),
-                sse(vec![
-                    ev_assistant_message("msg-1", "done"),
-                    ev_completed("resp-2"),
-                ]),
-            ]
-        }
-    };
+    let responses = shell_responses(call_id, vec!["/bin/echo", "shell json"], output_type)?;
     let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
@@ -163,53 +177,7 @@ async fn shell_output_is_structured_with_freeform_apply_patch(
     let test = builder.build(&server).await?;
 
     let call_id = "shell-structured";
-    let responses = match output_type {
-        ShellModelOutput::Shell | ShellModelOutput::ShellCommand => {
-            let command = if matches!(output_type, ShellModelOutput::ShellCommand) {
-                json!({
-                    "command": "echo freeform shell",
-                    "timeout_ms": 1_000,
-                })
-            } else {
-                json!({
-                    "command": ["/bin/echo", "freeform shell"],
-                    "timeout_ms": 1_000,
-                })
-            };
-            vec![
-                sse(vec![
-                    ev_response_created("resp-1"),
-                    ev_function_call(
-                        call_id,
-                        if matches!(output_type, ShellModelOutput::ShellCommand) {
-                            "shell_command"
-                        } else {
-                            "shell"
-                        },
-                        &serde_json::to_string(&command)?,
-                    ),
-                    ev_completed("resp-1"),
-                ]),
-                sse(vec![
-                    ev_assistant_message("msg-1", "done"),
-                    ev_completed("resp-2"),
-                ]),
-            ]
-        }
-        ShellModelOutput::LocalShell => {
-            vec![
-                sse(vec![
-                    ev_response_created("resp-1"),
-                    ev_local_shell_call(call_id, "completed", vec!["/bin/echo", "freeform shell"]),
-                    ev_completed("resp-1"),
-                ]),
-                sse(vec![
-                    ev_assistant_message("msg-1", "done"),
-                    ev_completed("resp-2"),
-                ]),
-            ]
-        }
-    };
+    let responses = shell_responses(call_id, vec!["/bin/echo", "freeform shell"], output_type)?;
     let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
@@ -267,57 +235,11 @@ async fn shell_output_preserves_fixture_json_without_serialization(
     let fixture_path_str = fixture_path.to_string_lossy().to_string();
 
     let call_id = "shell-json-fixture";
-    let responses = match output_type {
-        ShellModelOutput::Shell | ShellModelOutput::ShellCommand => {
-            let command = if matches!(output_type, ShellModelOutput::ShellCommand) {
-                json!({
-                    "command": format!("/usr/bin/sed -n p {fixture_path_str}"),
-                    "timeout_ms": 1_000,
-                })
-            } else {
-                json!({
-                    "command": ["/usr/bin/sed", "-n", "p", fixture_path_str],
-                    "timeout_ms": 1_000,
-                })
-            };
-            vec![
-                sse(vec![
-                    ev_response_created("resp-1"),
-                    ev_function_call(
-                        call_id,
-                        if matches!(output_type, ShellModelOutput::ShellCommand) {
-                            "shell_command"
-                        } else {
-                            "shell"
-                        },
-                        &serde_json::to_string(&command)?,
-                    ),
-                    ev_completed("resp-1"),
-                ]),
-                sse(vec![
-                    ev_assistant_message("msg-1", "done"),
-                    ev_completed("resp-2"),
-                ]),
-            ]
-        }
-        ShellModelOutput::LocalShell => {
-            vec![
-                sse(vec![
-                    ev_response_created("resp-1"),
-                    ev_local_shell_call(
-                        call_id,
-                        "completed",
-                        vec!["/usr/bin/sed", "-n", "p", fixture_path_str.as_str()],
-                    ),
-                    ev_completed("resp-1"),
-                ]),
-                sse(vec![
-                    ev_assistant_message("msg-1", "done"),
-                    ev_completed("resp-2"),
-                ]),
-            ]
-        }
-    };
+    let responses = shell_responses(
+        call_id,
+        vec!["/usr/bin/sed", "-n", "p", fixture_path_str.as_str()],
+        output_type,
+    )?;
     let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
@@ -383,57 +305,11 @@ async fn shell_output_structures_fixture_with_serialization(
     let fixture_path_str = fixture_path.to_string_lossy().to_string();
 
     let call_id = "shell-structured-fixture";
-    let responses = match output_type {
-        ShellModelOutput::Shell | ShellModelOutput::ShellCommand => {
-            let command = if matches!(output_type, ShellModelOutput::ShellCommand) {
-                json!({
-                    "command": format!("/usr/bin/sed -n p {fixture_path_str}"),
-                    "timeout_ms": 1_000,
-                })
-            } else {
-                json!({
-                    "command": ["/usr/bin/sed", "-n", "p", fixture_path_str],
-                    "timeout_ms": 1_000,
-                })
-            };
-            vec![
-                sse(vec![
-                    ev_response_created("resp-1"),
-                    ev_function_call(
-                        call_id,
-                        if matches!(output_type, ShellModelOutput::ShellCommand) {
-                            "shell_command"
-                        } else {
-                            "shell"
-                        },
-                        &serde_json::to_string(&command)?,
-                    ),
-                    ev_completed("resp-1"),
-                ]),
-                sse(vec![
-                    ev_assistant_message("msg-1", "done"),
-                    ev_completed("resp-2"),
-                ]),
-            ]
-        }
-        ShellModelOutput::LocalShell => {
-            vec![
-                sse(vec![
-                    ev_response_created("resp-1"),
-                    ev_local_shell_call(
-                        call_id,
-                        "completed",
-                        vec!["/usr/bin/sed", "-n", "p", fixture_path_str.as_str()],
-                    ),
-                    ev_completed("resp-1"),
-                ]),
-                sse(vec![
-                    ev_assistant_message("msg-1", "done"),
-                    ev_completed("resp-2"),
-                ]),
-            ]
-        }
-    };
+    let responses = shell_responses(
+        call_id,
+        vec!["/usr/bin/sed", "-n", "p", fixture_path_str.as_str()],
+        output_type,
+    )?;
     let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
@@ -490,53 +366,7 @@ async fn shell_output_for_freeform_tool_records_duration(
     let test = builder.build(&server).await?;
 
     let call_id = "shell-structured";
-    let responses = match output_type {
-        ShellModelOutput::Shell | ShellModelOutput::ShellCommand => {
-            let command = if matches!(output_type, ShellModelOutput::ShellCommand) {
-                json!({
-                    "command": "sleep 1",
-                    "timeout_ms": 2_000,
-                })
-            } else {
-                json!({
-                    "command": ["/bin/bash", "-c", "sleep 1"],
-                    "timeout_ms": 2_000,
-                })
-            };
-            vec![
-                sse(vec![
-                    json!({"type": "response.created", "response": {"id": "resp-1"}}),
-                    ev_function_call(
-                        call_id,
-                        if matches!(output_type, ShellModelOutput::ShellCommand) {
-                            "shell_command"
-                        } else {
-                            "shell"
-                        },
-                        &serde_json::to_string(&command)?,
-                    ),
-                    ev_completed("resp-1"),
-                ]),
-                sse(vec![
-                    ev_assistant_message("msg-1", "done"),
-                    ev_completed("resp-2"),
-                ]),
-            ]
-        }
-        ShellModelOutput::LocalShell => {
-            vec![
-                sse(vec![
-                    json!({"type": "response.created", "response": {"id": "resp-1"}}),
-                    ev_local_shell_call(call_id, "completed", vec!["/bin/bash", "-c", "sleep 1"]),
-                    ev_completed("resp-1"),
-                ]),
-                sse(vec![
-                    ev_assistant_message("msg-1", "done"),
-                    ev_completed("resp-2"),
-                ]),
-            ]
-        }
-    };
+    let responses = shell_responses(call_id, vec!["/bin/bash", "-c", "sleep 1"], output_type)?;
     let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
@@ -595,53 +425,7 @@ async fn shell_output_reserializes_truncated_content(output_type: ShellModelOutp
     let test = builder.build(&server).await?;
 
     let call_id = "shell-truncated";
-    let responses = match output_type {
-        ShellModelOutput::Shell | ShellModelOutput::ShellCommand => {
-            let command = if matches!(output_type, ShellModelOutput::ShellCommand) {
-                json!({
-                    "command": "seq 1 400",
-                    "timeout_ms": 5_000,
-                })
-            } else {
-                json!({
-                    "command": ["/bin/sh", "-c", "seq 1 400"],
-                    "timeout_ms": 5_000,
-                })
-            };
-            vec![
-                sse(vec![
-                    ev_response_created("resp-1"),
-                    ev_function_call(
-                        call_id,
-                        if matches!(output_type, ShellModelOutput::ShellCommand) {
-                            "shell_command"
-                        } else {
-                            "shell"
-                        },
-                        &serde_json::to_string(&command)?,
-                    ),
-                    ev_completed("resp-1"),
-                ]),
-                sse(vec![
-                    ev_assistant_message("msg-1", "done"),
-                    ev_completed("resp-2"),
-                ]),
-            ]
-        }
-        ShellModelOutput::LocalShell => {
-            vec![
-                sse(vec![
-                    ev_response_created("resp-1"),
-                    ev_local_shell_call(call_id, "completed", vec!["/bin/sh", "-c", "seq 1 400"]),
-                    ev_completed("resp-1"),
-                ]),
-                sse(vec![
-                    ev_assistant_message("msg-1", "done"),
-                    ev_completed("resp-2"),
-                ]),
-            ]
-        }
-    };
+    let responses = shell_responses(call_id, vec!["/bin/sh", "-c", "seq 1 400"], output_type)?;
     let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
@@ -1042,7 +826,7 @@ async fn shell_output_is_structured_for_nonzero_exit(output_type: ShellModelOutp
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(|config| {
+    let mut builder = test_codex().with_config(move |config| {
         config.model = "gpt-5.1-codex".to_string();
         config.model_family =
             find_family_for_model("gpt-5.1-codex").expect("gpt-5.1-codex is a model family");
@@ -1054,53 +838,7 @@ async fn shell_output_is_structured_for_nonzero_exit(output_type: ShellModelOutp
     let test = builder.build(&server).await?;
 
     let call_id = "shell-nonzero-exit";
-    let responses = match output_type {
-        ShellModelOutput::Shell | ShellModelOutput::ShellCommand => {
-            let command = if matches!(output_type, ShellModelOutput::ShellCommand) {
-                json!({
-                    "command": "exit 42",
-                    "timeout_ms": 1_000,
-                })
-            } else {
-                json!({
-                    "command": ["/bin/sh", "-c", "exit 42"],
-                    "timeout_ms": 1_000,
-                })
-            };
-            vec![
-                sse(vec![
-                    json!({"type": "response.created", "response": {"id": "resp-1"}}),
-                    ev_function_call(
-                        call_id,
-                        if matches!(output_type, ShellModelOutput::ShellCommand) {
-                            "shell_command"
-                        } else {
-                            "shell"
-                        },
-                        &serde_json::to_string(&command)?,
-                    ),
-                    ev_completed("resp-1"),
-                ]),
-                sse(vec![
-                    ev_assistant_message("msg-1", "shell failure handled"),
-                    ev_completed("resp-2"),
-                ]),
-            ]
-        }
-        ShellModelOutput::LocalShell => {
-            vec![
-                sse(vec![
-                    json!({"type": "response.created", "response": {"id": "resp-1"}}),
-                    ev_local_shell_call(call_id, "completed", vec!["/bin/sh", "-c", "exit 42"]),
-                    ev_completed("resp-1"),
-                ]),
-                sse(vec![
-                    ev_assistant_message("msg-1", "shell failure handled"),
-                    ev_completed("resp-2"),
-                ]),
-            ]
-        }
-    };
+    let responses = shell_responses(call_id, vec!["/bin/sh", "-c", "exit 42"], output_type)?;
     let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
