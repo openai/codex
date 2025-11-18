@@ -300,7 +300,7 @@ impl ShellHandler {
                 ApprovalRequirement::Skip
             } else {
                 approval_requirement_for_command(
-                    turn.exec_policy_v2.as_deref(),
+                    turn.exec_policy.as_deref(),
                     &exec_params.command,
                     turn.approval_policy,
                     &turn.sandbox_policy,
