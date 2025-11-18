@@ -291,6 +291,7 @@ fn truncate_with_tokenizer_path(
 /// performing any real tokenization. This keeps the logic purely byte-based and
 /// uses a bytes placeholder in the truncated output.
 fn truncate_with_byte_estimate(s: &str, max_bytes: usize) -> String {
+    eprintln!("truncate_with_byte_estimate: s={s}, max_bytes={max_bytes}");
     if s.is_empty() {
         return String::new();
     }

@@ -464,7 +464,8 @@ mod tests {
         };
 
         assert!(
-            truncated_text.contains("tokens truncated"),
+            truncated_text.contains("tokens truncated")
+                || truncated_text.contains("bytes truncated"),
             "expected truncation marker in truncated user message"
         );
         assert!(
