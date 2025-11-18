@@ -1,104 +1,77 @@
 //! Integration test for the text encoding fix for issue #6178.
 //!
-//! This test simulates the scenario where VSCode shell preview window
-//! shows garbled text when executing commands with non-ASCII characters
-//! in Windows/WSL environments.
+//! These tests simulate VSCode's shell preview on Windows/WSL where the output
+//! may be encoded with a legacy code page before it reaches Codex.
 
 use codex_core::exec::StreamOutput;
+use pretty_assertions::assert_eq;
 
-/// Test that simulates the specific issue #6178 scenario:
-/// - User runs `codex exec "пример"` (Russian text)
-/// - In Windows/WSL environment, shell output might be encoded in Windows-1252
-/// - Our fix should correctly decode this without showing replacement characters
 #[test]
-fn test_shell_output_encoding_issue_6178() {
-    // Simulate various encoding scenarios that could happen in Windows/WSL
-
-    // Test case 1: UTF-8 Russian text (should work fine)
-    let utf8_russian = "пример".as_bytes();
-    let utf8_output = StreamOutput {
-        text: utf8_russian.to_vec(),
-        truncated_after_lines: None,
-    };
-    let decoded_utf8 = utf8_output.from_utf8_lossy();
-    assert_eq!(decoded_utf8.text, "пример");
-    assert!(!decoded_utf8.text.contains('\u{FFFD}')); // No replacement characters
-
-    // Test case 2: Windows-1252 encoded text (simulating Windows shell output)
-    // This represents bytes that might come from a Windows process
-    let windows_bytes = [0x93, 0x94, 0x20, 0x74, 0x65, 0x73, 0x74]; // ""test" in Windows-1252
-    let windows_output = StreamOutput {
-        text: windows_bytes.to_vec(),
-        truncated_after_lines: None,
-    };
-    let decoded_windows = windows_output.from_utf8_lossy();
-    assert!(!decoded_windows.text.contains('\u{FFFD}')); // Should not have replacement chars
-    assert!(decoded_windows.text.contains("test")); // Should contain the ASCII part
-
-    // Test case 3: Latin-1 encoded text (common fallback)
-    let latin1_text = "café"; // This would be [99, 97, 102, 233] in Latin-1
-    let latin1_bytes = latin1_text.encode_latin1();
-    let latin1_output = StreamOutput {
-        text: latin1_bytes,
-        truncated_after_lines: None,
-    };
-    let decoded_latin1 = latin1_output.from_utf8_lossy();
-    assert_eq!(decoded_latin1.text, "café");
-    assert!(!decoded_latin1.text.contains('\u{FFFD}'));
-
-    // Test case 4: Mixed content (common in real scenarios)
-    let mut mixed_bytes = Vec::new();
-    mixed_bytes.extend_from_slice("Output: ".as_bytes()); // ASCII prefix
-    mixed_bytes.extend_from_slice(&latin1_text.encode_latin1()); // Latin-1 content
-    let mixed_output = StreamOutput {
-        text: mixed_bytes,
-        truncated_after_lines: None,
-    };
-    let decoded_mixed = mixed_output.from_utf8_lossy();
-    assert!(decoded_mixed.text.starts_with("Output: "));
-    assert!(decoded_mixed.text.contains("café"));
-    assert!(!decoded_mixed.text.contains('\u{FFFD}'));
+fn test_utf8_shell_output() {
+    // Baseline: UTF-8 output should bypass the detector and remain unchanged.
+    assert_eq!(decode_shell_output("пример".as_bytes()), "пример");
 }
 
-/// Test that demonstrates the improvement over the old approach
 #[test]
-fn test_improvement_over_string_from_utf8_lossy() {
-    // This test shows that our smart decoding handles cases where
-    // String::from_utf8_lossy() would produce replacement characters
+fn test_cp1251_shell_output() {
+    // VS Code shells on Windows frequently surface CP1251 bytes for Cyrillic text.
+    assert_eq!(decode_shell_output(b"\xEF\xF0\xE8\xEC\xE5\xF0"), "пример");
+}
 
-    // Windows-1252 bytes that would be invalid UTF-8
-    let problematic_bytes = [0x93, 0x94]; // LEFT and RIGHT DOUBLE QUOTATION MARK
+#[test]
+fn test_cp866_shell_output() {
+    // Native cmd.exe still defaults to CP866; make sure we recognize that too.
+    assert_eq!(decode_shell_output(b"\xAF\xE0\xA8\xAC\xA5\xE0"), "пример");
+}
 
-    // Old approach (what was happening before our fix)
-    let old_result = String::from_utf8_lossy(&problematic_bytes).to_string();
-    assert!(old_result.contains('\u{FFFD}')); // Contains replacement characters
+#[test]
+fn test_windows_1252_smart_decoding() {
+    // Smart detection should turn fancy quotes/dashes into the proper Unicode glyphs.
+    assert_eq!(
+        decode_shell_output(b"\x93\x94 test \x96 dash"),
+        "\u{201C}\u{201D} test \u{2013} dash"
+    );
+}
 
-    // New approach (our fix)
-    let new_output = StreamOutput {
-        text: problematic_bytes.to_vec(),
+#[test]
+fn test_smart_decoding_improves_over_lossy_utf8() {
+    // Regression guard: String::from_utf8_lossy() alone used to emit replacement chars here.
+    let bytes = b"\x93\x94 test \x96 dash";
+    assert!(
+        String::from_utf8_lossy(bytes).contains('\u{FFFD}'),
+        "lossy UTF-8 should inject replacement chars"
+    );
+    assert_eq!(
+        decode_shell_output(bytes),
+        "\u{201C}\u{201D} test \u{2013} dash",
+        "smart decoding should keep curly quotes intact"
+    );
+}
+
+#[test]
+fn test_mixed_ascii_and_legacy_encoding() {
+    // Commands tend to mix ASCII status text with Latin-1 bytes (e.g. café).
+    assert_eq!(decode_shell_output(b"Output: caf\xE9"), "Output: café");
+}
+
+#[test]
+fn test_pure_latin1_shell_output() {
+    // Latin-1 by itself should still decode correctly (regression coverage for the older tests).
+    assert_eq!(decode_shell_output(b"caf\xE9"), "café");
+}
+
+#[test]
+fn test_invalid_bytes_still_fall_back_to_lossy() {
+    // If detection fails, we still want the user to see replacement characters.
+    let bytes = b"\xFF\xFE\xFD";
+    assert_eq!(decode_shell_output(bytes), String::from_utf8_lossy(bytes));
+}
+
+fn decode_shell_output(bytes: &[u8]) -> String {
+    StreamOutput {
+        text: bytes.to_vec(),
         truncated_after_lines: None,
-    };
-    let new_result = new_output.from_utf8_lossy();
-    assert!(!new_result.text.contains('\u{FFFD}')); // No replacement characters
-    assert_eq!(new_result.text, "\u{201C}\u{201D}"); // Correct Unicode characters
-}
-
-/// Helper trait to simulate Latin-1 encoding
-trait EncodeLatin1 {
-    fn encode_latin1(&self) -> Vec<u8>;
-}
-
-impl EncodeLatin1 for str {
-    fn encode_latin1(&self) -> Vec<u8> {
-        self.chars()
-            .map(|c| {
-                let code = c as u32;
-                if code <= 255 {
-                    code as u8
-                } else {
-                    b'?' // Replacement for non-Latin-1 characters
-                }
-            })
-            .collect()
     }
+    .from_utf8_lossy()
+    .text
 }

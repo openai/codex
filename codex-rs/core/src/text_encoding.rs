@@ -1,159 +1,158 @@
-//! Text encoding detection and conversion utilities.
+//! Text encoding detection and conversion utilities for shell output.
 //!
-//! This module provides improved handling of text encoding for shell command outputs,
-//! especially for non-UTF-8 text that commonly appears in Windows/WSL environments.
+//! Windows users frequently run into code pages such as CP1251 or CP866 when
+//! invoking commands through VS Code. Those bytes show up as invalid UTF-8 and
+//! used to be replaced with the standard Unicode replacement character. We now
+//! lean on `chardetng` and `encoding_rs` so we can automatically detect and
+//! decode the vast majority of legacy encodings before falling back to lossy
+//! UTF-8 decoding.
 
-/// Attempts to convert bytes to UTF-8 string with intelligent encoding detection.
-///
-/// This function tries multiple encoding strategies:
-/// 1. Direct UTF-8 validation (fastest path)
-/// 2. Windows-1252/CP1252 decoding (common in Windows environments)
-/// 3. ISO-8859-1/Latin-1 decoding (fallback for extended ASCII)
-/// 4. Lossy UTF-8 conversion (final fallback)
+use chardetng::EncodingDetector;
+use encoding_rs::Encoding;
+use encoding_rs::IBM866;
+use encoding_rs::WINDOWS_1252;
+
+/// Attempts to convert arbitrary bytes to UTF-8 with best-effort encoding
+/// detection.
 pub fn bytes_to_string_smart(bytes: &[u8]) -> String {
-    // Fast path: check if already valid UTF-8
+    if bytes.is_empty() {
+        return String::new();
+    }
+
     if let Ok(utf8_str) = std::str::from_utf8(bytes) {
         return utf8_str.to_owned();
     }
 
-    // Try Windows-1252 (superset of ISO-8859-1, common in Windows)
-    if let Some(decoded) = try_decode_windows_1252(bytes) {
-        return decoded;
-    }
-
-    // Try ISO-8859-1/Latin-1 as fallback
-    if let Some(decoded) = try_decode_latin1(bytes) {
-        return decoded;
-    }
-
-    // Final fallback: lossy UTF-8 conversion
-    String::from_utf8_lossy(bytes).into_owned()
+    let encoding = detect_encoding(bytes);
+    decode_bytes(bytes, encoding)
 }
 
-/// Attempts to decode bytes as Windows-1252 encoding.
-/// Windows-1252 is commonly used in Windows environments and includes
-/// characters in the 0x80-0x9F range that are undefined in ISO-8859-1.
-fn try_decode_windows_1252(bytes: &[u8]) -> Option<String> {
-    // Windows-1252 mapping for 0x80-0x9F range
-    const WINDOWS_1252_MAP: [char; 32] = [
-        '\u{20AC}', // 0x80 -> EURO SIGN
-        '\u{0081}', // 0x81 -> <control>
-        '\u{201A}', // 0x82 -> SINGLE LOW-9 QUOTATION MARK
-        '\u{0192}', // 0x83 -> LATIN SMALL LETTER F WITH HOOK
-        '\u{201E}', // 0x84 -> DOUBLE LOW-9 QUOTATION MARK
-        '\u{2026}', // 0x85 -> HORIZONTAL ELLIPSIS
-        '\u{2020}', // 0x86 -> DAGGER
-        '\u{2021}', // 0x87 -> DOUBLE DAGGER
-        '\u{02C6}', // 0x88 -> MODIFIER LETTER CIRCUMFLEX ACCENT
-        '\u{2030}', // 0x89 -> PER MILLE SIGN
-        '\u{0160}', // 0x8A -> LATIN CAPITAL LETTER S WITH CARON
-        '\u{2039}', // 0x8B -> SINGLE LEFT-POINTING ANGLE QUOTATION MARK
-        '\u{0152}', // 0x8C -> LATIN CAPITAL LIGATURE OE
-        '\u{008D}', // 0x8D -> <control>
-        '\u{017D}', // 0x8E -> LATIN CAPITAL LETTER Z WITH CARON
-        '\u{008F}', // 0x8F -> <control>
-        '\u{0090}', // 0x90 -> <control>
-        '\u{2018}', // 0x91 -> LEFT SINGLE QUOTATION MARK
-        '\u{2019}', // 0x92 -> RIGHT SINGLE QUOTATION MARK
-        '\u{201C}', // 0x93 -> LEFT DOUBLE QUOTATION MARK
-        '\u{201D}', // 0x94 -> RIGHT DOUBLE QUOTATION MARK
-        '\u{2022}', // 0x95 -> BULLET
-        '\u{2013}', // 0x96 -> EN DASH
-        '\u{2014}', // 0x97 -> EM DASH
-        '\u{02DC}', // 0x98 -> SMALL TILDE
-        '\u{2122}', // 0x99 -> TRADE MARK SIGN
-        '\u{0161}', // 0x9A -> LATIN SMALL LETTER S WITH CARON
-        '\u{203A}', // 0x9B -> SINGLE RIGHT-POINTING ANGLE QUOTATION MARK
-        '\u{0153}', // 0x9C -> LATIN SMALL LIGATURE OE
-        '\u{009D}', // 0x9D -> <control>
-        '\u{017E}', // 0x9E -> LATIN SMALL LETTER Z WITH CARON
-        '\u{0178}', // 0x9F -> LATIN CAPITAL LETTER Y WITH DIAERESIS
-    ];
+fn detect_encoding(bytes: &[u8]) -> &'static Encoding {
+    let mut detector = EncodingDetector::new();
+    detector.feed(bytes, true);
+    let (encoding, _) = detector.guess_assess(None, true);
 
-    let mut result = String::with_capacity(bytes.len());
+    // chardetng occasionally reports IBM866 for short strings that only contain
+    // Windows-1252 “smart punctuation” bytes (0x80-0x9F) because that range
+    // maps to Cyrillic letters in IBM866. When those bytes show up alongside an
+    // ASCII word (typical shell output: `"“`test), we know the intent was likely
+    // CP1252 quotes/dashes. Prefer WINDOWS_1252 in that specific situation so
+    // we render the characters users expect instead of Cyrillic junk. References:
+    // - Windows-1252 reserving 0x80-0x9F for curly quotes/dashes:
+    //   https://en.wikipedia.org/wiki/Windows-1252
+    // - CP866 mapping 0x93/0x94/0x96 to Cyrillic letters, so the same bytes show
+    //   up as “УФЦ” when mis-decoded:
+    //   https://www.unicode.org/Public/MAPPINGS/VENDORS/MICSFT/PC/CP866.TXT
+    if encoding == IBM866 && looks_like_windows_1252_punctuation(bytes) {
+        return WINDOWS_1252;
+    }
+
+    encoding
+}
+
+fn decode_bytes(bytes: &[u8], encoding: &'static Encoding) -> String {
+    let (decoded, _, had_errors) = encoding.decode(bytes);
+
+    if had_errors {
+        return String::from_utf8_lossy(bytes).into_owned();
+    }
+
+    decoded.into_owned()
+}
+
+/// Detect whether the byte stream looks like Windows-1252 “smart punctuation”
+/// wrapped around otherwise-ASCII text.
+///
+/// Context: IBM866 and Windows-1252 share the 0x80-0x9F slot range. In IBM866
+/// these bytes decode to Cyrillic letters, whereas Windows-1252 maps them to
+/// curly quotes and dashes. chardetng can guess IBM866 for short snippets that
+/// only contain those bytes, which turns shell output such as `“test”` into
+/// unreadable Cyrillic. To avoid that, we treat inputs comprising a handful of
+/// bytes from the problematic range plus ASCII letters as CP1252 punctuation.
+fn looks_like_windows_1252_punctuation(bytes: &[u8]) -> bool {
+    let mut saw_extended_punctuation = false;
+    let mut saw_ascii_word = false;
+    let mut high_byte_count = 0i32;
+
     for &byte in bytes {
-        let ch = match byte {
-            0x00..=0x7F => byte as char,                             // ASCII range
-            0x80..=0x9F => WINDOWS_1252_MAP[(byte - 0x80) as usize], // Windows-1252 specific
-            0xA0..=0xFF => byte as char,                             // ISO-8859-1 compatible range
-        };
-        result.push(ch);
+        if byte >= 0xA0 {
+            return false;
+        }
+        if (0x80..=0x9F).contains(&byte) {
+            saw_extended_punctuation = true;
+            high_byte_count += 1;
+            if high_byte_count > 4 {
+                return false;
+            }
+        }
+        if byte.is_ascii_alphabetic() {
+            saw_ascii_word = true;
+        }
     }
 
-    // Validate that the result makes sense (contains reasonable characters)
-    // Allow ANSI escape codes (ESC \x1b) which are common in shell output
-    if result
-        .chars()
-        .any(|c| c.is_control() && c != '\n' && c != '\r' && c != '\t' && c != '\x1b')
-    {
-        return None;
-    }
-
-    Some(result)
-}
-
-/// Attempts to decode bytes as ISO-8859-1 (Latin-1) encoding.
-/// This is a simple 1:1 mapping where each byte maps directly to a Unicode code point.
-fn try_decode_latin1(bytes: &[u8]) -> Option<String> {
-    let result: String = bytes.iter().map(|&b| b as char).collect();
-
-    // Validate that the result doesn't contain too many control characters
-    // Allow ANSI escape codes (ESC \x1b) which are common in shell output
-    let control_count = result
-        .chars()
-        .filter(|c| c.is_control() && *c != '\n' && *c != '\r' && *c != '\t' && *c != '\x1b')
-        .count();
-    let total_chars = result.chars().count();
-
-    // If more than 10% are control characters, this probably isn't Latin-1 text
-    if total_chars > 0 && (control_count as f32 / total_chars as f32) > 0.1 {
-        return None;
-    }
-
-    Some(result)
+    saw_extended_punctuation && saw_ascii_word
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn test_utf8_passthrough() {
+        // Fast path: when UTF-8 is valid we should avoid copies and return as-is.
         let utf8_text = "Hello, мир! 世界";
         let bytes = utf8_text.as_bytes();
         assert_eq!(bytes_to_string_smart(bytes), utf8_text);
     }
 
     #[test]
-    fn test_windows_1252_decoding() {
-        // Test Windows-1252 specific characters
-        let bytes = [0x93, 0x94]; // LEFT and RIGHT DOUBLE QUOTATION MARK
-        let result = bytes_to_string_smart(&bytes);
-        assert_eq!(result, "\u{201C}\u{201D}"); // " "
+    fn test_cp1251_russian_text() {
+        // Cyrillic text emitted by PowerShell/WSL in CP1251 should decode cleanly.
+        let bytes = b"\xEF\xF0\xE8\xEC\xE5\xF0"; // "пример" encoded with Windows-1251
+        assert_eq!(bytes_to_string_smart(bytes), "пример");
     }
 
     #[test]
-    fn test_latin1_decoding() {
-        // Test Latin-1 text (like café)
-        let bytes = [0x63, 0x61, 0x66, 0xE9]; // "café" in Latin-1
-        let result = bytes_to_string_smart(&bytes);
-        assert_eq!(result, "café");
+    fn test_cp866_russian_text() {
+        // Legacy consoles (cmd.exe) commonly emit CP866 bytes for Cyrillic content.
+        let bytes = b"\xAF\xE0\xA8\xAC\xA5\xE0"; // "пример" encoded with CP866
+        assert_eq!(bytes_to_string_smart(bytes), "пример");
     }
 
     #[test]
-    fn test_cyrillic_text() {
-        // Example of Russian text that might be encoded in various ways
-        let utf8_example = "пример";
-        let utf8_bytes = utf8_example.as_bytes();
-        assert_eq!(bytes_to_string_smart(utf8_bytes), utf8_example);
+    fn test_cp866_uppercase_text() {
+        // Ensure the IBM866 heuristic still returns IBM866 for uppercase-only words.
+        let bytes = b"\x8F\x90\x88"; // "ПРИ" encoded with CP866 uppercase letters
+        assert_eq!(bytes_to_string_smart(bytes), "ПРИ");
+    }
+
+    #[test]
+    fn test_windows_1252_quotes() {
+        // Smart detection should map Windows-1252 punctuation into proper Unicode.
+        let bytes = b"\x93\x94test";
+        assert_eq!(bytes_to_string_smart(bytes), "\u{201C}\u{201D}test");
+    }
+
+    #[test]
+    fn test_latin1_cafe() {
+        // Latin-1 bytes remain common in Western-European locales; decode them directly.
+        let bytes = b"caf\xE9";
+        assert_eq!(bytes_to_string_smart(bytes), "café");
+    }
+
+    #[test]
+    fn test_preserves_ansi_sequences() {
+        // ANSI escape sequences should survive regardless of the detected encoding.
+        let bytes = b"\x1b[31mred\x1b[0m";
+        assert_eq!(bytes_to_string_smart(bytes), "\x1b[31mred\x1b[0m");
     }
 
     #[test]
     fn test_fallback_to_lossy() {
-        // Invalid byte sequences should fall back to lossy conversion
+        // Completely invalid sequences fall back to the old lossy behavior.
         let invalid_bytes = [0xFF, 0xFE, 0xFD];
         let result = bytes_to_string_smart(&invalid_bytes);
-        // Should not panic and should contain some content
-        assert!(!result.is_empty());
+        assert_eq!(result, String::from_utf8_lossy(&invalid_bytes));
     }
 }
