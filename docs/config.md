@@ -442,7 +442,7 @@ You can configure Codex to use [MCP servers](https://modelcontextprotocol.io/abo
 command = "npx"
 # Optional
 args = ["-y", "mcp-server"]
-# Optional: propagate additional env vars to the MVP server.
+# Optional: propagate additional env vars to the MCP server.
 # A default whitelist of env vars will be propagated to the MCP server.
 # https://github.com/openai/codex/blob/main/codex-rs/rmcp-client/src/utils.rs#L82
 env = { "API_KEY" = "value" }
