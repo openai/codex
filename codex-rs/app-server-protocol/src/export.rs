@@ -759,6 +759,7 @@ mod tests {
 
         let _guard = TempDirGuard(output_dir.clone());
 
+        // Avoid doing more work than necessary to keep the test from timing out.
         let options = GenerateTsOptions {
             generate_indices: false,
             ensure_headers: false,
