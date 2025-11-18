@@ -34,7 +34,14 @@ This repository now includes comprehensive infrastructure for the **DecryptTheGi
    open public/logger-demo.html
    ```
 
-3. **Run Data Processing**:
+3. **Read the Daily Cipher Clock**:
+
+   ```bash
+   # View the date-driven poetry generator
+   open public/decrypt-cipher-clock.html
+   ```
+
+4. **Run Data Processing**:
 
    ```bash
    # Validate CSV headers
@@ -44,7 +51,7 @@ This repository now includes comprehensive infrastructure for the **DecryptTheGi
    node scripts/normalize_batch.mjs process events.json analytics
    ```
 
-4. **View Privacy Policy**:
+5. **View Privacy Policy**:
    ```bash
    # Review the Zero Loss, Zero Surprise framework
    open public/zero-loss-zero-surprise.html

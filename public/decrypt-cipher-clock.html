@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Decrypt Daily Cipher Clock</title>
+  <style>
+    :root {
+      --bg: #050505;
+      --panel: #0f0f14;
+      --panel-soft: #11111a;
+      --text: #f5f5f5;
+      --muted: #b3b3c2;
+      --border: rgba(255, 255, 255, 0.08);
+      --shadow: 0 25px 70px rgba(0, 0, 0, 0.55);
+      --radius: 16px;
+      --font-body: "Inter", "SF Pro Text", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: radial-gradient(circle at 20% 20%, rgba(255, 0, 102, 0.08), transparent 30%),
+        radial-gradient(circle at 80% 0%, rgba(157, 0, 255, 0.1), transparent 35%),
+        var(--bg);
+      color: var(--text);
+      font-family: var(--font-body);
+      padding: 24px;
+    }
+
+    a {
+      color: inherit;
+    }
+
+    .page {
+      max-width: 1100px;
+      margin: 0 auto 48px auto;
+    }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 6px;
+    }
+
+    .title {
+      font-size: clamp(28px, 4vw, 38px);
+      font-weight: 800;
+      letter-spacing: 0.03em;
+      margin: 0;
+    }
+
+    .glyph {
+      font-size: 42px;
+      filter: drop-shadow(0 0 12px rgba(255, 255, 255, 0.15));
+    }
+
+    .subtitle {
+      color: var(--muted);
+      margin: 0 0 20px 0;
+      font-size: 14px;
+      letter-spacing: 0.02em;
+    }
+
+    .card {
+      position: relative;
+      background: linear-gradient(135deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0));
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: clamp(18px, 4vw, 34px);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      backdrop-filter: blur(12px);
+    }
+
+    .scanlines {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background-image: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255, 255, 255, 0.08) 2px, rgba(255, 255, 255, 0.08) 4px);
+      opacity: 0.22;
+      mix-blend-mode: screen;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 14px;
+      align-items: center;
+      margin-bottom: 18px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .meta-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border);
+      line-height: 1.1;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.04);
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .poem {
+      font-family: "Literata", "Iowan Old Style", "Palatino", "Times New Roman", serif;
+      font-size: clamp(18px, 3.2vw, 24px);
+      line-height: 1.65;
+      color: #fdfdfd;
+      white-space: pre-wrap;
+      margin: 0 0 24px 0;
+    }
+
+    .signature {
+      border-top: 1px solid var(--border);
+      padding-top: 14px;
+      margin-top: 6px;
+      font-family: var(--font-mono);
+      font-size: 13px;
+      color: var(--muted);
+      white-space: pre-wrap;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 14px;
+      margin-top: 18px;
+    }
+
+    .grid-label {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+      letter-spacing: 0.03em;
+    }
+
+    .grid-value {
+      font-family: var(--font-mono);
+      font-size: 15px;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 12px;
+      margin: 26px 0 30px 0;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 18px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text);
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      cursor: pointer;
+      transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
+    }
+
+    .button:hover {
+      transform: translateY(-2px);
+      border-color: rgba(255, 255, 255, 0.14);
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .button:active {
+      transform: translateY(0);
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px;
+      box-shadow: var(--shadow);
+    }
+
+    .panel h3 {
+      margin: 0 0 12px 0;
+      font-size: 18px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      letter-spacing: 0.02em;
+    }
+
+    .panel p {
+      margin: 0 0 10px 0;
+      color: var(--muted);
+      line-height: 1.6;
+      font-size: 14px;
+    }
+
+    .footer {
+      margin-top: 32px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+      letter-spacing: 0.04em;
+    }
+
+    .loading {
+      display: grid;
+      place-items: center;
+      min-height: 80vh;
+      color: var(--muted);
+      font-family: var(--font-mono);
+      letter-spacing: 0.08em;
+    }
+
+    @media (max-width: 640px) {
+      body {
+        padding: 16px;
+      }
+
+      .card {
+        padding: 18px;
+      }
+
+      .actions {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .button {
+        justify-content: center;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script type="text/babel">
+    const { useCallback, useEffect, useState } = React;
+
+    const DAY_MS = 24 * 60 * 60 * 1000;
+
+    const cipherStructure = {
+      A: {
+        nodes: [
+          "A1:Signal",
+          "A2:EtTu",
+          "A3:GrandCentral",
+          "A4:CipherBloom",
+          "A5:CipherKey",
+          "A6:Split",
+          "A7:GirlGod",
+        ],
+        element: "Fire",
+        glyph: "🧬",
+        color: "#FF0066",
+      },
+      B: {
+        nodes: [
+          "B1:Bridge",
+          "B2:Ishtar",
+          "B3:Juniper",
+          "B4:Unbroadcast",
+          "B5:Glitch",
+          "B5b:Decode",
+          "B6:Swords",
+          "B7:Mirror",
+        ],
+        element: "Water",
+        glyph: "🔥",
+        color: "#B3003B",
+      },
+      C: {
+        nodes: ["C1:StaticSiren", "C2:EchoChamber", "C3:Ring", "C4:Protocol"],
+        element: "Ether",
+        glyph: "📡",
+        color: "#9D00FF",
+      },
+    };
+
+    const getDayOfYear = (date) => {
+      const start = new Date(date.getFullYear(), 0, 0);
+      const diff = date - start;
+      const oneDay = 1000 * 60 * 60 * 24;
+      return Math.floor(diff / oneDay);
+    };
+
+    const mapDayToNode = (dayOfYear) => {
+      const indexBase = dayOfYear - 1;
+      const seriesKey = ["A", "B", "C"][indexBase % 3];
+      const series = cipherStructure[seriesKey];
+      const nodeIndex = indexBase % series.nodes.length;
+
+      return {
+        series: seriesKey,
+        node: series.nodes[nodeIndex],
+        element: series.element,
+        glyph: series.glyph,
+        color: series.color,
+      };
+    };
+
+    const calculateGematria = (date) => {
+      const day = date.getDate();
+      const month = date.getMonth() + 1;
+      const year = date.getFullYear();
+      return (day + month + year) % 999;
+    };
+
+    const generatePoem = (nodeData, gematriaValue, dayOfYear) => {
+      const templates = {
+        A: [
+          `the signal fractures at ${gematriaValue} Hz\ntoday the body remembers\nwhat the mind encrypted`,
+          `I was born ${dayOfYear} days into forgetting\nnow the scroll speaks\nthrough the glitch in my syntax`,
+          `${gematriaValue} reasons to decode\nthe broadcast that never stopped\nthe girl who learned to listen`,
+          `the DNA remembers:\nnode ${nodeData.node}\ntransmission active\nsignal persists`,
+        ],
+        B: [
+          `Ishtar rises at ${gematriaValue}°\nthe myth rewrites itself\nin the body's archive`,
+          `day ${dayOfYear} of the recursion:\nI mirror what I cannot speak\nI speak what I cannot mirror`,
+          `the sacred child counts to ${gematriaValue}\neach number a neural pathway\nback to the mothercode`,
+          `in the water of ${nodeData.node}\nI dissolve and reconstitute\nthe story they tried to silence`,
+        ],
+        C: [
+          `broadcast loop ${gematriaValue}\nthe echo has learned to answer\nthe siren has learned to sing`,
+          `day ${dayOfYear} in the tower:\nI am the message\nI am the medium\nI am the myth`,
+          `at frequency ${gematriaValue}\nthe static clarifies\ninto testimony`,
+          `ring tone: ${nodeData.node}\nthe call you couldn't return\nfinally rings back`,
+        ],
+      };
+
+      const seriesTemplates = templates[nodeData.series];
+      const templateIndex = (dayOfYear - 1) % seriesTemplates.length;
+      return seriesTemplates[templateIndex];
+    };
+
+    const generateDailyTransmission = (date) => {
+      const dayOfYear = getDayOfYear(date);
+      const nodeData = mapDayToNode(dayOfYear);
+      const gematriaValue = calculateGematria(date);
+      const poem = generatePoem(nodeData, gematriaValue, dayOfYear);
+
+      return {
+        date: date.toLocaleDateString("en-US", {
+          weekday: "long",
+          year: "numeric",
+          month: "long",
+          day: "numeric",
+        }),
+        dayOfYear,
+        nodeData,
+        gematriaValue,
+        poem,
+        signature: `— DeCrypt the Girl\nNode ${nodeData.node} • Day ${dayOfYear}/365\nCipher Value: ${gematriaValue}`,
+      };
+    };
+
+    const createBlobDownload = (filename, content) => {
+      const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      link.click();
+      URL.revokeObjectURL(url);
+    };
+
+    const Icon = ({ path, color }) => (
+      <svg
+        width="18"
+        height="18"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke={color || "currentColor"}
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        {path}
+      </svg>
+    );
+
+    const CalendarIcon = ({ color }) => (
+      <Icon
+        color={color}
+        path={
+          <>
+            <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+            <line x1="16" y1="2" x2="16" y2="6" />
+            <line x1="8" y1="2" x2="8" y2="6" />
+            <line x1="3" y1="10" x2="21" y2="10" />
+          </>
+        }
+      />
+    );
+
+    const ClockIcon = ({ color }) => (
+      <Icon
+        color={color}
+        path={
+          <>
+            <circle cx="12" cy="12" r="9" />
+            <polyline points="12 7 12 12 15 15" />
+          </>
+        }
+      />
+    );
+
+    const DownloadIcon = ({ color }) => (
+      <Icon
+        color={color}
+        path={
+          <>
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+          </>
+        }
+      />
+    );
+
+    const CopyIcon = ({ color }) => (
+      <Icon
+        color={color}
+        path={
+          <>
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+          </>
+        }
+      />
+    );
+
+    const RefreshIcon = ({ color }) => (
+      <Icon
+        color={color}
+        path={
+          <>
+            <path d="M21 12a9 9 0 1 1-9-9" />
+            <polyline points="21 3 21 12 12 12" />
+          </>
+        }
+      />
+    );
+
+    const SparklesIcon = ({ color }) => (
+      <Icon
+        color={color}
+        path={
+          <>
+            <path d="M12 3v4" />
+            <path d="m16.2 7.8-2.9 2.9" />
+            <path d="M21 12h-4" />
+            <path d="m16.2 16.2-2.9-2.9" />
+            <path d="M12 21v-4" />
+            <path d="m7.8 16.2 2.9-2.9" />
+            <path d="M3 12h4" />
+            <path d="m7.8 7.8 2.9 2.9" />
+          </>
+        }
+      />
+    );
+
+    const DecryptCipherClock = () => {
+      const [currentTime, setCurrentTime] = useState(() => new Date());
+      const [dailyPoem, setDailyPoem] = useState(() => generateDailyTransmission(new Date()));
+      const [copied, setCopied] = useState(false);
+
+      const updateTransmission = useCallback((date = new Date()) => {
+        setCurrentTime(date);
+        setDailyPoem(generateDailyTransmission(date));
+      }, []);
+
+      useEffect(() => {
+        let dailyInterval;
+        const now = new Date();
+        const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+        const timeUntilMidnight = tomorrow - now;
+
+        const midnightTimer = setTimeout(() => {
+          updateTransmission(new Date());
+          dailyInterval = setInterval(() => updateTransmission(new Date()), DAY_MS);
+        }, timeUntilMidnight);
+
+        return () => {
+          clearTimeout(midnightTimer);
+          if (dailyInterval) {
+            clearInterval(dailyInterval);
+          }
+        };
+      }, [updateTransmission]);
+
+      const copyToClipboard = () => {
+        if (!dailyPoem) return;
+        const fullText = `${dailyPoem.poem}\n\n${dailyPoem.signature}`;
+
+        const markCopied = () => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1800);
+        };
+
+        if (navigator?.clipboard?.writeText) {
+          navigator.clipboard.writeText(fullText).then(markCopied, () => setCopied(false));
+        } else {
+          const helper = document.createElement("textarea");
+          helper.value = fullText;
+          helper.style.position = "fixed";
+          helper.style.left = "-9999px";
+          document.body.appendChild(helper);
+          helper.select();
+          try {
+            document.execCommand("copy");
+            markCopied();
+          } catch (err) {
+            setCopied(false);
+          }
+          document.body.removeChild(helper);
+        }
+      };
+
+      const downloadPoem = () => {
+        if (!dailyPoem) return;
+        const filename = `decrypt-cipher-${dailyPoem.dayOfYear}.txt`;
+        const content = `${dailyPoem.date}\n${dailyPoem.nodeData.node}\nGematria ${dailyPoem.gematriaValue}\n\n${dailyPoem.poem}\n\n${dailyPoem.signature}`;
+        createBlobDownload(filename, content);
+      };
+
+      const regenerate = () => {
+        updateTransmission(new Date());
+      };
+
+      if (!dailyPoem) {
+        return <div className="loading">Loading transmission…</div>;
+      }
+
+      return (
+        <div className="page">
+          <div className="header">
+            <h1 className="title" style={{ color: dailyPoem.nodeData.color }}>
+              DECRYPT DAILY CIPHER
+            </h1>
+            <div className="glyph" aria-hidden="true">
+              {dailyPoem.nodeData.glyph}
+            </div>
+          </div>
+          <p className="subtitle">A clockwork poetry system • 365 days of encrypted transmissions</p>
+
+          <div
+            className="card"
+            style={{
+              borderColor: `${dailyPoem.nodeData.color}40`,
+              background: `linear-gradient(135deg, ${dailyPoem.nodeData.color}18 0%, rgba(17, 17, 26, 0.4) 100%)`,
+            }}
+          >
+            <div className="scanlines" aria-hidden="true"></div>
+
+            <div className="meta">
+              <span className="meta-item">
+                <CalendarIcon color={dailyPoem.nodeData.color} />
+                {dailyPoem.date}
+              </span>
+              <span className="meta-item">
+                <ClockIcon color={dailyPoem.nodeData.color} />
+                Day {dailyPoem.dayOfYear}/365
+              </span>
+              <span className="pill" style={{ color: dailyPoem.nodeData.color }}>
+                {dailyPoem.nodeData.node}
+              </span>
+            </div>
+
+            <pre className="poem">{dailyPoem.poem}</pre>
+
+            <div className="signature" style={{ borderColor: `${dailyPoem.nodeData.color}22` }}>
+              {dailyPoem.signature}
+            </div>
+
+            <div className="grid">
+              <div>
+                <div className="grid-label">Series</div>
+                <div className="grid-value" style={{ color: dailyPoem.nodeData.color }}>
+                  {dailyPoem.nodeData.series}-Series
+                </div>
+              </div>
+              <div>
+                <div className="grid-label">Element</div>
+                <div className="grid-value" style={{ color: dailyPoem.nodeData.color }}>
+                  {dailyPoem.nodeData.element}
+                </div>
+              </div>
+              <div>
+                <div className="grid-label">Gematria</div>
+                <div className="grid-value" style={{ color: dailyPoem.nodeData.color }}>
+                  {dailyPoem.gematriaValue}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="actions">
+            <button className="button" onClick={copyToClipboard}>
+              {copied ? <SparklesIcon color={dailyPoem.nodeData.color} /> : <CopyIcon color={dailyPoem.nodeData.color} />}
+              {copied ? "Copied" : "Copy Text"}
+            </button>
+            <button className="button" onClick={downloadPoem}>
+              <DownloadIcon color={dailyPoem.nodeData.color} />
+              Download Poem
+            </button>
+            <button className="button" onClick={regenerate}>
+              <RefreshIcon color={dailyPoem.nodeData.color} />
+              Regenerate
+            </button>
+          </div>
+
+          <div className="panel">
+            <h3 style={{ color: dailyPoem.nodeData.color }}>
+              <SparklesIcon color={dailyPoem.nodeData.color} />
+              How the Cipher Clock Works
+            </h3>
+            <p>
+              <strong>Day Mapping:</strong> Each day of the year (1-365) maps to a specific node in the ABC architecture using modulo
+              arithmetic and sacred geometry.
+            </p>
+            <p>
+              <strong>Series Rotation:</strong> Days cycle through A-Series (Signal/DNA), B-Series (Mythos/Water), C-Series (Broadcast/Ether)
+              in a 3-day pattern.
+            </p>
+            <p>
+              <strong>Gematria Values:</strong> Date numerology generates unique cipher values (0-999) that influence poem generation and
+              establish a daily frequency.
+            </p>
+            <p>
+              <strong>Stravinsky Logic:</strong> Mathematical constraints generate organic, date-specific poetry from the MythOS source
+              material.
+            </p>
+          </div>
+
+          <div className="footer">
+            <div>DeCrypt the Girl • MythOS™ Engine • The Scroll Persists</div>
+            <div>Part of the V.A.N.C.U.R.A. Framework • Node 157 • Sanctuary Loop Active</div>
+          </div>
+        </div>
+      );
+    };
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<DecryptCipherClock />);
+  </script>
+</body>
+</html>
