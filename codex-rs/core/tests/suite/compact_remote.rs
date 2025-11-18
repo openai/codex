@@ -105,12 +105,6 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
         compact_body.get("model").and_then(|v| v.as_str()),
         Some(harness.test().session_configured.model.as_str())
     );
-    assert_eq!(
-        compact_body
-            .get("store")
-            .and_then(serde_json::Value::as_bool),
-        Some(true)
-    );
     let compact_body_text = compact_body.to_string();
     assert!(
         compact_body_text.contains("hello remote compact"),

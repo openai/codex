@@ -40,7 +40,6 @@ use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::client_common::ResponsesApiRequest;
 use crate::client_common::create_text_param_for_request;
-use crate::compact_remote::REMOTE_SUMMARIZATION_PROMPT;
 use crate::config::Config;
 use crate::default_client::CodexHttpClient;
 use crate::default_client::create_client;
@@ -84,7 +83,6 @@ struct CompactHistoryRequest<'a> {
     model: &'a str,
     input: &'a [ResponseItem],
     instructions: &'a str,
-    store: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -522,11 +520,8 @@ impl ModelClient {
         self.auth_manager.clone()
     }
 
-    pub async fn compact_conversation_history(
-        &self,
-        history: &[ResponseItem],
-    ) -> Result<Vec<ResponseItem>> {
-        if history.is_empty() {
+    pub async fn compact_conversation_history(&self, prompt: &Prompt) -> Result<Vec<ResponseItem>> {
+        if prompt.input.is_empty() {
             return Ok(Vec::new());
         }
         let auth_manager = self.auth_manager.clone();
@@ -554,9 +549,8 @@ impl ModelClient {
         }
         let payload = CompactHistoryRequest {
             model: &self.config.model,
-            input: history,
-            store: true,
-            instructions: REMOTE_SUMMARIZATION_PROMPT,
+            input: &prompt.input,
+            instructions: &prompt.get_full_instructions(&self.config.model_family),
         };
         let response = req_builder
             .json(&payload)

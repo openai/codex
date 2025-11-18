@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::Prompt;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::error::Result as CodexResult;
@@ -13,9 +14,6 @@ use crate::protocol::WarningEvent;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
-
-/// Duplicate in order to be able to have custom instructions for remote compact.
-pub const REMOTE_SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt.md");
 
 pub(crate) async fn run_remote_compact_task(
     sess: Arc<Session>,
@@ -60,16 +58,21 @@ async fn run_remote_compact_task_inner(
         let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
         history.record_items(&[initial_input_for_turn.into()]);
     }
-    let history_snapshot = history.get_history();
-    if history_snapshot.is_empty() {
-        return Ok(());
-    }
+
+    let prompt = Prompt {
+        input: history.get_history_for_prompt(),
+        tools: vec![],
+        parallel_tool_calls: false,
+        base_instructions_override: turn_context.base_instructions.clone(),
+        output_schema: None,
+    };
 
     let compacted_items = turn_context
         .client
-        .compact_conversation_history(&history_snapshot)
+        .compact_conversation_history(&prompt)
         .await?;
-    let ghost_snapshots: Vec<ResponseItem> = history_snapshot
+    let ghost_snapshots: Vec<ResponseItem> = history
+        .get_history()
         .iter()
         .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
         .cloned()
