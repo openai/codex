@@ -530,8 +530,8 @@ impl App {
                 self.chat_widget
                     .open_reasoning_popup(model, preferred_effort);
             }
-            AppEvent::OpenLegacyModelPopup => {
-                self.chat_widget.open_legacy_model_popup();
+            AppEvent::OpenAllModelsPopup => {
+                self.chat_widget.open_all_models_popup();
             }
             AppEvent::ApplyModelAndEffort { model, effort } => {
                 self.chat_widget.apply_model_and_effort(model, effort);

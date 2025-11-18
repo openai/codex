@@ -1968,14 +1968,14 @@ impl ChatWidget {
     pub(crate) fn open_model_popup(&mut self) {
         let auth_mode = self.auth_manager.auth().map(|auth| auth.mode);
         let presets = builtin_model_presets(auth_mode);
-        let (featured, legacy): (Vec<_>, Vec<_>) =
+        let (featured, all_models): (Vec<_>, Vec<_>) =
             presets.into_iter().partition(|preset| preset.is_default);
         if featured.is_empty() {
             self.show_model_list(
-                legacy,
+                all_models,
                 "Select Model and Effort",
                 Some(
-                    "Access legacy models by running codex -m <model_name> or in your config.toml"
+                    "Access all models by running codex -m <model_name> or in your config.toml"
                         .to_string(),
                 ),
             );
@@ -1994,7 +1994,7 @@ impl ChatWidget {
             selected_description: None,
             is_current: false,
             actions: vec![Box::new(|tx| {
-                tx.send(AppEvent::OpenLegacyModelPopup);
+                tx.send(AppEvent::OpenAllModelsPopup);
             })],
             dismiss_on_select: true,
             ..Default::default()
@@ -2003,7 +2003,8 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Select Model".to_string()),
             subtitle: Some(
-                "Quickly pick Codex Auto or open the legacy list for more options.".to_string(),
+                "Quickly pick Codex Auto or open the full list of models for more options."
+                    .to_string(),
             ),
             footer_hint: Some("Press enter to apply selection, or esc to dismiss.".into()),
             items,
@@ -2011,16 +2012,16 @@ impl ChatWidget {
         });
     }
 
-    pub(crate) fn open_legacy_model_popup(&mut self) {
+    pub(crate) fn open_all_models_popup(&mut self) {
         let auth_mode = self.auth_manager.auth().map(|auth| auth.mode);
         let presets = builtin_model_presets(auth_mode);
-        let (_, legacy): (Vec<_>, Vec<_>) =
+        let (_, all_models): (Vec<_>, Vec<_>) =
             presets.into_iter().partition(|preset| preset.is_default);
         self.show_model_list(
-            legacy,
-            "Select Legacy Model",
+            all_models,
+            "Select Model",
             Some(
-                "Access legacy models by running codex -m <model_name> or in your config.toml"
+                "Access the full list of models or use codex -m <model_name> in your config.toml"
                     .to_string(),
             ),
         );

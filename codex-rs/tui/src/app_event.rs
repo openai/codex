@@ -78,8 +78,8 @@ pub(crate) enum AppEvent {
         effort: Option<ReasoningEffort>,
     },
 
-    /// Open the legacy model picker.
-    OpenLegacyModelPopup,
+    /// Open the full model list picker.
+    OpenAllModelsPopup,
 
     /// Open the confirmation prompt before enabling full access mode.
     OpenFullAccessConfirmation {
