@@ -1464,6 +1464,9 @@ fn model_selection_popup_chatgpt_auth_snapshot() {
 fn featured_model_popup_hides_default_label_when_option_is_current() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
+    chat.auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+
     let preset = builtin_model_presets(None)
         .into_iter()
         .find(|preset| preset.is_default)
@@ -1480,6 +1483,32 @@ fn featured_model_popup_hides_default_label_when_option_is_current() {
     assert!(
         !current_line.contains("(default)"),
         "expected current featured option to omit redundant default tag: {current_line}"
+    );
+}
+
+#[test]
+fn esc_on_all_models_returns_to_featured_picker() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    chat.open_model_popup();
+
+    // Select "All models" from the featured picker (option 4) and open the full list.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE));
+    chat.open_all_models_popup();
+
+    assert!(
+        !chat.bottom_pane.is_normal_backtrack_mode(),
+        "all models popup should be stacked on top of the featured picker"
+    );
+
+    // Esc should close the all-models list but leave the featured picker visible.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    assert!(
+        !chat.bottom_pane.is_normal_backtrack_mode(),
+        "esc should return to the featured picker instead of dismissing the model picker"
     );
 }
 

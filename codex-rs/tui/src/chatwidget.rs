@@ -1996,7 +1996,7 @@ impl ChatWidget {
             actions: vec![Box::new(|tx| {
                 tx.send(AppEvent::OpenAllModelsPopup);
             })],
-            dismiss_on_select: true,
+            dismiss_on_select: false,
             ..Default::default()
         });
 

@@ -1,6 +1,7 @@
 use codex_core::WireApi;
 use codex_core::config::Config;
 
+use crate::model_presets::reasoning_effort_label_for_model;
 use crate::sandbox_summary::summarize_sandbox_policy;
 
 /// Build a list of key/value pairs summarizing the effective configuration.
@@ -19,7 +20,7 @@ pub fn create_config_summary_entries(config: &Config) -> Vec<(&'static str, Stri
             "reasoning effort",
             config
                 .model_reasoning_effort
-                .map(|effort| effort.to_string())
+                .map(|effort| reasoning_effort_label_for_model(&config.model, effort))
                 .unwrap_or_else(|| "none".to_string()),
         ));
         entries.push((

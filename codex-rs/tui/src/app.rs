@@ -19,6 +19,7 @@ use crate::update_action::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
 use codex_common::model_presets::ModelUpgrade;
 use codex_common::model_presets::all_model_presets;
+use codex_common::model_presets::reasoning_effort_label_for_model;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
@@ -99,7 +100,8 @@ fn should_show_model_migration_prompt(
 
 fn format_model_change_target(model: &str, effort: Option<ReasoningEffortConfig>) -> String {
     if let Some(effort) = effort {
-        format!("{model} ({effort})")
+        let effort_label = reasoning_effort_label_for_model(model, effort);
+        format!("{model} ({effort_label})")
     } else {
         format!("{model} with default reasoning")
     }
@@ -1128,11 +1130,11 @@ mod tests {
     fn format_model_change_target_prefers_featured_label() {
         let formatted =
             super::format_model_change_target("codex-auto", Some(ReasoningEffortConfig::Low));
-        assert_eq!(formatted, "codex-auto (low)");
+        assert_eq!(formatted, "codex-auto (Fast)");
     }
 
     #[test]
-    fn format_model_change_target_uses_effort_label() {
+    fn format_model_change_target_falls_back_to_effort_name_when_no_label() {
         let formatted =
             super::format_model_change_target("gpt-5.1-codex", Some(ReasoningEffortConfig::High));
         assert_eq!(formatted, "gpt-5.1-codex (high)");

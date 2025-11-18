@@ -271,6 +271,16 @@ impl ModelPreset {
             .unwrap_or_else(|| effort.to_string())
     }
 }
+
+/// Return the display label for a reasoning effort on a given model, falling back to the effort
+/// name when no label is provided.
+pub fn reasoning_effort_label_for_model(model: &str, effort: ReasoningEffort) -> String {
+    all_model_presets()
+        .iter()
+        .find(|preset| preset.model == model)
+        .map(|preset| preset.reasoning_effort_label(effort))
+        .unwrap_or_else(|| effort.to_string())
+}
 #[cfg(test)]
 mod tests {
     use super::*;
