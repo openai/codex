@@ -323,8 +323,9 @@ impl TestCodexHarness {
     pub async fn shell_output(&self, call_id: &str, output_type: ShellModelOutput) -> String {
         match output_type {
             ShellModelOutput::LocalShell => self.local_shell_call_output(call_id).await,
-            ShellModelOutput::Shell
-            | ShellModelOutput::ShellCommand => self.function_call_stdout(call_id).await,
+            ShellModelOutput::Shell | ShellModelOutput::ShellCommand => {
+                self.function_call_stdout(call_id).await
+            }
         }
     }
 }
