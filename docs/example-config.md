@@ -369,4 +369,17 @@ exporter = "none"
 #   endpoint = "https://otel.example.com:4317",
 #   headers = { "x-otlp-meta" = "abc123" }
 # }}
+
+# Example OTLP exporter with mutual TLS
+# [otel]
+# exporter = { otlp-http = {
+#   endpoint = "https://otel.example.com/v1/logs",
+#   protocol = "binary",
+#   headers = { "x-otlp-api-key" = "${OTLP_TOKEN}" },
+#   tls = {
+#     ca-certificate = "certs/otel-ca.pem",
+#     client-certificate = "/etc/codex/certs/client.pem",
+#     client-private-key = "/etc/codex/certs/client-key.pem",
+#   }
+# }}
 ```

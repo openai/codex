@@ -1173,11 +1173,13 @@ pub struct GitInfo {
     pub repository_url: Option<String>,
 }
 
-/// Review request sent to the review session.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+/// Review request sent to the review session.
 pub struct ReviewRequest {
     pub prompt: String,
     pub user_facing_hint: String,
+    #[serde(default)]
+    pub append_to_original_thread: bool,
 }
 
 /// Structured review result produced by a child review session.

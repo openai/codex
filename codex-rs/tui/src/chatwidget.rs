@@ -2742,6 +2742,7 @@ impl ChatWidget {
                         review_request: ReviewRequest {
                             prompt: "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.".to_string(),
                             user_facing_hint: "current changes".to_string(),
+                            append_to_original_thread: true,
                         },
                     }));
                 },
@@ -2798,6 +2799,7 @@ impl ChatWidget {
                                 "Review the code changes against the base branch '{branch}'. Start by finding the merge diff between the current branch and {branch}'s upstream e.g. (`git merge-base HEAD \"$(git rev-parse --abbrev-ref \"{branch}@{{upstream}}\")\"`), then run `git diff` against that SHA to see what changes we would merge into the {branch} branch. Provide prioritized, actionable findings."
                             ),
                             user_facing_hint: format!("changes against '{branch}'"),
+                            append_to_original_thread: true,
                         },
                     }));
                 })],
@@ -2838,6 +2840,7 @@ impl ChatWidget {
                         review_request: ReviewRequest {
                             prompt,
                             user_facing_hint: hint,
+                            append_to_original_thread: true,
                         },
                     }));
                 })],
@@ -2872,6 +2875,7 @@ impl ChatWidget {
                     review_request: ReviewRequest {
                         prompt: trimmed.clone(),
                         user_facing_hint: trimmed,
+                        append_to_original_thread: true,
                     },
                 }));
             }),
@@ -3082,6 +3086,7 @@ pub(crate) fn show_review_commit_picker_with_entries(
                     review_request: ReviewRequest {
                         prompt,
                         user_facing_hint: hint,
+                        append_to_original_thread: true,
                     },
                 }));
             })],

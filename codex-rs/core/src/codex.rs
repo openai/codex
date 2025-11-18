@@ -1774,7 +1774,12 @@ async fn spawn_review_thread(
         text: review_prompt,
     }];
     let tc = Arc::new(review_turn_context);
-    sess.spawn_task(tc.clone(), input, ReviewTask).await;
+    sess.spawn_task(
+        tc.clone(),
+        input,
+        ReviewTask::new(review_request.append_to_original_thread),
+    )
+    .await;
 
     // Announce entering review mode so UIs can switch modes.
     sess.send_event(&tc, EventMsg::EnteredReviewMode(review_request))
@@ -2780,7 +2785,8 @@ mod tests {
         let input = vec![UserInput::Text {
             text: "start review".to_string(),
         }];
-        sess.spawn_task(Arc::clone(&tc), input, ReviewTask).await;
+        sess.spawn_task(Arc::clone(&tc), input, ReviewTask::new(true))
+            .await;
 
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 

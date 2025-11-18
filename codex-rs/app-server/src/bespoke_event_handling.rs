@@ -38,7 +38,9 @@ use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
+use codex_core::review_format::format_review_findings_block;
 use codex_protocol::ConversationId;
+use codex_protocol::protocol::ReviewOutputEvent;
 use std::convert::TryFrom;
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -189,6 +191,17 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .await;
             }
         }
+        EventMsg::EnteredReviewMode(review_request) => {
+            let notification = ItemStartedNotification {
+                item: ThreadItem::CodeReview {
+                    id: event_id.clone(),
+                    review: review_request.user_facing_hint,
+                },
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemStarted(notification))
+                .await;
+        }
         EventMsg::ItemStarted(item_started_event) => {
             let item: ThreadItem = item_started_event.item.clone().into();
             let notification = ItemStartedNotification { item };
@@ -199,6 +212,21 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::ItemCompleted(item_completed_event) => {
             let item: ThreadItem = item_completed_event.item.clone().into();
             let notification = ItemCompletedNotification { item };
+            outgoing
+                .send_server_notification(ServerNotification::ItemCompleted(notification))
+                .await;
+        }
+        EventMsg::ExitedReviewMode(review_event) => {
+            let review_text = match review_event.review_output {
+                Some(output) => render_review_output_text(&output),
+                None => REVIEW_FALLBACK_MESSAGE.to_string(),
+            };
+            let notification = ItemCompletedNotification {
+                item: ThreadItem::CodeReview {
+                    id: event_id,
+                    review: review_text,
+                },
+            };
             outgoing
                 .send_server_notification(ServerNotification::ItemCompleted(notification))
                 .await;
@@ -379,6 +407,28 @@ async fn on_exec_approval_response(
         .await
     {
         error!("failed to submit ExecApproval: {err}");
+    }
+}
+
+const REVIEW_FALLBACK_MESSAGE: &str = "Reviewer failed to output a response.";
+
+fn render_review_output_text(output: &ReviewOutputEvent) -> String {
+    let mut sections = Vec::new();
+    let explanation = output.overall_explanation.trim();
+    if !explanation.is_empty() {
+        sections.push(explanation.to_string());
+    }
+    if !output.findings.is_empty() {
+        let findings = format_review_findings_block(&output.findings, None);
+        let trimmed = findings.trim();
+        if !trimmed.is_empty() {
+            sections.push(trimmed.to_string());
+        }
+    }
+    if sections.is_empty() {
+        REVIEW_FALLBACK_MESSAGE.to_string()
+    } else {
+        sections.join("\n\n")
     }
 }
 

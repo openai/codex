@@ -282,6 +282,14 @@ pub enum OtelHttpProtocol {
     Json,
 }
 
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub struct OtelTlsConfig {
+    pub ca_certificate: Option<PathBuf>,
+    pub client_certificate: Option<PathBuf>,
+    pub client_private_key: Option<PathBuf>,
+}
+
 /// Which OTEL exporter to use.
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "kebab-case")]
@@ -289,12 +297,18 @@ pub enum OtelExporterKind {
     None,
     OtlpHttp {
         endpoint: String,
+        #[serde(default)]
         headers: HashMap<String, String>,
         protocol: OtelHttpProtocol,
+        #[serde(default)]
+        tls: Option<OtelTlsConfig>,
     },
     OtlpGrpc {
         endpoint: String,
+        #[serde(default)]
         headers: HashMap<String, String>,
+        #[serde(default)]
+        tls: Option<OtelTlsConfig>,
     },
 }
 
