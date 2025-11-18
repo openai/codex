@@ -83,7 +83,7 @@ pub(crate) fn truncate_function_output_items_to_token_limit(
                     out.push(FunctionCallOutputContentItem::InputText { text: text.clone() });
                     remaining_tokens = remaining_tokens.saturating_sub(token_len);
                 } else {
-                    let (snippet, _) = truncate_with_token_budget(text, remaining_tokens, model);
+                    let (snippet, _) = truncate_text(text, remaining_tokens, model);
                     if snippet.is_empty() {
                         omitted_text_items += 1;
                     } else {
