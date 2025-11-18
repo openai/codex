@@ -27,6 +27,20 @@ pub fn bytes_to_string_smart(bytes: &[u8]) -> String {
     decode_bytes(bytes, encoding)
 }
 
+// Windows-1252 reassigns a handful of 0x80-0x9F slots to smart punctuation
+// (curly quotes, dashes, ™). CP866 uses those *same byte values* for uppercase
+// Cyrillic letters. When chardetng sees a short snippet that mixes those bytes
+// with ASCII, it sometimes reports IBM866, so “smart quotes” turn into the
+// Cyrillic letters УФЦ in VS Code. Conversely, if we indiscriminately flip all
+// 0x80-0x9F bytes to Windows-1252 we corrupt real CP866 uppercase words (e.g.,
+// cmd.exe output like `ПРИ test`). To avoid both failures we only coerce IBM866
+// to Windows-1252 when every offending byte is one of the actual Windows-1252
+// punctuation code points listed below *and* we see ASCII alongside them. If we
+// ever encounter another legacy code page with overlapping high bytes, follow
+// the same playbook: gate the heuristic on concrete byte values and add unit
+// tests exercising the real-world samples.
+const WINDOWS_1252_PUNCT_BYTES: [u8; 8] = [0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x99];
+
 fn detect_encoding(bytes: &[u8]) -> &'static Encoding {
     let mut detector = EncodingDetector::new();
     detector.feed(bytes, true);
@@ -79,6 +93,9 @@ fn looks_like_windows_1252_punctuation(bytes: &[u8]) -> bool {
             return false;
         }
         if (0x80..=0x9F).contains(&byte) {
+            if !WINDOWS_1252_PUNCT_BYTES.contains(&byte) {
+                return false;
+            }
             saw_extended_punctuation = true;
             high_byte_count += 1;
             if high_byte_count > 4 {
@@ -125,6 +142,13 @@ mod tests {
         // Ensure the IBM866 heuristic still returns IBM866 for uppercase-only words.
         let bytes = b"\x8F\x90\x88"; // "ПРИ" encoded with CP866 uppercase letters
         assert_eq!(bytes_to_string_smart(bytes), "ПРИ");
+    }
+
+    #[test]
+    fn test_cp866_uppercase_followed_by_ascii() {
+        // Regression test: uppercase CP866 tokens next to ASCII text should not be treated as CP1252.
+        let bytes = b"\x8F\x90\x88 test"; // "ПРИ test" encoded with CP866 uppercase letters followed by ASCII
+        assert_eq!(bytes_to_string_smart(bytes), "ПРИ test");
     }
 
     #[test]
