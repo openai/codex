@@ -383,7 +383,7 @@ fn format_exec_output_marks_byte_truncation_without_omitted_lines() {
     let truncated = truncate_exec_output(&long_line);
 
     assert_ne!(truncated, long_line);
-    assert_truncated_message_matches(&truncated, "a", 13);
+    assert_truncated_message_matches(&truncated, "a", 20);
     assert!(
         !truncated.contains("omitted"),
         "line omission marker should not appear when no lines were dropped: {truncated}"
