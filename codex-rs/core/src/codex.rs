@@ -1934,12 +1934,30 @@ async fn run_turn(
         .client
         .get_model_family()
         .supports_parallel_tool_calls;
-    let parallel_tool_calls = model_supports_parallel;
+
+    // TODO(jif) revert once testing phase is done.
+    let parallel_tool_calls = model_supports_parallel
+        && sess
+            .state
+            .lock()
+            .await
+            .session_configuration
+            .features
+            .enabled(Feature::ParallelToolCalls);
+    let mut base_instructions = turn_context.base_instructions.clone();
+    if parallel_tool_calls {
+        static INSTRUCTIONS: &str = include_str!("../templates/parallel/instructions.md");
+        static INSERTION_SPOT: &str = "## Editing constraints";
+        base_instructions
+            .as_mut()
+            .map(|base| base.replace(INSERTION_SPOT, INSTRUCTIONS));
+    }
+
     let prompt = Prompt {
         input,
         tools: router.specs(),
         parallel_tool_calls,
-        base_instructions_override: turn_context.base_instructions.clone(),
+        base_instructions_override: base_instructions,
         output_schema: turn_context.final_output_json_schema.clone(),
     };
 
