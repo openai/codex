@@ -334,7 +334,7 @@ fn record_items_respects_custom_token_limit() {
 }
 
 fn assert_truncated_message_matches(message: &str, line: &str, expected_removed: usize) {
-    let pattern = truncated_message_pattern(line, expected_removed);
+    let pattern = truncated_message_pattern(line);
     let regex = Regex::new(&pattern).unwrap_or_else(|err| {
         panic!("failed to compile regex {pattern}: {err}");
     });
@@ -350,19 +350,19 @@ fn assert_truncated_message_matches(message: &str, line: &str, expected_removed:
         "body exceeds byte limit: {} bytes",
         body.len()
     );
-    let removed = captures
+    let removed: usize = captures
         .name("removed")
         .expect("missing removed capture")
         .as_str()
-        .parse::<usize>()
+        .parse()
         .unwrap_or_else(|err| panic!("invalid removed tokens: {err}"));
     assert_eq!(removed, expected_removed, "mismatched removed token count");
 }
 
-fn truncated_message_pattern(line: &str, expected_removed: usize) -> String {
+fn truncated_message_pattern(line: &str) -> String {
     let escaped_line = regex_lite::escape(line);
     format!(
-        r"(?s)^(?P<body>{escaped_line}.*?)(?:\r?\n)?\[…(?P<removed>{expected_removed}) tokens truncated…](?:\r?\n.*)?$"
+        r"(?s)^(?P<body>{escaped_line}.*?)(?:\r?\n)?\[…(?P<removed>\d+) tokens truncated…](?:\r?\n.*)?$"
     )
 }
 
@@ -373,7 +373,7 @@ fn format_exec_output_truncates_large_error() {
 
     let truncated = truncate_exec_output(&large_error);
 
-    assert_truncated_message_matches(&truncated, line, 36_250);
+    assert_truncated_message_matches(&truncated, line, 36_270);
     assert_ne!(truncated, large_error);
 }
 
@@ -406,7 +406,7 @@ fn format_exec_output_reports_omitted_lines_and_keeps_head_and_tail() {
         .collect();
 
     let truncated = truncate_exec_output(&content);
-    assert_truncated_message_matches(&truncated, "line-0-", 34_723);
+    assert_truncated_message_matches(&truncated, "line-0-", 34_747);
     assert!(
         truncated.contains("line-0-"),
         "expected head line to remain: {truncated}"
@@ -429,7 +429,7 @@ fn format_exec_output_prefers_line_marker_when_both_limits_exceeded() {
 
     let truncated = truncate_exec_output(&content);
 
-    assert_truncated_message_matches(&truncated, "line-0-", 17_423);
+    assert_truncated_message_matches(&truncated, "line-0-", 17_536);
 }
 
 //TODO(aibrahim): run CI in release mode.

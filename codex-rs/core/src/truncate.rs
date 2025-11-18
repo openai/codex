@@ -190,31 +190,46 @@ fn truncate_with_byte_estimate(s: &str, max_bytes: usize, source: TruncationSour
     }
 
     let total_bytes = s.len();
-    let removed_bytes = total_bytes.saturating_sub(max_bytes);
-    let marker = format_truncation_marker(source, removed_units_for_source(source, removed_bytes));
-    let marker_len = marker.len();
+    let mut marker = format_truncation_marker(
+        source,
+        removed_units_for_source(source, total_bytes.saturating_sub(max_bytes)),
+    );
 
-    if marker_len >= max_bytes {
-        let truncated_marker = truncate_on_boundary(&marker, max_bytes);
-        return truncated_marker.to_string();
+    loop {
+        if marker.len() >= max_bytes {
+            let truncated_marker = truncate_on_boundary(&marker, max_bytes);
+            return truncated_marker.to_string();
+        }
+
+        let keep_budget = max_bytes - marker.len();
+        let (left_budget, right_budget) = split_budget(keep_budget);
+        let prefix_end = pick_prefix_end(s, left_budget);
+        let mut suffix_start = pick_suffix_start(s, right_budget);
+        if suffix_start < prefix_end {
+            suffix_start = prefix_end;
+        }
+
+        let kept_bytes = prefix_end.saturating_add(total_bytes.saturating_sub(suffix_start));
+        let actual_removed_bytes = total_bytes.saturating_sub(kept_bytes);
+        let accurate_marker = format_truncation_marker(
+            source,
+            removed_units_for_source(source, actual_removed_bytes),
+        );
+
+        if accurate_marker != marker {
+            marker = accurate_marker;
+            continue;
+        }
+
+        let mut out = assemble_truncated_output(&s[..prefix_end], &s[suffix_start..], &marker);
+
+        if out.len() > max_bytes {
+            let boundary = truncate_on_boundary(&out, max_bytes);
+            out.truncate(boundary.len());
+        }
+
+        return out;
     }
-
-    let keep_budget = max_bytes - marker_len;
-    let (left_budget, right_budget) = split_budget(keep_budget);
-    let prefix_end = pick_prefix_end(s, left_budget);
-    let mut suffix_start = pick_suffix_start(s, right_budget);
-    if suffix_start < prefix_end {
-        suffix_start = prefix_end;
-    }
-
-    let mut out = assemble_truncated_output(&s[..prefix_end], &s[suffix_start..], &marker);
-
-    if out.len() > max_bytes {
-        let boundary = truncate_on_boundary(&out, max_bytes);
-        out.truncate(boundary.len());
-    }
-
-    out
 }
 
 #[derive(Clone, Copy)]
@@ -341,7 +356,7 @@ mod tests {
     }
 
     fn assert_truncated_message_matches(message: &str, line: &str, expected_removed: usize) {
-        let pattern = truncated_message_pattern(line, expected_removed);
+        let pattern = truncated_message_pattern(line);
         let regex = Regex::new(&pattern).unwrap_or_else(|err| {
             panic!("failed to compile regex {pattern}: {err}");
         });
@@ -357,19 +372,19 @@ mod tests {
             "body exceeds byte limit: {} bytes",
             body.len()
         );
-        let removed = captures
+        let removed: usize = captures
             .name("removed")
             .expect("missing removed capture")
             .as_str()
-            .parse::<usize>()
+            .parse()
             .unwrap_or_else(|err| panic!("invalid removed tokens: {err}"));
         assert_eq!(removed, expected_removed, "mismatched removed tokens");
     }
 
-    fn truncated_message_pattern(line: &str, expected_removed: usize) -> String {
+    fn truncated_message_pattern(line: &str) -> String {
         let escaped_line = regex_lite::escape(line);
         format!(
-            r"(?s)^(?P<body>{escaped_line}.*?)(?:\r?\n)?\[…(?P<removed>{expected_removed}) tokens truncated…](?:\r?\n.*)?$"
+            r"(?s)^(?P<body>{escaped_line}.*?)(?:\r?\n)?\[…(?P<removed>\d+) tokens truncated…](?:\r?\n.*)?$"
         )
     }
 
@@ -422,7 +437,7 @@ mod tests {
         let large_error = line.repeat(2_500); // way beyond both byte and line limits
 
         let truncated = truncate_model_output(&large_error);
-        assert_truncated_message_matches(&truncated, line, 36_250);
+        assert_truncated_message_matches(&truncated, line, 36_270);
         assert_ne!(truncated, large_error);
     }
 
@@ -433,7 +448,7 @@ mod tests {
         let truncated = truncate_model_output(&long_line);
 
         assert_ne!(truncated, long_line);
-        assert_truncated_message_matches(&truncated, "a", 7_513);
+        assert_truncated_message_matches(&truncated, "a", 7_520);
         assert!(
             !truncated.contains("omitted"),
             "line omission marker should not appear when no lines were dropped: {truncated}"
@@ -456,7 +471,7 @@ mod tests {
             .collect();
 
         let truncated = truncate_model_output(&content);
-        assert_truncated_message_matches(&truncated, "line-0-", 34_723);
+        assert_truncated_message_matches(&truncated, "line-0-", 34_747);
         assert!(
             truncated.contains("line-0-"),
             "expected head line to remain: {truncated}"
@@ -478,7 +493,7 @@ mod tests {
             .collect();
 
         let truncated = truncate_model_output(&content);
-        assert_truncated_message_matches(&truncated, "line-0-", 17_423);
+        assert_truncated_message_matches(&truncated, "line-0-", 17_536);
     }
 
     #[test]
