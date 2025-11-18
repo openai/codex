@@ -8,6 +8,7 @@
 use crate::CodexAuth;
 use crate::default_client::CodexHttpClient;
 use crate::default_client::CodexRequestBuilder;
+use crate::error::CodexErr;
 use codex_app_server_protocol::AuthMode;
 use serde::Deserialize;
 use serde::Serialize;
@@ -109,21 +110,7 @@ impl ModelProviderInfo {
         client: &'a CodexHttpClient,
         auth: &Option<CodexAuth>,
     ) -> crate::error::Result<CodexRequestBuilder> {
-        let effective_auth = if let Some(secret_key) = &self.experimental_bearer_token {
-            Some(CodexAuth::from_api_key(secret_key))
-        } else {
-            match self.api_key() {
-                Ok(Some(key)) => Some(CodexAuth::from_api_key(&key)),
-                Ok(None) => auth.clone(),
-                Err(err) => {
-                    if auth.is_some() {
-                        auth.clone()
-                    } else {
-                        return Err(err);
-                    }
-                }
-            }
-        };
+        let effective_auth = self.effective_auth(auth)?;
 
         let url = self.get_full_url(&effective_auth);
 
@@ -134,6 +121,51 @@ impl ModelProviderInfo {
         }
 
         Ok(self.apply_http_headers(builder))
+    }
+
+    pub async fn create_compact_request_builder<'a>(
+        &'a self,
+        client: &'a CodexHttpClient,
+        auth: &Option<CodexAuth>,
+    ) -> crate::error::Result<CodexRequestBuilder> {
+        if self.wire_api != WireApi::Responses {
+            return Err(CodexErr::UnsupportedOperation(
+                "Compaction endpoint requires Responses API providers".to_string(),
+            ));
+        }
+        let effective_auth = self.effective_auth(auth)?;
+
+        let url = self.get_compact_url(&effective_auth).ok_or_else(|| {
+            CodexErr::UnsupportedOperation(
+                "Compaction endpoint requires Responses API providers".to_string(),
+            )
+        })?;
+
+        let mut builder = client.post(url);
+
+        if let Some(auth) = effective_auth.as_ref() {
+            builder = builder.bearer_auth(auth.get_token().await?);
+        }
+
+        Ok(self.apply_http_headers(builder))
+    }
+
+    fn effective_auth(&self, auth: &Option<CodexAuth>) -> crate::error::Result<Option<CodexAuth>> {
+        if let Some(secret_key) = &self.experimental_bearer_token {
+            return Ok(Some(CodexAuth::from_api_key(secret_key)));
+        }
+
+        match self.api_key() {
+            Ok(Some(key)) => Ok(Some(CodexAuth::from_api_key(&key))),
+            Ok(None) => Ok(auth.clone()),
+            Err(err) => {
+                if auth.is_some() {
+                    Ok(auth.clone())
+                } else {
+                    Err(err)
+                }
+            }
+        }
     }
 
     fn get_query_string(&self) -> String {
@@ -170,6 +202,18 @@ impl ModelProviderInfo {
         match self.wire_api {
             WireApi::Responses => format!("{base_url}/responses{query_string}"),
             WireApi::Chat => format!("{base_url}/chat/completions{query_string}"),
+        }
+    }
+
+    pub(crate) fn get_compact_url(&self, auth: &Option<CodexAuth>) -> Option<String> {
+        if self.wire_api != WireApi::Responses {
+            return None;
+        }
+        let full = self.get_full_url(auth);
+        if let Some((path, query)) = full.split_once('?') {
+            Some(format!("{path}/compact?{query}"))
+        } else {
+            Some(format!("{full}/compact"))
         }
     }
 

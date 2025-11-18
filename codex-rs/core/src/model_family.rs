@@ -184,6 +184,7 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             shell_type: if cfg!(windows) { ConfigShellToolType::ShellCommand } else { ConfigShellToolType::Default },
+            supports_parallel_tool_calls: true,
             support_verbosity: false,
             truncation_policy: TruncationPolicy::Tokens(10_000),
         )
@@ -197,6 +198,7 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             base_instructions: GPT_5_1_INSTRUCTIONS.to_string(),
             default_reasoning_effort: Some(ReasoningEffort::Medium),
             truncation_policy: TruncationPolicy::Bytes(10_000),
+            supports_parallel_tool_calls: true,
         )
     } else if slug.starts_with("gpt-5") {
         model_family!(
