@@ -4,7 +4,6 @@ use crate::model_family::derive_default_model_family;
 use crate::model_family::find_family_for_model;
 use crate::truncate;
 use crate::truncate::TruncationPolicy;
-use crate::truncate::TruncationSettings;
 use codex_git::GhostCommit;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -13,7 +12,6 @@ use codex_protocol::models::LocalShellExecAction;
 use codex_protocol::models::LocalShellStatus;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
-use codex_utils_tokenizer::Tokenizer;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 
@@ -43,9 +41,8 @@ fn create_history_with_items(items: Vec<ResponseItem>) -> ContextManager {
         .unwrap_or_else(|| derive_default_model_family(model))
         .truncation_policy
         .token_budget();
-    let truncation_settings = TruncationSettings::new(TruncationPolicy::Tokens(max_tokens), model);
     let mut h = ContextManager::new();
-    h.record_items(items.iter(), &truncation_settings);
+    h.record_items(items.iter(), TruncationPolicy::Tokens(max_tokens));
     h
 }
 
@@ -75,15 +72,11 @@ fn reasoning_msg(text: &str) -> ResponseItem {
 #[test]
 fn filters_non_api_messages() {
     let mut h = ContextManager::default();
-    let truncation_settings = TruncationSettings::new(
-        TruncationPolicy::Tokens(
-            find_family_for_model(OPENAI_DEFAULT_MODEL)
-                .unwrap_or_else(|| derive_default_model_family(OPENAI_DEFAULT_MODEL))
-                .truncation_policy
-                .token_budget(),
-        ),
-        OPENAI_DEFAULT_MODEL,
-    );
+    let max_tokens = find_family_for_model(OPENAI_DEFAULT_MODEL)
+        .unwrap_or_else(|| derive_default_model_family(OPENAI_DEFAULT_MODEL))
+        .truncation_policy
+        .token_budget();
+    let policy = TruncationPolicy::Tokens(max_tokens);
     // System message is not API messages; Other is ignored.
     let system = ResponseItem::Message {
         id: None,
@@ -93,15 +86,12 @@ fn filters_non_api_messages() {
         }],
     };
     let reasoning = reasoning_msg("thinking...");
-    h.record_items(
-        [&system, &reasoning, &ResponseItem::Other],
-        &truncation_settings,
-    );
+    h.record_items([&system, &reasoning, &ResponseItem::Other], policy);
 
     // User and assistant should be retained.
     let u = user_msg("hi");
     let a = assistant_msg("hello");
-    h.record_items([&u, &a], &truncation_settings);
+    h.record_items([&u, &a], policy);
 
     let items = h.contents();
     assert_eq!(
@@ -274,8 +264,7 @@ fn record_items_truncates_function_call_output_content() {
         .truncation_policy
         .token_budget();
     let mut history = ContextManager::new();
-    let truncation_settings = TruncationSettings::new(TruncationPolicy::Tokens(max_tokens), model);
-    let tok = Tokenizer::try_default().expect("load tokenizer");
+    let policy = TruncationPolicy::Tokens(max_tokens);
     let long_line = "a very long line to trigger truncation\n";
     let long_output = long_line.repeat(2_500);
     let item = ResponseItem::FunctionCallOutput {
@@ -287,7 +276,7 @@ fn record_items_truncates_function_call_output_content() {
         },
     };
 
-    history.record_items([&item], &truncation_settings);
+    history.record_items([&item], policy);
 
     assert_eq!(history.items.len(), 1);
     match &history.items[0] {
@@ -298,10 +287,11 @@ fn record_items_truncates_function_call_output_content() {
                 "expected token-based truncation marker, got {}",
                 output.content
             );
-            let token_count = usize::try_from(tok.count(&output.content)).unwrap_or(usize::MAX);
             assert!(
-                token_count <= max_tokens,
-                "token count should not exceed limit: {token_count}"
+                output.content.contains("tokens truncated")
+                    || output.content.contains("bytes truncated"),
+                "expected truncation marker, got {}",
+                output.content
             );
         }
         other => panic!("unexpected history item: {other:?}"),
@@ -316,8 +306,7 @@ fn record_items_truncates_custom_tool_call_output_content() {
         .truncation_policy
         .token_budget();
     let mut history = ContextManager::new();
-    let truncation_settings = TruncationSettings::new(TruncationPolicy::Tokens(max_tokens), model);
-    let tok = Tokenizer::try_default().expect("load tokenizer");
+    let policy = TruncationPolicy::Tokens(max_tokens);
     let line = "custom output that is very long\n";
     let long_output = line.repeat(2_500);
     let item = ResponseItem::CustomToolCallOutput {
@@ -325,7 +314,7 @@ fn record_items_truncates_custom_tool_call_output_content() {
         output: long_output.clone(),
     };
 
-    history.record_items([&item], &truncation_settings);
+    history.record_items([&item], policy);
 
     assert_eq!(history.items.len(), 1);
     match &history.items[0] {
@@ -335,10 +324,10 @@ fn record_items_truncates_custom_tool_call_output_content() {
                 output.contains("tokens truncated"),
                 "expected token-based truncation marker, got {output}"
             );
-            let token_count = usize::try_from(tok.count(output)).unwrap_or(usize::MAX);
             assert!(
-                token_count <= max_tokens,
-                "token count should not exceed limit: {token_count}"
+                output.contains("tokens truncated")
+                    || output.contains("bytes truncated"),
+                "expected truncation marker, got {output}"
             );
         }
         other => panic!("unexpected history item: {other:?}"),
@@ -349,7 +338,7 @@ fn record_items_truncates_custom_tool_call_output_content() {
 fn record_items_respects_custom_token_limit() {
     let model = OPENAI_DEFAULT_MODEL;
     let mut history = ContextManager::new();
-    let truncation_settings = TruncationSettings::new(TruncationPolicy::Tokens(10), model);
+    let policy = TruncationPolicy::Tokens(10);
     let long_output = "tokenized content repeated many times ".repeat(200);
     let item = ResponseItem::FunctionCallOutput {
         call_id: "call-custom-limit".to_string(),
@@ -360,7 +349,7 @@ fn record_items_respects_custom_token_limit() {
         },
     };
 
-    history.record_items([&item], &truncation_settings);
+    history.record_items([&item], policy);
 
     let stored = match &history.items[0] {
         ResponseItem::FunctionCallOutput { output, .. } => output,

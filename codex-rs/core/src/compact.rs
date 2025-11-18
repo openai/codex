@@ -15,7 +15,6 @@ use crate::protocol::TaskStartedEvent;
 use crate::protocol::TurnContextItem;
 use crate::protocol::WarningEvent;
 use crate::truncate::TruncationPolicy;
-use crate::truncate::TruncationSettings;
 use crate::truncate::truncate_text;
 use crate::util::backoff;
 use codex_protocol::items::TurnItem;
@@ -24,7 +23,6 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
-use codex_utils_tokenizer::Tokenizer;
 use futures::prelude::*;
 use tracing::error;
 
@@ -62,10 +60,7 @@ async fn run_compact_task_inner(
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
 
     let mut history = sess.clone_history().await;
-    history.record_items(
-        &[initial_input_for_turn.into()],
-        &turn_context.truncation_settings,
-    );
+    history.record_items(&[initial_input_for_turn.into()], turn_context.truncation_policy);
 
     let mut truncated_count = 0usize;
 
@@ -153,12 +148,7 @@ async fn run_compact_task_inner(
     let user_messages = collect_user_messages(&history_snapshot);
 
     let initial_context = sess.build_initial_context(turn_context.as_ref());
-    let mut new_history = build_compacted_history(
-        initial_context,
-        &user_messages,
-        &summary_text,
-        turn_context.truncation_settings.tokenizer.clone(),
-    );
+    let mut new_history = build_compacted_history(initial_context, &user_messages, &summary_text);
     let ghost_snapshots: Vec<ResponseItem> = history_snapshot
         .iter()
         .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
@@ -235,14 +225,12 @@ pub(crate) fn build_compacted_history(
     initial_context: Vec<ResponseItem>,
     user_messages: &[String],
     summary_text: &str,
-    tokenizer: Arc<Option<Tokenizer>>,
 ) -> Vec<ResponseItem> {
     build_compacted_history_with_limit(
         initial_context,
         user_messages,
         summary_text,
         COMPACT_USER_MESSAGE_MAX_TOKENS,
-        tokenizer,
     )
 }
 
@@ -251,7 +239,6 @@ fn build_compacted_history_with_limit(
     user_messages: &[String],
     summary_text: &str,
     max_tokens: usize,
-    tokenizer: Arc<Option<Tokenizer>>,
 ) -> Vec<ResponseItem> {
     let mut selected_messages: Vec<String> = Vec::new();
     if max_tokens > 0 {
@@ -260,20 +247,12 @@ fn build_compacted_history_with_limit(
             if remaining == 0 {
                 break;
             }
-            let tokens = tokenizer
-                .as_ref()
-                .as_ref()
-                .map(|tok| usize::try_from(tok.count(message)).unwrap_or(usize::MAX))
-                .unwrap_or_else(|| message.len().saturating_add(3) / 4);
+            let tokens = approximate_tokens(message);
             if tokens <= remaining {
                 selected_messages.push(message.clone());
                 remaining = remaining.saturating_sub(tokens);
             } else {
-                let truncation_settings = TruncationSettings {
-                    policy: TruncationPolicy::Tokens(remaining),
-                    tokenizer,
-                };
-                let truncated = truncate_text(message, &truncation_settings);
+                let truncated = truncate_text(message, TruncationPolicy::Tokens(remaining));
                 selected_messages.push(truncated);
                 break;
             }
@@ -306,6 +285,10 @@ fn build_compacted_history_with_limit(
     history
 }
 
+fn approximate_tokens(text: &str) -> usize {
+    text.len().saturating_add(3) / 4
+}
+
 async fn drain_to_completed(
     sess: &Session,
     turn_context: &TurnContext,
@@ -322,11 +305,8 @@ async fn drain_to_completed(
         };
         match event {
             Ok(ResponseEvent::OutputItemDone(item)) => {
-                sess.record_into_history(
-                    std::slice::from_ref(&item),
-                    &turn_context.truncation_settings,
-                )
-                .await;
+                sess.record_into_history(std::slice::from_ref(&item), turn_context)
+                    .await;
             }
             Ok(ResponseEvent::RateLimits(snapshot)) => {
                 sess.update_rate_limits(turn_context, snapshot).await;
@@ -442,14 +422,11 @@ mod tests {
         // that oversized user content is truncated.
         let max_tokens = 16;
         let big = "word ".repeat(200);
-        let model = OPENAI_DEFAULT_MODEL;
-        let tokenizer = Arc::new(Tokenizer::for_model(model).ok());
         let history = super::build_compacted_history_with_limit(
             Vec::new(),
             std::slice::from_ref(&big),
             "SUMMARY",
             max_tokens,
-            tokenizer,
         );
         assert_eq!(history.len(), 2);
 
@@ -488,10 +465,7 @@ mod tests {
         let user_messages = vec!["first user message".to_string()];
         let summary_text = "summary text";
 
-        let tokenizer = Arc::new(Tokenizer::for_model(OPENAI_DEFAULT_MODEL).ok());
-
-        let history =
-            build_compacted_history(initial_context, &user_messages, summary_text, tokenizer);
+        let history = build_compacted_history(initial_context, &user_messages, summary_text);
         assert!(
             !history.is_empty(),
             "expected compacted history to include summary"

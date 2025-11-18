@@ -1,6 +1,6 @@
 use crate::codex::TurnContext;
 use crate::context_manager::normalize;
-use crate::truncate::TruncationSettings;
+use crate::truncate::TruncationPolicy;
 use crate::truncate::truncate_function_output_items_to_token_limit;
 use crate::truncate::truncate_text;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -44,7 +44,7 @@ impl ContextManager {
     }
 
     /// `items` is ordered from oldest to newest.
-    pub(crate) fn record_items<I>(&mut self, items: I, truncation_settings: &TruncationSettings)
+    pub(crate) fn record_items<I>(&mut self, items: I, policy: TruncationPolicy)
     where
         I: IntoIterator,
         I::Item: std::ops::Deref<Target = ResponseItem>,
@@ -56,7 +56,7 @@ impl ContextManager {
                 continue;
             }
 
-            let processed = self.process_item(item_ref, truncation_settings);
+            let processed = self.process_item(item_ref, policy);
             self.items.push(processed);
         }
     }
@@ -144,17 +144,14 @@ impl ContextManager {
         items.retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
     }
 
-    fn process_item(
-        &self,
-        item: &ResponseItem,
-        truncation_settings: &TruncationSettings,
-    ) -> ResponseItem {
+    fn process_item(&self, item: &ResponseItem, policy: TruncationPolicy) -> ResponseItem {
         match item {
             ResponseItem::FunctionCallOutput { call_id, output } => {
-                let truncated = truncate_text(output.content.as_str(), truncation_settings);
-                let truncated_items = output.content_items.as_ref().map(|items| {
-                    truncate_function_output_items_to_token_limit(items, truncation_settings)
-                });
+                let truncated = truncate_text(output.content.as_str(), policy);
+                let truncated_items = output
+                    .content_items
+                    .as_ref()
+                    .map(|items| truncate_function_output_items_to_token_limit(items, policy));
                 ResponseItem::FunctionCallOutput {
                     call_id: call_id.clone(),
                     output: FunctionCallOutputPayload {
@@ -165,7 +162,7 @@ impl ContextManager {
                 }
             }
             ResponseItem::CustomToolCallOutput { call_id, output } => {
-                let truncated = truncate_text(output, truncation_settings);
+                let truncated = truncate_text(output, policy);
                 ResponseItem::CustomToolCallOutput {
                     call_id: call_id.clone(),
                     output: truncated,

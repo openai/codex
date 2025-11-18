@@ -3,7 +3,6 @@ use crate::exec::ExecToolCallOutput;
 use crate::token_data::KnownPlan;
 use crate::token_data::PlanType;
 use crate::truncate::TruncationPolicy;
-use crate::truncate::TruncationSettings;
 use crate::truncate::truncate_text;
 use chrono::DateTime;
 use chrono::Datelike;
@@ -15,7 +14,6 @@ use codex_protocol::protocol::RateLimitSnapshot;
 use reqwest::StatusCode;
 use serde_json;
 use std::io;
-use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::task::JoinError;
@@ -464,11 +462,7 @@ pub fn get_error_message_ui(e: &CodexErr) -> String {
         _ => e.to_string(),
     };
 
-    let truncation_settings = TruncationSettings {
-        policy: TruncationPolicy::Bytes(ERROR_MESSAGE_UI_MAX_TOKENS),
-        tokenizer: Arc::new(None),
-    };
-    truncate_text(&message, &truncation_settings)
+    truncate_text(&message, TruncationPolicy::Bytes(ERROR_MESSAGE_UI_MAX_TOKENS))
 }
 
 #[cfg(test)]

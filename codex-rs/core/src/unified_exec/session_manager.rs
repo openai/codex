@@ -25,7 +25,7 @@ use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolR
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
 use crate::tools::sandboxing::ToolCtx;
 use crate::truncate::TruncationPolicy;
-use crate::truncate::TruncationSettings;
+use crate::truncate::truncate_text;
 
 use super::ExecCommandRequest;
 use super::SessionEntry;
@@ -74,9 +74,7 @@ impl UnifiedExecSessionManager {
 
         let text = String::from_utf8_lossy(&collected).to_string();
         let model = context.turn.client.get_model();
-        let truncation_settings =
-            TruncationSettings::new(TruncationPolicy::Tokens(max_tokens), &model);
-        let output = truncate_text(&text, &truncation_settings);
+        let output = truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
         let chunk_id = generate_chunk_id();
         let has_exited = session.has_exited();
         let stored_id = self
@@ -185,9 +183,7 @@ impl UnifiedExecSessionManager {
 
         let text = String::from_utf8_lossy(&collected).to_string();
         let model = turn_ref.client.get_model();
-        let truncation_settings =
-            TruncationSettings::new(TruncationPolicy::Tokens(max_tokens), &model);
-        let output = truncate_text(&text, &truncation_settings);
+        let output = truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
         let tokenizer = Tokenizer::for_model(&model).ok();
         let original_token_count = tokenizer.map(|tok| tok.count(&text) as usize);
         let chunk_id = generate_chunk_id();
