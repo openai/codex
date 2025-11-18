@@ -120,13 +120,13 @@ async fn tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> {
             "command": [
                 "powershell",
                 "-Command",
-                "for ($i=1; $i -le 400; $i++) { Write-Output $i }"
+                "for ($i=1; $i -le 100000; $i++) { Write-Output $i }"
             ],
             "timeout_ms": 5_000,
         })
     } else {
         serde_json::json!({
-            "command": ["/bin/sh", "-c", "seq 1 400"],
+            "command": ["/bin/sh", "-c", "seq 1 100000"],
             "timeout_ms": 5_000,
         })
     };
@@ -167,23 +167,19 @@ async fn tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> {
         serde_json::from_str::<Value>(&output).is_err(),
         "expected truncated shell output to be plain text"
     );
-    let truncated_pattern = r#"(?s)^Exit code: 0
-Wall time: [0-9]+(?:\.[0-9]+)? seconds
-Output:
-1
-2
-3
-4
-5
-6
-.*
-396
-397
-398
-399
-400
-$"#;
-    assert_regex_match(truncated_pattern, &output);
+    assert!(
+        output.contains("{\"output\":\"1\\n2\\n3\\n4\\n5\\n6\\n"),
+        "expected leading lines to remain in truncated output: {output}"
+    );
+    assert!(
+        output.contains("[…1902 tokens truncated…]"),
+        "expected token-truncation marker: {output}"
+    );
+    let tail = "99996\\n99997\\n99998\\n99999\\n100000\\n\",\"metadata\":{\"exit_code\":0,\"duration_seconds\":";
+    assert!(
+        output.contains(tail),
+        "expected trailing lines and metadata to remain: {output}"
+    );
 
     Ok(())
 }

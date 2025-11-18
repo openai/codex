@@ -427,7 +427,7 @@ async fn shell_output_reserializes_truncated_content(output_type: ShellModelOutp
     let test = builder.build(&server).await?;
 
     let call_id = "shell-truncated";
-    let responses = shell_responses(call_id, vec!["/bin/sh", "-c", "seq 1 400"], output_type)?;
+    let responses = shell_responses(call_id, vec!["/bin/sh", "-c", "seq 1 100000"], output_type)?;
     let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
@@ -449,23 +449,19 @@ async fn shell_output_reserializes_truncated_content(output_type: ShellModelOutp
         serde_json::from_str::<Value>(output).is_err(),
         "expected truncated shell output to be plain text",
     );
-    let truncated_pattern = r#"(?s)^Exit code: 0
-Wall time: [0-9]+(?:\.[0-9]+)? seconds
-Output:
-1
-2
-3
-4
-5
-6
-.*
-396
-397
-398
-399
-400
-$"#;
-    assert_regex_match(truncated_pattern, output);
+    assert!(
+        output.starts_with("{\"output\":\"1\\n2\\n3\\n4\\n5\\n6\\n"),
+        "expected truncated JSON string to start with the original leading lines: {output}"
+    );
+    assert!(
+        output.contains("[…1902 tokens truncated…]"),
+        "expected token-truncation marker: {output}"
+    );
+    let tail = "99996\\n99997\\n99998\\n99999\\n100000\\n\",\"metadata\":{\"exit_code\":0,\"duration_seconds\":";
+    assert!(
+        output.contains(tail),
+        "expected trailing lines and metadata to remain: {output}"
+    );
 
     Ok(())
 }
