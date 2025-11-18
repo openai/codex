@@ -149,6 +149,7 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
                 "test_sync_tool".to_string(),
             ],
             supports_parallel_tool_calls: true,
+            shell_type: ConfigShellToolType::ShellCommand,
             support_verbosity: true,
             truncation_policy: TruncationPolicy::Tokens(10_000),
         )
@@ -198,6 +199,7 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             base_instructions: GPT_5_1_INSTRUCTIONS.to_string(),
             default_reasoning_effort: Some(ReasoningEffort::Medium),
             truncation_policy: TruncationPolicy::Bytes(10_000),
+            shell_type: ConfigShellToolType::ShellCommand,
             supports_parallel_tool_calls: true,
         )
     } else if slug.starts_with("gpt-5") {
@@ -205,6 +207,7 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             slug, "gpt-5",
             supports_reasoning_summaries: true,
             needs_special_apply_patch_instructions: true,
+            shell_type: ConfigShellToolType::ShellCommand,
             support_verbosity: true,
             truncation_policy: TruncationPolicy::Bytes(10_000),
         )
