@@ -95,7 +95,7 @@ impl FeedbackNoteView {
                     "• Feedback recorded (no logs)."
                 };
                 let issue_url = issue_url_for_category(self.category, &thread_id);
-                let mut lines = vec![Line::from(match issue_url {
+                let mut lines = vec![Line::from(match issue_url.as_ref() {
                     Some(_) => format!("{prefix} Please open an issue using the following URL:"),
                     None => format!("{prefix} Thanks for the feedback!"),
                 })];
@@ -335,10 +335,10 @@ fn feedback_classification(category: FeedbackCategory) -> &'static str {
 
 fn issue_url_for_category(category: FeedbackCategory, thread_id: &str) -> Option<String> {
     match category {
-        FeedbackCategory::Bug | FeedbackCategory::BadResult => Some(format!(
-            "{BASE_BUG_ISSUE_URL}&steps=Uploaded%20thread:%20{thread_id}"
-        )),
-        FeedbackCategory::GoodResult | FeedbackCategory::Other => None,
+        FeedbackCategory::Bug | FeedbackCategory::BadResult | FeedbackCategory::Other => Some(
+            format!("{BASE_BUG_ISSUE_URL}&steps=Uploaded%20thread:%20{thread_id}"),
+        ),
+        FeedbackCategory::GoodResult => None,
     }
 }
 
@@ -538,7 +538,7 @@ mod tests {
     }
 
     #[test]
-    fn issue_url_only_for_bug_and_bad_result() {
+    fn issue_url_available_for_bug_bad_result_and_other() {
         let bug_url = issue_url_for_category(FeedbackCategory::Bug, "thread-1");
         assert!(
             bug_url
@@ -549,7 +549,9 @@ mod tests {
         let bad_result_url = issue_url_for_category(FeedbackCategory::BadResult, "thread-2");
         assert!(bad_result_url.is_some());
 
+        let other_url = issue_url_for_category(FeedbackCategory::Other, "thread-3");
+        assert!(other_url.is_some());
+
         assert!(issue_url_for_category(FeedbackCategory::GoodResult, "t").is_none());
-        assert!(issue_url_for_category(FeedbackCategory::Other, "t").is_none());
     }
 }
