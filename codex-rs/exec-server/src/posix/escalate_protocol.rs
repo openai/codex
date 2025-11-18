@@ -17,7 +17,7 @@ pub(super) enum EscalateClientMessage {
     /// The client wants to run exec() with the given arguments.
     EscalateRequest {
         /// The absolute path to the executable to run, i.e. the first arg to exec.
-        file: String,
+        file: PathBuf,
         /// The argv, including the program name (argv[0]).
         argv: Vec<String>,
         workdir: PathBuf,

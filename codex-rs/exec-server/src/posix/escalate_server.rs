@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::os::fd::AsRawFd;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
@@ -22,17 +23,22 @@ use crate::posix::escalate_protocol::SuperExecResult;
 use crate::posix::socket::AsyncDatagramSocket;
 use crate::posix::socket::AsyncSocket;
 
+/// This is the policy which decides how to handle an exec() call.
+///
+/// `file` is the absolute, canonical path to the executable to run, i.e. the first arg to exec.
+/// `argv` is the argv, including the program name (`argv[0]`).
+/// `workdir` is the absolute, canonical path to the working directory in which to execute the
+/// command.
+pub(crate) type ExecPolicy = fn(file: &Path, argv: &[String], workdir: &Path) -> EscalateAction;
+
 pub(crate) struct EscalateServer {
     bash_path: String,
-    decider: fn(&str, &[String], &PathBuf) -> EscalateAction,
+    policy: ExecPolicy,
 }
 
 impl EscalateServer {
-    pub fn new(
-        bash_path: String,
-        decider: fn(&str, &[String], &PathBuf) -> EscalateAction,
-    ) -> Self {
-        Self { bash_path, decider }
+    pub fn new(bash_path: String, policy: ExecPolicy) -> Self {
+        Self { bash_path, policy }
     }
 
     pub async fn exec(
@@ -46,7 +52,7 @@ impl EscalateServer {
         let client_socket = escalate_client.into_inner();
         client_socket.set_cloexec(false)?;
 
-        let escalate_task = tokio::spawn(escalate_task(escalate_server, self.decider));
+        let escalate_task = tokio::spawn(escalate_task(escalate_server, self.policy));
         let mut env = env.clone();
         env.insert(
             ESCALATE_SOCKET_ENV_VAR.to_string(),
@@ -84,10 +90,7 @@ impl EscalateServer {
     }
 }
 
-async fn escalate_task(
-    socket: AsyncDatagramSocket,
-    decider: fn(&str, &[String], &PathBuf) -> EscalateAction,
-) -> anyhow::Result<()> {
+async fn escalate_task(socket: AsyncDatagramSocket, policy: ExecPolicy) -> anyhow::Result<()> {
     loop {
         let (_, mut fds) = socket.receive_with_fds().await?;
         if fds.len() != 1 {
@@ -96,7 +99,7 @@ async fn escalate_task(
         }
         let stream_socket = AsyncSocket::from_fd(fds.remove(0))?;
         tokio::spawn(async move {
-            if let Err(err) = handle_escalate_session_with_decider(stream_socket, decider).await {
+            if let Err(err) = handle_escalate_session_with_policy(stream_socket, policy).await {
                 tracing::error!("escalate session failed: {err:?}");
             }
         });
@@ -111,20 +114,19 @@ pub(crate) struct ExecResult {
     pub(crate) timed_out: bool,
 }
 
-async fn handle_escalate_session_with_decider<F>(
+async fn handle_escalate_session_with_policy(
     socket: AsyncSocket,
-    decider: F,
-) -> anyhow::Result<()>
-where
-    F: Fn(&str, &[String], &PathBuf) -> EscalateAction,
-{
+    policy: ExecPolicy,
+) -> anyhow::Result<()> {
     let EscalateClientMessage::EscalateRequest {
         file,
         argv,
         workdir,
         env,
     } = socket.receive::<EscalateClientMessage>().await?;
-    let action = decider(&file, &argv, &workdir);
+    let file = PathBuf::from(&file).canonicalize()?;
+    let workdir = PathBuf::from(&workdir).canonicalize()?;
+    let action = policy(file.as_path(), &argv, &workdir);
     tracing::debug!("decided {action:?} for {file:?} {argv:?} {workdir:?}");
     match action {
         EscalateAction::RunInSandbox => {
@@ -201,14 +203,14 @@ mod tests {
     #[tokio::test]
     async fn handle_escalate_session_respects_run_in_sandbox_decision() -> anyhow::Result<()> {
         let (server, client) = AsyncSocket::pair()?;
-        let server_task = tokio::spawn(handle_escalate_session_with_decider(
+        let server_task = tokio::spawn(handle_escalate_session_with_policy(
             server,
             |_file, _argv, _workdir| EscalateAction::RunInSandbox,
         ));
 
         client
             .send(EscalateClientMessage::EscalateRequest {
-                file: "/bin/echo".to_string(),
+                file: PathBuf::from("/bin/echo"),
                 argv: vec!["echo".to_string()],
                 workdir: PathBuf::from("/tmp"),
                 env: HashMap::new(),
@@ -226,14 +228,14 @@ mod tests {
     #[tokio::test]
     async fn handle_escalate_session_executes_escalated_command() -> anyhow::Result<()> {
         let (server, client) = AsyncSocket::pair()?;
-        let server_task = tokio::spawn(handle_escalate_session_with_decider(
+        let server_task = tokio::spawn(handle_escalate_session_with_policy(
             server,
             |_file, _argv, _workdir| EscalateAction::Escalate,
         ));
 
         client
             .send(EscalateClientMessage::EscalateRequest {
-                file: "/bin/sh".to_string(),
+                file: PathBuf::from("/bin/sh"),
                 argv: vec![
                     "sh".to_string(),
                     "-c".to_string(),

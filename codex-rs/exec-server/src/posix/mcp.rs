@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -25,14 +26,16 @@ use crate::posix::escalate_server::EscalateServer;
 /// Path to our patched bash.
 const BASH_PATH_ENV_VAR: &str = "CODEX_BASH_PATH";
 
-pub(crate) fn decide_escalate(file: &str, argv: &[String], _workdir: &PathBuf) -> EscalateAction {
+pub(crate) fn decide_escalate(file: &Path, argv: &[String], _workdir: &Path) -> EscalateAction {
     // TODO: execpolicy
-    match (file, argv) {
-        ("/opt/homebrew/bin/gh", [_, arg1, arg2, ..]) if arg1 == "issue" && arg2 == "list" => {
-            EscalateAction::Escalate
-        }
-        _ => EscalateAction::RunInSandbox,
+    if file == Path::new("/opt/homebrew/bin/gh")
+        && let [_, arg1, arg2, ..] = argv
+        && arg1 == "issue"
+        && arg2 == "list"
+    {
+        return EscalateAction::Escalate;
     }
+    EscalateAction::RunInSandbox
 }
 
 pub(crate) fn get_bash_path() -> Result<String> {

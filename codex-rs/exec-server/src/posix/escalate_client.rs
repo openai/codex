@@ -43,7 +43,7 @@ pub(crate) async fn run(file: String, argv: Vec<String>) -> anyhow::Result<i32> 
         .collect();
     client
         .send(EscalateClientMessage::EscalateRequest {
-            file: file.clone(),
+            file: file.clone().into(),
             argv: argv.clone(),
             workdir: std::env::current_dir()?,
             env,
