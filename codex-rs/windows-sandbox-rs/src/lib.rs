@@ -202,6 +202,8 @@ mod windows_impl {
         let logs_base_dir = Some(codex_home);
         log_start(&command, logs_base_dir);
         let cap_sid_path = cap_sid_file(codex_home);
+        let is_workspace_write = matches!(&policy, SandboxPolicy::WorkspaceWrite { .. });
+
         let (h_token, psid_to_use): (HANDLE, *mut c_void) = unsafe {
             match &policy {
                 SandboxPolicy::ReadOnly => {
@@ -225,7 +227,7 @@ mod windows_impl {
         };
 
         unsafe {
-            if matches!(policy, SandboxPolicy::WorkspaceWrite { .. }) {
+            if is_workspace_write {
                 if let Ok(base) = super::token::get_current_token_for_restriction() {
                     if let Ok(bytes) = super::token::get_logon_sid_bytes(base) {
                         let mut tmp = bytes.clone();
@@ -237,7 +239,7 @@ mod windows_impl {
             }
         }
 
-        let persist_aces = matches!(policy, SandboxPolicy::WorkspaceWrite { .. });
+        let persist_aces = is_workspace_write;
         let allow = compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map);
         let mut guards: Vec<(PathBuf, *mut c_void)> = Vec::new();
         unsafe {
