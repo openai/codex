@@ -863,6 +863,7 @@ impl Session {
         let parsed_cmd = parse_command(&command);
         let event = EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
             call_id,
+            turn_id: turn_context.sub_id.clone(),
             command,
             cwd,
             reason,

@@ -20,6 +20,11 @@ pub enum ConfigShellToolType {
     Default,
     Local,
     UnifiedExec,
+    /// Do not include a shell tool by default. Useful when using Codex
+    /// with tools provided exclusively provided by MCP servers. Often used
+    /// with `--config base_instructions=CUSTOM_INSTRUCTIONS`
+    /// to customize agent behavior.
+    Disabled,
     /// Takes a command as a single string to be run in the user's default shell.
     ShellCommand,
 }
@@ -48,7 +53,9 @@ impl ToolsConfig {
         let include_web_search_request = features.enabled(Feature::WebSearchRequest);
         let include_view_image_tool = features.enabled(Feature::ViewImageTool);
 
-        let shell_type = if features.enabled(Feature::UnifiedExec) {
+        let shell_type = if !features.enabled(Feature::ShellTool) {
+            ConfigShellToolType::Disabled
+        } else if features.enabled(Feature::UnifiedExec) {
             ConfigShellToolType::UnifiedExec
         } else if features.enabled(Feature::ShellCommandTool) {
             ConfigShellToolType::ShellCommand
@@ -1006,16 +1013,21 @@ pub(crate) fn build_specs(
             builder.register_handler("exec_command", unified_exec_handler.clone());
             builder.register_handler("write_stdin", unified_exec_handler);
         }
+        ConfigShellToolType::Disabled => {
+            // Do nothing.
+        }
         ConfigShellToolType::ShellCommand => {
             builder.push_spec(create_shell_command_tool());
         }
     }
 
-    // Always register shell aliases so older prompts remain compatible.
-    builder.register_handler("shell", shell_handler.clone());
-    builder.register_handler("container.exec", shell_handler.clone());
-    builder.register_handler("local_shell", shell_handler);
-    builder.register_handler("shell_command", shell_command_handler);
+    if config.shell_type != ConfigShellToolType::Disabled {
+        // Always register shell aliases so older prompts remain compatible.
+        builder.register_handler("shell", shell_handler.clone());
+        builder.register_handler("container.exec", shell_handler.clone());
+        builder.register_handler("local_shell", shell_handler);
+        builder.register_handler("shell_command", shell_command_handler);
+    }
 
     builder.push_spec_with_parallel_support(create_list_mcp_resources_tool(), true);
     builder.push_spec_with_parallel_support(create_list_mcp_resource_templates_tool(), true);
@@ -1151,6 +1163,7 @@ mod tests {
             ConfigShellToolType::Default => Some("shell"),
             ConfigShellToolType::Local => Some("local_shell"),
             ConfigShellToolType::UnifiedExec => None,
+            ConfigShellToolType::Disabled => None,
             ConfigShellToolType::ShellCommand => Some("shell_command"),
         }
     }

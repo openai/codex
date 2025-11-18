@@ -2,7 +2,10 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
+use codex_app_server_protocol::AuthMode;
+use codex_backend_client::Client as BackendClient;
 use codex_core::config::Config;
 use codex_core::config::types::Notifications;
 use codex_core::git_info::current_branch_name;
@@ -65,6 +68,7 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::task::JoinHandle;
 use tracing::debug;
 
 use crate::app_event::AppEvent;
@@ -119,6 +123,7 @@ use codex_common::approval_presets::builtin_approval_presets;
 use codex_common::model_presets::ModelPreset;
 use codex_common::model_presets::builtin_model_presets;
 use codex_core::AuthManager;
+use codex_core::CodexAuth;
 use codex_core::ConversationManager;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
@@ -258,6 +263,7 @@ pub(crate) struct ChatWidget {
     rate_limit_snapshot: Option<RateLimitSnapshotDisplay>,
     rate_limit_warnings: RateLimitWarningState,
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
+    rate_limit_poller: Option<JoinHandle<()>>,
     // Stream lifecycle controller
     stream_controller: Option<StreamController>,
     running_commands: HashMap<String, RunningCommand>,
@@ -498,7 +504,7 @@ impl ChatWidget {
         }
     }
 
-    fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshot>) {
+    pub(crate) fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshot>) {
         if let Some(snapshot) = snapshot {
             let warnings = self.rate_limit_warnings.take_warnings(
                 snapshot
@@ -1106,7 +1112,7 @@ impl ChatWidget {
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
 
-        Self {
+        let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_tx,
@@ -1130,6 +1136,7 @@ impl ChatWidget {
             rate_limit_snapshot: None,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
+            rate_limit_poller: None,
             stream_controller: None,
             running_commands: HashMap::new(),
             task_complete_pending: false,
@@ -1149,7 +1156,11 @@ impl ChatWidget {
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
-        }
+        };
+
+        widget.prefetch_rate_limits();
+
+        widget
     }
 
     /// Create a ChatWidget attached to an existing conversation (e.g., a fork).
@@ -1174,7 +1185,7 @@ impl ChatWidget {
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
 
-        Self {
+        let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_tx,
@@ -1198,6 +1209,7 @@ impl ChatWidget {
             rate_limit_snapshot: None,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
+            rate_limit_poller: None,
             stream_controller: None,
             running_commands: HashMap::new(),
             task_complete_pending: false,
@@ -1217,7 +1229,11 @@ impl ChatWidget {
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
-        }
+        };
+
+        widget.prefetch_rate_limits();
+
+        widget
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
@@ -1812,6 +1828,38 @@ impl ChatWidget {
             self.rate_limit_snapshot.as_ref(),
             Local::now(),
         ));
+    }
+    fn stop_rate_limit_poller(&mut self) {
+        if let Some(handle) = self.rate_limit_poller.take() {
+            handle.abort();
+        }
+    }
+
+    fn prefetch_rate_limits(&mut self) {
+        self.stop_rate_limit_poller();
+
+        let Some(auth) = self.auth_manager.auth() else {
+            return;
+        };
+        if auth.mode != AuthMode::ChatGPT {
+            return;
+        }
+
+        let base_url = self.config.chatgpt_base_url.clone();
+        let app_event_tx = self.app_event_tx.clone();
+
+        let handle = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+
+            loop {
+                if let Some(snapshot) = fetch_rate_limits(base_url.clone(), auth.clone()).await {
+                    app_event_tx.send(AppEvent::RateLimitSnapshotFetched(snapshot));
+                }
+                interval.tick().await;
+            }
+        });
+
+        self.rate_limit_poller = Some(handle);
     }
 
     fn lower_cost_preset(&self) -> Option<ModelPreset> {
@@ -2850,6 +2898,12 @@ impl ChatWidget {
     }
 }
 
+impl Drop for ChatWidget {
+    fn drop(&mut self) {
+        self.stop_rate_limit_poller();
+    }
+}
+
 impl Renderable for ChatWidget {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         self.as_renderable().render(area, buf);
@@ -2966,6 +3020,22 @@ fn extract_first_bold(s: &str) -> Option<String> {
         i += 1;
     }
     None
+}
+
+async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Option<RateLimitSnapshot> {
+    match BackendClient::from_auth(base_url, &auth).await {
+        Ok(client) => match client.get_rate_limits().await {
+            Ok(snapshot) => Some(snapshot),
+            Err(err) => {
+                debug!(error = ?err, "failed to fetch rate limits from /usage");
+                None
+            }
+        },
+        Err(err) => {
+            debug!(error = ?err, "failed to construct backend client for rate limits");
+            None
+        }
+    }
 }
 
 #[cfg(test)]

@@ -189,16 +189,20 @@ async fn exec_windows_sandbox(
     };
 
     let sandbox_cwd = cwd.clone();
-    let logs_base_dir = find_codex_home().ok();
+    let codex_home = find_codex_home().map_err(|err| {
+        CodexErr::Io(io::Error::other(format!(
+            "windows sandbox: failed to resolve codex_home: {err}"
+        )))
+    })?;
     let spawn_res = tokio::task::spawn_blocking(move || {
         run_windows_sandbox_capture(
             policy_str,
             &sandbox_cwd,
+            codex_home.as_ref(),
             command,
             &cwd,
             env,
             timeout_ms,
-            logs_base_dir.as_deref(),
         )
     })
     .await;
