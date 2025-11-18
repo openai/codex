@@ -106,7 +106,7 @@ pub(crate) fn exec_policy_for(
     Ok(Some(policy))
 }
 
-pub(crate) fn evaluate_with_policy(
+fn evaluate_with_policy(
     policy: &Policy,
     command: &[String],
     approval_policy: AskForApproval,
@@ -248,8 +248,34 @@ prefix_rule(pattern=["rm"], decision="forbidden")
     }
 
     #[test]
+    fn approval_requirement_respects_approval_policy() {
+        let policy_src = r#"prefix_rule(pattern=["rm"], decision="prompt")"#;
+        let mut parser = PolicyParser::new();
+        parser
+            .parse("test.codexpolicy", policy_src)
+            .expect("parse policy");
+        let policy = parser.build();
+        let command = vec!["rm".to_string()];
+
+        let requirement = approval_requirement_for_command(
+            Some(&policy),
+            &command,
+            AskForApproval::Never,
+            &SandboxPolicy::DangerFullAccess,
+            false,
+        );
+
+        assert_eq!(
+            requirement,
+            ApprovalRequirement::Forbidden {
+                reason: PROMPT_REASON.to_string()
+            }
+        );
+    }
+
+    #[test]
     fn approval_requirement_falls_back_to_heuristics() {
-        let command = vec!["ls".to_string()];
+        let command = vec!["python".to_string()];
 
         let requirement = approval_requirement_for_command(
             None,
