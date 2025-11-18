@@ -6,12 +6,10 @@ expression: popup
   Select Model
   Quickly pick Codex Auto or open the legacy list for more options.
 
-› 1. codex-auto — Fast                Fastest responses with limited reasoning
-  2. codex-auto — Balanced (default)  Balanced responses that adapt to the
-                                      task
-  3. codex-auto — Thorough            Maximum reasoning depth for complex
-                                      problems
-  4. Legacy models…                   Browse GPT-5.1 Codex, GPT-5, and other
-                                      legacy models.
+› 1. Fast                Works faster
+  2. Balanced (default)  Balances speed with intelligence
+  3. Thorough            Works longer for harder tasks
+  4. All models          Choose and configure what model and reasoning level
+                         to use
 
   Press enter to apply selection, or esc to dismiss.

@@ -1985,11 +1985,15 @@ impl ChatWidget {
             return;
         }
 
-        let featured_model = featured.into_iter().next().expect("featured preset");
+        let Some(featured_model) = featured.into_iter().next() else {
+            unreachable!("featured presets checked to be non-empty");
+        };
         let mut items = self.featured_model_items(&featured_model);
         items.push(SelectionItem {
-            name: "Legacy models…".to_string(),
-            description: Some("Browse GPT-5.1 Codex, GPT-5, and other legacy models.".to_string()),
+            name: "All models".to_string(),
+            description: Some(
+                "Choose and configure what model and reasoning level to use".to_string(),
+            ),
             selected_description: None,
             is_current: false,
             actions: vec![Box::new(|tx| {
@@ -2110,8 +2114,9 @@ impl ChatWidget {
             let label = effort_label_for_model(&model_slug, Some(effort))
                 .map(str::to_string)
                 .unwrap_or_else(|| Self::featured_option_label(effort));
-            let mut name = format!("{} — {}", preset.display_name, label);
-            if effort == default_effort {
+            let is_current_option = current_effort == Some(effort);
+            let mut name = label.to_string();
+            if effort == default_effort && !is_current_option {
                 name.push_str(" (default)");
             }
 
@@ -2121,7 +2126,7 @@ impl ChatWidget {
                 name,
                 description,
                 selected_description: None,
-                is_current: current_effort == Some(effort),
+                is_current: is_current_option,
                 actions,
                 dismiss_on_select: true,
                 ..Default::default()
@@ -2210,7 +2215,8 @@ impl ChatWidget {
             if let Some(first) = effort_label.get_mut(0..1) {
                 first.make_ascii_uppercase();
             }
-            if choice.stored == default_choice {
+            let is_current_choice = is_current_model && choice.stored == highlight_choice;
+            if choice.stored == default_choice && !is_current_choice {
                 effort_label.push_str(" (default)");
             }
 
@@ -2263,7 +2269,7 @@ impl ChatWidget {
                 name: effort_label,
                 description,
                 selected_description,
-                is_current: is_current_model && choice.stored == highlight_choice,
+                is_current: is_current_choice,
                 actions,
                 dismiss_on_select: true,
                 ..Default::default()

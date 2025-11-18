@@ -532,8 +532,7 @@ impl App {
                 self.chat_widget.open_legacy_model_popup();
             }
             AppEvent::ApplyModelAndEffort { model, effort } => {
-                self.chat_widget
-                    .apply_model_and_effort(model.clone(), effort);
+                self.chat_widget.apply_model_and_effort(model, effort);
             }
             AppEvent::OpenFullAccessConfirmation { preset } => {
                 self.chat_widget.open_full_access_confirmation(preset);

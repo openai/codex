@@ -1441,6 +1441,29 @@ fn model_selection_popup_snapshot() {
 }
 
 #[test]
+fn featured_model_popup_hides_default_label_when_option_is_current() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    let preset = builtin_model_presets(None)
+        .into_iter()
+        .find(|preset| preset.is_default)
+        .expect("default preset");
+    chat.config.model = preset.model.to_string();
+    chat.config.model_reasoning_effort = Some(preset.default_reasoning_effort);
+    chat.open_model_popup();
+
+    let popup = render_bottom_popup(&chat, 80);
+    let current_line = popup
+        .lines()
+        .find(|line| line.contains("(current)"))
+        .expect("current featured option line");
+    assert!(
+        !current_line.contains("(default)"),
+        "expected current featured option to omit redundant default tag: {current_line}"
+    );
+}
+
+#[test]
 fn approvals_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
@@ -1521,6 +1544,29 @@ fn model_reasoning_selection_popup_snapshot() {
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("model_reasoning_selection_popup", popup);
+}
+
+#[test]
+fn reasoning_popup_hides_default_label_when_option_is_current() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    let preset = builtin_model_presets(None)
+        .into_iter()
+        .find(|preset| preset.is_default)
+        .expect("default preset");
+    chat.config.model = preset.model.to_string();
+    chat.config.model_reasoning_effort = Some(preset.default_reasoning_effort);
+    chat.open_reasoning_popup(preset, None);
+
+    let popup = render_bottom_popup(&chat, 80);
+    let current_line = popup
+        .lines()
+        .find(|line| line.contains("(current)"))
+        .expect("current reasoning option line");
+    assert!(
+        !current_line.contains("(default)"),
+        "expected current reasoning option to omit redundant default tag: {current_line}"
+    );
 }
 
 #[test]
