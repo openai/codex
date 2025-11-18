@@ -630,6 +630,11 @@ pub(crate) fn new_session_info(
                 "/review".into(),
                 " - review any changes and find issues".dim(),
             ]),
+            Line::from(vec![
+                "  ".into(),
+                "/resume last".into(),
+                " - resume the most recent session".dim(),
+            ]),
         ];
 
         CompositeHistoryCell {
