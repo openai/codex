@@ -272,7 +272,7 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
     let tool_name = format!("mcp__{server_name}__echo");
 
     // Build a very large message to exceed 10KiB once serialized.
-    let large_msg = "long-message-with-newlines-".repeat(600);
+    let large_msg = "long-message-with-newlines-".repeat(6000);
     let args_json = serde_json::json!({ "message": large_msg });
 
     mount_sse_once(
