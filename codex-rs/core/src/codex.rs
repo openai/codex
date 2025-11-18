@@ -55,6 +55,7 @@ use crate::ModelProviderInfo;
 use crate::client::ModelClient;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
+use crate::compact::collect_user_messages;
 use crate::config::Config;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::context_manager::ContextManager;
@@ -63,10 +64,6 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 #[cfg(test)]
 use crate::exec::StreamOutput;
-// Removed: legacy executor wiring replaced by ToolOrchestrator flows.
-// legacy normalize_exec_result no longer used after orchestrator migration
-use crate::compact::build_compacted_history;
-use crate::compact::collect_user_messages;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::model_family::find_family_for_model;
@@ -956,13 +953,18 @@ impl Session {
                 }
                 RolloutItem::Compacted(compacted) => {
                     let snapshot = history.get_history();
-                    let user_messages = collect_user_messages(&snapshot);
-                    let rebuilt = build_compacted_history(
-                        self.build_initial_context(turn_context),
-                        &user_messages,
-                        &compacted.message,
-                    );
-                    history.replace(rebuilt);
+                    // TODO(jif) clean
+                    if let Some(replacement) = &compacted.replacement_history {
+                        history.replace(replacement.clone());
+                    } else {
+                        let user_messages = collect_user_messages(&snapshot);
+                        let rebuilt = compact::build_compacted_history(
+                            self.build_initial_context(turn_context),
+                            &user_messages,
+                            &compacted.message,
+                        );
+                        history.replace(rebuilt);
+                    }
                 }
                 _ => {}
             }
@@ -988,6 +990,15 @@ impl Session {
             .map(RolloutItem::ResponseItem)
             .collect();
         self.persist_rollout_items(&rollout_items).await;
+    }
+
+    pub async fn enabled(&self, feature: Feature) -> bool {
+        self.state
+            .lock()
+            .await
+            .session_configuration
+            .features
+            .enabled(feature)
     }
 
     async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {
@@ -1167,14 +1178,7 @@ impl Session {
         turn_context: Arc<TurnContext>,
         cancellation_token: CancellationToken,
     ) {
-        if !self
-            .state
-            .lock()
-            .await
-            .session_configuration
-            .features
-            .enabled(Feature::GhostCommit)
-        {
+        if !self.enabled(Feature::GhostCommit).await {
             return;
         }
         let token = match turn_context.tool_call_gate.subscribe().await {
@@ -1415,7 +1419,7 @@ mod handlers {
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
     use codex_protocol::protocol::TurnAbortReason;
-    use codex_protocol::user_input::UserInput;
+
     use std::sync::Arc;
     use tracing::info;
     use tracing::warn;
@@ -1623,16 +1627,9 @@ mod handlers {
         let turn_context = sess
             .new_turn_with_sub_id(sub_id, SessionSettingsUpdate::default())
             .await;
-        // Attempt to inject input into current task
-        if let Err(items) = sess
-            .inject_input(vec![UserInput::Text {
-                text: turn_context.compact_prompt().to_string(),
-            }])
-            .await
-        {
-            sess.spawn_task(Arc::clone(&turn_context), items, CompactTask)
-                .await;
-        }
+
+        sess.spawn_task(Arc::clone(&turn_context), vec![], CompactTask)
+            .await;
     }
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
@@ -2896,7 +2893,7 @@ mod tests {
         let summary1 = "summary one";
         let snapshot1 = live_history.get_history();
         let user_messages1 = collect_user_messages(&snapshot1);
-        let rebuilt1 = build_compacted_history(
+        let rebuilt1 = compact::build_compacted_history(
             session.build_initial_context(turn_context),
             &user_messages1,
             summary1,
@@ -2904,6 +2901,7 @@ mod tests {
         live_history.replace(rebuilt1);
         rollout_items.push(RolloutItem::Compacted(CompactedItem {
             message: summary1.to_string(),
+            replacement_history: None,
         }));
 
         let user2 = ResponseItem::Message {
@@ -2929,7 +2927,7 @@ mod tests {
         let summary2 = "summary two";
         let snapshot2 = live_history.get_history();
         let user_messages2 = collect_user_messages(&snapshot2);
-        let rebuilt2 = build_compacted_history(
+        let rebuilt2 = compact::build_compacted_history(
             session.build_initial_context(turn_context),
             &user_messages2,
             summary2,
@@ -2937,6 +2935,7 @@ mod tests {
         live_history.replace(rebuilt2);
         rollout_items.push(RolloutItem::Compacted(CompactedItem {
             message: summary2.to_string(),
+            replacement_history: None,
         }));
 
         let user3 = ResponseItem::Message {
