@@ -38,6 +38,28 @@ impl Policy {
             None => Evaluation::NoMatch,
         }
     }
+
+    pub fn check_multiple<Commands>(&self, commands: Commands) -> Evaluation
+    where
+        Commands: IntoIterator,
+        Commands::Item: AsRef<[String]>,
+    {
+        let matched_rules: Vec<RuleMatch> = commands
+            .into_iter()
+            .flat_map(|command| match self.check(command.as_ref()) {
+                Evaluation::Match { matched_rules, .. } => matched_rules,
+                Evaluation::NoMatch => Vec::new(),
+            })
+            .collect();
+
+        match matched_rules.iter().map(RuleMatch::decision).max() {
+            Some(decision) => Evaluation::Match {
+                decision,
+                matched_rules,
+            },
+            None => Evaluation::NoMatch,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

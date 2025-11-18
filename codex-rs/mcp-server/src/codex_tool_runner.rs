@@ -174,6 +174,7 @@ async fn run_codex_tool_session_inner(
 
                 match event.msg {
                     EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
+                        turn_id: _,
                         command,
                         cwd,
                         call_id,
