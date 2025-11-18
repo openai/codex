@@ -6,7 +6,6 @@ use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::SandboxPolicy;
 use core_test_support::assert_regex_match;
-use core_test_support::responses::ev_apply_patch_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -25,6 +24,9 @@ use serde_json::Value;
 use serde_json::json;
 use std::fs;
 use test_case::test_case;
+
+use crate::suite::apply_patch_cli::apply_patch_harness;
+use crate::suite::apply_patch_cli::mount_apply_patch;
 
 const FIXTURE_JSON: &str = r#"{
     "description": "This is an example JSON file.",
@@ -482,11 +484,7 @@ async fn apply_patch_custom_tool_output_is_structured(
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(move |config| {
-        config.include_apply_patch_tool = true;
-    });
-    let test = builder.build(&server).await?;
+    let harness = apply_patch_harness().await?;
 
     let call_id = "apply-patch-structured";
     let file_name = "structured.txt";
@@ -497,38 +495,17 @@ async fn apply_patch_custom_tool_output_is_structured(
 *** End Patch
 "#
     );
-    let responses = vec![
-        sse(vec![
-            json!({"type": "response.created", "response": {"id": "resp-1"}}),
-            ev_apply_patch_call(call_id, &patch, output_type),
-            ev_completed("resp-1"),
-        ]),
-        sse(vec![
-            ev_assistant_message("msg-1", "done"),
-            ev_completed("resp-2"),
-        ]),
-    ];
-    let mock = mount_sse_sequence(&server, responses).await;
+    mount_apply_patch(&harness, call_id, &patch, "done", output_type).await;
 
-    test.submit_turn_with_policy(
-        "apply the patch via custom tool",
-        SandboxPolicy::DangerFullAccess,
-    )
-    .await?;
+    harness
+        .test()
+        .submit_turn_with_policy(
+            "apply the patch via custom tool",
+            SandboxPolicy::DangerFullAccess,
+        )
+        .await?;
 
-    let req = mock
-        .last_request()
-        .expect("apply_patch output request recorded");
-    let output_item = match output_type {
-        ApplyPatchModelOutput::Freeform => req.custom_tool_call_output(call_id),
-        ApplyPatchModelOutput::Function
-        | ApplyPatchModelOutput::Shell
-        | ApplyPatchModelOutput::ShellViaHeredoc => req.function_call_output(call_id),
-    };
-    let output = output_item
-        .get("output")
-        .and_then(Value::as_str)
-        .expect("apply_patch output string");
+    let output = harness.apply_patch_output(call_id, output_type).await;
 
     let expected_pattern = format!(
         r"(?s)^Exit code: 0
@@ -538,7 +515,7 @@ Success. Updated the following files:
 A {file_name}
 ?$"
     );
-    assert_regex_match(&expected_pattern, output);
+    assert_regex_match(&expected_pattern, output.as_str());
 
     Ok(())
 }
@@ -553,49 +530,24 @@ async fn apply_patch_custom_tool_call_creates_file(
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(move |config| {
-        config.include_apply_patch_tool = true;
-    });
-    let test = builder.build(&server).await?;
+    let harness = apply_patch_harness().await?;
 
     let call_id = "apply-patch-add-file";
     let file_name = "custom_tool_apply_patch.txt";
     let patch = format!(
         "*** Begin Patch\n*** Add File: {file_name}\n+custom tool content\n*** End Patch\n"
     );
-    let responses = vec![
-        sse(vec![
-            json!({"type": "response.created", "response": {"id": "resp-1"}}),
-            ev_apply_patch_call(call_id, &patch, output_type),
-            ev_completed("resp-1"),
-        ]),
-        sse(vec![
-            ev_assistant_message("msg-1", "apply_patch done"),
-            ev_completed("resp-2"),
-        ]),
-    ];
-    let mock = mount_sse_sequence(&server, responses).await;
+    mount_apply_patch(&harness, call_id, &patch, "apply_patch done", output_type).await;
 
-    test.submit_turn_with_policy(
-        "apply the patch via custom tool to create a file",
-        SandboxPolicy::DangerFullAccess,
-    )
-    .await?;
+    harness
+        .test()
+        .submit_turn_with_policy(
+            "apply the patch via custom tool to create a file",
+            SandboxPolicy::DangerFullAccess,
+        )
+        .await?;
 
-    let req = mock
-        .last_request()
-        .expect("apply_patch output request recorded");
-    let output_item = match output_type {
-        ApplyPatchModelOutput::Freeform => req.custom_tool_call_output(call_id),
-        ApplyPatchModelOutput::Function
-        | ApplyPatchModelOutput::Shell
-        | ApplyPatchModelOutput::ShellViaHeredoc => req.function_call_output(call_id),
-    };
-    let output = output_item
-        .get("output")
-        .and_then(Value::as_str)
-        .expect("apply_patch output string");
+    let output = harness.apply_patch_output(call_id, output_type).await;
 
     let expected_pattern = format!(
         r"(?s)^Exit code: 0
@@ -605,9 +557,9 @@ Success. Updated the following files:
 A {file_name}
 ?$"
     );
-    assert_regex_match(&expected_pattern, output);
+    assert_regex_match(&expected_pattern, output.as_str());
 
-    let new_file_path = test.cwd.path().join(file_name);
+    let new_file_path = harness.path(file_name);
     let created_contents = fs::read_to_string(&new_file_path)?;
     assert_eq!(
         created_contents, "custom tool content\n",
@@ -627,51 +579,33 @@ async fn apply_patch_custom_tool_call_updates_existing_file(
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(move |config| {
-        config.include_apply_patch_tool = true;
-    });
-    let test = builder.build(&server).await?;
+    let harness = apply_patch_harness().await?;
 
     let call_id = "apply-patch-update-file";
     let file_name = "custom_tool_apply_patch_existing.txt";
-    let file_path = test.cwd.path().join(file_name);
+    let file_path = harness.path(file_name);
     fs::write(&file_path, "before\n")?;
     let patch = format!(
         "*** Begin Patch\n*** Update File: {file_name}\n@@\n-before\n+after\n*** End Patch\n"
     );
-    let responses = vec![
-        sse(vec![
-            json!({"type": "response.created", "response": {"id": "resp-1"}}),
-            ev_apply_patch_call(call_id, &patch, output_type),
-            ev_completed("resp-1"),
-        ]),
-        sse(vec![
-            ev_assistant_message("msg-1", "apply_patch update done"),
-            ev_completed("resp-2"),
-        ]),
-    ];
-    let mock = mount_sse_sequence(&server, responses).await;
-
-    test.submit_turn_with_policy(
-        "apply the patch via custom tool to update a file",
-        SandboxPolicy::DangerFullAccess,
+    mount_apply_patch(
+        &harness,
+        call_id,
+        &patch,
+        "apply_patch update done",
+        output_type,
     )
-    .await?;
+    .await;
 
-    let req = mock
-        .last_request()
-        .expect("apply_patch output request recorded");
-    let output_item = match output_type {
-        ApplyPatchModelOutput::Freeform => req.custom_tool_call_output(call_id),
-        ApplyPatchModelOutput::Function
-        | ApplyPatchModelOutput::Shell
-        | ApplyPatchModelOutput::ShellViaHeredoc => req.function_call_output(call_id),
-    };
-    let output = output_item
-        .get("output")
-        .and_then(Value::as_str)
-        .expect("apply_patch output string");
+    harness
+        .test()
+        .submit_turn_with_policy(
+            "apply the patch via custom tool to update a file",
+            SandboxPolicy::DangerFullAccess,
+        )
+        .await?;
+
+    let output = harness.apply_patch_output(call_id, output_type).await;
 
     let expected_pattern = format!(
         r"(?s)^Exit code: 0
@@ -681,7 +615,7 @@ Success. Updated the following files:
 M {file_name}
 ?$"
     );
-    assert_regex_match(&expected_pattern, output);
+    assert_regex_match(&expected_pattern, output.as_str());
 
     let updated_contents = fs::read_to_string(file_path)?;
     assert_eq!(updated_contents, "after\n", "expected updated file content");
@@ -699,55 +633,37 @@ async fn apply_patch_custom_tool_call_reports_failure_output(
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(move |config| {
-        config.include_apply_patch_tool = true;
-    });
-    let test = builder.build(&server).await?;
+    let harness = apply_patch_harness().await?;
 
     let call_id = "apply-patch-failure";
     let missing_file = "missing_custom_tool_apply_patch.txt";
     let patch = format!(
         "*** Begin Patch\n*** Update File: {missing_file}\n@@\n-before\n+after\n*** End Patch\n"
     );
-    let responses = vec![
-        sse(vec![
-            json!({"type": "response.created", "response": {"id": "resp-1"}}),
-            ev_apply_patch_call(call_id, &patch, output_type),
-            ev_completed("resp-1"),
-        ]),
-        sse(vec![
-            ev_assistant_message("msg-1", "apply_patch failure done"),
-            ev_completed("resp-2"),
-        ]),
-    ];
-    let mock = mount_sse_sequence(&server, responses).await;
-
-    test.submit_turn_with_policy(
-        "attempt a failing apply_patch via custom tool",
-        SandboxPolicy::DangerFullAccess,
+    mount_apply_patch(
+        &harness,
+        call_id,
+        &patch,
+        "apply_patch failure done",
+        output_type,
     )
-    .await?;
+    .await;
 
-    let req = mock
-        .last_request()
-        .expect("apply_patch output request recorded");
-    let output_item = match output_type {
-        ApplyPatchModelOutput::Freeform => req.custom_tool_call_output(call_id),
-        ApplyPatchModelOutput::Function
-        | ApplyPatchModelOutput::Shell
-        | ApplyPatchModelOutput::ShellViaHeredoc => req.function_call_output(call_id),
-    };
-    let output = output_item
-        .get("output")
-        .and_then(Value::as_str)
-        .expect("apply_patch output string");
+    harness
+        .test()
+        .submit_turn_with_policy(
+            "attempt a failing apply_patch via custom tool",
+            SandboxPolicy::DangerFullAccess,
+        )
+        .await?;
+
+    let output = harness.apply_patch_output(call_id, output_type).await;
 
     let expected_output = format!(
         "apply_patch verification failed: Failed to read file to update {}/{missing_file}: No such file or directory (os error 2)",
-        test.cwd.path().to_string_lossy()
+        harness.cwd().to_string_lossy()
     );
-    assert_eq!(output, expected_output);
+    assert_eq!(output, expected_output.as_str());
 
     Ok(())
 }
@@ -762,49 +678,29 @@ async fn apply_patch_function_call_output_is_structured(
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(move |config| {
-        config.include_apply_patch_tool = true;
-    });
-    let test = builder.build(&server).await?;
+    let harness = apply_patch_harness().await?;
 
     let call_id = "apply-patch-function";
     let file_name = "function_apply_patch.txt";
     let patch =
         format!("*** Begin Patch\n*** Add File: {file_name}\n+via function call\n*** End Patch\n");
-    let responses = vec![
-        sse(vec![
-            json!({"type": "response.created", "response": {"id": "resp-1"}}),
-            ev_apply_patch_call(call_id, &patch, output_type),
-            ev_completed("resp-1"),
-        ]),
-        sse(vec![
-            ev_assistant_message("msg-1", "apply_patch function done"),
-            ev_completed("resp-2"),
-        ]),
-    ];
-    let mock = mount_sse_sequence(&server, responses).await;
-
-    test.submit_turn_with_policy(
-        "apply the patch via function-call apply_patch",
-        SandboxPolicy::DangerFullAccess,
+    mount_apply_patch(
+        &harness,
+        call_id,
+        &patch,
+        "apply_patch function done",
+        output_type,
     )
-    .await?;
+    .await;
+    harness
+        .test()
+        .submit_turn_with_policy(
+            "apply the patch via function-call apply_patch",
+            SandboxPolicy::DangerFullAccess,
+        )
+        .await?;
 
-    let req = mock
-        .last_request()
-        .expect("apply_patch function output request recorded");
-    let output_item = match output_type {
-        ApplyPatchModelOutput::Freeform => req.custom_tool_call_output(call_id),
-        ApplyPatchModelOutput::Function
-        | ApplyPatchModelOutput::Shell
-        | ApplyPatchModelOutput::ShellViaHeredoc => req.function_call_output(call_id),
-    };
-    let output = output_item
-        .get("output")
-        .and_then(Value::as_str)
-        .expect("apply_patch output string");
-
+    let output = harness.apply_patch_output(call_id, output_type).await;
     let expected_pattern = format!(
         r"(?s)^Exit code: 0
 Wall time: [0-9]+(?:\.[0-9]+)? seconds
@@ -813,7 +709,7 @@ Success. Updated the following files:
 A {file_name}
 ?$"
     );
-    assert_regex_match(&expected_pattern, output);
+    assert_regex_match(&expected_pattern, output.as_str());
 
     Ok(())
 }

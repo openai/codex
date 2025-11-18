@@ -29,7 +29,7 @@ use core_test_support::wait_for_event;
 use serde_json::json;
 use test_case::test_case;
 
-async fn apply_patch_harness() -> Result<TestCodexHarness> {
+pub async fn apply_patch_harness() -> Result<TestCodexHarness> {
     apply_patch_harness_with(|_| {}).await
 }
 
@@ -43,7 +43,7 @@ async fn apply_patch_harness_with(
     .await
 }
 
-async fn mount_apply_patch(
+pub async fn mount_apply_patch(
     harness: &TestCodexHarness,
     call_id: &str,
     patch: &str,
