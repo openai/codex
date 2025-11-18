@@ -237,6 +237,7 @@ impl CodexMessageProcessor {
 
     fn review_request_from_target(
         target: ReviewTarget,
+        append_to_original_thread: bool,
     ) -> Result<(ReviewRequest, String), JSONRPCErrorError> {
         fn invalid_request(message: String) -> JSONRPCErrorError {
             JSONRPCErrorError {
@@ -247,10 +248,12 @@ impl CodexMessageProcessor {
         }
 
         match target {
+            // TODO(jif) those messages will be extracted in a follow-up PR.
             ReviewTarget::UncommittedChanges => Ok((
                 ReviewRequest {
                     prompt: "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.".to_string(),
                     user_facing_hint: "current changes".to_string(),
+                    append_to_original_thread,
                 },
                 "Review uncommitted changes".to_string(),
             )),
@@ -259,12 +262,17 @@ impl CodexMessageProcessor {
                 if branch.is_empty() {
                     return Err(invalid_request("branch must not be empty".to_string()));
                 }
-                let prompt = format!(
-                    "Review the code changes against the base branch '{branch}'. Start by finding the merge diff between the current branch and {branch}'s upstream e.g. (`git merge-base HEAD \"$(git rev-parse --abbrev-ref \"{branch}@{{upstream}}\")\"`), then run `git diff` against that SHA to see what changes we would merge into the {branch} branch. Provide prioritized, actionable findings."
-                );
+                let prompt = format!("Review the code changes against the base branch '{branch}'. Start by finding the merge diff between the current branch and {branch}'s upstream e.g. (`git merge-base HEAD \"$(git rev-parse --abbrev-ref \"{branch}@{{upstream}}\")\"`), then run `git diff` against that SHA to see what changes we would merge into the {branch} branch. Provide prioritized, actionable findings.");
                 let hint = format!("changes against '{branch}'");
                 let display = format!("Review changes against base branch '{branch}'");
-                Ok((ReviewRequest { prompt, user_facing_hint: hint }, display))
+                Ok((
+                    ReviewRequest {
+                        prompt,
+                        user_facing_hint: hint,
+                        append_to_original_thread,
+                    },
+                    display,
+                ))
             }
             ReviewTarget::Commit { sha, title } => {
                 let sha = sha.trim().to_string();
@@ -275,13 +283,9 @@ impl CodexMessageProcessor {
                     .map(|t| t.trim().to_string())
                     .filter(|t| !t.is_empty());
                 let prompt = if let Some(title) = brief_title.clone() {
-                    format!(
-                        "Review the code changes introduced by commit {sha} (\"{title}\"). Provide prioritized, actionable findings."
-                    )
+                    format!("Review the code changes introduced by commit {sha} (\"{title}\"). Provide prioritized, actionable findings.")
                 } else {
-                    format!(
-                        "Review the code changes introduced by commit {sha}. Provide prioritized, actionable findings."
-                    )
+                    format!("Review the code changes introduced by commit {sha}. Provide prioritized, actionable findings.")
                 };
                 let short_sha = sha.chars().take(7).collect::<String>();
                 let hint = format!("commit {short_sha}");
@@ -290,7 +294,14 @@ impl CodexMessageProcessor {
                 } else {
                     format!("Review commit {short_sha}")
                 };
-                Ok((ReviewRequest { prompt, user_facing_hint: hint }, display))
+                Ok((
+                    ReviewRequest {
+                        prompt,
+                        user_facing_hint: hint,
+                        append_to_original_thread,
+                    },
+                    display,
+                ))
             }
             ReviewTarget::Custom { instructions } => {
                 let trimmed = instructions.trim().to_string();
@@ -301,6 +312,7 @@ impl CodexMessageProcessor {
                     ReviewRequest {
                         prompt: trimmed.clone(),
                         user_facing_hint: trimmed.clone(),
+                        append_to_original_thread,
                     },
                     trimmed,
                 ))
@@ -2422,7 +2434,11 @@ impl CodexMessageProcessor {
     }
 
     async fn review_start(&self, request_id: RequestId, params: ReviewStartParams) {
-        let ReviewStartParams { thread_id, target } = params;
+        let ReviewStartParams {
+            thread_id,
+            target,
+            append_to_original_thread,
+        } = params;
         let (_, conversation) = match self.conversation_from_thread_id(&thread_id).await {
             Ok(v) => v,
             Err(error) => {
@@ -2431,13 +2447,14 @@ impl CodexMessageProcessor {
             }
         };
 
-        let (review_request, display_text) = match Self::review_request_from_target(target) {
-            Ok(value) => value,
-            Err(err) => {
-                self.outgoing.send_error(request_id, err).await;
-                return;
-            }
-        };
+        let (review_request, display_text) =
+            match Self::review_request_from_target(target, append_to_original_thread) {
+                Ok(value) => value,
+                Err(err) => {
+                    self.outgoing.send_error(request_id, err).await;
+                    return;
+                }
+            };
 
         let turn_id = conversation.submit(Op::Review { review_request }).await;
 

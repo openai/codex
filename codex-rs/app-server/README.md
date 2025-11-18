@@ -190,12 +190,14 @@ Use `review/start` to run Codex’s reviewer on the currently checked-out projec
 - `{"type":"baseBranch","branch":"main"}` — diff against the provided branch’s upstream (see prompt for the exact `git merge-base`/`git diff` instructions Codex will run).
 - `{"type":"commit","sha":"abc1234","title":"Optional subject"}` — review a specific commit.
 - `{"type":"custom","instructions":"Free-form reviewer instructions"}` — fallback prompt equivalent to the legacy manual review request.
+- `appendToOriginalThread` (bool, default `true`) — when `true`, Codex also records a final assistant-style message with the review summary in the original thread. When `false`, only the `codeReview` item is emitted for the review run and no extra message is added to the original thread.
 
 Example request/response:
 
 ```json
 { "method": "review/start", "id": 40, "params": {
     "threadId": "thr_123",
+    "appendToOriginalThread": true,
     "target": { "type": "commit", "sha": "1234567deadbeef", "title": "Polish tui colors" }
 } }
 { "id": 40, "result": { "turn": {

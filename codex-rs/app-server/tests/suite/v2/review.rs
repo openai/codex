@@ -58,6 +58,7 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
     let review_req = mcp
         .send_review_start_request(ReviewStartParams {
             thread_id: thread_id.clone(),
+            append_to_original_thread: true,
             target: ReviewTarget::Commit {
                 sha: "1234567deadbeef".to_string(),
                 title: Some("Tidy UI colors".to_string()),
@@ -128,6 +129,7 @@ async fn review_start_rejects_empty_base_branch() -> Result<()> {
     let request_id = mcp
         .send_review_start_request(ReviewStartParams {
             thread_id,
+            append_to_original_thread: true,
             target: ReviewTarget::BaseBranch {
                 branch: "   ".to_string(),
             },
@@ -161,6 +163,7 @@ async fn review_start_rejects_empty_commit_sha() -> Result<()> {
     let request_id = mcp
         .send_review_start_request(ReviewStartParams {
             thread_id,
+            append_to_original_thread: true,
             target: ReviewTarget::Commit {
                 sha: "\t".to_string(),
                 title: None,
@@ -195,6 +198,7 @@ async fn review_start_rejects_empty_custom_instructions() -> Result<()> {
     let request_id = mcp
         .send_review_start_request(ReviewStartParams {
             thread_id,
+            append_to_original_thread: true,
             target: ReviewTarget::Custom {
                 instructions: "\n\n".to_string(),
             },
