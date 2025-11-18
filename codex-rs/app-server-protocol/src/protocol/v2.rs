@@ -170,48 +170,64 @@ impl From<CoreSandboxCommandAssessment> for SandboxCommandAssessment {
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
-pub enum ParsedCommand {
+pub enum CommandAction {
     Read {
-        cmd: String,
+        command: String,
         name: String,
         path: PathBuf,
     },
     ListFiles {
-        cmd: String,
+        command: String,
         path: Option<String>,
     },
     Search {
-        cmd: String,
+        command: String,
         query: Option<String>,
         path: Option<String>,
     },
     Unknown {
-        cmd: String,
+        command: String,
     },
 }
 
-impl ParsedCommand {
+impl CommandAction {
     pub fn into_core(self) -> CoreParsedCommand {
         match self {
-            ParsedCommand::Read { cmd, name, path } => CoreParsedCommand::Read { cmd, name, path },
-            ParsedCommand::ListFiles { cmd, path } => CoreParsedCommand::ListFiles { cmd, path },
-            ParsedCommand::Search { cmd, query, path } => {
-                CoreParsedCommand::Search { cmd, query, path }
+            CommandAction::Read {
+                command: cmd,
+                name,
+                path,
+            } => CoreParsedCommand::Read { cmd, name, path },
+            CommandAction::ListFiles { command: cmd, path } => {
+                CoreParsedCommand::ListFiles { cmd, path }
             }
-            ParsedCommand::Unknown { cmd } => CoreParsedCommand::Unknown { cmd },
+            CommandAction::Search {
+                command: cmd,
+                query,
+                path,
+            } => CoreParsedCommand::Search { cmd, query, path },
+            CommandAction::Unknown { command: cmd } => CoreParsedCommand::Unknown { cmd },
         }
     }
 }
 
-impl From<CoreParsedCommand> for ParsedCommand {
+impl From<CoreParsedCommand> for CommandAction {
     fn from(value: CoreParsedCommand) -> Self {
         match value {
-            CoreParsedCommand::Read { cmd, name, path } => ParsedCommand::Read { cmd, name, path },
-            CoreParsedCommand::ListFiles { cmd, path } => ParsedCommand::ListFiles { cmd, path },
-            CoreParsedCommand::Search { cmd, query, path } => {
-                ParsedCommand::Search { cmd, query, path }
+            CoreParsedCommand::Read { cmd, name, path } => CommandAction::Read {
+                command: cmd,
+                name,
+                path,
+            },
+            CoreParsedCommand::ListFiles { cmd, path } => {
+                CommandAction::ListFiles { command: cmd, path }
             }
-            CoreParsedCommand::Unknown { cmd } => ParsedCommand::Unknown { cmd },
+            CoreParsedCommand::Search { cmd, query, path } => CommandAction::Search {
+                command: cmd,
+                query,
+                path,
+            },
+            CoreParsedCommand::Unknown { cmd } => CommandAction::Unknown { command: cmd },
         }
     }
 }
@@ -624,11 +640,13 @@ pub enum ThreadItem {
         id: String,
         /// The command to be executed.
         command: String,
-        /// The command's working directory if not the default cwd for the agent.
+        /// The command's working directory.
         cwd: PathBuf,
         status: CommandExecutionStatus,
-        /// A best-effort parsing of the command to identify the type of command and its arguments.
-        parsed_cmd: Vec<ParsedCommand>,
+        /// A best-effort parsing of the command to understand the action(s) it will perform.
+        /// This returns a list of CommandAction objects because a single shell command may
+        /// be composed of many commands piped together.
+        command_actions: Vec<CommandAction>,
         /// The command's output, aggregated from stdout and stderr.
         aggregated_output: Option<String>,
         /// The command's exit code.
@@ -876,14 +894,14 @@ pub struct CommandExecutionRequestApprovalParams {
     pub reason: Option<String>,
     /// Optional model-provided risk assessment describing the blocked command.
     pub risk: Option<SandboxCommandAssessment>,
-    /// A best-effort parsing of the command to identify the type of command and its arguments.
-    pub parsed_cmd: Vec<ParsedCommand>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct CommandExecutionRequestAcceptSettings {
+    /// If true, automatically approve this command for the duration of the session.
+    #[serde(default)]
     pub for_session: bool,
 }
 
@@ -892,6 +910,9 @@ pub struct CommandExecutionRequestAcceptSettings {
 #[ts(export_to = "v2/")]
 pub struct CommandExecutionRequestApprovalResponse {
     pub decision: ApprovalDecision,
+    /// Optional approval settings for when the decision is `accept`.
+    /// Ignored if the decision is `decline` or `cancel`.
+    #[serde(default)]
     pub accept_settings: Option<CommandExecutionRequestAcceptSettings>,
 }
 

@@ -9,7 +9,6 @@ use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::ParsedCommand;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItem;
@@ -263,12 +262,6 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
         panic!("expected CommandExecutionRequestApproval request");
     };
     assert_eq!(params.item_id, "call1");
-    assert_eq!(
-        params.parsed_cmd,
-        vec![ParsedCommand::Unknown {
-            cmd: "python3 -c 'print(42)'".to_string(),
-        }]
-    );
 
     // Approve and wait for task completion
     mcp.send_response(

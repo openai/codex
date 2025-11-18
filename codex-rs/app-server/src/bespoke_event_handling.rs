@@ -6,6 +6,7 @@ use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
 use codex_app_server_protocol::ApplyPatchApprovalResponse;
 use codex_app_server_protocol::ApprovalDecision;
+use codex_app_server_protocol::CommandAction as V2ParsedCommand;
 use codex_app_server_protocol::CommandExecutionOutputDeltaNotification;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
@@ -18,7 +19,6 @@ use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::McpToolCallError;
 use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus;
-use codex_app_server_protocol::ParsedCommand as V2ParsedCommand;
 use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
 use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
 use codex_app_server_protocol::ReasoningTextDeltaNotification;
@@ -111,7 +111,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                     item_id: call_id.clone(),
                     reason,
                     risk: risk.map(V2SandboxCommandAssessment::from),
-                    parsed_cmd: parsed_cmd.into_iter().map(V2ParsedCommand::from).collect(),
                 };
                 let rx = outgoing
                     .send_request(ServerRequestPayload::CommandExecutionRequestApproval(
@@ -210,7 +209,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 command: shlex_join(&exec_command_begin_event.command),
                 cwd: exec_command_begin_event.cwd,
                 status: CommandExecutionStatus::InProgress,
-                parsed_cmd: exec_command_begin_event
+                command_actions: exec_command_begin_event
                     .parsed_cmd
                     .into_iter()
                     .map(V2ParsedCommand::from)
@@ -266,7 +265,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 command: shlex_join(&command),
                 cwd,
                 status,
-                parsed_cmd: parsed_cmd.into_iter().map(V2ParsedCommand::from).collect(),
+                command_actions: parsed_cmd.into_iter().map(V2ParsedCommand::from).collect(),
                 aggregated_output,
                 exit_code: Some(exit_code),
                 duration_ms: Some(duration_ms),
