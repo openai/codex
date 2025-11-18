@@ -213,7 +213,7 @@ async fn user_shell_command_output_is_truncated_in_history() -> anyhow::Result<(
     let test = builder.build(&server).await?;
 
     #[cfg(windows)]
-    let command = r#"for ($i=1; $i -le 400; $i++) { Write-Output $i }"#.to_string();
+    let command = r#"1..400 | ForEach-Object { $_ }"#.to_string();
     #[cfg(not(windows))]
     let command = "seq 1 400".to_string();
 
