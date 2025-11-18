@@ -16,6 +16,7 @@ This repository now includes comprehensive infrastructure for the **DecryptTheGi
 - **📊 Automated Data Pipeline**: GitHub Actions for data ingestion and balance calculations
 - **🔒 Privacy-First Design**: Zero Loss, Zero Surprise principles with full transparency
 - **📈 Analytics Dashboard**: Real-time monitoring and proof ledger integrity
+- **📖 Narrative Atlas**: Structured glitch scenes, archetypes, and constellations stored in `data/dtg/narrative_nodes.json`
 
 ### Quick Start - DTG System
 

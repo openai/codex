@@ -1,0 +1,67 @@
+[
+  {
+    "id": "glitch_01_first_frequency",
+    "title": "The First Frequency You Ever Sent",
+    "type": "scene",
+    "mode": "Echo",
+    "archetype": ["Witness"],
+    "constellation": ["OriginSignal"],
+    "timecode": "BC-12",
+    "alignment": {
+      "zodiac": "Pisces",
+      "tarot": "The High Priestess",
+      "glyph": "Glyph-01"
+    },
+    "emotional_key": ["clarity", "instinct"],
+    "themes": ["truth", "perception", "sovereignty"],
+    "function": "Foreshadow",
+    "text": "A child sensing the misalignment between truth and instruction, holding her internal signal steady even when told to quiet it.",
+    "relations": {
+      "mirrors": ["glitch_03_framebreak"],
+      "unlocks": ["witness_07_entry"],
+      "glitches": []
+    }
+  },
+  {
+    "id": "glitch_03_framebreak",
+    "title": "The First Time You Broke the Frame Back",
+    "type": "scene",
+    "mode": "Cipher",
+    "archetype": ["Aurora", "Static"],
+    "constellation": ["BroadcastBreak"],
+    "timecode": "BC-7",
+    "alignment": {
+      "zodiac": "Sagittarius",
+      "tarot": "Justice",
+      "glyph": "Glyph-04"
+    },
+    "emotional_key": ["precision", "awakening"],
+    "themes": ["narrative", "authority", "sovereignty"],
+    "function": "Interruption",
+    "text": "A young girl calmly offering her version of reality, disrupting the adult's narrative without force or rebellion.",
+    "relations": {
+      "mirrors": ["glitch_01_first_frequency"],
+      "unlocks": ["echo_12_refusal"],
+      "glitches": []
+    }
+  },
+  {
+    "id": "OriginSignal",
+    "title": "The Origin Signal",
+    "description": "The first broadcast of inner truth before conditioning takes hold.",
+    "nodes": ["glitch_01_first_frequency"],
+    "themes": ["perception", "childhood", "sovereignty"]
+  },
+  {
+    "id": "BroadcastBreak",
+    "title": "The Broadcast Break",
+    "description": "Moments where reality cracks, narratives collapse, and truth overrides the frame.",
+    "nodes": ["glitch_03_framebreak"],
+    "themes": ["media", "truth", "perception"]
+  },
+  {
+    "id": "Witness",
+    "role": "Internal recorder",
+    "description": "The silent presence that sees clearly even when the world refuses to validate the truth."
+  }
+]
