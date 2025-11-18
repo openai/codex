@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use crate::shell::ShellType;
 use crate::shell::detect_shell_type;
 
-const POWERSHELL_FLAGS: &[&str] = &["-NoLogo", "-NoProfile", "-Command", "-c"];
+const POWERSHELL_FLAGS: &[&str] = &["-nologo", "-noprofile", "-command", "-c"];
 
 /// Extract the PowerShell script body from an invocation such as:
 ///
@@ -28,7 +28,7 @@ pub fn extract_powershell_command(command: &[String]) -> Option<(&str, &str)> {
     while i + 1 < command.len() {
         let flag = &command[i];
         // Reject unknown flags
-        if !POWERSHELL_FLAGS.contains(&flag.as_str()) {
+        if !POWERSHELL_FLAGS.contains(&flag.to_ascii_lowercase().as_str()) {
             return None;
         }
         if flag.eq_ignore_ascii_case("-Command") || flag.eq_ignore_ascii_case("-c") {
@@ -49,6 +49,18 @@ mod tests {
         let cmd = vec![
             "powershell".to_string(),
             "-Command".to_string(),
+            "Write-Host hi".to_string(),
+        ];
+        let (_shell, script) = extract_powershell_command(&cmd).expect("extract");
+        assert_eq!(script, "Write-Host hi");
+    }
+
+    #[test]
+    fn extracts_lowercase_flags() {
+        let cmd = vec![
+            "powershell".to_string(),
+            "-nologo".to_string(),
+            "-command".to_string(),
             "Write-Host hi".to_string(),
         ];
         let (_shell, script) = extract_powershell_command(&cmd).expect("extract");
