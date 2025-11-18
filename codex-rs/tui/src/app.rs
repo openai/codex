@@ -1053,14 +1053,14 @@ mod tests {
     fn format_model_change_target_prefers_featured_label() {
         let formatted =
             super::format_model_change_target("codex-auto", Some(ReasoningEffortConfig::Low));
-        assert_eq!(formatted, "codex-auto (Fast)");
+        assert_eq!(formatted, "codex-auto (low)");
     }
 
     #[test]
     fn format_model_change_target_uses_effort_label() {
         let formatted =
             super::format_model_change_target("gpt-5.1-codex", Some(ReasoningEffortConfig::High));
-        assert_eq!(formatted, "gpt-5.1-codex (Thorough)");
+        assert_eq!(formatted, "gpt-5.1-codex (high)");
     }
 
     #[test]

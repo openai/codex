@@ -56,6 +56,92 @@ const fn default_reasoning_effort_label(effort: ReasoningEffort) -> &'static str
     }
 }
 
+const CODEX_AUTO_EFFORTS: &[ReasoningEffortPreset] = &[
+    ReasoningEffortPreset::with_label(ReasoningEffort::Low, "Works faster", "Fast"),
+    ReasoningEffortPreset::with_label(
+        ReasoningEffort::Medium,
+        "Balances speed with intelligence",
+        "Balanced",
+    ),
+    ReasoningEffortPreset::with_label(
+        ReasoningEffort::High,
+        "Works longer for harder tasks",
+        "Thorough",
+    ),
+];
+
+const GPT_51_CODEX_EFFORTS: &[ReasoningEffortPreset] = &[
+    ReasoningEffortPreset::new(
+        ReasoningEffort::Low,
+        "Fastest responses with limited reasoning",
+        None,
+    ),
+    ReasoningEffortPreset::new(
+        ReasoningEffort::Medium,
+        "Dynamically adjusts reasoning based on the task",
+        None,
+    ),
+    ReasoningEffortPreset::new(
+        ReasoningEffort::High,
+        "Maximizes reasoning depth for complex or ambiguous problems",
+        None,
+    ),
+];
+
+const GPT_51_CODEX_MINI_EFFORTS: &[ReasoningEffortPreset] = &[
+    ReasoningEffortPreset::new(
+        ReasoningEffort::Medium,
+        "Dynamically adjusts reasoning based on the task",
+        None,
+    ),
+    ReasoningEffortPreset::new(
+        ReasoningEffort::High,
+        "Maximizes reasoning depth for complex or ambiguous problems",
+        None,
+    ),
+];
+
+const GPT_51_EFFORTS: &[ReasoningEffortPreset] = &[
+    ReasoningEffortPreset::new(
+        ReasoningEffort::Low,
+        "Balances speed with some reasoning; useful for straightforward queries and short explanations",
+        None,
+    ),
+    ReasoningEffortPreset::new(
+        ReasoningEffort::Medium,
+        "Provides a solid balance of reasoning depth and latency for general-purpose tasks",
+        None,
+    ),
+    ReasoningEffortPreset::new(
+        ReasoningEffort::High,
+        "Maximizes reasoning depth for complex or ambiguous problems",
+        None,
+    ),
+];
+
+const GPT_5_EFFORTS: &[ReasoningEffortPreset] = &[
+    ReasoningEffortPreset::new(
+        ReasoningEffort::Minimal,
+        "Fastest responses with little reasoning",
+        None,
+    ),
+    ReasoningEffortPreset::new(
+        ReasoningEffort::Low,
+        "Balances speed with some reasoning; useful for straightforward queries and short explanations",
+        None,
+    ),
+    ReasoningEffortPreset::new(
+        ReasoningEffort::Medium,
+        "Provides a solid balance of reasoning depth and latency for general-purpose tasks",
+        None,
+    ),
+    ReasoningEffortPreset::new(
+        ReasoningEffort::High,
+        "Maximizes reasoning depth for complex or ambiguous problems",
+        None,
+    ),
+];
+
 #[derive(Debug, Clone)]
 pub struct ModelUpgrade {
     pub id: &'static str,
@@ -91,19 +177,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             display_name: "codex-auto",
             description: "Automatically chooses the best Codex model configuration for your task.",
             default_reasoning_effort: ReasoningEffort::Medium,
-            supported_reasoning_efforts: &[
-                ReasoningEffortPreset::with_label(ReasoningEffort::Low, "Works faster", "Fast"),
-                ReasoningEffortPreset::with_label(
-                    ReasoningEffort::Medium,
-                    "Balances speed with intelligence",
-                    "Balanced",
-                ),
-                ReasoningEffortPreset::with_label(
-                    ReasoningEffort::High,
-                    "Works longer for harder tasks",
-                    "Thorough",
-                ),
-            ],
+            supported_reasoning_efforts: CODEX_AUTO_EFFORTS,
             is_default: true,
             upgrade: None,
         },
@@ -113,23 +187,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             display_name: "gpt-5.1-codex",
             description: "Optimized for codex.",
             default_reasoning_effort: ReasoningEffort::Medium,
-            supported_reasoning_efforts: &[
-                ReasoningEffortPreset::new(
-                    ReasoningEffort::Low,
-                    "Fastest responses with limited reasoning",
-                    None,
-                ),
-                ReasoningEffortPreset::new(
-                    ReasoningEffort::Medium,
-                    "Dynamically adjusts reasoning based on the task",
-                    None,
-                ),
-                ReasoningEffortPreset::new(
-                    ReasoningEffort::High,
-                    "Maximizes reasoning depth for complex or ambiguous problems",
-                    None,
-                ),
-            ],
+            supported_reasoning_efforts: GPT_51_CODEX_EFFORTS,
             is_default: false,
             upgrade: None,
         },
@@ -139,18 +197,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             display_name: "gpt-5.1-codex-mini",
             description: "Optimized for codex. Cheaper, faster, but less capable.",
             default_reasoning_effort: ReasoningEffort::Medium,
-            supported_reasoning_efforts: &[
-                ReasoningEffortPreset::new(
-                    ReasoningEffort::Medium,
-                    "Dynamically adjusts reasoning based on the task",
-                    None,
-                ),
-                ReasoningEffortPreset::new(
-                    ReasoningEffort::High,
-                    "Maximizes reasoning depth for complex or ambiguous problems",
-                    None,
-                ),
-            ],
+            supported_reasoning_efforts: GPT_51_CODEX_MINI_EFFORTS,
             is_default: false,
             upgrade: None,
         },
@@ -160,23 +207,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             display_name: "gpt-5.1",
             description: "Broad world knowledge with strong general reasoning.",
             default_reasoning_effort: ReasoningEffort::Medium,
-            supported_reasoning_efforts: &[
-                ReasoningEffortPreset::new(
-                    ReasoningEffort::Low,
-                    "Balances speed with some reasoning; useful for straightforward queries and short explanations",
-                    None,
-                ),
-                ReasoningEffortPreset::new(
-                    ReasoningEffort::Medium,
-                    "Provides a solid balance of reasoning depth and latency for general-purpose tasks",
-                    None,
-                ),
-                ReasoningEffortPreset::new(
-                    ReasoningEffort::High,
-                    "Maximizes reasoning depth for complex or ambiguous problems",
-                    None,
-                ),
-            ],
+            supported_reasoning_efforts: GPT_51_EFFORTS,
             is_default: false,
             upgrade: None,
         },
@@ -187,23 +218,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             display_name: "gpt-5-codex",
             description: "Optimized for codex.",
             default_reasoning_effort: ReasoningEffort::Medium,
-            supported_reasoning_efforts: &[
-                ReasoningEffortPreset::new(
-                    ReasoningEffort::Low,
-                    "Fastest responses with limited reasoning",
-                    None,
-                ),
-                ReasoningEffortPreset::new(
-                    ReasoningEffort::Medium,
-                    "Dynamically adjusts reasoning based on the task",
-                    None,
-                ),
-                ReasoningEffortPreset::new(
-                    ReasoningEffort::High,
-                    "Maximizes reasoning depth for complex or ambiguous problems",
-                    None,
-                ),
-            ],
+            supported_reasoning_efforts: GPT_51_CODEX_EFFORTS,
             is_default: false,
             upgrade: Some(ModelUpgrade {
                 id: "gpt-5.1-codex",
@@ -216,18 +231,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             display_name: "gpt-5-codex-mini",
             description: "Optimized for codex. Cheaper, faster, but less capable.",
             default_reasoning_effort: ReasoningEffort::Medium,
-            supported_reasoning_efforts: &[
-                ReasoningEffortPreset::new(
-                    ReasoningEffort::Medium,
-                    "Dynamically adjusts reasoning based on the task",
-                    None,
-                ),
-                ReasoningEffortPreset::new(
-                    ReasoningEffort::High,
-                    "Maximizes reasoning depth for complex or ambiguous problems",
-                    None,
-                ),
-            ],
+            supported_reasoning_efforts: GPT_51_CODEX_MINI_EFFORTS,
             is_default: false,
             upgrade: Some(ModelUpgrade {
                 id: "gpt-5.1-codex-mini",
@@ -240,28 +244,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             display_name: "gpt-5",
             description: "Broad world knowledge with strong general reasoning.",
             default_reasoning_effort: ReasoningEffort::Medium,
-            supported_reasoning_efforts: &[
-                ReasoningEffortPreset::new(
-                    ReasoningEffort::Minimal,
-                    "Fastest responses with little reasoning",
-                    None,
-                ),
-                ReasoningEffortPreset::new(
-                    ReasoningEffort::Low,
-                    "Balances speed with some reasoning; useful for straightforward queries and short explanations",
-                    None,
-                ),
-                ReasoningEffortPreset::new(
-                    ReasoningEffort::Medium,
-                    "Provides a solid balance of reasoning depth and latency for general-purpose tasks",
-                    None,
-                ),
-                ReasoningEffortPreset::new(
-                    ReasoningEffort::High,
-                    "Maximizes reasoning depth for complex or ambiguous problems",
-                    None,
-                ),
-            ],
+            supported_reasoning_efforts: GPT_5_EFFORTS,
             is_default: false,
             upgrade: Some(ModelUpgrade {
                 id: "gpt-5.1",

@@ -1818,7 +1818,7 @@ mod tests {
             .find(|line| line.contains("model:"))
             .expect("model line");
 
-        assert!(model_line.contains("gpt-4o Thorough"));
+        assert!(model_line.contains("gpt-4o high"));
         assert!(model_line.contains("/model to change"));
     }
 
