@@ -95,7 +95,7 @@ fn should_show_model_migration_prompt(
 
 fn format_model_change_target(model: &str, effort: Option<ReasoningEffortConfig>) -> String {
     if let Some(effort) = effort {
-        format!("{model} ({})", effort.label())
+        format!("{model} ({effort})")
     } else {
         format!("{model} with default reasoning")
     }

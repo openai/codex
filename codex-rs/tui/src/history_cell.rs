@@ -706,8 +706,8 @@ impl SessionHeaderHistoryCell {
         formatted
     }
 
-    fn reasoning_label(&self) -> Option<&'static str> {
-        self.reasoning_effort.map(|effort| effort.label())
+    fn reasoning_label(&self) -> Option<String> {
+        self.reasoning_effort.map(|effort| effort.to_string())
     }
 }
 

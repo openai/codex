@@ -1579,7 +1579,7 @@ fn single_reasoning_option_skips_selection() {
         display_name: "model-with-single-reasoning",
         description: "",
         default_reasoning_effort: ReasoningEffortConfig::High,
-        supported_reasoning_efforts: vec![ReasoningEffortPreset::new(
+        supported_reasoning_efforts: &[ReasoningEffortPreset::new(
             ReasoningEffortConfig::High,
             "Maximizes reasoning depth for complex or ambiguous problems",
             None,

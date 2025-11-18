@@ -2110,7 +2110,7 @@ impl ChatWidget {
                 });
             })];
 
-            let mut name = effort.label().to_string();
+            let mut name = option.label().to_string();
             let is_current_option = current_effort == Some(effort);
             if effort == default_effort && !is_current_option {
                 name.push_str(" (default)");
@@ -2139,7 +2139,7 @@ impl ChatWidget {
         preferred_effort: Option<ReasoningEffortConfig>,
     ) {
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
-        let supported = &preset.supported_reasoning_efforts;
+        let supported = preset.supported_reasoning_efforts;
 
         struct EffortChoice {
             stored: Option<ReasoningEffortConfig>,
@@ -2192,7 +2192,11 @@ impl ChatWidget {
         let mut items: Vec<SelectionItem> = Vec::new();
         for choice in choices.iter() {
             let effort = choice.display;
-            let mut effort_label = effort.label().to_string();
+            let mut effort_label = supported
+                .iter()
+                .find(|option| option.effort == effort)
+                .map(|option| option.label().to_string())
+                .unwrap_or_else(|| effort.to_string());
             let is_current_choice = is_current_model && choice.stored == highlight_choice;
             if choice.stored == default_choice && !is_current_choice {
                 effort_label.push_str(" (default)");

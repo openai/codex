@@ -19,16 +19,14 @@ fn model_from_preset(preset: ModelPreset) -> Model {
         display_name: preset.display_name.to_string(),
         description: preset.description.to_string(),
         supported_reasoning_efforts: reasoning_efforts_from_preset(
-            &preset.supported_reasoning_efforts,
+            preset.supported_reasoning_efforts,
         ),
         default_reasoning_effort: preset.default_reasoning_effort,
         is_default: preset.is_default,
     }
 }
 
-fn reasoning_efforts_from_preset(
-    efforts: &[ReasoningEffortPreset],
-) -> Vec<ReasoningEffortOption> {
+fn reasoning_efforts_from_preset(efforts: &[ReasoningEffortPreset]) -> Vec<ReasoningEffortOption> {
     efforts
         .iter()
         .map(|preset| ReasoningEffortOption {

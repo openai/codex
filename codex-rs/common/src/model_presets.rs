@@ -41,7 +41,18 @@ impl ReasoningEffortPreset {
     }
 
     pub fn label(&self) -> &'static str {
-        self.label.unwrap_or_else(|| self.effort.label())
+        self.label
+            .unwrap_or_else(|| default_reasoning_effort_label(self.effort))
+    }
+}
+
+const fn default_reasoning_effort_label(effort: ReasoningEffort) -> &'static str {
+    match effort {
+        ReasoningEffort::None => "None",
+        ReasoningEffort::Minimal => "Minimal",
+        ReasoningEffort::Low => "Low",
+        ReasoningEffort::Medium => "Medium",
+        ReasoningEffort::High => "High",
     }
 }
 
@@ -65,7 +76,7 @@ pub struct ModelPreset {
     /// Reasoning effort applied when none is explicitly chosen.
     pub default_reasoning_effort: ReasoningEffort,
     /// Supported reasoning effort options.
-    pub supported_reasoning_efforts: Vec<ReasoningEffortPreset>,
+    pub supported_reasoning_efforts: &'static [ReasoningEffortPreset],
     /// Whether this is the default model for new users.
     pub is_default: bool,
     /// recommended upgrade model
@@ -80,7 +91,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             display_name: "codex-auto",
             description: "Automatically chooses the best Codex model configuration for your task.",
             default_reasoning_effort: ReasoningEffort::Medium,
-            supported_reasoning_efforts: vec![
+            supported_reasoning_efforts: &[
                 ReasoningEffortPreset::with_label(ReasoningEffort::Low, "Works faster", "Fast"),
                 ReasoningEffortPreset::with_label(
                     ReasoningEffort::Medium,
@@ -102,7 +113,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             display_name: "gpt-5.1-codex",
             description: "Optimized for codex.",
             default_reasoning_effort: ReasoningEffort::Medium,
-            supported_reasoning_efforts: vec![
+            supported_reasoning_efforts: &[
                 ReasoningEffortPreset::new(
                     ReasoningEffort::Low,
                     "Fastest responses with limited reasoning",
@@ -128,7 +139,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             display_name: "gpt-5.1-codex-mini",
             description: "Optimized for codex. Cheaper, faster, but less capable.",
             default_reasoning_effort: ReasoningEffort::Medium,
-            supported_reasoning_efforts: vec![
+            supported_reasoning_efforts: &[
                 ReasoningEffortPreset::new(
                     ReasoningEffort::Medium,
                     "Dynamically adjusts reasoning based on the task",
@@ -149,7 +160,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             display_name: "gpt-5.1",
             description: "Broad world knowledge with strong general reasoning.",
             default_reasoning_effort: ReasoningEffort::Medium,
-            supported_reasoning_efforts: vec![
+            supported_reasoning_efforts: &[
                 ReasoningEffortPreset::new(
                     ReasoningEffort::Low,
                     "Balances speed with some reasoning; useful for straightforward queries and short explanations",
@@ -176,7 +187,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             display_name: "gpt-5-codex",
             description: "Optimized for codex.",
             default_reasoning_effort: ReasoningEffort::Medium,
-            supported_reasoning_efforts: vec![
+            supported_reasoning_efforts: &[
                 ReasoningEffortPreset::new(
                     ReasoningEffort::Low,
                     "Fastest responses with limited reasoning",
@@ -205,7 +216,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             display_name: "gpt-5-codex-mini",
             description: "Optimized for codex. Cheaper, faster, but less capable.",
             default_reasoning_effort: ReasoningEffort::Medium,
-            supported_reasoning_efforts: vec![
+            supported_reasoning_efforts: &[
                 ReasoningEffortPreset::new(
                     ReasoningEffort::Medium,
                     "Dynamically adjusts reasoning based on the task",
@@ -229,7 +240,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             display_name: "gpt-5",
             description: "Broad world knowledge with strong general reasoning.",
             default_reasoning_effort: ReasoningEffort::Medium,
-            supported_reasoning_efforts: vec![
+            supported_reasoning_efforts: &[
                 ReasoningEffortPreset::new(
                     ReasoningEffort::Minimal,
                     "Fastest responses with little reasoning",
@@ -281,8 +292,8 @@ impl ModelPreset {
         self.supported_reasoning_efforts
             .iter()
             .find(|option| option.effort == effort)
-            .map(|option| option.label())
-            .unwrap_or_else(|| effort.label())
+            .map(ReasoningEffortPreset::label)
+            .unwrap_or_else(|| default_reasoning_effort_label(effort))
     }
 }
 #[cfg(test)]
