@@ -40,9 +40,9 @@ async fn truncate_function_error_trims_respond_to_model() -> Result<()> {
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
         // Use the test model that wires function tools like grep_files
-        config.model = "test-gpt-5-codex".to_string();
+        config.model = "test-gpt-5.1-codex".to_string();
         config.model_family =
-            find_family_for_model("test-gpt-5-codex").expect("model family for test model");
+            find_family_for_model("test-gpt-5.1-codex").expect("model family for test model");
     });
     let test = builder.build(&server).await?;
 
@@ -108,9 +108,9 @@ async fn tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> {
 
     // Use a model that exposes the generic shell tool.
     let mut builder = test_codex().with_config(|config| {
-        config.model = "gpt-5-codex".to_string();
+        config.model = "gpt-5.1-codex".to_string();
         config.model_family =
-            find_family_for_model("gpt-5-codex").expect("gpt-5-codex is a model family");
+            find_family_for_model("gpt-5.1-codex").expect("gpt-5.1-codex is a model family");
     });
     let fixture = builder.build(&server).await?;
 
@@ -200,9 +200,9 @@ async fn tool_call_output_truncated_only_once() -> Result<()> {
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.model = "gpt-5-codex".to_string();
+        config.model = "gpt-5.1-codex".to_string();
         config.model_family =
-            find_family_for_model("gpt-5-codex").expect("gpt-5-codex is a model family");
+            find_family_for_model("gpt-5.1-codex").expect("gpt-5.1-codex is a model family");
     });
     let fixture = builder.build(&server).await?;
     let call_id = "shell-single-truncation";

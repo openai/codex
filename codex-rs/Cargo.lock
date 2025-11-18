@@ -874,7 +874,6 @@ dependencies = [
  "clap",
  "codex-protocol",
  "mcp-types",
- "paste",
  "pretty_assertions",
  "schemars 0.8.22",
  "serde",
@@ -1061,6 +1060,8 @@ dependencies = [
  "clap",
  "codex-app-server-protocol",
  "codex-core",
+ "codex-lmstudio",
+ "codex-ollama",
  "codex-protocol",
  "once_cell",
  "serde",
@@ -1159,7 +1160,6 @@ dependencies = [
  "codex-arg0",
  "codex-common",
  "codex-core",
- "codex-ollama",
  "codex-protocol",
  "core_test_support",
  "libc",
@@ -1200,6 +1200,21 @@ dependencies = [
  "serde_with",
  "starlark",
  "tempfile",
+]
+
+[[package]]
+name = "codex-execpolicy2"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "multimap",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "shlex",
+ "starlark",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -1261,6 +1276,19 @@ dependencies = [
  "seccompiler",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "codex-lmstudio"
+version = "0.0.0"
+dependencies = [
+ "codex-core",
+ "reqwest",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "which",
+ "wiremock",
 ]
 
 [[package]]
@@ -1427,6 +1455,7 @@ dependencies = [
  "tracing",
  "urlencoding",
  "webbrowser",
+ "which",
 ]
 
 [[package]]
@@ -1454,12 +1483,12 @@ dependencies = [
  "codex-ansi-escape",
  "codex-app-server-protocol",
  "codex-arg0",
+ "codex-backend-client",
  "codex-common",
  "codex-core",
  "codex-feedback",
  "codex-file-search",
  "codex-login",
- "codex-ollama",
  "codex-protocol",
  "codex-windows-sandbox",
  "color-eyre",
@@ -1482,6 +1511,7 @@ dependencies = [
  "ratatui",
  "ratatui-macros",
  "regex-lite",
+ "reqwest",
  "serde",
  "serde_json",
  "serial_test",

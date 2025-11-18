@@ -19,11 +19,11 @@ Use this example configuration as a starting point. For an explanation of each f
 ################################################################################
 
 # Primary model used by Codex. Default differs by OS; non-Windows defaults here.
-# Linux/macOS default: "gpt-5-codex"; Windows default: "gpt-5".
-model = "gpt-5-codex"
+# Linux/macOS default: "gpt-5.1-codex"; Windows default: "gpt-5.1".
+model = "gpt-5.1-codex"
 
-# Model used by the /review feature (code reviews). Default: "gpt-5-codex".
-review_model = "gpt-5-codex"
+# Model used by the /review feature (code reviews). Default: "gpt-5.1-codex".
+review_model = "gpt-5.1-codex"
 
 # Provider id selected from [model_providers]. Default: "openai".
 model_provider = "openai"
@@ -316,7 +316,7 @@ mcp_oauth_credentials_store = "auto"
 [profiles]
 
 # [profiles.default]
-# model = "gpt-5-codex"
+# model = "gpt-5.1-codex"
 # model_provider = "openai"
 # approval_policy = "on-request"
 # sandbox_mode = "read-only"

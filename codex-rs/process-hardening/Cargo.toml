@@ -11,11 +11,4 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
-[target.'cfg(target_os = "linux")'.dependencies]
-libc = { workspace = true }
-
-[target.'cfg(target_os = "android")'.dependencies]
-libc = { workspace = true }
-
-[target.'cfg(target_os = "macos")'.dependencies]
 libc = { workspace = true }
