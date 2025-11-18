@@ -28,7 +28,7 @@ mod compact_remote;
 mod compact_resume_fork;
 mod deprecation_notice;
 mod exec;
-mod execpolicy2;
+mod execpolicy;
 mod fork_conversation;
 mod grep_files;
 mod items;
