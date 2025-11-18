@@ -1,10 +1,14 @@
 use crate::codex::TurnContext;
+use crate::protocol::EventMsg;
+use crate::protocol::WarningEvent;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
 use async_trait::async_trait;
 use codex_git::CreateGhostCommitOptions;
+use codex_git::GhostSnapshotReport;
 use codex_git::GitToolingError;
+use codex_git::capture_ghost_snapshot_report;
 use codex_git::create_ghost_commit;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
@@ -39,6 +43,43 @@ impl SessionTask for GhostSnapshotTask {
                 _ = cancellation_token.cancelled() => true,
                 _ = async {
                     let repo_path = ctx_for_task.cwd.clone();
+                    // First, compute a snapshot report so we can warn about
+                    // large untracked directories before running the heavier
+                    // snapshot logic.
+                    match tokio::task::spawn_blocking({
+                        let repo_path = repo_path.clone();
+                        move || {
+                            let options = CreateGhostCommitOptions::new(&repo_path);
+                            capture_ghost_snapshot_report(&options)
+                        }
+                    })
+                    .await
+                    {
+                        Ok(Ok(report)) => {
+                            if let Some(message) = format_large_untracked_warning(&report) {
+                                session
+                                    .session
+                                    .send_event(
+                                        &ctx_for_task,
+                                        EventMsg::Warning(WarningEvent { message }),
+                                    )
+                                    .await;
+                            }
+                        }
+                        Ok(Err(err)) => {
+                            warn!(
+                                sub_id = ctx_for_task.sub_id.as_str(),
+                                "failed to compute ghost snapshot report: {err}"
+                            );
+                        }
+                        Err(err) => {
+                            warn!(
+                                sub_id = ctx_for_task.sub_id.as_str(),
+                                "ghost snapshot report task panicked: {err}"
+                            );
+                        }
+                    }
+
                     // Required to run in a dedicated blocking pool.
                     match tokio::task::spawn_blocking(move || {
                         let options = CreateGhostCommitOptions::new(&repo_path);
@@ -106,5 +147,36 @@ impl SessionTask for GhostSnapshotTask {
 impl GhostSnapshotTask {
     pub(crate) fn new(token: Token) -> Self {
         Self { token }
+    }
+}
+
+fn format_large_untracked_warning(report: &GhostSnapshotReport) -> Option<String> {
+    if report.large_untracked_dirs.is_empty() {
+        return None;
+    }
+    const MAX_DIRS: usize = 3;
+    let mut parts: Vec<String> = Vec::new();
+    for dir in report.large_untracked_dirs.iter().take(MAX_DIRS) {
+        parts.push(format!(
+            "{} ({})",
+            dir.path.display(),
+            describe_file_count(dir.file_count)
+        ));
+    }
+    if report.large_untracked_dirs.len() > MAX_DIRS {
+        let remaining = report.large_untracked_dirs.len() - MAX_DIRS;
+        parts.push(format!("{remaining} more"));
+    }
+    Some(format!(
+        "Ghost snapshots encountered large untracked directories: {}. This can slow Codex; consider adding these paths to .gitignore or disabling undo snapshots in your config.",
+        parts.join(", ")
+    ))
+}
+
+fn describe_file_count(count: usize) -> String {
+    if count == 1 {
+        "1 file".to_string()
+    } else {
+        format!("{count} files")
     }
 }
