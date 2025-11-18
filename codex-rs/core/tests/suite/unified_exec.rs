@@ -1585,8 +1585,9 @@ PY
     let outputs = collect_tool_outputs(&bodies)?;
     let large_output = outputs.get(call_id).expect("missing large output summary");
 
-    let output_text = &large_output.output;
-    assert_regex_match(r"(?s)tokens truncated", output_text);
+    let output_text = large_output.output.replace("\r\n", "\n");
+    let truncated_pattern = r#"(?s)^(token token \n){5,}.*\[\u{2026}\d+ tokens truncated\u{2026}]\n(token token \n){5,}$"#;
+    assert_regex_match(truncated_pattern, &output_text);
 
     let original_tokens = large_output
         .original_token_count

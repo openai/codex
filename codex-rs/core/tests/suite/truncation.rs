@@ -27,7 +27,6 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use escargot::CargoBuild;
-use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
@@ -455,18 +454,6 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
     Ok(())
 }
 
-fn extract_truncated_count(output: &str) -> u64 {
-    let re = Regex::new(r"\[\u2026(?P<count>\d+) (tokens|bytes) truncated\u2026]").unwrap();
-    let caps = re
-        .captures(output)
-        .unwrap_or_else(|| panic!("missing truncation marker in output: {output}"));
-    caps.name("count")
-        .unwrap()
-        .as_str()
-        .parse()
-        .expect("count parses")
-}
-
 // Token-based policy should report token counts even when truncation is byte-estimated.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn token_policy_marker_reports_tokens() -> Result<()> {
@@ -514,16 +501,7 @@ async fn token_policy_marker_reports_tokens() -> Result<()> {
         .function_call_output_text(call_id)
         .context("shell output present")?;
 
-    assert!(
-        output.contains("tokens truncated"),
-        "marker should use tokens: {output}"
-    );
-
-    let marker_tokens = extract_truncated_count(&output);
-    assert!(
-        marker_tokens > 0,
-        "token marker should carry a positive count"
-    );
+    assert_regex_match(r"\[\u{2026}127 tokens truncated\u{2026}]", &output);
 
     Ok(())
 }
@@ -574,16 +552,7 @@ async fn byte_policy_marker_reports_bytes() -> Result<()> {
         .function_call_output_text(call_id)
         .context("shell output present")?;
 
-    assert!(
-        output.contains("bytes truncated"),
-        "marker should use bytes: {output}"
-    );
-
-    let marker_bytes = extract_truncated_count(&output);
-    assert!(
-        marker_bytes > 0,
-        "byte marker should carry a positive count"
-    );
+    assert_regex_match(r"\[\u{2026}505 bytes truncated\u{2026}]", &output);
 
     Ok(())
 }

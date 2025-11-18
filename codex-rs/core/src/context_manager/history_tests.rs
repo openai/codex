@@ -258,7 +258,7 @@ fn normalization_retains_local_shell_outputs() {
 
 #[test]
 fn record_items_truncates_function_call_output_content() {
-    let model = OPENAI_DEFAULT_MODEL;
+    let model = "gpt-5.1-codex";
     let max_tokens = find_family_for_model(model)
         .unwrap_or_else(|| derive_default_model_family(model))
         .truncation_policy
@@ -288,8 +288,7 @@ fn record_items_truncates_function_call_output_content() {
                 output.content
             );
             assert!(
-                output.content.contains("tokens truncated")
-                    || output.content.contains("bytes truncated"),
+                output.content.contains("tokens truncated"),
                 "expected truncation marker, got {}",
                 output.content
             );

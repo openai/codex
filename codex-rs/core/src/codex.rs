@@ -179,7 +179,6 @@ impl Codex {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: config.features.clone(),
-            output_max_tokens: config.calls_output_max_tokens,
             session_source,
         };
 
@@ -335,8 +334,6 @@ pub(crate) struct SessionConfiguration {
     /// Set of feature flags for this session
     features: Features,
 
-    output_max_tokens: Option<usize>,
-
     // TODO(pakrym): Remove config from here
     original_config_do_not_use: Arc<Config>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
@@ -348,8 +345,6 @@ impl SessionConfiguration {
         let mut next_configuration = self.clone();
         if let Some(model) = updates.model.clone() {
             next_configuration.model = model;
-            // TODO (aibrahim): recompute output_max_tokens/calls_output_max_tokens when the model changes so
-            // truncation budgets keep matching the current model.
         }
         if let Some(effort) = updates.reasoning_effort {
             next_configuration.model_reasoning_effort = effort;
@@ -2578,7 +2573,6 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
-            output_max_tokens: config.calls_output_max_tokens,
             session_source: SessionSource::Exec,
         };
 
@@ -2656,7 +2650,6 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
-            output_max_tokens: config.calls_output_max_tokens,
             session_source: SessionSource::Exec,
         };
 

@@ -20,8 +20,8 @@ use tokio::task::JoinError;
 
 pub type Result<T> = std::result::Result<T, CodexErr>;
 
-/// Limit UI error messages to a reasonable token budget (~2 KiB of text).
-const ERROR_MESSAGE_UI_MAX_TOKENS: usize = (2 * 1024) / 4;
+/// Limit UI error messages to a reasonable size while keeping useful context.
+const ERROR_MESSAGE_UI_MAX_BYTES: usize = 2 * 1024; // 4 KiB
 
 #[derive(Error, Debug)]
 pub enum SandboxErr {
@@ -464,7 +464,7 @@ pub fn get_error_message_ui(e: &CodexErr) -> String {
 
     truncate_text(
         &message,
-        TruncationPolicy::Bytes(ERROR_MESSAGE_UI_MAX_TOKENS),
+        TruncationPolicy::Bytes(ERROR_MESSAGE_UI_MAX_BYTES),
     )
 }
 
