@@ -304,7 +304,7 @@ impl ShellHandler {
             with_escalated_permissions: exec_params.with_escalated_permissions,
             justification: exec_params.justification.clone(),
             approval_requirement: approval_requirement_for_command(
-                turn.exec_policy.as_deref(),
+                &turn.exec_policy,
                 &exec_params.command,
                 turn.approval_policy,
                 &turn.sandbox_policy,

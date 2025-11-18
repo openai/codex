@@ -1,4 +1,7 @@
 use std::fs;
+use std::fs::OpenOptions;
+use std::io::ErrorKind;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -19,6 +22,10 @@ use crate::tools::sandboxing::ApprovalRequirement;
 
 const FORBIDDEN_REASON: &str = "execpolicy forbids this command";
 const PROMPT_REASON: &str = "execpolicy requires approval for this command";
+const POLICY_DIR_NAME: &str = "policy";
+const POLICY_EXTENSION: &str = "codexpolicy";
+const DEFAULT_POLICY_FILENAME: &str = "default.codexpolicy";
+const DEFAULT_POLICY_CONTENT: &str = "# Codex execpolicy rules\n";
 
 #[derive(Debug, Error)]
 pub enum ExecPolicyError {
@@ -39,51 +46,33 @@ pub enum ExecPolicyError {
         path: String,
         source: codex_execpolicy2::Error,
     },
+
+    #[error("failed to create execpolicy directory {path}: {source}")]
+    CreatePolicyDir {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+
+    #[error("failed to create default execpolicy file {path}: {source}")]
+    CreateDefaultPolicy {
+        path: PathBuf,
+        source: std::io::Error,
+    },
 }
 
 pub(crate) fn exec_policy_for(
     features: &Features,
     codex_home: &Path,
-) -> Result<Option<Arc<Policy>>, ExecPolicyError> {
+) -> Result<Arc<Policy>, ExecPolicyError> {
     if !features.enabled(Feature::ExecPolicy) {
-        return Ok(None);
+        return Ok(Arc::new(Policy::empty()));
     }
 
-    let policy_dir = codex_home.to_path_buf();
-    let entries = match fs::read_dir(&policy_dir) {
-        Ok(entries) => entries,
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(source) => {
-            return Err(ExecPolicyError::ReadDir {
-                dir: policy_dir,
-                source,
-            });
-        }
-    };
+    let policy_dir = codex_home.join(POLICY_DIR_NAME);
+    ensure_policy_dir(&policy_dir)?;
+    ensure_default_policy_file(&policy_dir)?;
 
-    let entries = entries
-        .map(|entry| {
-            entry.map_err(|source| ExecPolicyError::ReadDir {
-                dir: policy_dir.clone(),
-                source,
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let mut policy_paths: Vec<PathBuf> = Vec::with_capacity(entries.len());
-    for entry in entries {
-        let path = entry.path();
-        if path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| ext == "codexpolicy")
-            && path.is_file()
-        {
-            policy_paths.push(path);
-        }
-    }
-
-    policy_paths.sort();
+    let policy_paths = collect_policy_files(&policy_dir)?;
 
     let mut parser = PolicyParser::new();
     for policy_path in &policy_paths {
@@ -108,7 +97,7 @@ pub(crate) fn exec_policy_for(
         policy_dir.display()
     );
 
-    Ok(Some(policy))
+    Ok(policy)
 }
 
 fn evaluate_with_policy(
@@ -141,15 +130,13 @@ fn evaluate_with_policy(
 }
 
 pub(crate) fn approval_requirement_for_command(
-    policy: Option<&Policy>,
+    policy: &Policy,
     command: &[String],
     approval_policy: AskForApproval,
     sandbox_policy: &SandboxPolicy,
     with_escalated_permissions: bool,
 ) -> ApprovalRequirement {
-    if let Some(policy) = policy
-        && let Some(requirement) = evaluate_with_policy(policy, command, approval_policy)
-    {
+    if let Some(requirement) = evaluate_with_policy(policy, command, approval_policy) {
         return requirement;
     }
 
@@ -165,6 +152,71 @@ pub(crate) fn approval_requirement_for_command(
     }
 }
 
+fn collect_policy_files(dir: &Path) -> Result<Vec<PathBuf>, ExecPolicyError> {
+    let entries = fs::read_dir(dir).map_err(|source| ExecPolicyError::ReadDir {
+        dir: dir.to_path_buf(),
+        source,
+    })?;
+
+    let mut policy_paths = entries
+        .map(|entry| {
+            let entry = entry.map_err(|source| ExecPolicyError::ReadDir {
+                dir: dir.to_path_buf(),
+                source,
+            })?;
+            let path = entry.path();
+            if path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext == POLICY_EXTENSION)
+                && path.is_file()
+            {
+                Ok(Some(path))
+            } else {
+                Ok(None)
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+
+    policy_paths.sort();
+
+    Ok(policy_paths)
+}
+
+fn ensure_policy_dir(policy_dir: &Path) -> Result<(), ExecPolicyError> {
+    match fs::create_dir_all(policy_dir) {
+        Ok(()) => Ok(()),
+        Err(source) => Err(ExecPolicyError::CreatePolicyDir {
+            path: policy_dir.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+fn ensure_default_policy_file(policy_dir: &Path) -> Result<(), ExecPolicyError> {
+    let default_path = policy_dir.join(DEFAULT_POLICY_FILENAME);
+    let maybe_file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&default_path);
+    match maybe_file {
+        Ok(mut file) => file
+            .write_all(DEFAULT_POLICY_CONTENT.as_bytes())
+            .map_err(|source| ExecPolicyError::CreateDefaultPolicy {
+                path: default_path.clone(),
+                source,
+            }),
+        Err(err) if err.kind() == ErrorKind::AlreadyExists => Ok(()),
+        Err(source) => Err(ExecPolicyError::CreateDefaultPolicy {
+            path: default_path,
+            source,
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,26 +228,69 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn returns_none_when_feature_disabled() {
+    fn returns_empty_policy_when_feature_disabled() {
         let mut features = Features::with_defaults();
         features.disable(Feature::ExecPolicy);
         let temp_dir = tempdir().expect("create temp dir");
 
         let policy = exec_policy_for(&features, temp_dir.path()).expect("policy result");
 
-        assert!(policy.is_none());
+        let commands = [vec!["rm".to_string()]];
+        assert!(matches!(
+            policy.check_multiple(commands.iter()),
+            Evaluation::NoMatch
+        ));
+        assert!(!temp_dir.path().join(POLICY_DIR_NAME).exists());
     }
 
     #[test]
-    fn returns_none_when_policy_dir_is_missing() {
-        let mut features = Features::with_defaults();
-        features.enable(Feature::ExecPolicy);
+    fn creates_policy_dir_and_default_file_when_missing() {
         let temp_dir = tempdir().expect("create temp dir");
-        let missing_dir = temp_dir.path().join("missing");
 
-        let policy = exec_policy_for(&features, &missing_dir).expect("policy result");
+        let _policy =
+            exec_policy_for(&Features::with_defaults(), temp_dir.path()).expect("policy result");
 
-        assert!(policy.is_none());
+        let policy_dir = temp_dir.path().join(POLICY_DIR_NAME);
+        assert!(policy_dir.exists());
+        assert!(policy_dir.join(DEFAULT_POLICY_FILENAME).exists());
+    }
+
+    #[test]
+    fn loads_policies_from_policy_subdirectory() {
+        let temp_dir = tempdir().expect("create temp dir");
+        let policy_dir = temp_dir.path().join(POLICY_DIR_NAME);
+        fs::create_dir_all(&policy_dir).expect("create policy dir");
+        fs::write(
+            policy_dir.join("deny.codexpolicy"),
+            r#"prefix_rule(pattern=["rm"], decision="forbidden")"#,
+        )
+        .expect("write policy file");
+
+        let policy =
+            exec_policy_for(&Features::with_defaults(), temp_dir.path()).expect("policy result");
+        let command = [vec!["rm".to_string()]];
+        assert!(matches!(
+            policy.check_multiple(command.iter()),
+            Evaluation::Match { .. }
+        ));
+    }
+
+    #[test]
+    fn ignores_policies_outside_policy_dir() {
+        let temp_dir = tempdir().expect("create temp dir");
+        fs::write(
+            temp_dir.path().join("root.codexpolicy"),
+            r#"prefix_rule(pattern=["ls"], decision="prompt")"#,
+        )
+        .expect("write policy file");
+
+        let policy =
+            exec_policy_for(&Features::with_defaults(), temp_dir.path()).expect("policy result");
+        let command = [vec!["ls".to_string()]];
+        assert!(matches!(
+            policy.check_multiple(command.iter()),
+            Evaluation::NoMatch
+        ));
     }
 
     #[test]
@@ -238,7 +333,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         let command = vec!["rm".to_string()];
 
         let requirement = approval_requirement_for_command(
-            Some(&policy),
+            &policy,
             &command,
             AskForApproval::OnRequest,
             &SandboxPolicy::DangerFullAccess,
@@ -264,7 +359,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         let command = vec!["rm".to_string()];
 
         let requirement = approval_requirement_for_command(
-            Some(&policy),
+            &policy,
             &command,
             AskForApproval::Never,
             &SandboxPolicy::DangerFullAccess,
@@ -283,8 +378,9 @@ prefix_rule(pattern=["rm"], decision="forbidden")
     fn approval_requirement_falls_back_to_heuristics() {
         let command = vec!["python".to_string()];
 
+        let empty_policy = Policy::empty();
         let requirement = approval_requirement_for_command(
-            None,
+            &empty_policy,
             &command,
             AskForApproval::UnlessTrusted,
             &SandboxPolicy::ReadOnly,
