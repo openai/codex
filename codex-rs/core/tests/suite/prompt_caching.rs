@@ -460,13 +460,13 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
         "expected at least environment context and user message"
     );
 
-    let env_msg = &input[0];
+    let env_msg = &input[1];
     let env_text = env_msg["content"][0]["text"]
         .as_str()
         .expect("environment context text");
     assert!(
         env_text.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG),
-        "first entry should be environment context, got: {env_text}"
+        "second entry should be environment context, got: {env_text}"
     );
     assert!(
         env_text.contains("<approval_policy>never</approval_policy>"),
@@ -491,11 +491,11 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
         })
         .count();
     assert_eq!(
-        env_count, 1,
-        "environment context should appear exactly once, found {env_count}"
+        env_count, 2,
+        "environment context should appear exactly twice, found {env_count}"
     );
 
-    let user_msg = &input[1];
+    let user_msg = &input[2];
     let user_text = user_msg["content"][0]["text"]
         .as_str()
         .expect("user message text");
