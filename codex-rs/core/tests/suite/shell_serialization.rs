@@ -451,7 +451,6 @@ async fn shell_output_reserializes_truncated_content(output_type: ShellModelOutp
     );
     let truncated_pattern = r#"(?s)^Exit code: 0
 Wall time: [0-9]+(?:\.[0-9]+)? seconds
-Total output lines: 400
 Output:
 1
 2
@@ -459,9 +458,6 @@ Output:
 4
 5
 6
-.*
-\[\.{3} omitted \d+ of 400 lines \.{3}\]
-
 .*
 396
 397

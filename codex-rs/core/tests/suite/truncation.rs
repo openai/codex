@@ -162,14 +162,13 @@ async fn tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> {
         .context("function_call_output present for shell call")?;
     let output = output.replace("\r\n", "\n");
 
-    // Expect plain text (not JSON) with truncation markers and line elision.
+    // Expect plain text (not JSON) containing the entire shell output.
     assert!(
         serde_json::from_str::<Value>(&output).is_err(),
         "expected truncated shell output to be plain text"
     );
     let truncated_pattern = r#"(?s)^Exit code: 0
-Wall time: .* seconds
-Total output lines: 400
+Wall time: [0-9]+(?:\.[0-9]+)? seconds
 Output:
 1
 2
@@ -177,9 +176,6 @@ Output:
 4
 5
 6
-.*
-\[\.{3} omitted 144 of 400 lines \.{3}\]
-
 .*
 396
 397
@@ -211,13 +207,13 @@ async fn tool_call_output_truncated_only_once() -> Result<()> {
             "command": [
                 "powershell",
                 "-Command",
-                "for ($i=1; $i -le 2000; $i++) { Write-Output $i }"
+                "for ($i=1; $i -le 10000; $i++) { Write-Output $i }"
             ],
             "timeout_ms": 5_000,
         })
     } else {
         serde_json::json!({
-            "command": ["/bin/sh", "-c", "seq 1 2000"],
+            "command": ["/bin/sh", "-c", "seq 1 10000"],
             "timeout_ms": 5_000,
         })
     };
@@ -249,11 +245,11 @@ async fn tool_call_output_truncated_only_once() -> Result<()> {
         .function_call_output_text(call_id)
         .context("function_call_output present for shell call")?;
 
-    let total_line_headers = output.matches("Total output lines:").count();
+    let truncation_markers = output.matches("tokens truncated").count();
 
     assert_eq!(
-        total_line_headers, 1,
-        "shell output should carry only one truncation header: {output}"
+        truncation_markers, 1,
+        "shell output should carry only one truncation marker: {output}"
     );
 
     Ok(())
@@ -501,7 +497,7 @@ async fn token_policy_marker_reports_tokens() -> Result<()> {
         .function_call_output_text(call_id)
         .context("shell output present")?;
 
-    assert_regex_match(r"\[\u{2026}127 tokens truncated\u{2026}]", &output);
+    assert_regex_match(r"\[\u{2026}28 tokens truncated\u{2026}]", &output);
 
     Ok(())
 }
@@ -552,14 +548,14 @@ async fn byte_policy_marker_reports_bytes() -> Result<()> {
         .function_call_output_text(call_id)
         .context("shell output present")?;
 
-    assert_regex_match(r"\[\u{2026}505 bytes truncated\u{2026}]", &output);
+    assert_regex_match(r"\[\u{2026}112 bytes truncated\u{2026}]", &output);
 
     Ok(())
 }
 
-// Overriding config with a large token budget should avoid truncation.
+// Shell tool output should remain intact when the config opts into a large token budget.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn large_budget_avoids_truncation() -> Result<()> {
+async fn shell_tool_output_not_truncated_with_custom_limit() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -576,6 +572,7 @@ async fn large_budget_avoids_truncation() -> Result<()> {
         "command": ["/bin/sh", "-c", "seq 1 1000"],
         "timeout_ms": 5_000,
     });
+    let expected_body: String = (1..=1000).map(|i| format!("{i}\n")).collect();
 
     mount_sse_once(
         &server,
@@ -608,8 +605,97 @@ async fn large_budget_avoids_truncation() -> Result<()> {
         .context("shell output present")?;
 
     assert!(
+        output.ends_with(&expected_body),
+        "expected entire shell output when budget increased: {output}"
+    );
+    assert!(
         !output.contains("truncated"),
         "output should remain untruncated with ample budget"
+    );
+
+    Ok(())
+}
+
+// MCP server output should also remain intact when the config increases the token limit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn mcp_tool_call_output_not_truncated_with_custom_limit() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let call_id = "rmcp-untruncated";
+    let server_name = "rmcp";
+    let tool_name = format!("mcp__{server_name}__echo");
+    let large_msg = "long-message-with-newlines-".repeat(6000);
+    let args_json = serde_json::json!({ "message": large_msg });
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_function_call(call_id, &tool_name, &args_json.to_string()),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let mock2 = mount_sse_once(
+        &server,
+        sse(vec![
+            responses::ev_assistant_message("msg-1", "rmcp echo tool completed."),
+            responses::ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    let rmcp_test_server_bin = CargoBuild::new()
+        .package("codex-rmcp-client")
+        .bin("test_stdio_server")
+        .run()?
+        .path()
+        .to_string_lossy()
+        .into_owned();
+
+    let mut builder = test_codex().with_config(move |config| {
+        config.features.enable(Feature::RmcpClient);
+        config.tool_output_token_limit = Some(50_000);
+        config.mcp_servers.insert(
+            server_name.to_string(),
+            codex_core::config::types::McpServerConfig {
+                transport: codex_core::config::types::McpServerTransportConfig::Stdio {
+                    command: rmcp_test_server_bin,
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                enabled: true,
+                startup_timeout_sec: Some(std::time::Duration::from_secs(10)),
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+            },
+        );
+    });
+    let fixture = builder.build(&server).await?;
+
+    fixture
+        .submit_turn_with_policy(
+            "call the rmcp echo tool with a very large message",
+            SandboxPolicy::ReadOnly,
+        )
+        .await?;
+
+    let output = mock2
+        .single_request()
+        .function_call_output_text(call_id)
+        .context("function_call_output present for rmcp call")?;
+
+    let parsed: Value = serde_json::from_str(&output)?;
+    let expected_echo = format!("ECHOING: {large_msg}");
+    assert_eq!(parsed["echo"], expected_echo);
+    assert!(
+        !output.contains("truncated"),
+        "output should not include truncation markers when limit is raised: {output}"
     );
 
     Ok(())

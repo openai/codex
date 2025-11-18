@@ -249,14 +249,11 @@ async fn user_shell_command_output_is_truncated_in_history() -> anyhow::Result<(
         .expect("command message recorded in request");
     let command_message = command_message.replace("\r\n", "\n");
 
-    let head = (1..=128).map(|i| format!("{i}\n")).collect::<String>();
-    let tail = (273..=400).map(|i| format!("{i}\n")).collect::<String>();
-    let truncated_body =
-        format!("Total output lines: 400\n\n{head}\n[... omitted 144 of 400 lines ...]\n\n{tail}");
+    let body = (1..=400).map(|i| format!("{i}\n")).collect::<String>();
     let escaped_command = escape(&command);
-    let escaped_truncated_body = escape(&truncated_body);
+    let escaped_body = escape(&body);
     let expected_pattern = format!(
-        r"(?m)\A<user_shell_command>\n<command>\n{escaped_command}\n</command>\n<result>\nExit code: 0\nDuration: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\n{escaped_truncated_body}\n</result>\n</user_shell_command>\z"
+        r"(?m)\A<user_shell_command>\n<command>\n{escaped_command}\n</command>\n<result>\nExit code: 0\nDuration: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\n{escaped_body}\n</result>\n</user_shell_command>\z"
     );
     assert_regex_match(&expected_pattern, &command_message);
 
@@ -282,13 +279,13 @@ async fn user_shell_command_is_truncated_only_once() -> anyhow::Result<()> {
             "command": [
                 "powershell",
                 "-Command",
-                "for ($i=1; $i -le 2000; $i++) { Write-Output $i }"
+                "for ($i=1; $i -le 10000; $i++) { Write-Output $i }"
             ],
             "timeout_ms": 5_000,
         })
     } else {
         serde_json::json!({
-            "command": ["/bin/sh", "-c", "seq 1 2000"],
+            "command": ["/bin/sh", "-c", "seq 1 10000"],
             "timeout_ms": 5_000,
         })
     };
@@ -320,11 +317,11 @@ async fn user_shell_command_is_truncated_only_once() -> anyhow::Result<()> {
         .function_call_output_text(call_id)
         .context("function_call_output present for shell call")?;
 
-    let truncation_headers = output.matches("Total output lines:").count();
+    let truncation_markers = output.matches("tokens truncated").count();
 
     assert_eq!(
-        truncation_headers, 1,
-        "shell output should carry only one truncation header: {output}"
+        truncation_markers, 1,
+        "shell output should carry only one truncation marker: {output}"
     );
 
     Ok(())
