@@ -129,37 +129,36 @@ pub async fn main() -> anyhow::Result<()> {
         .with_ansi(false)
         .init();
 
-    if let Some(subcommand) = cli.subcommand {
-        match subcommand {
-            Commands::Escalate(args) => {
-                std::process::exit(args.run().await?);
-            }
-            Commands::ShellExec(args) => {
-                let bash_path = mcp::get_bash_path()?;
-                let escalate_server = EscalateServer::new(bash_path, dummy_exec_policy);
-                let result = escalate_server
-                    .exec(
-                        args.command.clone(),
-                        std::env::vars().collect(),
-                        std::env::current_dir()?,
-                        None,
-                    )
-                    .await?;
-                println!("{result:?}");
-                std::process::exit(result.exit_code);
-            }
+    match cli.subcommand {
+        Some(Commands::Escalate(args)) => {
+            std::process::exit(args.run().await?);
+        }
+        Some(Commands::ShellExec(args)) => {
+            let bash_path = mcp::get_bash_path()?;
+            let escalate_server = EscalateServer::new(bash_path, dummy_exec_policy);
+            let result = escalate_server
+                .exec(
+                    args.command.clone(),
+                    std::env::vars().collect(),
+                    std::env::current_dir()?,
+                    None,
+                )
+                .await?;
+            println!("{result:?}");
+            std::process::exit(result.exit_code);
+        }
+        None => {
+            let bash_path = mcp::get_bash_path()?;
+
+            tracing::info!("Starting MCP server");
+            let service = mcp::serve(bash_path, dummy_exec_policy)
+                .await
+                .inspect_err(|e| {
+                    tracing::error!("serving error: {:?}", e);
+                })?;
+
+            service.waiting().await?;
+            Ok(())
         }
     }
-
-    let bash_path = mcp::get_bash_path()?;
-
-    tracing::info!("Starting MCP server");
-    let service = mcp::serve(bash_path, dummy_exec_policy)
-        .await
-        .inspect_err(|e| {
-            tracing::error!("serving error: {:?}", e);
-        })?;
-
-    service.waiting().await?;
-    Ok(())
 }
