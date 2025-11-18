@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use codex_app_server_protocol::AuthMode;
 use codex_core::ContentItem;
 use codex_core::LocalShellAction;
 use codex_core::LocalShellExecAction;
@@ -7,12 +8,13 @@ use codex_core::LocalShellStatus;
 use codex_core::ModelClient;
 use codex_core::ModelProviderInfo;
 use codex_core::Prompt;
-use codex_core::ReasoningItemContent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
-use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
-use codex_protocol::mcp_protocol::ConversationId;
+use codex_otel::otel_event_manager::OtelEventManager;
+use codex_protocol::ConversationId;
+use codex_protocol::models::ReasoningItemContent;
 use core_test_support::load_default_config_for_test;
+use core_test_support::skip_if_no_network;
 use futures::StreamExt;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -21,10 +23,6 @@ use wiremock::MockServer;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
-
-fn network_disabled() -> bool {
-    std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok()
-}
 
 async fn run_request(input: Vec<ResponseItem>) -> Value {
     let server = MockServer::start().await;
@@ -48,6 +46,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         base_url: Some(format!("{}/v1", server.uri())),
         env_key: None,
         env_key_instructions: None,
+        experimental_bearer_token: None,
         wire_api: WireApi::Chat,
         query_params: None,
         http_headers: None,
@@ -70,13 +69,28 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
     let summary = config.model_reasoning_summary;
     let config = Arc::new(config);
 
+    let conversation_id = ConversationId::new();
+
+    let otel_event_manager = OtelEventManager::new(
+        conversation_id,
+        config.model.as_str(),
+        config.model_family.slug.as_str(),
+        None,
+        Some("test@test.com".to_string()),
+        Some(AuthMode::ChatGPT),
+        false,
+        "test".to_string(),
+    );
+
     let client = ModelClient::new(
         Arc::clone(&config),
         None,
+        otel_event_manager,
         provider,
         effort,
         summary,
-        ConversationId::new(),
+        conversation_id,
+        codex_protocol::protocol::SessionSource::Exec,
     );
 
     let mut prompt = Prompt::default();
@@ -173,12 +187,7 @@ fn first_assistant(messages: &[Value]) -> &Value {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn omits_reasoning_when_none_present() {
-    if network_disabled() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    skip_if_no_network!();
 
     let body = run_request(vec![user_message("u1"), assistant_message("a1")]).await;
     let messages = messages_from(&body);
@@ -190,12 +199,7 @@ async fn omits_reasoning_when_none_present() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn attaches_reasoning_to_previous_assistant() {
-    if network_disabled() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    skip_if_no_network!();
 
     let body = run_request(vec![
         user_message("u1"),
@@ -212,12 +216,7 @@ async fn attaches_reasoning_to_previous_assistant() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn attaches_reasoning_to_function_call_anchor() {
-    if network_disabled() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    skip_if_no_network!();
 
     let body = run_request(vec![
         user_message("u1"),
@@ -239,12 +238,7 @@ async fn attaches_reasoning_to_function_call_anchor() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn attaches_reasoning_to_local_shell_call() {
-    if network_disabled() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    skip_if_no_network!();
 
     let body = run_request(vec![
         user_message("u1"),
@@ -264,12 +258,7 @@ async fn attaches_reasoning_to_local_shell_call() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn drops_reasoning_when_last_role_is_user() {
-    if network_disabled() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    skip_if_no_network!();
 
     let body = run_request(vec![
         assistant_message("aPrev"),
@@ -283,12 +272,7 @@ async fn drops_reasoning_when_last_role_is_user() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ignores_reasoning_before_last_user() {
-    if network_disabled() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    skip_if_no_network!();
 
     let body = run_request(vec![
         user_message("u1"),
@@ -303,12 +287,7 @@ async fn ignores_reasoning_before_last_user() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn skips_empty_reasoning_segments() {
-    if network_disabled() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    skip_if_no_network!();
 
     let body = run_request(vec![
         user_message("u1"),
@@ -324,12 +303,7 @@ async fn skips_empty_reasoning_segments() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn suppresses_duplicate_assistant_messages() {
-    if network_disabled() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    skip_if_no_network!();
 
     let body = run_request(vec![assistant_message("dup"), assistant_message("dup")]).await;
     let messages = messages_from(&body);

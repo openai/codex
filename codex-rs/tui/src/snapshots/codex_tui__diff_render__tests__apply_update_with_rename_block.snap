@@ -1,13 +1,12 @@
 ---
 source: tui/src/diff_render.rs
-assertion_line: 748
 expression: terminal.backend()
 ---
 "• Edited old_name.rs → new_name.rs (+1 -1)                                      "
-"    1      A                                                                    "
-"    2     -B                                                                    "
-"    2     +B changed                                                            "
-"    3      C                                                                    "
+"    1  A                                                                        "
+"    2 -B                                                                        "
+"    2 +B changed                                                                "
+"    3  C                                                                        "
 "                                                                                "
 "                                                                                "
 "                                                                                "

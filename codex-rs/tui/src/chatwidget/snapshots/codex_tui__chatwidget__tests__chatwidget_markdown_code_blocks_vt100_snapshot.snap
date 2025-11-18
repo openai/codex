@@ -2,7 +2,7 @@
 source: tui/src/chatwidget/tests.rs
 expression: visual
 ---
->     -- Indented code block (4 spaces)
+•     -- Indented code block (4 spaces)
       SELECT *
       FROM "users"
       WHERE "email" LIKE '%@example.com';

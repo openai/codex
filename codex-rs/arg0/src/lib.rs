@@ -11,6 +11,57 @@ const LINUX_SANDBOX_ARG0: &str = "codex-linux-sandbox";
 const APPLY_PATCH_ARG0: &str = "apply_patch";
 const MISSPELLED_APPLY_PATCH_ARG0: &str = "applypatch";
 
+pub fn arg0_dispatch() -> Option<TempDir> {
+    // Determine if we were invoked via the special alias.
+    let mut args = std::env::args_os();
+    let argv0 = args.next().unwrap_or_default();
+    let exe_name = Path::new(&argv0)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+
+    if exe_name == LINUX_SANDBOX_ARG0 {
+        // Safety: [`run_main`] never returns.
+        codex_linux_sandbox::run_main();
+    } else if exe_name == APPLY_PATCH_ARG0 || exe_name == MISSPELLED_APPLY_PATCH_ARG0 {
+        codex_apply_patch::main();
+    }
+
+    let argv1 = args.next().unwrap_or_default();
+    if argv1 == CODEX_APPLY_PATCH_ARG1 {
+        let patch_arg = args.next().and_then(|s| s.to_str().map(str::to_owned));
+        let exit_code = match patch_arg {
+            Some(patch_arg) => {
+                let mut stdout = std::io::stdout();
+                let mut stderr = std::io::stderr();
+                match codex_apply_patch::apply_patch(&patch_arg, &mut stdout, &mut stderr) {
+                    Ok(()) => 0,
+                    Err(_) => 1,
+                }
+            }
+            None => {
+                eprintln!("Error: {CODEX_APPLY_PATCH_ARG1} requires a UTF-8 PATCH argument.");
+                1
+            }
+        };
+        std::process::exit(exit_code);
+    }
+
+    // This modifies the environment, which is not thread-safe, so do this
+    // before creating any threads/the Tokio runtime.
+    load_dotenv();
+
+    match prepend_path_entry_for_codex_aliases() {
+        Ok(path_entry) => Some(path_entry),
+        Err(err) => {
+            // It is possible that Codex will proceed successfully even if
+            // updating the PATH fails, so warn the user and move on.
+            eprintln!("WARNING: proceeding, even though we could not update PATH: {err}");
+            None
+        }
+    }
+}
+
 /// While we want to deploy the Codex CLI as a single executable for simplicity,
 /// we also want to expose some of its functionality as distinct CLIs, so we use
 /// the "arg0 trick" to determine which CLI to dispatch. This effectively allows
@@ -37,57 +88,10 @@ where
     F: FnOnce(Option<PathBuf>) -> Fut,
     Fut: Future<Output = anyhow::Result<()>>,
 {
-    // Determine if we were invoked via the special alias.
-    let mut args = std::env::args_os();
-    let argv0 = args.next().unwrap_or_default();
-    let exe_name = Path::new(&argv0)
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
-
-    if exe_name == LINUX_SANDBOX_ARG0 {
-        // Safety: [`run_main`] never returns.
-        codex_linux_sandbox::run_main();
-    } else if exe_name == APPLY_PATCH_ARG0 || exe_name == MISSPELLED_APPLY_PATCH_ARG0 {
-        codex_apply_patch::main();
-    }
-
-    let argv1 = args.next().unwrap_or_default();
-    if argv1 == CODEX_APPLY_PATCH_ARG1 {
-        let patch_arg = args.next().and_then(|s| s.to_str().map(|s| s.to_owned()));
-        let exit_code = match patch_arg {
-            Some(patch_arg) => {
-                let mut stdout = std::io::stdout();
-                let mut stderr = std::io::stderr();
-                match codex_apply_patch::apply_patch(&patch_arg, &mut stdout, &mut stderr) {
-                    Ok(()) => 0,
-                    Err(_) => 1,
-                }
-            }
-            None => {
-                eprintln!("Error: {CODEX_APPLY_PATCH_ARG1} requires a UTF-8 PATCH argument.");
-                1
-            }
-        };
-        std::process::exit(exit_code);
-    }
-
-    // This modifies the environment, which is not thread-safe, so do this
-    // before creating any threads/the Tokio runtime.
-    load_dotenv();
-
     // Retain the TempDir so it exists for the lifetime of the invocation of
     // this executable. Admittedly, we could invoke `keep()` on it, but it
     // would be nice to avoid leaving temporary directories behind, if possible.
-    let _path_entry = match prepend_path_entry_for_apply_patch() {
-        Ok(path_entry) => Some(path_entry),
-        Err(err) => {
-            // It is possible that Codex will proceed successfully even if
-            // updating the PATH fails, so warn the user and move on.
-            eprintln!("WARNING: proceeding, even though we could not update PATH: {err}");
-            None
-        }
-    };
+    let _path_entry = arg0_dispatch();
 
     // Regular invocation – create a Tokio runtime and execute the provided
     // async entry-point.
@@ -144,11 +148,16 @@ where
 ///
 /// IMPORTANT: This function modifies the PATH environment variable, so it MUST
 /// be called before multiple threads are spawned.
-fn prepend_path_entry_for_apply_patch() -> std::io::Result<TempDir> {
+pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<TempDir> {
     let temp_dir = TempDir::new()?;
     let path = temp_dir.path();
 
-    for filename in &[APPLY_PATCH_ARG0, MISSPELLED_APPLY_PATCH_ARG0] {
+    for filename in &[
+        APPLY_PATCH_ARG0,
+        MISSPELLED_APPLY_PATCH_ARG0,
+        #[cfg(target_os = "linux")]
+        LINUX_SANDBOX_ARG0,
+    ] {
         let exe = std::env::current_exe()?;
 
         #[cfg(unix)]

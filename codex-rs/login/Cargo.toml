@@ -7,27 +7,30 @@ version = { workspace = true }
 workspace = true
 
 [dependencies]
-base64 = "0.22"
-chrono = { version = "0.4", features = ["serde"] }
-codex-core = { path = "../core" }
-codex-protocol = { path = "../protocol" }
-rand = "0.8"
-reqwest = { version = "0.12", features = ["json", "blocking"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-sha2 = "0.10"
-tempfile = "3"
-tiny_http = "0.12"
-tokio = { version = "1", features = [
+base64 = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+codex-core = { workspace = true }
+codex-app-server-protocol = { workspace = true }
+rand = { workspace = true }
+reqwest = { workspace = true, features = ["json", "blocking"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tempfile = { workspace = true }
+tiny_http = { workspace = true }
+tokio = { workspace = true, features = [
     "io-std",
     "macros",
     "process",
     "rt-multi-thread",
     "signal",
 ] }
-url = "2"
-urlencoding = "2.1"
-webbrowser = "1.0"
+url = { workspace = true }
+urlencoding = { workspace = true }
+webbrowser = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3"
+anyhow = { workspace = true }
+core_test_support = { workspace = true }
+tempfile = { workspace = true }
+wiremock = { workspace = true }

@@ -1,47 +1,20 @@
-use crate::bash::try_parse_bash;
+use crate::bash::extract_bash_command;
+use crate::bash::try_parse_shell;
 use crate::bash::try_parse_word_only_commands_sequence;
-use serde::Deserialize;
-use serde::Serialize;
+use crate::powershell::extract_powershell_command;
+use codex_protocol::parse_command::ParsedCommand;
 use shlex::split as shlex_split;
 use shlex::try_join as shlex_try_join;
+use std::path::PathBuf;
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub enum ParsedCommand {
-    Read {
-        cmd: String,
-        name: String,
-    },
-    ListFiles {
-        cmd: String,
-        path: Option<String>,
-    },
-    Search {
-        cmd: String,
-        query: Option<String>,
-        path: Option<String>,
-    },
-    Unknown {
-        cmd: String,
-    },
-}
-
-// Convert core's parsed command enum into the protocol's simplified type so
-// events can carry the canonical representation across process boundaries.
-impl From<ParsedCommand> for codex_protocol::parse_command::ParsedCommand {
-    fn from(v: ParsedCommand) -> Self {
-        use codex_protocol::parse_command::ParsedCommand as P;
-        match v {
-            ParsedCommand::Read { cmd, name } => P::Read { cmd, name },
-            ParsedCommand::ListFiles { cmd, path } => P::ListFiles { cmd, path },
-            ParsedCommand::Search { cmd, query, path } => P::Search { cmd, query, path },
-            ParsedCommand::Unknown { cmd } => P::Unknown { cmd },
-        }
-    }
-}
-
-fn shlex_join(tokens: &[String]) -> String {
-    shlex_try_join(tokens.iter().map(|s| s.as_str()))
+pub fn shlex_join(tokens: &[String]) -> String {
+    shlex_try_join(tokens.iter().map(String::as_str))
         .unwrap_or_else(|_| "<command included NUL byte>".to_string())
+}
+
+/// Extracts the shell and script from a command, regardless of platform
+pub fn extract_shell_command(command: &[String]) -> Option<(&str, &str)> {
+    extract_bash_command(command).or_else(|| extract_powershell_command(command))
 }
 
 /// DO NOT REVIEW THIS CODE BY HAND
@@ -72,13 +45,15 @@ pub fn parse_command(command: &[String]) -> Vec<ParsedCommand> {
 /// Tests are at the top to encourage using TDD + Codex to fix the implementation.
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+    use std::string::ToString;
 
     fn shlex_split_safe(s: &str) -> Vec<String> {
-        shlex_split(s).unwrap_or_else(|| s.split_whitespace().map(|s| s.to_string()).collect())
+        shlex_split(s).unwrap_or_else(|| s.split_whitespace().map(ToString::to_string).collect())
     }
 
     fn vec_str(args: &[&str]) -> Vec<String> {
-        args.iter().map(|s| s.to_string()).collect()
+        args.iter().map(ToString::to_string).collect()
     }
 
     fn assert_parsed(args: &[String], expected: Vec<ParsedCommand>) {
@@ -220,6 +195,20 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: inner.to_string(),
                 name: "README.md".to_string(),
+                path: PathBuf::from("webview/README.md"),
+            }],
+        );
+    }
+
+    #[test]
+    fn zsh_lc_supports_cat() {
+        let inner = "cat README.md";
+        assert_parsed(
+            &vec_str(&["zsh", "-lc", inner]),
+            vec![ParsedCommand::Read {
+                cmd: inner.to_string(),
+                name: "README.md".to_string(),
+                path: PathBuf::from("README.md"),
             }],
         );
     }
@@ -231,6 +220,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: "cat foo.txt".to_string(),
                 name: "foo.txt".to_string(),
+                path: PathBuf::from("foo/foo.txt"),
             }],
         );
     }
@@ -253,6 +243,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: "cat foo.txt".to_string(),
                 name: "foo.txt".to_string(),
+                path: PathBuf::from("foo/foo.txt"),
             }],
         );
     }
@@ -277,6 +268,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: inner.to_string(),
                 name: "Cargo.toml".to_string(),
+                path: PathBuf::from("Cargo.toml"),
             }],
         );
     }
@@ -289,6 +281,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: inner.to_string(),
                 name: "Cargo.toml".to_string(),
+                path: PathBuf::from("tui/Cargo.toml"),
             }],
         );
     }
@@ -301,6 +294,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: inner.to_string(),
                 name: "README.md".to_string(),
+                path: PathBuf::from("README.md"),
             }],
         );
     }
@@ -314,6 +308,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: inner.to_string(),
                 name: "README.md".to_string(),
+                path: PathBuf::from("README.md"),
             }]
         );
     }
@@ -483,6 +478,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: inner.to_string(),
                 name: "parse_command.rs".to_string(),
+                path: PathBuf::from("core/src/parse_command.rs"),
             }],
         );
     }
@@ -495,6 +491,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: inner.to_string(),
                 name: "history_cell.rs".to_string(),
+                path: PathBuf::from("tui/src/history_cell.rs"),
             }],
         );
     }
@@ -508,6 +505,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: "cat -- ansi-escape/Cargo.toml".to_string(),
                 name: "Cargo.toml".to_string(),
+                path: PathBuf::from("ansi-escape/Cargo.toml"),
             }],
         );
     }
@@ -537,6 +535,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: "sed -n '260,640p' exec/src/event_processor_with_human_output.rs".to_string(),
                 name: "event_processor_with_human_output.rs".to_string(),
+                path: PathBuf::from("exec/src/event_processor_with_human_output.rs"),
             }],
         );
     }
@@ -696,6 +695,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: r#"cat "pkg\\src\\main.rs""#.to_string(),
                 name: "main.rs".to_string(),
+                path: PathBuf::from(r#"pkg\src\main.rs"#),
             }],
         );
     }
@@ -707,6 +707,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: "head -n50 Cargo.toml".to_string(),
                 name: "Cargo.toml".to_string(),
+                path: PathBuf::from("Cargo.toml"),
             }],
         );
     }
@@ -737,6 +738,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: "tail -n+10 README.md".to_string(),
                 name: "README.md".to_string(),
+                path: PathBuf::from("README.md"),
             }],
         );
     }
@@ -773,6 +775,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: "cat -- ./-strange-file-name".to_string(),
                 name: "-strange-file-name".to_string(),
+                path: PathBuf::from("./-strange-file-name"),
             }],
         );
 
@@ -782,6 +785,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: "sed -n '12,20p' Cargo.toml".to_string(),
                 name: "Cargo.toml".to_string(),
+                path: PathBuf::from("Cargo.toml"),
             }],
         );
     }
@@ -856,11 +860,76 @@ mod tests {
             }],
         );
     }
+
+    #[test]
+    fn bin_bash_lc_sed() {
+        assert_parsed(
+            &shlex_split_safe("/bin/bash -lc 'sed -n '1,10p' Cargo.toml'"),
+            vec![ParsedCommand::Read {
+                cmd: "sed -n '1,10p' Cargo.toml".to_string(),
+                name: "Cargo.toml".to_string(),
+                path: PathBuf::from("Cargo.toml"),
+            }],
+        );
+    }
+    #[test]
+    fn bin_zsh_lc_sed() {
+        assert_parsed(
+            &shlex_split_safe("/bin/zsh -lc 'sed -n '1,10p' Cargo.toml'"),
+            vec![ParsedCommand::Read {
+                cmd: "sed -n '1,10p' Cargo.toml".to_string(),
+                name: "Cargo.toml".to_string(),
+                path: PathBuf::from("Cargo.toml"),
+            }],
+        );
+    }
+
+    #[test]
+    fn powershell_command_is_stripped() {
+        assert_parsed(
+            &vec_str(&["powershell", "-Command", "Get-ChildItem"]),
+            vec![ParsedCommand::Unknown {
+                cmd: "Get-ChildItem".to_string(),
+            }],
+        );
+    }
+
+    #[test]
+    fn pwsh_with_noprofile_and_c_alias_is_stripped() {
+        assert_parsed(
+            &vec_str(&["pwsh", "-NoProfile", "-c", "Write-Host hi"]),
+            vec![ParsedCommand::Unknown {
+                cmd: "Write-Host hi".to_string(),
+            }],
+        );
+    }
+
+    #[test]
+    fn powershell_with_path_is_stripped() {
+        let command = if cfg!(windows) {
+            "C:\\windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        } else {
+            "/usr/local/bin/powershell.exe"
+        };
+
+        assert_parsed(
+            &vec_str(&[command, "-NoProfile", "-c", "Write-Host hi"]),
+            vec![ParsedCommand::Unknown {
+                cmd: "Write-Host hi".to_string(),
+            }],
+        );
+    }
 }
 
 pub fn parse_command_impl(command: &[String]) -> Vec<ParsedCommand> {
-    if let Some(commands) = parse_bash_lc_commands(command) {
+    if let Some(commands) = parse_shell_lc_commands(command) {
         return commands;
+    }
+
+    if let Some((_, script)) = extract_powershell_command(command) {
+        return vec![ParsedCommand::Unknown {
+            cmd: script.to_string(),
+        }];
     }
 
     let normalized = normalize_tokens(command);
@@ -874,11 +943,39 @@ pub fn parse_command_impl(command: &[String]) -> Vec<ParsedCommand> {
     // Preserve left-to-right execution order for all commands, including bash -c/-lc
     // so summaries reflect the order they will run.
 
-    // Map each pipeline segment to its parsed summary.
-    let mut commands: Vec<ParsedCommand> = parts
-        .iter()
-        .map(|tokens| summarize_main_tokens(tokens))
-        .collect();
+    // Map each pipeline segment to its parsed summary, tracking `cd` to compute paths.
+    let mut commands: Vec<ParsedCommand> = Vec::new();
+    let mut cwd: Option<String> = None;
+    for tokens in &parts {
+        if let Some((head, tail)) = tokens.split_first()
+            && head == "cd"
+        {
+            if let Some(dir) = tail.first() {
+                cwd = Some(match &cwd {
+                    Some(base) => join_paths(base, dir),
+                    None => dir.clone(),
+                });
+            }
+            continue;
+        }
+        let parsed = summarize_main_tokens(tokens);
+        let parsed = match parsed {
+            ParsedCommand::Read { cmd, name, path } => {
+                if let Some(base) = &cwd {
+                    let full = join_paths(base, &path.to_string_lossy());
+                    ParsedCommand::Read {
+                        cmd,
+                        name,
+                        path: PathBuf::from(full),
+                    }
+                } else {
+                    ParsedCommand::Read { cmd, name, path }
+                }
+            }
+            other => other,
+        };
+        commands.push(parsed);
+    }
 
     while let Some(next) = simplify_once(&commands) {
         commands = next;
@@ -894,7 +991,7 @@ fn simplify_once(commands: &[ParsedCommand]) -> Option<Vec<ParsedCommand>> {
 
     // echo ... && ...rest => ...rest
     if let ParsedCommand::Unknown { cmd } = &commands[0]
-        && shlex_split(cmd).is_some_and(|t| t.first().map(|s| s.as_str()) == Some("echo"))
+        && shlex_split(cmd).is_some_and(|t| t.first().map(String::as_str) == Some("echo"))
     {
         return Some(commands[1..].to_vec());
     }
@@ -902,7 +999,7 @@ fn simplify_once(commands: &[ParsedCommand]) -> Option<Vec<ParsedCommand>> {
     // cd foo && [any command] => [any command] (keep non-cd when a cd is followed by something)
     if let Some(idx) = commands.iter().position(|pc| match pc {
         ParsedCommand::Unknown { cmd } => {
-            shlex_split(cmd).is_some_and(|t| t.first().map(|s| s.as_str()) == Some("cd"))
+            shlex_split(cmd).is_some_and(|t| t.first().map(String::as_str) == Some("cd"))
         }
         _ => false,
     }) && commands.len() > idx + 1
@@ -969,7 +1066,7 @@ fn is_valid_sed_n_arg(arg: Option<&str>) -> bool {
 }
 
 /// Normalize a command by:
-/// - Removing `yes`/`no`/`bash -c`/`bash -lc` prefixes.
+/// - Removing `yes`/`no`/`bash -c`/`bash -lc`/`zsh -c`/`zsh -lc` prefixes.
 /// - Splitting on `|` and `&&`/`||`/`;
 fn normalize_tokens(cmd: &[String]) -> Vec<String> {
     match cmd {
@@ -981,9 +1078,10 @@ fn normalize_tokens(cmd: &[String]) -> Vec<String> {
             // Do not re-shlex already-tokenized input; just drop the prefix.
             rest.to_vec()
         }
-        [bash, flag, script] if bash == "bash" && (flag == "-c" || flag == "-lc") => {
-            shlex_split(script)
-                .unwrap_or_else(|| vec!["bash".to_string(), flag.clone(), script.clone()])
+        [shell, flag, script]
+            if (shell == "bash" || shell == "zsh") && (flag == "-c" || flag == "-lc") =>
+        {
+            shlex_split(script).unwrap_or_else(|| vec![shell.clone(), flag.clone(), script.clone()])
         }
         _ => cmd.to_vec(),
     }
@@ -1035,7 +1133,7 @@ fn short_display_path(path: &str) -> String {
     });
     parts
         .next()
-        .map(|s| s.to_string())
+        .map(str::to_string)
         .unwrap_or_else(|| trimmed.to_string())
 }
 
@@ -1139,19 +1237,15 @@ fn parse_find_query_and_path(tail: &[String]) -> (Option<String>, Option<String>
     (query, path)
 }
 
-fn parse_bash_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
-    let [bash, flag, script] = original else {
-        return None;
-    };
-    if bash != "bash" || flag != "-lc" {
-        return None;
-    }
-    if let Some(tree) = try_parse_bash(script)
+fn parse_shell_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
+    // Only handle bash/zsh here; PowerShell is stripped separately without bash parsing.
+    let (_, script) = extract_bash_command(original)?;
+
+    if let Some(tree) = try_parse_shell(script)
         && let Some(all_commands) = try_parse_word_only_commands_sequence(&tree, script)
         && !all_commands.is_empty()
     {
-        let script_tokens = shlex_split(script)
-            .unwrap_or_else(|| vec!["bash".to_string(), flag.clone(), script.clone()]);
+        let script_tokens = shlex_split(script).unwrap_or_else(|| vec![script.to_string()]);
         // Strip small formatting helpers (e.g., head/tail/awk/wc/etc) so we
         // bias toward the primary command when pipelines are present.
         // First, drop obvious small formatting helpers (e.g., wc/awk/etc).
@@ -1160,13 +1254,42 @@ fn parse_bash_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
         let filtered_commands = drop_small_formatting_commands(all_commands);
         if filtered_commands.is_empty() {
             return Some(vec![ParsedCommand::Unknown {
-                cmd: script.clone(),
+                cmd: script.to_string(),
             }]);
         }
-        let mut commands: Vec<ParsedCommand> = filtered_commands
-            .into_iter()
-            .map(|tokens| summarize_main_tokens(&tokens))
-            .collect();
+        // Build parsed commands, tracking `cd` segments to compute effective file paths.
+        let mut commands: Vec<ParsedCommand> = Vec::new();
+        let mut cwd: Option<String> = None;
+        for tokens in filtered_commands.into_iter() {
+            if let Some((head, tail)) = tokens.split_first()
+                && head == "cd"
+            {
+                if let Some(dir) = tail.first() {
+                    cwd = Some(match &cwd {
+                        Some(base) => join_paths(base, dir),
+                        None => dir.clone(),
+                    });
+                }
+                continue;
+            }
+            let parsed = summarize_main_tokens(&tokens);
+            let parsed = match parsed {
+                ParsedCommand::Read { cmd, name, path } => {
+                    if let Some(base) = &cwd {
+                        let full = join_paths(base, &path.to_string_lossy());
+                        ParsedCommand::Read {
+                            cmd,
+                            name,
+                            path: PathBuf::from(full),
+                        }
+                    } else {
+                        ParsedCommand::Read { cmd, name, path }
+                    }
+                }
+                other => other,
+            };
+            commands.push(parsed);
+        }
         if commands.len() > 1 {
             commands.retain(|pc| !matches!(pc, ParsedCommand::Unknown { cmd } if cmd == "true"));
             // Apply the same simplifications used for non-bash parsing, e.g., drop leading `cd`.
@@ -1186,25 +1309,27 @@ fn parse_bash_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
             commands = commands
                 .into_iter()
                 .map(|pc| match pc {
-                    ParsedCommand::Read { name, cmd, .. } => {
+                    ParsedCommand::Read { name, cmd, path } => {
                         if had_connectors {
                             let has_pipe = script_tokens.iter().any(|t| t == "|");
                             let has_sed_n = script_tokens.windows(2).any(|w| {
-                                w.first().map(|s| s.as_str()) == Some("sed")
-                                    && w.get(1).map(|s| s.as_str()) == Some("-n")
+                                w.first().map(String::as_str) == Some("sed")
+                                    && w.get(1).map(String::as_str) == Some("-n")
                             });
                             if has_pipe && has_sed_n {
                                 ParsedCommand::Read {
-                                    cmd: script.clone(),
+                                    cmd: script.to_string(),
                                     name,
+                                    path,
                                 }
                             } else {
-                                ParsedCommand::Read { cmd, name }
+                                ParsedCommand::Read { cmd, name, path }
                             }
                         } else {
                             ParsedCommand::Read {
                                 cmd: shlex_join(&script_tokens),
                                 name,
+                                path,
                             }
                         }
                     }
@@ -1238,7 +1363,7 @@ fn parse_bash_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
         return Some(commands);
     }
     Some(vec![ParsedCommand::Unknown {
-        cmd: script.clone(),
+        cmd: script.to_string(),
     }])
 }
 
@@ -1271,7 +1396,7 @@ fn is_small_formatting_command(tokens: &[String]) -> bool {
             // Keep `sed -n <range> file` (treated as a file read elsewhere);
             // otherwise consider it a formatting helper in a pipeline.
             tokens.len() < 4
-                || !(tokens[1] == "-n" && is_valid_sed_n_arg(tokens.get(2).map(|s| s.as_str())))
+                || !(tokens[1] == "-n" && is_valid_sed_n_arg(tokens.get(2).map(String::as_str)))
         }
         _ => false,
     }
@@ -1318,7 +1443,7 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
                 (None, non_flags.first().map(|s| short_display_path(s)))
             } else {
                 (
-                    non_flags.first().cloned().map(|s| s.to_string()),
+                    non_flags.first().cloned().map(String::from),
                     non_flags.get(1).map(|s| short_display_path(s)),
                 )
             };
@@ -1353,7 +1478,7 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
                 .collect();
             // Do not shorten the query: grep patterns may legitimately contain slashes
             // and should be preserved verbatim. Only paths should be shortened.
-            let query = non_flags.first().cloned().map(|s| s.to_string());
+            let query = non_flags.first().cloned().map(String::from);
             let path = non_flags.get(1).map(|s| short_display_path(s));
             ParsedCommand::Search {
                 cmd: shlex_join(main_cmd),
@@ -1363,16 +1488,18 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
         }
         Some((head, tail)) if head == "cat" => {
             // Support both `cat <file>` and `cat -- <file>` forms.
-            let effective_tail: &[String] = if tail.first().map(|s| s.as_str()) == Some("--") {
+            let effective_tail: &[String] = if tail.first().map(String::as_str) == Some("--") {
                 &tail[1..]
             } else {
                 tail
             };
             if effective_tail.len() == 1 {
-                let name = short_display_path(&effective_tail[0]);
+                let path = effective_tail[0].clone();
+                let name = short_display_path(&path);
                 ParsedCommand::Read {
                     cmd: shlex_join(main_cmd),
                     name,
+                    path: PathBuf::from(path),
                 }
             } else {
                 ParsedCommand::Unknown {
@@ -1407,10 +1534,12 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
                     i += 1;
                 }
                 if let Some(p) = candidates.into_iter().find(|p| !p.starts_with('-')) {
-                    let name = short_display_path(p);
+                    let path = p.clone();
+                    let name = short_display_path(&path);
                     return ParsedCommand::Read {
                         cmd: shlex_join(main_cmd),
                         name,
+                        path: PathBuf::from(path),
                     };
                 }
             }
@@ -1449,10 +1578,12 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
                     i += 1;
                 }
                 if let Some(p) = candidates.into_iter().find(|p| !p.starts_with('-')) {
-                    let name = short_display_path(p);
+                    let path = p.clone();
+                    let name = short_display_path(&path);
                     return ParsedCommand::Read {
                         cmd: shlex_join(main_cmd),
                         name,
+                        path: PathBuf::from(path),
                     };
                 }
             }
@@ -1464,10 +1595,12 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
             // Avoid treating option values as paths (e.g., nl -s "  ").
             let candidates = skip_flag_values(tail, &["-s", "-w", "-v", "-i", "-b"]);
             if let Some(p) = candidates.into_iter().find(|p| !p.starts_with('-')) {
-                let name = short_display_path(p);
+                let path = p.clone();
+                let name = short_display_path(&path);
                 ParsedCommand::Read {
                     cmd: shlex_join(main_cmd),
                     name,
+                    path: PathBuf::from(path),
                 }
             } else {
                 ParsedCommand::Unknown {
@@ -1479,13 +1612,15 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
             if head == "sed"
                 && tail.len() >= 3
                 && tail[0] == "-n"
-                && is_valid_sed_n_arg(tail.get(1).map(|s| s.as_str())) =>
+                && is_valid_sed_n_arg(tail.get(1).map(String::as_str)) =>
         {
             if let Some(path) = tail.get(2) {
-                let name = short_display_path(path);
+                let path = path.clone();
+                let name = short_display_path(&path);
                 ParsedCommand::Read {
                     cmd: shlex_join(main_cmd),
                     name,
+                    path: PathBuf::from(path),
                 }
             } else {
                 ParsedCommand::Unknown {
@@ -1498,4 +1633,31 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
             cmd: shlex_join(main_cmd),
         },
     }
+}
+
+fn is_abs_like(path: &str) -> bool {
+    if std::path::Path::new(path).is_absolute() {
+        return true;
+    }
+    let mut chars = path.chars();
+    match (chars.next(), chars.next(), chars.next()) {
+        // Windows drive path like C:\
+        (Some(d), Some(':'), Some('\\')) if d.is_ascii_alphabetic() => return true,
+        // UNC path like \\server\share
+        (Some('\\'), Some('\\'), _) => return true,
+        _ => {}
+    }
+    false
+}
+
+fn join_paths(base: &str, rel: &str) -> String {
+    if is_abs_like(rel) {
+        return rel.to_string();
+    }
+    if base.is_empty() {
+        return rel.to_string();
+    }
+    let mut buf = PathBuf::from(base);
+    buf.push(rel);
+    buf.to_string_lossy().to_string()
 }

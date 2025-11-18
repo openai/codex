@@ -15,19 +15,19 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
-allocative = "0.3.3"
-anyhow = "1"
-clap = { version = "4", features = ["derive"] }
-derive_more = { version = "2", features = ["display"] }
-env_logger = "0.11.5"
-log = "0.4"
-multimap = "0.10.0"
-path-absolutize = "3.1.1"
-regex-lite = "0.1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-serde_with = { version = "3", features = ["macros"] }
-starlark = "0.13.0"
+allocative = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+derive_more = { workspace = true, features = ["display"] }
+env_logger = { workspace = true }
+log = { workspace = true }
+multimap = { workspace = true }
+path-absolutize = { workspace = true }
+regex-lite = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_with = { workspace = true, features = ["macros"] }
+starlark = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3.13.0"
+tempfile = { workspace = true }

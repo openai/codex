@@ -3,8 +3,6 @@ use crate::CodexAuth;
 use crate::codex::Codex;
 use crate::codex::CodexSpawnOk;
 use crate::codex::INITIAL_SUBMIT_ID;
-use crate::codex::compact::content_items_to_text;
-use crate::codex::compact::is_session_prefix_message;
 use crate::codex_conversation::CodexConversation;
 use crate::config::Config;
 use crate::error::CodexErr;
@@ -13,10 +11,12 @@ use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::SessionConfiguredEvent;
 use crate::rollout::RolloutRecorder;
-use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::ConversationId;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SessionSource;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -35,20 +35,25 @@ pub struct NewConversation {
 pub struct ConversationManager {
     conversations: Arc<RwLock<HashMap<ConversationId, Arc<CodexConversation>>>>,
     auth_manager: Arc<AuthManager>,
+    session_source: SessionSource,
 }
 
 impl ConversationManager {
-    pub fn new(auth_manager: Arc<AuthManager>) -> Self {
+    pub fn new(auth_manager: Arc<AuthManager>, session_source: SessionSource) -> Self {
         Self {
             conversations: Arc::new(RwLock::new(HashMap::new())),
             auth_manager,
+            session_source,
         }
     }
 
     /// Construct with a dummy AuthManager containing the provided CodexAuth.
     /// Used for integration tests: should not be used by ordinary business logic.
     pub fn with_auth(auth: CodexAuth) -> Self {
-        Self::new(crate::AuthManager::from_auth_for_testing(auth))
+        Self::new(
+            crate::AuthManager::from_auth_for_testing(auth),
+            SessionSource::Exec,
+        )
     }
 
     pub async fn new_conversation(&self, config: Config) -> CodexResult<NewConversation> {
@@ -64,7 +69,13 @@ impl ConversationManager {
         let CodexSpawnOk {
             codex,
             conversation_id,
-        } = Codex::spawn(config, auth_manager, InitialHistory::New).await?;
+        } = Codex::spawn(
+            config,
+            auth_manager,
+            InitialHistory::New,
+            self.session_source.clone(),
+        )
+        .await?;
         self.finalize_spawn(codex, conversation_id).await
     }
 
@@ -87,7 +98,10 @@ impl ConversationManager {
             }
         };
 
-        let conversation = Arc::new(CodexConversation::new(codex));
+        let conversation = Arc::new(CodexConversation::new(
+            codex,
+            session_configured.rollout_path.clone(),
+        ));
         self.conversations
             .write()
             .await
@@ -118,10 +132,26 @@ impl ConversationManager {
         auth_manager: Arc<AuthManager>,
     ) -> CodexResult<NewConversation> {
         let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
+        self.resume_conversation_with_history(config, initial_history, auth_manager)
+            .await
+    }
+
+    pub async fn resume_conversation_with_history(
+        &self,
+        config: Config,
+        initial_history: InitialHistory,
+        auth_manager: Arc<AuthManager>,
+    ) -> CodexResult<NewConversation> {
         let CodexSpawnOk {
             codex,
             conversation_id,
-        } = Codex::spawn(config, auth_manager, initial_history).await?;
+        } = Codex::spawn(
+            config,
+            auth_manager,
+            initial_history,
+            self.session_source.clone(),
+        )
+        .await?;
         self.finalize_spawn(codex, conversation_id).await
     }
 
@@ -155,7 +185,7 @@ impl ConversationManager {
         let CodexSpawnOk {
             codex,
             conversation_id,
-        } = Codex::spawn(config, auth_manager, history).await?;
+        } = Codex::spawn(config, auth_manager, history, self.session_source.clone()).await?;
 
         self.finalize_spawn(codex, conversation_id).await
     }
@@ -170,9 +200,11 @@ fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> Initia
     // Find indices of user message inputs in rollout order.
     let mut user_positions: Vec<usize> = Vec::new();
     for (idx, item) in items.iter().enumerate() {
-        if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = item
-            && role == "user"
-            && content_items_to_text(content).is_some_and(|text| !is_session_prefix_message(&text))
+        if let RolloutItem::ResponseItem(item @ ResponseItem::Message { .. }) = item
+            && matches!(
+                crate::event_mapping::parse_turn_item(item),
+                Some(TurnItem::UserMessage(_))
+            )
         {
             user_positions.push(idx);
         }
@@ -198,6 +230,7 @@ fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> Initia
 mod tests {
     use super::*;
     use crate::codex::make_session_and_context;
+    use assert_matches::assert_matches;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ReasoningItemReasoningSummary;
     use codex_protocol::models::ResponseItem;
@@ -224,7 +257,7 @@ mod tests {
 
     #[test]
     fn drops_from_last_user_only() {
-        let items = vec![
+        let items = [
             user_msg("u1"),
             assistant_msg("a1"),
             assistant_msg("a2"),
@@ -271,7 +304,7 @@ mod tests {
             .map(RolloutItem::ResponseItem)
             .collect();
         let truncated2 = truncate_before_nth_user_message(InitialHistory::Forked(initial2), 2);
-        assert!(matches!(truncated2, InitialHistory::New));
+        assert_matches!(truncated2, InitialHistory::New);
     }
 
     #[test]

@@ -2,6 +2,6 @@
 source: tui/src/chatwidget/tests.rs
 expression: blob3
 ---
-⠋ Exploring
+• Exploring
   └ List ls -la
     Read foo.txt

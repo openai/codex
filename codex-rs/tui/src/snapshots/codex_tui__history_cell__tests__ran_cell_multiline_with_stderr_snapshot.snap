@@ -2,13 +2,11 @@
 source: tui/src/history_cell.rs
 expression: rendered
 ---
-• Ran
-  └ echo
-        this_is_a_very_long_
-        single_token_that_wi
-        ll_wrap_across_the_a
-        vailable_width
-    error: first line on
+• Ran echo
+  │ this_is_a_very_long_si
+  │ ngle_token_that_will_w
+  │ … +2 lines
+  └ error: first line on
     stderr
     error: second line on
     stderr

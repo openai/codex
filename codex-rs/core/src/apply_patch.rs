@@ -1,13 +1,12 @@
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::function_tool::FunctionCallError;
 use crate::protocol::FileChange;
 use crate::protocol::ReviewDecision;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_patch_safety;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
-use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::ResponseInputItem;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -17,7 +16,7 @@ pub(crate) enum InternalApplyPatchInvocation {
     /// The `apply_patch` call was handled programmatically, without any sort
     /// of sandbox, because the user explicitly approved it. This is the
     /// result to use with the `shell` function call that contained `apply_patch`.
-    Output(ResponseInputItem),
+    Output(Result<String, FunctionCallError>),
 
     /// The `apply_patch` call was approved, either automatically because it
     /// appears that it should be allowed based on the user's sandbox policy
@@ -28,21 +27,15 @@ pub(crate) enum InternalApplyPatchInvocation {
     DelegateToExec(ApplyPatchExec),
 }
 
+#[derive(Debug)]
 pub(crate) struct ApplyPatchExec {
     pub(crate) action: ApplyPatchAction,
     pub(crate) user_explicitly_approved_this_action: bool,
 }
 
-impl From<ResponseInputItem> for InternalApplyPatchInvocation {
-    fn from(item: ResponseInputItem) -> Self {
-        InternalApplyPatchInvocation::Output(item)
-    }
-}
-
 pub(crate) async fn apply_patch(
     sess: &Session,
     turn_context: &TurnContext,
-    sub_id: &str,
     call_id: &str,
     action: ApplyPatchAction,
 ) -> InternalApplyPatchInvocation {
@@ -52,12 +45,13 @@ pub(crate) async fn apply_patch(
         &turn_context.sandbox_policy,
         &turn_context.cwd,
     ) {
-        SafetyCheck::AutoApprove { .. } => {
-            InternalApplyPatchInvocation::DelegateToExec(ApplyPatchExec {
-                action,
-                user_explicitly_approved_this_action: false,
-            })
-        }
+        SafetyCheck::AutoApprove {
+            user_explicitly_approved,
+            ..
+        } => InternalApplyPatchInvocation::DelegateToExec(ApplyPatchExec {
+            action,
+            user_explicitly_approved_this_action: user_explicitly_approved,
+        }),
         SafetyCheck::AskUser => {
             // Compute a readable summary of path changes to include in the
             // approval request so the user can make an informed decision.
@@ -67,7 +61,13 @@ pub(crate) async fn apply_patch(
             // that similar patches can be auto-approved in the future during
             // this session.
             let rx_approve = sess
-                .request_patch_approval(sub_id.to_owned(), call_id.to_owned(), &action, None, None)
+                .request_patch_approval(
+                    turn_context,
+                    call_id.to_owned(),
+                    convert_apply_patch_to_protocol(&action),
+                    None,
+                    None,
+                )
                 .await;
             match rx_approve.await.unwrap_or_default() {
                 ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {
@@ -77,25 +77,15 @@ pub(crate) async fn apply_patch(
                     })
                 }
                 ReviewDecision::Denied | ReviewDecision::Abort => {
-                    ResponseInputItem::FunctionCallOutput {
-                        call_id: call_id.to_owned(),
-                        output: FunctionCallOutputPayload {
-                            content: "patch rejected by user".to_string(),
-                            success: Some(false),
-                        },
-                    }
-                    .into()
+                    InternalApplyPatchInvocation::Output(Err(FunctionCallError::RespondToModel(
+                        "patch rejected by user".to_string(),
+                    )))
                 }
             }
         }
-        SafetyCheck::Reject { reason } => ResponseInputItem::FunctionCallOutput {
-            call_id: call_id.to_owned(),
-            output: FunctionCallOutputPayload {
-                content: format!("patch rejected: {reason}"),
-                success: Some(false),
-            },
-        }
-        .into(),
+        SafetyCheck::Reject { reason } => InternalApplyPatchInvocation::Output(Err(
+            FunctionCallError::RespondToModel(format!("patch rejected: {reason}")),
+        )),
     }
 }
 
@@ -124,4 +114,29 @@ pub(crate) fn convert_apply_patch_to_protocol(
         result.insert(path.clone(), protocol_change);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    use tempfile::tempdir;
+
+    #[test]
+    fn convert_apply_patch_maps_add_variant() {
+        let tmp = tempdir().expect("tmp");
+        let p = tmp.path().join("a.txt");
+        // Create an action with a single Add change
+        let action = ApplyPatchAction::new_add_for_test(&p, "hello".to_string());
+
+        let got = convert_apply_patch_to_protocol(&action);
+
+        assert_eq!(
+            got.get(&p),
+            Some(&FileChange::Add {
+                content: "hello".to_string()
+            })
+        );
+    }
 }

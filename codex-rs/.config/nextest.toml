@@ -1,0 +1,9 @@
+[profile.default]
+# Do not increase, fix your test instead
+slow-timeout = { period = "15s", terminate-after = 2 }
+
+
+[[profile.default.overrides]]
+# Do not add new tests here
+filter = 'test(rmcp_client) | test(humanlike_typing_1000_chars_appears_live_no_placeholder)'
+slow-timeout = { period = "1m", terminate-after = 4 }

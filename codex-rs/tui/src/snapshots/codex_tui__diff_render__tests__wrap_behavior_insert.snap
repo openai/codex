@@ -2,8 +2,8 @@
 source: tui/src/diff_render.rs
 expression: terminal.backend()
 ---
-"    1     +this is a very long line that should wrap across multiple terminal co          "
-"           lumns and continue                                                             "
+"1 +this is a very long line that should wrap across multiple terminal columns an          "
+"   d continue                                                                             "
 "                                                                                          "
 "                                                                                          "
 "                                                                                          "
