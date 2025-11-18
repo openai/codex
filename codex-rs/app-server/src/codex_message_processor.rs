@@ -158,8 +158,8 @@ struct ActiveLogin {
     login_id: Uuid,
 }
 
-impl ActiveLogin {
-    fn drop(&self) {
+impl Drop for ActiveLogin {
+    fn drop(&mut self) {
         self.shutdown_handle.shutdown();
     }
 }
@@ -417,7 +417,7 @@ impl CodexMessageProcessor {
         {
             let mut guard = self.active_login.lock().await;
             if let Some(active) = guard.take() {
-                active.drop();
+                drop(active);
             }
         }
 
@@ -525,7 +525,7 @@ impl CodexMessageProcessor {
                     {
                         let mut guard = self.active_login.lock().await;
                         if let Some(existing) = guard.take() {
-                            existing.drop();
+                            drop(existing);
                         }
                         *guard = Some(ActiveLogin {
                             shutdown_handle: shutdown_handle.clone(),
@@ -615,7 +615,7 @@ impl CodexMessageProcessor {
                     {
                         let mut guard = self.active_login.lock().await;
                         if let Some(existing) = guard.take() {
-                            existing.drop();
+                            drop(existing);
                         }
                         *guard = Some(ActiveLogin {
                             shutdown_handle: shutdown_handle.clone(),
@@ -704,7 +704,7 @@ impl CodexMessageProcessor {
         let mut guard = self.active_login.lock().await;
         if guard.as_ref().map(|l| l.login_id) == Some(login_id) {
             if let Some(active) = guard.take() {
-                active.drop();
+                drop(active);
             }
             Ok(())
         } else {
@@ -758,7 +758,7 @@ impl CodexMessageProcessor {
         {
             let mut guard = self.active_login.lock().await;
             if let Some(active) = guard.take() {
-                active.drop();
+                drop(active);
             }
         }
 

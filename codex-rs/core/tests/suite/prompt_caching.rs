@@ -162,7 +162,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         (
             "gpt-5.1",
             vec![
-                "shell",
+                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -173,7 +173,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         (
             "gpt-5.1",
             vec![
-                "shell",
+                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -185,7 +185,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         (
             "gpt-5.1-codex",
             vec![
-                "shell",
+                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -209,7 +209,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         (
             "gpt-5.1-codex",
             vec![
-                "shell",
+                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",

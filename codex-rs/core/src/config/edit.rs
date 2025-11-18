@@ -550,6 +550,15 @@ impl ConfigEditsBuilder {
         self
     }
 
+    /// Enable or disable a feature flag by key under the `[features]` table.
+    pub fn set_feature_enabled(mut self, key: &str, enabled: bool) -> Self {
+        self.edits.push(ConfigEdit::SetPath {
+            segments: vec!["features".to_string(), key.to_string()],
+            value: value(enabled),
+        });
+        self
+    }
+
     /// Apply edits on a blocking thread.
     pub fn apply_blocking(self) -> anyhow::Result<()> {
         apply_blocking(&self.codex_home, self.profile.as_deref(), &self.edits)

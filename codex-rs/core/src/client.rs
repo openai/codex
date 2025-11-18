@@ -26,6 +26,7 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_util::io::ReaderStream;
 use tracing::debug;
+use tracing::enabled;
 use tracing::trace;
 use tracing::warn;
 
@@ -76,6 +77,18 @@ struct Error {
     // Optional fields available on "usage_limit_reached" and "usage_not_included" errors
     plan_type: Option<PlanType>,
     resets_at: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+struct CompactHistoryRequest<'a> {
+    model: &'a str,
+    input: &'a [ResponseItem],
+    instructions: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+struct CompactHistoryResponse {
+    output: Vec<ResponseItem>,
 }
 
 #[derive(Debug, Clone)]
@@ -506,6 +519,70 @@ impl ModelClient {
 
     pub fn get_auth_manager(&self) -> Option<Arc<AuthManager>> {
         self.auth_manager.clone()
+    }
+
+    pub async fn compact_conversation_history(&self, prompt: &Prompt) -> Result<Vec<ResponseItem>> {
+        if prompt.input.is_empty() {
+            return Ok(Vec::new());
+        }
+        let auth_manager = self.auth_manager.clone();
+        let auth = auth_manager.as_ref().and_then(|m| m.auth());
+        let mut req_builder = self
+            .provider
+            .create_compact_request_builder(&self.client, &auth)
+            .await?;
+        if let SessionSource::SubAgent(sub) = &self.session_source {
+            let subagent = if let crate::protocol::SubAgentSource::Other(label) = sub {
+                label.clone()
+            } else {
+                serde_json::to_value(sub)
+                    .ok()
+                    .and_then(|v| v.as_str().map(std::string::ToString::to_string))
+                    .unwrap_or_else(|| "other".to_string())
+            };
+            req_builder = req_builder.header("x-openai-subagent", subagent);
+        }
+        if let Some(auth) = auth.as_ref()
+            && auth.mode == AuthMode::ChatGPT
+            && let Some(account_id) = auth.get_account_id()
+        {
+            req_builder = req_builder.header("chatgpt-account-id", account_id);
+        }
+        let payload = CompactHistoryRequest {
+            model: &self.config.model,
+            input: &prompt.input,
+            instructions: &prompt.get_full_instructions(&self.config.model_family),
+        };
+
+        if enabled!(tracing::Level::TRACE) {
+            trace!(
+                "POST to {}: {}",
+                self.provider
+                    .get_compact_url(&auth)
+                    .unwrap_or("<none>".to_string()),
+                serde_json::to_value(&payload).unwrap_or_default()
+            );
+        }
+
+        let response = req_builder
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|source| CodexErr::ConnectionFailed(ConnectionFailedError { source }))?;
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|source| CodexErr::ConnectionFailed(ConnectionFailedError { source }))?;
+        if !status.is_success() {
+            return Err(CodexErr::UnexpectedStatus(UnexpectedResponseError {
+                status,
+                body,
+                request_id: None,
+            }));
+        }
+        let CompactHistoryResponse { output } = serde_json::from_str(&body)?;
+        Ok(output)
     }
 }
 
