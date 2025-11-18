@@ -25,7 +25,6 @@ use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
 use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
 use crate::tools::runtimes::shell::ShellRequest;
 use crate::tools::runtimes::shell::ShellRuntime;
-use crate::tools::sandboxing::ApprovalRequirement;
 use crate::tools::sandboxing::ToolCtx;
 
 pub struct ShellHandler;
