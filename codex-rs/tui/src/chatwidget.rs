@@ -122,7 +122,6 @@ use codex_common::approval_presets::ApprovalPreset;
 use codex_common::approval_presets::builtin_approval_presets;
 use codex_common::model_presets::ModelPreset;
 use codex_common::model_presets::builtin_model_presets;
-use codex_common::model_presets::effort_label_for_model;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ConversationManager;
@@ -2111,11 +2110,8 @@ impl ChatWidget {
                 });
             })];
 
-            let label = effort_label_for_model(&model_slug, Some(effort))
-                .map(str::to_string)
-                .unwrap_or_else(|| Self::featured_option_label(effort));
+            let mut name = effort.label().to_string();
             let is_current_option = current_effort == Some(effort);
-            let mut name = label.to_string();
             if effort == default_effort && !is_current_option {
                 name.push_str(" (default)");
             }
@@ -2136,21 +2132,6 @@ impl ChatWidget {
         items
     }
 
-    fn featured_option_label(effort: ReasoningEffortConfig) -> String {
-        match effort {
-            ReasoningEffortConfig::Low => "Fast".to_string(),
-            ReasoningEffortConfig::Medium => "Balanced".to_string(),
-            ReasoningEffortConfig::High => "Thorough".to_string(),
-            _ => {
-                let mut text = effort.to_string();
-                if let Some(first) = text.get_mut(0..1) {
-                    first.make_ascii_uppercase();
-                }
-                text
-            }
-        }
-    }
-
     /// Open a popup to choose the reasoning effort (stage 2) for the given model.
     pub(crate) fn open_reasoning_popup(
         &mut self,
@@ -2158,7 +2139,7 @@ impl ChatWidget {
         preferred_effort: Option<ReasoningEffortConfig>,
     ) {
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
-        let supported = preset.supported_reasoning_efforts;
+        let supported = &preset.supported_reasoning_efforts;
 
         struct EffortChoice {
             stored: Option<ReasoningEffortConfig>,
@@ -2211,10 +2192,7 @@ impl ChatWidget {
         let mut items: Vec<SelectionItem> = Vec::new();
         for choice in choices.iter() {
             let effort = choice.display;
-            let mut effort_label = effort.to_string();
-            if let Some(first) = effort_label.get_mut(0..1) {
-                first.make_ascii_uppercase();
-            }
+            let mut effort_label = effort.label().to_string();
             let is_current_choice = is_current_model && choice.stored == highlight_choice;
             if choice.stored == default_choice && !is_current_choice {
                 effort_label.push_str(" (default)");

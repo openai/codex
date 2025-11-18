@@ -32,6 +32,19 @@ pub enum ReasoningEffort {
     High,
 }
 
+impl ReasoningEffort {
+    /// Friendly label that can be shown in UIs.
+    pub fn label(self) -> &'static str {
+        match self {
+            ReasoningEffort::None => "None",
+            ReasoningEffort::Minimal => "Minimal",
+            ReasoningEffort::Low => "Fast",
+            ReasoningEffort::Medium => "Balanced",
+            ReasoningEffort::High => "Thorough",
+        }
+    }
+}
+
 /// A summary of the reasoning performed by the model. This can be useful for
 /// debugging and understanding the model's reasoning process.
 /// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries

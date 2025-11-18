@@ -1573,17 +1573,17 @@ fn reasoning_popup_hides_default_label_when_option_is_current() {
 fn single_reasoning_option_skips_selection() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
-    static SINGLE_EFFORT: [ReasoningEffortPreset; 1] = [ReasoningEffortPreset {
-        effort: ReasoningEffortConfig::High,
-        description: "Maximizes reasoning depth for complex or ambiguous problems",
-    }];
     let preset = ModelPreset {
         id: "model-with-single-reasoning",
         model: "model-with-single-reasoning",
         display_name: "model-with-single-reasoning",
         description: "",
         default_reasoning_effort: ReasoningEffortConfig::High,
-        supported_reasoning_efforts: &SINGLE_EFFORT,
+        supported_reasoning_efforts: vec![ReasoningEffortPreset::new(
+            ReasoningEffortConfig::High,
+            "Maximizes reasoning depth for complex or ambiguous problems",
+            None,
+        )],
         is_default: false,
         upgrade: None,
     };

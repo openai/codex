@@ -707,13 +707,7 @@ impl SessionHeaderHistoryCell {
     }
 
     fn reasoning_label(&self) -> Option<&'static str> {
-        self.reasoning_effort.map(|effort| match effort {
-            ReasoningEffortConfig::Minimal => "minimal",
-            ReasoningEffortConfig::Low => "low",
-            ReasoningEffortConfig::Medium => "medium",
-            ReasoningEffortConfig::High => "high",
-            ReasoningEffortConfig::None => "none",
-        })
+        self.reasoning_effort.map(|effort| effort.label())
     }
 }
 
@@ -1824,7 +1818,7 @@ mod tests {
             .find(|line| line.contains("model:"))
             .expect("model line");
 
-        assert!(model_line.contains("gpt-4o high"));
+        assert!(model_line.contains("gpt-4o Thorough"));
         assert!(model_line.contains("/model to change"));
     }
 

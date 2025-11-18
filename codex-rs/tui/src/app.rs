@@ -19,7 +19,6 @@ use crate::update_action::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
 use codex_common::model_presets::ModelUpgrade;
 use codex_common::model_presets::all_model_presets;
-use codex_common::model_presets::effort_label_for_model;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
@@ -95,13 +94,10 @@ fn should_show_model_migration_prompt(
 }
 
 fn format_model_change_target(model: &str, effort: Option<ReasoningEffortConfig>) -> String {
-    if let Some(label) = effort_label_for_model(model, effort) {
-        format!("{model} ({label})")
+    if let Some(effort) = effort {
+        format!("{model} ({})", effort.label())
     } else {
-        let suffix = effort
-            .map(|eff| format!(" with {eff} reasoning"))
-            .unwrap_or_else(|| " with default reasoning".to_string());
-        format!("{model}{suffix}")
+        format!("{model} with default reasoning")
     }
 }
 
@@ -1061,10 +1057,10 @@ mod tests {
     }
 
     #[test]
-    fn format_model_change_target_falls_back_to_reasoning_text() {
+    fn format_model_change_target_uses_effort_label() {
         let formatted =
             super::format_model_change_target("gpt-5.1-codex", Some(ReasoningEffortConfig::High));
-        assert_eq!(formatted, "gpt-5.1-codex with high reasoning");
+        assert_eq!(formatted, "gpt-5.1-codex (Thorough)");
     }
 
     #[test]
