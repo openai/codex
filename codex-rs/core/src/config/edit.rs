@@ -3,6 +3,8 @@ use crate::config::types::McpServerConfig;
 use crate::config::types::Notice;
 use anyhow::Context;
 use codex_protocol::config_types::ReasoningEffort;
+use codex_protocol::config_types::TrustLevel;
+use codex_utils_tokenizer::warm_model_cache;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -29,11 +31,13 @@ pub enum ConfigEdit {
     SetNoticeHideRateLimitModelNudge(bool),
     /// Toggle the Windows onboarding acknowledgement flag.
     SetWindowsWslSetupAcknowledged(bool),
+    /// Toggle the model migration prompt acknowledgement flag.
+    SetNoticeHideModelMigrationPrompt(String, bool),
     /// Replace the entire `[mcp_servers]` table.
     ReplaceMcpServers(BTreeMap<String, McpServerConfig>),
-    /// Set trust_level = "trusted" under `[projects."<path>"]`,
+    /// Set trust_level under `[projects."<path>"]`,
     /// migrating inline tables to explicit tables.
-    SetProjectTrusted(PathBuf),
+    SetProjectTrustLevel { path: PathBuf, level: TrustLevel },
     /// Set the value stored at the exact dotted path.
     SetPath {
         segments: Vec<String>,
@@ -227,6 +231,9 @@ impl ConfigDocument {
     fn apply(&mut self, edit: &ConfigEdit) -> anyhow::Result<bool> {
         match edit {
             ConfigEdit::SetModel { model, effort } => Ok({
+                if let Some(model) = &model {
+                    warm_model_cache(model)
+                }
                 let mut mutated = false;
                 mutated |= self.write_profile_value(
                     &["model"],
@@ -253,6 +260,13 @@ impl ConfigDocument {
                 &[Notice::TABLE_KEY, "hide_rate_limit_model_nudge"],
                 value(*acknowledged),
             )),
+            ConfigEdit::SetNoticeHideModelMigrationPrompt(migration_config, acknowledged) => {
+                Ok(self.write_value(
+                    Scope::Global,
+                    &[Notice::TABLE_KEY, migration_config.as_str()],
+                    value(*acknowledged),
+                ))
+            }
             ConfigEdit::SetWindowsWslSetupAcknowledged(acknowledged) => Ok(self.write_value(
                 Scope::Global,
                 &["windows_wsl_setup_acknowledged"],
@@ -261,10 +275,14 @@ impl ConfigDocument {
             ConfigEdit::ReplaceMcpServers(servers) => Ok(self.replace_mcp_servers(servers)),
             ConfigEdit::SetPath { segments, value } => Ok(self.insert(segments, value.clone())),
             ConfigEdit::ClearPath { segments } => Ok(self.clear_owned(segments)),
-            ConfigEdit::SetProjectTrusted(project_path) => {
+            ConfigEdit::SetProjectTrustLevel { path, level } => {
                 // Delegate to the existing, tested logic in config.rs to
                 // ensure tables are explicit and migration is preserved.
-                crate::config::set_project_trusted_inner(&mut self.doc, project_path.as_path())?;
+                crate::config::set_project_trust_level_inner(
+                    &mut self.doc,
+                    path.as_path(),
+                    *level,
+                )?;
                 Ok(true)
             }
         }
@@ -499,6 +517,15 @@ impl ConfigEditsBuilder {
         self
     }
 
+    pub fn set_hide_model_migration_prompt(mut self, model: &str, acknowledged: bool) -> Self {
+        self.edits
+            .push(ConfigEdit::SetNoticeHideModelMigrationPrompt(
+                model.to_string(),
+                acknowledged,
+            ));
+        self
+    }
+
     pub fn set_windows_wsl_setup_acknowledged(mut self, acknowledged: bool) -> Self {
         self.edits
             .push(ConfigEdit::SetWindowsWslSetupAcknowledged(acknowledged));
@@ -511,9 +538,15 @@ impl ConfigEditsBuilder {
         self
     }
 
-    pub fn set_project_trusted<P: Into<PathBuf>>(mut self, project_path: P) -> Self {
-        self.edits
-            .push(ConfigEdit::SetProjectTrusted(project_path.into()));
+    pub fn set_project_trust_level<P: Into<PathBuf>>(
+        mut self,
+        project_path: P,
+        trust_level: TrustLevel,
+    ) -> Self {
+        self.edits.push(ConfigEdit::SetProjectTrustLevel {
+            path: project_path.into(),
+            level: trust_level,
+        });
         self
     }
 
@@ -551,7 +584,7 @@ mod tests {
             codex_home,
             None,
             &[ConfigEdit::SetModel {
-                model: Some("gpt-5-codex".to_string()),
+                model: Some("gpt-5.1-codex".to_string()),
                 effort: Some(ReasoningEffort::High),
             }],
         )
@@ -559,7 +592,7 @@ mod tests {
 
         let contents =
             std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
-        let expected = r#"model = "gpt-5-codex"
+        let expected = r#"model = "gpt-5.1-codex"
 model_reasoning_effort = "high"
 "#;
         assert_eq!(contents, expected);
@@ -689,7 +722,7 @@ model = "o5-preview"
         std::fs::write(
             codex_home.join(CONFIG_TOML_FILE),
             r#"[profiles."team a"]
-model = "gpt-5-codex"
+model = "gpt-5.1-codex"
 "#,
         )
         .expect("seed");
@@ -770,6 +803,35 @@ existing = "value"
         let expected = r#"[notice]
 existing = "value"
 hide_rate_limit_model_nudge = true
+"#;
+        assert_eq!(contents, expected);
+    }
+    #[test]
+    fn blocking_set_hide_gpt5_1_migration_prompt_preserves_table() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path();
+        std::fs::write(
+            codex_home.join(CONFIG_TOML_FILE),
+            r#"[notice]
+existing = "value"
+"#,
+        )
+        .expect("seed");
+        apply_blocking(
+            codex_home,
+            None,
+            &[ConfigEdit::SetNoticeHideModelMigrationPrompt(
+                "hide_gpt5_1_migration_prompt".to_string(),
+                true,
+            )],
+        )
+        .expect("persist");
+
+        let contents =
+            std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        let expected = r#"[notice]
+existing = "value"
+hide_gpt5_1_migration_prompt = true
 "#;
         assert_eq!(contents, expected);
     }
@@ -910,14 +972,14 @@ B = \"2\"
         let codex_home = tmp.path().to_path_buf();
 
         ConfigEditsBuilder::new(&codex_home)
-            .set_model(Some("gpt-5-codex"), Some(ReasoningEffort::High))
+            .set_model(Some("gpt-5.1-codex"), Some(ReasoningEffort::High))
             .apply()
             .await
             .expect("persist");
 
         let contents =
             std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
-        let expected = r#"model = "gpt-5-codex"
+        let expected = r#"model = "gpt-5.1-codex"
 model_reasoning_effort = "high"
 "#;
         assert_eq!(contents, expected);
@@ -939,11 +1001,11 @@ model_reasoning_effort = "low"
             std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
         assert_eq!(contents, initial_expected);
 
-        let updated_expected = r#"model = "gpt-5-codex"
+        let updated_expected = r#"model = "gpt-5.1-codex"
 model_reasoning_effort = "high"
 "#;
         ConfigEditsBuilder::new(codex_home)
-            .set_model(Some("gpt-5-codex"), Some(ReasoningEffort::High))
+            .set_model(Some("gpt-5.1-codex"), Some(ReasoningEffort::High))
             .apply_blocking()
             .expect("persist update");
         contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");

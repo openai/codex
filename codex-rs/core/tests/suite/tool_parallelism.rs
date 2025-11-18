@@ -14,6 +14,7 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -21,6 +22,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use serde_json::Value;
 use serde_json::json;
 
 async fn run_turn(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
@@ -55,9 +57,9 @@ async fn run_turn_and_measure(test: &TestCodex, prompt: &str) -> anyhow::Result<
 #[allow(clippy::expect_used)]
 async fn build_codex_with_test_tool(server: &wiremock::MockServer) -> anyhow::Result<TestCodex> {
     let mut builder = test_codex().with_config(|config| {
-        config.model = "test-gpt-5-codex".to_string();
+        config.model = "test-gpt-5.1-codex".to_string();
         config.model_family =
-            find_family_for_model("test-gpt-5-codex").expect("test-gpt-5-codex model family");
+            find_family_for_model("test-gpt-5.1-codex").expect("test-gpt-5.1-codex model family");
     });
     builder.build(server).await
 }
@@ -201,6 +203,84 @@ async fn mixed_tools_fall_back_to_serial() -> anyhow::Result<()> {
 
     let duration = run_turn_and_measure(&test, "mix tools").await?;
     assert_serial_duration(duration);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_results_grouped() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let test = build_codex_with_test_tool(&server).await?;
+
+    let shell_args = serde_json::to_string(&json!({
+        "command": ["/bin/sh", "-c", "echo 'shell output'"],
+        "timeout_ms": 1_000,
+    }))?;
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            json!({"type": "response.created", "response": {"id": "resp-1"}}),
+            ev_function_call("call-1", "shell", &shell_args),
+            ev_function_call("call-2", "shell", &shell_args),
+            ev_function_call("call-3", "shell", &shell_args),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let tool_output_request = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    run_turn(&test, "run shell three times").await?;
+
+    let input = tool_output_request.single_request().input();
+
+    // find all function_call inputs with indexes
+    let function_calls = input
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| item.get("type").and_then(Value::as_str) == Some("function_call"))
+        .collect::<Vec<_>>();
+
+    let function_call_outputs = input
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| {
+            item.get("type").and_then(Value::as_str) == Some("function_call_output")
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(function_calls.len(), 3);
+    assert_eq!(function_call_outputs.len(), 3);
+
+    for (index, _) in &function_calls {
+        for (output_index, _) in &function_call_outputs {
+            assert!(
+                *index < *output_index,
+                "all function calls must come before outputs"
+            );
+        }
+    }
+
+    // output should come in the order of the function calls
+    let zipped = function_calls
+        .iter()
+        .zip(function_call_outputs.iter())
+        .collect::<Vec<_>>();
+    for (call, output) in zipped {
+        assert_eq!(
+            call.1.get("call_id").and_then(Value::as_str),
+            output.1.get("call_id").and_then(Value::as_str)
+        );
+    }
 
     Ok(())
 }

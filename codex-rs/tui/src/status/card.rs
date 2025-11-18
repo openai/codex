@@ -33,6 +33,7 @@ use super::rate_limits::format_status_limit_summary;
 use super::rate_limits::render_status_limit_progress_bar;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_lines;
+use codex_core::AuthManager;
 
 #[derive(Debug, Clone)]
 struct StatusContextWindowData {
@@ -65,6 +66,7 @@ struct StatusHistoryCell {
 
 pub(crate) fn new_status_output(
     config: &Config,
+    auth_manager: &AuthManager,
     total_usage: &TokenUsage,
     context_usage: Option<&TokenUsage>,
     session_id: &Option<ConversationId>,
@@ -74,6 +76,7 @@ pub(crate) fn new_status_output(
     let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
     let card = StatusHistoryCell::new(
         config,
+        auth_manager,
         total_usage,
         context_usage,
         session_id,
@@ -87,6 +90,7 @@ pub(crate) fn new_status_output(
 impl StatusHistoryCell {
     fn new(
         config: &Config,
+        auth_manager: &AuthManager,
         total_usage: &TokenUsage,
         context_usage: Option<&TokenUsage>,
         session_id: &Option<ConversationId>,
@@ -106,7 +110,7 @@ impl StatusHistoryCell {
             SandboxPolicy::WorkspaceWrite { .. } => "workspace-write".to_string(),
         };
         let agents_summary = compose_agents_summary(config);
-        let account = compose_account_display(config);
+        let account = compose_account_display(auth_manager);
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
         let context_window = config.model_context_window.and_then(|window| {
             context_usage.map(|usage| StatusContextWindowData {
