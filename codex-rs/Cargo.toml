@@ -17,9 +17,11 @@ members = [
     "core",
     "exec",
     "execpolicy",
+    "execpolicy2",
     "keyring-store",
     "file-search",
     "linux-sandbox",
+    "lmstudio",
     "login",
     "mcp-server",
     "mcp-types",
@@ -69,6 +71,7 @@ codex-file-search = { path = "file-search" }
 codex-git = { path = "utils/git" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
+codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
 codex-mcp-server = { path = "mcp-server" }
 codex-ollama = { path = "ollama" }
@@ -150,7 +153,6 @@ opentelemetry-semantic-conventions = "0.30.0"
 opentelemetry_sdk = "0.30.0"
 os_info = "3.12.0"
 owo-colors = "4.2.0"
-paste = "1.0.15"
 path-absolutize = "3.1.1"
 pathdiff = "0.2"
 portable-pty = "0.9.0"

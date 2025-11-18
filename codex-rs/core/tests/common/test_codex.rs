@@ -38,6 +38,15 @@ pub enum ApplyPatchModelOutput {
     ShellViaHeredoc,
 }
 
+/// A collection of different ways the model can output an apply_patch call
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ShellModelOutput {
+    Shell,
+    ShellCommand,
+    LocalShell,
+    // UnifiedExec has its own set of tests
+}
+
 pub struct TestCodexBuilder {
     config_mutators: Vec<Box<ConfigMutator>>,
 }

@@ -15,6 +15,7 @@ use crate::protocol::PatchApplyEndEvent;
 use crate::protocol::TurnDiffEvent;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::sandboxing::ToolError;
+use codex_protocol::parse_command::ParsedCommand;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -61,6 +62,7 @@ pub(crate) async fn emit_exec_command_begin(
     ctx: ToolEventCtx<'_>,
     command: &[String],
     cwd: &Path,
+    parsed_cmd: &[ParsedCommand],
     source: ExecCommandSource,
     interaction_input: Option<String>,
 ) {
@@ -69,9 +71,10 @@ pub(crate) async fn emit_exec_command_begin(
             ctx.turn,
             EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                 call_id: ctx.call_id.to_string(),
+                turn_id: ctx.turn.sub_id.clone(),
                 command: command.to_vec(),
                 cwd: cwd.to_path_buf(),
-                parsed_cmd: parse_command(command),
+                parsed_cmd: parsed_cmd.to_vec(),
                 source,
                 interaction_input,
             }),
@@ -84,6 +87,7 @@ pub(crate) enum ToolEmitter {
         command: Vec<String>,
         cwd: PathBuf,
         source: ExecCommandSource,
+        parsed_cmd: Vec<ParsedCommand>,
     },
     ApplyPatch {
         changes: HashMap<PathBuf, FileChange>,
@@ -94,15 +98,18 @@ pub(crate) enum ToolEmitter {
         cwd: PathBuf,
         source: ExecCommandSource,
         interaction_input: Option<String>,
+        parsed_cmd: Vec<ParsedCommand>,
     },
 }
 
 impl ToolEmitter {
     pub fn shell(command: Vec<String>, cwd: PathBuf, source: ExecCommandSource) -> Self {
+        let parsed_cmd = parse_command(&command);
         Self::Shell {
             command,
             cwd,
             source,
+            parsed_cmd,
         }
     }
 
@@ -119,11 +126,13 @@ impl ToolEmitter {
         source: ExecCommandSource,
         interaction_input: Option<String>,
     ) -> Self {
+        let parsed_cmd = parse_command(command);
         Self::UnifiedExec {
             command: command.to_vec(),
             cwd,
             source,
             interaction_input,
+            parsed_cmd,
         }
     }
 
@@ -134,44 +143,14 @@ impl ToolEmitter {
                     command,
                     cwd,
                     source,
+                    parsed_cmd,
                 },
-                ToolEventStage::Begin,
+                stage,
             ) => {
-                emit_exec_command_begin(ctx, command, cwd.as_path(), *source, None).await;
-            }
-            (Self::Shell { .. }, ToolEventStage::Success(output)) => {
-                emit_exec_end(
+                emit_exec_stage(
                     ctx,
-                    output.stdout.text.clone(),
-                    output.stderr.text.clone(),
-                    output.aggregated_output.text.clone(),
-                    output.exit_code,
-                    output.duration,
-                    format_exec_output_str(&output),
-                )
-                .await;
-            }
-            (Self::Shell { .. }, ToolEventStage::Failure(ToolEventFailure::Output(output))) => {
-                emit_exec_end(
-                    ctx,
-                    output.stdout.text.clone(),
-                    output.stderr.text.clone(),
-                    output.aggregated_output.text.clone(),
-                    output.exit_code,
-                    output.duration,
-                    format_exec_output_str(&output),
-                )
-                .await;
-            }
-            (Self::Shell { .. }, ToolEventStage::Failure(ToolEventFailure::Message(message))) => {
-                emit_exec_end(
-                    ctx,
-                    String::new(),
-                    (*message).to_string(),
-                    (*message).to_string(),
-                    -1,
-                    Duration::ZERO,
-                    message.clone(),
+                    ExecCommandInput::new(command, cwd.as_path(), parsed_cmd, *source, None),
+                    stage,
                 )
                 .await;
             }
@@ -231,57 +210,20 @@ impl ToolEmitter {
                     cwd,
                     source,
                     interaction_input,
+                    parsed_cmd,
                 },
-                ToolEventStage::Begin,
+                stage,
             ) => {
-                emit_exec_command_begin(
+                emit_exec_stage(
                     ctx,
-                    command,
-                    cwd.as_path(),
-                    *source,
-                    interaction_input.clone(),
-                )
-                .await;
-            }
-            (Self::UnifiedExec { .. }, ToolEventStage::Success(output)) => {
-                emit_exec_end(
-                    ctx,
-                    output.stdout.text.clone(),
-                    output.stderr.text.clone(),
-                    output.aggregated_output.text.clone(),
-                    output.exit_code,
-                    output.duration,
-                    format_exec_output_str(&output),
-                )
-                .await;
-            }
-            (
-                Self::UnifiedExec { .. },
-                ToolEventStage::Failure(ToolEventFailure::Output(output)),
-            ) => {
-                emit_exec_end(
-                    ctx,
-                    output.stdout.text.clone(),
-                    output.stderr.text.clone(),
-                    output.aggregated_output.text.clone(),
-                    output.exit_code,
-                    output.duration,
-                    format_exec_output_str(&output),
-                )
-                .await;
-            }
-            (
-                Self::UnifiedExec { .. },
-                ToolEventStage::Failure(ToolEventFailure::Message(message)),
-            ) => {
-                emit_exec_end(
-                    ctx,
-                    String::new(),
-                    (*message).to_string(),
-                    (*message).to_string(),
-                    -1,
-                    Duration::ZERO,
-                    message.clone(),
+                    ExecCommandInput::new(
+                        command,
+                        cwd.as_path(),
+                        parsed_cmd,
+                        *source,
+                        interaction_input.as_deref(),
+                    ),
+                    stage,
                 )
                 .await;
             }
@@ -340,26 +282,107 @@ impl ToolEmitter {
     }
 }
 
-async fn emit_exec_end(
-    ctx: ToolEventCtx<'_>,
+struct ExecCommandInput<'a> {
+    command: &'a [String],
+    cwd: &'a Path,
+    parsed_cmd: &'a [ParsedCommand],
+    source: ExecCommandSource,
+    interaction_input: Option<&'a str>,
+}
+
+impl<'a> ExecCommandInput<'a> {
+    fn new(
+        command: &'a [String],
+        cwd: &'a Path,
+        parsed_cmd: &'a [ParsedCommand],
+        source: ExecCommandSource,
+        interaction_input: Option<&'a str>,
+    ) -> Self {
+        Self {
+            command,
+            cwd,
+            parsed_cmd,
+            source,
+            interaction_input,
+        }
+    }
+}
+
+struct ExecCommandResult {
     stdout: String,
     stderr: String,
     aggregated_output: String,
     exit_code: i32,
     duration: Duration,
     formatted_output: String,
+}
+
+async fn emit_exec_stage(
+    ctx: ToolEventCtx<'_>,
+    exec_input: ExecCommandInput<'_>,
+    stage: ToolEventStage,
+) {
+    match stage {
+        ToolEventStage::Begin => {
+            emit_exec_command_begin(
+                ctx,
+                exec_input.command,
+                exec_input.cwd,
+                exec_input.parsed_cmd,
+                exec_input.source,
+                exec_input.interaction_input.map(str::to_owned),
+            )
+            .await;
+        }
+        ToolEventStage::Success(output)
+        | ToolEventStage::Failure(ToolEventFailure::Output(output)) => {
+            let exec_result = ExecCommandResult {
+                stdout: output.stdout.text.clone(),
+                stderr: output.stderr.text.clone(),
+                aggregated_output: output.aggregated_output.text.clone(),
+                exit_code: output.exit_code,
+                duration: output.duration,
+                formatted_output: format_exec_output_str(&output),
+            };
+            emit_exec_end(ctx, exec_input, exec_result).await;
+        }
+        ToolEventStage::Failure(ToolEventFailure::Message(message)) => {
+            let text = message.to_string();
+            let exec_result = ExecCommandResult {
+                stdout: String::new(),
+                stderr: text.clone(),
+                aggregated_output: text.clone(),
+                exit_code: -1,
+                duration: Duration::ZERO,
+                formatted_output: text,
+            };
+            emit_exec_end(ctx, exec_input, exec_result).await;
+        }
+    }
+}
+
+async fn emit_exec_end(
+    ctx: ToolEventCtx<'_>,
+    exec_input: ExecCommandInput<'_>,
+    exec_result: ExecCommandResult,
 ) {
     ctx.session
         .send_event(
             ctx.turn,
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id: ctx.call_id.to_string(),
-                stdout,
-                stderr,
-                aggregated_output,
-                exit_code,
-                duration,
-                formatted_output,
+                turn_id: ctx.turn.sub_id.clone(),
+                command: exec_input.command.to_vec(),
+                cwd: exec_input.cwd.to_path_buf(),
+                parsed_cmd: exec_input.parsed_cmd.to_vec(),
+                source: exec_input.source,
+                interaction_input: exec_input.interaction_input.map(str::to_owned),
+                stdout: exec_result.stdout,
+                stderr: exec_result.stderr,
+                aggregated_output: exec_result.aggregated_output,
+                exit_code: exec_result.exit_code,
+                duration: exec_result.duration,
+                formatted_output: exec_result.formatted_output,
             }),
         )
         .await;

@@ -8,8 +8,12 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::protocol::SandboxCommandAssessment;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TurnAbortReason;
@@ -189,6 +193,46 @@ pub struct LoginChatGptResponse {
 pub struct GitDiffToRemoteResponse {
     pub sha: GitSha,
     pub diff: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyPatchApprovalParams {
+    pub conversation_id: ConversationId,
+    /// Use to correlate this with [codex_core::protocol::PatchApplyBeginEvent]
+    /// and [codex_core::protocol::PatchApplyEndEvent].
+    pub call_id: String,
+    pub file_changes: HashMap<PathBuf, FileChange>,
+    /// Optional explanatory reason (e.g. request for extra write access).
+    pub reason: Option<String>,
+    /// When set, the agent is asking the user to allow writes under this root
+    /// for the remainder of the session (unclear if this is honored today).
+    pub grant_root: Option<PathBuf>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyPatchApprovalResponse {
+    pub decision: ReviewDecision,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecCommandApprovalParams {
+    pub conversation_id: ConversationId,
+    /// Use to correlate this with [codex_core::protocol::ExecCommandBeginEvent]
+    /// and [codex_core::protocol::ExecCommandEndEvent].
+    pub call_id: String,
+    pub command: Vec<String>,
+    pub cwd: PathBuf,
+    pub reason: Option<String>,
+    pub risk: Option<SandboxCommandAssessment>,
+    pub parsed_cmd: Vec<ParsedCommand>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+pub struct ExecCommandApprovalResponse {
+    pub decision: ReviewDecision,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
