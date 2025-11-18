@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -19,24 +18,12 @@ use rmcp::tool_handler;
 use rmcp::tool_router;
 use rmcp::transport::stdio;
 
-use crate::posix::escalate_protocol::EscalateAction;
 use crate::posix::escalate_server;
 use crate::posix::escalate_server::EscalateServer;
+use crate::posix::escalate_server::ExecPolicy;
 
 /// Path to our patched bash.
 const BASH_PATH_ENV_VAR: &str = "CODEX_BASH_PATH";
-
-pub(crate) fn decide_escalate(file: &Path, argv: &[String], _workdir: &Path) -> EscalateAction {
-    // TODO: execpolicy
-    if file == Path::new("/opt/homebrew/bin/gh")
-        && let [_, arg1, arg2, ..] = argv
-        && arg1 == "issue"
-        && arg2 == "list"
-    {
-        return EscalateAction::Escalate;
-    }
-    EscalateAction::RunInSandbox
-}
 
 pub(crate) fn get_bash_path() -> Result<String> {
     std::env::var(BASH_PATH_ENV_VAR).context(format!("{BASH_PATH_ENV_VAR} must be set"))
@@ -75,14 +62,16 @@ impl From<escalate_server::ExecResult> for ExecResult {
 pub struct ExecTool {
     tool_router: ToolRouter<ExecTool>,
     bash_path: String,
+    policy: ExecPolicy,
 }
 
 #[tool_router]
 impl ExecTool {
-    pub fn new(bash_path: String) -> Self {
+    pub fn new(bash_path: String, policy: ExecPolicy) -> Self {
         Self {
             tool_router: Self::tool_router(),
             bash_path,
+            policy,
         }
     }
 
@@ -93,7 +82,7 @@ impl ExecTool {
         _context: RequestContext<RoleServer>,
         Parameters(params): Parameters<ExecParams>,
     ) -> Result<CallToolResult, McpError> {
-        let escalate_server = EscalateServer::new(self.bash_path.clone(), decide_escalate);
+        let escalate_server = EscalateServer::new(self.bash_path.clone(), self.policy);
         let result = escalate_server
             .exec(
                 params.command,
@@ -156,7 +145,8 @@ impl ServerHandler for ExecTool {
 
 pub(crate) async fn serve(
     bash_path: String,
+    policy: ExecPolicy,
 ) -> Result<RunningService<RoleServer, ExecTool>, rmcp::service::ServerInitializeError> {
-    let tool = ExecTool::new(bash_path);
+    let tool = ExecTool::new(bash_path, policy);
     tool.serve(stdio()).await
 }

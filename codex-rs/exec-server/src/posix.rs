@@ -55,11 +55,14 @@
 //!   |      |
 //!   o<-----x
 //!
+use std::path::Path;
+
 use clap::Parser;
 use clap::Subcommand;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::{self};
 
+use crate::posix::escalate_protocol::EscalateAction;
 use crate::posix::escalate_server::EscalateServer;
 
 mod escalate_client;
@@ -67,6 +70,18 @@ mod escalate_protocol;
 mod escalate_server;
 mod mcp;
 mod socket;
+
+fn dummy_exec_policy(file: &Path, argv: &[String], _workdir: &Path) -> EscalateAction {
+    // TODO: execpolicy
+    if file == Path::new("/opt/homebrew/bin/gh")
+        && let [_, arg1, arg2, ..] = argv
+        && arg1 == "issue"
+        && arg2 == "list"
+    {
+        return EscalateAction::Escalate;
+    }
+    EscalateAction::RunInSandbox
+}
 
 #[derive(Parser)]
 #[command(version)]
@@ -121,7 +136,7 @@ pub async fn main() -> anyhow::Result<()> {
             }
             Commands::ShellExec(args) => {
                 let bash_path = mcp::get_bash_path()?;
-                let escalate_server = EscalateServer::new(bash_path, mcp::decide_escalate);
+                let escalate_server = EscalateServer::new(bash_path, dummy_exec_policy);
                 let result = escalate_server
                     .exec(
                         args.command.clone(),
@@ -139,9 +154,11 @@ pub async fn main() -> anyhow::Result<()> {
     let bash_path = mcp::get_bash_path()?;
 
     tracing::info!("Starting MCP server");
-    let service = mcp::serve(bash_path).await.inspect_err(|e| {
-        tracing::error!("serving error: {:?}", e);
-    })?;
+    let service = mcp::serve(bash_path, dummy_exec_policy)
+        .await
+        .inspect_err(|e| {
+            tracing::error!("serving error: {:?}", e);
+        })?;
 
     service.waiting().await?;
     Ok(())
