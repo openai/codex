@@ -116,7 +116,8 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
         let completed: ItemCompletedNotification =
             serde_json::from_value(review_notif.params.expect("params must be present"))?;
         match completed.item {
-            ThreadItem::CodeReview { review, .. } => {
+            ThreadItem::CodeReview { id, review } => {
+                assert_eq!(id, turn_id);
                 review_body = Some(review);
                 break;
             }
