@@ -24,7 +24,6 @@ codex-common = { workspace = true, features = [
     "sandbox_summary",
 ] }
 codex-core = { workspace = true }
-codex-ollama = { workspace = true }
 codex-protocol = { workspace = true }
 mcp-types = { workspace = true }
 opentelemetry-appender-tracing = { workspace = true }

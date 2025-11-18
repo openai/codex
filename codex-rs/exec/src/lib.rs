@@ -11,20 +11,25 @@ pub mod event_processor_with_jsonl_output;
 pub mod exec_events;
 
 pub use cli::Cli;
+use codex_common::oss::ensure_oss_provider_ready;
+use codex_common::oss::get_default_model_for_oss_provider;
 use codex_core::AuthManager;
-use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::ConversationManager;
+use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_core::NewConversation;
+use codex_core::OLLAMA_OSS_PROVIDER_ID;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::find_codex_home;
+use codex_core::config::load_config_as_toml_with_cli_overrides;
+use codex_core::config::resolve_oss_provider;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
-use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::user_input::UserInput;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
@@ -57,6 +62,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         images,
         model: model_cli_arg,
         oss,
+        oss_provider,
         config_profile,
         full_auto,
         dangerously_bypass_approvals_and_sandbox,
@@ -146,21 +152,64 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         sandbox_mode_cli_arg.map(Into::<SandboxMode>::into)
     };
 
-    // When using `--oss`, let the bootstrapper pick the model (defaulting to
-    // gpt-oss:20b) and ensure it is present locally. Also, force the built‑in
-    // `oss` model provider.
-    let model = if let Some(model) = model_cli_arg {
-        Some(model)
-    } else if oss {
-        Some(DEFAULT_OSS_MODEL.to_owned())
-    } else {
-        None // No model specified, will use the default.
+    // Parse `-c` overrides from the CLI.
+    let cli_kv_overrides = match config_overrides.parse_overrides() {
+        Ok(v) => v,
+        #[allow(clippy::print_stderr)]
+        Err(e) => {
+            eprintln!("Error parsing -c overrides: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    // we load config.toml here to determine project state.
+    #[allow(clippy::print_stderr)]
+    let config_toml = {
+        let codex_home = match find_codex_home() {
+            Ok(codex_home) => codex_home,
+            Err(err) => {
+                eprintln!("Error finding codex home: {err}");
+                std::process::exit(1);
+            }
+        };
+
+        match load_config_as_toml_with_cli_overrides(&codex_home, cli_kv_overrides.clone()).await {
+            Ok(config_toml) => config_toml,
+            Err(err) => {
+                eprintln!("Error loading config.toml: {err}");
+                std::process::exit(1);
+            }
+        }
     };
 
     let model_provider = if oss {
-        Some(BUILT_IN_OSS_MODEL_PROVIDER_ID.to_string())
+        let resolved = resolve_oss_provider(
+            oss_provider.as_deref(),
+            &config_toml,
+            config_profile.clone(),
+        );
+
+        if let Some(provider) = resolved {
+            Some(provider)
+        } else {
+            return Err(anyhow::anyhow!(
+                "No default OSS provider configured. Use --local-provider=provider or set oss_provider to either {LMSTUDIO_OSS_PROVIDER_ID} or {OLLAMA_OSS_PROVIDER_ID} in config.toml"
+            ));
+        }
     } else {
-        None // No specific model provider override.
+        None // No OSS mode enabled
+    };
+
+    // When using `--oss`, let the bootstrapper pick the model based on selected provider
+    let model = if let Some(model) = model_cli_arg {
+        Some(model)
+    } else if oss {
+        model_provider
+            .as_ref()
+            .and_then(|provider_id| get_default_model_for_oss_provider(provider_id))
+            .map(std::borrow::ToOwned::to_owned)
+    } else {
+        None // No model specified, will use the default.
     };
 
     // Load configuration and determine approval policy
@@ -172,7 +221,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         approval_policy: Some(AskForApproval::Never),
         sandbox_mode,
         cwd: cwd.map(|p| p.canonicalize().unwrap_or(p)),
-        model_provider,
+        model_provider: model_provider.clone(),
         codex_linux_sandbox_exe,
         base_instructions: None,
         developer_instructions: None,
@@ -182,14 +231,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         tools_web_search_request: None,
         experimental_sandbox_command_assessment: None,
         additional_writable_roots: add_dir,
-    };
-    // Parse `-c` overrides.
-    let cli_kv_overrides = match config_overrides.parse_overrides() {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("Error parsing -c overrides: {e}");
-            std::process::exit(1);
-        }
     };
 
     let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides).await?;
@@ -233,7 +274,18 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     };
 
     if oss {
-        codex_ollama::ensure_oss_ready(&config)
+        // We're in the oss section, so provider_id should be Some
+        // Let's handle None case gracefully though just in case
+        let provider_id = match model_provider.as_ref() {
+            Some(id) => id,
+            None => {
+                error!("OSS provider unexpectedly not set when oss flag is used");
+                return Err(anyhow::anyhow!(
+                    "OSS provider not set but oss flag was used"
+                ));
+            }
+        };
+        ensure_oss_provider_ready(provider_id, &config)
             .await
             .map_err(|e| anyhow::anyhow!("OSS setup failed: {e}"))?;
     }

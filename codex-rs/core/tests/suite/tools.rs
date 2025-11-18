@@ -197,9 +197,9 @@ async fn sandbox_denied_shell_returns_original_output() -> Result<()> {
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
-        config.model = "gpt-5-codex".to_string();
+        config.model = "gpt-5.1-codex".to_string();
         config.model_family =
-            find_family_for_model("gpt-5-codex").expect("gpt-5-codex model family");
+            find_family_for_model("gpt-5.1-codex").expect("gpt-5.1-codex model family");
     });
     let fixture = builder.build(&server).await?;
 
@@ -425,8 +425,8 @@ async fn shell_timeout_handles_background_grandchild_stdout() -> Result<()> {
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
-        config.model = "gpt-5".to_string();
-        config.model_family = find_family_for_model("gpt-5").expect("gpt-5 is a valid model");
+        config.model = "gpt-5.1".to_string();
+        config.model_family = find_family_for_model("gpt-5.1").expect("gpt-5.1 is a valid model");
         config.sandbox_policy = SandboxPolicy::DangerFullAccess;
     });
     let test = builder.build(&server).await?;

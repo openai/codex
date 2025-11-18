@@ -73,6 +73,11 @@ mod windows_impl {
         Ok(())
     }
 
+    fn ensure_codex_home_exists(p: &Path) -> Result<()> {
+        std::fs::create_dir_all(p)?;
+        Ok(())
+    }
+
     fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
         let mut items: Vec<(String, String)> =
             env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
@@ -179,40 +184,37 @@ mod windows_impl {
     pub fn run_windows_sandbox_capture(
         policy_json_or_preset: &str,
         sandbox_policy_cwd: &Path,
+        codex_home: &Path,
         command: Vec<String>,
         cwd: &Path,
         mut env_map: HashMap<String, String>,
         timeout_ms: Option<u64>,
-        logs_base_dir: Option<&Path>,
     ) -> Result<CaptureResult> {
         let policy = SandboxPolicy::parse(policy_json_or_preset)?;
         normalize_null_device_env(&mut env_map);
         ensure_non_interactive_pager(&mut env_map);
         apply_no_network_to_env(&mut env_map)?;
+        ensure_codex_home_exists(codex_home)?;
 
         let current_dir = cwd.to_path_buf();
         // for now, don't fail if we detect world-writable directories
         // audit::audit_everyone_writable(&current_dir, &env_map)?;
+        let logs_base_dir = Some(codex_home);
         log_start(&command, logs_base_dir);
+        let cap_sid_path = cap_sid_file(codex_home);
         let (h_token, psid_to_use): (HANDLE, *mut c_void) = unsafe {
             match &policy.0 {
                 SandboxMode::ReadOnly => {
-                    let caps = load_or_create_cap_sids(sandbox_policy_cwd);
-                    ensure_dir(&cap_sid_file(sandbox_policy_cwd))?;
-                    fs::write(
-                        cap_sid_file(sandbox_policy_cwd),
-                        serde_json::to_string(&caps)?,
-                    )?;
+                    let caps = load_or_create_cap_sids(codex_home);
+                    ensure_dir(&cap_sid_path)?;
+                    fs::write(&cap_sid_path, serde_json::to_string(&caps)?)?;
                     let psid = convert_string_sid_to_sid(&caps.readonly).unwrap();
                     super::token::create_readonly_token_with_cap(psid)?
                 }
                 SandboxMode::WorkspaceWrite => {
-                    let caps = load_or_create_cap_sids(sandbox_policy_cwd);
-                    ensure_dir(&cap_sid_file(sandbox_policy_cwd))?;
-                    fs::write(
-                        cap_sid_file(sandbox_policy_cwd),
-                        serde_json::to_string(&caps)?,
-                    )?;
+                    let caps = load_or_create_cap_sids(codex_home);
+                    ensure_dir(&cap_sid_path)?;
+                    fs::write(&cap_sid_path, serde_json::to_string(&caps)?)?;
                     let psid = convert_string_sid_to_sid(&caps.workspace).unwrap();
                     super::token::create_workspace_write_token_with_cap(psid)?
                 }
@@ -445,11 +447,11 @@ mod stub {
     pub fn run_windows_sandbox_capture(
         _policy_json_or_preset: &str,
         _sandbox_policy_cwd: &Path,
+        _codex_home: &Path,
         _command: Vec<String>,
         _cwd: &Path,
         _env_map: HashMap<String, String>,
         _timeout_ms: Option<u64>,
-        _logs_base_dir: Option<&Path>,
     ) -> Result<CaptureResult> {
         bail!("Windows sandbox is only available on Windows")
     }

@@ -5,10 +5,13 @@ use app_test_support::create_mock_chat_completions_server;
 use app_test_support::create_mock_chat_completions_server_unchecked;
 use app_test_support::create_shell_sse_response;
 use app_test_support::to_response;
+use codex_app_server_protocol::CommandExecutionStatus;
+use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -17,9 +20,6 @@ use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::protocol_config_types::ReasoningEffort;
 use codex_core::protocol_config_types::ReasoningSummary;
-use codex_protocol::parse_command::ParsedCommand;
-use codex_protocol::protocol::Event;
-use codex_protocol::protocol::EventMsg;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use std::path::Path;
@@ -235,7 +235,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     .await??;
     let ThreadStartResponse { thread } = to_response::<ThreadStartResponse>(start_resp)?;
 
-    // turn/start — expect ExecCommandApproval request from server
+    // turn/start — expect CommandExecutionRequestApproval request from server
     let first_turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
@@ -258,16 +258,10 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
         mcp.read_stream_until_request_message(),
     )
     .await??;
-    let ServerRequest::ExecCommandApproval { request_id, params } = server_req else {
-        panic!("expected ExecCommandApproval request");
+    let ServerRequest::CommandExecutionRequestApproval { request_id, params } = server_req else {
+        panic!("expected CommandExecutionRequestApproval request");
     };
-    assert_eq!(params.call_id, "call1");
-    assert_eq!(
-        params.parsed_cmd,
-        vec![ParsedCommand::Unknown {
-            cmd: "python3 -c 'print(42)'".to_string()
-        }]
-    );
+    assert_eq!(params.item_id, "call1");
 
     // Approve and wait for task completion
     mcp.send_response(
@@ -302,7 +296,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     )
     .await??;
 
-    // Ensure we do NOT receive an ExecCommandApproval request before task completes
+    // Ensure we do NOT receive a CommandExecutionRequestApproval request before task completes
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("codex/event/task_complete"),
@@ -314,8 +308,6 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
 
 #[tokio::test]
 async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
-    // When returning Result from a test, pass an Ok(()) to the skip macro
-    // so the early return type matches. The no-arg form returns unit.
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
@@ -424,29 +416,35 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     )
     .await??;
 
-    let exec_begin_notification = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/exec_command_begin"),
-    )
+    let command_exec_item = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let item_started_notification = mcp
+                .read_stream_until_notification_message("item/started")
+                .await?;
+            let params = item_started_notification
+                .params
+                .clone()
+                .expect("item/started params");
+            let item_started: ItemStartedNotification =
+                serde_json::from_value(params).expect("deserialize item/started notification");
+            if matches!(item_started.item, ThreadItem::CommandExecution { .. }) {
+                return Ok::<ThreadItem, anyhow::Error>(item_started.item);
+            }
+        }
+    })
     .await??;
-    let params = exec_begin_notification
-        .params
-        .clone()
-        .expect("exec_command_begin params");
-    let event: Event = serde_json::from_value(params).expect("deserialize exec begin event");
-    let exec_begin = match event.msg {
-        EventMsg::ExecCommandBegin(exec_begin) => exec_begin,
-        other => panic!("expected ExecCommandBegin event, got {other:?}"),
+    let ThreadItem::CommandExecution {
+        cwd,
+        command,
+        status,
+        ..
+    } = command_exec_item
+    else {
+        unreachable!("loop ensures we break on command execution items");
     };
-    assert_eq!(exec_begin.cwd, second_cwd);
-    assert_eq!(
-        exec_begin.command,
-        vec![
-            "bash".to_string(),
-            "-lc".to_string(),
-            "echo second turn".to_string()
-        ]
-    );
+    assert_eq!(cwd, second_cwd);
+    assert_eq!(command, "bash -lc 'echo second turn'");
+    assert_eq!(status, CommandExecutionStatus::InProgress);
 
     timeout(
         DEFAULT_READ_TIMEOUT,
