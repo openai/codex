@@ -287,7 +287,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test]
     async fn unified_exec_timeouts() -> anyhow::Result<()> {
         skip_if_sandbox!(Ok(()));
 

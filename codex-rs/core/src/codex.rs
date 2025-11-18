@@ -2387,8 +2387,8 @@ mod tests {
         assert_eq!(expected, reconstructed);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn record_initial_history_reconstructs_resumed_transcript() {
+    #[test]
+    fn record_initial_history_reconstructs_resumed_transcript() {
         let (session, turn_context) = make_session_and_context();
         let (rollout_items, expected) = sample_rollout(&session, &turn_context);
 
@@ -2404,16 +2404,16 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn record_initial_history_reconstructs_forked_transcript() {
+    #[test]
+    fn record_initial_history_reconstructs_forked_transcript() {
         let (session, turn_context) = make_session_and_context();
         let (rollout_items, expected) = sample_rollout(&session, &turn_context);
 
-        session
-            .record_initial_history(InitialHistory::Forked(rollout_items))
-            .await;
+        tokio_test::block_on(session.record_initial_history(InitialHistory::Forked(rollout_items)));
 
-        let actual = session.state.lock().await.clone_history().get_history();
+        let actual = tokio_test::block_on(async {
+            session.state.lock().await.clone_history().get_history()
+        });
         assert_eq!(expected, actual);
     }
 
@@ -2747,7 +2747,7 @@ mod tests {
         assert!(rx.try_recv().is_err());
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test]
     async fn abort_gracefuly_emits_turn_aborted_only() {
         let (sess, tc, rx) = make_session_and_context_with_rx();
         let input = vec![UserInput::Text {
@@ -2834,7 +2834,7 @@ mod tests {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test]
     async fn fatal_tool_error_stops_turn_and_reports_error() {
         let (session, turn_context, _rx) = make_session_and_context_with_rx();
         let tools = {
@@ -3000,7 +3000,7 @@ mod tests {
         (rollout_items, live_history.get_history())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test]
     async fn rejects_escalated_permissions_when_policy_not_on_request() {
         use crate::exec::ExecParams;
         use crate::protocol::AskForApproval;
@@ -3126,7 +3126,7 @@ mod tests {
         pretty_assertions::assert_eq!(exec_output.metadata, ResponseExecMetadata { exit_code: 0 });
         assert!(exec_output.output.contains("hi"));
     }
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test]
     async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request() {
         use crate::protocol::AskForApproval;
         use crate::turn_diff_tracker::TurnDiffTracker;
