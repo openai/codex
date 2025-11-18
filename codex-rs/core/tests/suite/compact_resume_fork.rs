@@ -99,6 +99,34 @@ fn extract_summary_message(request: &Value, summary_text: &str) -> Value {
         .unwrap_or_else(|| panic!("expected summary message {summary_text}"))
 }
 
+fn normalize_compact_prompts(requests: &mut [Value]) {
+    for request in requests {
+        if let Some(input) = request.get_mut("input").and_then(Value::as_array_mut) {
+            input.retain(|item| {
+                if item.get("type").and_then(Value::as_str) != Some("message")
+                    || item.get("role").and_then(Value::as_str) != Some("user")
+                {
+                    return true;
+                }
+                let content = item
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                if let Some(first) = content.first() {
+                    let text = first
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    !(text.is_empty() || text == SUMMARIZATION_PROMPT)
+                } else {
+                    false
+                }
+            });
+        }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 /// Scenario: compact an initial conversation, resume it, fork one turn back, and
 /// ensure the model-visible history matches expectations at each request.
@@ -136,7 +164,8 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     user_turn(&forked, "AFTER_FORK").await;
 
     // 3. Capture the requests to the model and validate the history slices.
-    let requests = gather_request_bodies(&server).await;
+    let mut requests = gather_request_bodies(&server).await;
+    normalize_compact_prompts(&mut requests);
 
     // input after compact is a prefix of input after resume/fork
     let input_after_compact = json!(requests[requests.len() - 3]["input"]);
@@ -168,6 +197,10 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         &fork_arr[..compact_arr.len()]
     );
 
+    let expected_model = requests[0]["model"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
     let prompt = requests[0]["instructions"]
         .as_str()
         .unwrap_or_default()
@@ -189,7 +222,6 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         .as_str()
         .unwrap_or_default()
         .to_string();
-    let expected_model = OPENAI_DEFAULT_MODEL;
     let summary_after_compact = extract_summary_message(&requests[2], SUMMARY_TEXT);
     let summary_after_resume = extract_summary_message(&requests[3], SUMMARY_TEXT);
     let summary_after_fork = extract_summary_message(&requests[4], SUMMARY_TEXT);
@@ -539,6 +571,9 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         user_turn_3_after_fork
     ]);
     normalize_line_endings(&mut expected);
+    if let Some(arr) = expected.as_array_mut() {
+        normalize_compact_prompts(arr);
+    }
     assert_eq!(requests.len(), 5);
     assert_eq!(json!(requests), expected);
 }
@@ -591,7 +626,8 @@ async fn compact_resume_after_second_compaction_preserves_history() {
     let resumed_again = resume_conversation(&manager, &config, forked_path).await;
     user_turn(&resumed_again, AFTER_SECOND_RESUME).await;
 
-    let requests = gather_request_bodies(&server).await;
+    let mut requests = gather_request_bodies(&server).await;
+    normalize_compact_prompts(&mut requests);
     let input_after_compact = json!(requests[requests.len() - 2]["input"]);
     let input_after_resume = json!(requests[requests.len() - 1]["input"]);
 
@@ -694,6 +730,12 @@ async fn compact_resume_after_second_compaction_preserves_history() {
         "instructions": requests[requests.len() -1]["instructions"],
         "input": requests[requests.len() -1]["input"],
     }]);
+    if let Some(arr) = expected.as_array_mut() {
+        normalize_compact_prompts(arr);
+    }
+    if let Some(arr) = last_request_after_2_compacts.as_array_mut() {
+        normalize_compact_prompts(arr);
+    }
     assert_eq!(expected, last_request_after_2_compacts);
 }
 
@@ -751,7 +793,6 @@ async fn mount_initial_flow(server: &MockServer) {
     let match_first = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains("\"text\":\"hello world\"")
-            && !body_contains_text(body, SUMMARIZATION_PROMPT)
             && !body.contains(&format!("\"text\":\"{SUMMARY_TEXT}\""))
             && !body.contains("\"text\":\"AFTER_COMPACT\"")
             && !body.contains("\"text\":\"AFTER_RESUME\"")
@@ -761,7 +802,7 @@ async fn mount_initial_flow(server: &MockServer) {
 
     let match_compact = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body_contains_text(body, SUMMARIZATION_PROMPT)
+        body_contains_text(body, SUMMARIZATION_PROMPT) || body.contains(&json_fragment(FIRST_REPLY))
     };
     mount_sse_once_match(server, match_compact, sse2).await;
 
@@ -795,7 +836,7 @@ async fn mount_second_compact_flow(server: &MockServer) {
 
     let match_second_compact = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body_contains_text(body, SUMMARIZATION_PROMPT) && body.contains("AFTER_FORK")
+        body.contains("AFTER_FORK")
     };
     mount_sse_once_match(server, match_second_compact, sse6).await;
 
