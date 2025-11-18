@@ -196,7 +196,7 @@ pub struct Config {
     pub project_doc_fallback_filenames: Vec<String>,
 
     /// Token budget applied when storing tool/function outputs in the context manager.
-    pub calls_output_max_tokens: Option<usize>,
+    pub tool_output_token_limit: Option<usize>,
 
     /// Directory containing all Codex state (defaults to `~/.codex` but can be
     /// overridden by the `CODEX_HOME` environment variable).
@@ -640,7 +640,7 @@ pub struct ConfigToml {
     pub project_doc_fallback_filenames: Option<Vec<String>>,
 
     /// Token budget applied when storing tool/function outputs in the context manager.
-    pub calls_output_max_tokens: Option<usize>,
+    pub tool_output_token_limit: Option<usize>,
 
     /// Profile to use from the `profiles` map.
     pub profile: Option<String>,
@@ -1215,7 +1215,7 @@ impl Config {
                     }
                 })
                 .collect(),
-            calls_output_max_tokens: cfg.calls_output_max_tokens,
+            tool_output_token_limit: cfg.tool_output_token_limit,
             codex_home,
             history,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
@@ -2968,7 +2968,7 @@ model_verbosity = "high"
                 model_providers: fixture.model_provider_map.clone(),
                 project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
                 project_doc_fallback_filenames: Vec::new(),
-                calls_output_max_tokens: None,
+                tool_output_token_limit: None,
                 codex_home: fixture.codex_home(),
                 history: History::default(),
                 file_opener: UriBasedFileOpener::VsCode,
@@ -3040,7 +3040,7 @@ model_verbosity = "high"
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
-            calls_output_max_tokens: None,
+            tool_output_token_limit: None,
             codex_home: fixture.codex_home(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
@@ -3127,7 +3127,7 @@ model_verbosity = "high"
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
-            calls_output_max_tokens: None,
+            tool_output_token_limit: None,
             codex_home: fixture.codex_home(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
@@ -3200,7 +3200,7 @@ model_verbosity = "high"
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
-            calls_output_max_tokens: None,
+            tool_output_token_limit: None,
             codex_home: fixture.codex_home(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,

@@ -464,7 +464,7 @@ async fn token_policy_marker_reports_tokens() -> Result<()> {
         config.model = "gpt-5.1-codex".to_string(); // token policy
         config.model_family =
             find_family_for_model("gpt-5.1-codex").expect("model family for gpt-5.1-codex");
-        config.calls_output_max_tokens = Some(50); // small budget to force truncation
+        config.tool_output_token_limit = Some(50); // small budget to force truncation
     });
     let fixture = builder.build(&server).await?;
 
@@ -515,7 +515,7 @@ async fn byte_policy_marker_reports_bytes() -> Result<()> {
     let mut builder = test_codex().with_config(|config| {
         config.model = "gpt-5.1".to_string(); // byte policy
         config.model_family = find_family_for_model("gpt-5.1").expect("model family for gpt-5.1");
-        config.calls_output_max_tokens = Some(50); // ~200 byte cap
+        config.tool_output_token_limit = Some(50); // ~200 byte cap
     });
     let fixture = builder.build(&server).await?;
 
@@ -567,7 +567,7 @@ async fn large_budget_avoids_truncation() -> Result<()> {
         config.model = "gpt-5.1-codex".to_string();
         config.model_family =
             find_family_for_model("gpt-5.1-codex").expect("model family for gpt-5.1-codex");
-        config.calls_output_max_tokens = Some(50_000); // ample budget
+        config.tool_output_token_limit = Some(50_000); // ample budget
     });
     let fixture = builder.build(&server).await?;
 

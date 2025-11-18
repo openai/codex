@@ -18,7 +18,7 @@ pub enum TruncationPolicy {
 
 impl TruncationPolicy {
     pub fn new(config: &Config) -> Self {
-        let config_token_limit = config.calls_output_max_tokens;
+        let config_token_limit = config.tool_output_token_limit;
 
         match config.model_family.truncation_policy {
             TruncationPolicy::Bytes(family_bytes) => {
