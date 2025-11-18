@@ -14,7 +14,6 @@ use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StreamOutput;
 use crate::exec::is_likely_sandbox_denied;
-use crate::tools::sandboxing::ToolCtx;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::truncate_text;
 use codex_utils_pty::ExecCommandSession;
