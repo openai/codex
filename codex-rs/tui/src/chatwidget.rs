@@ -2139,7 +2139,7 @@ impl ChatWidget {
         preferred_effort: Option<ReasoningEffortConfig>,
     ) {
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
-        let supported = preset.supported_reasoning_efforts;
+        let supported = &preset.supported_reasoning_efforts;
 
         struct EffortChoice {
             stored: Option<ReasoningEffortConfig>,
