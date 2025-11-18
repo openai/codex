@@ -95,8 +95,6 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PlainHistoryCell;
 use crate::markdown::append_markdown;
-#[cfg(target_os = "windows")]
-use crate::onboarding::WSL_INSTRUCTIONS;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::FlexRenderable;
@@ -2172,40 +2170,16 @@ impl ChatWidget {
         let mut items: Vec<SelectionItem> = Vec::new();
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
         #[cfg(target_os = "windows")]
-        let header_renderable: Box<dyn Renderable> = if self
-            .config
-            .forced_auto_mode_downgraded_on_windows
-        {
-            use ratatui_macros::line;
-
-            let mut header = ColumnRenderable::new();
-            header.push(line![
-                "Codex forced your settings back to Read Only on this Windows machine.".bold()
-            ]);
-            header.push(line![
-                "To re-enable Auto mode, run Codex inside Windows Subsystem for Linux (WSL) or enable Full Access manually.".dim()
-                ]);
-            Box::new(header)
-        } else {
-            Box::new(())
-        };
+        let forced_windows_read_only = self.config.forced_auto_mode_downgraded_on_windows
+            && codex_core::get_platform_sandbox().is_none();
         #[cfg(not(target_os = "windows"))]
-        let header_renderable: Box<dyn Renderable> = Box::new(());
+        let forced_windows_read_only = false;
         for preset in presets.into_iter() {
             let is_current =
                 current_approval == preset.approval && current_sandbox == preset.sandbox;
             let name = preset.label.to_string();
             let description_text = preset.description;
-            let description = if cfg!(target_os = "windows")
-                && preset.id == "auto"
-                && codex_core::get_platform_sandbox().is_none()
-            {
-                Some(format!(
-                    "{description_text}\nRequires Windows Subsystem for Linux (WSL). Show installation instructions..."
-                ))
-            } else {
-                Some(description_text.to_string())
-            };
+            let description = Some(description_text.to_string());
             let requires_confirmation = preset.id == "full-access"
                 && !self
                     .config
@@ -2223,53 +2197,16 @@ impl ChatWidget {
                 #[cfg(target_os = "windows")]
                 {
                     if codex_core::get_platform_sandbox().is_none() {
-                        vec![Box::new(|tx| {
-                            tx.send(AppEvent::ShowWindowsAutoModeInstructions);
+                        let preset_clone = preset.clone();
+                        vec![Box::new(move |tx| {
+                            tx.send(AppEvent::OpenWindowsSandboxEnablePrompt {
+                                preset: preset_clone.clone(),
+                            });
                         })]
-                    } else if !self
-                        .config
-                        .notices
-                        .hide_world_writable_warning
-                        .unwrap_or(false)
-                        && self.windows_world_writable_flagged()
+                    } else if let Some((sample_paths, extra_count, failed_scan)) =
+                        self.world_writable_warning_details()
                     {
                         let preset_clone = preset.clone();
-                        // Compute sample paths for the warning popup.
-                        let mut env_map: std::collections::HashMap<String, String> =
-                            std::collections::HashMap::new();
-                        for (k, v) in std::env::vars() {
-                            env_map.insert(k, v);
-                        }
-                        let (sample_paths, extra_count, failed_scan) =
-                            match codex_windows_sandbox::preflight_audit_everyone_writable(
-                                &self.config.cwd,
-                                &env_map,
-                                Some(self.config.codex_home.as_path()),
-                            ) {
-                                Ok(paths) if !paths.is_empty() => {
-                                    fn normalize_windows_path_for_display(
-                                        p: &std::path::Path,
-                                    ) -> String {
-                                        let canon = dunce::canonicalize(p)
-                                            .unwrap_or_else(|_| p.to_path_buf());
-                                        canon.display().to_string().replace('/', "\\")
-                                    }
-                                    let as_strings: Vec<String> = paths
-                                        .iter()
-                                        .map(|p| normalize_windows_path_for_display(p))
-                                        .collect();
-                                    let samples: Vec<String> =
-                                        as_strings.iter().take(3).cloned().collect();
-                                    let extra = if as_strings.len() > samples.len() {
-                                        as_strings.len() - samples.len()
-                                    } else {
-                                        0
-                                    };
-                                    (samples, extra, false)
-                                }
-                                Err(_) => (Vec::new(), 0, true),
-                                _ => (Vec::new(), 0, false),
-                            };
                         vec![Box::new(move |tx| {
                             tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
                                 preset: Some(preset_clone.clone()),
@@ -2300,10 +2237,17 @@ impl ChatWidget {
         }
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Select Approval Mode".to_string()),
+            title: Some(
+                if forced_windows_read_only {
+                    "Select approval mode (Codex changed your permissions to Read Only because the Windows sandbox is off)"
+                        .to_string()
+                } else {
+                    "Select Approval Mode".to_string()
+                },
+            ),
             footer_hint: Some(standard_popup_hint_line()),
             items,
-            header: header_renderable,
+            header: Box::new(()),
             ..Default::default()
         });
     }
@@ -2328,20 +2272,22 @@ impl ChatWidget {
     }
 
     #[cfg(target_os = "windows")]
-    fn windows_world_writable_flagged(&self) -> bool {
-        use std::collections::HashMap;
-        let mut env_map: HashMap<String, String> = HashMap::new();
-        for (k, v) in std::env::vars() {
-            env_map.insert(k, v);
+    pub(crate) fn world_writable_warning_details(&self) -> Option<(Vec<String>, usize, bool)> {
+        if self
+            .config
+            .notices
+            .hide_world_writable_warning
+            .unwrap_or(false)
+        {
+            return None;
         }
-        match codex_windows_sandbox::preflight_audit_everyone_writable(
-            &self.config.cwd,
-            &env_map,
-            Some(self.config.codex_home.as_path()),
-        ) {
-            Ok(paths) => !paths.is_empty(),
-            Err(_) => true,
-        }
+        codex_windows_sandbox::world_writable_warning_details(self.config.codex_home.as_path())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[allow(dead_code)]
+    pub(crate) fn world_writable_warning_details(&self) -> Option<(Vec<String>, usize, bool)> {
+        None
     }
 
     pub(crate) fn open_full_access_confirmation(&mut self, preset: ApprovalPreset) {
@@ -2426,7 +2372,6 @@ impl ChatWidget {
             SandboxPolicy::ReadOnly => "Read-Only mode",
             _ => "Auto mode",
         };
-        let title_line = Line::from("Unprotected directories found").bold();
         let info_line = if failed_scan {
             Line::from(vec![
                 "We couldn't complete the world-writable scan, so protections cannot be verified. "
@@ -2443,7 +2388,6 @@ impl ChatWidget {
                 .fg(Color::Red),
             ])
         };
-        header_children.push(Box::new(title_line));
         header_children.push(Box::new(
             Paragraph::new(vec![info_line]).wrap(Wrap { trim: false }),
         ));
@@ -2452,8 +2396,9 @@ impl ChatWidget {
             // Show up to three examples and optionally an "and X more" line.
             let mut lines: Vec<Line> = Vec::new();
             lines.push(Line::from("Examples:").bold());
+            lines.push(Line::from(""));
             for p in &sample_paths {
-                lines.push(Line::from(format!(" - {p}")));
+                lines.push(Line::from(format!("  - {p}")));
             }
             if extra_count > 0 {
                 lines.push(Line::from(format!("and {extra_count} more")));
@@ -2521,21 +2466,33 @@ impl ChatWidget {
     }
 
     #[cfg(target_os = "windows")]
-    pub(crate) fn open_windows_auto_mode_instructions(&mut self) {
+    pub(crate) fn open_windows_sandbox_enable_prompt(&mut self, preset: ApprovalPreset) {
         use ratatui_macros::line;
 
         let mut header = ColumnRenderable::new();
         header.push(line![
-            "Auto mode requires Windows Subsystem for Linux (WSL2).".bold()
+            "Auto mode requires the experimental Windows sandbox.".bold(),
+            " Turn it on to enable sandboxed commands on Windows."
         ]);
-        header.push(line!["Run Codex inside WSL to enable sandboxed commands."]);
-        header.push(line![""]);
-        header.push(Paragraph::new(WSL_INSTRUCTIONS).wrap(Wrap { trim: false }));
 
+        let preset_clone = preset;
         let items = vec![SelectionItem {
-            name: "Back".to_string(),
+            name: "Turn on Windows sandbox and use Auto mode".to_string(),
             description: Some(
-                "Return to the approval mode list. Auto mode stays disabled outside WSL."
+                "Adds enable_experimental_windows_sandbox = true to config.toml and switches to Auto mode."
+                    .to_string(),
+            ),
+            actions: vec![Box::new(move |tx| {
+                tx.send(AppEvent::EnableWindowsSandboxForAuto {
+                    preset: preset_clone.clone(),
+                });
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        }, SelectionItem {
+            name: "Go Back".to_string(),
+            description: Some(
+                "Stay on read-only or full access without enabling the sandbox feature."
                     .to_string(),
             ),
             actions: vec![Box::new(|tx| {
@@ -2555,7 +2512,31 @@ impl ChatWidget {
     }
 
     #[cfg(not(target_os = "windows"))]
-    pub(crate) fn open_windows_auto_mode_instructions(&mut self) {}
+    pub(crate) fn open_windows_sandbox_enable_prompt(&mut self, _preset: ApprovalPreset) {}
+
+    #[cfg(target_os = "windows")]
+    pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self) {
+        if self.config.forced_auto_mode_downgraded_on_windows
+            && codex_core::get_platform_sandbox().is_none()
+            && let Some(preset) = builtin_approval_presets()
+                .into_iter()
+                .find(|preset| preset.id == "auto")
+        {
+            self.open_windows_sandbox_enable_prompt(preset);
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self) {}
+
+    #[cfg(target_os = "windows")]
+    pub(crate) fn clear_forced_auto_mode_downgrade(&mut self) {
+        self.config.forced_auto_mode_downgraded_on_windows = false;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[allow(dead_code)]
+    pub(crate) fn clear_forced_auto_mode_downgrade(&mut self) {}
 
     /// Set the approval policy in the widget's config copy.
     pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
@@ -2564,7 +2545,16 @@ impl ChatWidget {
 
     /// Set the sandbox policy in the widget's config copy.
     pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) {
+        #[cfg(target_os = "windows")]
+        let should_clear_downgrade = !matches!(policy, SandboxPolicy::ReadOnly)
+            || codex_core::get_platform_sandbox().is_some();
+
         self.config.sandbox_policy = policy;
+
+        #[cfg(target_os = "windows")]
+        if should_clear_downgrade {
+            self.config.forced_auto_mode_downgraded_on_windows = false;
+        }
     }
 
     pub(crate) fn set_full_access_warning_acknowledged(&mut self, acknowledged: bool) {

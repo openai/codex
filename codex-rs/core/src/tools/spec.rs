@@ -1292,11 +1292,7 @@ mod tests {
             "gpt-5-codex",
             &Features::with_defaults(),
             &[
-                if cfg!(windows) {
-                    "shell_command"
-                } else {
-                    "shell"
-                },
+                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1313,11 +1309,7 @@ mod tests {
             "gpt-5.1-codex",
             &Features::with_defaults(),
             &[
-                if cfg!(windows) {
-                    "shell_command"
-                } else {
-                    "shell"
-                },
+                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1392,11 +1384,7 @@ mod tests {
             "gpt-5.1-codex-mini",
             &Features::with_defaults(),
             &[
-                if cfg!(windows) {
-                    "shell_command"
-                } else {
-                    "shell"
-                },
+                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1413,7 +1401,7 @@ mod tests {
             "gpt-5.1",
             &Features::with_defaults(),
             &[
-                "shell",
+                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",

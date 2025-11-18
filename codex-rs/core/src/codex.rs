@@ -13,6 +13,7 @@ use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::response_processing::process_items;
 use crate::terminal;
+use crate::truncate::TruncationPolicy;
 use crate::user_notification::UserNotifier;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
@@ -275,6 +276,7 @@ pub(crate) struct TurnContext {
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
+    pub(crate) truncation_policy: TruncationPolicy,
 }
 
 impl TurnContext {
@@ -401,7 +403,7 @@ impl Session {
         );
 
         let client = ModelClient::new(
-            Arc::new(per_turn_config),
+            Arc::new(per_turn_config.clone()),
             auth_manager,
             otel_event_manager,
             provider,
@@ -431,6 +433,7 @@ impl Session {
             final_output_json_schema: None,
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
+            truncation_policy: TruncationPolicy::new(&per_turn_config),
         }
     }
 
@@ -678,7 +681,8 @@ impl Session {
                 let reconstructed_history =
                     self.reconstruct_history_from_rollout(&turn_context, &rollout_items);
                 if !reconstructed_history.is_empty() {
-                    self.record_into_history(&reconstructed_history).await;
+                    self.record_into_history(&reconstructed_history, &turn_context)
+                        .await;
                 }
 
                 // If persisting, persist all rollout items as-is (recorder filters)
@@ -935,7 +939,7 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) {
-        self.record_into_history(items).await;
+        self.record_into_history(items, turn_context).await;
         self.persist_rollout_response_items(items).await;
         self.send_raw_response_items(turn_context, items).await;
     }
@@ -949,7 +953,10 @@ impl Session {
         for item in rollout_items {
             match item {
                 RolloutItem::ResponseItem(response_item) => {
-                    history.record_items(std::iter::once(response_item));
+                    history.record_items(
+                        std::iter::once(response_item),
+                        turn_context.truncation_policy,
+                    );
                 }
                 RolloutItem::Compacted(compacted) => {
                     let snapshot = history.get_history();
@@ -973,9 +980,13 @@ impl Session {
     }
 
     /// Append ResponseItems to the in-memory conversation history only.
-    pub(crate) async fn record_into_history(&self, items: &[ResponseItem]) {
+    pub(crate) async fn record_into_history(
+        &self,
+        items: &[ResponseItem],
+        turn_context: &TurnContext,
+    ) {
         let mut state = self.state.lock().await;
-        state.record_items(items.iter());
+        state.record_items(items.iter(), turn_context.truncation_policy);
     }
 
     pub(crate) async fn replace_history(&self, items: Vec<ResponseItem>) {
@@ -1755,6 +1766,7 @@ async fn spawn_review_thread(
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
+        truncation_policy: TruncationPolicy::new(&per_turn_config),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -2886,7 +2898,7 @@ mod tests {
         for item in &initial_context {
             rollout_items.push(RolloutItem::ResponseItem(item.clone()));
         }
-        live_history.record_items(initial_context.iter());
+        live_history.record_items(initial_context.iter(), turn_context.truncation_policy);
 
         let user1 = ResponseItem::Message {
             id: None,
@@ -2895,7 +2907,7 @@ mod tests {
                 text: "first user".to_string(),
             }],
         };
-        live_history.record_items(std::iter::once(&user1));
+        live_history.record_items(std::iter::once(&user1), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(user1.clone()));
 
         let assistant1 = ResponseItem::Message {
@@ -2905,7 +2917,7 @@ mod tests {
                 text: "assistant reply one".to_string(),
             }],
         };
-        live_history.record_items(std::iter::once(&assistant1));
+        live_history.record_items(std::iter::once(&assistant1), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(assistant1.clone()));
 
         let summary1 = "summary one";
@@ -2929,7 +2941,7 @@ mod tests {
                 text: "second user".to_string(),
             }],
         };
-        live_history.record_items(std::iter::once(&user2));
+        live_history.record_items(std::iter::once(&user2), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(user2.clone()));
 
         let assistant2 = ResponseItem::Message {
@@ -2939,7 +2951,7 @@ mod tests {
                 text: "assistant reply two".to_string(),
             }],
         };
-        live_history.record_items(std::iter::once(&assistant2));
+        live_history.record_items(std::iter::once(&assistant2), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(assistant2.clone()));
 
         let summary2 = "summary two";
@@ -2963,7 +2975,7 @@ mod tests {
                 text: "third user".to_string(),
             }],
         };
-        live_history.record_items(std::iter::once(&user3));
+        live_history.record_items(std::iter::once(&user3), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(user3.clone()));
 
         let assistant3 = ResponseItem::Message {
@@ -2973,7 +2985,7 @@ mod tests {
                 text: "assistant reply three".to_string(),
             }],
         };
-        live_history.record_items(std::iter::once(&assistant3));
+        live_history.record_items(std::iter::once(&assistant3), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(assistant3.clone()));
 
         (rollout_items, live_history.get_history())

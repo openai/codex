@@ -58,6 +58,11 @@ use tempfile::tempdir;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::unbounded_channel;
 
+#[cfg(target_os = "windows")]
+fn set_windows_sandbox_enabled(enabled: bool) {
+    codex_core::set_windows_sandbox_enabled(enabled);
+}
+
 fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
     Config::load_from_base_config_with_overrides(
@@ -1457,28 +1462,6 @@ fn approvals_selection_popup_snapshot() {
 }
 
 #[test]
-fn approvals_popup_includes_wsl_note_for_auto_mode() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
-
-    if cfg!(target_os = "windows") {
-        chat.config.forced_auto_mode_downgraded_on_windows = true;
-    }
-    chat.open_approvals_popup();
-
-    let popup = render_bottom_popup(&chat, 80);
-    assert_eq!(
-        popup.contains("Requires Windows Subsystem for Linux (WSL)"),
-        cfg!(target_os = "windows"),
-        "expected auto preset description to mention WSL requirement only on Windows, popup: {popup}"
-    );
-    assert_eq!(
-        popup.contains("Codex forced your settings back to Read Only on this Windows machine."),
-        cfg!(target_os = "windows") && chat.config.forced_auto_mode_downgraded_on_windows,
-        "expected downgrade notice only when auto mode is forced off on Windows, popup: {popup}"
-    );
-}
-
-#[test]
 fn full_access_confirmation_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
@@ -1494,16 +1477,39 @@ fn full_access_confirmation_popup_snapshot() {
 
 #[cfg(target_os = "windows")]
 #[test]
-fn windows_auto_mode_instructions_popup_lists_install_steps() {
+fn windows_auto_mode_prompt_requests_enabling_sandbox_feature() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
-    chat.open_windows_auto_mode_instructions();
+    let preset = builtin_approval_presets()
+        .into_iter()
+        .find(|preset| preset.id == "auto")
+        .expect("auto preset");
+    chat.open_windows_sandbox_enable_prompt(preset);
 
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        popup.contains("wsl --install"),
-        "expected WSL instructions popup to include install command, popup: {popup}"
+        popup.contains("experimental Windows sandbox"),
+        "expected auto mode prompt to mention enabling the sandbox feature, popup: {popup}"
     );
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn startup_prompts_for_windows_sandbox_when_auto_requested() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    set_windows_sandbox_enabled(false);
+    chat.config.forced_auto_mode_downgraded_on_windows = true;
+
+    chat.maybe_prompt_windows_sandbox_enable();
+
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup.contains("Turn on Windows sandbox and use Auto mode"),
+        "expected startup prompt to offer enabling the sandbox: {popup}"
+    );
+
+    set_windows_sandbox_enabled(true);
 }
 
 #[test]

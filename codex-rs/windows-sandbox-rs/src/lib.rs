@@ -7,6 +7,8 @@ macro_rules! windows_modules {
 windows_modules!(acl, allow, audit, cap, env, logging, policy, token, winutil);
 
 #[cfg(target_os = "windows")]
+pub use audit::world_writable_warning_details;
+#[cfg(target_os = "windows")]
 pub use windows_impl::preflight_audit_everyone_writable;
 #[cfg(target_os = "windows")]
 pub use windows_impl::run_windows_sandbox_capture;
@@ -17,6 +19,8 @@ pub use windows_impl::CaptureResult;
 pub use stub::preflight_audit_everyone_writable;
 #[cfg(not(target_os = "windows"))]
 pub use stub::run_windows_sandbox_capture;
+#[cfg(not(target_os = "windows"))]
+pub use stub::world_writable_warning_details;
 #[cfg(not(target_os = "windows"))]
 pub use stub::CaptureResult;
 
@@ -454,5 +458,11 @@ mod stub {
         _timeout_ms: Option<u64>,
     ) -> Result<CaptureResult> {
         bail!("Windows sandbox is only available on Windows")
+    }
+
+    pub fn world_writable_warning_details(
+        _codex_home: impl AsRef<Path>,
+    ) -> Option<(Vec<String>, usize, bool)> {
+        None
     }
 }
