@@ -1088,6 +1088,8 @@ pub struct SessionMeta {
     #[serde(default)]
     pub source: SessionSource,
     pub model_provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 impl Default for SessionMeta {
@@ -1101,6 +1103,7 @@ impl Default for SessionMeta {
             instructions: None,
             source: SessionSource::default(),
             model_provider: None,
+            name: None,
         }
     }
 }

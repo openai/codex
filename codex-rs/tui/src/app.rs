@@ -21,6 +21,7 @@ use codex_common::model_presets::ModelUpgrade;
 use codex_common::model_presets::all_model_presets;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
+use codex_core::build_saved_session_entry;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::model_family::find_family_for_model;
@@ -28,6 +29,7 @@ use codex_core::protocol::FinalOutput;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
+use codex_core::upsert_saved_session;
 use codex_protocol::ConversationId;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -261,6 +263,27 @@ impl App {
                     resumed.session_configured,
                 )
             }
+            ResumeSelection::Fork(path) => {
+                let resumed = conversation_manager
+                    .fork_from_rollout(config.clone(), path.clone(), auth_manager.clone())
+                    .await
+                    .wrap_err_with(|| format!("Failed to fork session from {}", path.display()))?;
+                let init = crate::chatwidget::ChatWidgetInit {
+                    config: config.clone(),
+                    frame_requester: tui.frame_requester(),
+                    app_event_tx: app_event_tx.clone(),
+                    initial_prompt: initial_prompt.clone(),
+                    initial_images: initial_images.clone(),
+                    enhanced_keys_supported,
+                    auth_manager: auth_manager.clone(),
+                    feedback: feedback.clone(),
+                };
+                ChatWidget::new_from_existing(
+                    init,
+                    resumed.conversation,
+                    resumed.session_configured,
+                )
+            }
         };
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
@@ -386,6 +409,96 @@ impl App {
         Ok(true)
     }
 
+    async fn save_session(&mut self, requested_name: String) {
+        let name = requested_name.trim().to_string();
+        if name.is_empty() {
+            self.chat_widget
+                .add_error_message("Usage: /save <name>".to_string());
+            return;
+        }
+        let Some(conversation_id) = self.chat_widget.conversation_id() else {
+            self.chat_widget.add_error_message(
+                "Session is not ready yet; try /save again in a moment.".to_string(),
+            );
+            return;
+        };
+        let Some(rollout_path) = self.chat_widget.rollout_path() else {
+            self.chat_widget.add_error_message(
+                "Rollout path is not available yet; try /save again shortly.".to_string(),
+            );
+            return;
+        };
+        let conversation = match self.server.get_conversation(conversation_id).await {
+            Ok(conv) => conv,
+            Err(err) => {
+                tracing::error!(
+                    conversation_id = %conversation_id,
+                    error = %err,
+                    "failed to look up conversation for /save"
+                );
+                self.chat_widget
+                    .add_error_message(format!("Failed to save session '{name}': {err}"));
+                return;
+            }
+        };
+        if let Err(err) = conversation.flush_rollout().await {
+            tracing::error!(
+                conversation_id = %conversation_id,
+                error = %err,
+                "failed to flush rollout before /save"
+            );
+            self.chat_widget
+                .add_error_message(format!("Failed to save session '{name}': {err}"));
+            return;
+        }
+        if let Err(err) = conversation.set_session_name(Some(name.clone())).await {
+            tracing::error!(
+                conversation_id = %conversation_id,
+                error = %err,
+                "failed to update session name before /save"
+            );
+            self.chat_widget
+                .add_error_message(format!("Failed to save session '{name}': {err}"));
+            return;
+        }
+        let model = self.chat_widget.config_ref().model.clone();
+        let entry = match build_saved_session_entry(name.clone(), rollout_path.clone(), model).await
+        {
+            Ok(entry) => entry,
+            Err(err) => {
+                tracing::error!(
+                    rollout = %rollout_path.display(),
+                    error = %err,
+                    "failed to build saved session entry"
+                );
+                self.chat_widget
+                    .add_error_message(format!("Failed to save session '{name}': {err}"));
+                return;
+            }
+        };
+        if let Err(err) = upsert_saved_session(&self.config.codex_home, entry.clone()).await {
+            tracing::error!(
+                rollout = %rollout_path.display(),
+                error = %err,
+                "failed to persist saved session entry"
+            );
+            self.chat_widget
+                .add_error_message(format!("Failed to save session '{name}': {err}"));
+            return;
+        }
+        let hint = format!(
+            "Resume with `codex resume {}` or fork with `codex fork {}`.",
+            entry.name, entry.name
+        );
+        self.chat_widget.add_info_message(
+            format!(
+                "Saved session '{}' (conversation {}).",
+                entry.name, entry.conversation_id
+            ),
+            Some(hint),
+        );
+    }
+
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
         match event {
             AppEvent::NewSession => {
@@ -467,6 +580,9 @@ impl App {
             }
             AppEvent::ConversationHistory(ev) => {
                 self.on_conversation_history_for_backtrack(tui, ev).await?;
+            }
+            AppEvent::SaveSession { name } => {
+                self.save_session(name).await;
             }
             AppEvent::ExitRequest => {
                 return Ok(false);

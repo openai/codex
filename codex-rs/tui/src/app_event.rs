@@ -136,6 +136,11 @@ pub(crate) enum AppEvent {
     /// Forwarded conversation history snapshot from the current conversation.
     ConversationHistory(ConversationPathResponseEvent),
 
+    /// Save the current session under a user-provided name.
+    SaveSession {
+        name: String,
+    },
+
     /// Open the branch picker option from the review popup.
     OpenReviewBranchPicker(PathBuf),
 

@@ -128,7 +128,9 @@ impl Session {
                         task_cancellation_token.child_token(),
                     )
                     .await;
-                session_ctx.clone_session().flush_rollout().await;
+                if let Err(e) = session_ctx.clone_session().flush_rollout().await {
+                    tracing::warn!("failed to flush rollout recorder: {e}");
+                }
                 if !task_cancellation_token.is_cancelled() {
                     // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
                     let sess = session_ctx.clone_session();

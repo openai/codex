@@ -28,6 +28,9 @@ pub struct Cli {
     #[clap(skip)]
     pub resume_session_id: Option<String>,
 
+    #[clap(skip)]
+    pub fork_source: Option<String>,
+
     /// Model the agent should use.
     #[arg(long, short = 'm')]
     pub model: Option<String>,

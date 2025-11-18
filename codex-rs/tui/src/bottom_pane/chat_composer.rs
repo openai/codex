@@ -69,7 +69,7 @@ const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
 #[derive(Debug, PartialEq)]
 pub enum InputResult {
     Submitted(String),
-    Command(SlashCommand),
+    Command { command: SlashCommand, args: String },
     None,
 }
 
@@ -333,6 +333,14 @@ impl ChatComposer {
         PasteBurst::recommended_flush_delay()
     }
 
+    fn command_args_from_line(line: &str, command: SlashCommand) -> String {
+        if let Some((name, rest)) = parse_slash_name(line)
+            && name == command.command() {
+                return rest.to_string();
+            }
+        String::new()
+    }
+
     /// Integrate results from an asynchronous file search.
     pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         // Only apply if user is still editing a token starting with `query`.
@@ -505,8 +513,9 @@ impl ChatComposer {
                 if let Some(sel) = popup.selected_item() {
                     match sel {
                         CommandItem::Builtin(cmd) => {
+                            let args = Self::command_args_from_line(first_line, cmd);
                             self.textarea.set_text("");
-                            return (InputResult::Command(cmd), true);
+                            return (InputResult::Command { command: cmd, args }, true);
                         }
                         CommandItem::UserPrompt(idx) => {
                             if let Some(prompt) = popup.prompt(idx) {
@@ -920,22 +929,21 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                // If the first line is a bare built-in slash command (no args),
-                // dispatch it even when the slash popup isn't visible. This preserves
-                // the workflow: type a prefix ("/di"), press Tab to complete to
-                // "/diff ", then press Enter to run it. Tab moves the cursor beyond
-                // the '/name' token and our caret-based heuristic hides the popup,
-                // but Enter should still dispatch the command rather than submit
-                // literal text.
+                // If the first line is a built-in slash command, dispatch it even when
+                // the slash popup isn't visible. This preserves the workflow:
+                // type a prefix ("/di"), press Tab to complete to "/diff ", then press
+                // Enter to run it. Tab moves the cursor beyond the '/name' token and
+                // our caret-based heuristic hides the popup, but Enter should still
+                // dispatch the command rather than submit literal text.
                 let first_line = self.textarea.text().lines().next().unwrap_or("");
-                if let Some((name, rest)) = parse_slash_name(first_line)
-                    && rest.is_empty()
+                if let Some((name, _rest)) = parse_slash_name(first_line)
                     && let Some((_n, cmd)) = built_in_slash_commands()
                         .into_iter()
                         .find(|(n, _)| *n == name)
                 {
+                    let args = Self::command_args_from_line(first_line, cmd);
                     self.textarea.set_text("");
-                    return (InputResult::Command(cmd), true);
+                    return (InputResult::Command { command: cmd, args }, true);
                 }
                 // If we're in a paste-like burst capture, treat Enter as part of the burst
                 // and accumulate it rather than submitting or inserting immediately.
@@ -2399,8 +2407,9 @@ mod tests {
         // When a slash command is dispatched, the composer should return a
         // Command result (not submit literal text) and clear its textarea.
         match result {
-            InputResult::Command(cmd) => {
+            InputResult::Command { command: cmd, args } => {
                 assert_eq!(cmd.command(), "init");
+                assert!(args.is_empty());
             }
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
@@ -2474,11 +2483,50 @@ mod tests {
         let (result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match result {
-            InputResult::Command(cmd) => assert_eq!(cmd.command(), "diff"),
+            InputResult::Command { command: cmd, args } => {
+                assert_eq!(cmd.command(), "diff");
+                assert!(args.is_empty());
+            }
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch after Tab completion, got literal submit: {text}")
             }
             InputResult::None => panic!("expected Command result for '/diff'"),
+        }
+        assert!(composer.textarea.is_empty());
+    }
+
+    #[test]
+    fn slash_command_with_args_dispatches_and_preserves_args() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.textarea.set_text("/save feature-one");
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        match result {
+            InputResult::Command { command: cmd, args } => {
+                assert_eq!(cmd, SlashCommand::Save);
+                assert_eq!(args, "feature-one");
+            }
+            InputResult::Submitted(text) => {
+                panic!(
+                    "expected slash command dispatch, but composer submitted literal text: {text}"
+                )
+            }
+            InputResult::None => panic!("expected Command result for '/save feature-one'"),
         }
         assert!(composer.textarea.is_empty());
     }
@@ -2505,8 +2553,9 @@ mod tests {
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         match result {
-            InputResult::Command(cmd) => {
+            InputResult::Command { command: cmd, args } => {
                 assert_eq!(cmd.command(), "mention");
+                assert!(args.is_empty());
             }
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")

@@ -147,6 +147,7 @@ pub struct Codex {
 pub struct CodexSpawnOk {
     pub codex: Codex,
     pub conversation_id: ConversationId,
+    pub(crate) session: Arc<Session>,
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
@@ -202,7 +203,8 @@ impl Codex {
         let conversation_id = session.conversation_id;
 
         // This task will run until Op::Shutdown is received.
-        tokio::spawn(submission_loop(session, config, rx_sub));
+        let submission_session = Arc::clone(&session);
+        tokio::spawn(submission_loop(submission_session, config, rx_sub));
         let codex = Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
@@ -212,6 +214,7 @@ impl Codex {
         Ok(CodexSpawnOk {
             codex,
             conversation_id,
+            session,
         })
     }
 
@@ -616,15 +619,27 @@ impl Session {
     }
 
     /// Ensure all rollout writes are durably flushed.
-    pub(crate) async fn flush_rollout(&self) {
+    pub(crate) async fn flush_rollout(&self) -> std::io::Result<()> {
         let recorder = {
             let guard = self.services.rollout.lock().await;
             guard.clone()
         };
-        if let Some(rec) = recorder
-            && let Err(e) = rec.flush().await
-        {
-            warn!("failed to flush rollout recorder: {e}");
+        if let Some(rec) = recorder {
+            rec.flush().await
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(crate) async fn set_session_name(&self, name: Option<String>) -> std::io::Result<()> {
+        let recorder = {
+            let guard = self.services.rollout.lock().await;
+            guard.clone()
+        };
+        if let Some(rec) = recorder {
+            rec.set_session_name(name).await
+        } else {
+            Ok(())
         }
     }
 
@@ -643,7 +658,9 @@ impl Session {
                 let items = self.build_initial_context(&turn_context);
                 self.record_conversation_items(&turn_context, &items).await;
                 // Ensure initial items are visible to immediate readers (e.g., tests, forks).
-                self.flush_rollout().await;
+                if let Err(e) = self.flush_rollout().await {
+                    warn!("failed to flush rollout recorder: {e}");
+                }
             }
             InitialHistory::Resumed(_) | InitialHistory::Forked(_) => {
                 let rollout_items = conversation_history.get_rollout_items();
@@ -689,7 +706,9 @@ impl Session {
                     self.persist_rollout_items(&rollout_items).await;
                 }
                 // Flush after seeding history and any persisted rollout copy.
-                self.flush_rollout().await;
+                if let Err(e) = self.flush_rollout().await {
+                    warn!("failed to flush rollout recorder: {e}");
+                }
             }
         }
     }

@@ -3,6 +3,7 @@ use crate::CodexAuth;
 use crate::codex::Codex;
 use crate::codex::CodexSpawnOk;
 use crate::codex::INITIAL_SUBMIT_ID;
+use crate::codex::Session;
 use crate::codex_conversation::CodexConversation;
 use crate::config::Config;
 use crate::error::CodexErr;
@@ -69,6 +70,7 @@ impl ConversationManager {
         let CodexSpawnOk {
             codex,
             conversation_id,
+            session,
         } = Codex::spawn(
             config,
             auth_manager,
@@ -76,13 +78,14 @@ impl ConversationManager {
             self.session_source.clone(),
         )
         .await?;
-        self.finalize_spawn(codex, conversation_id).await
+        self.finalize_spawn(codex, conversation_id, session).await
     }
 
     async fn finalize_spawn(
         &self,
         codex: Codex,
         conversation_id: ConversationId,
+        session: Arc<Session>,
     ) -> CodexResult<NewConversation> {
         // The first event must be `SessionInitialized`. Validate and forward it
         // to the caller so that they can display it in the conversation
@@ -101,6 +104,7 @@ impl ConversationManager {
         let conversation = Arc::new(CodexConversation::new(
             codex,
             session_configured.rollout_path.clone(),
+            session,
         ));
         self.conversations
             .write()
@@ -145,6 +149,7 @@ impl ConversationManager {
         let CodexSpawnOk {
             codex,
             conversation_id,
+            session,
         } = Codex::spawn(
             config,
             auth_manager,
@@ -152,7 +157,23 @@ impl ConversationManager {
             self.session_source.clone(),
         )
         .await?;
-        self.finalize_spawn(codex, conversation_id).await
+        self.finalize_spawn(codex, conversation_id, session).await
+    }
+
+    pub async fn fork_from_rollout(
+        &self,
+        config: Config,
+        path: PathBuf,
+        auth_manager: Arc<AuthManager>,
+    ) -> CodexResult<NewConversation> {
+        let initial_history = RolloutRecorder::get_rollout_history(&path).await?;
+        let forked = match initial_history {
+            InitialHistory::Resumed(resumed) => InitialHistory::Forked(resumed.history),
+            InitialHistory::Forked(items) => InitialHistory::Forked(items),
+            InitialHistory::New => InitialHistory::New,
+        };
+        self.resume_conversation_with_history(config, forked, auth_manager)
+            .await
     }
 
     /// Removes the conversation from the manager's internal map, though the
@@ -185,9 +206,10 @@ impl ConversationManager {
         let CodexSpawnOk {
             codex,
             conversation_id,
+            session,
         } = Codex::spawn(config, auth_manager, history, self.session_source.clone()).await?;
 
-        self.finalize_spawn(codex, conversation_id).await
+        self.finalize_spawn(codex, conversation_id, session).await
     }
 }
 

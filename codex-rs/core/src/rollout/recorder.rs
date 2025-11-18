@@ -11,6 +11,8 @@ use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::FormatItem;
 use time::macros::format_description;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncSeekExt;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::{self};
@@ -69,6 +71,10 @@ enum RolloutCmd {
     },
     Shutdown {
         ack: oneshot::Sender<()>,
+    },
+    SetName {
+        name: Option<String>,
+        ack: oneshot::Sender<std::io::Result<()>>,
     },
 }
 
@@ -148,11 +154,14 @@ impl RolloutRecorder {
                         instructions,
                         source,
                         model_provider: Some(config.model_provider_id.clone()),
+                        name: None,
                     }),
                 )
             }
             RolloutRecorderParams::Resume { path } => (
                 tokio::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
                     .append(true)
                     .open(&path)
                     .await?,
@@ -194,6 +203,21 @@ impl RolloutRecorder {
             .send(RolloutCmd::AddItems(filtered))
             .await
             .map_err(|e| IoError::other(format!("failed to queue rollout items: {e}")))
+    }
+
+    /// Update the session name stored in the rollout's SessionMeta line.
+    pub async fn set_session_name(&self, name: Option<String>) -> std::io::Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(RolloutCmd::SetName { name, ack: tx })
+            .await
+            .map_err(|e| IoError::other(format!("failed to queue session name update: {e}")))?;
+        match rx.await {
+            Ok(result) => result,
+            Err(e) => Err(IoError::other(format!(
+                "failed waiting for session name update: {e}"
+            ))),
+        }
     }
 
     /// Flush all queued writes and wait until they are committed by the writer task.
@@ -334,6 +358,8 @@ fn create_log_file(
 
     let path = dir.join(filename);
     let file = std::fs::OpenOptions::new()
+        .read(true)
+        
         .append(true)
         .create(true)
         .open(&path)?;
@@ -389,6 +415,10 @@ async fn rollout_writer(
             RolloutCmd::Shutdown { ack } => {
                 let _ = ack.send(());
             }
+            RolloutCmd::SetName { name, ack } => {
+                let result = rewrite_session_meta_name(&mut writer.file, name).await;
+                let _ = ack.send(result);
+            }
         }
     }
 
@@ -421,4 +451,39 @@ impl JsonlWriter {
         self.file.flush().await?;
         Ok(())
     }
+}
+
+async fn rewrite_session_meta_name(
+    file: &mut tokio::fs::File,
+    name: Option<String>,
+) -> std::io::Result<()> {
+    use std::io::SeekFrom;
+
+    file.flush().await?;
+    file.seek(SeekFrom::Start(0)).await?;
+    let mut contents = Vec::new();
+    file.read_to_end(&mut contents).await?;
+    if contents.is_empty() {
+        return Err(IoError::other("empty rollout file"));
+    }
+    let newline_idx = contents
+        .iter()
+        .position(|&b| b == b'\n')
+        .ok_or_else(|| IoError::other("rollout missing newline after SessionMeta"))?;
+    let first_line = &contents[..newline_idx];
+    let mut rollout_line: RolloutLine = serde_json::from_slice(first_line)
+        .map_err(|e| IoError::other(format!("failed to parse SessionMeta: {e}")))?;
+    let RolloutItem::SessionMeta(ref mut session_meta_line) = rollout_line.item else {
+        return Err(IoError::other("first rollout item is not SessionMeta"));
+    };
+    session_meta_line.meta.name = name;
+    let mut updated = serde_json::to_vec(&rollout_line)?;
+    updated.push(b'\n');
+    updated.extend_from_slice(&contents[newline_idx + 1..]);
+    file.set_len(0).await?;
+    file.seek(SeekFrom::Start(0)).await?;
+    file.write_all(&updated).await?;
+    file.flush().await?;
+    file.seek(SeekFrom::End(0)).await?;
+    Ok(())
 }

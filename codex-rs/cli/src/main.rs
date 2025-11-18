@@ -100,6 +100,12 @@ enum Subcommand {
     /// Resume a previous interactive session (picker by default; use --last to continue the most recent).
     Resume(ResumeCommand),
 
+    /// Fork an existing session into a new conversation.
+    Fork(ForkCommand),
+
+    /// Manage saved sessions.
+    Session(SessionCommand),
+
     /// [EXPERIMENTAL] Browse tasks from Codex Cloud and apply changes locally.
     #[clap(name = "cloud", alias = "cloud-tasks")]
     Cloud(CloudTasksCli),
@@ -136,6 +142,28 @@ struct ResumeCommand {
 
     #[clap(flatten)]
     config_overrides: TuiCli,
+}
+
+#[derive(Debug, Parser)]
+struct ForkCommand {
+    /// Resume from a saved session name or rollout id, but start a new conversation.
+    #[arg(value_name = "ID|NAME")]
+    target: String,
+
+    #[clap(flatten)]
+    config_overrides: TuiCli,
+}
+
+#[derive(Debug, Parser)]
+struct SessionCommand {
+    #[command(subcommand)]
+    action: SessionSubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum SessionSubcommand {
+    /// List saved sessions created via `/save <name>`.
+    List,
 }
 
 #[derive(Debug, Parser)]
@@ -460,6 +488,24 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             let exit_info = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
             handle_app_exit(exit_info)?;
         }
+        Some(Subcommand::Fork(ForkCommand {
+            target,
+            config_overrides,
+        })) => {
+            interactive = finalize_fork_interactive(
+                interactive,
+                root_config_overrides.clone(),
+                target,
+                config_overrides,
+            );
+            let exit_info = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
+            handle_app_exit(exit_info)?;
+        }
+        Some(Subcommand::Session(SessionCommand { action })) => match action {
+            SessionSubcommand::List => {
+                list_saved_sessions_cli().await?;
+            }
+        },
         Some(Subcommand::Login(mut login_cli)) => {
             prepend_config_flags(
                 &mut login_cli.config_overrides,
@@ -619,6 +665,7 @@ fn finalize_resume_interactive(
     interactive.resume_picker = resume_session_id.is_none() && !last;
     interactive.resume_last = last;
     interactive.resume_session_id = resume_session_id;
+    interactive.fork_source = None;
 
     // Merge resume-scoped flags and overrides with highest precedence.
     merge_resume_cli_flags(&mut interactive, resume_cli);
@@ -626,6 +673,21 @@ fn finalize_resume_interactive(
     // Propagate any root-level config overrides (e.g. `-c key=value`).
     prepend_config_flags(&mut interactive.config_overrides, root_config_overrides);
 
+    interactive
+}
+
+fn finalize_fork_interactive(
+    mut interactive: TuiCli,
+    root_config_overrides: CliConfigOverrides,
+    target: String,
+    fork_cli: TuiCli,
+) -> TuiCli {
+    interactive.resume_picker = false;
+    interactive.resume_last = false;
+    interactive.resume_session_id = None;
+    interactive.fork_source = Some(target);
+    merge_resume_cli_flags(&mut interactive, fork_cli);
+    prepend_config_flags(&mut interactive.config_overrides, root_config_overrides);
     interactive
 }
 
@@ -682,6 +744,35 @@ fn print_completion(cmd: CompletionCommand) {
     generate(cmd.shell, &mut app, name, &mut std::io::stdout());
 }
 
+async fn list_saved_sessions_cli() -> anyhow::Result<()> {
+    let codex_home = codex_core::config::find_codex_home()?;
+    let entries = codex_core::list_saved_sessions(&codex_home).await?;
+    if entries.is_empty() {
+        println!("No saved sessions. Run `/save <name>` inside Codex to create one.");
+        return Ok(());
+    }
+    println!(
+        "{:<20} {:<36} {:<20} {:<12} CWD",
+        "NAME", "CONVERSATION ID", "SAVED AT", "MODEL"
+    );
+    for entry in entries {
+        let cid = entry.conversation_id.to_string();
+        println!(
+            "{:<20} {:<36} {:<20} {:<12} {}",
+            entry.name,
+            cid,
+            entry.saved_at,
+            entry.model,
+            entry.cwd.display()
+        );
+        let created = entry.created_at.as_deref().unwrap_or("-");
+        println!("{:<20} created: {}", "", created);
+        println!("{:<20} path: {}", "", entry.rollout_path.display());
+        println!();
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -709,6 +800,26 @@ mod tests {
         };
 
         finalize_resume_interactive(interactive, root_overrides, session_id, last, resume_cli)
+    }
+
+    fn fork_from_args(args: &[&str]) -> TuiCli {
+        let cli = MultitoolCli::try_parse_from(args).expect("parse");
+        let MultitoolCli {
+            interactive,
+            config_overrides: root_overrides,
+            subcommand,
+            feature_toggles: _,
+        } = cli;
+
+        let Subcommand::Fork(ForkCommand {
+            target,
+            config_overrides,
+        }) = subcommand.expect("fork present")
+        else {
+            unreachable!()
+        };
+
+        finalize_fork_interactive(interactive, root_overrides, target, config_overrides)
     }
 
     fn sample_exit_info(conversation: Option<&str>) -> AppExitInfo {
@@ -791,6 +902,15 @@ mod tests {
         assert!(!interactive.resume_picker);
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id.as_deref(), Some("1234"));
+    }
+
+    #[test]
+    fn fork_sets_target_and_disables_resume_controls() {
+        let interactive = fork_from_args(["codex", "fork", "saved"].as_ref());
+        assert_eq!(interactive.fork_source.as_deref(), Some("saved"));
+        assert!(!interactive.resume_picker);
+        assert!(!interactive.resume_last);
+        assert!(interactive.resume_session_id.is_none());
     }
 
     #[test]

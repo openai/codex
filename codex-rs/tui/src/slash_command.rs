@@ -16,6 +16,7 @@ pub enum SlashCommand {
     Approvals,
     Review,
     New,
+    Save,
     Init,
     Compact,
     Undo,
@@ -37,6 +38,7 @@ impl SlashCommand {
         match self {
             SlashCommand::Feedback => "send logs to maintainers",
             SlashCommand::New => "start a new chat during a conversation",
+            SlashCommand::Save => "save this session so it can be resumed later",
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
             SlashCommand::Review => "review my current changes and find issues",
@@ -64,6 +66,7 @@ impl SlashCommand {
     pub fn available_during_task(self) -> bool {
         match self {
             SlashCommand::New
+            | SlashCommand::Save
             | SlashCommand::Init
             | SlashCommand::Compact
             | SlashCommand::Undo

@@ -22,11 +22,14 @@ use codex_core::config::resolve_oss_provider;
 use codex_core::find_conversation_path_by_id_str;
 use codex_core::get_platform_sandbox;
 use codex_core::protocol::AskForApproval;
+use codex_core::resolve_saved_session;
 use codex_protocol::config_types::SandboxMode;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use std::fs::OpenOptions;
+use std::path::Path;
 use std::path::PathBuf;
 use tracing::error;
+use tracing::warn;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::Targets;
@@ -335,6 +338,23 @@ pub async fn run_main(
     .map_err(|err| std::io::Error::other(err.to_string()))
 }
 
+async fn resolve_rollout_path(
+    codex_home: &Path,
+    identifier: &str,
+) -> std::io::Result<Option<PathBuf>> {
+    if let Some(entry) = resolve_saved_session(codex_home, identifier).await? {
+        if entry.rollout_path.exists() {
+            return Ok(Some(entry.rollout_path));
+        }
+        warn!(
+            "saved session '{}' points to missing rollout at {}",
+            identifier,
+            entry.rollout_path.display()
+        );
+    }
+    find_conversation_path_by_id_str(codex_home, identifier).await
+}
+
 async fn run_ratatui_app(
     cli: Cli,
     initial_config: Config,
@@ -445,8 +465,29 @@ async fn run_ratatui_app(
     };
 
     // Determine resume behavior: explicit id, then resume last, then picker.
-    let resume_selection = if let Some(id_str) = cli.resume_session_id.as_deref() {
-        match find_conversation_path_by_id_str(&config.codex_home, id_str).await? {
+    let resume_selection = if let Some(target) = cli.fork_source.as_deref() {
+        match resolve_rollout_path(&config.codex_home, target).await? {
+            Some(path) => resume_picker::ResumeSelection::Fork(path),
+            None => {
+                error!("Error finding conversation path: {target}");
+                restore();
+                session_log::log_session_end();
+                let _ = tui.terminal.clear();
+                if let Err(err) = writeln!(
+                    std::io::stdout(),
+                    "No saved session or rollout found for '{target}'. Run `codex resume` without a name to choose from existing sessions."
+                ) {
+                    error!("Failed to write resume error message: {err}");
+                }
+                return Ok(AppExitInfo {
+                    token_usage: codex_core::protocol::TokenUsage::default(),
+                    conversation_id: None,
+                    update_action: None,
+                });
+            }
+        }
+    } else if let Some(id_str) = cli.resume_session_id.as_deref() {
+        match resolve_rollout_path(&config.codex_home, id_str).await? {
             Some(path) => resume_picker::ResumeSelection::Resume(path),
             None => {
                 error!("Error finding conversation path: {id_str}");
@@ -455,7 +496,7 @@ async fn run_ratatui_app(
                 let _ = tui.terminal.clear();
                 if let Err(err) = writeln!(
                     std::io::stdout(),
-                    "No saved session found with ID {id_str}. Run `codex resume` without an ID to choose from existing sessions."
+                    "No saved session or rollout found for '{id_str}'. Run `codex resume` without a name to choose from existing sessions."
                 ) {
                     error!("Failed to write resume error message: {err}");
                 }
