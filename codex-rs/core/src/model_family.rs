@@ -1,3 +1,4 @@
+use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::Verbosity;
 
 use crate::config::types::ReasoningSummaryFormat;
@@ -30,6 +31,9 @@ pub struct ModelFamily {
     // model family. Note it has `effort` and `summary` subfields (though
     // `summary` is optional).
     pub supports_reasoning_summaries: bool,
+
+    // The reasoning effort to use for this model family when none is explicitly chosen.
+    pub default_reasoning_effort: Option<ReasoningEffort>,
 
     // Define if we need a special handling of reasoning summary
     pub reasoning_summary_format: ReasoningSummaryFormat,
@@ -84,6 +88,7 @@ macro_rules! model_family {
             support_verbosity: false,
             shell_type: ConfigShellToolType::Default,
             default_verbosity: None,
+            default_reasoning_effort: None,
         };
 
         // apply overrides
@@ -127,7 +132,7 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
         model_family!(slug, "gpt-4o", needs_special_apply_patch_instructions: true)
     } else if slug.starts_with("gpt-3.5") {
         model_family!(slug, "gpt-3.5", needs_special_apply_patch_instructions: true)
-    } else if slug.starts_with("test-gpt-5-codex") {
+    } else if slug.starts_with("test-gpt-5") {
         model_family!(
             slug, slug,
             supports_reasoning_summaries: true,
@@ -156,6 +161,7 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
                 "list_dir".to_string(),
                 "read_file".to_string(),
             ],
+            shell_type: if cfg!(windows) { ConfigShellToolType::ShellCommand } else { ConfigShellToolType::Default },
             supports_parallel_tool_calls: true,
             support_verbosity: true,
         )
@@ -171,6 +177,8 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             reasoning_summary_format: ReasoningSummaryFormat::Experimental,
             base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+            shell_type: if cfg!(windows) { ConfigShellToolType::ShellCommand } else { ConfigShellToolType::Default },
+            supports_parallel_tool_calls: true,
             support_verbosity: false,
         )
     } else if slug.starts_with("gpt-5.1") {
@@ -181,6 +189,8 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             support_verbosity: true,
             default_verbosity: Some(Verbosity::Low),
             base_instructions: GPT_5_1_INSTRUCTIONS.to_string(),
+            default_reasoning_effort: Some(ReasoningEffort::Medium),
+            supports_parallel_tool_calls: true,
         )
     } else if slug.starts_with("gpt-5") {
         model_family!(
@@ -209,5 +219,6 @@ pub fn derive_default_model_family(model: &str) -> ModelFamily {
         support_verbosity: false,
         shell_type: ConfigShellToolType::Default,
         default_verbosity: None,
+        default_reasoning_effort: None,
     }
 }

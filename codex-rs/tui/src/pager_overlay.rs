@@ -579,6 +579,7 @@ fn render_offset_content(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_core::protocol::ExecCommandSource;
     use codex_core::protocol::ReviewDecision;
     use insta::assert_snapshot;
     use std::collections::HashMap;
@@ -719,7 +720,8 @@ mod tests {
             "exec-1".into(),
             vec!["bash".into(), "-lc".into(), "ls".into()],
             vec![ParsedCommand::Unknown { cmd: "ls".into() }],
-            false,
+            ExecCommandSource::Agent,
+            None,
         );
         exec_cell.complete_call(
             "exec-1",

@@ -42,7 +42,7 @@ async fn collect_tool_identifiers_for_model(model: &str) -> Vec<String> {
     let server = MockServer::start().await;
 
     let sse = sse_completed(model);
-    let resp_mock = responses::mount_sse_once_match(&server, wiremock::matchers::any(), sse).await;
+    let resp_mock = responses::mount_sse_once(&server, sse).await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
@@ -119,7 +119,12 @@ async fn model_selects_expected_tools() {
     assert_eq!(
         gpt5_codex_tools,
         vec![
-            "shell".to_string(),
+            if cfg!(windows) {
+                "shell_command"
+            } else {
+                "shell"
+            }
+            .to_string(),
             "list_mcp_resources".to_string(),
             "list_mcp_resource_templates".to_string(),
             "read_mcp_resource".to_string(),
@@ -133,7 +138,12 @@ async fn model_selects_expected_tools() {
     assert_eq!(
         gpt51_codex_tools,
         vec![
-            "shell".to_string(),
+            if cfg!(windows) {
+                "shell_command"
+            } else {
+                "shell"
+            }
+            .to_string(),
             "list_mcp_resources".to_string(),
             "list_mcp_resource_templates".to_string(),
             "read_mcp_resource".to_string(),

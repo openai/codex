@@ -29,6 +29,7 @@ clap = { workspace = true, features = ["derive"] }
 codex-ansi-escape = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-arg0 = { workspace = true }
+codex-backend-client = { workspace = true }
 codex-common = { workspace = true, features = [
     "cli",
     "elapsed",
@@ -38,7 +39,6 @@ codex-core = { workspace = true }
 codex-feedback = { workspace = true }
 codex-file-search = { workspace = true }
 codex-login = { workspace = true }
-codex-ollama = { workspace = true }
 codex-protocol = { workspace = true }
 color-eyre = { workspace = true }
 crossterm = { workspace = true, features = ["bracketed-paste", "event-stream"] }
@@ -62,6 +62,7 @@ ratatui = { workspace = true, features = [
 ] }
 ratatui-macros = { workspace = true }
 regex-lite = { workspace = true }
+reqwest = { version = "0.12", features = ["json"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
 shlex = { workspace = true }

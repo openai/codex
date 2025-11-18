@@ -110,12 +110,7 @@ async fn exec_cli_applies_experimental_instructions_file() {
         "data: {\"type\":\"response.created\",\"response\":{}}\n\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n"
     );
-    let resp_mock = core_test_support::responses::mount_sse_once_match(
-        &server,
-        path("/v1/responses"),
-        sse.to_string(),
-    )
-    .await;
+    let resp_mock = core_test_support::responses::mount_sse_once(&server, sse.to_string()).await;
 
     // Create a temporary instructions file with a unique marker we can assert
     // appears in the outbound request payload.
