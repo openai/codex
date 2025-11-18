@@ -103,8 +103,8 @@ pub(crate) fn exec_policy_for(
 
     let policy = Arc::new(parser.build());
     tracing::debug!(
-        file_count = policy_paths.len(),
-        "loaded execpolicy from {}",
+        "loaded execpolicy from {} files in {}",
+        policy_paths.len(),
         policy_dir.display()
     );
 
