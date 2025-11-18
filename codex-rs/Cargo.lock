@@ -1172,6 +1172,7 @@ dependencies = [
  "clap",
  "codex-core",
  "libc",
+ "path-absolutize",
  "pretty_assertions",
  "rmcp",
  "serde",

@@ -47,7 +47,7 @@
 //!   |      |           |
 //!   |o<-(EscalateReq)--o
 //!   ||     |           |
-//!   |o-(RunInSandbox)->o
+//!   |o-(Run)---------->o
 //!   |      |           |
 //!   |      |           x--(exec)-->o
 //!   |      |                       |
@@ -80,7 +80,7 @@ fn dummy_exec_policy(file: &Path, argv: &[String], _workdir: &Path) -> EscalateA
     {
         return EscalateAction::Escalate;
     }
-    EscalateAction::RunInSandbox
+    EscalateAction::Run
 }
 
 #[derive(Parser)]

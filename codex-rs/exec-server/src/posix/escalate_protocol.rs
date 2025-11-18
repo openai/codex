@@ -11,39 +11,38 @@ pub(super) const ESCALATE_SOCKET_ENV_VAR: &str = "CODEX_ESCALATE_SOCKET";
 /// The patched bash uses this to wrap exec() calls.
 pub(super) const BASH_EXEC_WRAPPER_ENV_VAR: &str = "BASH_EXEC_WRAPPER";
 
-// C->S on the escalate socket
+/// The client sends this to the server to request an exec() call.
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
-pub(super) enum EscalateClientMessage {
-    /// The client wants to run exec() with the given arguments.
-    EscalateRequest {
-        /// The absolute path to the executable to run, i.e. the first arg to exec.
-        file: PathBuf,
-        /// The argv, including the program name (argv[0]).
-        argv: Vec<String>,
-        workdir: PathBuf,
-        env: HashMap<String, String>,
-    },
+pub(super) struct EscalateRequest {
+    /// The absolute path to the executable to run, i.e. the first arg to exec.
+    pub(super) file: PathBuf,
+    /// The argv, including the program name (argv[0]).
+    pub(super) argv: Vec<String>,
+    pub(super) workdir: PathBuf,
+    pub(super) env: HashMap<String, String>,
 }
 
-// C->S on the escalate socket
+/// The server sends this to the client to respond to an exec() request.
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
-pub(super) enum EscalateServerMessage {
-    EscalateResponse(EscalateAction),
+pub(super) struct EscalateResponse {
+    pub(super) action: EscalateAction,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub(super) enum EscalateAction {
-    RunInSandbox,
+    /// The command should be run directly by the client.
+    Run,
+    /// The command should be escalated to the server for execution.
     Escalate,
 }
 
-// C->S on the super-exec socket
+/// The client sends this to the server to forward its open FDs.
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub(super) struct SuperExecMessage {
     pub(super) fds: Vec<RawFd>,
 }
 
-// S->C on the super-exec socket
+/// The server responds when the exec()'d command has exited.
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub(super) struct SuperExecResult {
     pub(super) exit_code: i32,

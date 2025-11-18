@@ -8,8 +8,8 @@ use anyhow::Context as _;
 use crate::posix::escalate_protocol::BASH_EXEC_WRAPPER_ENV_VAR;
 use crate::posix::escalate_protocol::ESCALATE_SOCKET_ENV_VAR;
 use crate::posix::escalate_protocol::EscalateAction;
-use crate::posix::escalate_protocol::EscalateClientMessage;
-use crate::posix::escalate_protocol::EscalateServerMessage;
+use crate::posix::escalate_protocol::EscalateRequest;
+use crate::posix::escalate_protocol::EscalateResponse;
 use crate::posix::escalate_protocol::SuperExecMessage;
 use crate::posix::escalate_protocol::SuperExecResult;
 use crate::posix::socket::AsyncDatagramSocket;
@@ -43,7 +43,7 @@ pub(crate) async fn run(file: String, argv: Vec<String>) -> anyhow::Result<i32> 
         })
         .collect();
     client
-        .send(EscalateClientMessage::EscalateRequest {
+        .send(EscalateRequest {
             file: file.clone().into(),
             argv: argv.clone(),
             workdir: std::env::current_dir()?,
@@ -51,9 +51,8 @@ pub(crate) async fn run(file: String, argv: Vec<String>) -> anyhow::Result<i32> 
         })
         .await
         .context("failed to send EscalateRequest")?;
-    let message = client.receive::<EscalateServerMessage>().await?;
-    let EscalateServerMessage::EscalateResponse(action) = message;
-    match action {
+    let message = client.receive::<EscalateResponse>().await?;
+    match message.action {
         EscalateAction::Escalate => {
             // TODO: maybe we should send ALL open FDs (except the escalate client)?
             let fds_to_send = [
@@ -76,7 +75,7 @@ pub(crate) async fn run(file: String, argv: Vec<String>) -> anyhow::Result<i32> 
             let SuperExecResult { exit_code } = client.receive::<SuperExecResult>().await?;
             Ok(exit_code)
         }
-        EscalateAction::RunInSandbox => {
+        EscalateAction::Run => {
             // We avoid std::process::Command here because we want to be as transparent as
             // possible. std::os::unix::process::CommandExt has .exec() but it does some funky
             // stuff with signal masks and dup2() on its standard FDs, which we don't want.

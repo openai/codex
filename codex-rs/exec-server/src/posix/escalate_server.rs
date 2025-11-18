@@ -6,6 +6,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::Context as _;
+use path_absolutize::Absolutize as _;
 
 use codex_core::exec::SandboxType;
 use codex_core::exec::process_exec_tool_call;
@@ -16,8 +17,8 @@ use tokio::process::Command;
 use crate::posix::escalate_protocol::BASH_EXEC_WRAPPER_ENV_VAR;
 use crate::posix::escalate_protocol::ESCALATE_SOCKET_ENV_VAR;
 use crate::posix::escalate_protocol::EscalateAction;
-use crate::posix::escalate_protocol::EscalateClientMessage;
-use crate::posix::escalate_protocol::EscalateServerMessage;
+use crate::posix::escalate_protocol::EscalateRequest;
+use crate::posix::escalate_protocol::EscalateResponse;
 use crate::posix::escalate_protocol::SuperExecMessage;
 use crate::posix::escalate_protocol::SuperExecResult;
 use crate::posix::socket::AsyncDatagramSocket;
@@ -32,12 +33,12 @@ use crate::posix::socket::AsyncSocket;
 pub(crate) type ExecPolicy = fn(file: &Path, argv: &[String], workdir: &Path) -> EscalateAction;
 
 pub(crate) struct EscalateServer {
-    bash_path: String,
+    bash_path: PathBuf,
     policy: ExecPolicy,
 }
 
 impl EscalateServer {
-    pub fn new(bash_path: String, policy: ExecPolicy) -> Self {
+    pub fn new(bash_path: PathBuf, policy: ExecPolicy) -> Self {
         Self { bash_path, policy }
     }
 
@@ -64,7 +65,11 @@ impl EscalateServer {
         );
         let result = process_exec_tool_call(
             codex_core::exec::ExecParams {
-                command: vec![self.bash_path.clone(), "-c".to_string(), command],
+                command: vec![
+                    self.bash_path.to_string_lossy().to_string(),
+                    "-c".to_string(),
+                    command,
+                ],
                 cwd: PathBuf::from(&workdir),
                 timeout_ms,
                 env,
@@ -73,6 +78,7 @@ impl EscalateServer {
                 arg0: None,
             },
             get_platform_sandbox().unwrap_or(SandboxType::None),
+            // TODO: use the sandbox policy and cwd from the calling client
             &SandboxPolicy::ReadOnly,
             &PathBuf::from("/__NONEXISTENT__"), // This is ignored for ReadOnly
             &None,
@@ -118,29 +124,29 @@ async fn handle_escalate_session_with_policy(
     socket: AsyncSocket,
     policy: ExecPolicy,
 ) -> anyhow::Result<()> {
-    let EscalateClientMessage::EscalateRequest {
+    let EscalateRequest {
         file,
         argv,
         workdir,
         env,
-    } = socket.receive::<EscalateClientMessage>().await?;
-    let file = PathBuf::from(&file).canonicalize()?;
-    let workdir = PathBuf::from(&workdir).canonicalize()?;
+    } = socket.receive::<EscalateRequest>().await?;
+    let file = PathBuf::from(&file).absolutize()?.into_owned();
+    let workdir = PathBuf::from(&workdir).absolutize()?.into_owned();
     let action = policy(file.as_path(), &argv, &workdir);
     tracing::debug!("decided {action:?} for {file:?} {argv:?} {workdir:?}");
     match action {
-        EscalateAction::RunInSandbox => {
+        EscalateAction::Run => {
             socket
-                .send(EscalateServerMessage::EscalateResponse(
-                    EscalateAction::RunInSandbox,
-                ))
+                .send(EscalateResponse {
+                    action: EscalateAction::Run,
+                })
                 .await?;
         }
         EscalateAction::Escalate => {
             socket
-                .send(EscalateServerMessage::EscalateResponse(
-                    EscalateAction::Escalate,
-                ))
+                .send(EscalateResponse {
+                    action: EscalateAction::Escalate,
+                })
                 .await?;
             let (msg, fds) = socket
                 .receive_with_fds::<SuperExecMessage>()
@@ -205,11 +211,11 @@ mod tests {
         let (server, client) = AsyncSocket::pair()?;
         let server_task = tokio::spawn(handle_escalate_session_with_policy(
             server,
-            |_file, _argv, _workdir| EscalateAction::RunInSandbox,
+            |_file, _argv, _workdir| EscalateAction::Run,
         ));
 
         client
-            .send(EscalateClientMessage::EscalateRequest {
+            .send(EscalateRequest {
                 file: PathBuf::from("/bin/echo"),
                 argv: vec!["echo".to_string()],
                 workdir: PathBuf::from("/tmp"),
@@ -217,9 +223,11 @@ mod tests {
             })
             .await?;
 
-        let response = client.receive::<EscalateServerMessage>().await?;
+        let response = client.receive::<EscalateResponse>().await?;
         assert_eq!(
-            EscalateServerMessage::EscalateResponse(EscalateAction::RunInSandbox),
+            EscalateResponse {
+                action: EscalateAction::Run,
+            },
             response
         );
         server_task.await?
@@ -234,7 +242,7 @@ mod tests {
         ));
 
         client
-            .send(EscalateClientMessage::EscalateRequest {
+            .send(EscalateRequest {
                 file: PathBuf::from("/bin/sh"),
                 argv: vec![
                     "sh".to_string(),
@@ -246,9 +254,11 @@ mod tests {
             })
             .await?;
 
-        let response = client.receive::<EscalateServerMessage>().await?;
+        let response = client.receive::<EscalateResponse>().await?;
         assert_eq!(
-            EscalateServerMessage::EscalateResponse(EscalateAction::Escalate),
+            EscalateResponse {
+                action: EscalateAction::Escalate,
+            },
             response
         );
 

@@ -23,10 +23,12 @@ use crate::posix::escalate_server::EscalateServer;
 use crate::posix::escalate_server::ExecPolicy;
 
 /// Path to our patched bash.
-const BASH_PATH_ENV_VAR: &str = "CODEX_BASH_PATH";
+const CODEX_BASH_PATH_ENV_VAR: &str = "CODEX_BASH_PATH";
 
-pub(crate) fn get_bash_path() -> Result<String> {
-    std::env::var(BASH_PATH_ENV_VAR).context(format!("{BASH_PATH_ENV_VAR} must be set"))
+pub(crate) fn get_bash_path() -> Result<PathBuf> {
+    std::env::var(CODEX_BASH_PATH_ENV_VAR)
+        .map(PathBuf::from)
+        .context(format!("{CODEX_BASH_PATH_ENV_VAR} must be set"))
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -61,13 +63,13 @@ impl From<escalate_server::ExecResult> for ExecResult {
 #[derive(Clone)]
 pub struct ExecTool {
     tool_router: ToolRouter<ExecTool>,
-    bash_path: String,
+    bash_path: PathBuf,
     policy: ExecPolicy,
 }
 
 #[tool_router]
 impl ExecTool {
-    pub fn new(bash_path: String, policy: ExecPolicy) -> Self {
+    pub fn new(bash_path: PathBuf, policy: ExecPolicy) -> Self {
         Self {
             tool_router: Self::tool_router(),
             bash_path,
@@ -144,7 +146,7 @@ impl ServerHandler for ExecTool {
 }
 
 pub(crate) async fn serve(
-    bash_path: String,
+    bash_path: PathBuf,
     policy: ExecPolicy,
 ) -> Result<RunningService<RoleServer, ExecTool>, rmcp::service::ServerInitializeError> {
     let tool = ExecTool::new(bash_path, policy);
