@@ -2089,49 +2089,6 @@ impl ChatWidget {
         });
     }
 
-    fn featured_model_items(&self, preset: &ModelPreset) -> Vec<SelectionItem> {
-        let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
-        let is_current = self.config.model == preset.model;
-        let current_effort = if is_current {
-            self.config.model_reasoning_effort.or(Some(default_effort))
-        } else {
-            None
-        };
-
-        let mut items = Vec::new();
-        let model_slug = preset.model.to_string();
-        for option in preset.supported_reasoning_efforts.iter() {
-            let effort = option.effort;
-            let model_for_action = model_slug.clone();
-            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                tx.send(AppEvent::ApplyModelAndEffort {
-                    model: model_for_action.clone(),
-                    effort: Some(effort),
-                });
-            })];
-
-            let mut name = option.label().to_string();
-            let is_current_option = current_effort == Some(effort);
-            if effort == default_effort && !is_current_option {
-                name.push_str(" (default)");
-            }
-
-            let description =
-                (!option.description.is_empty()).then(|| option.description.to_string());
-            items.push(SelectionItem {
-                name,
-                description,
-                selected_description: None,
-                is_current: is_current_option,
-                actions,
-                dismiss_on_select: true,
-                ..Default::default()
-            });
-        }
-
-        items
-    }
-
     /// Open a popup to choose the reasoning effort (stage 2) for the given model.
     pub(crate) fn open_reasoning_popup(
         &mut self,
@@ -2139,7 +2096,7 @@ impl ChatWidget {
         preferred_effort: Option<ReasoningEffortConfig>,
     ) {
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
-        let supported = &preset.supported_reasoning_efforts;
+        let supported = preset.supported_reasoning_efforts;
 
         struct EffortChoice {
             stored: Option<ReasoningEffortConfig>,
@@ -2269,6 +2226,49 @@ impl ChatWidget {
             items,
             ..Default::default()
         });
+    }
+
+    fn featured_model_items(&self, preset: &ModelPreset) -> Vec<SelectionItem> {
+        let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
+        let is_current = self.config.model == preset.model;
+        let current_effort = if is_current {
+            self.config.model_reasoning_effort.or(Some(default_effort))
+        } else {
+            None
+        };
+
+        let mut items = Vec::new();
+        let model_slug = preset.model.to_string();
+        for option in preset.supported_reasoning_efforts.iter() {
+            let effort = option.effort;
+            let model_for_action = model_slug.clone();
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::ApplyModelAndEffort {
+                    model: model_for_action.clone(),
+                    effort: Some(effort),
+                });
+            })];
+
+            let mut name = option.label().to_string();
+            let is_current_option = current_effort == Some(effort);
+            if effort == default_effort && !is_current_option {
+                name.push_str(" (default)");
+            }
+
+            let description =
+                (!option.description.is_empty()).then(|| option.description.to_string());
+            items.push(SelectionItem {
+                name,
+                description,
+                selected_description: None,
+                is_current: is_current_option,
+                actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        }
+
+        items
     }
 
     pub(crate) fn apply_model_and_effort(

@@ -43,7 +43,7 @@ pub struct ModelPreset {
     /// Reasoning effort applied when none is explicitly chosen.
     pub default_reasoning_effort: ReasoningEffort,
     /// Supported reasoning effort options.
-    pub supported_reasoning_efforts: Vec<ReasoningEffortPreset>,
+    pub supported_reasoning_efforts: &'static [ReasoningEffortPreset],
     /// Whether this is the default model for new users.
     pub is_default: bool,
     /// recommended upgrade model
@@ -58,7 +58,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             display_name: "codex-auto",
             description: "Automatically chooses the best Codex model configuration for your task.",
             default_reasoning_effort: ReasoningEffort::Medium,
-            supported_reasoning_efforts: vec![
+            supported_reasoning_efforts: &[
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::Low,
                     description: "Works faster",
@@ -84,7 +84,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             display_name: "gpt-5.1-codex",
             description: "Optimized for codex.",
             default_reasoning_effort: ReasoningEffort::Medium,
-            supported_reasoning_efforts: vec![
+            supported_reasoning_efforts: &[
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::Low,
                     description: "Fastest responses with limited reasoning",
@@ -110,7 +110,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             display_name: "gpt-5.1-codex-mini",
             description: "Optimized for codex. Cheaper, faster, but less capable.",
             default_reasoning_effort: ReasoningEffort::Medium,
-            supported_reasoning_efforts: vec![
+            supported_reasoning_efforts: &[
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::Medium,
                     description: "Dynamically adjusts reasoning based on the task",
@@ -131,7 +131,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             display_name: "gpt-5.1",
             description: "Broad world knowledge with strong general reasoning.",
             default_reasoning_effort: ReasoningEffort::Medium,
-            supported_reasoning_efforts: vec![
+            supported_reasoning_efforts: &[
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::Low,
                     description: "Balances speed with some reasoning; useful for straightforward queries and short explanations",
@@ -158,7 +158,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             display_name: "gpt-5-codex",
             description: "Optimized for codex.",
             default_reasoning_effort: ReasoningEffort::Medium,
-            supported_reasoning_efforts: vec![
+            supported_reasoning_efforts: &[
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::Low,
                     description: "Fastest responses with limited reasoning",
@@ -187,7 +187,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             display_name: "gpt-5-codex-mini",
             description: "Optimized for codex. Cheaper, faster, but less capable.",
             default_reasoning_effort: ReasoningEffort::Medium,
-            supported_reasoning_efforts: vec![
+            supported_reasoning_efforts: &[
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::Medium,
                     description: "Dynamically adjusts reasoning based on the task",
@@ -211,7 +211,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             display_name: "gpt-5",
             description: "Broad world knowledge with strong general reasoning.",
             default_reasoning_effort: ReasoningEffort::Medium,
-            supported_reasoning_efforts: vec![
+            supported_reasoning_efforts: &[
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::Minimal,
                     description: "Fastest responses with little reasoning",
