@@ -18,7 +18,6 @@ use codex_core::NewConversation;
 use codex_core::built_in_model_providers;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
-use codex_core::config::OPENAI_DEFAULT_MODEL;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::WarningEvent;
@@ -111,9 +110,10 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     // 1. Arrange mocked SSE responses for the initial compact/resume/fork flow.
     let server = MockServer::start().await;
     mount_initial_flow(&server).await;
-
+    let expected_model = "gpt-5.1-codex";
     // 2. Start a new conversation and drive it through the compact/resume/fork steps.
-    let (_home, config, manager, base) = start_test_conversation(&server).await;
+    let (_home, config, manager, base) =
+        start_test_conversation(&server, Some(expected_model)).await;
 
     user_turn(&base, "hello world").await;
     compact_conversation(&base).await;
@@ -189,7 +189,6 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         .as_str()
         .unwrap_or_default()
         .to_string();
-    let expected_model = OPENAI_DEFAULT_MODEL;
     let summary_after_compact = extract_summary_message(&requests[2], SUMMARY_TEXT);
     let summary_after_resume = extract_summary_message(&requests[3], SUMMARY_TEXT);
     let summary_after_fork = extract_summary_message(&requests[4], SUMMARY_TEXT);
@@ -558,7 +557,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
     mount_second_compact_flow(&server).await;
 
     // 2. Drive the conversation through compact -> resume -> fork -> compact -> resume.
-    let (_home, config, manager, base) = start_test_conversation(&server).await;
+    let (_home, config, manager, base) = start_test_conversation(&server, None).await;
 
     user_turn(&base, "hello world").await;
     compact_conversation(&base).await;
@@ -808,6 +807,7 @@ async fn mount_second_compact_flow(server: &MockServer) {
 
 async fn start_test_conversation(
     server: &MockServer,
+    model: Option<&str>,
 ) -> (TempDir, Config, ConversationManager, Arc<CodexConversation>) {
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
@@ -817,7 +817,9 @@ async fn start_test_conversation(
     let mut config = load_default_config_for_test(&home);
     config.model_provider = model_provider;
     config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
-
+    if let Some(model) = model {
+        config.model = model.to_string();
+    }
     let manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
     let NewConversation { conversation, .. } = manager
         .new_conversation(config.clone())

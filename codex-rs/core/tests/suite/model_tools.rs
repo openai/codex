@@ -119,7 +119,12 @@ async fn model_selects_expected_tools() {
     assert_eq!(
         gpt5_codex_tools,
         vec![
-            "shell".to_string(),
+            if cfg!(windows) {
+                "shell_command"
+            } else {
+                "shell"
+            }
+            .to_string(),
             "list_mcp_resources".to_string(),
             "list_mcp_resource_templates".to_string(),
             "read_mcp_resource".to_string(),
@@ -133,7 +138,12 @@ async fn model_selects_expected_tools() {
     assert_eq!(
         gpt51_codex_tools,
         vec![
-            "shell".to_string(),
+            if cfg!(windows) {
+                "shell_command"
+            } else {
+                "shell"
+            }
+            .to_string(),
             "list_mcp_resources".to_string(),
             "list_mcp_resource_templates".to_string(),
             "read_mcp_resource".to_string(),
