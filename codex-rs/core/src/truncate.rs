@@ -8,7 +8,7 @@ use codex_utils_string::take_last_bytes_at_char_boundary;
 
 use crate::config::Config;
 
-pub const APPROX_BYTES_PER_TOKEN: usize = 4;
+const APPROX_BYTES_PER_TOKEN: usize = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TruncationPolicy {
@@ -23,9 +23,9 @@ impl TruncationPolicy {
         match config.model_family.truncation_policy {
             TruncationPolicy::Bytes(family_bytes) => {
                 if let Some(token_limit) = config_token_limit {
-                    Self::Bytes(token_limit.saturating_mul(APPROX_BYTES_PER_TOKEN))
+                    Self::Bytes(approx_bytes_for_tokens(token_limit))
                 } else {
-                    Self::Bytes(family_bytes.saturating_mul(APPROX_BYTES_PER_TOKEN))
+                    Self::Bytes(approx_bytes_for_tokens(family_bytes))
                 }
             }
             TruncationPolicy::Tokens(family_tokens) => {
@@ -45,7 +45,9 @@ impl TruncationPolicy {
     ///   bytes-per-token heuristic.
     pub fn token_budget(&self) -> usize {
         match self {
-            TruncationPolicy::Bytes(bytes) => bytes / APPROX_BYTES_PER_TOKEN,
+            TruncationPolicy::Bytes(bytes) => {
+                usize::try_from(approx_tokens_from_byte_count(*bytes)).unwrap_or(usize::MAX)
+            }
             TruncationPolicy::Tokens(tokens) => *tokens,
         }
     }
@@ -58,7 +60,7 @@ impl TruncationPolicy {
     pub fn byte_budget(&self) -> usize {
         match self {
             TruncationPolicy::Bytes(bytes) => *bytes,
-            TruncationPolicy::Tokens(tokens) => tokens.saturating_mul(APPROX_BYTES_PER_TOKEN),
+            TruncationPolicy::Tokens(tokens) => approx_bytes_for_tokens(*tokens),
         }
     }
 }
@@ -115,7 +117,7 @@ pub(crate) fn truncate_function_output_items_to_token_limit(
                     continue;
                 }
 
-                let token_len = estimate_safe_token_count(text);
+                let token_len = approx_token_count(text);
                 if token_len <= remaining_tokens {
                     out.push(FunctionCallOutputContentItem::InputText { text: text.clone() });
                     remaining_tokens = remaining_tokens.saturating_sub(token_len);
@@ -167,9 +169,9 @@ fn truncate_with_token_budget(
         }
     }
 
-    let truncated =
-        truncate_with_byte_estimate(s, max_tokens.saturating_mul(APPROX_BYTES_PER_TOKEN), source);
-    let approx_total = approx_token_count(s);
+    let truncated = truncate_with_byte_estimate(s, approx_bytes_for_tokens(max_tokens), source);
+    let approx_total_usize = approx_token_count(s);
+    let approx_total = u64::try_from(approx_total_usize).unwrap_or(u64::MAX);
     if truncated == s {
         (truncated, None)
     } else {
@@ -343,8 +345,9 @@ fn assemble_truncated_output(prefix: &str, suffix: &str, marker: &str) -> String
     out
 }
 
-fn approx_token_count(text: &str) -> u64 {
-    (text.len() as u64).saturating_add(3) / 4
+pub(crate) fn approx_token_count(text: &str) -> usize {
+    let len = text.len();
+    len.saturating_add(APPROX_BYTES_PER_TOKEN.saturating_sub(1)) / APPROX_BYTES_PER_TOKEN
 }
 
 fn approx_bytes_for_tokens(tokens: usize) -> usize {
@@ -352,7 +355,9 @@ fn approx_bytes_for_tokens(tokens: usize) -> usize {
 }
 
 fn approx_tokens_from_byte_count(bytes: usize) -> u64 {
-    (bytes as u64).saturating_add(3) / 4
+    let bytes_u64 = bytes as u64;
+    bytes_u64.saturating_add((APPROX_BYTES_PER_TOKEN as u64).saturating_sub(1))
+        / (APPROX_BYTES_PER_TOKEN as u64)
 }
 
 fn truncate_on_boundary(input: &str, max_len: usize) -> &str {
@@ -396,10 +401,6 @@ fn error_on_double_truncation(content: &str) {
             "FunctionCallOutput content was already truncated before ContextManager::record_items; this would cause double truncation {content}"
         );
     }
-}
-
-fn estimate_safe_token_count(text: &str) -> usize {
-    usize::try_from(approx_token_count(text)).unwrap_or(usize::MAX)
 }
 
 #[cfg(test)]
@@ -461,7 +462,7 @@ mod tests {
         let source = TruncationSource::Policy(TruncationPolicy::Tokens(0));
         let (out, original) = truncate_with_token_budget(s, 0, source);
         assert_eq!(out, "[…2 tokens truncated…]");
-        assert_eq!(original, Some(approx_token_count(s)));
+        assert_eq!(original, Some(approx_token_count(s) as u64));
     }
 
     #[test]
@@ -471,7 +472,7 @@ mod tests {
         let source = TruncationSource::Policy(TruncationPolicy::Tokens(max_tokens));
         let (out, original) = truncate_with_token_budget(s, max_tokens, source);
         assert!(out.contains("tokens truncated"));
-        assert_eq!(original, Some(approx_token_count(s)));
+        assert_eq!(original, Some(approx_token_count(s) as u64));
         assert!(out.len() < s.len(), "truncated output should be shorter");
     }
 
@@ -484,7 +485,7 @@ mod tests {
 
         assert!(out.contains("tokens truncated"));
         assert!(!out.contains('\u{fffd}'));
-        assert_eq!(tokens, Some(approx_token_count(s)));
+        assert_eq!(tokens, Some(approx_token_count(s) as u64));
         assert!(out.len() < s.len(), "UTF-8 content should be shortened");
     }
 
@@ -596,7 +597,7 @@ mod tests {
     #[test]
     fn truncates_across_multiple_under_limit_texts_and_reports_omitted() {
         let chunk = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega.\n";
-        let chunk_tokens = usize::try_from(approx_token_count(chunk)).unwrap_or(usize::MAX);
+        let chunk_tokens = approx_token_count(chunk);
         assert!(chunk_tokens > 0, "chunk must consume tokens");
         let limit = chunk_tokens * 3;
         let t1 = chunk.to_string();

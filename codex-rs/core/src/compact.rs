@@ -15,6 +15,7 @@ use crate::protocol::TaskStartedEvent;
 use crate::protocol::TurnContextItem;
 use crate::protocol::WarningEvent;
 use crate::truncate::TruncationPolicy;
+use crate::truncate::approx_token_count;
 use crate::truncate::truncate_text;
 use crate::util::backoff;
 use codex_protocol::items::TurnItem;
@@ -251,7 +252,7 @@ fn build_compacted_history_with_limit(
             if remaining == 0 {
                 break;
             }
-            let tokens = approximate_tokens(message);
+            let tokens = approx_token_count(message);
             if tokens <= remaining {
                 selected_messages.push(message.clone());
                 remaining = remaining.saturating_sub(tokens);
@@ -287,10 +288,6 @@ fn build_compacted_history_with_limit(
     });
 
     history
-}
-
-fn approximate_tokens(text: &str) -> usize {
-    text.len().saturating_add(3) / 4
 }
 
 async fn drain_to_completed(
