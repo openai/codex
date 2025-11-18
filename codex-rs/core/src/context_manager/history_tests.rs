@@ -358,8 +358,7 @@ fn truncated_message_pattern(line: &str, total_lines: usize) -> String {
     let escaped_line = regex_lite::escape(line);
     if omitted == 0 {
         return format!(
-            r"(?s)^Total output lines: {total_lines}\n\n(?P<body>{escaped_line}.*\n\[\.{{3}} removed \d+ bytes to fit {max_bytes} byte limit \.{{3}}]\n\n.*)$",
-            max_bytes = EXEC_FORMAT_MAX_BYTES,
+            r"(?s)^Total output lines: {total_lines}\n\n(?P<body>{escaped_line}.*\n\[\.{{3}} removed \d+ bytes to fit {EXEC_FORMAT_MAX_BYTES} byte limit \.{{3}}]\n\n.*)$",
         );
     }
     format!(
@@ -387,8 +386,7 @@ fn format_exec_output_marks_byte_truncation_without_omitted_lines() {
     assert_ne!(truncated, long_line);
     let removed_bytes = long_line.len().saturating_sub(EXEC_FORMAT_MAX_BYTES);
     let marker_line = format!(
-        "[... removed {removed_bytes} bytes to fit {max_bytes} byte limit ...]",
-        max_bytes = EXEC_FORMAT_MAX_BYTES
+        "[... removed {removed_bytes} bytes to fit {EXEC_FORMAT_MAX_BYTES} byte limit ...]"
     );
     assert!(
         truncated.contains(&marker_line),
