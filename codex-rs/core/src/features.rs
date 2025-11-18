@@ -50,6 +50,8 @@ pub enum Feature {
     RemoteCompaction,
     /// Enable the default shell tool.
     ShellTool,
+    /// Allow model to call multiple tools in parallel (only for models supporting it).
+    ParallelToolCalls,
 }
 
 impl Feature {
@@ -310,6 +312,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RemoteCompaction,
         key: "remote_compaction",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ParallelToolCalls,
+        key: "parallel",
         stage: Stage::Experimental,
         default_enabled: false,
     },
