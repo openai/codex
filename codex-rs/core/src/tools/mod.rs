@@ -9,9 +9,7 @@ pub mod runtimes;
 pub mod sandboxing;
 pub mod spec;
 
-use crate::context_manager::MODEL_FORMAT_MAX_BYTES;
-use crate::context_manager::MODEL_FORMAT_MAX_LINES;
-use crate::context_manager::format_output_for_model_body;
+use crate::context_manager::truncate_with_line_bytes_budget;
 use crate::exec::ExecToolCallOutput;
 pub use router::ToolRouter;
 use serde::Serialize;
@@ -21,6 +19,9 @@ pub(crate) const TELEMETRY_PREVIEW_MAX_BYTES: usize = 2 * 1024; // 2 KiB
 pub(crate) const TELEMETRY_PREVIEW_MAX_LINES: usize = 64; // lines
 pub(crate) const TELEMETRY_PREVIEW_TRUNCATION_NOTICE: &str =
     "[... telemetry preview truncated ...]";
+
+// TODO(aibrahim): migrate shell tool to use truncate text and respect config value
+const SHELL_OUTPUT_MAX_BYTES: usize = 10_000;
 
 /// Format the combined exec output for sending back to the model.
 /// Includes exit code and duration metadata; truncates large bodies safely.
@@ -77,5 +78,5 @@ pub fn format_exec_output_str(exec_output: &ExecToolCallOutput) -> String {
     };
 
     // Truncate for model consumption before serialization.
-    format_output_for_model_body(&body, MODEL_FORMAT_MAX_BYTES, MODEL_FORMAT_MAX_LINES)
+    truncate_with_line_bytes_budget(&body, SHELL_OUTPUT_MAX_BYTES)
 }

@@ -50,7 +50,10 @@ async fn run_remote_compact_task_inner(
     let mut history = sess.clone_history().await;
     if !input.is_empty() {
         let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
-        history.record_items(&[initial_input_for_turn.into()]);
+        history.record_items(
+            &[initial_input_for_turn.into()],
+            turn_context.truncation_policy,
+        );
     }
 
     let prompt = Prompt {

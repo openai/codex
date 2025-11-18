@@ -1,9 +1,8 @@
 use super::*;
-use crate::context_manager::MODEL_FORMAT_MAX_LINES;
 use crate::truncate;
+use crate::truncate::TruncationPolicy;
 use codex_git::GhostCommit;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::LocalShellExecAction;
@@ -12,6 +11,9 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
+
+const EXEC_FORMAT_MAX_LINES: usize = 256;
+const EXEC_FORMAT_MAX_BYTES: usize = 10_000;
 
 fn assistant_msg(text: &str) -> ResponseItem {
     ResponseItem::Message {
@@ -25,7 +27,9 @@ fn assistant_msg(text: &str) -> ResponseItem {
 
 fn create_history_with_items(items: Vec<ResponseItem>) -> ContextManager {
     let mut h = ContextManager::new();
-    h.record_items(items.iter());
+    // Use a generous but fixed token budget; tests only rely on truncation
+    // behavior, not on a specific model's token limit.
+    h.record_items(items.iter(), TruncationPolicy::Tokens(10_000));
     h
 }
 
@@ -55,6 +59,7 @@ fn reasoning_msg(text: &str) -> ResponseItem {
 #[test]
 fn filters_non_api_messages() {
     let mut h = ContextManager::default();
+    let policy = TruncationPolicy::Tokens(10_000);
     // System message is not API messages; Other is ignored.
     let system = ResponseItem::Message {
         id: None,
@@ -64,12 +69,12 @@ fn filters_non_api_messages() {
         }],
     };
     let reasoning = reasoning_msg("thinking...");
-    h.record_items([&system, &reasoning, &ResponseItem::Other]);
+    h.record_items([&system, &reasoning, &ResponseItem::Other], policy);
 
     // User and assistant should be retained.
     let u = user_msg("hi");
     let a = assistant_msg("hello");
-    h.record_items([&u, &a]);
+    h.record_items([&u, &a], policy);
 
     let items = h.contents();
     assert_eq!(
@@ -237,6 +242,9 @@ fn normalization_retains_local_shell_outputs() {
 #[test]
 fn record_items_truncates_function_call_output_content() {
     let mut history = ContextManager::new();
+    // Any reasonably small token budget works; the test only cares that
+    // truncation happens and the marker is present.
+    let policy = TruncationPolicy::Tokens(1_000);
     let long_line = "a very long line to trigger truncation\n";
     let long_output = long_line.repeat(2_500);
     let item = ResponseItem::FunctionCallOutput {
@@ -248,15 +256,20 @@ fn record_items_truncates_function_call_output_content() {
         },
     };
 
-    history.record_items([&item]);
+    history.record_items([&item], policy);
 
     assert_eq!(history.items.len(), 1);
     match &history.items[0] {
         ResponseItem::FunctionCallOutput { output, .. } => {
             assert_ne!(output.content, long_output);
             assert!(
-                output.content.starts_with("Total output lines:"),
-                "expected truncated summary, got {}",
+                output.content.contains("tokens truncated"),
+                "expected token-based truncation marker, got {}",
+                output.content
+            );
+            assert!(
+                output.content.contains("tokens truncated"),
+                "expected truncation marker, got {}",
                 output.content
             );
         }
@@ -267,6 +280,7 @@ fn record_items_truncates_function_call_output_content() {
 #[test]
 fn record_items_truncates_custom_tool_call_output_content() {
     let mut history = ContextManager::new();
+    let policy = TruncationPolicy::Tokens(1_000);
     let line = "custom output that is very long\n";
     let long_output = line.repeat(2_500);
     let item = ResponseItem::CustomToolCallOutput {
@@ -274,19 +288,46 @@ fn record_items_truncates_custom_tool_call_output_content() {
         output: long_output.clone(),
     };
 
-    history.record_items([&item]);
+    history.record_items([&item], policy);
 
     assert_eq!(history.items.len(), 1);
     match &history.items[0] {
         ResponseItem::CustomToolCallOutput { output, .. } => {
             assert_ne!(output, &long_output);
             assert!(
-                output.starts_with("Total output lines:"),
-                "expected truncated summary, got {output}"
+                output.contains("tokens truncated"),
+                "expected token-based truncation marker, got {output}"
+            );
+            assert!(
+                output.contains("tokens truncated") || output.contains("bytes truncated"),
+                "expected truncation marker, got {output}"
             );
         }
         other => panic!("unexpected history item: {other:?}"),
     }
+}
+
+#[test]
+fn record_items_respects_custom_token_limit() {
+    let mut history = ContextManager::new();
+    let policy = TruncationPolicy::Tokens(10);
+    let long_output = "tokenized content repeated many times ".repeat(200);
+    let item = ResponseItem::FunctionCallOutput {
+        call_id: "call-custom-limit".to_string(),
+        output: FunctionCallOutputPayload {
+            content: long_output,
+            success: Some(true),
+            ..Default::default()
+        },
+    };
+
+    history.record_items([&item], policy);
+
+    let stored = match &history.items[0] {
+        ResponseItem::FunctionCallOutput { output, .. } => output,
+        other => panic!("unexpected history item: {other:?}"),
+    };
+    assert!(stored.content.contains("tokens truncated"));
 }
 
 fn assert_truncated_message_matches(message: &str, line: &str, total_lines: usize) {
@@ -302,23 +343,22 @@ fn assert_truncated_message_matches(message: &str, line: &str, total_lines: usiz
         .expect("missing body capture")
         .as_str();
     assert!(
-        body.len() <= truncate::MODEL_FORMAT_MAX_BYTES,
+        body.len() <= EXEC_FORMAT_MAX_BYTES,
         "body exceeds byte limit: {} bytes",
         body.len()
     );
 }
 
 fn truncated_message_pattern(line: &str, total_lines: usize) -> String {
-    let head_lines = MODEL_FORMAT_MAX_LINES / 2;
-    let tail_lines = MODEL_FORMAT_MAX_LINES - head_lines;
+    let head_lines = EXEC_FORMAT_MAX_LINES / 2;
+    let tail_lines = EXEC_FORMAT_MAX_LINES - head_lines;
     let head_take = head_lines.min(total_lines);
     let tail_take = tail_lines.min(total_lines.saturating_sub(head_take));
     let omitted = total_lines.saturating_sub(head_take + tail_take);
     let escaped_line = regex_lite::escape(line);
     if omitted == 0 {
         return format!(
-            r"(?s)^Total output lines: {total_lines}\n\n(?P<body>{escaped_line}.*\n\[\.{{3}} output truncated to fit {max_bytes} bytes \.{{3}}]\n\n.*)$",
-            max_bytes = truncate::MODEL_FORMAT_MAX_BYTES,
+            r"(?s)^Total output lines: {total_lines}\n\n(?P<body>{escaped_line}.*\n\[\.{{3}} removed \d+ bytes to fit {EXEC_FORMAT_MAX_BYTES} byte limit \.{{3}}]\n\n.*)$",
         );
     }
     format!(
@@ -331,11 +371,7 @@ fn format_exec_output_truncates_large_error() {
     let line = "very long execution error line that should trigger truncation\n";
     let large_error = line.repeat(2_500); // way beyond both byte and line limits
 
-    let truncated = truncate::format_output_for_model_body(
-        &large_error,
-        truncate::MODEL_FORMAT_MAX_BYTES,
-        truncate::MODEL_FORMAT_MAX_LINES,
-    );
+    let truncated = truncate::truncate_with_line_bytes_budget(&large_error, EXEC_FORMAT_MAX_BYTES);
 
     let total_lines = large_error.lines().count();
     assert_truncated_message_matches(&truncated, line, total_lines);
@@ -344,17 +380,13 @@ fn format_exec_output_truncates_large_error() {
 
 #[test]
 fn format_exec_output_marks_byte_truncation_without_omitted_lines() {
-    let long_line = "a".repeat(truncate::MODEL_FORMAT_MAX_BYTES + 50);
-    let truncated = truncate::format_output_for_model_body(
-        &long_line,
-        truncate::MODEL_FORMAT_MAX_BYTES,
-        truncate::MODEL_FORMAT_MAX_LINES,
-    );
+    let long_line = "a".repeat(EXEC_FORMAT_MAX_BYTES + 50);
+    let truncated = truncate::truncate_with_line_bytes_budget(&long_line, EXEC_FORMAT_MAX_BYTES);
 
     assert_ne!(truncated, long_line);
+    let removed_bytes = long_line.len().saturating_sub(EXEC_FORMAT_MAX_BYTES);
     let marker_line = format!(
-        "[... output truncated to fit {} bytes ...]",
-        truncate::MODEL_FORMAT_MAX_BYTES
+        "[... removed {removed_bytes} bytes to fit {EXEC_FORMAT_MAX_BYTES} byte limit ...]"
     );
     assert!(
         truncated.contains(&marker_line),
@@ -371,28 +403,20 @@ fn format_exec_output_returns_original_when_within_limits() {
     let content = "example output\n".repeat(10);
 
     assert_eq!(
-        truncate::format_output_for_model_body(
-            &content,
-            truncate::MODEL_FORMAT_MAX_BYTES,
-            truncate::MODEL_FORMAT_MAX_LINES
-        ),
+        truncate::truncate_with_line_bytes_budget(&content, EXEC_FORMAT_MAX_BYTES),
         content
     );
 }
 
 #[test]
 fn format_exec_output_reports_omitted_lines_and_keeps_head_and_tail() {
-    let total_lines = truncate::MODEL_FORMAT_MAX_LINES + 100;
+    let total_lines = EXEC_FORMAT_MAX_LINES + 100;
     let content: String = (0..total_lines)
         .map(|idx| format!("line-{idx}\n"))
         .collect();
 
-    let truncated = truncate::format_output_for_model_body(
-        &content,
-        truncate::MODEL_FORMAT_MAX_BYTES,
-        truncate::MODEL_FORMAT_MAX_LINES,
-    );
-    let omitted = total_lines - truncate::MODEL_FORMAT_MAX_LINES;
+    let truncated = truncate::truncate_with_line_bytes_budget(&content, EXEC_FORMAT_MAX_BYTES);
+    let omitted = total_lines - EXEC_FORMAT_MAX_LINES;
     let expected_marker = format!("[... omitted {omitted} of {total_lines} lines ...]");
 
     assert!(
@@ -413,101 +437,22 @@ fn format_exec_output_reports_omitted_lines_and_keeps_head_and_tail() {
 
 #[test]
 fn format_exec_output_prefers_line_marker_when_both_limits_exceeded() {
-    let total_lines = truncate::MODEL_FORMAT_MAX_LINES + 42;
+    let total_lines = EXEC_FORMAT_MAX_LINES + 42;
     let long_line = "x".repeat(256);
     let content: String = (0..total_lines)
         .map(|idx| format!("line-{idx}-{long_line}\n"))
         .collect();
 
-    let truncated = truncate::format_output_for_model_body(
-        &content,
-        truncate::MODEL_FORMAT_MAX_BYTES,
-        truncate::MODEL_FORMAT_MAX_LINES,
-    );
+    let truncated = truncate::truncate_with_line_bytes_budget(&content, EXEC_FORMAT_MAX_BYTES);
 
     assert!(
         truncated.contains("[... omitted 42 of 298 lines ...]"),
         "expected omitted marker when line count exceeds limit: {truncated}"
     );
     assert!(
-        !truncated.contains("output truncated to fit"),
+        !truncated.contains("byte limit"),
         "line omission marker should take precedence over byte marker: {truncated}"
     );
-}
-
-#[test]
-fn truncates_across_multiple_under_limit_texts_and_reports_omitted() {
-    // Arrange: several text items, none exceeding per-item limit, but total exceeds budget.
-    let budget = truncate::MODEL_FORMAT_MAX_BYTES;
-    let t1_len = (budget / 2).saturating_sub(10);
-    let t2_len = (budget / 2).saturating_sub(10);
-    let remaining_after_t1_t2 = budget.saturating_sub(t1_len + t2_len);
-    let t3_len = 50; // gets truncated to remaining_after_t1_t2
-    let t4_len = 5; // omitted
-    let t5_len = 7; // omitted
-
-    let t1 = "a".repeat(t1_len);
-    let t2 = "b".repeat(t2_len);
-    let t3 = "c".repeat(t3_len);
-    let t4 = "d".repeat(t4_len);
-    let t5 = "e".repeat(t5_len);
-
-    let item = ResponseItem::FunctionCallOutput {
-        call_id: "call-omit".to_string(),
-        output: FunctionCallOutputPayload {
-            content: "irrelevant".to_string(),
-            content_items: Some(vec![
-                FunctionCallOutputContentItem::InputText { text: t1 },
-                FunctionCallOutputContentItem::InputText { text: t2 },
-                FunctionCallOutputContentItem::InputImage {
-                    image_url: "img:mid".to_string(),
-                },
-                FunctionCallOutputContentItem::InputText { text: t3 },
-                FunctionCallOutputContentItem::InputText { text: t4 },
-                FunctionCallOutputContentItem::InputText { text: t5 },
-            ]),
-            success: Some(true),
-        },
-    };
-
-    let mut history = ContextManager::new();
-    history.record_items([&item]);
-    assert_eq!(history.items.len(), 1);
-    let json = serde_json::to_value(&history.items[0]).expect("serialize to json");
-
-    let output = json
-        .get("output")
-        .expect("output field")
-        .as_array()
-        .expect("array output");
-
-    // Expect: t1 (full), t2 (full), image, t3 (truncated), summary mentioning 2 omitted.
-    assert_eq!(output.len(), 5);
-
-    let first = output[0].as_object().expect("first obj");
-    assert_eq!(first.get("type").unwrap(), "input_text");
-    let first_text = first.get("text").unwrap().as_str().unwrap();
-    assert_eq!(first_text.len(), t1_len);
-
-    let second = output[1].as_object().expect("second obj");
-    assert_eq!(second.get("type").unwrap(), "input_text");
-    let second_text = second.get("text").unwrap().as_str().unwrap();
-    assert_eq!(second_text.len(), t2_len);
-
-    assert_eq!(
-        output[2],
-        serde_json::json!({"type": "input_image", "image_url": "img:mid"})
-    );
-
-    let fourth = output[3].as_object().expect("fourth obj");
-    assert_eq!(fourth.get("type").unwrap(), "input_text");
-    let fourth_text = fourth.get("text").unwrap().as_str().unwrap();
-    assert_eq!(fourth_text.len(), remaining_after_t1_t2);
-
-    let summary = output[4].as_object().expect("summary obj");
-    assert_eq!(summary.get("type").unwrap(), "input_text");
-    let summary_text = summary.get("text").unwrap().as_str().unwrap();
-    assert!(summary_text.contains("omitted 2 text items"));
 }
 
 //TODO(aibrahim): run CI in release mode.
