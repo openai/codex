@@ -1,0 +1,14 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: popup
+---
+  Select Model
+  Quickly pick Codex Auto or open the full list of models for more options.
+
+› 1. Fast                Works faster
+  2. Balanced (default)  Balances speed with intelligence
+  3. Thorough            Works longer for harder tasks
+  4. All models          Choose and configure what model and reasoning level
+                         to use
+
+  Press enter to apply selection, or esc to dismiss.
