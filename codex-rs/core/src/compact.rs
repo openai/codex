@@ -152,7 +152,7 @@ async fn run_compact_task_inner(
         initial_context,
         &user_messages,
         &summary_text,
-        Some(turn_context.client.get_model().as_str()),
+        turn_context.client.get_model().as_str(),
     );
     let ghost_snapshots: Vec<ResponseItem> = history_snapshot
         .iter()
@@ -230,7 +230,7 @@ pub(crate) fn build_token_limited_compacted_history(
     initial_context: Vec<ResponseItem>,
     user_messages: &[String],
     summary_text: &str,
-    model: Option<&str>,
+    model: &str,
 ) -> Vec<ResponseItem> {
     build_token_limited_compacted_history_with_limit(
         initial_context,
@@ -246,7 +246,7 @@ fn build_token_limited_compacted_history_with_limit(
     user_messages: &[String],
     summary_text: &str,
     max_tokens: usize,
-    model: Option<&str>,
+    model: &str,
 ) -> Vec<ResponseItem> {
     let mut selected_messages: Vec<String> = Vec::new();
     if max_tokens > 0 {
@@ -264,7 +264,7 @@ fn build_token_limited_compacted_history_with_limit(
                 selected_messages.push(message.clone());
                 remaining = remaining.saturating_sub(tokens);
             } else {
-                let (truncated, _) = truncate_text(message, Some(remaining), model);
+                let (truncated, _) = truncate_text(message, remaining, model);
                 selected_messages.push(truncated);
                 break;
             }
@@ -435,7 +435,7 @@ mod tests {
             std::slice::from_ref(&big),
             "SUMMARY",
             max_tokens,
-            Some(model),
+            model,
         );
         assert_eq!(history.len(), 2);
 
@@ -477,7 +477,7 @@ mod tests {
             initial_context,
             &user_messages,
             summary_text,
-            Some(OPENAI_DEFAULT_MODEL),
+            OPENAI_DEFAULT_MODEL,
         );
         assert!(
             !history.is_empty(),

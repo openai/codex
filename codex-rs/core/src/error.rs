@@ -431,7 +431,7 @@ impl CodexErr {
     }
 }
 
-pub fn get_error_message_ui(e: &CodexErr, model: Option<&str>) -> String {
+pub fn get_error_message_ui(e: &CodexErr, model: &str) -> String {
     let message = match e {
         CodexErr::Sandbox(SandboxErr::Denied { output }) => {
             let aggregated = output.aggregated_output.text.trim();
@@ -461,7 +461,7 @@ pub fn get_error_message_ui(e: &CodexErr, model: Option<&str>) -> String {
         _ => e.to_string(),
     };
 
-    truncate_text(&message, Some(ERROR_MESSAGE_UI_MAX_TOKENS), model).0
+    truncate_text(&message, ERROR_MESSAGE_UI_MAX_TOKENS, model).0
 }
 
 #[cfg(test)]
@@ -535,7 +535,7 @@ mod tests {
             output: Box::new(output),
         });
         assert_eq!(
-            get_error_message_ui(&err, Some(OPENAI_DEFAULT_MODEL)),
+            get_error_message_ui(&err, OPENAI_DEFAULT_MODEL),
             "aggregate detail"
         );
     }
@@ -554,7 +554,7 @@ mod tests {
             output: Box::new(output),
         });
         assert_eq!(
-            get_error_message_ui(&err, Some(OPENAI_DEFAULT_MODEL)),
+            get_error_message_ui(&err, OPENAI_DEFAULT_MODEL),
             "stderr detail\nstdout detail"
         );
     }
@@ -573,7 +573,7 @@ mod tests {
             output: Box::new(output),
         });
         assert_eq!(
-            get_error_message_ui(&err, Some(OPENAI_DEFAULT_MODEL)),
+            get_error_message_ui(&err, OPENAI_DEFAULT_MODEL),
             "stdout only"
         );
     }
@@ -592,7 +592,7 @@ mod tests {
             output: Box::new(output),
         });
         assert_eq!(
-            get_error_message_ui(&err, Some(OPENAI_DEFAULT_MODEL)),
+            get_error_message_ui(&err, OPENAI_DEFAULT_MODEL),
             "command failed inside sandbox with exit code 13"
         );
     }

@@ -1,4 +1,7 @@
 use super::*;
+use crate::config::OPENAI_DEFAULT_MODEL;
+use crate::model_family::derive_default_model_family;
+use crate::model_family::find_family_for_model;
 use crate::truncate;
 use codex_git::GhostCommit;
 use codex_protocol::models::ContentItem;
@@ -12,6 +15,15 @@ use codex_utils_tokenizer::Tokenizer;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 
+const EXEC_FORMAT_MAX_LINES: usize = 256;
+
+fn exec_format_max_bytes() -> usize {
+    find_family_for_model(OPENAI_DEFAULT_MODEL)
+        .unwrap_or_else(|| derive_default_model_family(OPENAI_DEFAULT_MODEL))
+        .truncation_policy
+        .tokens_budget
+}
+
 fn assistant_msg(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,
@@ -23,7 +35,12 @@ fn assistant_msg(text: &str) -> ResponseItem {
 }
 
 fn create_history_with_items(items: Vec<ResponseItem>) -> ContextManager {
-    let mut h = ContextManager::new();
+    let model = OPENAI_DEFAULT_MODEL;
+    let max_tokens = find_family_for_model(model)
+        .unwrap_or_else(|| derive_default_model_family(model))
+        .truncation_policy
+        .tokens_budget;
+    let mut h = ContextManager::new(model, max_tokens);
     h.record_items(items.iter());
     h
 }
@@ -235,7 +252,12 @@ fn normalization_retains_local_shell_outputs() {
 
 #[test]
 fn record_items_truncates_function_call_output_content() {
-    let mut history = ContextManager::new();
+    let model = OPENAI_DEFAULT_MODEL;
+    let max_tokens = find_family_for_model(model)
+        .unwrap_or_else(|| derive_default_model_family(model))
+        .truncation_policy
+        .tokens_budget;
+    let mut history = ContextManager::new(model, max_tokens);
     let tok = Tokenizer::try_default().expect("load tokenizer");
     let long_line = "a very long line to trigger truncation\n";
     let long_output = long_line.repeat(2_500);
@@ -261,7 +283,7 @@ fn record_items_truncates_function_call_output_content() {
             );
             let token_count = usize::try_from(tok.count(&output.content)).unwrap_or(usize::MAX);
             assert!(
-                token_count <= truncate::DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT,
+                token_count <= max_tokens,
                 "token count should not exceed limit: {token_count}"
             );
         }
@@ -271,7 +293,12 @@ fn record_items_truncates_function_call_output_content() {
 
 #[test]
 fn record_items_truncates_custom_tool_call_output_content() {
-    let mut history = ContextManager::new();
+    let model = OPENAI_DEFAULT_MODEL;
+    let max_tokens = find_family_for_model(model)
+        .unwrap_or_else(|| derive_default_model_family(model))
+        .truncation_policy
+        .tokens_budget;
+    let mut history = ContextManager::new(model, max_tokens);
     let tok = Tokenizer::try_default().expect("load tokenizer");
     let line = "custom output that is very long\n";
     let long_output = line.repeat(2_500);
@@ -292,7 +319,7 @@ fn record_items_truncates_custom_tool_call_output_content() {
             );
             let token_count = usize::try_from(tok.count(output)).unwrap_or(usize::MAX);
             assert!(
-                token_count <= truncate::DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT,
+                token_count <= max_tokens,
                 "token count should not exceed limit: {token_count}"
             );
         }
@@ -302,7 +329,8 @@ fn record_items_truncates_custom_tool_call_output_content() {
 
 #[test]
 fn record_items_respects_custom_token_limit() {
-    let mut history = ContextManager::with_function_output_limit(8);
+    let model = OPENAI_DEFAULT_MODEL;
+    let mut history = ContextManager::new(model, 8);
     let tok = Tokenizer::try_default().expect("load tokenizer");
     let long_output = "tokenized content repeated many times ".repeat(200);
     let item = ResponseItem::FunctionCallOutput {
@@ -341,15 +369,15 @@ fn assert_truncated_message_matches(message: &str, line: &str, total_lines: usiz
         .expect("missing body capture")
         .as_str();
     assert!(
-        body.len() <= truncate::MODEL_FORMAT_MAX_BYTES,
+        body.len() <= exec_format_max_bytes(),
         "body exceeds byte limit: {} bytes",
         body.len()
     );
 }
 
 fn truncated_message_pattern(line: &str, total_lines: usize) -> String {
-    let head_lines = truncate::MODEL_FORMAT_MAX_LINES / 2;
-    let tail_lines = truncate::MODEL_FORMAT_MAX_LINES - head_lines;
+    let head_lines = EXEC_FORMAT_MAX_LINES / 2;
+    let tail_lines = EXEC_FORMAT_MAX_LINES - head_lines;
     let head_take = head_lines.min(total_lines);
     let tail_take = tail_lines.min(total_lines.saturating_sub(head_take));
     let omitted = total_lines.saturating_sub(head_take + tail_take);
@@ -357,7 +385,7 @@ fn truncated_message_pattern(line: &str, total_lines: usize) -> String {
     if omitted == 0 {
         return format!(
             r"(?s)^Total output lines: {total_lines}\n\n(?P<body>{escaped_line}.*\n\[\.{{3}} output truncated to fit {max_bytes} bytes \.{{3}}]\n\n.*)$",
-            max_bytes = truncate::MODEL_FORMAT_MAX_BYTES,
+            max_bytes = exec_format_max_bytes(),
         );
     }
     format!(
@@ -371,7 +399,7 @@ fn format_exec_output_truncates_large_error() {
     let large_error = line.repeat(2_500); // way beyond both byte and line limits
 
     let truncated =
-        truncate::truncate_with_line_bytes_budget(&large_error, truncate::MODEL_FORMAT_MAX_BYTES);
+        truncate::truncate_with_line_bytes_budget(&large_error, exec_format_max_bytes());
 
     let total_lines = large_error.lines().count();
     assert_truncated_message_matches(&truncated, line, total_lines);
@@ -380,15 +408,12 @@ fn format_exec_output_truncates_large_error() {
 
 #[test]
 fn format_exec_output_marks_byte_truncation_without_omitted_lines() {
-    let long_line = "a".repeat(truncate::MODEL_FORMAT_MAX_BYTES + 50);
-    let truncated =
-        truncate::truncate_with_line_bytes_budget(&long_line, truncate::MODEL_FORMAT_MAX_BYTES);
+    let max_bytes = exec_format_max_bytes();
+    let long_line = "a".repeat(max_bytes + 50);
+    let truncated = truncate::truncate_with_line_bytes_budget(&long_line, max_bytes);
 
     assert_ne!(truncated, long_line);
-    let marker_line = format!(
-        "[... output truncated to fit {} bytes ...]",
-        truncate::MODEL_FORMAT_MAX_BYTES
-    );
+    let marker_line = format!("[... output truncated to fit {max_bytes} bytes ...]");
     assert!(
         truncated.contains(&marker_line),
         "missing byte truncation marker: {truncated}"
@@ -404,21 +429,20 @@ fn format_exec_output_returns_original_when_within_limits() {
     let content = "example output\n".repeat(10);
 
     assert_eq!(
-        truncate::truncate_with_line_bytes_budget(&content, truncate::MODEL_FORMAT_MAX_BYTES,),
+        truncate::truncate_with_line_bytes_budget(&content, exec_format_max_bytes(),),
         content
     );
 }
 
 #[test]
 fn format_exec_output_reports_omitted_lines_and_keeps_head_and_tail() {
-    let total_lines = truncate::MODEL_FORMAT_MAX_LINES + 100;
+    let total_lines = EXEC_FORMAT_MAX_LINES + 100;
     let content: String = (0..total_lines)
         .map(|idx| format!("line-{idx}\n"))
         .collect();
 
-    let truncated =
-        truncate::truncate_with_line_bytes_budget(&content, truncate::MODEL_FORMAT_MAX_BYTES);
-    let omitted = total_lines - truncate::MODEL_FORMAT_MAX_LINES;
+    let truncated = truncate::truncate_with_line_bytes_budget(&content, exec_format_max_bytes());
+    let omitted = total_lines - EXEC_FORMAT_MAX_LINES;
     let expected_marker = format!("[... omitted {omitted} of {total_lines} lines ...]");
 
     assert!(
@@ -439,14 +463,13 @@ fn format_exec_output_reports_omitted_lines_and_keeps_head_and_tail() {
 
 #[test]
 fn format_exec_output_prefers_line_marker_when_both_limits_exceeded() {
-    let total_lines = truncate::MODEL_FORMAT_MAX_LINES + 42;
+    let total_lines = EXEC_FORMAT_MAX_LINES + 42;
     let long_line = "x".repeat(256);
     let content: String = (0..total_lines)
         .map(|idx| format!("line-{idx}-{long_line}\n"))
         .collect();
 
-    let truncated =
-        truncate::truncate_with_line_bytes_budget(&content, truncate::MODEL_FORMAT_MAX_BYTES);
+    let truncated = truncate::truncate_with_line_bytes_budget(&content, exec_format_max_bytes());
 
     assert!(
         truncated.contains("[... omitted 42 of 298 lines ...]"),

@@ -132,10 +132,8 @@ impl ModelClient {
         })
     }
 
-    pub fn get_max_output_tokens(&self) -> Option<i64> {
-        self.config.model_max_output_tokens.or_else(|| {
-            get_model_info(&self.config.model_family).map(|info| info.max_output_tokens)
-        })
+    pub fn get_max_calls_output_tokens(&self) -> usize {
+        self.config.calls_output_max_tokens
     }
 
     pub fn config(&self) -> Arc<Config> {

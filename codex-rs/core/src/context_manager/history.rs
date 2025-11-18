@@ -1,6 +1,8 @@
 use crate::codex::TurnContext;
+use crate::config::OPENAI_DEFAULT_MODEL;
 use crate::context_manager::normalize;
-use crate::truncate::DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT;
+use crate::model_family::derive_default_model_family;
+use crate::model_family::find_family_for_model;
 use crate::truncate::truncate_function_output_items_to_token_limit;
 use crate::truncate::truncate_text;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -17,25 +19,25 @@ pub(crate) struct ContextManager {
     items: Vec<ResponseItem>,
     token_info: Option<TokenUsageInfo>,
     function_output_max_tokens: usize,
-    model: Option<String>,
+    model: String,
 }
 
 impl ContextManager {
-    pub(crate) fn new() -> Self {
-        Self::with_function_output_limit(DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT)
-    }
-
-    pub(crate) fn with_function_output_limit(max_tokens: usize) -> Self {
+    pub(crate) fn new(model: &str, function_output_max_tokens: usize) -> Self {
         Self {
             items: Vec::new(),
             token_info: TokenUsageInfo::new_or_append(&None, &None, None),
-            function_output_max_tokens: max_tokens,
-            model: None,
+            function_output_max_tokens,
+            model: model.to_string(),
         }
     }
 
-    pub(crate) fn set_model(&mut self, model: Option<&str>) {
-        self.model = model.map(ToString::to_string);
+    pub(crate) fn set_model(&mut self, model: &str) {
+        self.model = model.to_string();
+        self.function_output_max_tokens = find_family_for_model(model)
+            .unwrap_or_else(|| derive_default_model_family(model))
+            .truncation_policy
+            .tokens_budget;
     }
 
     pub(crate) fn token_info(&self) -> Option<TokenUsageInfo> {
@@ -161,13 +163,14 @@ impl ContextManager {
             ResponseItem::FunctionCallOutput { call_id, output } => {
                 let (truncated, _) = truncate_text(
                     output.content.as_str(),
-                    Some(self.function_output_max_tokens),
-                    self.model.as_deref(),
+                    self.function_output_max_tokens,
+                    &self.model,
                 );
                 let truncated_items = output.content_items.as_ref().map(|items| {
                     truncate_function_output_items_to_token_limit(
                         items,
                         self.function_output_max_tokens,
+                        &self.model,
                     )
                 });
                 ResponseItem::FunctionCallOutput {
@@ -180,11 +183,8 @@ impl ContextManager {
                 }
             }
             ResponseItem::CustomToolCallOutput { call_id, output } => {
-                let (truncated, _) = truncate_text(
-                    output,
-                    Some(self.function_output_max_tokens),
-                    self.model.as_deref(),
-                );
+                let (truncated, _) =
+                    truncate_text(output, self.function_output_max_tokens, &self.model);
                 ResponseItem::CustomToolCallOutput {
                     call_id: call_id.clone(),
                     output: truncated,
@@ -204,7 +204,11 @@ impl ContextManager {
 
 impl Default for ContextManager {
     fn default() -> Self {
-        Self::new()
+        let default_function_output_max_tokens = find_family_for_model(OPENAI_DEFAULT_MODEL)
+            .unwrap_or_else(|| derive_default_model_family(OPENAI_DEFAULT_MODEL))
+            .truncation_policy
+            .tokens_budget;
+        Self::new(OPENAI_DEFAULT_MODEL, default_function_output_max_tokens)
     }
 }
 

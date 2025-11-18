@@ -5,6 +5,7 @@ use crate::config::types::ReasoningSummaryFormat;
 use crate::tools::handlers::apply_patch::ApplyPatchToolType;
 use crate::tools::spec::ConfigShellToolType;
 use crate::truncate::TruncationMode;
+use crate::truncate::TruncationPolicy;
 
 /// The `instructions` field in the payload sent to a model should always start
 /// with this content.
@@ -68,7 +69,7 @@ pub struct ModelFamily {
     /// Preferred shell tool type for this model family when features do not override it.
     pub shell_type: ConfigShellToolType,
 
-    pub truncation_mode: TruncationMode,
+    pub truncation_policy: TruncationPolicy,
 }
 
 macro_rules! model_family {
@@ -92,7 +93,10 @@ macro_rules! model_family {
             shell_type: ConfigShellToolType::Default,
             default_verbosity: None,
             default_reasoning_effort: None,
-            truncation_mode: TruncationMode::Bytes(10_000),
+            truncation_policy: TruncationPolicy {
+                mode: TruncationMode::Bytes,
+                tokens_budget: 10_000,
+            },
         };
 
         // apply overrides
@@ -150,7 +154,10 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             ],
             supports_parallel_tool_calls: true,
             support_verbosity: true,
-            truncation_mode: TruncationMode::Tokens(10_000),
+            truncation_policy: TruncationPolicy {
+                mode: TruncationMode::Tokens,
+                tokens_budget: 10_000,
+            },
         )
 
     // Internal models.
@@ -168,7 +175,10 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             ],
             supports_parallel_tool_calls: true,
             support_verbosity: true,
-            truncation_mode: TruncationMode::Tokens(10_000),
+            truncation_policy: TruncationPolicy {
+                mode: TruncationMode::Tokens,
+                tokens_budget: 10_000,
+            },
         )
 
     // Production models.
@@ -183,7 +193,10 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             support_verbosity: false,
-            truncation_mode: TruncationMode::Tokens(10_000),
+            truncation_policy: TruncationPolicy {
+                mode: TruncationMode::Tokens,
+                tokens_budget: 10_000,
+            },
         )
     } else if slug.starts_with("gpt-5.1") {
         model_family!(
@@ -194,7 +207,10 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             default_verbosity: Some(Verbosity::Low),
             base_instructions: GPT_5_1_INSTRUCTIONS.to_string(),
             default_reasoning_effort: Some(ReasoningEffort::Medium),
-            truncation_mode: TruncationMode::Bytes(10_000),
+            truncation_policy: TruncationPolicy {
+                mode: TruncationMode::Bytes,
+                tokens_budget: 2_500,
+            },
         )
     } else if slug.starts_with("gpt-5") {
         model_family!(
@@ -202,7 +218,10 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             supports_reasoning_summaries: true,
             needs_special_apply_patch_instructions: true,
             support_verbosity: true,
-            truncation_mode: TruncationMode::Bytes(10_000),
+            truncation_policy: TruncationPolicy {
+                mode: TruncationMode::Bytes,
+                tokens_budget: 2_500,
+            },
         )
     } else {
         None
@@ -225,6 +244,9 @@ pub fn derive_default_model_family(model: &str) -> ModelFamily {
         shell_type: ConfigShellToolType::Default,
         default_verbosity: None,
         default_reasoning_effort: None,
-        truncation_mode: TruncationMode::Bytes(10_000),
+        truncation_policy: TruncationPolicy {
+            mode: TruncationMode::Bytes,
+            tokens_budget: 2_500,
+        },
     }
 }

@@ -131,7 +131,7 @@ impl ToolOrchestrator {
                         };
                         let friendly = get_error_message_ui(
                             &CodexErr::Sandbox(err),
-                            Some(turn_ctx.client.get_model().as_str()),
+                            turn_ctx.client.get_model().as_str(),
                         );
                         let failure_summary = format!("failed in sandbox: {friendly}");
 

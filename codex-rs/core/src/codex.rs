@@ -183,7 +183,7 @@ impl Codex {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: config.features.clone(),
-            output_max_tokens: config.output_max_tokens,
+            output_max_tokens: config.calls_output_max_tokens,
             session_source,
         };
 
@@ -741,7 +741,7 @@ impl Session {
 
         state.session_configuration = state.session_configuration.apply(&updates);
         let model = state.session_configuration.model().to_string();
-        state.history.set_model(Some(model.as_str()));
+        state.history.set_model(&model);
     }
 
     pub(crate) async fn new_turn(&self, updates: SessionSettingsUpdate) -> Arc<TurnContext> {
@@ -759,7 +759,7 @@ impl Session {
             let session_configuration = state.session_configuration.clone().apply(&updates);
             state.session_configuration = session_configuration.clone();
             let model = state.session_configuration.model().to_string();
-            state.history.set_model(Some(model.as_str()));
+            state.history.set_model(&model);
             session_configuration
         };
 
@@ -993,7 +993,10 @@ impl Session {
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
     ) -> Vec<ResponseItem> {
-        let mut history = ContextManager::new();
+        let mut history = ContextManager::new(
+            turn_context.client.get_model().as_str(),
+            turn_context.client.get_max_calls_output_tokens(),
+        );
         for item in rollout_items {
             match item {
                 RolloutItem::ResponseItem(response_item) => {
@@ -1006,7 +1009,7 @@ impl Session {
                         self.build_initial_context(turn_context),
                         &user_messages,
                         &compacted.message,
-                        Some(turn_context.client.get_model().as_str()),
+                        turn_context.client.get_model().as_str(),
                     );
                     history.replace(rebuilt);
                 }
@@ -2616,7 +2619,7 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
-            output_max_tokens: config.output_max_tokens,
+            output_max_tokens: config.calls_output_max_tokens,
             session_source: SessionSource::Exec,
         };
 
@@ -2693,7 +2696,7 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
-            output_max_tokens: config.output_max_tokens,
+            output_max_tokens: config.calls_output_max_tokens,
             session_source: SessionSource::Exec,
         };
 
@@ -2920,7 +2923,10 @@ mod tests {
         turn_context: &TurnContext,
     ) -> (Vec<RolloutItem>, Vec<ResponseItem>) {
         let mut rollout_items = Vec::new();
-        let mut live_history = ContextManager::new();
+        let mut live_history = ContextManager::new(
+            turn_context.client.get_model().as_str(),
+            turn_context.client.get_max_calls_output_tokens(),
+        );
 
         let initial_context = session.build_initial_context(turn_context);
         for item in &initial_context {
@@ -2955,7 +2961,7 @@ mod tests {
             session.build_initial_context(turn_context),
             &user_messages1,
             summary1,
-            Some(turn_context.client.get_model().as_str()),
+            turn_context.client.get_model().as_str(),
         );
         live_history.replace(rebuilt1);
         rollout_items.push(RolloutItem::Compacted(CompactedItem {
@@ -2989,7 +2995,7 @@ mod tests {
             session.build_initial_context(turn_context),
             &user_messages2,
             summary2,
-            Some(turn_context.client.get_model().as_str()),
+            turn_context.client.get_model().as_str(),
         );
         live_history.replace(rebuilt2);
         rollout_items.push(RolloutItem::Compacted(CompactedItem {

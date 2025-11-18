@@ -11,23 +11,26 @@ use crate::model_family::derive_default_model_family;
 use crate::model_family::find_family_for_model;
 
 /// Model-formatting limits: clients get full streams; only content sent to the model is truncated.
-pub const MODEL_FORMAT_MAX_BYTES: usize = 10 * 1024; // 10 KiB
-pub const MODEL_FORMAT_MAX_LINES: usize = 256; // lines
-pub const DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT: usize = MODEL_FORMAT_MAX_BYTES / 4;
 const TOKENIZER_STACK_SAFE_BYTES: usize = 1024 * 1024; // 1 MiB
 const APPROX_BYTES_PER_TOKEN: usize = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TruncationPolicy {
+    pub mode: TruncationMode,
+    pub tokens_budget: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TruncationMode {
-    Bytes(usize),
-    Tokens(usize),
+    Bytes,
+    Tokens,
 }
 
 /// Format a block of exec/tool output for model consumption, truncating by
 /// lines and bytes while preserving head and tail segments.
 pub(crate) fn truncate_with_line_bytes_budget(content: &str, bytes_budget: usize) -> String {
     // TODO(aibrahim): to be removed
-    let lines_budget = MODEL_FORMAT_MAX_LINES;
+    let lines_budget = 256;
     // Head+tail truncation for the model: show the beginning and end with an elision.
     // Clients still receive full streams; only this formatted summary is capped.
     let total_lines = content.lines().count();
@@ -40,32 +43,16 @@ pub(crate) fn truncate_with_line_bytes_budget(content: &str, bytes_budget: usize
 
 pub(crate) fn truncate_text(
     content: &str,
-    tokens_budget: Option<usize>,
-    model: Option<&str>,
+    tokens_budget: usize,
+    model: &str,
 ) -> (String, Option<u64>) {
-    let mode = model
-        .map(|m| {
-            find_family_for_model(m)
-                .unwrap_or(derive_default_model_family(m))
-                .truncation_mode
-        })
-        .unwrap_or(TruncationMode::Bytes(MODEL_FORMAT_MAX_BYTES));
+    let mode = find_family_for_model(model)
+        .unwrap_or_else(|| derive_default_model_family(model))
+        .truncation_policy
+        .mode;
     match mode {
-        TruncationMode::Bytes(bytes) => {
-            let max_tokens = if let Some(tokens) = tokens_budget {
-                tokens
-            } else {
-                bytes / APPROX_BYTES_PER_TOKEN
-            };
-            truncate_with_byte_estimate(content, max_tokens, model)
-        }
-        TruncationMode::Tokens(tokens) => {
-            if let Some(tokens) = tokens_budget {
-                truncate_with_token_budget(content, tokens, model)
-            } else {
-                truncate_with_token_budget(content, tokens, model)
-            }
-        }
+        TruncationMode::Bytes => truncate_with_byte_estimate(content, tokens_budget, model),
+        TruncationMode::Tokens => truncate_with_token_budget(content, tokens_budget, model),
     }
 }
 
@@ -76,6 +63,7 @@ pub(crate) fn truncate_text(
 pub(crate) fn truncate_function_output_items_to_token_limit(
     items: &[FunctionCallOutputContentItem],
     max_tokens: usize,
+    model: &str,
 ) -> Vec<FunctionCallOutputContentItem> {
     let mut out: Vec<FunctionCallOutputContentItem> = Vec::with_capacity(items.len());
     let mut remaining_tokens = max_tokens;
@@ -95,7 +83,7 @@ pub(crate) fn truncate_function_output_items_to_token_limit(
                     out.push(FunctionCallOutputContentItem::InputText { text: text.clone() });
                     remaining_tokens = remaining_tokens.saturating_sub(token_len);
                 } else {
-                    let (snippet, _) = truncate_with_token_budget(text, remaining_tokens, None);
+                    let (snippet, _) = truncate_with_token_budget(text, remaining_tokens, model);
                     if snippet.is_empty() {
                         omitted_text_items += 1;
                     } else {
@@ -125,11 +113,7 @@ pub(crate) fn truncate_function_output_items_to_token_limit(
 /// preserving the beginning and the end. Returns the possibly truncated string
 /// and `Some(original_token_count)` if truncation occurred; otherwise returns
 /// the original string and `None`.
-fn truncate_with_token_budget(
-    s: &str,
-    max_tokens: usize,
-    model: Option<&str>,
-) -> (String, Option<u64>) {
+fn truncate_with_token_budget(s: &str, max_tokens: usize, model: &str) -> (String, Option<u64>) {
     if s.is_empty() {
         return (String::new(), None);
     }
@@ -223,11 +207,7 @@ fn truncate_with_tokenizer_path(
 }
 
 /// estimate the number of tokens in a string based on the length of the string
-fn truncate_with_byte_estimate(
-    s: &str,
-    max_tokens: usize,
-    model: Option<&str>,
-) -> (String, Option<u64>) {
+fn truncate_with_byte_estimate(s: &str, max_tokens: usize, model: &str) -> (String, Option<u64>) {
     let total_tokens = approx_token_count(s);
     if max_tokens == 0 {
         return (format_truncation_marker(total_tokens), Some(total_tokens));
@@ -428,7 +408,7 @@ fn ensure_candidate_within_token_budget(
     candidate: String,
     max_budget: usize,
     total_tokens: u64,
-    model: Option<&str>,
+    model: &str,
 ) -> (String, Option<u64>) {
     if max_budget == 0 {
         return (candidate, Some(total_tokens));
@@ -458,14 +438,10 @@ fn approx_bytes_for_tokens(tokens: usize) -> usize {
     tokens.saturating_mul(APPROX_BYTES_PER_TOKEN)
 }
 
-fn select_tokenizer(model: Option<&str>) -> Option<Tokenizer> {
-    if let Some(name) = model {
-        Tokenizer::for_model(name)
-            .or_else(|_| Tokenizer::try_default())
-            .ok()
-    } else {
-        Tokenizer::try_default().ok()
-    }
+fn select_tokenizer(model: &str) -> Option<Tokenizer> {
+    Tokenizer::for_model(model)
+        .or_else(|_| Tokenizer::try_default())
+        .ok()
 }
 
 fn truncate_on_boundary(input: &str, max_len: usize) -> &str {
@@ -527,9 +503,10 @@ fn estimate_safe_token_count(text: &str, tokenizer: Option<&Tokenizer>) -> usize
 
 #[cfg(test)]
 mod tests {
-    use super::DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT;
-    use super::MODEL_FORMAT_MAX_BYTES;
-    use super::MODEL_FORMAT_MAX_LINES;
+    use crate::config::OPENAI_DEFAULT_MODEL;
+    use crate::model_family::derive_default_model_family;
+    use crate::model_family::find_family_for_model;
+
     use super::truncate_function_output_items_to_token_limit;
     use super::truncate_with_line_bytes_budget;
     use super::truncate_with_token_budget;
@@ -537,6 +514,15 @@ mod tests {
     use codex_utils_tokenizer::Tokenizer;
     use pretty_assertions::assert_eq;
     use regex_lite::Regex;
+
+    const MODEL_FORMAT_MAX_LINES: usize = 256;
+
+    fn model_format_max_bytes() -> usize {
+        find_family_for_model(OPENAI_DEFAULT_MODEL)
+            .unwrap_or_else(|| derive_default_model_family(OPENAI_DEFAULT_MODEL))
+            .truncation_policy
+            .tokens_budget
+    }
 
     fn truncated_message_pattern(line: &str, total_lines: usize) -> String {
         let head_lines = MODEL_FORMAT_MAX_LINES / 2;
@@ -547,7 +533,8 @@ mod tests {
         let escaped_line = regex_lite::escape(line);
         if omitted == 0 {
             return format!(
-                r"(?s)^Total output lines: {total_lines}\n\n(?P<body>{escaped_line}.*\n\[\.{{3}} output truncated to fit {MODEL_FORMAT_MAX_BYTES} bytes \.{{3}}]\n\n.*)$",
+                r"(?s)^Total output lines: {total_lines}\n\n(?P<body>{escaped_line}.*\n\[\.{{3}} output truncated to fit {max_bytes} bytes \.{{3}}]\n\n.*)$",
+                max_bytes = model_format_max_bytes(),
             );
         }
         format!(
@@ -578,7 +565,7 @@ mod tests {
         let tok = Tokenizer::try_default().expect("load tokenizer");
         let s = "short output";
         let limit = usize::try_from(tok.count(s)).unwrap_or(0) + 10;
-        let (out, original) = truncate_with_token_budget(s, limit, None);
+        let (out, original) = truncate_with_token_budget(s, limit, OPENAI_DEFAULT_MODEL);
         assert_eq!(out, s);
         assert_eq!(original, None);
     }
@@ -588,7 +575,7 @@ mod tests {
         let tok = Tokenizer::try_default().expect("load tokenizer");
         let s = "abcdef";
         let total = tok.count(s) as u64;
-        let (out, original) = truncate_with_token_budget(s, 0, None);
+        let (out, original) = truncate_with_token_budget(s, 0, OPENAI_DEFAULT_MODEL);
         assert!(out.contains("tokens truncated"));
         assert_eq!(original, Some(total));
     }
@@ -598,7 +585,7 @@ mod tests {
         let tok = Tokenizer::try_default().expect("load tokenizer");
         let s = "alpha beta gamma delta epsilon zeta eta theta iota kappa";
         let max_tokens = 12;
-        let (out, original) = truncate_with_token_budget(s, max_tokens, None);
+        let (out, original) = truncate_with_token_budget(s, max_tokens, OPENAI_DEFAULT_MODEL);
         assert!(out.contains("tokens truncated"));
         assert_eq!(original, Some(tok.count(s) as u64));
         let result_tokens = tok.count(&out) as usize;
@@ -610,7 +597,7 @@ mod tests {
         let tok = Tokenizer::try_default().expect("load tokenizer");
         let s = "😀😀😀😀😀😀😀😀😀😀\nsecond line with ascii text\n";
         let max_tokens = 8;
-        let (out, tokens) = truncate_with_token_budget(s, max_tokens, None);
+        let (out, tokens) = truncate_with_token_budget(s, max_tokens, OPENAI_DEFAULT_MODEL);
 
         assert!(out.contains("tokens truncated"));
         assert!(!out.contains('\u{fffd}'));
@@ -624,7 +611,7 @@ mod tests {
         let line = "very long execution error line that should trigger truncation\n";
         let large_error = line.repeat(2_500); // way beyond both byte and line limits
 
-        let truncated = truncate_with_line_bytes_budget(&large_error, MODEL_FORMAT_MAX_BYTES);
+        let truncated = truncate_with_line_bytes_budget(&large_error, model_format_max_bytes());
 
         let total_lines = large_error.lines().count();
         let pattern = truncated_message_pattern(line, total_lines);
@@ -639,7 +626,7 @@ mod tests {
             .expect("missing body capture")
             .as_str();
         assert!(
-            body.len() <= MODEL_FORMAT_MAX_BYTES,
+            body.len() <= model_format_max_bytes(),
             "body exceeds byte limit: {} bytes",
             body.len()
         );
@@ -648,12 +635,12 @@ mod tests {
 
     #[test]
     fn format_exec_output_marks_byte_truncation_without_omitted_lines() {
-        let long_line = "a".repeat(MODEL_FORMAT_MAX_BYTES + 50);
-        let truncated = truncate_with_line_bytes_budget(&long_line, MODEL_FORMAT_MAX_BYTES);
+        let max_bytes = model_format_max_bytes();
+        let long_line = "a".repeat(max_bytes + 50);
+        let truncated = truncate_with_line_bytes_budget(&long_line, max_bytes);
 
         assert_ne!(truncated, long_line);
-        let marker_line =
-            format!("[... output truncated to fit {MODEL_FORMAT_MAX_BYTES} bytes ...]");
+        let marker_line = format!("[... output truncated to fit {max_bytes} bytes ...]");
         assert!(
             truncated.contains(&marker_line),
             "missing byte truncation marker: {truncated}"
@@ -669,7 +656,7 @@ mod tests {
         let content = "example output\n".repeat(10);
 
         assert_eq!(
-            truncate_with_line_bytes_budget(&content, MODEL_FORMAT_MAX_BYTES),
+            truncate_with_line_bytes_budget(&content, model_format_max_bytes()),
             content
         );
     }
@@ -681,7 +668,7 @@ mod tests {
             .map(|idx| format!("line-{idx}\n"))
             .collect();
 
-        let truncated = truncate_with_line_bytes_budget(&content, MODEL_FORMAT_MAX_BYTES);
+        let truncated = truncate_with_line_bytes_budget(&content, model_format_max_bytes());
 
         let omitted = total_lines - MODEL_FORMAT_MAX_LINES;
         let expected_marker = format!("[... omitted {omitted} of {total_lines} lines ...]");
@@ -710,7 +697,7 @@ mod tests {
             .map(|idx| format!("line-{idx}-{long_line}\n"))
             .collect();
 
-        let truncated = truncate_with_line_bytes_budget(&content, MODEL_FORMAT_MAX_BYTES);
+        let truncated = truncate_with_line_bytes_budget(&content, model_format_max_bytes());
 
         assert!(
             truncated.contains("[... omitted 42 of 298 lines ...]"),
@@ -728,14 +715,11 @@ mod tests {
         let chunk = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega.\n";
         let chunk_tokens = usize::try_from(tok.count(chunk)).unwrap_or(usize::MAX);
         assert!(chunk_tokens > 0, "chunk must consume tokens");
-
-        let target_each = DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT
-            .saturating_div(2)
-            .saturating_sub(chunk_tokens);
+        let limit = model_format_max_bytes();
+        let target_each = limit.saturating_div(2).saturating_sub(chunk_tokens);
         let (t1, t1_tokens) = build_chunked_text(chunk, chunk_tokens, target_each);
         let (t2, t2_tokens) = build_chunked_text(chunk, chunk_tokens, target_each);
-        let remaining_after_t1_t2 =
-            DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT.saturating_sub(t1_tokens + t2_tokens);
+        let remaining_after_t1_t2 = limit.saturating_sub(t1_tokens + t2_tokens);
         assert!(
             remaining_after_t1_t2 > 0,
             "expected positive token remainder after first two items"
@@ -763,10 +747,9 @@ mod tests {
             FunctionCallOutputContentItem::InputText { text: t5 },
         ];
 
-        let output = truncate_function_output_items_to_token_limit(
-            &items,
-            DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT,
-        );
+        let model = OPENAI_DEFAULT_MODEL;
+
+        let output = truncate_function_output_items_to_token_limit(&items, limit, model);
 
         // Expect: t1 (full), t2 (full), image, t3 (truncated), summary mentioning 2 omitted.
         assert_eq!(output.len(), 5);

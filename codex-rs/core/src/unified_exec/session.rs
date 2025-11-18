@@ -172,8 +172,8 @@ impl UnifiedExecSession {
         if is_likely_sandbox_denied(self.sandbox_type(), &exec_output) {
             let (snippet, _) = truncate_text(
                 &aggregated_text,
-                Some(UNIFIED_EXEC_OUTPUT_MAX_TOKENS),
-                Some(ctx.turn.client.get_model().as_str()),
+                UNIFIED_EXEC_OUTPUT_MAX_TOKENS,
+                ctx.turn.client.get_model().as_str(),
             );
             let message = if snippet.is_empty() {
                 format!("exit code {exit_code}")

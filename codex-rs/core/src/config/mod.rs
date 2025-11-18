@@ -32,7 +32,6 @@ use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
-use crate::truncate::DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -195,7 +194,7 @@ pub struct Config {
     pub project_doc_fallback_filenames: Vec<String>,
 
     /// Token budget applied when storing tool/function outputs in the context manager.
-    pub output_max_tokens: usize,
+    pub calls_output_max_tokens: usize,
 
     /// Directory containing all Codex state (defaults to `~/.codex` but can be
     /// overridden by the `CODEX_HOME` environment variable).
@@ -597,7 +596,7 @@ pub struct ConfigToml {
     pub project_doc_fallback_filenames: Option<Vec<String>>,
 
     /// Token budget applied when storing tool/function outputs in the context manager.
-    pub output_max_tokens: Option<usize>,
+    pub calls_output_max_tokens: Option<usize>,
 
     /// Profile to use from the `profiles` map.
     pub profile: Option<String>,
@@ -1103,7 +1102,7 @@ impl Config {
         let config = Self {
             model,
             review_model,
-            model_family,
+            model_family: model_family.clone(),
             model_context_window,
             model_max_output_tokens,
             model_auto_compact_token_limit,
@@ -1142,9 +1141,9 @@ impl Config {
                     }
                 })
                 .collect(),
-            output_max_tokens: cfg
-                .output_max_tokens
-                .unwrap_or(DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT),
+            calls_output_max_tokens: cfg
+                .calls_output_max_tokens
+                .unwrap_or(model_family.truncation_policy.tokens_budget),
             codex_home,
             history,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
@@ -2897,7 +2896,10 @@ model_verbosity = "high"
                 model_providers: fixture.model_provider_map.clone(),
                 project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
                 project_doc_fallback_filenames: Vec::new(),
-                output_max_tokens: DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT,
+                calls_output_max_tokens: find_family_for_model(OPENAI_DEFAULT_MODEL)
+                    .unwrap()
+                    .truncation_policy
+                    .tokens_budget,
                 codex_home: fixture.codex_home(),
                 history: History::default(),
                 file_opener: UriBasedFileOpener::VsCode,
@@ -2969,7 +2971,10 @@ model_verbosity = "high"
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
-            output_max_tokens: DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT,
+            calls_output_max_tokens: find_family_for_model(OPENAI_DEFAULT_MODEL)
+                .unwrap()
+                .truncation_policy
+                .tokens_budget,
             codex_home: fixture.codex_home(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
@@ -3056,7 +3061,10 @@ model_verbosity = "high"
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
-            output_max_tokens: DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT,
+            calls_output_max_tokens: find_family_for_model(OPENAI_DEFAULT_MODEL)
+                .unwrap()
+                .truncation_policy
+                .tokens_budget,
             codex_home: fixture.codex_home(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
@@ -3129,7 +3137,10 @@ model_verbosity = "high"
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
-            output_max_tokens: DEFAULT_FUNCTION_OUTPUT_TOKEN_LIMIT,
+            calls_output_max_tokens: find_family_for_model(OPENAI_DEFAULT_MODEL)
+                .unwrap()
+                .truncation_policy
+                .tokens_budget,
             codex_home: fixture.codex_home(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
