@@ -726,7 +726,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
       }
     ]);
     normalize_line_endings(&mut expected);
-    let last_request_after_2_compacts = json!([{
+    let mut last_request_after_2_compacts = json!([{
         "instructions": requests[requests.len() -1]["instructions"],
         "input": requests[requests.len() -1]["input"],
     }]);
