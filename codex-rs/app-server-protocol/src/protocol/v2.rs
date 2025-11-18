@@ -66,10 +66,6 @@ v2_enum_from_core!(
     }
 );
 
-fn default_true() -> bool {
-    true
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -574,7 +570,7 @@ pub struct ReviewStartParams {
     pub target: ReviewTarget,
 
     /// When true (default), also append the final review message to the original thread.
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub append_to_original_thread: bool,
 }
 
