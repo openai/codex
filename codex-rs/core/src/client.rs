@@ -736,6 +736,7 @@ fn response_item_id(item: &ResponseItem) -> Option<String> {
         ResponseItem::CustomToolCallOutput { call_id, .. } => {
             (!call_id.is_empty()).then_some(call_id.clone())
         }
+        ResponseItem::CompactionSummary { .. } => None,
         ResponseItem::GhostSnapshot { .. } => None,
         ResponseItem::Other => None,
     }
