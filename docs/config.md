@@ -921,7 +921,7 @@ Valid values:
 
 | Key                                              | Type / Values                                                     | Notes                                                                                                                      |
 | ------------------------------------------------ | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `model`                                          | string                                                            | Model to use (e.g., `codex-auto`).                                                                                          |
+| `model`                                          | string                                                            | Model to use (e.g., `codex-auto`).                                                                                         |
 | `model_provider`                                 | string                                                            | Provider id from `model_providers` (default: `openai`).                                                                    |
 | `model_context_window`                           | number                                                            | Context window tokens.                                                                                                     |
 | `model_max_output_tokens`                        | number                                                            | Max output tokens.                                                                                                         |
