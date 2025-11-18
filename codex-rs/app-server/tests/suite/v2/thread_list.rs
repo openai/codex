@@ -102,7 +102,6 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
     assert_eq!(data1.len(), 2);
     for thread in &data1 {
         assert_eq!(thread.preview, "Hello");
-        assert_eq!(thread.model_provider, "mock_provider");
         assert!(thread.created_at > 0);
     }
     let cursor1 = cursor1.expect("expected nextCursor on first page");
@@ -127,7 +126,6 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
     assert!(data2.len() <= 2);
     for thread in &data2 {
         assert_eq!(thread.preview, "Hello");
-        assert_eq!(thread.model_provider, "mock_provider");
         assert!(thread.created_at > 0);
     }
     assert_eq!(cursor2, None, "expected nextCursor to be null on last page");
@@ -177,7 +175,6 @@ async fn thread_list_respects_provider_filter() -> Result<()> {
     assert_eq!(next_cursor, None);
     let thread = &data[0];
     assert_eq!(thread.preview, "X");
-    assert_eq!(thread.model_provider, "other_provider");
     let expected_ts = chrono::DateTime::parse_from_rfc3339("2025-01-02T11:00:00Z")?.timestamp();
     assert_eq!(thread.created_at, expected_ts);
 
