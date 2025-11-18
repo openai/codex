@@ -8,7 +8,7 @@ use codex_utils_string::take_last_bytes_at_char_boundary;
 
 use crate::config::Config;
 
-const APPROX_BYTES_PER_TOKEN: usize = 4;
+pub const APPROX_BYTES_PER_TOKEN: usize = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TruncationPolicy {

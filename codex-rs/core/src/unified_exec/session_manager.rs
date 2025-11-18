@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use codex_utils_tokenizer::Tokenizer;
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::time::Duration;
@@ -24,6 +23,7 @@ use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
 use crate::tools::sandboxing::ToolCtx;
+use crate::truncate::APPROX_BYTES_PER_TOKEN;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::truncate_text;
 
@@ -72,7 +72,6 @@ impl UnifiedExecSessionManager {
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let text = String::from_utf8_lossy(&collected).to_string();
-        let model = context.turn.client.get_model();
         let output = truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
         let chunk_id = generate_chunk_id();
         let has_exited = session.has_exited();
@@ -88,8 +87,7 @@ impl UnifiedExecSessionManager {
         // Only include a session_id in the response if the process is still alive.
         let session_id = if has_exited { None } else { Some(stored_id) };
 
-        let tokenizer = Tokenizer::for_model(&model).ok();
-        let original_token_count = tokenizer.map(|tok| tok.count(&text) as usize);
+        let original_token_count = text.len() / APPROX_BYTES_PER_TOKEN;
 
         let response = UnifiedExecResponse {
             event_call_id: context.call_id.clone(),
@@ -98,7 +96,7 @@ impl UnifiedExecSessionManager {
             output,
             session_id,
             exit_code: exit_code.flatten(),
-            original_token_count,
+            original_token_count: Some(original_token_count),
             session_command: Some(request.command.clone()),
         };
 
@@ -181,10 +179,8 @@ impl UnifiedExecSessionManager {
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let text = String::from_utf8_lossy(&collected).to_string();
-        let model = turn_ref.client.get_model();
         let output = truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
-        let tokenizer = Tokenizer::for_model(&model).ok();
-        let original_token_count = tokenizer.map(|tok| tok.count(&text) as usize);
+        let original_token_count = text.len() / APPROX_BYTES_PER_TOKEN;
         let chunk_id = generate_chunk_id();
 
         let status = self.refresh_session_state(session_id).await;
@@ -208,7 +204,7 @@ impl UnifiedExecSessionManager {
             output,
             session_id,
             exit_code,
-            original_token_count,
+            original_token_count: Some(original_token_count),
             session_command: Some(session_command.clone()),
         };
 
