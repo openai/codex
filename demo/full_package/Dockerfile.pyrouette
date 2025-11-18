@@ -1,0 +1,6 @@
+FROM python:3.11-slim
+WORKDIR /app
+COPY credential_validator.py /app/
+RUN pip install --no-cache-dir fastapi uvicorn pydantic
+EXPOSE 8000
+CMD ["python","credential_validator.py","--serve","--port","8000"]

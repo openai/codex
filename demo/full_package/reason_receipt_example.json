@@ -1,0 +1,18 @@
+{
+  "credentialId": "urn:stagecred:demo-001",
+  "verified": true,
+  "signatureOk": true,
+  "revoked": false,
+  "credentialSubject": {
+    "id": "urn:hash:demo1234",
+    "name": "Demo: AI Choreography for Ballet",
+    "evidence": [{ "id": "https://example.com/lesson.pdf", "type": "PDF" }]
+  },
+  "proof": {
+    "type": "Ed25519Signature2018",
+    "created": "2025-08-01T12:00:00Z",
+    "proofPurpose": "assertionMethod",
+    "verificationMethod": "https://stageport.studio/.well-known/stageport-public-key.json",
+    "signatureValue": "a1b2c3d4"
+  }
+}
