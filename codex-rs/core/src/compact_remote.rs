@@ -31,11 +31,6 @@ pub(crate) async fn run_remote_compact_task(
                 message: "Compact task completed".to_string(),
             });
             sess.send_event(&turn_context, event).await;
-
-            let warning = EventMsg::Warning(WarningEvent {
-                message: "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start a new conversation when possible to keep conversations small and targeted.".to_string(),
-            });
-            sess.send_event(&turn_context, warning).await;
         }
         Err(err) => {
             let event = EventMsg::Error(ErrorEvent {
@@ -67,22 +62,22 @@ async fn run_remote_compact_task_inner(
         output_schema: None,
     };
 
-    let compacted_items = turn_context
+    let mut new_history = turn_context
         .client
         .compact_conversation_history(&prompt)
         .await?;
+    // Required to keep `/undo` available after compaction
     let ghost_snapshots: Vec<ResponseItem> = history
         .get_history()
         .iter()
         .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
         .cloned()
         .collect();
-    let mut new_history = sess.build_initial_context(turn_context.as_ref());
-    new_history.extend(compacted_items.clone());
+
     if !ghost_snapshots.is_empty() {
         new_history.extend(ghost_snapshots);
     }
-    sess.replace_history(new_history).await;
+    sess.replace_history(new_history.clone()).await;
 
     if let Some(estimated_tokens) = sess
         .clone_history()
@@ -95,7 +90,7 @@ async fn run_remote_compact_task_inner(
 
     let compacted_item = CompactedItem {
         message: String::new(),
-        replacement_history: Some(compacted_items),
+        replacement_history: Some(new_history),
     };
     sess.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])
         .await;

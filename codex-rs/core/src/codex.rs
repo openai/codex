@@ -954,14 +954,7 @@ impl Session {
                     let snapshot = history.get_history();
                     // TODO(jif) clean
                     if let Some(replacement) = &compacted.replacement_history {
-                        let mut rebuilt = self.build_initial_context(turn_context);
-                        rebuilt.extend(replacement.clone());
-                        let ghost_snapshots = snapshot
-                            .iter()
-                            .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
-                            .cloned();
-                        rebuilt.extend(ghost_snapshots);
-                        history.replace(rebuilt);
+                        history.replace(replacement.clone());
                     } else {
                         let user_messages = collect_user_messages(&snapshot);
                         let rebuilt = compact::build_compacted_history(
