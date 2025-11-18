@@ -1,0 +1,27 @@
+{
+  "cmn_version": "1.0",
+  "divine_dewey": "DDT-<PLANET>-<LIT>-<PIPE>-####",
+  "title": "<human title>",
+  "role": "UI | signal | legal | model | dataset | doc",
+  "planetary": "<Mercury|Venus|Mars|Jupiter|Saturn|Uranus|Neptune|Pluto>",
+  "literary": "<manifesto|procedural|implementation|poem|report|interactive_ui>",
+  "pipeline": "<ingest|etl|llm-prompt|embed|train|backtest|notary>",
+  "time_signature": "4/4",
+  "tempo": 8,
+  "energy_scalar": 0.0,
+  "anchors": [],
+  "short_tldr": "<3-line TL;DR>",
+  "tokens": [],
+  "provenance": {
+    "sha256": "<hex or placeholder>",
+    "author": "<author>",
+    "created": "<ISO-8601>"
+  },
+  "rehearse": {
+    "repetition": "daily:3,weekly:1",
+    "tests": [],
+    "rehearsal_command": ""
+  },
+  "visibility": "private|project|public",
+  "secret_refs": []
+}

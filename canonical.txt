@@ -1,0 +1,2 @@
+Canonical repo is @TheAVCfiles/pyrouette
+Codex license is CLEP-C
