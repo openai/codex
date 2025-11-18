@@ -2896,7 +2896,7 @@ model_verbosity = "high"
                 model_providers: fixture.model_provider_map.clone(),
                 project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
                 project_doc_fallback_filenames: Vec::new(),
-                calls_output_max_tokens: find_family_for_model(OPENAI_DEFAULT_MODEL)
+                calls_output_max_tokens: find_family_for_model("o3")
                     .unwrap()
                     .truncation_policy
                     .tokens_budget,
@@ -2971,7 +2971,7 @@ model_verbosity = "high"
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
-            calls_output_max_tokens: find_family_for_model(OPENAI_DEFAULT_MODEL)
+            calls_output_max_tokens: find_family_for_model("gpt-3.5-turbo")
                 .unwrap()
                 .truncation_policy
                 .tokens_budget,
@@ -3061,7 +3061,7 @@ model_verbosity = "high"
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
-            calls_output_max_tokens: find_family_for_model(OPENAI_DEFAULT_MODEL)
+            calls_output_max_tokens: find_family_for_model("o3")
                 .unwrap()
                 .truncation_policy
                 .tokens_budget,
