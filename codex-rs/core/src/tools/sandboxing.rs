@@ -93,7 +93,6 @@ pub(crate) enum ApprovalRequirement {
     Forbidden { reason: String },
 }
 
-/// Reflects the orchestrator's behavior (pre-refactor):
 /// - Never, OnFailure: do not ask
 /// - OnRequest: ask unless sandbox policy is DangerFullAccess
 /// - UnlessTrusted: always ask

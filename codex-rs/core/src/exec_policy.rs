@@ -61,12 +61,17 @@ pub(crate) fn exec_policy_for(
         }
     };
 
-    let mut policy_paths: Vec<PathBuf> = Vec::new();
+    let entries = entries
+        .map(|entry| {
+            entry.map_err(|source| ExecPolicyError::ReadDir {
+                dir: policy_dir.clone(),
+                source,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut policy_paths: Vec<PathBuf> = Vec::with_capacity(entries.len());
     for entry in entries {
-        let entry = entry.map_err(|source| ExecPolicyError::ReadDir {
-            dir: policy_dir.clone(),
-            source,
-        })?;
         let path = entry.path();
         if path
             .extension()
