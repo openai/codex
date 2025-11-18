@@ -69,7 +69,17 @@ pub(crate) enum AppEvent {
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {
         model: ModelPreset,
+        preferred_effort: Option<ReasoningEffort>,
     },
+
+    /// Apply a model + reasoning effort combination directly.
+    ApplyModelAndEffort {
+        model: String,
+        effort: Option<ReasoningEffort>,
+    },
+
+    /// Open the legacy model picker.
+    OpenLegacyModelPopup,
 
     /// Open the confirmation prompt before enabling full access mode.
     OpenFullAccessConfirmation {

@@ -1,13 +1,17 @@
 ---
 source: tui/src/chatwidget/tests.rs
+assertion_line: 1440
 expression: popup
 ---
-  Select Model and Effort
-  Access legacy models by running codex -m <model_name> or in your config.toml
+  Select Model
+  Quickly pick Codex Auto or open the legacy list for more options.
 
-› 1. gpt-5.1-codex       Optimized for codex.
-  2. gpt-5.1-codex-mini  Optimized for codex. Cheaper, faster, but less
-                         capable.
-  3. gpt-5.1             Broad world knowledge with strong general reasoning.
+› 1. codex-auto — Fast                Fastest responses with limited reasoning
+  2. codex-auto — Balanced (default)  Balanced responses that adapt to the
+                                      task
+  3. codex-auto — Thorough            Maximum reasoning depth for complex
+                                      problems
+  4. Legacy models…                   Browse GPT-5.1 Codex, GPT-5, and other
+                                      legacy models.
 
-  Press enter to select reasoning effort, or esc to dismiss.
+  Press enter to apply selection, or esc to dismiss.

@@ -122,6 +122,7 @@ use codex_common::approval_presets::ApprovalPreset;
 use codex_common::approval_presets::builtin_approval_presets;
 use codex_common::model_presets::ModelPreset;
 use codex_common::model_presets::builtin_model_presets;
+use codex_common::model_presets::effort_label_for_model;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ConversationManager;
@@ -1968,10 +1969,87 @@ impl ChatWidget {
     /// Open a popup to choose the model (stage 1). After selecting a model,
     /// a second popup is shown to choose the reasoning effort.
     pub(crate) fn open_model_popup(&mut self) {
-        let current_model = self.config.model.clone();
         let auth_mode = self.auth_manager.auth().map(|auth| auth.mode);
-        let presets: Vec<ModelPreset> = builtin_model_presets(auth_mode);
+        let presets = builtin_model_presets(auth_mode);
+        let (featured, legacy): (Vec<_>, Vec<_>) =
+            presets.into_iter().partition(|preset| preset.is_default);
+        if featured.is_empty() {
+            self.show_model_list(
+                legacy,
+                "Select Model and Effort",
+                Some(
+                    "Access legacy models by running codex -m <model_name> or in your config.toml"
+                        .to_string(),
+                ),
+            );
+            return;
+        }
 
+        let featured_model = featured.into_iter().next().expect("featured preset");
+        let mut items = self.featured_model_items(&featured_model);
+        items.push(SelectionItem {
+            name: "Legacy models…".to_string(),
+            description: Some("Browse GPT-5.1 Codex, GPT-5, and other legacy models.".to_string()),
+            selected_description: None,
+            is_current: false,
+            actions: vec![Box::new(|tx| {
+                tx.send(AppEvent::OpenLegacyModelPopup);
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Select Model".to_string()),
+            subtitle: Some(
+                "Quickly pick Codex Auto or open the legacy list for more options.".to_string(),
+            ),
+            footer_hint: Some("Press enter to apply selection, or esc to dismiss.".into()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn open_legacy_model_popup(&mut self) {
+        let auth_mode = self.auth_manager.auth().map(|auth| auth.mode);
+        let presets = builtin_model_presets(auth_mode);
+        let (_, legacy): (Vec<_>, Vec<_>) =
+            presets.into_iter().partition(|preset| preset.is_default);
+        self.show_model_list(
+            legacy,
+            "Select Legacy Model",
+            Some(
+                "Access legacy models by running codex -m <model_name> or in your config.toml"
+                    .to_string(),
+            ),
+        );
+    }
+
+    fn show_model_list(
+        &mut self,
+        presets: Vec<ModelPreset>,
+        title: &str,
+        subtitle: Option<String>,
+    ) {
+        if presets.is_empty() {
+            let items = vec![SelectionItem {
+                name: "No models available".to_string(),
+                description: Some("No matching model presets are configured.".to_string()),
+                is_current: false,
+                dismiss_on_select: true,
+                ..Default::default()
+            }];
+            self.bottom_pane.show_selection_view(SelectionViewParams {
+                title: Some(title.to_string()),
+                subtitle,
+                footer_hint: Some(standard_popup_hint_line()),
+                items,
+                ..Default::default()
+            });
+            return;
+        }
+
+        let current_model = self.config.model.clone();
         let mut items: Vec<SelectionItem> = Vec::new();
         for preset in presets.into_iter() {
             let description = if preset.description.is_empty() {
@@ -1986,6 +2064,7 @@ impl ChatWidget {
                 let preset_for_event = preset_for_action.clone();
                 tx.send(AppEvent::OpenReasoningPopup {
                     model: preset_for_event,
+                    preferred_effort: None,
                 });
             })];
             items.push(SelectionItem {
@@ -1999,19 +2078,80 @@ impl ChatWidget {
         }
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Select Model and Effort".to_string()),
-            subtitle: Some(
-                "Access legacy models by running codex -m <model_name> or in your config.toml"
-                    .to_string(),
-            ),
+            title: Some(title.to_string()),
+            subtitle,
             footer_hint: Some("Press enter to select reasoning effort, or esc to dismiss.".into()),
             items,
             ..Default::default()
         });
     }
 
+    fn featured_model_items(&self, preset: &ModelPreset) -> Vec<SelectionItem> {
+        let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
+        let is_current = self.config.model == preset.model;
+        let current_effort = if is_current {
+            self.config.model_reasoning_effort.or(Some(default_effort))
+        } else {
+            None
+        };
+
+        let mut items = Vec::new();
+        let model_slug = preset.model.to_string();
+        for option in preset.supported_reasoning_efforts.iter() {
+            let effort = option.effort;
+            let model_for_action = model_slug.clone();
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::ApplyModelAndEffort {
+                    model: model_for_action.clone(),
+                    effort: Some(effort),
+                });
+            })];
+
+            let label = effort_label_for_model(&model_slug, Some(effort))
+                .map(str::to_string)
+                .unwrap_or_else(|| Self::featured_option_label(effort));
+            let mut name = format!("{} — {}", preset.display_name, label);
+            if effort == default_effort {
+                name.push_str(" (default)");
+            }
+
+            let description =
+                (!option.description.is_empty()).then(|| option.description.to_string());
+            items.push(SelectionItem {
+                name,
+                description,
+                selected_description: None,
+                is_current: current_effort == Some(effort),
+                actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        }
+
+        items
+    }
+
+    fn featured_option_label(effort: ReasoningEffortConfig) -> String {
+        match effort {
+            ReasoningEffortConfig::Low => "Fast".to_string(),
+            ReasoningEffortConfig::Medium => "Balanced".to_string(),
+            ReasoningEffortConfig::High => "Thorough".to_string(),
+            _ => {
+                let mut text = effort.to_string();
+                if let Some(first) = text.get_mut(0..1) {
+                    first.make_ascii_uppercase();
+                }
+                text
+            }
+        }
+    }
+
     /// Open a popup to choose the reasoning effort (stage 2) for the given model.
-    pub(crate) fn open_reasoning_popup(&mut self, preset: ModelPreset) {
+    pub(crate) fn open_reasoning_popup(
+        &mut self,
+        preset: ModelPreset,
+        preferred_effort: Option<ReasoningEffortConfig>,
+    ) {
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
         let supported = preset.supported_reasoning_efforts;
 
@@ -2054,7 +2194,11 @@ impl ChatWidget {
 
         let model_slug = preset.model.to_string();
         let is_current_model = self.config.model == preset.model;
-        let highlight_choice = if is_current_model {
+        let preferred_choice = preferred_effort
+            .filter(|effort| choices.iter().any(|choice| choice.stored == Some(*effort)));
+        let highlight_choice = if let Some(effort) = preferred_choice {
+            Some(effort)
+        } else if is_current_model {
             self.config.model_reasoning_effort
         } else {
             default_choice
@@ -2139,7 +2283,11 @@ impl ChatWidget {
         });
     }
 
-    fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
+    pub(crate) fn apply_model_and_effort(
+        &self,
+        model: String,
+        effort: Option<ReasoningEffortConfig>,
+    ) {
         self.app_event_tx
             .send(AppEvent::CodexOp(Op::OverrideTurnContext {
                 cwd: None,

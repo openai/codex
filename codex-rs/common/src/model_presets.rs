@@ -43,6 +43,29 @@ pub struct ModelPreset {
 static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
     vec![
         ModelPreset {
+            id: "codex-auto",
+            model: "codex-auto",
+            display_name: "codex-auto",
+            description: "Automatically chooses the best Codex model configuration for your task.",
+            default_reasoning_effort: ReasoningEffort::Medium,
+            supported_reasoning_efforts: &[
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Low,
+                    description: "Fastest responses with limited reasoning",
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Medium,
+                    description: "Balanced responses that adapt to the task",
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::High,
+                    description: "Maximum reasoning depth for complex problems",
+                },
+            ],
+            is_default: true,
+            upgrade: None,
+        },
+        ModelPreset {
             id: "gpt-5.1-codex",
             model: "gpt-5.1-codex",
             display_name: "gpt-5.1-codex",
@@ -62,7 +85,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                     description: "Maximizes reasoning depth for complex or ambiguous problems",
                 },
             ],
-            is_default: true,
+            is_default: false,
             upgrade: None,
         },
         ModelPreset {
@@ -205,6 +228,44 @@ pub fn all_model_presets() -> &'static Vec<ModelPreset> {
     &PRESETS
 }
 
+/// Label metadata for featured pickers (e.g., codex-auto variants).
+#[derive(Debug, Clone, Copy)]
+struct FeaturedEffortLabel {
+    model: &'static str,
+    effort: ReasoningEffort,
+    label: &'static str,
+}
+
+static FEATURED_EFFORT_LABELS: &[FeaturedEffortLabel] = &[
+    FeaturedEffortLabel {
+        model: "codex-auto",
+        effort: ReasoningEffort::Low,
+        label: "Fast",
+    },
+    FeaturedEffortLabel {
+        model: "codex-auto",
+        effort: ReasoningEffort::Medium,
+        label: "Balanced",
+    },
+    FeaturedEffortLabel {
+        model: "codex-auto",
+        effort: ReasoningEffort::High,
+        label: "Thorough",
+    },
+];
+
+/// Returns a friendly label for the given model/effort combination when available.
+pub fn effort_label_for_model(
+    model: &str,
+    effort: Option<ReasoningEffort>,
+) -> Option<&'static str> {
+    let effort = effort?;
+    FEATURED_EFFORT_LABELS
+        .iter()
+        .find(|entry| entry.model == model && entry.effort == effort)
+        .map(|entry| entry.label)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,5 +274,21 @@ mod tests {
     fn only_one_default_model_is_configured() {
         let default_models = PRESETS.iter().filter(|preset| preset.is_default).count();
         assert!(default_models == 1);
+    }
+
+    #[test]
+    fn codex_auto_featured_options_define_labels() {
+        assert_eq!(
+            effort_label_for_model("codex-auto", Some(ReasoningEffort::Low)),
+            Some("Fast")
+        );
+        assert_eq!(
+            effort_label_for_model("codex-auto", Some(ReasoningEffort::Medium)),
+            Some("Balanced")
+        );
+        assert_eq!(
+            effort_label_for_model("codex-auto", Some(ReasoningEffort::High)),
+            Some("Thorough")
+        );
     }
 }

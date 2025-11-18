@@ -19,6 +19,7 @@ use crate::update_action::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
 use codex_common::model_presets::ModelUpgrade;
 use codex_common::model_presets::all_model_presets;
+use codex_common::model_presets::effort_label_for_model;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
@@ -91,6 +92,17 @@ fn should_show_model_migration_prompt(
         .iter()
         .filter(|preset| preset.upgrade.is_some())
         .any(|preset| preset.model == current_model)
+}
+
+fn format_model_change_target(model: &str, effort: Option<ReasoningEffortConfig>) -> String {
+    if let Some(label) = effort_label_for_model(model, effort) {
+        format!("{model} ({label})")
+    } else {
+        let suffix = effort
+            .map(|eff| format!(" with {eff} reasoning"))
+            .unwrap_or_else(|| " with default reasoning".to_string());
+        format!("{model}{suffix}")
+    }
 }
 
 async fn handle_model_migration_prompt_if_needed(
@@ -509,8 +521,19 @@ impl App {
                     self.config.model_family = family;
                 }
             }
-            AppEvent::OpenReasoningPopup { model } => {
-                self.chat_widget.open_reasoning_popup(model);
+            AppEvent::OpenReasoningPopup {
+                model,
+                preferred_effort,
+            } => {
+                self.chat_widget
+                    .open_reasoning_popup(model, preferred_effort);
+            }
+            AppEvent::OpenLegacyModelPopup => {
+                self.chat_widget.open_legacy_model_popup();
+            }
+            AppEvent::ApplyModelAndEffort { model, effort } => {
+                self.chat_widget
+                    .apply_model_and_effort(model.clone(), effort);
             }
             AppEvent::OpenFullAccessConfirmation { preset } => {
                 self.chat_widget.open_full_access_confirmation(preset);
@@ -549,21 +572,15 @@ impl App {
                     .await
                 {
                     Ok(()) => {
-                        let effort_label = effort
-                            .map(|eff| format!(" with {eff} reasoning"))
-                            .unwrap_or_else(|| " with default reasoning".to_string());
+                        let target = format_model_change_target(&model, effort);
                         if let Some(profile) = profile {
                             self.chat_widget.add_info_message(
-                                format!(
-                                    "Model changed to {model}{effort_label} for {profile} profile"
-                                ),
+                                format!("Model changed to {target} for {profile} profile"),
                                 None,
                             );
                         } else {
-                            self.chat_widget.add_info_message(
-                                format!("Model changed to {model}{effort_label}"),
-                                None,
-                            );
+                            self.chat_widget
+                                .add_info_message(format!("Model changed to {target}"), None);
                         }
                     }
                     Err(err) => {
@@ -1035,5 +1052,25 @@ mod tests {
             summary.resume_command,
             Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
         );
+    }
+
+    #[test]
+    fn format_model_change_target_prefers_featured_label() {
+        let formatted =
+            super::format_model_change_target("codex-auto", Some(ReasoningEffortConfig::Low));
+        assert_eq!(formatted, "codex-auto (Fast)");
+    }
+
+    #[test]
+    fn format_model_change_target_falls_back_to_reasoning_text() {
+        let formatted =
+            super::format_model_change_target("gpt-5.1-codex", Some(ReasoningEffortConfig::High));
+        assert_eq!(formatted, "gpt-5.1-codex with high reasoning");
+    }
+
+    #[test]
+    fn format_model_change_target_handles_default_reasoning() {
+        let formatted = super::format_model_change_target("gpt-5.1-codex", None);
+        assert_eq!(formatted, "gpt-5.1-codex with default reasoning");
     }
 }

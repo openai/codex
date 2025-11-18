@@ -62,9 +62,9 @@ pub mod profile;
 pub mod types;
 
 #[cfg(target_os = "windows")]
-pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5.1";
+pub const OPENAI_DEFAULT_MODEL: &str = "codex-auto";
 #[cfg(not(target_os = "windows"))]
-pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5.1-codex";
+pub const OPENAI_DEFAULT_MODEL: &str = "codex-auto";
 const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5.1-codex";
 pub const GPT_5_CODEX_MEDIUM_MODEL: &str = "gpt-5.1-codex";
 

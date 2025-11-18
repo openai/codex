@@ -1517,7 +1517,7 @@ fn model_reasoning_selection_popup_snapshot() {
         .into_iter()
         .find(|preset| preset.model == "gpt-5.1-codex")
         .expect("gpt-5.1-codex preset");
-    chat.open_reasoning_popup(preset);
+    chat.open_reasoning_popup(preset, None);
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("model_reasoning_selection_popup", popup);
@@ -1541,7 +1541,7 @@ fn single_reasoning_option_skips_selection() {
         is_default: false,
         upgrade: None,
     };
-    chat.open_reasoning_popup(preset);
+    chat.open_reasoning_popup(preset, None);
 
     let popup = render_bottom_popup(&chat, 80);
     assert!(
@@ -1595,7 +1595,7 @@ fn reasoning_popup_escape_returns_to_model_popup() {
         .into_iter()
         .find(|preset| preset.model == "gpt-5.1-codex")
         .expect("gpt-5.1-codex preset");
-    chat.open_reasoning_popup(presets);
+    chat.open_reasoning_popup(presets, None);
 
     let before_escape = render_bottom_popup(&chat, 80);
     assert!(before_escape.contains("Select Reasoning Level"));
@@ -1603,7 +1603,7 @@ fn reasoning_popup_escape_returns_to_model_popup() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
     let after_escape = render_bottom_popup(&chat, 80);
-    assert!(after_escape.contains("Select Model and Effort"));
+    assert!(after_escape.contains("Select Model"));
     assert!(!after_escape.contains("Select Reasoning Level"));
 }
 
