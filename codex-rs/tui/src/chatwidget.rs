@@ -2195,7 +2195,7 @@ impl ChatWidget {
             let mut effort_label = supported
                 .iter()
                 .find(|option| option.effort == effort)
-                .map(|option| option.label().to_string())
+                .map(codex_common::model_presets::ReasoningEffortPreset::label)
                 .unwrap_or_else(|| effort.to_string());
             let is_current_choice = is_current_model && choice.stored == highlight_choice;
             if choice.stored == default_choice && !is_current_choice {

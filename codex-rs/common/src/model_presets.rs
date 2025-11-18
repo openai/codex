@@ -40,19 +40,10 @@ impl ReasoningEffortPreset {
         }
     }
 
-    pub fn label(&self) -> &'static str {
+    pub fn label(&self) -> String {
         self.label
-            .unwrap_or_else(|| default_reasoning_effort_label(self.effort))
-    }
-}
-
-const fn default_reasoning_effort_label(effort: ReasoningEffort) -> &'static str {
-    match effort {
-        ReasoningEffort::None => "None",
-        ReasoningEffort::Minimal => "Minimal",
-        ReasoningEffort::Low => "Low",
-        ReasoningEffort::Medium => "Medium",
-        ReasoningEffort::High => "High",
+            .map(ToString::to_string)
+            .unwrap_or_else(|| self.effort.to_string())
     }
 }
 
@@ -271,12 +262,12 @@ pub fn all_model_presets() -> &'static Vec<ModelPreset> {
 }
 
 impl ModelPreset {
-    pub fn reasoning_effort_label(&self, effort: ReasoningEffort) -> &'static str {
+    pub fn reasoning_effort_label(&self, effort: ReasoningEffort) -> String {
         self.supported_reasoning_efforts
             .iter()
             .find(|option| option.effort == effort)
             .map(ReasoningEffortPreset::label)
-            .unwrap_or_else(|| default_reasoning_effort_label(effort))
+            .unwrap_or_else(|| effort.to_string())
     }
 }
 #[cfg(test)]
