@@ -46,17 +46,15 @@ impl SessionTask for GhostSnapshotTask {
                     // First, compute a snapshot report so we can warn about
                     // large untracked directories before running the heavier
                     // snapshot logic.
-                    match tokio::task::spawn_blocking({
+                    if let Ok(Ok(report)) = tokio::task::spawn_blocking({
                         let repo_path = repo_path.clone();
                         move || {
                             let options = CreateGhostCommitOptions::new(&repo_path);
                             capture_ghost_snapshot_report(&options)
                         }
                     })
-                    .await
-                    {
-                        Ok(Ok(report)) => {
-                            if let Some(message) = format_large_untracked_warning(&report) {
+                    .await {
+                        if let Some(message) = format_large_untracked_warning(&report) {
                                 session
                                     .session
                                     .send_event(
@@ -65,19 +63,6 @@ impl SessionTask for GhostSnapshotTask {
                                     )
                                     .await;
                             }
-                        }
-                        Ok(Err(err)) => {
-                            warn!(
-                                sub_id = ctx_for_task.sub_id.as_str(),
-                                "failed to compute ghost snapshot report: {err}"
-                            );
-                        }
-                        Err(err) => {
-                            warn!(
-                                sub_id = ctx_for_task.sub_id.as_str(),
-                                "ghost snapshot report task panicked: {err}"
-                            );
-                        }
                     }
 
                     // Required to run in a dedicated blocking pool.
@@ -160,7 +145,7 @@ fn format_large_untracked_warning(report: &GhostSnapshotReport) -> Option<String
         parts.push(format!(
             "{} ({})",
             dir.path.display(),
-            describe_file_count(dir.file_count)
+            format!("{count} files")
         ));
     }
     if report.large_untracked_dirs.len() > MAX_DIRS {
@@ -168,15 +153,7 @@ fn format_large_untracked_warning(report: &GhostSnapshotReport) -> Option<String
         parts.push(format!("{remaining} more"));
     }
     Some(format!(
-        "Ghost snapshots encountered large untracked directories: {}. This can slow Codex; consider adding these paths to .gitignore or disabling undo snapshots in your config.",
+        "Ghost snapshots encountered large untracked directories: {}. This can slow Codex; consider adding these paths to .gitignore or disabling undo in your config.",
         parts.join(", ")
     ))
-}
-
-fn describe_file_count(count: usize) -> String {
-    if count == 1 {
-        "1 file".to_string()
-    } else {
-        format!("{count} files")
-    }
 }
