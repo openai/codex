@@ -245,11 +245,15 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
     ]
 });
 
-pub fn builtin_model_presets(_auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
-    // leave auth mode for later use
+pub fn builtin_model_presets(auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
     PRESETS
         .iter()
         .filter(|preset| preset.upgrade.is_none())
+        .filter(|preset| match auth_mode {
+            // `codex-auto` is only available when using ChatGPT-style auth.
+            Some(AuthMode::ApiKey) => preset.id != "codex-auto",
+            _ => true,
+        })
         .cloned()
         .collect()
 }
@@ -275,5 +279,32 @@ mod tests {
     fn only_one_default_model_is_configured() {
         let default_models = PRESETS.iter().filter(|preset| preset.is_default).count();
         assert!(default_models == 1);
+    }
+
+    #[test]
+    fn codex_auto_is_included_for_non_api_auth() {
+        let presets_no_auth = builtin_model_presets(None);
+        assert!(
+            presets_no_auth
+                .iter()
+                .any(|preset| preset.id == "codex-auto")
+        );
+
+        let presets_chatgpt = builtin_model_presets(Some(AuthMode::ChatGPT));
+        assert!(
+            presets_chatgpt
+                .iter()
+                .any(|preset| preset.id == "codex-auto")
+        );
+    }
+
+    #[test]
+    fn codex_auto_is_excluded_for_api_key_auth() {
+        let presets_api_key = builtin_model_presets(Some(AuthMode::ApiKey));
+        assert!(
+            !presets_api_key
+                .iter()
+                .any(|preset| preset.id == "codex-auto")
+        );
     }
 }

@@ -1441,6 +1441,21 @@ fn model_selection_popup_snapshot() {
 }
 
 #[test]
+fn model_selection_popup_chatgpt_auth_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    chat.config.model = "gpt-5.1-codex".to_string();
+    chat.open_model_popup();
+
+    let popup = render_bottom_popup(&chat, 80);
+    insta::with_settings!({ snapshot_suffix => "chatgpt_auth" }, {
+        assert_snapshot!("model_selection_popup", popup);
+    });
+}
+
+#[test]
 fn featured_model_popup_hides_default_label_when_option_is_current() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 

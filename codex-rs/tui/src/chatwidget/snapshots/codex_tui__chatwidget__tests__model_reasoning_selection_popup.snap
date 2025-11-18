@@ -4,9 +4,9 @@ expression: popup
 ---
   Select Reasoning Level for gpt-5.1-codex
 
-  1. Low               Fastest responses with limited reasoning
-  2. Medium (default)  Dynamically adjusts reasoning based on the task
-› 3. High (current)    Maximizes reasoning depth for complex or ambiguous
+  1. low               Fastest responses with limited reasoning
+  2. medium (default)  Dynamically adjusts reasoning based on the task
+› 3. high (current)    Maximizes reasoning depth for complex or ambiguous
                        problems
                        ⚠ High reasoning effort can quickly consume Plus plan
                        rate limits.
