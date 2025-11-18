@@ -21,7 +21,7 @@ pub(crate) const TELEMETRY_PREVIEW_TRUNCATION_NOTICE: &str =
     "[... telemetry preview truncated ...]";
 
 // TODO(aibrahim): migrate shell tool to use truncate text and respect config value
-const SHELL_OUTPUT_MAX_BYTES: usize = 2_500;
+const SHELL_OUTPUT_MAX_BYTES: usize = 10_000;
 
 /// Format the combined exec output for sending back to the model.
 /// Includes exit code and duration metadata; truncates large bodies safely.
