@@ -34,7 +34,10 @@ fn format_user_shell_command_body(
     sections.push(format!("Exit code: {}", exec_output.exit_code));
     sections.push(format_duration_line(exec_output.duration));
     sections.push("Output:".to_string());
-    sections.push(format_exec_output_str(exec_output, turn_context));
+    sections.push(format_exec_output_str(
+        exec_output,
+        turn_context.truncation_policy,
+    ));
     sections.push("</result>".to_string());
     sections.join("\n")
 }

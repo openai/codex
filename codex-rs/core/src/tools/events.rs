@@ -241,7 +241,8 @@ impl ToolEmitter {
     ) -> Result<String, FunctionCallError> {
         let (event, result) = match out {
             Ok(output) => {
-                let content = super::format_exec_output_for_model(&output, ctx.turn);
+                let content =
+                    super::format_exec_output_for_model(&output, ctx.turn.truncation_policy);
                 let exit_code = output.exit_code;
                 let event = ToolEventStage::Success(output);
                 let result = if exit_code == 0 {
@@ -253,7 +254,8 @@ impl ToolEmitter {
             }
             Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output })))
             | Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output }))) => {
-                let response = super::format_exec_output_for_model(&output, ctx.turn);
+                let response =
+                    super::format_exec_output_for_model(&output, ctx.turn.truncation_policy);
                 let event = ToolEventStage::Failure(ToolEventFailure::Output(*output));
                 let result = Err(FunctionCallError::RespondToModel(response));
                 (event, result)
@@ -342,7 +344,7 @@ async fn emit_exec_stage(
                 aggregated_output: output.aggregated_output.text.clone(),
                 exit_code: output.exit_code,
                 duration: output.duration,
-                formatted_output: format_exec_output_str(&output, ctx.turn),
+                formatted_output: format_exec_output_str(&output, ctx.turn.truncation_policy),
             };
             emit_exec_end(ctx, exec_input, exec_result).await;
         }

@@ -9,8 +9,8 @@ pub mod runtimes;
 pub mod sandboxing;
 pub mod spec;
 
-use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
+use crate::truncate::TruncationPolicy;
 use crate::truncate::truncate_text;
 pub use router::ToolRouter;
 use serde::Serialize;
@@ -25,7 +25,7 @@ pub(crate) const TELEMETRY_PREVIEW_TRUNCATION_NOTICE: &str =
 /// Includes exit code and duration metadata; truncates large bodies safely.
 pub fn format_exec_output_for_model(
     exec_output: &ExecToolCallOutput,
-    turn_context: &TurnContext,
+    truncation_policy: TruncationPolicy,
 ) -> String {
     let ExecToolCallOutput {
         exit_code,
@@ -48,7 +48,7 @@ pub fn format_exec_output_for_model(
     // round to 1 decimal place
     let duration_seconds = ((duration.as_secs_f32()) * 10.0).round() / 10.0;
 
-    let formatted_output = format_exec_output_str(exec_output, turn_context);
+    let formatted_output = format_exec_output_str(exec_output, truncation_policy);
 
     let payload = ExecOutput {
         output: &formatted_output,
@@ -64,7 +64,7 @@ pub fn format_exec_output_for_model(
 
 pub fn format_exec_output_str(
     exec_output: &ExecToolCallOutput,
-    turn_context: &TurnContext,
+    truncation_policy: TruncationPolicy,
 ) -> String {
     let ExecToolCallOutput {
         aggregated_output, ..
@@ -82,5 +82,5 @@ pub fn format_exec_output_str(
     };
 
     // Truncate for model consumption before serialization.
-    truncate_text(&body, turn_context.truncation_policy)
+    truncate_text(&body, truncation_policy)
 }

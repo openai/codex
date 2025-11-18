@@ -168,7 +168,10 @@ impl SessionTask for UserShellCommandTask {
                             aggregated_output: output.aggregated_output.text.clone(),
                             exit_code: output.exit_code,
                             duration: output.duration,
-                            formatted_output: format_exec_output_str(&output, &turn_context),
+                            formatted_output: format_exec_output_str(
+                                &output,
+                                turn_context.truncation_policy,
+                            ),
                         }),
                     )
                     .await;
@@ -209,7 +212,10 @@ impl SessionTask for UserShellCommandTask {
                             aggregated_output: exec_output.aggregated_output.text.clone(),
                             exit_code: exec_output.exit_code,
                             duration: exec_output.duration,
-                            formatted_output: format_exec_output_str(&exec_output, &turn_context),
+                            formatted_output: format_exec_output_str(
+                                &exec_output,
+                                turn_context.truncation_policy,
+                            ),
                         }),
                     )
                     .await;
