@@ -582,9 +582,13 @@ pub enum ReviewTarget {
     UncommittedChanges,
 
     /// Review changes between the current branch and the given base branch.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     BaseBranch { branch: String },
 
     /// Review the changes introduced by a specific commit.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     Commit {
         sha: String,
         /// Optional human-readable label (e.g., commit subject) for UIs.
@@ -592,6 +596,8 @@ pub enum ReviewTarget {
     },
 
     /// Arbitrary instructions, equivalent to the old free-form prompt.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     Custom { instructions: String },
 }
 

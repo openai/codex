@@ -4,6 +4,7 @@ use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_chat_completions_server_unchecked;
 use app_test_support::to_response;
 use codex_app_server_protocol::ItemCompletedNotification;
+use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -71,6 +72,7 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
     )
     .await??;
     let TurnStartResponse { turn } = to_response::<TurnStartResponse>(review_resp)?;
+    let turn_id = turn.id.clone();
     assert_eq!(turn.status, TurnStatus::InProgress);
     assert_eq!(turn.items.len(), 1);
     match &turn.items[0] {
@@ -89,6 +91,20 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
         mcp.read_stream_until_notification_message("turn/started"),
     )
     .await??;
+    let item_started: JSONRPCNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("item/started"),
+    )
+    .await??;
+    let started: ItemStartedNotification =
+        serde_json::from_value(item_started.params.expect("params must be present"))?;
+    match started.item {
+        ThreadItem::CodeReview { id, review } => {
+            assert_eq!(id, turn_id);
+            assert_eq!(review, "commit 1234567");
+        }
+        other => panic!("expected code review item, got {other:?}"),
+    }
 
     let mut review_body: Option<String> = None;
     for _ in 0..5 {

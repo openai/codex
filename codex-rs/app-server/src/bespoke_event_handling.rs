@@ -191,6 +191,17 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .await;
             }
         }
+        EventMsg::EnteredReviewMode(review_request) => {
+            let notification = ItemStartedNotification {
+                item: ThreadItem::CodeReview {
+                    id: event_id.clone(),
+                    review: review_request.user_facing_hint,
+                },
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemStarted(notification))
+                .await;
+        }
         EventMsg::ItemStarted(item_started_event) => {
             let item: ThreadItem = item_started_event.item.clone().into();
             let notification = ItemStartedNotification { item };

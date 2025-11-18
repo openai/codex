@@ -210,7 +210,19 @@ Example request/response:
 } } }
 ```
 
-Codex streams the usual `turn/started` notification. When the reviewer finishes, the server emits `item/completed` containing a `codeReview` item:
+Codex streams the usual `turn/started` notification followed by an `item/started`
+with the same `codeReview` item id so clients can show progress:
+
+```json
+{ "method": "item/started", "params": { "item": {
+    "type": "codeReview",
+    "id": "turn_900",
+    "review": "current changes"
+} } }
+```
+
+When the reviewer finishes, the server emits `item/completed` containing the same
+`codeReview` item with the final review text:
 
 ```json
 { "method": "item/completed", "params": { "item": {
