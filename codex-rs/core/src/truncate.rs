@@ -42,6 +42,30 @@ impl TruncationPolicy {
             }
         }
     }
+
+    /// Returns a token budget derived from this policy.
+    ///
+    /// - For `Tokens`, this is the explicit token limit.
+    /// - For `Bytes`, this is an approximate token budget using the global
+    ///   bytes-per-token heuristic.
+    pub fn token_budget(&self) -> usize {
+        match self {
+            TruncationPolicy::Bytes(bytes) => bytes / APPROX_BYTES_PER_TOKEN,
+            TruncationPolicy::Tokens(tokens) => *tokens,
+        }
+    }
+
+    /// Returns a byte budget derived from this policy.
+    ///
+    /// - For `Bytes`, this is the explicit byte limit.
+    /// - For `Tokens`, this is an approximate byte budget using the global
+    ///   bytes-per-token heuristic.
+    pub fn byte_budget(&self) -> usize {
+        match self {
+            TruncationPolicy::Bytes(bytes) => *bytes,
+            TruncationPolicy::Tokens(tokens) => tokens.saturating_mul(APPROX_BYTES_PER_TOKEN),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -95,10 +119,7 @@ pub(crate) fn truncate_function_output_items_to_token_limit(
     truncation_settings: &TruncationSettings,
 ) -> Vec<FunctionCallOutputContentItem> {
     let mut out: Vec<FunctionCallOutputContentItem> = Vec::with_capacity(items.len());
-    let mut remaining_tokens = match truncation_settings.policy {
-        TruncationPolicy::Tokens(tokens) => tokens,
-        TruncationPolicy::Bytes(bytes) => bytes / APPROX_BYTES_PER_TOKEN,
-    };
+    let mut remaining_tokens = truncation_settings.policy.token_budget();
     let tokenizer = truncation_settings.tokenizer_ref();
     let mut omitted_text_items = 0usize;
 
@@ -532,7 +553,7 @@ mod tests {
         find_family_for_model(OPENAI_DEFAULT_MODEL)
             .unwrap_or_else(|| derive_default_model_family(OPENAI_DEFAULT_MODEL))
             .truncation_policy
-            .tokens_budget
+            .byte_budget()
     }
 
     fn truncated_message_pattern(line: &str, total_lines: usize) -> String {

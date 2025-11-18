@@ -2964,11 +2964,12 @@ mod tests {
         let summary1 = "summary one";
         let snapshot1 = live_history.get_history();
         let user_messages1 = collect_user_messages(&snapshot1);
+        let tokenizer = turn_context.truncation_settings.tokenizer.clone();
         let rebuilt1 = build_compacted_history(
             session.build_initial_context(turn_context),
             &user_messages1,
             summary1,
-            turn_context.client.get_model().as_str(),
+            tokenizer.clone(),
         );
         live_history.replace(rebuilt1);
         rollout_items.push(RolloutItem::Compacted(CompactedItem {
@@ -3005,7 +3006,7 @@ mod tests {
             session.build_initial_context(turn_context),
             &user_messages2,
             summary2,
-            turn_context.client.get_model().as_str(),
+            tokenizer,
         );
         live_history.replace(rebuilt2);
         rollout_items.push(RolloutItem::Compacted(CompactedItem {

@@ -443,12 +443,13 @@ mod tests {
         let max_tokens = 16;
         let big = "word ".repeat(200);
         let model = OPENAI_DEFAULT_MODEL;
+        let tokenizer = Arc::new(Tokenizer::for_model(model).ok());
         let history = super::build_compacted_history_with_limit(
             Vec::new(),
             std::slice::from_ref(&big),
             "SUMMARY",
             max_tokens,
-            model,
+            tokenizer,
         );
         assert_eq!(history.len(), 2);
 
@@ -486,12 +487,10 @@ mod tests {
         let user_messages = vec!["first user message".to_string()];
         let summary_text = "summary text";
 
-        let history = build_compacted_history(
-            initial_context,
-            &user_messages,
-            summary_text,
-            OPENAI_DEFAULT_MODEL,
-        );
+        let tokenizer = Arc::new(Tokenizer::for_model(OPENAI_DEFAULT_MODEL).ok());
+
+        let history =
+            build_compacted_history(initial_context, &user_messages, summary_text, tokenizer);
         assert!(
             !history.is_empty(),
             "expected compacted history to include summary"

@@ -474,7 +474,6 @@ pub fn get_error_message_ui(e: &CodexErr) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::OPENAI_DEFAULT_MODEL;
     use crate::exec::StreamOutput;
     use chrono::DateTime;
     use chrono::Duration as ChronoDuration;

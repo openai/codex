@@ -3,6 +3,8 @@ use crate::config::OPENAI_DEFAULT_MODEL;
 use crate::model_family::derive_default_model_family;
 use crate::model_family::find_family_for_model;
 use crate::truncate;
+use crate::truncate::TruncationPolicy;
+use crate::truncate::TruncationSettings;
 use codex_git::GhostCommit;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -22,7 +24,7 @@ fn exec_format_max_bytes() -> usize {
     find_family_for_model(OPENAI_DEFAULT_MODEL)
         .unwrap_or_else(|| derive_default_model_family(OPENAI_DEFAULT_MODEL))
         .truncation_policy
-        .tokens_budget
+        .byte_budget()
 }
 
 fn assistant_msg(text: &str) -> ResponseItem {
@@ -40,9 +42,10 @@ fn create_history_with_items(items: Vec<ResponseItem>) -> ContextManager {
     let max_tokens = find_family_for_model(model)
         .unwrap_or_else(|| derive_default_model_family(model))
         .truncation_policy
-        .tokens_budget;
-    let mut h = ContextManager::new(model, max_tokens);
-    h.record_items(items.iter());
+        .token_budget();
+    let truncation_settings = TruncationSettings::new(TruncationPolicy::Tokens(max_tokens), model);
+    let mut h = ContextManager::new();
+    h.record_items(items.iter(), &truncation_settings);
     h
 }
 
@@ -72,6 +75,15 @@ fn reasoning_msg(text: &str) -> ResponseItem {
 #[test]
 fn filters_non_api_messages() {
     let mut h = ContextManager::default();
+    let truncation_settings = TruncationSettings::new(
+        TruncationPolicy::Tokens(
+            find_family_for_model(OPENAI_DEFAULT_MODEL)
+                .unwrap_or_else(|| derive_default_model_family(OPENAI_DEFAULT_MODEL))
+                .truncation_policy
+                .token_budget(),
+        ),
+        OPENAI_DEFAULT_MODEL,
+    );
     // System message is not API messages; Other is ignored.
     let system = ResponseItem::Message {
         id: None,
@@ -81,12 +93,15 @@ fn filters_non_api_messages() {
         }],
     };
     let reasoning = reasoning_msg("thinking...");
-    h.record_items([&system, &reasoning, &ResponseItem::Other]);
+    h.record_items(
+        [&system, &reasoning, &ResponseItem::Other],
+        &truncation_settings,
+    );
 
     // User and assistant should be retained.
     let u = user_msg("hi");
     let a = assistant_msg("hello");
-    h.record_items([&u, &a]);
+    h.record_items([&u, &a], &truncation_settings);
 
     let items = h.contents();
     assert_eq!(
@@ -257,8 +272,9 @@ fn record_items_truncates_function_call_output_content() {
     let max_tokens = find_family_for_model(model)
         .unwrap_or_else(|| derive_default_model_family(model))
         .truncation_policy
-        .tokens_budget;
-    let mut history = ContextManager::new(model, max_tokens);
+        .token_budget();
+    let mut history = ContextManager::new();
+    let truncation_settings = TruncationSettings::new(TruncationPolicy::Tokens(max_tokens), model);
     let tok = Tokenizer::try_default().expect("load tokenizer");
     let long_line = "a very long line to trigger truncation\n";
     let long_output = long_line.repeat(2_500);
@@ -271,7 +287,7 @@ fn record_items_truncates_function_call_output_content() {
         },
     };
 
-    history.record_items([&item]);
+    history.record_items([&item], &truncation_settings);
 
     assert_eq!(history.items.len(), 1);
     match &history.items[0] {
@@ -298,8 +314,9 @@ fn record_items_truncates_custom_tool_call_output_content() {
     let max_tokens = find_family_for_model(model)
         .unwrap_or_else(|| derive_default_model_family(model))
         .truncation_policy
-        .tokens_budget;
-    let mut history = ContextManager::new(model, max_tokens);
+        .token_budget();
+    let mut history = ContextManager::new();
+    let truncation_settings = TruncationSettings::new(TruncationPolicy::Tokens(max_tokens), model);
     let tok = Tokenizer::try_default().expect("load tokenizer");
     let line = "custom output that is very long\n";
     let long_output = line.repeat(2_500);
@@ -308,7 +325,7 @@ fn record_items_truncates_custom_tool_call_output_content() {
         output: long_output.clone(),
     };
 
-    history.record_items([&item]);
+    history.record_items([&item], &truncation_settings);
 
     assert_eq!(history.items.len(), 1);
     match &history.items[0] {
@@ -331,7 +348,8 @@ fn record_items_truncates_custom_tool_call_output_content() {
 #[test]
 fn record_items_respects_custom_token_limit() {
     let model = OPENAI_DEFAULT_MODEL;
-    let mut history = ContextManager::new(model, 8);
+    let mut history = ContextManager::new();
+    let truncation_settings = TruncationSettings::new(TruncationPolicy::Tokens(8), model);
     let tok = Tokenizer::try_default().expect("load tokenizer");
     let long_output = "tokenized content repeated many times ".repeat(200);
     let item = ResponseItem::FunctionCallOutput {
@@ -343,7 +361,7 @@ fn record_items_respects_custom_token_limit() {
         },
     };
 
-    history.record_items([&item]);
+    history.record_items([&item], &truncation_settings);
 
     let stored = match &history.items[0] {
         ResponseItem::FunctionCallOutput { output, .. } => output,

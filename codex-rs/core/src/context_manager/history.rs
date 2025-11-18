@@ -11,7 +11,7 @@ use codex_utils_tokenizer::Tokenizer;
 use std::ops::Deref;
 
 /// Transcript of conversation history
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct ContextManager {
     /// The oldest items are at the beginning of the vector.
     items: Vec<ResponseItem>,
