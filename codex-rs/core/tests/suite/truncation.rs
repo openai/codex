@@ -27,7 +27,6 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use escargot::CargoBuild;
-use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
@@ -48,7 +47,7 @@ async fn truncate_function_error_trims_respond_to_model() -> Result<()> {
     let test = builder.build(&server).await?;
 
     // Construct a very long, non-existent path to force a RespondToModel error with a large message
-    let long_path = "a".repeat(20_000);
+    let long_path = "long path text should trigger truncation".repeat(8_000);
     let call_id = "grep-huge-error";
     let args = json!({
         "pattern": "alpha",
@@ -80,12 +79,16 @@ async fn truncate_function_error_trims_respond_to_model() -> Result<()> {
 
     tracing::debug!(output = %output, "truncated function error output");
 
-    // Expect plaintext with byte-truncation marker and no omitted-lines marker
+    // Expect plaintext with token-based truncation marker and no omitted-lines marker
     assert!(
         serde_json::from_str::<serde_json::Value>(&output).is_err(),
         "expected error output to be plain text",
     );
-    let truncated_pattern = r#"(?s)^Total output lines: 1\s+.*\[\.\.\. output truncated to fit 11264 bytes \.\.\.\]\s*$"#;
+    assert!(
+        !output.contains("Total output lines:"),
+        "error output should not include line-based truncation header: {output}",
+    );
+    let truncated_pattern = r"(?s)^unable to access `.*tokens truncated.*$";
     assert_regex_match(truncated_pattern, &output);
     assert!(
         !output.contains("omitted"),
@@ -269,7 +272,7 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
     let tool_name = format!("mcp__{server_name}__echo");
 
     // Build a very large message to exceed 10KiB once serialized.
-    let large_msg = "long-message-with-newlines-".repeat(600);
+    let large_msg = "long-message-with-newlines-".repeat(6000);
     let args_json = serde_json::json!({ "message": large_msg });
 
     mount_sse_once(
@@ -334,22 +337,19 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
         .function_call_output_text(call_id)
         .context("function_call_output present for rmcp call")?;
 
-    // Expect plain text with byte-based truncation marker.
+    // Expect plain text with token-based truncation marker; the original JSON body
+    // is truncated in the middle of the echo string.
     assert!(
         serde_json::from_str::<Value>(&output).is_err(),
         "expected truncated MCP output to be plain text"
     );
     assert!(
-        output.starts_with("Total output lines: 1\n\n{"),
-        "expected total line header and JSON head, got: {output}"
+        !output.contains("Total output lines:"),
+        "MCP output should not include line-based truncation header: {output}"
     );
 
-    let byte_marker = Regex::new(r"\[\.\.\. output truncated to fit 11264 bytes \.\.\.\]")
-        .expect("compile regex");
-    assert!(
-        byte_marker.is_match(&output),
-        "expected byte truncation marker, got: {output}"
-    );
+    let truncated_pattern = r#"(?s)^\{"echo":\s*"ECHOING: long-message-with-newlines-.*tokens truncated.*long-message-with-newlines-.*$"#;
+    assert_regex_match(truncated_pattern, &output);
 
     Ok(())
 }
@@ -449,6 +449,167 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
     assert_eq!(
         arr[0],
         json!({"type": "input_image", "image_url": openai_png})
+    );
+
+    Ok(())
+}
+
+// Token-based policy should report token counts even when truncation is byte-estimated.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn token_policy_marker_reports_tokens() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config.model = "gpt-5.1-codex".to_string(); // token policy
+        config.model_family =
+            find_family_for_model("gpt-5.1-codex").expect("model family for gpt-5.1-codex");
+        config.tool_output_token_limit = Some(50); // small budget to force truncation
+    });
+    let fixture = builder.build(&server).await?;
+
+    let call_id = "shell-token-marker";
+    let args = json!({
+        "command": ["/bin/sh", "-c", "seq 1 150"],
+        "timeout_ms": 5_000,
+    });
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let done_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    fixture
+        .submit_turn_with_policy("run the shell tool", SandboxPolicy::DangerFullAccess)
+        .await?;
+
+    let output = done_mock
+        .single_request()
+        .function_call_output_text(call_id)
+        .context("shell output present")?;
+
+    assert_regex_match(r"\[\u{2026}127 tokens truncated\u{2026}]", &output);
+
+    Ok(())
+}
+
+// Byte-based policy should report bytes removed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn byte_policy_marker_reports_bytes() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config.model = "gpt-5.1".to_string(); // byte policy
+        config.model_family = find_family_for_model("gpt-5.1").expect("model family for gpt-5.1");
+        config.tool_output_token_limit = Some(50); // ~200 byte cap
+    });
+    let fixture = builder.build(&server).await?;
+
+    let call_id = "shell-byte-marker";
+    let args = json!({
+        "command": ["/bin/sh", "-c", "seq 1 150"],
+        "timeout_ms": 5_000,
+    });
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let done_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    fixture
+        .submit_turn_with_policy("run the shell tool", SandboxPolicy::DangerFullAccess)
+        .await?;
+
+    let output = done_mock
+        .single_request()
+        .function_call_output_text(call_id)
+        .context("shell output present")?;
+
+    assert_regex_match(r"\[\u{2026}505 bytes truncated\u{2026}]", &output);
+
+    Ok(())
+}
+
+// Overriding config with a large token budget should avoid truncation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn large_budget_avoids_truncation() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config.model = "gpt-5.1-codex".to_string();
+        config.model_family =
+            find_family_for_model("gpt-5.1-codex").expect("model family for gpt-5.1-codex");
+        config.tool_output_token_limit = Some(50_000); // ample budget
+    });
+    let fixture = builder.build(&server).await?;
+
+    let call_id = "shell-no-trunc";
+    let args = json!({
+        "command": ["/bin/sh", "-c", "seq 1 1000"],
+        "timeout_ms": 5_000,
+    });
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let done_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    fixture
+        .submit_turn_with_policy(
+            "run big output without truncation",
+            SandboxPolicy::DangerFullAccess,
+        )
+        .await?;
+
+    let output = done_mock
+        .single_request()
+        .function_call_output_text(call_id)
+        .context("shell output present")?;
+
+    assert!(
+        !output.contains("truncated"),
+        "output should remain untruncated with ample budget"
     );
 
     Ok(())

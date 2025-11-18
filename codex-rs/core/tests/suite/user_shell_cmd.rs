@@ -272,7 +272,7 @@ async fn user_shell_command_is_truncated_only_once() -> anyhow::Result<()> {
     let mut builder = test_codex().with_config(|config| {
         config.model = "gpt-5.1-codex".to_string();
         config.model_family =
-            find_family_for_model("gpt-5.1-codex").expect("gpt-5.1-codex is a model family");
+            find_family_for_model("gpt-5-codex").expect("gpt-5-codex is a model family");
     });
     let fixture = builder.build(&server).await?;
 

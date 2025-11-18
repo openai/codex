@@ -14,7 +14,9 @@ use crate::protocol::EventMsg;
 use crate::protocol::TaskStartedEvent;
 use crate::protocol::TurnContextItem;
 use crate::protocol::WarningEvent;
-use crate::truncate::truncate_middle;
+use crate::truncate::TruncationPolicy;
+use crate::truncate::approx_token_count;
+use crate::truncate::truncate_text;
 use crate::util::backoff;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
@@ -59,7 +61,10 @@ async fn run_compact_task_inner(
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
 
     let mut history = sess.clone_history().await;
-    history.record_items(&[initial_input_for_turn.into()]);
+    history.record_items(
+        &[initial_input_for_turn.into()],
+        turn_context.truncation_policy,
+    );
 
     let mut truncated_count = 0usize;
 
@@ -167,6 +172,7 @@ async fn run_compact_task_inner(
 
     let rollout_item = RolloutItem::Compacted(CompactedItem {
         message: summary_text.clone(),
+        replacement_history: None,
     });
     sess.persist_rollout_items(&[rollout_item]).await;
 
@@ -229,7 +235,7 @@ pub(crate) fn build_compacted_history(
         initial_context,
         user_messages,
         summary_text,
-        COMPACT_USER_MESSAGE_MAX_TOKENS * 4,
+        COMPACT_USER_MESSAGE_MAX_TOKENS,
     )
 }
 
@@ -237,20 +243,21 @@ fn build_compacted_history_with_limit(
     mut history: Vec<ResponseItem>,
     user_messages: &[String],
     summary_text: &str,
-    max_bytes: usize,
+    max_tokens: usize,
 ) -> Vec<ResponseItem> {
     let mut selected_messages: Vec<String> = Vec::new();
-    if max_bytes > 0 {
-        let mut remaining = max_bytes;
+    if max_tokens > 0 {
+        let mut remaining = max_tokens;
         for message in user_messages.iter().rev() {
             if remaining == 0 {
                 break;
             }
-            if message.len() <= remaining {
+            let tokens = approx_token_count(message);
+            if tokens <= remaining {
                 selected_messages.push(message.clone());
-                remaining = remaining.saturating_sub(message.len());
+                remaining = remaining.saturating_sub(tokens);
             } else {
-                let (truncated, _) = truncate_middle(message, remaining);
+                let truncated = truncate_text(message, TruncationPolicy::Tokens(remaining));
                 selected_messages.push(truncated);
                 break;
             }
@@ -299,7 +306,8 @@ async fn drain_to_completed(
         };
         match event {
             Ok(ResponseEvent::OutputItemDone(item)) => {
-                sess.record_into_history(std::slice::from_ref(&item)).await;
+                sess.record_into_history(std::slice::from_ref(&item), turn_context)
+                    .await;
             }
             Ok(ResponseEvent::RateLimits(snapshot)) => {
                 sess.update_rate_limits(turn_context, snapshot).await;
@@ -317,6 +325,7 @@ async fn drain_to_completed(
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use pretty_assertions::assert_eq;
 
@@ -408,16 +417,16 @@ mod tests {
     }
 
     #[test]
-    fn build_compacted_history_truncates_overlong_user_messages() {
+    fn build_token_limited_compacted_history_truncates_overlong_user_messages() {
         // Use a small truncation limit so the test remains fast while still validating
         // that oversized user content is truncated.
-        let max_bytes = 128;
-        let big = "X".repeat(max_bytes + 50);
+        let max_tokens = 16;
+        let big = "word ".repeat(200);
         let history = super::build_compacted_history_with_limit(
             Vec::new(),
             std::slice::from_ref(&big),
             "SUMMARY",
-            max_bytes,
+            max_tokens,
         );
         assert_eq!(history.len(), 2);
 
@@ -450,7 +459,7 @@ mod tests {
     }
 
     #[test]
-    fn build_compacted_history_appends_summary_message() {
+    fn build_token_limited_compacted_history_appends_summary_message() {
         let initial_context: Vec<ResponseItem> = Vec::new();
         let user_messages = vec!["first user message".to_string()];
         let summary_text = "summary text";

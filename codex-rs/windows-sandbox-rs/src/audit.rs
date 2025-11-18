@@ -1,6 +1,7 @@
 use crate::token::world_sid;
 use crate::winutil::to_wide;
 use anyhow::Result;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::c_void;
 use std::path::Path;
@@ -274,6 +275,35 @@ pub fn audit_everyone_writable(
         logs_base_dir,
     );
     Ok(Vec::new())
+}
+
+fn normalize_windows_path_for_display(p: impl AsRef<Path>) -> String {
+    let canon = dunce::canonicalize(p.as_ref()).unwrap_or_else(|_| p.as_ref().to_path_buf());
+    canon.display().to_string().replace('/', "\\")
+}
+
+pub fn world_writable_warning_details(
+    codex_home: impl AsRef<Path>,
+) -> Option<(Vec<String>, usize, bool)> {
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(_) => return Some((Vec::new(), 0, true)),
+    };
+
+    let env_map: HashMap<String, String> = std::env::vars().collect();
+    match audit_everyone_writable(&cwd, &env_map, Some(codex_home.as_ref())) {
+        Ok(paths) if paths.is_empty() => None,
+        Ok(paths) => {
+            let as_strings: Vec<String> = paths
+                .iter()
+                .map(normalize_windows_path_for_display)
+                .collect();
+            let sample_paths: Vec<String> = as_strings.iter().take(3).cloned().collect();
+            let extra_count = as_strings.len().saturating_sub(sample_paths.len());
+            Some((sample_paths, extra_count, false))
+        }
+        Err(_) => Some((Vec::new(), 0, true)),
+    }
 }
 // Fast mask-based check: does the DACL contain any ACCESS_ALLOWED ACE for
 // Everyone that includes generic or specific write bits? Skips inherit-only
