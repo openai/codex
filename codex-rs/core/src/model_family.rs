@@ -166,6 +166,7 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
                 "list_dir".to_string(),
                 "read_file".to_string(),
             ],
+            shell_type: if cfg!(windows) { ConfigShellToolType::ShellCommand } else { ConfigShellToolType::Default },
             supports_parallel_tool_calls: true,
             support_verbosity: true,
             truncation_policy: TruncationPolicy::Tokens(10_000),
@@ -182,6 +183,7 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             reasoning_summary_format: ReasoningSummaryFormat::Experimental,
             base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+            shell_type: if cfg!(windows) { ConfigShellToolType::ShellCommand } else { ConfigShellToolType::Default },
             support_verbosity: false,
             truncation_policy: TruncationPolicy::Tokens(10_000),
         )
