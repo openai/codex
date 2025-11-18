@@ -64,7 +64,7 @@ mod tests {
             .args(args)
             .status()
             .expect("git command");
-        assert!(status.success(), "git command failed: {:?}", args);
+        assert!(status.success(), "git command failed: {args:?}");
     }
 
     fn run_git_stdout(repo_path: &Path, args: &[&str]) -> String {
@@ -73,7 +73,7 @@ mod tests {
             .args(args)
             .output()
             .expect("git command");
-        assert!(output.status.success(), "git command failed: {:?}", args);
+        assert!(output.status.success(), "git command failed: {args:?}");
         String::from_utf8_lossy(&output.stdout).trim().to_string()
     }
 
