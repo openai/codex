@@ -1,0 +1,27 @@
+{
+  "cmn_version": "1.0",
+  "divine_dewey": "DDT-MER-UI-LLM-0005",
+  "title": "PlatformerGame.jsx",
+  "role": "UI|demo",
+  "planetary": "Mercury",
+  "literary": "interactive_ui",
+  "pipeline": "llm-prompt->parse->store",
+  "time_signature": "7/8",
+  "tempo": 8,
+  "energy_scalar": 0.86,
+  "anchors": ["generateLevel", "TRANSLATIONS"],
+  "short_tldr": "React platformer with LLM-driven level generation; JSON-only response enforced.",
+  "tokens": ["window.claude.complete", "TRANSLATIONS", "generateLevel()"],
+  "provenance": {
+    "sha256": "<TO_COMPUTE>",
+    "author": "Allison Van Cura",
+    "created": "2025-11-11T00:00:00Z"
+  },
+  "rehearse": {
+    "repetition": "weekly:2",
+    "tests": ["schema_validation", "fallback_generator"],
+    "rehearsal_command": "npm test --testLevelgen"
+  },
+  "visibility": "private",
+  "secret_refs": ["vault://pyrouette/claude_api_key"]
+}
