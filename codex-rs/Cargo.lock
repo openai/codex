@@ -1004,7 +1004,6 @@ dependencies = [
  "predicates",
  "pretty_assertions",
  "regex-lite",
- "serde",
  "serde_json",
  "supports-color",
  "tempfile",
