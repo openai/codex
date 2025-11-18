@@ -1,0 +1,19 @@
+version: '3.8'
+services:
+  pyrouette:
+    build:
+      context: .
+      dockerfile: Dockerfile.pyrouette
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./credentials_log.json:/app/credentials_log.json
+    restart: unless-stopped
+  stageport:
+    image: stageport/validator:latest
+    ports:
+      - "8001:8001"
+    environment:
+      - STAGEPORT_PUBLIC_KEY_URL=https://stageport.studio/.well-known/stageport-public-key.json
+      - REVOCATIONS_URL=https://stageport-credentials.github.io/revocations.json
+    restart: unless-stopped

@@ -1,0 +1,9 @@
+# PyRouette Demo Client File
+This file contains example choreography sequences in PyRouette DSL format.
+
+- Movement: Plié (Knee Flexion)
+- Sequence: Glitch_01
+- Time signature: 4/4
+- Master-level credential required
+
+Output: AI-generated curriculum, ready for stage deployment.
