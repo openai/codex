@@ -205,7 +205,7 @@ impl ModelProviderInfo {
         }
     }
 
-    fn get_compact_url(&self, auth: &Option<CodexAuth>) -> Option<String> {
+    pub(crate) fn get_compact_url(&self, auth: &Option<CodexAuth>) -> Option<String> {
         if self.wire_api != WireApi::Responses {
             return None;
         }

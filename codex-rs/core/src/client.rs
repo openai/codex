@@ -26,6 +26,7 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_util::io::ReaderStream;
 use tracing::debug;
+use tracing::enabled;
 use tracing::trace;
 use tracing::warn;
 
@@ -552,6 +553,17 @@ impl ModelClient {
             input: &prompt.input,
             instructions: &prompt.get_full_instructions(&self.config.model_family),
         };
+
+        if enabled!(tracing::Level::TRACE) {
+            trace!(
+                "POST to {}: {}",
+                self.provider
+                    .get_compact_url(&auth)
+                    .unwrap_or("<none>".to_string()),
+                serde_json::to_value(&payload).unwrap_or_default()
+            );
+        }
+
         let response = req_builder
             .json(&payload)
             .send()

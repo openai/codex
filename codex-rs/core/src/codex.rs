@@ -1633,16 +1633,9 @@ mod handlers {
         let turn_context = sess
             .new_turn_with_sub_id(sub_id, SessionSettingsUpdate::default())
             .await;
-        // Attempt to inject input into current task
-        if let Err(items) = sess
-            .inject_input(vec![UserInput::Text {
-                text: turn_context.compact_prompt().to_string(),
-            }])
-            .await
-        {
-            sess.spawn_task(Arc::clone(&turn_context), items, CompactTask)
-                .await;
-        }
+
+        sess.spawn_task(Arc::clone(&turn_context), vec![], CompactTask)
+            .await;
     }
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
