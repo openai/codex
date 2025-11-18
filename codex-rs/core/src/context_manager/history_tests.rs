@@ -15,6 +15,7 @@ use codex_utils_tokenizer::Tokenizer;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 
+// TODO(aibrahim): to be removed
 const EXEC_FORMAT_MAX_LINES: usize = 256;
 
 fn exec_format_max_bytes() -> usize {
