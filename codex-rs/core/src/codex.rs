@@ -746,21 +746,6 @@ impl Session {
         )))
     }
 
-    async fn current_turn_context_snapshot(&self) -> Arc<TurnContext> {
-        let session_configuration = {
-            let state = self.state.lock().await;
-            state.session_configuration.clone()
-        };
-        Arc::new(Self::make_turn_context(
-            Some(Arc::clone(&self.services.auth_manager)),
-            &self.services.otel_event_manager,
-            session_configuration.provider.clone(),
-            &session_configuration,
-            self.conversation_id,
-            INITIAL_SUBMIT_ID.to_string(),
-        ))
-    }
-
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
         let legacy_source = msg.clone();
@@ -1330,8 +1315,10 @@ impl Session {
 }
 
 async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {
+    // Seed with context in case there is an OverrideTurnContext first.
     let mut previous_context: Option<Arc<TurnContext>> =
-        Some(sess.current_turn_context_snapshot().await);
+        Some(sess.new_turn(SessionSettingsUpdate::default()).await);
+
     // To break out of this loop, send Op::Shutdown.
     while let Ok(sub) = rx_sub.recv().await {
         debug!(?sub, "Submission");
