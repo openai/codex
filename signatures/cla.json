@@ -4743,6 +4743,14 @@
       "created_at": "2025-11-18T05:12:13Z",
       "repoId": 965415649,
       "pullRequestNo": 6819
+    },
+    {
+      "name": "kyuheon-kr",
+      "id": 65669461,
+      "comment_id": 3547242343,
+      "created_at": "2025-11-18T11:52:18Z",
+      "repoId": 965415649,
+      "pullRequestNo": 6827
     }
   ]
 }
