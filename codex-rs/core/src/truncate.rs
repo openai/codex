@@ -460,7 +460,7 @@ mod tests {
         let s = "abcdef";
         let source = TruncationSource::Policy(TruncationPolicy::Tokens(0));
         let (out, original) = truncate_with_token_budget(s, 0, source);
-        assert!(out.contains("tokens truncated"));
+        assert_eq!(out, "[…2 tokens truncated…]");
         assert_eq!(original, Some(approx_token_count(s)));
     }
 
