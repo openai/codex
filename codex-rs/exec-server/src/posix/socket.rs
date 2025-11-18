@@ -23,6 +23,11 @@ const MAX_DATAGRAM_SIZE: usize = 8192;
 fn assume_init(buf: &[MaybeUninit<u8>]) -> &[u8] {
     unsafe { std::slice::from_raw_parts(buf.as_ptr().cast(), buf.len()) }
 }
+
+fn assume_init_slice<const N: usize>(buf: &[MaybeUninit<u8>; N]) -> &[u8; N] {
+    unsafe { std::mem::transmute(buf) }
+}
+
 fn assume_init_vec(mut buf: Vec<MaybeUninit<u8>>) -> Vec<u8> {
     unsafe {
         let ptr = buf.as_mut_ptr() as *mut u8;
@@ -32,19 +37,21 @@ fn assume_init_vec(mut buf: Vec<MaybeUninit<u8>>) -> Vec<u8> {
         Vec::from_raw_parts(ptr, len, cap)
     }
 }
+
 fn control_space_for_fds(count: usize) -> usize {
     unsafe { libc::CMSG_SPACE((count * size_of::<RawFd>()) as _) as usize }
 }
-fn extract_fds(control: &mut [MaybeUninit<u8>], len: usize) -> std::io::Result<Vec<OwnedFd>> {
-    if len == 0 {
-        return Ok(Vec::new());
-    }
-    let mut fds = Vec::new();
-    let mut hdr: libc::msghdr = unsafe { std::mem::zeroed() };
-    hdr.msg_control = control.as_mut_ptr().cast();
-    hdr.msg_controllen = len as _;
 
-    let mut cmsg = unsafe { libc::CMSG_FIRSTHDR(&hdr) };
+/// Extracts the FDs from a SCM_RIGHTS control message.
+fn extract_fds(control: &[u8]) -> Vec<OwnedFd> {
+    let mut fds = Vec::new();
+    let hdr = libc::msghdr {
+        msg_control: control.as_ptr() as *mut libc::c_void,
+        msg_controllen: control.len() as _,
+        ..unsafe { std::mem::zeroed() }
+    };
+
+    let mut cmsg = unsafe { libc::CMSG_FIRSTHDR(&hdr) as *const libc::cmsghdr };
     while !cmsg.is_null() {
         let level = unsafe { (*cmsg).cmsg_level };
         let ty = unsafe { (*cmsg).cmsg_type };
@@ -62,62 +69,74 @@ fn extract_fds(control: &mut [MaybeUninit<u8>], len: usize) -> std::io::Result<V
         }
         cmsg = unsafe { libc::CMSG_NXTHDR(&hdr, cmsg) };
     }
-    Ok(fds)
+    fds
 }
 
+/// Read a frame from a SOCK_STREAM socket.
+///
+/// A frame is a message length prefix followed by a payload. FDs may be included in the control
+/// message when receiving the frame header.
+async fn read_frame(async_socket: &AsyncFd<Socket>) -> std::io::Result<(Vec<u8>, Vec<OwnedFd>)> {
+    let (message_len, fds) = read_frame_header(async_socket).await?;
+    let payload = read_frame_payload(async_socket, message_len).await?;
+    Ok((payload, fds))
+}
+
+/// Read the frame header (i.e. length) and any FDs from a SOCK_STREAM socket.
 async fn read_frame_header(
     async_socket: &AsyncFd<Socket>,
 ) -> std::io::Result<(usize, Vec<OwnedFd>)> {
     let mut header = [MaybeUninit::<u8>::uninit(); LENGTH_PREFIX_SIZE];
     let mut filled = 0;
     let mut control = vec![MaybeUninit::<u8>::uninit(); control_space_for_fds(MAX_FDS_PER_MESSAGE)];
-    let mut control_len = 0usize;
     let mut captured_control = false;
 
     while filled < LENGTH_PREFIX_SIZE {
         let mut guard = async_socket.readable().await?;
+        // The first read should come with a control message containing any FDs.
         let result = if !captured_control {
             guard.try_io(|inner| {
                 let mut bufs = [MaybeUninitSlice::new(&mut header[filled..])];
-                let mut msg = MsgHdrMut::new()
-                    .with_buffers(&mut bufs)
-                    .with_control(&mut control);
-                let read = inner.get_ref().recvmsg(&mut msg, 0)?;
-                control_len = msg.control_len();
+                let (read, control_len) = {
+                    let mut msg = MsgHdrMut::new()
+                        .with_buffers(&mut bufs)
+                        .with_control(&mut control);
+                    let read = inner.get_ref().recvmsg(&mut msg, 0)?;
+                    (read, msg.control_len())
+                };
+                control.truncate(control_len);
                 captured_control = true;
                 Ok(read)
             })
         } else {
             guard.try_io(|inner| inner.get_ref().recv(&mut header[filled..]))
         };
+        let Ok(result) = result else {
+            // Would block, try again.
+            continue;
+        };
 
-        match result {
-            Ok(Ok(0)) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "socket closed while receiving frame header",
-                ));
-            }
-            Ok(Ok(n)) => {
-                filled += n;
-                assert!(filled <= LENGTH_PREFIX_SIZE);
-                if filled == LENGTH_PREFIX_SIZE {
-                    #[allow(clippy::expect_used)]
-                    let len_bytes: [u8; LENGTH_PREFIX_SIZE] = assume_init(&header)
-                        .try_into()
-                        .expect("length prefix size mismatch");
-                    let payload_len = u32::from_le_bytes(len_bytes) as usize;
-                    let fds = extract_fds(&mut control, control_len)?;
-                    return Ok((payload_len, fds));
-                }
-            }
-            Ok(Err(err)) => return Err(err),
-            Err(_would_block) => continue,
+        let read = result?;
+        if read == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "socket closed while receiving frame header",
+            ));
+        }
+
+        filled += read;
+        assert!(filled <= LENGTH_PREFIX_SIZE);
+        if filled == LENGTH_PREFIX_SIZE {
+            let len_bytes = assume_init_slice(&header);
+            let payload_len = u32::from_le_bytes(*len_bytes) as usize;
+            let fds = extract_fds(assume_init(&control));
+            return Ok((payload_len, fds));
         }
     }
     unreachable!("header loop always returns")
 }
 
+/// Read `message_len` bytes from a SOCK_STREAM socket.
 async fn read_frame_payload(
     async_socket: &AsyncFd<Socket>,
     message_len: usize,
@@ -129,26 +148,27 @@ async fn read_frame_payload(
     let mut filled = 0;
     while filled < message_len {
         let mut guard = async_socket.readable().await?;
-        match guard.try_io(|inner| inner.get_ref().recv(&mut payload[filled..])) {
-            Ok(Ok(0)) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "socket closed while receiving frame payload",
-                ));
-            }
-            Ok(Ok(n)) => {
-                filled += n;
-                assert!(filled <= message_len);
-                if filled == message_len {
-                    return Ok(assume_init_vec(payload));
-                }
-            }
-            Ok(Err(err)) => return Err(err),
-            Err(_would_block) => continue,
+        let result = guard.try_io(|inner| inner.get_ref().recv(&mut payload[filled..]));
+        let Ok(result) = result else {
+            // Would block, try again.
+            continue;
+        };
+        let read = result?;
+        if read == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "socket closed while receiving frame payload",
+            ));
+        }
+        filled += read;
+        assert!(filled <= message_len);
+        if filled == message_len {
+            return Ok(assume_init_vec(payload));
         }
     }
     unreachable!("loop exits only after returning payload")
 }
+
 fn send_message_bytes(socket: &Socket, data: &[u8], fds: &[OwnedFd]) -> std::io::Result<()> {
     if fds.len() > MAX_FDS_PER_MESSAGE {
         return Err(std::io::Error::new(
@@ -255,7 +275,7 @@ fn receive_datagram_bytes(socket: &Socket) -> std::io::Result<(Vec<u8>, Vec<Owne
         (read, msg.control_len())
     };
     let data = assume_init(&buffer[..read]).to_vec();
-    let fds = extract_fds(&mut control, control_len)?;
+    let fds = extract_fds(assume_init(&control[..control_len]));
     Ok((data, fds))
 }
 
@@ -296,8 +316,7 @@ impl AsyncSocket {
     pub async fn receive_with_fds<T: for<'de> Deserialize<'de>>(
         &self,
     ) -> std::io::Result<(T, Vec<OwnedFd>)> {
-        let (message_len, fds) = read_frame_header(&self.inner).await?;
-        let payload = read_frame_payload(&self.inner, message_len).await?;
+        let (payload, fds) = read_frame(&self.inner).await?;
         let message: T = serde_json::from_slice(&payload)?;
         Ok((message, fds))
     }
@@ -405,7 +424,10 @@ mod tests {
         assert_eq!(payload, received_payload);
         assert_eq!(1, received_fds.len());
         let fd_status = unsafe { libc::fcntl(received_fds[0].as_raw_fd(), libc::F_GETFD) };
-        assert!(fd_status >= 0);
+        assert!(
+            fd_status >= 0,
+            "expected received file descriptor to be valid, but got {fd_status}",
+        );
         Ok(())
     }
 
