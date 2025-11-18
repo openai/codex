@@ -53,8 +53,8 @@ impl SessionTask for GhostSnapshotTask {
                             capture_ghost_snapshot_report(&options)
                         }
                     })
-                    .await {
-                        if let Some(message) = format_large_untracked_warning(&report) {
+                    .await
+                        && let Some(message) = format_large_untracked_warning(&report) {
                                 session
                                     .session
                                     .send_event(
@@ -63,7 +63,6 @@ impl SessionTask for GhostSnapshotTask {
                                     )
                                     .await;
                             }
-                    }
 
                     // Required to run in a dedicated blocking pool.
                     match tokio::task::spawn_blocking(move || {
@@ -142,11 +141,7 @@ fn format_large_untracked_warning(report: &GhostSnapshotReport) -> Option<String
     const MAX_DIRS: usize = 3;
     let mut parts: Vec<String> = Vec::new();
     for dir in report.large_untracked_dirs.iter().take(MAX_DIRS) {
-        parts.push(format!(
-            "{} ({})",
-            dir.path.display(),
-            format!("{count} files")
-        ));
+        parts.push(format!("{} ({} files)", dir.path.display(), dir.file_count));
     }
     if report.large_untracked_dirs.len() > MAX_DIRS {
         let remaining = report.large_untracked_dirs.len() - MAX_DIRS;
