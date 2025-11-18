@@ -281,7 +281,6 @@ impl ShellHandler {
             }
         }
 
-        // Regular shell execution path.
         let source = ExecCommandSource::Agent;
         let emitter =
             ToolEmitter::shell(exec_params.command.clone(), exec_params.cwd.clone(), source);
