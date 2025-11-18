@@ -179,7 +179,6 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             shell_type: if cfg!(windows) { ConfigShellToolType::ShellCommand } else { ConfigShellToolType::Default },
             support_verbosity: false,
-            default_reasoning_effort: Some(ReasoningEffort::Medium),
         )
     } else if slug.starts_with("gpt-5.1") {
         model_family!(
@@ -197,7 +196,6 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             supports_reasoning_summaries: true,
             needs_special_apply_patch_instructions: true,
             support_verbosity: true,
-            default_reasoning_effort: Some(ReasoningEffort::Medium),
         )
     } else {
         None
