@@ -451,7 +451,7 @@ impl UnifiedExecSessionManager {
             with_escalated_permissions,
             justification,
             approval_requirement_for_command(
-                context.turn.exec_policy_v2.as_deref(),
+                context.turn.exec_policy.as_deref(),
                 command,
                 context.turn.approval_policy,
                 &context.turn.sandbox_policy,

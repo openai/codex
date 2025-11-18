@@ -23,7 +23,7 @@ use std::fs;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn execpolicy2_blocks_shell_invocation() -> Result<()> {
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::ExecPolicyV2);
+        config.features.enable(Feature::ExecPolicy);
         let policy_path = config.codex_home.join("policy.codexpolicy");
         fs::write(
             &policy_path,

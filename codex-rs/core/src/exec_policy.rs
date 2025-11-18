@@ -45,7 +45,7 @@ pub(crate) fn exec_policy_for(
     features: &Features,
     codex_home: &Path,
 ) -> Result<Option<Arc<Policy>>, ExecPolicyError> {
-    if !features.enabled(Feature::ExecPolicyV2) {
+    if !features.enabled(Feature::ExecPolicy) {
         return Ok(None);
     }
 
@@ -183,7 +183,7 @@ mod tests {
     #[test]
     fn returns_none_when_policy_dir_is_missing() {
         let mut features = Features::with_defaults();
-        features.enable(Feature::ExecPolicyV2);
+        features.enable(Feature::ExecPolicy);
         let temp_dir = tempdir().expect("create temp dir");
         let missing_dir = temp_dir.path().join("missing");
 
