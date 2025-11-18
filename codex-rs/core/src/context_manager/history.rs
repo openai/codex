@@ -1,7 +1,7 @@
 use crate::codex::TurnContext;
 use crate::context_manager::normalize;
 use crate::truncate::TruncationPolicy;
-use crate::truncate::truncate_function_output_items_to_token_limit;
+use crate::truncate::truncate_function_output_items_with_policy;
 use crate::truncate::truncate_text;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
@@ -151,7 +151,7 @@ impl ContextManager {
                 let truncated_items = output
                     .content_items
                     .as_ref()
-                    .map(|items| truncate_function_output_items_to_token_limit(items, policy));
+                    .map(|items| truncate_function_output_items_with_policy(items, policy));
                 ResponseItem::FunctionCallOutput {
                     call_id: call_id.clone(),
                     output: FunctionCallOutputPayload {

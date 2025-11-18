@@ -97,38 +97,48 @@ pub(crate) fn truncate_text(content: &str, policy: TruncationPolicy) -> String {
         }
     }
 }
-/// Globally truncate function output items to fit within
-/// `max_tokens` tokens by preserving as many
-/// text/image items as possible and appending a summary for any omitted text
-/// items.
-pub(crate) fn truncate_function_output_items_to_token_limit(
+/// Globally truncate function output items to fit within the given
+/// truncation policy's budget, preserving as many text/image items as
+/// possible and appending a summary for any omitted text items.
+pub(crate) fn truncate_function_output_items_with_policy(
     items: &[FunctionCallOutputContentItem],
     policy: TruncationPolicy,
 ) -> Vec<FunctionCallOutputContentItem> {
     let mut out: Vec<FunctionCallOutputContentItem> = Vec::with_capacity(items.len());
-    let mut remaining_tokens = policy.token_budget();
+    let mut remaining_budget = match policy {
+        TruncationPolicy::Bytes(_) => policy.byte_budget(),
+        TruncationPolicy::Tokens(_) => policy.token_budget(),
+    };
     let mut omitted_text_items = 0usize;
 
     for it in items {
         match it {
             FunctionCallOutputContentItem::InputText { text } => {
-                if remaining_tokens == 0 {
+                if remaining_budget == 0 {
                     omitted_text_items += 1;
                     continue;
                 }
 
-                let token_len = approx_token_count(text);
-                if token_len <= remaining_tokens {
+                let cost = match policy {
+                    TruncationPolicy::Bytes(_) => text.len(),
+                    TruncationPolicy::Tokens(_) => approx_token_count(text),
+                };
+
+                if cost <= remaining_budget {
                     out.push(FunctionCallOutputContentItem::InputText { text: text.clone() });
-                    remaining_tokens = remaining_tokens.saturating_sub(token_len);
+                    remaining_budget = remaining_budget.saturating_sub(cost);
                 } else {
-                    let snippet = truncate_text(text, TruncationPolicy::Tokens(remaining_tokens));
+                    let snippet_policy = match policy {
+                        TruncationPolicy::Bytes(_) => TruncationPolicy::Bytes(remaining_budget),
+                        TruncationPolicy::Tokens(_) => TruncationPolicy::Tokens(remaining_budget),
+                    };
+                    let snippet = truncate_text(text, snippet_policy);
                     if snippet.is_empty() {
                         omitted_text_items += 1;
                     } else {
                         out.push(FunctionCallOutputContentItem::InputText { text: snippet });
                     }
-                    remaining_tokens = 0;
+                    remaining_budget = 0;
                 }
             }
             FunctionCallOutputContentItem::InputImage { image_url } => {
@@ -412,7 +422,7 @@ mod tests {
     use super::TruncationPolicy;
     use super::TruncationSource;
     use super::approx_token_count;
-    use super::truncate_function_output_items_to_token_limit;
+    use super::truncate_function_output_items_with_policy;
     use super::truncate_with_line_bytes_budget;
     use super::truncate_with_token_budget;
     use codex_protocol::models::FunctionCallOutputContentItem;
@@ -618,7 +628,7 @@ mod tests {
         ];
 
         let output =
-            truncate_function_output_items_to_token_limit(&items, TruncationPolicy::Tokens(limit));
+            truncate_function_output_items_with_policy(&items, TruncationPolicy::Tokens(limit));
 
         // Expect: t1 (full), t2 (full), image, t3 (truncated), summary mentioning 2 omitted.
         assert_eq!(output.len(), 5);
