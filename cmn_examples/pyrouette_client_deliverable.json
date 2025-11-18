@@ -1,0 +1,27 @@
+{
+  "cmn_version": "1.0",
+  "divine_dewey": "DDT-SAT-LAW-CODE-0004",
+  "title": "PyRouette // Client Deliverable Report",
+  "role": "legal|deliverable",
+  "planetary": "Saturn",
+  "literary": "report",
+  "pipeline": "notary->package",
+  "time_signature": "3/4",
+  "tempo": 8,
+  "energy_scalar": 0.95,
+  "anchors": ["clep-c", "dsl-snippet"],
+  "short_tldr": "Client deliverable certifying PyRouette choreography, CLEP-C license, and asset metadata.",
+  "tokens": ["fidelity_score", "CLEP-C", "dslcode"],
+  "provenance": {
+    "sha256": "<TO_COMPUTE>",
+    "author": "Allison Van Cura",
+    "created": "2025-11-11T00:00:00Z"
+  },
+  "rehearse": {
+    "repetition": "weekly:1",
+    "tests": ["pdf_build", "dsl_snippet_hash"],
+    "rehearsal_command": "make build-pdf"
+  },
+  "visibility": "private",
+  "secret_refs": []
+}

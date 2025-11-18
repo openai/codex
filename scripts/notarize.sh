@@ -68,4 +68,4 @@ else
   echo "ipfs CLI not found; skipping IPFS pin. Install go-ipfs or use a pinning service to capture a CID."
 fi
 
-echo "To notarize on-chain, run: node scripts/notarize.cjs --hash 0x${SHA256} ${CID:+--cid ${CID}}"
+echo "To notarize on-chain, run: node scripts/notarize.js --hash 0x${SHA256} ${CID:+--cid ${CID}}"

@@ -1,0 +1,28 @@
+name: Compute hashes & bundle
+
+on:
+  push:
+    paths:
+      - "batch1/**"
+      - "PyRouette_report.tex"
+      - "selfimproving_guidance.py"
+      - "cunning_mercy.html"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compute sha256 for artifacts
+        run: |
+          mkdir -p artifacts
+          for f in PyRouette_report.tex selfimproving_guidance.py cunning_mercy.html PlatformerGame.jsx; do
+            if [ -f "$f" ]; then shasum -a 256 "$f" | awk '{print $1","FILENAME}' FILENAME="$f" >> artifacts/batch1_hashes.csv; fi
+          done
+      - name: Zip artifacts
+        run: zip -r artifacts/batch1_bundle.zip PyRouette_report.tex selfimproving_guidance.py cunning_mercy.html PlatformerGame.jsx || true
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: batch1_bundle
+          path: artifacts

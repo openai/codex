@@ -1,0 +1,2 @@
+conversation_id,timestamp,owner,top_concepts,action_id,action_desc,action_owner,est_hours,top_file,divine_dewey,sha256,provenance_note,vault_pointer,visibility
+b1-20251111-0001,2025-11-11T16:00:00Z,Allison,"Lithium+ETH pair;Cipher Canvas;SentientCents",A1,"Notarize PyRouette_report.tex","Allison",2,PyRouette_report.tex,DDT-SAT-LAW-CODE-0004,<TO_COMPUTE_SHA256>,"pin to ipfs CID: <CID>","vault://pyrouette/main_quota_2025-11-11",private

@@ -1,0 +1,27 @@
+{
+  "cmn_version": "1.0",
+  "divine_dewey": "DDT-NEP-MAN-CHORE-0001",
+  "title": "Cunning Mercy: MetaCodeography",
+  "role": "doc|concept",
+  "planetary": "Neptune",
+  "literary": "manifesto",
+  "pipeline": "schema->convert->notary",
+  "time_signature": "5/4",
+  "tempo": 8,
+  "energy_scalar": 0.78,
+  "anchors": ["CipherCanvas", "VigenereExample"],
+  "short_tldr": "Manifesto mapping ballet to cryptography via a 4D Cipher Canvas (Time/Space/Symbol/Energy).",
+  "tokens": ["Cipher Canvas", "gesture_id", "motif_id"],
+  "provenance": {
+    "sha256": "<TO_COMPUTE>",
+    "author": "Allison Van Cura",
+    "created": "2025-11-11T00:00:00Z"
+  },
+  "rehearse": {
+    "repetition": "monthly:1",
+    "tests": ["example_encoding", "schema_export"],
+    "rehearsal_command": "python tools/encode_example.py"
+  },
+  "visibility": "private",
+  "secret_refs": []
+}
