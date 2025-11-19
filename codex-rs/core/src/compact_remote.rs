@@ -32,11 +32,11 @@ async fn run_remote_compact_task_inner(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
 )  {
-    if let Err(err) = run_remote_compact_task_inner_impl(&sess, &turn_context).await {
+    if let Err(err) = run_remote_compact_task_inner_impl(sess, turn_context).await {
         let event = EventMsg::Error(ErrorEvent {
             message: format!("Error running remote compact task: {err}"),
         });
-        sess.send_event(&turn_context, event).await;
+        sess.send_event(turn_context, event).await;
     }
 }
 
@@ -89,7 +89,7 @@ async fn run_remote_compact_task_inner_impl(
     let event = EventMsg::AgentMessage(AgentMessageEvent {
         message: "Compact task completed".to_string(),
     });
-    sess.send_event(&turn_context, event).await;
+    sess.send_event(turn_context, event).await;
     
     Ok(())
 }
