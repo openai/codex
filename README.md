@@ -78,6 +78,7 @@ Codex CLI supports a rich set of configuration options, with preferences stored 
   - [Architecture Design](./docs/electron-ui-architecture.md)
   - [Requirements Specification](./docs/electron-ui-requirements.md)
   - [3-Week POC Plan](./docs/electron-ui-poc-3weeks.md) ⭐
+  - [Detailed 3-Week Todo & Roadmap](./docs/electron-ui-3week-detailed-plan.md) 🚀
 - [**Getting started**](./docs/getting-started.md)
   - [CLI usage](./docs/getting-started.md#cli-usage)
   - [Slash Commands](./docs/slash_commands.md)
