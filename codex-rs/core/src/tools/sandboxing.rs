@@ -89,11 +89,11 @@ pub(crate) struct ApprovalCtx<'a> {
 // Specifies what tool orchestrator should do with a given tool call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ApprovalRequirement {
-    // No approval required for this tool call
+    /// No approval required for this tool call
     Skip,
-    // Approval required for this tool call
+    /// Approval required for this tool call
     NeedsApproval { reason: Option<String> },
-    // Execution forbidden for this tool call
+    /// Execution forbidden for this tool call
     Forbidden { reason: String },
 }
 
