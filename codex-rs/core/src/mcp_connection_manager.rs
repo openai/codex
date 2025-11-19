@@ -10,7 +10,10 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::env;
 use std::ffi::OsString;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::mcp::auth::McpAuthStatusEntry;
@@ -20,12 +23,15 @@ use anyhow::anyhow;
 use async_channel::Sender;
 use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
+use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpStartupCompleteEvent;
 use codex_protocol::protocol::McpStartupFailure;
 use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpStartupUpdateEvent;
+use codex_rmcp_client::Elicitation;
+use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use codex_rmcp_client::RmcpClient;
 use futures::future::BoxFuture;
@@ -39,6 +45,7 @@ use mcp_types::ListResourcesRequestParams;
 use mcp_types::ListResourcesResult;
 use mcp_types::ReadResourceRequestParams;
 use mcp_types::ReadResourceResult;
+use mcp_types::RequestId;
 use mcp_types::Resource;
 use mcp_types::ResourceTemplate;
 use mcp_types::Tool;
@@ -46,6 +53,7 @@ use mcp_types::Tool;
 use serde_json::json;
 use sha1::Digest;
 use sha1::Sha1;
+use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
@@ -129,6 +137,10 @@ impl AsyncManagedClient {
         config: McpServerConfig,
         store_mode: OAuthCredentialsStoreMode,
         cancel_token: CancellationToken,
+        tx_event: Sender<Event>,
+        elicitation_requests: Arc<
+            Mutex<HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>>,
+        >,
     ) -> Self {
         let tool_filter = ToolFilter::from_config(&config);
         let fut = start_server_task(
@@ -141,6 +153,8 @@ impl AsyncManagedClient {
             config.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT),
             tool_filter,
             cancel_token,
+            tx_event,
+            elicitation_requests,
         );
         Self {
             client: fut.boxed().shared(),
@@ -156,6 +170,8 @@ impl AsyncManagedClient {
 #[derive(Default)]
 pub(crate) struct McpConnectionManager {
     clients: HashMap<String, AsyncManagedClient>,
+    elicitation_requests:
+        Arc<Mutex<HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>>>,
 }
 
 impl McpConnectionManager {
@@ -172,6 +188,7 @@ impl McpConnectionManager {
         }
         let mut clients = HashMap::new();
         let mut join_set = JoinSet::new();
+        let elicitation_requests = Arc::new(Mutex::new(HashMap::new()));
         for (server_name, cfg) in mcp_servers.into_iter().filter(|(_, cfg)| cfg.enabled) {
             let cancel_token = cancel_token.child_token();
             let _ = emit_update(
@@ -182,8 +199,14 @@ impl McpConnectionManager {
                 },
             )
             .await;
-            let async_managed_client =
-                AsyncManagedClient::new(server_name.clone(), cfg, store_mode, cancel_token.clone());
+            let async_managed_client = AsyncManagedClient::new(
+                server_name.clone(),
+                cfg,
+                store_mode,
+                cancel_token.clone(),
+                tx_event.clone(),
+                elicitation_requests.clone(),
+            );
             clients.insert(server_name.clone(), async_managed_client.clone());
             let tx_event = tx_event.clone();
             let auth_entry = auth_entries.get(&server_name).cloned();
@@ -217,6 +240,7 @@ impl McpConnectionManager {
             });
         }
         self.clients = clients;
+        self.elicitation_requests = elicitation_requests;
         tokio::spawn(async move {
             let outcomes = join_set.join_all().await;
             let mut summary = McpStartupCompleteEvent::default();
@@ -248,6 +272,21 @@ impl McpConnectionManager {
             .client()
             .await
             .context("failed to get client")
+    }
+
+    pub fn resolve_elicitation(
+        &self,
+        server_name: String,
+        id: RequestId,
+        response: ElicitationResponse,
+    ) -> Result<()> {
+        self.elicitation_requests
+            .lock()
+            .expect("elicitation_requests lock")
+            .remove(&(server_name, id))
+            .ok_or_else(|| anyhow!("elicitation request not found"))?
+            .send(response)
+            .map_err(|e| anyhow!("failed to send elicitation response: {e:?}"))
     }
 
     /// Returns a single map that contains all tools. Each key is the
@@ -578,6 +617,45 @@ impl From<anyhow::Error> for StartupOutcomeError {
     }
 }
 
+#[allow(clippy::type_complexity)]
+fn make_elicitation_sender(
+    server_name: String,
+    tx_event: Sender<Event>,
+    elicitation_requests: Arc<
+        Mutex<HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>>,
+    >,
+) -> Box<
+    dyn Fn(RequestId, Elicitation) -> Pin<Box<dyn Future<Output = ElicitationResponse> + Send>>
+        + Send
+        + Sync,
+> {
+    Box::new(move |id: RequestId, elicitation: Elicitation| {
+        let elicitation_requests = elicitation_requests.clone();
+        let tx_event = tx_event.clone();
+        let server_name = server_name.clone();
+        Box::pin(async move {
+            let (tx, rx) = oneshot::channel::<ElicitationResponse>();
+            {
+                let mut elicitation_requests_lock = elicitation_requests
+                    .lock()
+                    .expect("elicitation_requests lock");
+                elicitation_requests_lock.insert((server_name.clone(), id.clone()), tx);
+            }
+            let _ = tx_event
+                .send(Event {
+                    id: "mcp_elicitation_request".to_string(),
+                    msg: EventMsg::ElicitationRequest(ElicitationRequestEvent {
+                        server_name,
+                        id,
+                        message: elicitation.message,
+                    }),
+                })
+                .await;
+            rx.await.unwrap()
+        })
+    })
+}
+
 async fn start_server_task(
     server_name: String,
     transport: McpServerTransportConfig,
@@ -586,6 +664,10 @@ async fn start_server_task(
     tool_timeout: Duration,
     tool_filter: ToolFilter,
     cancel_token: CancellationToken,
+    tx_event: Sender<Event>,
+    elicitation_requests: Arc<
+        Mutex<HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>>,
+    >,
 ) -> Result<ManagedClient, StartupOutcomeError> {
     if cancel_token.is_cancelled() {
         return Err(StartupOutcomeError::Cancelled);
@@ -594,6 +676,9 @@ async fn start_server_task(
         return Err(error.into());
     }
 
+    let send_elicitation =
+        make_elicitation_sender(server_name.clone(), tx_event, elicitation_requests);
+
     match start_server_work(
         server_name,
         transport,
@@ -601,6 +686,7 @@ async fn start_server_task(
         startup_timeout,
         tool_timeout,
         tool_filter,
+        send_elicitation,
     )
     .or_cancel(&cancel_token)
     .await
@@ -617,6 +703,11 @@ async fn start_server_work(
     startup_timeout: Duration,
     tool_timeout: Duration,
     tool_filter: ToolFilter,
+    send_elicitation: Box<
+        dyn Fn(RequestId, Elicitation) -> Pin<Box<dyn Future<Output = ElicitationResponse> + Send>>
+            + Send
+            + Sync,
+    >,
 ) -> Result<ManagedClient, StartupOutcomeError> {
     let params = mcp_types::InitializeRequestParams {
         capabilities: ClientCapabilities {
@@ -639,7 +730,7 @@ async fn start_server_work(
         protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
     };
 
-    let client_result = match transport {
+    let client = match transport {
         McpServerTransportConfig::Stdio {
             command,
             args,
@@ -649,16 +740,9 @@ async fn start_server_work(
         } => {
             let command_os: OsString = command.into();
             let args_os: Vec<OsString> = args.into_iter().map(Into::into).collect();
-            match RmcpClient::new_stdio_client(command_os, args_os, env, &env_vars, cwd).await {
-                Ok(client) => {
-                    let client = Arc::new(client);
-                    client
-                        .initialize(params.clone(), Some(startup_timeout))
-                        .await
-                        .map(|_| client)
-                }
-                Err(err) => Err(err.into()),
-            }
+            RmcpClient::new_stdio_client(command_os, args_os, env, &env_vars, cwd)
+                .await
+                .map_err(|err| StartupOutcomeError::from(anyhow!(err)))
         }
         McpServerTransportConfig::StreamableHttp {
             url,
@@ -671,7 +755,7 @@ async fn start_server_work(
                     Ok(token) => token,
                     Err(error) => return Err(error.into()),
                 };
-            match RmcpClient::new_streamable_http_client(
+            RmcpClient::new_streamable_http_client(
                 &server_name,
                 &url,
                 resolved_bearer_token,
@@ -680,25 +764,15 @@ async fn start_server_work(
                 store_mode,
             )
             .await
-            {
-                Ok(client) => {
-                    let client = Arc::new(client);
-                    client
-                        .initialize(params.clone(), Some(startup_timeout))
-                        .await
-                        .map(|_| client)
-                }
-                Err(err) => Err(err),
-            }
+            .map_err(StartupOutcomeError::from)
         }
-    };
+    }?;
 
-    let client = match client_result {
-        Ok(client) => client,
-        Err(error) => {
-            return Err(error.into());
-        }
-    };
+    let client = Arc::new(client);
+    client
+        .initialize(params.clone(), Some(startup_timeout), send_elicitation)
+        .await
+        .map_err(StartupOutcomeError::from)?;
 
     let tools = match list_tools_for_client(&server_name, &client, startup_timeout).await {
         Ok(tools) => tools,

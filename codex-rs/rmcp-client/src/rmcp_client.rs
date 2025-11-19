@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,8 +22,11 @@ use mcp_types::ListToolsRequestParams;
 use mcp_types::ListToolsResult;
 use mcp_types::ReadResourceRequestParams;
 use mcp_types::ReadResourceResult;
+use mcp_types::RequestId;
 use reqwest::header::HeaderMap;
 use rmcp::model::CallToolRequestParam;
+use rmcp::model::CreateElicitationRequestParam;
+use rmcp::model::CreateElicitationResult;
 use rmcp::model::InitializeRequestParam;
 use rmcp::model::PaginatedRequestParam;
 use rmcp::model::ReadResourceRequestParam;
@@ -76,6 +80,15 @@ enum ClientState {
         oauth: Option<OAuthPersistor>,
     },
 }
+
+pub type Elicitation = CreateElicitationRequestParam;
+pub type ElicitationResponse = CreateElicitationResult;
+
+pub type SendElicitation = Box<
+    dyn Fn(RequestId, Elicitation) -> Pin<Box<dyn Future<Output = ElicitationResponse> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// MCP client implemented on top of the official `rmcp` SDK.
 /// https://github.com/modelcontextprotocol/rust-sdk
@@ -200,9 +213,10 @@ impl RmcpClient {
         &self,
         params: InitializeRequestParams,
         timeout: Option<Duration>,
+        send_elicitation: SendElicitation,
     ) -> Result<InitializeResult> {
         let rmcp_params: InitializeRequestParam = convert_to_rmcp(params.clone())?;
-        let client_handler = LoggingClientHandler::new(rmcp_params);
+        let client_handler = LoggingClientHandler::new(rmcp_params, send_elicitation);
 
         let (transport, oauth_persistor) = {
             let mut guard = self.state.lock().await;

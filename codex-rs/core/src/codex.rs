@@ -34,6 +34,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TaskStartedEvent;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
+use codex_rmcp_client::ElicitationResponse;
 use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::FuturesOrdered;
@@ -44,6 +45,7 @@ use mcp_types::ListResourcesRequestParams;
 use mcp_types::ListResourcesResult;
 use mcp_types::ReadResourceRequestParams;
 use mcp_types::ReadResourceResult;
+use mcp_types::RequestId;
 use serde_json;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -936,6 +938,19 @@ impl Session {
                 warn!("No pending approval found for sub_id: {sub_id}");
             }
         }
+    }
+
+    pub async fn resolve_elicitation(
+        &self,
+        server_name: String,
+        id: RequestId,
+        response: ElicitationResponse,
+    ) -> anyhow::Result<()> {
+        self.services
+            .mcp_connection_manager
+            .read()
+            .await
+            .resolve_elicitation(server_name, id, response)
     }
 
     /// Records input items: always append to conversation history and

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use crate::parse_command::ParsedCommand;
 use crate::protocol::FileChange;
+use mcp_types::RequestId;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -51,6 +52,14 @@ pub struct ExecApprovalRequestEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub risk: Option<SandboxCommandAssessment>,
     pub parsed_cmd: Vec<ParsedCommand>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ElicitationRequestEvent {
+    pub server_name: String,
+    pub id: RequestId,
+    pub message: String,
+    // pub requested_schema: ElicitRequestParamsRequestedSchema,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
