@@ -809,6 +809,7 @@ pub enum PatchApplyStatus {
     InProgress,
     Completed,
     Failed,
+    Declined,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

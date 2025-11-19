@@ -755,7 +755,7 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
         unreachable!("loop ensures we break on file change items");
     };
     assert_eq!(id, "patch-call");
-    assert_eq!(status, PatchApplyStatus::Failed);
+    assert_eq!(status, PatchApplyStatus::Declined);
 
     timeout(
         DEFAULT_READ_TIMEOUT,

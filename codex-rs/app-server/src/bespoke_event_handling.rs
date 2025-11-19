@@ -677,6 +677,7 @@ fn format_file_change_diff(change: &CoreFileChange) -> String {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn on_file_change_request_approval_response(
     event_id: String,
     conversation_id: ConversationId,
@@ -688,7 +689,7 @@ async fn on_file_change_request_approval_response(
     turn_summary_store: TurnSummaryStore,
 ) {
     let response = receiver.await;
-    let (decision, should_complete_item) = match response {
+    let (decision, completion_status) = match response {
         Ok(value) => {
             let response = serde_json::from_value::<FileChangeRequestApprovalResponse>(value)
                 .unwrap_or_else(|err| {
@@ -698,28 +699,31 @@ async fn on_file_change_request_approval_response(
                     }
                 });
 
-            let decision = match response.decision {
-                ApprovalDecision::Accept => ReviewDecision::Approved,
-                ApprovalDecision::Decline => ReviewDecision::Denied,
-                ApprovalDecision::Cancel => ReviewDecision::Abort,
+            let (decision, completion_status) = match response.decision {
+                ApprovalDecision::Accept => (ReviewDecision::Approved, None),
+                ApprovalDecision::Decline => {
+                    (ReviewDecision::Denied, Some(PatchApplyStatus::Declined))
+                }
+                ApprovalDecision::Cancel => {
+                    (ReviewDecision::Abort, Some(PatchApplyStatus::Declined))
+                }
             };
             // Allow EventMsg::PatchApplyEnd to emit ItemCompleted for accepted patches.
             // Only short-circuit on declines/cancels/failures.
-            let should_complete_item = !matches!(decision, ReviewDecision::Approved);
-            (decision, should_complete_item)
+            (decision, completion_status)
         }
         Err(err) => {
             error!("request failed: {err:?}");
-            (ReviewDecision::Denied, true)
+            (ReviewDecision::Denied, Some(PatchApplyStatus::Failed))
         }
     };
 
-    if should_complete_item {
+    if let Some(status) = completion_status {
         complete_file_change_item(
             conversation_id,
             item_id,
             changes,
-            PatchApplyStatus::Failed,
+            status,
             outgoing.as_ref(),
             &turn_summary_store,
         )
