@@ -206,11 +206,15 @@ fn format_credit_balance(raw: &str) -> Option<String> {
         return None;
     }
 
-    if let Ok(int_value) = trimmed.parse::<i64>() && int_value > 0 {
+    if let Ok(int_value) = trimmed.parse::<i64>()
+        && int_value > 0
+    {
         return Some(int_value.to_string());
     }
 
-    if let Ok(value) = trimmed.parse::<f64>()  && value > 0.0 {
+    if let Ok(value) = trimmed.parse::<f64>()
+        && value > 0.0
+    {
         let rounded = value.round() as i64;
         return Some(rounded.to_string());
     }
