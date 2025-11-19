@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 codex-core = { workspace = true }
 libc = { workspace = true }
@@ -31,6 +32,7 @@ rmcp = { workspace = true, default-features = false, features = [
 ] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+shlex = { workspace = true }
 socket2 = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
