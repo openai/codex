@@ -249,7 +249,9 @@ impl StatusHistoryCell {
                     }
                 }
                 StatusRateLimitValue::Text(text) => {
-                    lines.push(formatter.line(row.label.as_str(), vec![Span::from(text.clone())]));
+                    let spans =
+                        formatter.full_spans(row.label.as_str(), vec![Span::from(text.clone())]);
+                    lines.push(Line::from(spans));
                 }
             }
         }
