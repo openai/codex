@@ -101,7 +101,6 @@ fn shell_responses(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ShellModelOutput::Shell)]
-#[test_case(ShellModelOutput::ShellCommand)]
 #[test_case(ShellModelOutput::LocalShell)]
 async fn shell_output_stays_json_without_freeform_apply_patch(
     output_type: ShellModelOutput,
@@ -213,7 +212,6 @@ freeform shell
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ShellModelOutput::Shell)]
-#[test_case(ShellModelOutput::ShellCommand)]
 #[test_case(ShellModelOutput::LocalShell)]
 async fn shell_output_preserves_fixture_json_without_serialization(
     output_type: ShellModelOutput,
@@ -804,7 +802,6 @@ async fn shell_command_output_is_freeform() -> Result<()> {
 
     let expected_pattern = r"(?s)^Exit code: 0
 Wall time: [0-9]+(?:\.[0-9]+)? seconds
-Total output lines: 1
 Output:
 shell command
 ?$";

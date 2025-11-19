@@ -79,7 +79,9 @@ pub fn format_exec_output_for_model_freeform(exec_output: &ExecToolCallOutput) -
 
     sections.push(format!("Exit code: {}", exec_output.exit_code));
     sections.push(format!("Wall time: {duration_seconds} seconds"));
-    sections.push(format!("Total output lines: {total_lines}"));
+    if total_lines != formatted_output.lines().count() {
+        sections.push(format!("Total output lines: {total_lines}"));
+    }
 
     sections.push("Output:".to_string());
     sections.push(formatted_output);
