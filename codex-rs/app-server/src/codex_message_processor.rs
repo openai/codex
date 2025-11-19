@@ -91,6 +91,7 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInfoResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_app_server_protocol::UserSavedConfig;
+use codex_app_server_protocol::build_turns_from_event_msgs;
 use codex_backend_client::Client as BackendClient;
 use codex_core::AuthManager;
 use codex_core::CodexConversation;
@@ -1652,6 +1653,11 @@ impl CodexMessageProcessor {
                 session_configured,
                 ..
             }) => {
+                let SessionConfiguredEvent {
+                    rollout_path,
+                    initial_messages,
+                    ..
+                } = session_configured;
                 // Auto-attach a conversation listener when resuming a thread.
                 if let Err(err) = self
                     .attach_conversation_listener(conversation_id, false, ApiVersion::V2)
@@ -1664,8 +1670,8 @@ impl CodexMessageProcessor {
                     );
                 }
 
-                let thread = match read_summary_from_rollout(
-                    session_configured.rollout_path.as_path(),
+                let mut thread = match read_summary_from_rollout(
+                    rollout_path.as_path(),
                     fallback_model_provider.as_str(),
                 )
                 .await
@@ -1676,13 +1682,17 @@ impl CodexMessageProcessor {
                             request_id,
                             format!(
                                 "failed to load rollout `{}` for conversation {conversation_id}: {err}",
-                                session_configured.rollout_path.display()
+                                rollout_path.display()
                             ),
                         )
                         .await;
                         return;
                     }
                 };
+                thread.turns = initial_messages
+                    .as_deref()
+                    .map_or_else(Vec::new, build_turns_from_event_msgs);
+
                 let response = ThreadResumeResponse {
                     thread,
                     model: session_configured.model,
@@ -1692,6 +1702,7 @@ impl CodexMessageProcessor {
                     sandbox: session_configured.sandbox_policy.into(),
                     reasoning_effort: session_configured.reasoning_effort,
                 };
+
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(err) => {
@@ -2983,6 +2994,7 @@ fn summary_to_thread(summary: ConversationSummary) -> Thread {
         model_provider,
         created_at: created_at.map(|dt| dt.timestamp()).unwrap_or(0),
         path,
+        turns: Vec::new(),
     }
 }
 
