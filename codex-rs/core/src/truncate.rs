@@ -325,9 +325,6 @@ fn pick_suffix_start(s: &str, right_budget: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::OPENAI_DEFAULT_MODEL;
-    use crate::model_family::derive_default_model_family;
-    use crate::model_family::find_family_for_model;
 
     use super::TruncationPolicy;
     use super::TruncationSource;
@@ -338,13 +335,6 @@ mod tests {
     use codex_protocol::models::FunctionCallOutputContentItem;
     use pretty_assertions::assert_eq;
     use regex_lite::Regex;
-
-    fn model_format_max_bytes() -> usize {
-        find_family_for_model(OPENAI_DEFAULT_MODEL)
-            .unwrap_or_else(|| derive_default_model_family(OPENAI_DEFAULT_MODEL))
-            .truncation_policy
-            .byte_budget()
-    }
 
     const MODEL_FORMAT_MAX_TOKENS_FOR_TESTS: usize = 2_500;
 
@@ -368,7 +358,7 @@ mod tests {
             .expect("missing body capture")
             .as_str();
         assert!(
-            body.len() <= model_format_max_bytes(),
+            body.len() <= MODEL_FORMAT_MAX_TOKENS_FOR_TESTS,
             "body exceeds byte limit: {} bytes",
             body.len()
         );
@@ -443,7 +433,7 @@ mod tests {
 
     #[test]
     fn format_exec_output_marks_byte_truncation_without_omitted_lines() {
-        let max_bytes = model_format_max_bytes();
+        let max_bytes = MODEL_FORMAT_MAX_TOKENS_FOR_TESTS;
         let long_line = "a".repeat(max_bytes + 50);
         let truncated = truncate_model_output(&long_line);
 
