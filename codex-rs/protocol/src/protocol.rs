@@ -102,6 +102,9 @@ pub enum Op {
         final_output_json_schema: Option<Value>,
     },
 
+    /// Persist the current session under a user-provided name.
+    SaveSession { name: String },
+
     /// Override parts of the persistent turn context for subsequent turns.
     ///
     /// All fields are optional; when omitted, the existing value is preserved.
@@ -512,6 +515,9 @@ pub enum EventMsg {
     DeprecationNotice(DeprecationNoticeEvent),
 
     BackgroundEvent(BackgroundEventEvent),
+
+    /// Result of a save-session request.
+    SaveSessionResponse(SaveSessionResponseEvent),
 
     UndoStarted(UndoStartedEvent),
 
@@ -1028,6 +1034,13 @@ impl InitialHistory {
         }
     }
 
+    pub fn without_session_meta(&self) -> Vec<RolloutItem> {
+        self.get_rollout_items()
+            .into_iter()
+            .filter(|item| !matches!(item, RolloutItem::SessionMeta(_)))
+            .collect()
+    }
+
     pub fn get_event_msgs(&self) -> Option<Vec<EventMsg>> {
         match self {
             InitialHistory::New => None,
@@ -1363,6 +1376,13 @@ pub struct StreamErrorEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct StreamInfoEvent {
     pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SaveSessionResponseEvent {
+    pub name: String,
+    pub rollout_path: PathBuf,
+    pub conversation_id: ConversationId,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

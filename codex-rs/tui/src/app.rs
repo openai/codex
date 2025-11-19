@@ -27,8 +27,6 @@ use codex_common::model_presets::ModelUpgrade;
 use codex_common::model_presets::all_model_presets;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
-use codex_core::SavedSessionEntry;
-use codex_core::build_saved_session_entry;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::error::CodexErr;
@@ -41,7 +39,6 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
-use codex_core::upsert_saved_session;
 use codex_protocol::ConversationId;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -440,70 +437,6 @@ impl App {
         Ok(true)
     }
 
-    async fn save_session(&mut self, requested_name: String) {
-        let name = requested_name.trim().to_string();
-        if name.is_empty() {
-            self.chat_widget
-                .add_error_message("Usage: /save <name>".to_string());
-            return;
-        }
-        match self.try_save_session(&name).await {
-            Ok(entry) => {
-                let name = &entry.name;
-                self.chat_widget.add_info_message(
-                    format!(
-                        "Saved session '{name}' (conversation {}).",
-                        entry.conversation_id
-                    ),
-                    Some(format!(
-                        "Resume with `codex resume {name}` or fork with `codex fork {name}`.",
-                    )),
-                );
-            }
-            Err(error) => self
-                .chat_widget
-                .add_error_message(format!("Failed to save session '{name}': {error}")),
-        }
-    }
-
-    async fn try_save_session(&mut self, name: &str) -> Result<SavedSessionEntry, CodexErr> {
-        // Normalize and validate the user-provided name early so downstream async work
-        // only runs for actionable requests.
-        if name.is_empty() {
-            return Err(CodexErr::Fatal("Usage: /save <name>".to_string()));
-        }
-
-        // Capture identifiers from the active chat widget; these are cheap and fast.
-        let conversation_id = self.chat_widget.conversation_id().ok_or_else(|| {
-            CodexErr::Fatal("Session is not ready yet; try /save again in a moment.".to_string())
-        })?;
-        let rollout_path = self.chat_widget.rollout_path().ok_or_else(|| {
-            CodexErr::Fatal(
-                "Rollout path is not available yet; try /save again shortly.".to_string(),
-            )
-        })?;
-
-        // Resolve the conversation handle; all subsequent operations use this shared reference.
-        let conversation = self.server.get_conversation(conversation_id).await?;
-
-        // Ensure the rollout is fully flushed before snapshotting metadata.
-        conversation.flush_rollout().await?;
-
-        // Persist the human-friendly name into the SessionMeta line.
-        conversation
-            .set_session_name(Some(name.to_string()))
-            .await?;
-
-        // Build and persist the saved-session entry on disk.
-        let model = self.chat_widget.config_ref().model.clone();
-        let entry =
-            build_saved_session_entry(name.to_string(), rollout_path.clone(), model).await?;
-
-        upsert_saved_session(&self.config.codex_home, entry.clone()).await?;
-
-        Ok(entry)
-    }
-
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
         match event {
             AppEvent::NewSession => {
@@ -585,9 +518,6 @@ impl App {
             }
             AppEvent::ConversationHistory(ev) => {
                 self.on_conversation_history_for_backtrack(tui, ev).await?;
-            }
-            AppEvent::SaveSession { name } => {
-                self.save_session(name).await;
             }
             AppEvent::ExitRequest => {
                 return Ok(false);

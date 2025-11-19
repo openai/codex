@@ -1,4 +1,5 @@
 use crate::error::Result;
+use crate::find_conversation_path_by_id_str;
 use crate::rollout::list::read_head_for_summary;
 use codex_protocol::ConversationId;
 use codex_protocol::protocol::SessionMetaLine;
@@ -11,6 +12,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use tracing::warn;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -123,4 +125,22 @@ pub async fn list_saved_sessions(codex_home: &Path) -> Result<Vec<SavedSessionEn
     let mut entries: Vec<SavedSessionEntry> = file.entries.values().cloned().collect();
     entries.sort_by(|a, b| b.saved_at.cmp(&a.saved_at));
     Ok(entries)
+}
+
+/// Resolve a rollout path from either a saved-session name or rollout id string.
+/// Returns `Ok(None)` when nothing matches.
+pub async fn resolve_rollout_path(codex_home: &Path, identifier: &str) -> Result<Option<PathBuf>> {
+    if let Some(entry) = resolve_saved_session(codex_home, identifier).await? {
+        if entry.rollout_path.exists() {
+            return Ok(Some(entry.rollout_path));
+        }
+        warn!(
+            "saved session '{}' points to missing rollout at {}",
+            identifier,
+            entry.rollout_path.display()
+        );
+    }
+    find_conversation_path_by_id_str(codex_home, identifier)
+        .await
+        .map_err(Into::into) // todo jif
 }

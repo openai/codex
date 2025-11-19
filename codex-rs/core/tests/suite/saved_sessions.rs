@@ -85,12 +85,11 @@ async fn save_session(
     name: &str,
     codex: &Arc<CodexConversation>,
     config: &Config,
-    model: &str,
 ) -> Result<SavedSessionEntry> {
     codex.flush_rollout().await?;
     codex.set_session_name(Some(name.to_string())).await?;
     let entry =
-        build_saved_session_entry(name.to_string(), codex.rollout_path(), model.to_string())
+        build_saved_session_entry(name.to_string(), codex.rollout_path(), codex.model().await)
             .await?;
     upsert_saved_session(&config.codex_home, entry.clone()).await?;
     Ok(entry)
@@ -108,13 +107,7 @@ async fn save_and_resume_by_name() -> Result<()> {
     submit_text(&initial.codex, "first turn").await?;
 
     let name = "alpha";
-    let entry = save_session(
-        name,
-        &initial.codex,
-        &initial.config,
-        &initial.session_configured.model,
-    )
-    .await?;
+    let entry = save_session(name, &initial.codex, &initial.config).await?;
     let resolved = resolve_saved_session(&initial.config.codex_home, name)
         .await?
         .expect("saved session");
@@ -148,13 +141,7 @@ async fn save_and_fork_by_name() -> Result<()> {
     let initial = builder.build(&server).await?;
     submit_text(&initial.codex, "original").await?;
 
-    let entry = save_session(
-        "forkable",
-        &initial.codex,
-        &initial.config,
-        &initial.session_configured.model,
-    )
-    .await?;
+    let entry = save_session("forkable", &initial.codex, &initial.config).await?;
 
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy"));
     let conversation_manager = ConversationManager::new(auth_manager.clone(), SessionSource::Exec);
@@ -199,13 +186,7 @@ async fn forked_messages_do_not_touch_original() -> Result<()> {
     let initial = builder.build(&server).await?;
     submit_text(&initial.codex, "first").await?;
 
-    let entry = save_session(
-        "branch",
-        &initial.codex,
-        &initial.config,
-        &initial.session_configured.model,
-    )
-    .await?;
+    let entry = save_session("branch", &initial.codex, &initial.config).await?;
     let baseline_items = rollout_items_without_meta(&entry.rollout_path);
 
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy"));
@@ -257,13 +238,7 @@ async fn resumed_messages_are_present_in_new_fork() -> Result<()> {
     let initial = builder.build(&server).await?;
     submit_text(&initial.codex, "start").await?;
 
-    let entry = save_session(
-        "seed",
-        &initial.codex,
-        &initial.config,
-        &initial.session_configured.model,
-    )
-    .await?;
+    let entry = save_session("seed", &initial.codex, &initial.config).await?;
 
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy"));
     let conversation_manager = ConversationManager::new(auth_manager.clone(), SessionSource::Exec);
@@ -318,23 +293,11 @@ async fn duplicate_name_overwrites_entry() -> Result<()> {
     let first = builder.build(&server).await?;
     submit_text(&first.codex, "first session").await?;
     let name = "shared";
-    let entry_one = save_session(
-        name,
-        &first.codex,
-        &first.config,
-        &first.session_configured.model,
-    )
-    .await?;
+    let entry_one = save_session(name, &first.codex, &first.config).await?;
 
     let second = builder.build(&server).await?;
     submit_text(&second.codex, "second session").await?;
-    let entry_two = save_session(
-        name,
-        &second.codex,
-        &second.config,
-        &second.session_configured.model,
-    )
-    .await?;
+    let entry_two = save_session(name, &second.codex, &second.config).await?;
 
     let resolved = resolve_saved_session(&second.config.codex_home, name)
         .await?
@@ -356,20 +319,8 @@ async fn same_session_multiple_names() -> Result<()> {
     let session = builder.build(&server).await?;
     submit_text(&session.codex, "save twice").await?;
 
-    let entry_first = save_session(
-        "first",
-        &session.codex,
-        &session.config,
-        &session.session_configured.model,
-    )
-    .await?;
-    let entry_second = save_session(
-        "second",
-        &session.codex,
-        &session.config,
-        &session.session_configured.model,
-    )
-    .await?;
+    let entry_first = save_session("first", &session.codex, &session.config).await?;
+    let entry_second = save_session("second", &session.codex, &session.config).await?;
 
     let resolved_first = resolve_saved_session(&session.config.codex_home, "first")
         .await?

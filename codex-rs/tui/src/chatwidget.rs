@@ -1483,9 +1483,8 @@ impl ChatWidget {
             ));
             return;
         }
-        self.app_event_tx.send(AppEvent::SaveSession {
-            name: name.to_string(),
-        });
+        self.app_event_tx
+            .send(AppEvent::CodexOp(Op::SaveSession { name: name.into() }));
         self.add_info_message(format!("Saving session '{name}'..."), None);
     }
 
@@ -1659,6 +1658,12 @@ impl ChatWidget {
             EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
             EventMsg::McpStartupUpdate(ev) => self.on_mcp_startup_update(ev),
             EventMsg::McpStartupComplete(ev) => self.on_mcp_startup_complete(ev),
+            EventMsg::SaveSessionResponse(ev) => {
+                self.add_info_message(
+                    format!("Saved session '{}' ({}).", ev.name, ev.conversation_id),
+                    Some(format!("Rollout: {}", ev.rollout_path.display())),
+                );
+            }
             EventMsg::TurnAborted(ev) => match ev.reason {
                 TurnAbortReason::Interrupted => {
                     self.on_interrupted_turn(ev.reason);

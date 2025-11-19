@@ -48,4 +48,16 @@ impl CodexConversation {
     pub async fn set_session_name(&self, name: Option<String>) -> CodexResult<()> {
         Ok(self.session.set_session_name(name).await?)
     }
+
+    pub async fn model(&self) -> String {
+        self.session.model().await
+    }
+
+    pub async fn save_session(
+        &self,
+        codex_home: &std::path::Path,
+        name: &str,
+    ) -> CodexResult<crate::SavedSessionEntry> {
+        self.session.save_session(codex_home, name).await
+    }
 }

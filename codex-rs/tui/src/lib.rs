@@ -19,17 +19,14 @@ use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::resolve_oss_provider;
-use codex_core::find_conversation_path_by_id_str;
 use codex_core::get_platform_sandbox;
 use codex_core::protocol::AskForApproval;
-use codex_core::resolve_saved_session;
+use codex_core::resolve_rollout_path;
 use codex_protocol::config_types::SandboxMode;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use std::fs::OpenOptions;
-use std::path::Path;
 use std::path::PathBuf;
 use tracing::error;
-use tracing::warn;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::Targets;
@@ -336,26 +333,6 @@ pub async fn run_main(
     )
     .await
     .map_err(|err| std::io::Error::other(err.to_string()))
-}
-
-async fn resolve_rollout_path(
-    codex_home: &Path,
-    identifier: &str,
-) -> std::io::Result<Option<PathBuf>> {
-    if let Some(entry) = resolve_saved_session(codex_home, identifier)
-        .await
-        .map_err(|err| std::io::Error::other(err.to_string()))?
-    {
-        if entry.rollout_path.exists() {
-            return Ok(Some(entry.rollout_path));
-        }
-        warn!(
-            "saved session '{}' points to missing rollout at {}",
-            identifier,
-            entry.rollout_path.display()
-        );
-    }
-    find_conversation_path_by_id_str(codex_home, identifier).await
 }
 
 async fn run_ratatui_app(

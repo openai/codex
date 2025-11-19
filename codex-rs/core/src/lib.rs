@@ -86,6 +86,7 @@ pub use rollout::list::read_head_for_summary;
 pub use saved_sessions::SavedSessionEntry;
 pub use saved_sessions::build_saved_session_entry;
 pub use saved_sessions::list_saved_sessions;
+pub use saved_sessions::resolve_rollout_path;
 pub use saved_sessions::resolve_saved_session;
 pub use saved_sessions::upsert_saved_session;
 mod function_tool;
