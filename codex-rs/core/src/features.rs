@@ -313,7 +313,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::RemoteCompaction,
         key: "remote_compaction",
         stage: Stage::Experimental,
-        default_enabled: false,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::ParallelToolCalls,

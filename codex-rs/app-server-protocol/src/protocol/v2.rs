@@ -519,9 +519,11 @@ pub struct AccountUpdatedNotification {
 #[ts(export_to = "v2/")]
 pub struct Turn {
     pub id: String,
+    /// This is currently only populated for resumed threads.
+    /// TODO: properly populate items for all turns.
     pub items: Vec<ThreadItem>,
+    #[serde(flatten)]
     pub status: TurnStatus,
-    pub error: Option<TurnError>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -532,12 +534,12 @@ pub struct TurnError {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
+#[serde(tag = "status", rename_all = "camelCase")]
+#[ts(tag = "status", export_to = "v2/")]
 pub enum TurnStatus {
     Completed,
     Interrupted,
-    Failed,
+    Failed { error: TurnError },
     InProgress,
 }
 
@@ -853,8 +855,6 @@ pub struct Usage {
 #[ts(export_to = "v2/")]
 pub struct TurnCompletedNotification {
     pub turn: Turn,
-    // TODO: should usage be stored on the Turn object, and we return that instead?
-    pub usage: Usage,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
