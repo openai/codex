@@ -1490,14 +1490,14 @@ fn windows_auto_mode_prompt_requests_enabling_sandbox_feature() {
 
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        popup.contains("experimental Windows sandbox"),
+        popup.contains("Agent mode on Windows uses an experimental sandbox"),
         "expected auto mode prompt to mention enabling the sandbox feature, popup: {popup}"
     );
 }
 
 #[cfg(target_os = "windows")]
 #[test]
-fn startup_prompts_for_windows_sandbox_when_auto_requested() {
+fn startup_prompts_for_windows_sandbox_when_agent_requested() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
     set_windows_sandbox_enabled(false);
@@ -1507,7 +1507,11 @@ fn startup_prompts_for_windows_sandbox_when_auto_requested() {
 
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        popup.contains("Turn on Windows sandbox and use Auto mode"),
+        popup.contains("Agent mode on Windows uses an experimental sandbox"),
+        "expected startup prompt to explain sandbox: {popup}"
+    );
+    assert!(
+        popup.contains("Enable experimental sandbox"),
         "expected startup prompt to offer enabling the sandbox: {popup}"
     );
 

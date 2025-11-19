@@ -293,7 +293,7 @@ impl App {
             skip_world_writable_scan_once: false,
         };
 
-        // On startup, if Auto mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
+        // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
         {
             let should_check = codex_core::get_platform_sandbox().is_some()
@@ -546,7 +546,7 @@ impl App {
             AppEvent::OpenWindowsSandboxEnablePrompt { preset } => {
                 self.chat_widget.open_windows_sandbox_enable_prompt(preset);
             }
-            AppEvent::EnableWindowsSandboxForAuto { preset } => {
+            AppEvent::EnableWindowsSandboxForAgentMode { preset } => {
                 #[cfg(target_os = "windows")]
                 {
                     let profile = self.active_profile.as_deref();
@@ -587,8 +587,7 @@ impl App {
                                 self.app_event_tx
                                     .send(AppEvent::UpdateSandboxPolicy(preset.sandbox.clone()));
                                 self.chat_widget.add_info_message(
-                                    "Enabled the Windows sandbox feature and switched to Auto mode."
-                                        .to_string(),
+                                    "Enabled experimental Windows sandbox.".to_string(),
                                     None,
                                 );
                             }
@@ -732,7 +731,7 @@ impl App {
                         "failed to persist world-writable warning acknowledgement"
                     );
                     self.chat_widget.add_error_message(format!(
-                        "Failed to save Auto mode warning preference: {err}"
+                        "Failed to save Agent mode warning preference: {err}"
                     ));
                 }
             }

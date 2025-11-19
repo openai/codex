@@ -2169,11 +2169,6 @@ impl ChatWidget {
         let current_sandbox = self.config.sandbox_policy.clone();
         let mut items: Vec<SelectionItem> = Vec::new();
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
-        #[cfg(target_os = "windows")]
-        let forced_windows_read_only = self.config.forced_auto_mode_downgraded_on_windows
-            && codex_core::get_platform_sandbox().is_none();
-        #[cfg(not(target_os = "windows"))]
-        let forced_windows_read_only = false;
         for preset in presets.into_iter() {
             let is_current =
                 current_approval == preset.approval && current_sandbox == preset.sandbox;
@@ -2237,14 +2232,7 @@ impl ChatWidget {
         }
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some(
-                if forced_windows_read_only {
-                    "Select approval mode (Codex changed your permissions to Read Only because the Windows sandbox is off)"
-                        .to_string()
-                } else {
-                    "Select Approval Mode".to_string()
-                },
-            ),
+            title: Some("Select Approval Mode".to_string()),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             header: Box::new(()),
@@ -2368,9 +2356,9 @@ impl ChatWidget {
         };
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
         let mode_label = match self.config.sandbox_policy {
-            SandboxPolicy::WorkspaceWrite { .. } => "Auto mode",
+            SandboxPolicy::WorkspaceWrite { .. } => "Agent mode",
             SandboxPolicy::ReadOnly => "Read-Only mode",
-            _ => "Auto mode",
+            _ => "Agent mode",
         };
         let info_line = if failed_scan {
             Line::from(vec![
@@ -2471,36 +2459,36 @@ impl ChatWidget {
 
         let mut header = ColumnRenderable::new();
         header.push(line![
-            "Auto mode requires the experimental Windows sandbox.".bold(),
-            " Turn it on to enable sandboxed commands on Windows."
+            "Agent mode on Windows uses an experimental sandbox".bold()
+        ]);
+        header.push(line!["to limit network and filesystem access.".bold()]);
+        header.push(line![
+            "Learn more: https://github.com/openai/codex/blob/main/docs/sandbox.md#windows"
         ]);
 
         let preset_clone = preset;
-        let items = vec![SelectionItem {
-            name: "Turn on Windows sandbox and use Auto mode".to_string(),
-            description: Some(
-                "Adds enable_experimental_windows_sandbox = true to config.toml and switches to Auto mode."
-                    .to_string(),
-            ),
-            actions: vec![Box::new(move |tx| {
-                tx.send(AppEvent::EnableWindowsSandboxForAuto {
-                    preset: preset_clone.clone(),
-                });
-            })],
-            dismiss_on_select: true,
-            ..Default::default()
-        }, SelectionItem {
-            name: "Go Back".to_string(),
-            description: Some(
-                "Stay on read-only or full access without enabling the sandbox feature."
-                    .to_string(),
-            ),
-            actions: vec![Box::new(|tx| {
-                tx.send(AppEvent::OpenApprovalsPopup);
-            })],
-            dismiss_on_select: true,
-            ..Default::default()
-        }];
+        let items = vec![
+            SelectionItem {
+                name: "Enable experimental sandbox".to_string(),
+                description: None,
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::EnableWindowsSandboxForAuto {
+                        preset: preset_clone.clone(),
+                    });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Go back".to_string(),
+                description: None,
+                actions: vec![Box::new(|tx| {
+                    tx.send(AppEvent::OpenApprovalsPopup);
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: None,
