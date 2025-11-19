@@ -330,6 +330,7 @@ fn record_items_respects_custom_token_limit() {
         ResponseItem::FunctionCallOutput { output, .. } => output,
         other => panic!("unexpected history item: {other:?}"),
     };
+    eprintln!("stored: {}", stored.content);
     assert!(stored.content.contains("tokens truncated"));
 }
 
@@ -373,17 +374,16 @@ fn format_exec_output_truncates_large_error() {
 
     let truncated = truncate_exec_output(&large_error);
 
-    assert_truncated_message_matches(&truncated, line, 36_270);
+    assert_truncated_message_matches(&truncated, line, 36250);
     assert_ne!(truncated, large_error);
 }
 
 #[test]
 fn format_exec_output_marks_byte_truncation_without_omitted_lines() {
-    let long_line = "a".repeat(EXEC_FORMAT_MAX_BYTES + 50);
+    let long_line = "a".repeat(EXEC_FORMAT_MAX_BYTES + 10000);
     let truncated = truncate_exec_output(&long_line);
-
     assert_ne!(truncated, long_line);
-    assert_truncated_message_matches(&truncated, "a", 20);
+    assert_truncated_message_matches(&truncated, "a", 2500);
     assert!(
         !truncated.contains("omitted"),
         "line omission marker should not appear when no lines were dropped: {truncated}"
@@ -406,7 +406,7 @@ fn format_exec_output_reports_omitted_lines_and_keeps_head_and_tail() {
         .collect();
 
     let truncated = truncate_exec_output(&content);
-    assert_truncated_message_matches(&truncated, "line-0-", 34_747);
+    assert_truncated_message_matches(&truncated, "line-0-", 34_723);
     assert!(
         truncated.contains("line-0-"),
         "expected head line to remain: {truncated}"
@@ -429,7 +429,7 @@ fn format_exec_output_prefers_line_marker_when_both_limits_exceeded() {
 
     let truncated = truncate_exec_output(&content);
 
-    assert_truncated_message_matches(&truncated, "line-0-", 17_536);
+    assert_truncated_message_matches(&truncated, "line-0-", 17_423);
 }
 
 //TODO(aibrahim): run CI in release mode.

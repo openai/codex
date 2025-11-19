@@ -176,11 +176,15 @@ fn truncate_with_byte_estimate(s: &str, policy: TruncationPolicy) -> String {
     if s.is_empty() {
         return String::new();
     }
+    let total_chars = s.chars().count();
     let max_bytes = policy.byte_budget();
 
     if max_bytes == 0 {
         // No budget to show content; just report that everything was truncated.
-        let marker = format_truncation_marker(policy, removed_units_for_source(policy, s.len()));
+        let marker = format_truncation_marker(
+            policy,
+            removed_units_for_source(policy, s.len(), total_chars),
+        );
         return marker;
     }
 
@@ -189,38 +193,32 @@ fn truncate_with_byte_estimate(s: &str, policy: TruncationPolicy) -> String {
     }
 
     let total_bytes = s.len();
-    let marker = format_truncation_marker(
-        policy,
-        removed_units_for_source(policy, total_bytes.saturating_sub(max_bytes)),
-    );
 
-    if marker.len() >= max_bytes {
-        let truncated_marker = truncate_on_boundary(&marker, max_bytes);
-        return truncated_marker.to_string();
-    }
-
-    let keep_budget = max_bytes - marker.len();
-    let (left_budget, right_budget) = split_budget(keep_budget);
+    let (left_budget, right_budget) = split_budget(max_bytes);
     let prefix_end = pick_prefix_end(s, left_budget);
     let mut suffix_start = pick_suffix_start(s, right_budget);
     if suffix_start < prefix_end {
         suffix_start = prefix_end;
     }
 
-    let mut out = assemble_truncated_output(&s[..prefix_end], &s[suffix_start..], &marker);
+    let left_chars = s[..prefix_end].chars().count();
+    let right_chars = s[suffix_start..].chars().count();
+    let removed_chars = total_chars
+        .saturating_sub(left_chars)
+        .saturating_sub(right_chars);
 
-    if out.len() > max_bytes {
-        let boundary = truncate_on_boundary(&out, max_bytes);
-        out.truncate(boundary.len());
-    }
+    let marker = format_truncation_marker(
+        policy,
+        removed_units_for_source(policy, total_bytes.saturating_sub(max_bytes), removed_chars),
+    );
 
-    out
+    assemble_truncated_output(&s[..prefix_end], &s[suffix_start..], &marker)
 }
 
 fn format_truncation_marker(policy: TruncationPolicy, removed_count: u64) -> String {
     match policy {
         TruncationPolicy::Tokens(_) => format!("[…{removed_count} tokens truncated…]"),
-        TruncationPolicy::Bytes(_) => format!("[…{removed_count} bytes truncated…]"),
+        TruncationPolicy::Bytes(_) => format!("[…{removed_count} chars truncated…]"),
     }
 }
 
@@ -229,10 +227,14 @@ fn split_budget(budget: usize) -> (usize, usize) {
     (left, budget - left)
 }
 
-fn removed_units_for_source(policy: TruncationPolicy, removed_bytes: usize) -> u64 {
+fn removed_units_for_source(
+    policy: TruncationPolicy,
+    removed_bytes: usize,
+    removed_chars: usize,
+) -> u64 {
     match policy {
         TruncationPolicy::Tokens(_) => approx_tokens_from_byte_count(removed_bytes),
-        TruncationPolicy::Bytes(_) => u64::try_from(removed_bytes).unwrap_or(u64::MAX),
+        TruncationPolicy::Bytes(_) => u64::try_from(removed_chars).unwrap_or(u64::MAX),
     }
 }
 
@@ -347,7 +349,7 @@ mod tests {
         let s = "😀😀😀😀😀😀😀😀😀😀\nsecond line with text\n";
         let max_tokens = 8;
         let (out, tokens) = truncate_with_token_budget(s, TruncationPolicy::Tokens(max_tokens));
-
+        eprintln!("out: {}", out);
         assert!(out.contains("tokens truncated"));
         assert!(!out.contains('\u{fffd}'));
         assert_eq!(tokens, Some(approx_token_count(s) as u64));
@@ -362,7 +364,7 @@ mod tests {
         let truncated = truncate_text(&large_error, TruncationPolicy::Tokens(60));
         dbg!(&truncated);
         // Assert the exact truncated output to avoid regex/indirection.
-        let expected = "very long execution error line that should trigger truncation\n[…1829 tokens truncated…]\nvery long execution error line that should trigger truncation\n";
+        let expected = "very long execution error line that should trigger truncation\n[…1800 tokens truncated…]\nvery long execution error line that should trigger truncation\n";
         assert_eq!(truncated, expected);
     }
 
@@ -373,8 +375,7 @@ mod tests {
         let truncated = truncate_text(&long_line, TruncationPolicy::Bytes(80));
         dbg!(&truncated);
 
-        let expected =
-            "aaaaaaaaaaaaaaaaaaaaaaaaaa[…247 bytes truncated…]\naaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let expected = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa[…220 chars truncated…]\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         assert_eq!(truncated, expected);
         assert!(
             !truncated.contains("omitted"),
@@ -398,8 +399,12 @@ mod tests {
             .collect();
 
         let truncated = truncate_text(&content, TruncationPolicy::Tokens(80));
-        dbg!(&truncated);
-        let expected = "line-0-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline-1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n[…37168 tokens truncated…]\nline-1999-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n";
+        let expected = "line-0-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+line-1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+[…37143 tokens truncated…]
+line-1998-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+line-1999-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+";
         assert_eq!(truncated, expected);
         assert!(
             truncated.contains("line-0-"),
@@ -416,14 +421,18 @@ mod tests {
     #[test]
     fn format_exec_output_prefers_line_marker_when_both_limits_exceeded() {
         let total_lines = 300;
-        let long_line = "x".repeat(256);
+        let long_line = "x".repeat(50);
         let content: String = (0..total_lines)
             .map(|idx| format!("line-{idx}-{long_line}\n"))
             .collect();
 
         let truncated = truncate_text(&content, TruncationPolicy::Tokens(60));
         dbg!(&truncated);
-        let expected = "line-0-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[…19897 tokens truncated…]\n";
+        let expected = "line-0-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+line-1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+[…4413 tokens truncated…]
+line-299-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+";
         assert_eq!(truncated, expected);
     }
 
