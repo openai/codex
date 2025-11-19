@@ -1,12 +1,4 @@
 <p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install --cask codex</code></p>
-
-> [!NOTE]
-> The leader–worker workflow described in this repository was implemented entirely by Codex CLI without human intervention and has not been tested; it exists to illustrate the concept only.
-
-### Leader–worker preview status
-
-The leader–worker workflow remains a preview feature. Even when the configuration gate is enabled (`[leader_worker].enabled = true`), Codex only emits events to demonstrate the orchestration concept; it does **not** run production-quality multi-worker execution. Expect breaking changes, missing validation, and telemetry-only behavior until a future release completes the hardening phase.
-
 <p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
 </br>
 </br>If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="https://developers.openai.com/codex/ide">install in your IDE</a>
@@ -101,6 +93,7 @@ Codex CLI supports a rich set of configuration options, with preferences stored 
   - [Tracing / verbose logging](./docs/advanced.md#tracing--verbose-logging)
   - [Model Context Protocol (MCP)](./docs/advanced.md#model-context-protocol-mcp)
 - [**Zero data retention (ZDR)**](./docs/zdr.md)
+- [Leader–worker workflow (preview)](./docs/leader-worker-workflow.html)
 - [**Contributing**](./docs/contributing.md)
 - [**Install & build**](./docs/install.md)
   - [System Requirements](./docs/install.md#system-requirements)
