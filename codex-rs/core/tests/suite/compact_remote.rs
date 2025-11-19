@@ -14,7 +14,6 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::mount_sse_once;
-use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodexHarness;

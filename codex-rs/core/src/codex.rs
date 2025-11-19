@@ -1903,7 +1903,6 @@ pub(crate) async fn run_task(
                         )
                         .await;
                     }
-                    compact::run_inline_auto_compact_task(sess.clone(), turn_context.clone()).await;
                     continue;
                 }
 
