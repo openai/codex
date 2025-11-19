@@ -23,7 +23,6 @@ use std::sync::Arc;
 pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     codex_message_processor: CodexMessageProcessor,
-    config: Arc<Config>,
     initialized: bool,
 }
 
@@ -51,14 +50,13 @@ impl MessageProcessor {
             conversation_manager,
             outgoing.clone(),
             codex_linux_sandbox_exe,
-            config.clone(),
+            config,
             feedback,
         );
 
         Self {
             outgoing,
             codex_message_processor,
-            config,
             initialized: false,
         }
     }

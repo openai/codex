@@ -1255,16 +1255,11 @@ impl CodexMessageProcessor {
         // Persist windows sandbox feature.
         // TODO: persist default config in general.
         let mut cli_overrides = cli_overrides.unwrap_or_default();
-        if cfg!(target_os = "windows") && self.config.features.enabled(Feature::WindowsSandbox) {
+        if cfg!(windows) && self.config.features.enabled(Feature::WindowsSandbox) {
             cli_overrides.insert(
                 "features.enable_experimental_windows_sandbox".to_string(),
                 serde_json::json!(true),
             );
-            self.handle_windows_world_writable_warning(
-                cwd.map(PathBuf::from)
-                    .unwrap_or_else(|| self.config.cwd.clone()),
-            )
-            .await;
         }
 
         let config = match derive_config_from_params(overrides, Some(cli_overrides)).await {
@@ -1279,6 +1274,10 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        if cfg!(windows) && config.features.enabled(Feature::WindowsSandbox) {
+            self.handle_windows_world_writable_warning(config.cwd.clone())
+                .await;
+        }
 
         match self.conversation_manager.new_conversation(config).await {
             Ok(conversation_id) => {
@@ -1959,6 +1958,15 @@ impl CodexMessageProcessor {
                     include_apply_patch_tool,
                 } = overrides;
 
+                // Persist windows sandbox feature.
+                let mut cli_overrides = cli_overrides.unwrap_or_default();
+                if cfg!(windows) && self.config.features.enabled(Feature::WindowsSandbox) {
+                    cli_overrides.insert(
+                        "features.enable_experimental_windows_sandbox".to_string(),
+                        serde_json::json!(true),
+                    );
+                }
+
                 let overrides = ConfigOverrides {
                     model,
                     config_profile: profile,
@@ -1974,7 +1982,7 @@ impl CodexMessageProcessor {
                     ..Default::default()
                 };
 
-                derive_config_from_params(overrides, cli_overrides).await
+                derive_config_from_params(overrides, Some(cli_overrides)).await
             }
             None => Ok(self.config.as_ref().clone()),
         };
@@ -1989,6 +1997,10 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        if cfg!(windows) && config.features.enabled(Feature::WindowsSandbox) {
+            self.handle_windows_world_writable_warning(config.cwd.clone())
+                .await;
+        }
 
         let conversation_history = if let Some(path) = path {
             match RolloutRecorder::get_rollout_history(&path).await {
@@ -2882,6 +2894,7 @@ impl CodexMessageProcessor {
                 cwd,
             )
         {
+            tracing::warn!("world writable warning: {sample_paths:?} {extra_count} {failed_scan}");
             self.outgoing
                 .send_server_notification(ServerNotification::WindowsWorldWritableWarning(
                     WindowsWorldWritableWarningNotification {
