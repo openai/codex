@@ -12,16 +12,14 @@ use codex_core::protocol_config_types::ReasoningSummary;
 use codex_core::shell::Shell;
 use codex_core::shell::default_user_shell;
 use codex_protocol::user_input::UserInput;
-use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
+use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use tempfile::TempDir;
-use wiremock::Mock;
-use wiremock::MockServer;
-use wiremock::ResponseTemplate;
-use wiremock::matchers::method;
-use wiremock::matchers::path;
 
 fn text_user_input(text: String) -> serde_json::Value {
     serde_json::json!({
@@ -66,18 +64,18 @@ fn operating_system_context_block() -> String {
 }
 
 fn default_env_context_str(cwd: &str, shell: &Shell) -> String {
-    let shell_line = match shell.name() {
-        Some(name) => format!("  <shell>{name}</shell>\n"),
-        None => String::new(),
-    };
-    let os_block = operating_system_context_block();
     format!(
         r#"<environment_context>
-  <cwd>{cwd}</cwd>
+  <cwd>{}</cwd>
   <approval_policy>on-request</approval_policy>
   <sandbox_mode>read-only</sandbox_mode>
   <network_access>restricted</network_access>
-{shell_line}{os_block}</environment_context>"#
+{}</environment_context>"#,
+        cwd,
+        match shell.name() {
+            Some(name) => format!("  <shell>{name}</shell>\n"),
+            None => String::new(),
+        }
     )
 }
 
@@ -99,48 +97,24 @@ fn assert_tool_names(body: &serde_json::Value, expected_names: &[&str]) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn codex_mini_latest_tools() {
-    skip_if_no_network!();
+async fn codex_mini_latest_tools() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
     use pretty_assertions::assert_eq;
 
-    let server = MockServer::start().await;
+    let server = start_mock_server().await;
+    let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
 
-    let sse = sse_completed("resp");
-    let template = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(sse, "text/event-stream");
-
-    // Expect two POSTs to /v1/responses
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(template)
-        .expect(2)
-        .mount(&server)
-        .await;
-
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-
-    let cwd = TempDir::new().unwrap();
-    let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home);
-    config.cwd = cwd.path().to_path_buf();
-    config.model_provider = model_provider;
-    config.user_instructions = Some("be consistent and helpful".to_string());
-    config.features.disable(Feature::ApplyPatchFreeform);
-
-    let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
-    config.model = "codex-mini-latest".to_string();
-    config.model_family = find_family_for_model("codex-mini-latest").unwrap();
-
-    let codex = conversation_manager
-        .new_conversation(config)
-        .await
-        .expect("create new conversation")
-        .conversation;
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|config| {
+            config.user_instructions = Some("be consistent and helpful".to_string());
+            config.features.disable(Feature::ApplyPatchFreeform);
+            config.model = "codex-mini-latest".to_string();
+            config.model_family = find_family_for_model("codex-mini-latest")
+                .expect("model family for codex-mini-latest");
+        })
+        .build(&server)
+        .await?;
 
     codex
         .submit(Op::UserInput {
@@ -148,8 +122,7 @@ async fn codex_mini_latest_tools() {
                 text: "hello 1".into(),
             }],
         })
-        .await
-        .unwrap();
+        .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     codex
@@ -158,12 +131,8 @@ async fn codex_mini_latest_tools() {
                 text: "hello 2".into(),
             }],
         })
-        .await
-        .unwrap();
+        .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
-
-    let requests = server.received_requests().await.unwrap();
-    assert_eq!(requests.len(), 2, "expected two POST requests");
 
     let expected_instructions = [
         include_str!("../../prompt.md"),
@@ -171,59 +140,36 @@ async fn codex_mini_latest_tools() {
     ]
     .join("\n");
 
-    let body0 = requests[0].body_json::<serde_json::Value>().unwrap();
+    let body0 = req1.single_request().body_json();
     assert_eq!(
         body0["instructions"],
         serde_json::json!(expected_instructions),
     );
-    let body1 = requests[1].body_json::<serde_json::Value>().unwrap();
+    let body1 = req2.single_request().body_json();
     assert_eq!(
         body1["instructions"],
         serde_json::json!(expected_instructions),
     );
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn prompt_tools_are_consistent_across_requests() {
-    skip_if_no_network!();
+async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
     use pretty_assertions::assert_eq;
 
-    let server = MockServer::start().await;
+    let server = start_mock_server().await;
+    let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
 
-    let sse = sse_completed("resp");
-    let template = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(sse, "text/event-stream");
-
-    // Expect two POSTs to /v1/responses
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(template)
-        .expect(2)
-        .mount(&server)
-        .await;
-
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-
-    let cwd = TempDir::new().unwrap();
-    let codex_home = TempDir::new().unwrap();
-
-    let mut config = load_default_config_for_test(&codex_home);
-    config.cwd = cwd.path().to_path_buf();
-    config.model_provider = model_provider;
-    config.user_instructions = Some("be consistent and helpful".to_string());
-
-    let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let TestCodex { codex, config, .. } = test_codex()
+        .with_config(|config| {
+            config.user_instructions = Some("be consistent and helpful".to_string());
+        })
+        .build(&server)
+        .await?;
     let base_instructions = config.model_family.base_instructions.clone();
-    let codex = conversation_manager
-        .new_conversation(config)
-        .await
-        .expect("create new conversation")
-        .conversation;
 
     codex
         .submit(Op::UserInput {
@@ -231,8 +177,7 @@ async fn prompt_tools_are_consistent_across_requests() {
                 text: "hello 1".into(),
             }],
         })
-        .await
-        .unwrap();
+        .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     codex
@@ -241,8 +186,7 @@ async fn prompt_tools_are_consistent_across_requests() {
                 text: "hello 2".into(),
             }],
         })
-        .await
-        .unwrap();
+        .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     let expected_tools_names = vec![
@@ -272,7 +216,7 @@ async fn prompt_tools_are_consistent_across_requests() {
     );
     assert_tool_names(&body0, &expected_tools_names);
 
-    let body1 = requests[1].body_json::<serde_json::Value>().unwrap();
+    let body1 = req2.single_request().body_json();
     assert_eq!(
         body1["instructions"],
         serde_json::json!(expected_instructions),
@@ -283,44 +227,21 @@ async fn prompt_tools_are_consistent_across_requests() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn prefixes_context_and_instructions_once_and_consistently_across_requests() {
-    skip_if_no_network!();
+async fn prefixes_context_and_instructions_once_and_consistently_across_requests()
+-> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
     use pretty_assertions::assert_eq;
 
-    let server = MockServer::start().await;
+    let server = start_mock_server().await;
+    let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
 
-    let sse = sse_completed("resp");
-    let template = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(sse, "text/event-stream");
-
-    // Expect two POSTs to /v1/responses
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(template)
-        .expect(2)
-        .mount(&server)
-        .await;
-
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-
-    let cwd = TempDir::new().unwrap();
-    let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home);
-    config.cwd = cwd.path().to_path_buf();
-    config.model_provider = model_provider;
-    config.user_instructions = Some("be consistent and helpful".to_string());
-
-    let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
-    let codex = conversation_manager
-        .new_conversation(config)
-        .await
-        .expect("create new conversation")
-        .conversation;
+    let TestCodex { codex, config, .. } = test_codex()
+        .with_config(|config| {
+            config.user_instructions = Some("be consistent and helpful".to_string());
+        })
+        .build(&server)
+        .await?;
 
     codex
         .submit(Op::UserInput {
@@ -328,8 +249,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
                 text: "hello 1".into(),
             }],
         })
-        .await
-        .unwrap();
+        .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     codex
@@ -338,16 +258,11 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
                 text: "hello 2".into(),
             }],
         })
-        .await
-        .unwrap();
+        .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    let requests = server.received_requests().await.unwrap();
-    assert_eq!(requests.len(), 2, "expected two POST requests");
-
     let shell = default_user_shell().await;
-
-    let cwd_str = cwd.path().to_string_lossy().into_owned();
+    let cwd_str = config.cwd.to_string_lossy();
     let expected_env_text = default_env_context_str(&cwd_str, &shell);
     let expected_ui_text = format!(
         "# AGENTS.md instructions for {cwd_str}\n\n<INSTRUCTIONS>\nbe consistent and helpful\n</INSTRUCTIONS>"
@@ -369,7 +284,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
         "role": "user",
         "content": [ { "type": "input_text", "text": "hello 1" } ]
     });
-    let body1 = requests[0].body_json::<serde_json::Value>().unwrap();
+    let body1 = req1.single_request().body_json();
     assert_eq!(
         body1["input"],
         serde_json::json!([expected_ui_msg, expected_env_msg, expected_user_message_1])
@@ -380,7 +295,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
         "role": "user",
         "content": [ { "type": "input_text", "text": "hello 2" } ]
     });
-    let body2 = requests[1].body_json::<serde_json::Value>().unwrap();
+    let body2 = req2.single_request().body_json();
     let expected_body2 = serde_json::json!(
         [
             body1["input"].as_array().unwrap().as_slice(),
@@ -389,47 +304,25 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
         .concat()
     );
     assert_eq!(body2["input"], expected_body2);
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
-    skip_if_no_network!();
+async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
     use pretty_assertions::assert_eq;
 
-    let server = MockServer::start().await;
+    let server = start_mock_server().await;
+    let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
 
-    let sse = sse_completed("resp");
-    let template = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(sse, "text/event-stream");
-
-    // Expect two POSTs to /v1/responses
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(template)
-        .expect(2)
-        .mount(&server)
-        .await;
-
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-
-    let cwd = TempDir::new().unwrap();
-    let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home);
-    config.cwd = cwd.path().to_path_buf();
-    config.model_provider = model_provider;
-    config.user_instructions = Some("be consistent and helpful".to_string());
-
-    let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
-    let codex = conversation_manager
-        .new_conversation(config)
-        .await
-        .expect("create new conversation")
-        .conversation;
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|config| {
+            config.user_instructions = Some("be consistent and helpful".to_string());
+        })
+        .build(&server)
+        .await?;
 
     // First turn
     codex
@@ -438,8 +331,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
                 text: "hello 1".into(),
             }],
         })
-        .await
-        .unwrap();
+        .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     let writable = TempDir::new().unwrap();
@@ -457,8 +349,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
             effort: Some(Some(ReasoningEffort::High)),
             summary: Some(ReasoningSummary::Detailed),
         })
-        .await
-        .unwrap();
+        .await?;
 
     // Second turn after overrides
     codex
@@ -467,16 +358,11 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
                 text: "hello 2".into(),
             }],
         })
-        .await
-        .unwrap();
+        .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    // Verify we issued exactly two requests, and the cached prefix stayed identical.
-    let requests = server.received_requests().await.unwrap();
-    assert_eq!(requests.len(), 2, "expected two POST requests");
-
-    let body1 = requests[0].body_json::<serde_json::Value>().unwrap();
-    let body2 = requests[1].body_json::<serde_json::Value>().unwrap();
+    let body1 = req1.single_request().body_json();
+    let body2 = req2.single_request().body_json();
     // prompt_cache_key should remain constant across overrides
     assert_eq!(
         body1["prompt_cache_key"], body2["prompt_cache_key"],
@@ -517,6 +403,8 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
         .concat()
     );
     assert_eq!(body2["input"], expected_body2);
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -607,40 +495,16 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
     skip_if_no_network!(Ok(()));
     use pretty_assertions::assert_eq;
 
-    let server = MockServer::start().await;
+    let server = start_mock_server().await;
+    let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
 
-    let sse = sse_completed("resp");
-    let template = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(sse, "text/event-stream");
-
-    // Expect two POSTs to /v1/responses
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(template)
-        .expect(2)
-        .mount(&server)
-        .await;
-
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-
-    let cwd = TempDir::new().unwrap();
-    let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home);
-    config.cwd = cwd.path().to_path_buf();
-    config.model_provider = model_provider;
-    config.user_instructions = Some("be consistent and helpful".to_string());
-
-    let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
-    let codex = conversation_manager
-        .new_conversation(config)
-        .await
-        .expect("create new conversation")
-        .conversation;
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|config| {
+            config.user_instructions = Some("be consistent and helpful".to_string());
+        })
+        .build(&server)
+        .await?;
 
     // First turn
     codex
@@ -649,8 +513,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
                 text: "hello 1".into(),
             }],
         })
-        .await
-        .unwrap();
+        .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // Second turn using per-turn overrides via UserTurn
@@ -674,16 +537,11 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
             summary: ReasoningSummary::Detailed,
             final_output_json_schema: None,
         })
-        .await
-        .unwrap();
+        .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    // Verify we issued exactly two requests, and the cached prefix stayed identical.
-    let requests = server.received_requests().await.unwrap();
-    assert_eq!(requests.len(), 2, "expected two POST requests");
-
-    let body1 = requests[0].body_json::<serde_json::Value>().unwrap();
-    let body2 = requests[1].body_json::<serde_json::Value>().unwrap();
+    let body1 = req1.single_request().body_json();
+    let body2 = req2.single_request().body_json();
 
     // prompt_cache_key should remain constant across per-turn overrides
     assert_eq!(
@@ -724,38 +582,25 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
         .concat()
     );
     assert_eq!(body2["input"], expected_body2);
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn send_user_turn_with_no_changes_does_not_send_environment_context() {
-    skip_if_no_network!();
+async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
     use pretty_assertions::assert_eq;
 
-    let server = MockServer::start().await;
+    let server = start_mock_server().await;
+    let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
 
-    let sse = sse_completed("resp");
-    let template = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(sse, "text/event-stream");
-
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(template)
-        .expect(2)
-        .mount(&server)
-        .await;
-
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-
-    let cwd = TempDir::new().unwrap();
-    let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home);
-    config.cwd = cwd.path().to_path_buf();
-    config.model_provider = model_provider;
-    config.user_instructions = Some("be consistent and helpful".to_string());
+    let TestCodex { codex, config, .. } = test_codex()
+        .with_config(|config| {
+            config.user_instructions = Some("be consistent and helpful".to_string());
+        })
+        .build(&server)
+        .await?;
 
     let default_cwd = config.cwd.clone();
     let default_approval_policy = config.approval_policy;
@@ -763,14 +608,6 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() {
     let default_model = config.model.clone();
     let default_effort = config.model_reasoning_effort;
     let default_summary = config.model_reasoning_summary;
-
-    let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
-    let codex = conversation_manager
-        .new_conversation(config)
-        .await
-        .expect("create new conversation")
-        .conversation;
 
     codex
         .submit(Op::UserTurn {
@@ -785,8 +622,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() {
             summary: default_summary,
             final_output_json_schema: None,
         })
-        .await
-        .unwrap();
+        .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     codex
@@ -802,27 +638,20 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() {
             summary: default_summary,
             final_output_json_schema: None,
         })
-        .await
-        .unwrap();
+        .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    let requests = server.received_requests().await.unwrap();
-    assert_eq!(requests.len(), 2, "expected two POST requests");
-
-    let body1 = requests[0].body_json::<serde_json::Value>().unwrap();
-    let body2 = requests[1].body_json::<serde_json::Value>().unwrap();
+    let body1 = req1.single_request().body_json();
+    let body2 = req2.single_request().body_json();
 
     let shell = default_user_shell().await;
+    let default_cwd_lossy = default_cwd.to_string_lossy();
     let expected_ui_text = format!(
-        "# AGENTS.md instructions for {}\n\n<INSTRUCTIONS>\nbe consistent and helpful\n</INSTRUCTIONS>",
-        default_cwd.to_string_lossy()
+        "# AGENTS.md instructions for {default_cwd_lossy}\n\n<INSTRUCTIONS>\nbe consistent and helpful\n</INSTRUCTIONS>"
     );
     let expected_ui_msg = text_user_input(expected_ui_text);
 
-    let expected_env_msg_1 = text_user_input(default_env_context_str(
-        &cwd.path().to_string_lossy(),
-        &shell,
-    ));
+    let expected_env_msg_1 = text_user_input(default_env_context_str(&default_cwd_lossy, &shell));
     let expected_user_message_1 = text_user_input("hello 1".to_string());
 
     let expected_input_1 = serde_json::Value::Array(vec![
@@ -840,38 +669,25 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() {
         expected_user_message_2,
     ]);
     assert_eq!(body2["input"], expected_input_2);
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn send_user_turn_with_changes_sends_environment_context() {
-    skip_if_no_network!();
+async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
     use pretty_assertions::assert_eq;
 
-    let server = MockServer::start().await;
+    let server = start_mock_server().await;
 
-    let sse = sse_completed("resp");
-    let template = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(sse, "text/event-stream");
-
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(template)
-        .expect(2)
-        .mount(&server)
-        .await;
-
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-
-    let cwd = TempDir::new().unwrap();
-    let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home);
-    config.cwd = cwd.path().to_path_buf();
-    config.model_provider = model_provider;
-    config.user_instructions = Some("be consistent and helpful".to_string());
+    let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
+    let TestCodex { codex, config, .. } = test_codex()
+        .with_config(|config| {
+            config.user_instructions = Some("be consistent and helpful".to_string());
+        })
+        .build(&server)
+        .await?;
 
     let default_cwd = config.cwd.clone();
     let default_approval_policy = config.approval_policy;
@@ -879,14 +695,6 @@ async fn send_user_turn_with_changes_sends_environment_context() {
     let default_model = config.model.clone();
     let default_effort = config.model_reasoning_effort;
     let default_summary = config.model_reasoning_summary;
-
-    let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
-    let codex = conversation_manager
-        .new_conversation(config.clone())
-        .await
-        .expect("create new conversation")
-        .conversation;
 
     codex
         .submit(Op::UserTurn {
@@ -901,8 +709,7 @@ async fn send_user_turn_with_changes_sends_environment_context() {
             summary: default_summary,
             final_output_json_schema: None,
         })
-        .await
-        .unwrap();
+        .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     codex
@@ -918,15 +725,11 @@ async fn send_user_turn_with_changes_sends_environment_context() {
             summary: ReasoningSummary::Detailed,
             final_output_json_schema: None,
         })
-        .await
-        .unwrap();
+        .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    let requests = server.received_requests().await.unwrap();
-    assert_eq!(requests.len(), 2, "expected two POST requests");
-
-    let body1 = requests[0].body_json::<serde_json::Value>().unwrap();
-    let body2 = requests[1].body_json::<serde_json::Value>().unwrap();
+    let body1 = req1.single_request().body_json();
+    let body2 = req2.single_request().body_json();
 
     let shell = default_user_shell().await;
     let expected_ui_text = format!(
@@ -965,4 +768,6 @@ async fn send_user_turn_with_changes_sends_environment_context() {
         expected_user_message_2,
     ]);
     assert_eq!(body2["input"], expected_input_2);
+
+    Ok(())
 }
