@@ -1900,6 +1900,7 @@ pub(crate) async fn run_task(
                             thread_id: sess.conversation_id.to_string(),
                             turn_id: turn_context.sub_id.clone(),
                             cwd: turn_context.cwd.display().to_string(),
+                            session_id: sess.conversation_id.to_string(),
                             input_messages: turn_input_messages,
                             last_assistant_message: last_agent_message.clone(),
                         });

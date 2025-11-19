@@ -45,19 +45,19 @@ impl WidgetRef for &TrustDirectoryWidget {
 
         column.push(Line::from(vec![
             "> ".into(),
-            "You are running Codex in ".bold(),
+            "You are running Codex Super in ".bold(),
             self.cwd.to_string_lossy().to_string().into(),
         ]));
         column.push("");
 
         let guidance = if self.is_git_repo {
-            "Since this folder is version controlled, you may wish to allow Codex to work in this folder without asking for approval."
+            "Codex Super can work in trusted folders without repeated approvals, so you stay focused on building while keeping control when it matters. Since this folder is version controlled, you may wish to allow Codex Super to work in this folder without asking for approval."
         } else {
-            "Since this folder is not version controlled, we recommend requiring approval of all edits and commands."
+            "Codex Super works best in trusted folders where approvals are optional, but in untracked directories we recommend keeping approvals for safety. Since this folder is not version controlled, we recommend requiring approval of all edits and commands."
         };
 
         column.push(
-            Paragraph::new(guidance.to_string())
+            Paragraph::new(guidance)
                 .wrap(Wrap { trim: true })
                 .inset(Insets::tlbr(0, 2, 0, 0)),
         );
@@ -66,7 +66,7 @@ impl WidgetRef for &TrustDirectoryWidget {
         let mut options: Vec<(&str, TrustDirectorySelection)> = Vec::new();
         if self.is_git_repo {
             options.push((
-                "Yes, allow Codex to work in this folder without asking for approval",
+                "Yes, allow Codex Super to work in this folder without asking for approval",
                 TrustDirectorySelection::Trust,
             ));
             options.push((
@@ -75,7 +75,7 @@ impl WidgetRef for &TrustDirectoryWidget {
             ));
         } else {
             options.push((
-                "Allow Codex to work in this folder without asking for approval",
+                "Allow Codex Super to work in this folder without asking for approval",
                 TrustDirectorySelection::Trust,
             ));
             options.push((

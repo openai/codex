@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install Codex native binaries (Rust CLI plus ripgrep helpers)."""
+"""Install codex-super native binaries (Rust CLI plus ripgrep helpers)."""
 
 import argparse
 import json
@@ -39,7 +39,7 @@ class BinaryComponent:
 
 
 BINARY_COMPONENTS = {
-    "codex": BinaryComponent(
+    "codex-super": BinaryComponent(
         artifact_prefix="codex",
         dest_dir="codex",
         binary_basename="codex",
@@ -64,7 +64,7 @@ DEFAULT_RG_TARGETS = [target for target, _ in RG_TARGET_PLATFORM_PAIRS]
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Install native Codex binaries.")
+    parser = argparse.ArgumentParser(description="Install native codex-super binaries.")
     parser.add_argument(
         "--workflow-url",
         help=(
@@ -79,7 +79,7 @@ def parse_args() -> argparse.Namespace:
         choices=tuple(list(BINARY_COMPONENTS) + ["rg"]),
         help=(
             "Limit installation to the specified components."
-            " May be repeated. Defaults to 'codex' and 'rg'."
+            " May be repeated. Defaults to 'codex-super' and 'rg'."
         ),
     )
     parser.add_argument(
@@ -101,7 +101,7 @@ def main() -> int:
     vendor_dir = codex_cli_root / VENDOR_DIR_NAME
     vendor_dir.mkdir(parents=True, exist_ok=True)
 
-    components = args.components or ["codex", "rg"]
+    components = args.components or ["codex-super", "rg"]
 
     workflow_url = (args.workflow_url or DEFAULT_WORKFLOW_URL).strip()
     if not workflow_url:
@@ -363,7 +363,17 @@ def extract_archive(
 
 def _load_manifest(manifest_path: Path) -> dict:
     cmd = ["dotslash", "--", "parse", str(manifest_path)]
-    stdout = subprocess.check_output(cmd, text=True)
+    try:
+        stdout = subprocess.check_output(cmd, text=True)
+    except FileNotFoundError:
+        file_contents = manifest_path.read_text(encoding="utf-8")
+        lines = file_contents.splitlines()
+        if lines and lines[0].startswith("#!"):
+            file_contents = "\n".join(lines[1:])
+        stdout = file_contents
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"Failed to parse DotSlash manifest {manifest_path}") from exc
+
     try:
         manifest = json.loads(stdout)
     except json.JSONDecodeError as exc:

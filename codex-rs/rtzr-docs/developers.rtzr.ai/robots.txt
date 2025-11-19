@@ -1,0 +1,10 @@
+User-agent: *
+Disallow: /console/
+Disallow: /assets/
+Disallow: /terms
+Disallow: /privacy
+
+User-agent: BuiltWith
+Disallow: /
+
+Sitemap: https://developers.rtzr.ai/sitemap.xml

@@ -15,6 +15,10 @@ use std::path::PathBuf;
 use crate::version::CODEX_CLI_VERSION;
 
 pub fn get_upgrade_version(config: &Config) -> Option<String> {
+    if std::env::var_os("CODEX_DISABLE_UPDATE_CHECK").is_some() {
+        return None;
+    }
+
     let version_file = version_filepath(config);
     let info = read_version_info(&version_file).ok();
 

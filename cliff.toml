@@ -4,7 +4,9 @@
 header = """
 # Changelog
 
-You can install any of these versions: `npm install -g @openai/codex@<version>`
+You can install any of these versions:
+- `npm install -g codex-super@<version>` (fork)
+- 공식 배포본: `npm install -g @openai/codex@<version>`
 """
 
 body = """

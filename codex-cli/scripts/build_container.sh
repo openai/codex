@@ -10,7 +10,7 @@ pushd "$SCRIPT_DIR/.." >> /dev/null || {
 }
 pnpm install
 pnpm run build
-rm -rf ./dist/openai-codex-*.tgz
+rm -rf ./dist/codex-super-*.tgz
 pnpm pack --pack-destination ./dist
-mv ./dist/openai-codex-*.tgz ./dist/codex.tgz
-docker build -t codex -f "./Dockerfile" .
+mv ./dist/codex-super-*.tgz ./dist/codex-super.tgz
+docker build -t codex-super -f "./Dockerfile" .

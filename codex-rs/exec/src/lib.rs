@@ -29,6 +29,7 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
+use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::SessionSource;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::user_input::UserInput;
@@ -86,7 +87,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         None => prompt,
     };
 
-    let prompt = match prompt_arg {
+    let mut prompt = match prompt_arg {
         Some(p) if p != "-" => p,
         // Either `-` was passed or no positional arg.
         maybe_dash => {
@@ -331,6 +332,14 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             .new_conversation(config.clone())
             .await?
     };
+
+    if let Some(global_prompt) = global_prompt_to_prepend(
+        &prompt,
+        config.global_prompt.as_deref(),
+        &session_configured,
+    ) {
+        prompt = format!("{global_prompt}\\n\\n{prompt}");
+    }
     // Print the effective configuration and prompt so users can see what Codex
     // is using.
     event_processor.print_config_summary(&config, &prompt, &session_configured);
@@ -453,6 +462,27 @@ async fn resolve_resume_path(
     }
 }
 
+fn global_prompt_to_prepend<'a>(
+    prompt: &str,
+    global_prompt: Option<&'a str>,
+    session_configured: &SessionConfiguredEvent,
+) -> Option<&'a str> {
+    if prompt.trim().is_empty() {
+        return None;
+    }
+
+    if session_configured
+        .initial_messages
+        .as_ref()
+        .is_some_and(|messages| !messages.is_empty())
+    {
+        return None;
+    }
+
+    let trimmed = global_prompt?.trim();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
 fn load_output_schema(path: Option<PathBuf>) -> Option<Value> {
     let path = path?;
 
@@ -476,5 +506,64 @@ fn load_output_schema(path: Option<PathBuf>) -> Option<Value> {
             );
             std::process::exit(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::global_prompt_to_prepend;
+    use codex_core::protocol::ErrorEvent;
+    use codex_core::protocol::EventMsg;
+    use codex_core::protocol::SessionConfiguredEvent;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn prepends_for_new_session_with_user_input() {
+        let session = SessionConfiguredEvent::default();
+
+        let result = global_prompt_to_prepend("build project", Some("stay focused"), &session);
+
+        assert_eq!(result, Some("stay focused"));
+    }
+
+    #[test]
+    fn skips_for_resumed_session() {
+        let session = SessionConfiguredEvent {
+            initial_messages: Some(vec![EventMsg::Error(ErrorEvent {
+                message: "oops".to_string(),
+            })]),
+            ..Default::default()
+        };
+
+        let result = global_prompt_to_prepend("build project", Some("stay focused"), &session);
+
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn skips_when_user_input_is_blank() {
+        let session = SessionConfiguredEvent::default();
+
+        let result = global_prompt_to_prepend("   \n", Some("stay focused"), &session);
+
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn skips_when_global_prompt_missing() {
+        let session = SessionConfiguredEvent::default();
+
+        let result = global_prompt_to_prepend("build project", None, &session);
+
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn trims_global_prompt() {
+        let session = SessionConfiguredEvent::default();
+
+        let result = global_prompt_to_prepend("build", Some("  focus   "), &session);
+
+        assert_eq!(result, Some("focus"));
     }
 }

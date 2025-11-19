@@ -2,12 +2,15 @@
 source: tui/src/onboarding/trust_directory.rs
 expression: terminal.backend()
 ---
-> You are running Codex in /workspace/project
+> You are running Codex Super in /workspace/project
 
-  Since this folder is version controlled, you may wish to allow Codex
-  to work in this folder without asking for approval.
+  Codex Super can work in trusted folders without repeated approvals,
+  so you stay focused on building while keeping control when it
+  matters. Since this folder is version controlled, you may wish to
+  allow Codex Super to work in this folder without asking for
+  approval.
 
-› 1. Yes, allow Codex to work in this folder without asking for       
+› 1. Yes, allow Codex Super to work in this folder without asking for 
      approval                                                         
   2. No, ask me to approve edits and commands
 

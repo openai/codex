@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use codex_common::approval_presets::ApprovalPreset;
@@ -13,6 +14,63 @@ use crate::history_cell::HistoryCell;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort;
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum CheckpointAction {
+    Save,
+    Load,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum TodoAction {
+    Add { text: String },
+    List,
+    Complete { index: usize },
+    Auto { enabled: bool },
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum AliasAction {
+    Add { name: String },
+    Store { name: String, prompt: String },
+    Remove { name: String },
+    List,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum PresetExecutionMode {
+    CurrentSession,
+    NewSession,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum PresetAction {
+    Add {
+        name: String,
+    },
+    Store {
+        name: String,
+        prompt: String,
+    },
+    Remove {
+        name: String,
+    },
+    List,
+    Load {
+        name: String,
+    },
+    Execute {
+        name: String,
+        prompt: String,
+        mode: PresetExecutionMode,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum CommitAction {
+    Perform { message: Option<String>, auto: bool },
+    SetAuto { enabled: bool },
+}
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
@@ -47,6 +105,35 @@ pub(crate) enum AppEvent {
 
     /// Result of computing a `/diff` command.
     DiffResult(String),
+    /// Handle a `/checkpoint` command issued from the composer.
+    CheckpointCommand {
+        action: CheckpointAction,
+        name: Option<String>,
+    },
+    /// Handle a `/todo` command issued from the composer.
+    TodoCommand {
+        action: TodoAction,
+    },
+    /// Handle a `/alias` command issued from the composer.
+    AliasCommand {
+        action: AliasAction,
+    },
+    /// Handle a `/preset` command issued from the composer.
+    PresetCommand {
+        action: PresetAction,
+    },
+    /// Handle a `/commit` command issued from the composer.
+    CommitCommand {
+        action: CommitAction,
+    },
+    /// Enable or disable automatic checkpoints.
+    SetCheckpointAutomation {
+        enabled: bool,
+    },
+    /// Fired when an automatic checkpoint should be captured after a turn.
+    AutoCheckpointTick,
+    /// Fired when auto-commit should stage and commit changes after a turn.
+    AutoCommitTick,
 
     InsertHistoryCell(Box<dyn HistoryCell>),
 
@@ -64,6 +151,26 @@ pub(crate) enum AppEvent {
     PersistModelSelection {
         model: String,
         effort: Option<ReasoningEffort>,
+    },
+
+    /// Persist the global prompt that should auto-prepend to new sessions.
+    PersistGlobalPrompt {
+        prompt: Option<String>,
+    },
+
+    /// Persist the alarm script that should run after each completed turn.
+    PersistAlarmScript {
+        script: Option<String>,
+    },
+
+    /// Persist the global alias list so prompt shortcuts survive restarts.
+    PersistAliases {
+        aliases: HashMap<String, String>,
+    },
+
+    /// Persist the preset list so it survives restarts.
+    PersistPresets {
+        presets: HashMap<String, String>,
     },
 
     /// Open the reasoning selection popup after picking a model.

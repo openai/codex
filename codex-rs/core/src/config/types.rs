@@ -363,6 +363,14 @@ pub struct Tui {
     /// Defaults to `true`.
     #[serde(default)]
     pub notifications: Notifications,
+
+    /// User-defined prompt aliases available across Codex sessions.
+    #[serde(default)]
+    pub aliases: HashMap<String, String>,
+
+    /// Reusable prompt presets that can be loaded into new or existing sessions.
+    #[serde(default)]
+    pub presets: HashMap<String, String>,
 }
 
 /// Settings for notices we display to users via the tui and app-server clients

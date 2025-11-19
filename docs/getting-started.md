@@ -36,6 +36,46 @@ codex resume --last
 codex resume 7f9f9a2e-1b3c-4c7a-9b0e-123456789abc
 ```
 
+### Tracking work with `/todo`
+
+Codex ships with a first-class TODO list:
+
+- `/todo add Write release notes` creates a new item. Items render as a Markdown checklist in the transcript.
+- `/todo list` shows the current queue.
+- `/todo complete <number>` marks an item done.
+- `/todo auto` turns on automatic reminders. When enabled, Codex will prepend the outstanding checklist to its next prompt so the agent keeps the plan top of mind.
+
+Codex also updates TODO items whenever it emits plan updates (for example, from tool-based planning). A completed plan step automatically ticks the matching TODO entry.
+
+### Automatic checkpoints
+
+`/checkpoint save <name>` still writes a one-off Markdown snapshot, but `/checkpoint auto` now accumulates the entire session inside a single file named `<session_id>.md` under `.codex/checkpoints/`. Each turn appends a new “Auto Update” section containing:
+
+- Any new user prompts
+- Codex’s latest responses
+- Updated plan/TODO items
+
+This makes it easy to follow progress over time (or resume after a restart) without littering the directory with separate files. Disable auto mode with `/checkpoint auto off`. The current preference is stored in `~/.codex/config.toml` under `auto_checkpoint`, and running `/checkpoint auto [on|off]` updates that global default.
+
+### Prompt aliases with `/alias`
+
+Save a frequently used prompt once and replay it later with a double slash:
+
+- `/alias add deploy` opens an editor. Whatever you enter is saved under the name `deploy`.
+- Typing `//deploy` in the composer immediately expands to the stored prompt (you can add extra instructions after the alias, which are appended to the saved text).
+- `/alias list` shows every alias; `/alias remove <name>` deletes one.
+
+Aliases are scoped to the active session so you can rapidly switch between recurring tasks without retyping long instructions.
+
+### Committing changes with `/commit`
+
+Use Codex to keep your git history tidy without leaving the TUI:
+
+- `/commit` stages tracked changes (respecting `.gitignore`), summarizes the diff, and creates a commit with an auto-generated message.
+- `/commit "Fix migrations"` stages everything and uses your custom commit message instead of the generated summary.
+- `/commit auto` enables automatic commits after each Codex response; turn it back off with `/commit auto off`. The preference persists as `auto_commit` in `~/.codex/config.toml`, so future sessions reuse your choice.
+- If the current working directory is not inside a git repository, Codex will show a warning instead of attempting a commit.
+
 ### Running with a prompt as input
 
 You can also run Codex CLI with a prompt as input:

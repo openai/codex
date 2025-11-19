@@ -1,4 +1,7 @@
-<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install --cask codex</code></p>
+<p align="center">
+  <code>npm i -g codex-super</code><br />또는 <code>brew install codex</code> (fork 패키지)
+  <br />또는 공식 배포본: <code>npm i -g @openai/codex</code> / <code>brew install --cask codex</code>
+</p>
 
 <p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
 </br>
@@ -18,7 +21,7 @@
 Install globally with your preferred package manager. If you use npm:
 
 ```shell
-npm install -g @openai/codex
+npm install -g codex-super
 ```
 
 Alternatively, if you use Homebrew:
@@ -68,6 +71,13 @@ Codex can access MCP servers. To configure them, refer to the [config docs](./do
 ### Configuration
 
 Codex CLI supports a rich set of configuration options, with preferences stored in `~/.codex/config.toml`. For full configuration options, see [Configuration](./docs/config.md).
+
+### Built-in session tools
+
+- ` /checkpoint save <name>` stores a workspace snapshot in `.codex/checkpoints/`. Enabling ` /checkpoint auto` now writes to a single session file named `<session_id>.md`, appending only the latest user prompts, Codex replies, and plan updates so you can skim a turn-by-turn log without a directory full of files. The default follows the `auto_checkpoint` flag in `~/.codex/config.toml`, and toggling `/checkpoint auto` updates that value automatically.
+- ` /todo add`, ` /todo list`, and ` /todo complete <number>` keep a shared checklist inside the transcript. With ` /todo auto` turned on Codex automatically prepends the current TODO list to its next prompt, and will mark items completed when `/todo complete` (or a plan update) resolves them.
+- ` /alias add <name>` opens an editor for saving reusable prompts. Invoke them later with `//name`, list them with ` /alias list`, or remove them with ` /alias remove <name>`.
+- ` /commit` summarizes tracked changes and creates a git commit. Enable auto-commits with ` /commit auto` to have Codex commit after each response; disable with ` /commit auto off`. The setting is persisted to `~/.codex/config.toml` via the `auto_commit` flag so new sessions reuse your preference.
 
 ---
 

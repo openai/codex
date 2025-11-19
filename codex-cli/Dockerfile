@@ -38,13 +38,13 @@ USER node
 ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
 ENV PATH=$PATH:/usr/local/share/npm-global/bin
 
-# Install codex
-COPY dist/codex.tgz codex.tgz
-RUN npm install -g codex.tgz \
+# Install codex-super
+COPY dist/codex-super.tgz codex-super.tgz
+RUN npm install -g codex-super.tgz \
   && npm cache clean --force \
-  && rm -rf /usr/local/share/npm-global/lib/node_modules/codex-cli/node_modules/.cache \
-  && rm -rf /usr/local/share/npm-global/lib/node_modules/codex-cli/tests \
-  && rm -rf /usr/local/share/npm-global/lib/node_modules/codex-cli/docs
+  && rm -rf /usr/local/share/npm-global/lib/node_modules/codex-super/node_modules/.cache \
+  && rm -rf /usr/local/share/npm-global/lib/node_modules/codex-super/tests \
+  && rm -rf /usr/local/share/npm-global/lib/node_modules/codex-super/docs
 
 # Inside the container we consider the environment already sufficiently locked
 # down, therefore instruct Codex CLI to allow running without sandboxing.
