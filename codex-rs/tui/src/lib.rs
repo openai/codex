@@ -342,7 +342,10 @@ async fn resolve_rollout_path(
     codex_home: &Path,
     identifier: &str,
 ) -> std::io::Result<Option<PathBuf>> {
-    if let Some(entry) = resolve_saved_session(codex_home, identifier).await? {
+    if let Some(entry) = resolve_saved_session(codex_home, identifier)
+        .await
+        .map_err(|err| std::io::Error::other(err.to_string()))?
+    {
         if entry.rollout_path.exists() {
             return Ok(Some(entry.rollout_path));
         }

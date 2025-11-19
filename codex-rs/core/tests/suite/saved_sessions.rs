@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)]
 use anyhow::Result;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
@@ -87,10 +88,7 @@ async fn save_session(
     model: &str,
 ) -> Result<SavedSessionEntry> {
     codex.flush_rollout().await?;
-    codex
-        .set_session_name(Some(name.to_string()))
-        .await
-        .expect("session name set");
+    codex.set_session_name(Some(name.to_string())).await?;
     let entry =
         build_saved_session_entry(name.to_string(), codex.rollout_path(), model.to_string())
             .await?;

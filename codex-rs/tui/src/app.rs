@@ -441,17 +441,19 @@ impl App {
     }
 
     async fn save_session(&mut self, requested_name: String) {
-        let name = requested_name.clone().trim();
+        let name = requested_name.trim().to_string();
         if name.is_empty() {
             self.chat_widget
-                .add_error_message("Usage: /save <name>".to_string())
+                .add_error_message("Usage: /save <name>".to_string());
+            return;
         }
-        match self.try_save_session(requested_name).await {
+        match self.try_save_session(&name).await {
             Ok(entry) => {
                 let name = &entry.name;
                 self.chat_widget.add_info_message(
                     format!(
-                        "Saved session '{name}' (conversation {}).", entry.conversation_id
+                        "Saved session '{name}' (conversation {}).",
+                        entry.conversation_id
                     ),
                     Some(format!(
                         "Resume with `codex resume {name}` or fork with `codex fork {name}`.",
@@ -464,24 +466,21 @@ impl App {
         }
     }
 
-    async fn try_save_session(
-        &mut self,
-        requested_name: String,
-    ) -> Result<SavedSessionEntry, CodexErr> {
+    async fn try_save_session(&mut self, name: &str) -> Result<SavedSessionEntry, CodexErr> {
         // Normalize and validate the user-provided name early so downstream async work
         // only runs for actionable requests.
-        let name = requested_name.trim();
         if name.is_empty() {
-            return Err("Usage: /save <name>".into());
+            return Err(CodexErr::Fatal("Usage: /save <name>".to_string()));
         }
 
         // Capture identifiers from the active chat widget; these are cheap and fast.
-        let conversation_id = self
-            .chat_widget
-            .conversation_id()
-            .ok_or_else(|| "Session is not ready yet; try /save again in a moment.".to_string())?;
+        let conversation_id = self.chat_widget.conversation_id().ok_or_else(|| {
+            CodexErr::Fatal("Session is not ready yet; try /save again in a moment.".to_string())
+        })?;
         let rollout_path = self.chat_widget.rollout_path().ok_or_else(|| {
-            "Rollout path is not available yet; try /save again shortly.".to_string()
+            CodexErr::Fatal(
+                "Rollout path is not available yet; try /save again shortly.".to_string(),
+            )
         })?;
 
         // Resolve the conversation handle; all subsequent operations use this shared reference.
