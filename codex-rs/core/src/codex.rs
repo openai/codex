@@ -90,7 +90,6 @@ use crate::protocol::ReasoningRawContentDeltaEvent;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxCommandAssessment;
 use crate::protocol::SandboxPolicy;
-use crate::protocol::SaveSessionResponseEvent;
 use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
@@ -1496,7 +1495,6 @@ mod handlers {
     use crate::codex::SessionSettingsUpdate;
     use crate::codex::TurnContext;
 
-    use crate::SavedSessionEntry;
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
     use crate::mcp::auth::compute_auth_statuses;
