@@ -84,6 +84,7 @@ fn snapshot(percent: f64) -> RateLimitSnapshot {
             resets_at: None,
         }),
         secondary: None,
+        credits: None,
     }
 }
 

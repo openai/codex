@@ -499,6 +499,7 @@ mod tests {
                 window_minutes: Some(120),
                 resets_at: Some(secondary_reset_at),
             }),
+            credits: None,
         }
     }
 
