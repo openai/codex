@@ -11,6 +11,7 @@ pub mod spec;
 
 use crate::context_manager::truncate_with_line_bytes_budget;
 use crate::exec::ExecToolCallOutput;
+use crate::truncate::truncate_formatted_exec_output;
 pub use router::ToolRouter;
 use serde::Serialize;
 
@@ -25,7 +26,7 @@ const SHELL_OUTPUT_MAX_BYTES: usize = 10_000;
 
 /// Format the combined exec output for sending back to the model.
 /// Includes exit code and duration metadata; truncates large bodies safely.
-pub fn format_exec_output_for_model(exec_output: &ExecToolCallOutput) -> String {
+pub fn format_exec_output_for_model_structured(exec_output: &ExecToolCallOutput) -> String {
     let ExecToolCallOutput {
         exit_code,
         duration,
@@ -59,6 +60,33 @@ pub fn format_exec_output_for_model(exec_output: &ExecToolCallOutput) -> String 
 
     #[expect(clippy::expect_used)]
     serde_json::to_string(&payload).expect("serialize ExecOutput")
+}
+
+pub fn format_exec_output_for_model_freeform(exec_output: &ExecToolCallOutput) -> String {
+    // round to 1 decimal place
+    let duration_seconds = ((exec_output.duration.as_secs_f32()) * 10.0).round() / 10.0;
+
+    let total_lines = exec_output.aggregated_output.text.lines().count();
+
+    let formatted_output = truncate_formatted_exec_output(
+        &exec_output.aggregated_output.text,
+        total_lines,
+        SHELL_OUTPUT_MAX_BYTES,
+        256, // TODO: to be removed
+    );
+
+    let mut sections = Vec::new();
+
+    sections.push(format!("Exit code: {}", exec_output.exit_code));
+    sections.push(format!("Wall time: {duration_seconds} seconds"));
+    if total_lines != formatted_output.lines().count() {
+        sections.push(format!("Total output lines: {total_lines}"));
+    }
+
+    sections.push("Output:".to_string());
+    sections.push(formatted_output);
+
+    sections.join("\n")
 }
 
 pub fn format_exec_output_str(exec_output: &ExecToolCallOutput) -> String {

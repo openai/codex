@@ -12,34 +12,32 @@ use crate::protocol::RolloutItem;
 use crate::protocol::TaskStartedEvent;
 use codex_protocol::models::ResponseItem;
 
-pub(crate) async fn run_remote_compact_task(
+pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-) -> Option<String> {
+) {
+    run_remote_compact_task_inner(&sess, &turn_context).await;
+}
+
+pub(crate) async fn run_remote_compact_task(sess: Arc<Session>, turn_context: Arc<TurnContext>) {
     let start_event = EventMsg::TaskStarted(TaskStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
     });
     sess.send_event(&turn_context, start_event).await;
 
-    match run_remote_compact_task_inner(&sess, &turn_context).await {
-        Ok(()) => {
-            let event = EventMsg::AgentMessage(AgentMessageEvent {
-                message: "Compact task completed".to_string(),
-            });
-            sess.send_event(&turn_context, event).await;
-        }
-        Err(err) => {
-            let event = EventMsg::Error(ErrorEvent {
-                message: err.to_string(),
-            });
-            sess.send_event(&turn_context, event).await;
-        }
-    }
-
-    None
+    run_remote_compact_task_inner(&sess, &turn_context).await;
 }
 
-async fn run_remote_compact_task_inner(
+async fn run_remote_compact_task_inner(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) {
+    if let Err(err) = run_remote_compact_task_inner_impl(sess, turn_context).await {
+        let event = EventMsg::Error(ErrorEvent {
+            message: format!("Error running remote compact task: {err}"),
+        });
+        sess.send_event(turn_context, event).await;
+    }
+}
+
+async fn run_remote_compact_task_inner_impl(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
 ) -> CodexResult<()> {
@@ -84,5 +82,11 @@ async fn run_remote_compact_task_inner(
     };
     sess.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])
         .await;
+
+    let event = EventMsg::AgentMessage(AgentMessageEvent {
+        message: "Compact task completed".to_string(),
+    });
+    sess.send_event(turn_context, event).await;
+
     Ok(())
 }

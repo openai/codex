@@ -402,6 +402,12 @@ pub struct ThreadStartParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadStartResponse {
     pub thread: Thread,
+    pub model: String,
+    pub model_provider: String,
+    pub cwd: PathBuf,
+    pub approval_policy: AskForApproval,
+    pub sandbox: SandboxPolicy,
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
@@ -444,6 +450,12 @@ pub struct ThreadResumeParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadResumeResponse {
     pub thread: Thread,
+    pub model: String,
+    pub model_provider: String,
+    pub cwd: PathBuf,
+    pub approval_policy: AskForApproval,
+    pub sandbox: SandboxPolicy,
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

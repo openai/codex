@@ -136,7 +136,7 @@ fn reserialize_shell_outputs(items: &mut [ResponseItem]) {
 }
 
 fn is_shell_tool_name(name: &str) -> bool {
-    matches!(name, "shell" | "container.exec" | "shell_command")
+    matches!(name, "shell" | "container.exec")
 }
 
 #[derive(Deserialize)]
@@ -431,7 +431,7 @@ mod tests {
                 expects_apply_patch_instructions: false,
             },
             InstructionsTestCase {
-                slug: "gpt-5.1-codex",
+                slug: "arcticfox",
                 expects_apply_patch_instructions: false,
             },
         ];

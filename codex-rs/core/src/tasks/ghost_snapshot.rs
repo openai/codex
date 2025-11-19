@@ -56,23 +56,18 @@ impl SessionTask for GhostSnapshotTask {
                                 .await;
                             info!("ghost commit captured: {}", ghost_commit.id());
                         }
-                        Ok(Err(err)) => {
-                            warn!(
+                        Ok(Err(err)) => match err {
+                            GitToolingError::NotAGitRepository { .. } => info!(
                                 sub_id = ctx_for_task.sub_id.as_str(),
-                                "failed to capture ghost snapshot: {err}"
-                            );
-                            let message = match err {
-                                GitToolingError::NotAGitRepository { .. } => {
-                                    "Snapshots disabled: current directory is not a Git repository."
-                                        .to_string()
-                                }
-                                _ => format!("Snapshots disabled after ghost snapshot error: {err}."),
-                            };
-                            session
-                                .session
-                                .notify_background_event(&ctx_for_task, message)
-                                .await;
-                        }
+                                "skipping ghost snapshot because current directory is not a Git repository"
+                            ),
+                            _ => {
+                                warn!(
+                                    sub_id = ctx_for_task.sub_id.as_str(),
+                                    "failed to capture ghost snapshot: {err}"
+                                );
+                            }
+                        },
                         Err(err) => {
                             warn!(
                                 sub_id = ctx_for_task.sub_id.as_str(),
