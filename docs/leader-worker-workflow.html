@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Leader–Worker Workflow for Parallel Task Distribution</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        :root {
+            --primary-dark: #16284d;
+            --primary: #1f3b73;
+            --primary-light: #2c4f9a;
+            --surface: #eef2f7;
+            --card-bg: #ffffff;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: var(--surface);
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+        
+        header {
+            background: var(--primary);
+            color: white;
+            padding: 60px 20px;
+            margin: -40px -20px 40px -20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        
+        header h1 {
+            font-size: 2.5em;
+            margin-bottom: 20px;
+            font-weight: 600;
+        }
+        
+        .metadata {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            background: rgba(255,255,255,0.15);
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        
+        .hero-commands {
+            margin-top: 20px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+        
+        .hero-command {
+            background: rgba(0,0,0,0.15);
+            border: 1px solid rgba(0,0,0,0.2);
+            padding: 12px 18px;
+            border-radius: 6px;
+            font-family: 'Fira Code', 'Consolas', monospace;
+            font-size: 0.95em;
+            color: white;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .metadata-item {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .metadata-label {
+            font-size: 0.85em;
+            opacity: 0.9;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 5px;
+        }
+        
+        .metadata-value {
+            font-size: 1.1em;
+            font-weight: 500;
+        }
+        
+        .content {
+            background: var(--card-bg);
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            margin-bottom: 30px;
+        }
+        
+        h2 {
+            color: var(--primary);
+            font-size: 2em;
+            margin: 40px 0 20px 0;
+            padding-bottom: 10px;
+            border-bottom: 3px solid var(--primary-light);
+        }
+        
+        h2:first-child {
+            margin-top: 0;
+        }
+        
+        h3 {
+            color: var(--primary-light);
+            font-size: 1.5em;
+            margin: 30px 0 15px 0;
+        }
+        
+        h4 {
+            color: #555;
+            font-size: 1.2em;
+            margin: 25px 0 12px 0;
+        }
+        
+        p {
+            margin-bottom: 15px;
+            text-align: justify;
+        }
+        
+        ul, ol {
+            margin: 15px 0 15px 30px;
+        }
+        
+        li {
+            margin-bottom: 8px;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 25px 0;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        
+        th {
+            background: var(--primary);
+            color: white;
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+        }
+        
+        td {
+            padding: 12px 15px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        
+        tr:hover {
+            background-color: #f8f9fa;
+        }
+        
+        tr:last-child td {
+            border-bottom: none;
+        }
+        
+        .story-box {
+            background: #f2f6fb;
+            border-left: 4px solid var(--primary-light);
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 5px;
+        }
+        
+        .story-box strong {
+            color: var(--primary);
+        }
+        
+        code {
+            background: #f4f4f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            color: #d63384;
+        }
+        
+        pre {
+            background: #2d2d2d;
+            color: #f8f8f2;
+            padding: 20px;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 20px 0;
+            line-height: 1.5;
+        }
+        
+        pre code {
+            background: none;
+            color: inherit;
+            padding: 0;
+        }
+        
+        .checkbox {
+            margin-left: 10px;
+        }
+        
+        .checkbox input[type="checkbox"] {
+            margin-right: 8px;
+        }
+        
+        hr {
+            border: none;
+            border-top: 2px solid #e0e0e0;
+            margin: 40px 0;
+        }
+        
+        .highlight-box {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 5px;
+        }
+        
+        footer {
+            text-align: center;
+            padding: 30px;
+            color: #777;
+            font-size: 0.9em;
+        }
+        
+        @media print {
+            body {
+                background: white;
+            }
+            
+            .container {
+                max-width: 100%;
+            }
+            
+            header {
+                margin: 0;
+                box-shadow: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Epic: Leader–Worker Workflow for Parallel Task Distribution</h1>
+            <div class="metadata">
+                <div class="metadata-item">
+                    <span class="metadata-label">File</span>
+                    <span class="metadata-value">leader-worker-workflow.html</span>
+                </div>
+                <div class="metadata-item">
+                    <span class="metadata-label">Version</span>
+                    <span class="metadata-value">1.1.0</span>
+                </div>
+                <div class="metadata-item">
+                    <span class="metadata-label">Status</span>
+                    <span class="metadata-value">Draft</span>
+                </div>
+                <div class="metadata-item">
+                    <span class="metadata-label">Owner</span>
+                    <span class="metadata-value">Mohammad Alhobayyeb</span>
+                </div>
+                <div class="metadata-item">
+                    <span class="metadata-label">Last Updated</span>
+                    <span class="metadata-value">2025-11-19</span>
+                </div>
+            </div>
+            
+            <div class="hero-commands">
+                <div class="hero-command">codex leader --workers=N</div>
+                <div class="hero-command">codex worker &lt;WORKER_ID&gt;</div>
+            </div>
+        </header>
+        
+        <div class="content">
+            <div class="highlight-box">
+                <p><strong>Note:</strong> This leader–worker workflow narrative was implemented entirely by Codex CLI without human intervention and has not been tested. It is intended to communicate the concept rather than represent production-ready code.</p>
+            </div>
+            <h2>Document Overview</h2>
+            <p>This document describes a proposed <strong>leader–worker workflow</strong> for Codex CLI, enabling a single leader session to orchestrate multiple worker sessions for parallel software engineering tasks. It also outlines the implementation strategy, rollout plan, and supporting communications for the workflow.</p>
+            
+            <h2>Overview</h2>
+            <p>Enable Codex CLI to orchestrate multiple parallel coding sessions through a <strong>leader–worker architecture</strong>, where a single leader session intelligently distributes user requests across multiple worker sessions for concurrent execution.</p>
+            
+            <h2>Problem Statement</h2>
+            <p>Developers currently manage multiple Codex sessions manually across different terminal windows to work on parallel tasks. This requires significant cognitive overhead to coordinate between sessions, merge results, and track progress.</p>
+            <p>A leader–worker workflow would automate this orchestration, significantly accelerating development of complex, multi-component features while keeping the user's mental model simple: <strong>talk to the leader, workers handle the details.</strong></p>
+            
+            <h2>Goals / In-Scope</h2>
+            <ul>
+                <li>Enable users to spawn a leader session with configurable number of worker sessions.</li>
+                <li>Provide intelligent task distribution from leader to workers based on request analysis.</li>
+                <li>Allow real-time monitoring of worker session progress.</li>
+                <li>Support result aggregation from multiple workers back to leader.</li>
+                <li>Enable read-only viewing of individual worker sessions.</li>
+            </ul>
+            
+            <h2>Non-Goals / Out-of-Scope</h2>
+            <ul>
+                <li>Distributed execution across multiple machines (local execution only in v1).</li>
+                <li>Automatic conflict resolution for file modifications (v1 surfaces conflicts, user resolves).</li>
+                <li>GUI-based session management (CLI-only experience in this epic).</li>
+                <li>Changes to underlying Codex model behavior outside of task orchestration.</li>
+                <li>Planning for CI, unit tests, or feature tests (tracked separately from this document).</li>
+            </ul>
+            
+            <h2>Success Criteria</h2>
+            <ul>
+                <li>User can launch a leader with multiple workers via a single command.</li>
+                <li>Leader successfully distributes work to an appropriate number of workers.</li>
+                <li>Results from all workers are correctly aggregated and presented.</li>
+                <li>Users can monitor individual worker progress without interfering with execution.</li>
+                <li>Complex features are completed <strong>3–5× faster</strong> than a single-session approach in internal benchmarks.</li>
+            </ul>
+
+            <h2>Configuration Quickstart</h2>
+            <p>The workflow ships behind a <code>[leader_worker]</code> config gate so teams can opt in gradually. Add the block below to <code>~/.codex/config.toml</code> (or to a named profile) to define your preferred defaults. See the <a href="config.md#leader-worker-workflow-preview">configuration reference</a> for details.</p>
+            <pre><code>[leader_worker]
+enabled = true
+default_worker_count = 3
+max_workers = 8
+</code></pre>
+            <p>These values only advertise intent today; later phases of the epic will honor them when launching <code>codex leader --workers=N</code> or when scaling worker pools dynamically.</p>
+            
+            <h2>Permissions and Roles Matrix (Leader vs Worker)</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Capability / Action</th>
+                        <th style="text-align: center;">Leader</th>
+                        <th style="text-align: center;">Worker</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Start a leader session</td>
+                        <td style="text-align: center;">✔</td>
+                        <td style="text-align: center;">✖</td>
+                        <td>Via <code>codex leader --workers=N</code>.</td>
+                    </tr>
+                    <tr>
+                        <td>Spawn worker sessions</td>
+                        <td style="text-align: center;">✔</td>
+                        <td style="text-align: center;">✖</td>
+                        <td>Workers are owned and managed by a leader.</td>
+                    </tr>
+                    <tr>
+                        <td>Receive user input</td>
+                        <td style="text-align: center;">✔</td>
+                        <td style="text-align: center;">✖</td>
+                        <td>User interacts directly only with the leader in this workflow.</td>
+                    </tr>
+                    <tr>
+                        <td>Decompose high-level request into sub-tasks</td>
+                        <td style="text-align: center;">✔</td>
+                        <td style="text-align: center;">✖</td>
+                        <td>Planning responsibility lives with leader.</td>
+                    </tr>
+                    <tr>
+                        <td>Assign tasks to workers</td>
+                        <td style="text-align: center;">✔</td>
+                        <td style="text-align: center;">✖</td>
+                        <td>Leader selects workers and context for each task.</td>
+                    </tr>
+                    <tr>
+                        <td>Execute assigned coding task</td>
+                        <td style="text-align: center;">✖</td>
+                        <td style="text-align: center;">✔</td>
+                        <td>Workers read/edit files, run tests, etc.</td>
+                    </tr>
+                    <tr>
+                        <td>Read/write project files</td>
+                        <td style="text-align: center;">✔*</td>
+                        <td style="text-align: center;">✔</td>
+                        <td>Leader can apply aggregated changes; workers edit scoped files.</td>
+                    </tr>
+                    <tr>
+                        <td>Aggregate results from workers</td>
+                        <td style="text-align: center;">✔</td>
+                        <td style="text-align: center;">✖</td>
+                        <td>Leader synthesizes outputs and presents them to user.</td>
+                    </tr>
+                    <tr>
+                        <td>Detect file-level conflicts across workers</td>
+                        <td style="text-align: center;">✔</td>
+                        <td style="text-align: center;">✖</td>
+                        <td>Leader maintains global view of modified files.</td>
+                    </tr>
+                    <tr>
+                        <td>Retry or reassign failed tasks</td>
+                        <td style="text-align: center;">✔</td>
+                        <td style="text-align: center;">✖</td>
+                        <td>Leader may spawn replacement worker or re-route work.</td>
+                    </tr>
+                    <tr>
+                        <td>View own transcript</td>
+                        <td style="text-align: center;">✔</td>
+                        <td style="text-align: center;">✔</td>
+                        <td>Leader and workers both have individual transcripts.</td>
+                    </tr>
+                    <tr>
+                        <td>Expose read-only view in standalone terminal</td>
+                        <td style="text-align: center;">✖</td>
+                        <td style="text-align: center;">✔*</td>
+                        <td>Accessed via <code>codex worker &lt;WORKER_ID&gt;</code>; read-only from user POV.</td>
+                    </tr>
+                    <tr>
+                        <td>Terminate session</td>
+                        <td style="text-align: center;">✔</td>
+                        <td style="text-align: center;">✔</td>
+                        <td>Leader can terminate workers; workers can fail/exit themselves.</td>
+                    </tr>
+                </tbody>
+            </table>
+            <p><small>* Implementation detail: exact file-write permissions and application of changes can be centralized in leader or left to workers, but the user-facing mental model is "leader owns the workflow and final application of changes."</small></p>
+            
+            <hr>
+            
+            <h2>User Stories</h2>
+            
+            <h3>Story 1: Launch Leader Session with Configurable Workers</h3>
+            <div class="story-box">
+                <p><strong>As a</strong> developer<br>
+                <strong>I want to</strong> launch a leader Codex session with a specified number of worker sessions<br>
+                <strong>So that</strong> I can parallelize complex development tasks automatically</p>
+            </div>
+            
+            <h4>Acceptance Criteria</h4>
+            <ul class="checkbox">
+                <li><input type="checkbox"> <code>codex leader --workers=N</code> launches a leader session where <code>N</code> is 1–10.</li>
+                <li><input type="checkbox"> Leader session displays confirmation of <code>N</code> worker sessions initialized.</li>
+                <li><input type="checkbox"> Each worker receives a unique identifier (hash/ID).</li>
+                <li><input type="checkbox"> Leader session UI indicates it is in leader mode.</li>
+                <li><input type="checkbox"> Error handling exists for invalid worker counts (<code>N &lt; 1</code> or <code>N &gt; 10</code>).</li>
+            </ul>
+            
+            <h3>Story 2: Intelligent Task Distribution</h3>
+            <div class="story-box">
+                <p><strong>As a</strong> developer<br>
+                <strong>I want to</strong> submit a complex request to the leader<br>
+                <strong>So that</strong> it intelligently breaks down and distributes work across available workers</p>
+            </div>
+            
+            <h4>Acceptance Criteria</h4>
+            <ul class="checkbox">
+                <li><input type="checkbox"> Leader analyzes incoming request and identifies parallelizable sub-tasks.</li>
+                <li><input type="checkbox"> Leader assigns sub-tasks to idle or least-busy workers.</li>
+                <li><input type="checkbox"> Workers receive sufficient context to execute their assigned tasks.</li>
+                <li><input type="checkbox"> Leader best-effort avoids assigning overlapping file modifications to multiple workers.</li>
+                <li><input type="checkbox"> Task distribution completes within 5 seconds for typical requests.</li>
+            </ul>
+            
+            <h3>Story 3: Real-time Worker Progress Monitoring</h3>
+            <div class="story-box">
+                <p><strong>As a</strong> developer<br>
+                <strong>I want to</strong> monitor progress of all worker sessions in real-time<br>
+                <strong>So that</strong> I understand what's happening without manually checking each worker</p>
+            </div>
+            
+            <h4>Acceptance Criteria</h4>
+            <ul class="checkbox">
+                <li><input type="checkbox"> Leader displays summary status of all active workers (e.g., "Worker 1: Running tests", "Worker 2: Editing files").</li>
+                <li><input type="checkbox"> Status updates refresh automatically without user intervention.</li>
+                <li><input type="checkbox"> Completed workers are marked with ✓ and their completion time.</li>
+                <li><input type="checkbox"> Failed workers are marked with ✗ and display error summary.</li>
+                <li><input type="checkbox"> User can expand individual worker to view detailed transcript.</li>
+            </ul>
+            
+            <h3>Story 4: Result Aggregation and Presentation</h3>
+            <div class="story-box">
+                <p><strong>As a</strong> developer<br>
+                <strong>I want to</strong> receive consolidated results from all workers<br>
+                <strong>So that</strong> I get a unified view of what was accomplished</p>
+            </div>
+            
+            <h4>Acceptance Criteria</h4>
+            <ul class="checkbox">
+                <li><input type="checkbox"> Leader waits for all workers to complete their tasks.</li>
+                <li><input type="checkbox"> Leader aggregates results (files modified, tests passed/failed, errors encountered).</li>
+                <li><input type="checkbox"> Leader presents unified summary of all changes made across workers.</li>
+                <li><input type="checkbox"> If any worker fails, leader surfaces that failure prominently.</li>
+                <li><input type="checkbox"> User can review detailed logs/transcripts of individual workers if needed.</li>
+            </ul>
+            
+            <h3>Story 5: View Individual Worker Session</h3>
+            <div class="story-box">
+                <p><strong>As a</strong> developer<br>
+                <strong>I want to</strong> open a read-only view of a specific worker session<br>
+                <strong>So that</strong> I can inspect its detailed activity without interfering</p>
+            </div>
+            
+            <h4>Acceptance Criteria</h4>
+            <ul class="checkbox">
+                <li><input type="checkbox"> Command <code>codex worker &lt;WORKER_ID&gt;</code> opens read-only view of that worker.</li>
+                <li><input type="checkbox"> View displays full transcript of worker's activity.</li>
+                <li><input type="checkbox"> View updates in real-time as worker progresses.</li>
+                <li><input type="checkbox"> User cannot send input or modify worker from this view.</li>
+                <li><input type="checkbox"> Exit command returns user to main terminal without affecting worker.</li>
+            </ul>
+            
+            <hr>
+            
+            <h2>Technical Design (High-Level)</h2>
+            
+            <h3>Architecture Overview</h3>
+            <ul>
+                <li><strong>Leader Session:</strong> Main orchestrator, receives user input, plans tasks, assigns to workers.</li>
+                <li><strong>Worker Sessions:</strong> Execution units, each runs in isolated context with own file system view.</li>
+                <li><strong>Communication Layer:</strong> MCP-based channel that coordinates leader–worker messaging and data exchange.</li>
+                <li><strong>State Management:</strong> Leader maintains global state of file modifications and task assignments.</li>
+            </ul>
+            
+            <h3>Key Components</h3>
+            <ul>
+                <li><strong>Task Planner:</strong> Analyzes user requests and decomposes into parallelizable sub-tasks.</li>
+                <li><strong>Worker Pool Manager:</strong> Spawns, tracks, and terminates worker sessions.</li>
+                <li><strong>Conflict Detector:</strong> Identifies when multiple workers target the same files.</li>
+                <li><strong>Result Aggregator:</strong> Consolidates outputs from multiple workers into unified response.</li>
+                <li><strong>Progress Monitor:</strong> Collects and displays real-time status from all workers.</li>
+            </ul>
+            
+            <h3>Workflow Sequence</h3>
+            <ol>
+                <li>User launches: <code>codex leader --workers=N</code></li>
+                <li>Leader spawns N worker sessions, each with unique ID</li>
+                <li>User submits request to leader</li>
+                <li>Leader analyzes request and identifies parallelizable tasks</li>
+                <li>Leader assigns tasks to available workers with necessary context</li>
+                <li>Workers execute tasks concurrently</li>
+                <li>Leader monitors progress and detects any conflicts</li>
+                <li>Upon completion, leader aggregates results</li>
+                <li>Leader presents unified summary to user</li>
+                <li>User reviews and approves/rejects changes</li>
+            </ol>
+            
+        </div>
+        
+        <footer>
+            <p>&copy; 2025 Mohammad Alhobayyeb | Leader–Worker Workflow Epic | Version 1.1.0</p>
+        </footer>
+    </div>
+</body>
+</html>

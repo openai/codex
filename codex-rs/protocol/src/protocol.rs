@@ -478,6 +478,9 @@ pub enum EventMsg {
     /// Ack the client's configure message.
     SessionConfigured(SessionConfiguredEvent),
 
+    /// Status update for the leader–worker workflow.
+    LeaderWorkerStatus(LeaderWorkerStatusEvent),
+
     /// Incremental MCP startup progress updates.
     McpStartupUpdate(McpStartupUpdateEvent),
 
@@ -1517,6 +1520,68 @@ pub struct SessionConfiguredEvent {
     pub initial_messages: Option<Vec<EventMsg>>,
 
     pub rollout_path: PathBuf,
+
+    /// Optional metadata describing the leader–worker role for this session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leader_worker: Option<LeaderWorkerSessionDescriptor>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct LeaderWorkerSessionDescriptor {
+    pub mode: LeaderWorkerMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub configured_worker_count: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_workers: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leader_id: Option<ConversationId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worker_id: Option<String>,
+}
+
+#[derive(
+    Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS, Display,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum LeaderWorkerMode {
+    #[default]
+    Standard,
+    Leader,
+    Worker,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct LeaderWorkerStatusEvent {
+    pub mode: LeaderWorkerMode,
+    pub workers: Vec<LeaderWorkerWorkerStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_subtasks: Option<Vec<LeaderWorkerPendingSubtask>>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct LeaderWorkerWorkerStatus {
+    pub worker_id: String,
+    pub state: LeaderWorkerWorkerState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct LeaderWorkerPendingSubtask {
+    pub id: String,
+    pub summary: String,
+    pub target_paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS, Display)]
+#[serde(rename_all = "snake_case")]
+pub enum LeaderWorkerWorkerState {
+    Starting,
+    Idle,
+    Running,
+    Blocked,
+    Error,
+    Offline,
 }
 
 /// User's decision in response to an ExecApprovalRequest.

@@ -1,5 +1,8 @@
 <p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install --cask codex</code></p>
 
+> [!NOTE]
+> The leader–worker workflow described in this repository was implemented entirely by Codex CLI without human intervention and has not been tested; it exists to illustrate the concept only.
+
 <p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
 </br>
 </br>If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="https://developers.openai.com/codex/ide">install in your IDE</a>

@@ -12,6 +12,7 @@ use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
+use crate::leader_worker::LeaderWorkerManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::response_processing::process_items;
@@ -83,6 +84,9 @@ use crate::protocol::DeprecationNoticeEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecApprovalRequestEvent;
+use crate::protocol::LeaderWorkerMode;
+use crate::protocol::LeaderWorkerSessionDescriptor;
+use crate::protocol::LeaderWorkerStatusEvent;
 use crate::protocol::Op;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::ReasoningContentDeltaEvent;
@@ -258,6 +262,7 @@ pub(crate) struct Session {
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
     next_internal_sub_id: AtomicU64,
+    leader_worker: Mutex<LeaderWorkerManager>,
 }
 
 /// The context needed for a single turn of the conversation.
@@ -566,6 +571,9 @@ impl Session {
             tool_approvals: Mutex::new(ApprovalStore::default()),
         };
 
+        let mut leader_worker_manager =
+            LeaderWorkerManager::new(config.leader_worker.clone(), conversation_id);
+        let leader_worker_descriptor = leader_worker_manager.descriptor();
         let sess = Arc::new(Session {
             conversation_id,
             tx_event: tx_event.clone(),
@@ -573,12 +581,12 @@ impl Session {
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
+            leader_worker: Mutex::new(leader_worker_manager),
         });
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
         let initial_messages = initial_history.get_event_msgs();
-
         let events = std::iter::once(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
@@ -593,11 +601,15 @@ impl Session {
                 history_entry_count,
                 initial_messages,
                 rollout_path,
+                leader_worker: Some(leader_worker_descriptor),
             }),
         })
         .chain(post_session_configured_events.into_iter());
         for event in events {
             sess.send_event_raw(event).await;
+        }
+        if leader_worker_descriptor.mode != LeaderWorkerMode::Standard {
+            sess.emit_leader_worker_status().await;
         }
         sess.services
             .mcp_connection_manager
@@ -1328,6 +1340,39 @@ impl Session {
         &self.services.user_shell
     }
 
+    pub(crate) async fn plan_leader_worker_subtasks(&self, items: &[UserInput]) {
+        if items.is_empty() {
+            return;
+        }
+        let mut manager = self.leader_worker.lock().await;
+        if !manager.is_enabled() || manager.mode() != LeaderWorkerMode::Leader {
+            return;
+        }
+        let request_text = flatten_user_inputs(items);
+        if request_text.trim().is_empty() {
+            manager.set_pending_subtasks(Vec::new());
+            return;
+        }
+        let planned = manager.plan_subtasks_from_text(&request_text);
+        manager.set_pending_subtasks(planned);
+        drop(manager);
+        self.emit_leader_worker_status().await;
+    }
+
+    async fn leader_worker_status(&self) -> LeaderWorkerStatusEvent {
+        let manager = self.leader_worker.lock().await;
+        manager.status_snapshot()
+    }
+
+    async fn emit_leader_worker_status(&self) {
+        let status = self.leader_worker_status().await;
+        self.send_event_raw(Event {
+            id: INITIAL_SUBMIT_ID.to_owned(),
+            msg: EventMsg::LeaderWorkerStatus(status),
+        })
+        .await;
+    }
+
     fn show_raw_agent_reasoning(&self) -> bool {
         self.services.show_raw_agent_reasoning
     }
@@ -1490,6 +1535,8 @@ mod handlers {
             Op::UserInput { items } => (items, SessionSettingsUpdate::default()),
             _ => unreachable!(),
         };
+
+        sess.plan_leader_worker_subtasks(&items).await;
 
         let current_context = sess.new_turn_with_sub_id(sub_id, updates).await;
         current_context
@@ -2371,6 +2418,23 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
     })
 }
 
+fn flatten_user_inputs(items: &[UserInput]) -> String {
+    let mut buffer = String::new();
+    for item in items {
+        match item {
+            UserInput::Text { text } => {
+                buffer.push_str(text);
+                buffer.push('\n');
+            }
+            UserInput::Image { .. } | UserInput::LocalImage { .. } => {
+                buffer.push_str("[image]");
+                buffer.push('\n');
+            }
+        }
+    }
+    buffer
+}
+
 use crate::features::Features;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
@@ -2380,6 +2444,7 @@ mod tests {
     use super::*;
     use crate::config::ConfigOverrides;
     use crate::config::ConfigToml;
+    use crate::config::LeaderWorkerSettings;
     use crate::exec::ExecToolCallOutput;
     use crate::tools::format_exec_output_str;
 
@@ -2642,6 +2707,10 @@ mod tests {
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
+            leader_worker: Mutex::new(LeaderWorkerManager::new(
+                LeaderWorkerSettings::default(),
+                conversation_id,
+            )),
         };
 
         (session, turn_context)
@@ -2719,6 +2788,10 @@ mod tests {
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
+            leader_worker: Mutex::new(LeaderWorkerManager::new(
+                LeaderWorkerSettings::default(),
+                conversation_id,
+            )),
         });
 
         (session, turn_context, rx_event)
