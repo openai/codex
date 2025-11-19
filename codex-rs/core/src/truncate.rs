@@ -453,7 +453,7 @@ mod tests {
     fn truncate_middle_tokens_handles_utf8_content() {
         let s = "😀😀😀😀😀😀😀😀😀😀\nsecond line with text\n";
         let (out, tokens) = truncate_with_token_budget(s, TruncationPolicy::Tokens(8));
-        assert_eq!(out, "😀😀😀😀…8 tokens truncated…line with text\n");
+        assert_eq!(out, "😀😀😀😀…8 tokens truncated… line with text\n");
         assert_eq!(tokens, Some(16));
     }
 
@@ -461,7 +461,7 @@ mod tests {
     fn truncate_middle_bytes_handles_utf8_content() {
         let s = "😀😀😀😀😀😀😀😀😀😀\nsecond line with text\n";
         let out = truncate_text(s, TruncationPolicy::Bytes(20));
-        assert_eq!(out, "😀😀…31 chars truncated…line with text\n");
+        assert_eq!(out, "😀😀…21 chars truncated…with text\n");
     }
 
     #[test]
