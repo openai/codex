@@ -12,8 +12,6 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use thiserror::Error;
 use tokio::fs;
-use tokio::fs::OpenOptions;
-use tokio::io::AsyncWriteExt;
 
 use crate::bash::parse_shell_lc_plain_commands;
 use crate::features::Feature;
@@ -25,8 +23,6 @@ const FORBIDDEN_REASON: &str = "execpolicy forbids this command";
 const PROMPT_REASON: &str = "execpolicy requires approval for this command";
 const POLICY_DIR_NAME: &str = "policy";
 const POLICY_EXTENSION: &str = "codexpolicy";
-const DEFAULT_POLICY_FILENAME: &str = "default.codexpolicy";
-const DEFAULT_POLICY_CONTENT: &str = "# Codex execpolicy rules\n";
 
 #[derive(Debug, Error)]
 pub enum ExecPolicyError {
@@ -47,18 +43,6 @@ pub enum ExecPolicyError {
         path: String,
         source: codex_execpolicy2::Error,
     },
-
-    #[error("failed to create execpolicy directory {path}: {source}")]
-    CreatePolicyDir {
-        path: PathBuf,
-        source: std::io::Error,
-    },
-
-    #[error("failed to create default execpolicy file {path}: {source}")]
-    CreateDefaultPolicy {
-        path: PathBuf,
-        source: std::io::Error,
-    },
 }
 
 pub(crate) async fn exec_policy_for(
@@ -70,9 +54,6 @@ pub(crate) async fn exec_policy_for(
     }
 
     let policy_dir = codex_home.join(POLICY_DIR_NAME);
-    ensure_policy_dir(&policy_dir).await?;
-    ensure_default_policy_file(&policy_dir).await?;
-
     let policy_paths = collect_policy_files(&policy_dir).await?;
 
     let mut parser = PolicyParser::new();
@@ -156,12 +137,16 @@ pub(crate) fn create_approval_requirement_for_command(
 }
 
 async fn collect_policy_files(dir: &Path) -> Result<Vec<PathBuf>, ExecPolicyError> {
-    let mut read_dir = fs::read_dir(dir)
-        .await
-        .map_err(|source| ExecPolicyError::ReadDir {
-            dir: dir.to_path_buf(),
-            source,
-        })?;
+    let mut read_dir = match fs::read_dir(dir).await {
+        Ok(read_dir) => read_dir,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(source) => {
+            return Err(ExecPolicyError::ReadDir {
+                dir: dir.to_path_buf(),
+                source,
+            });
+        }
+    };
 
     let mut policy_paths = Vec::new();
     while let Some(entry) =
@@ -197,39 +182,6 @@ async fn collect_policy_files(dir: &Path) -> Result<Vec<PathBuf>, ExecPolicyErro
     Ok(policy_paths)
 }
 
-async fn ensure_policy_dir(policy_dir: &Path) -> Result<(), ExecPolicyError> {
-    match fs::create_dir_all(policy_dir).await {
-        Ok(()) => Ok(()),
-        Err(source) => Err(ExecPolicyError::CreatePolicyDir {
-            path: policy_dir.to_path_buf(),
-            source,
-        }),
-    }
-}
-
-async fn ensure_default_policy_file(policy_dir: &Path) -> Result<(), ExecPolicyError> {
-    let default_path = policy_dir.join(DEFAULT_POLICY_FILENAME);
-    let maybe_file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&default_path)
-        .await;
-    match maybe_file {
-        Ok(mut file) => file
-            .write_all(DEFAULT_POLICY_CONTENT.as_bytes())
-            .await
-            .map_err(|source| ExecPolicyError::CreateDefaultPolicy {
-                path: default_path.clone(),
-                source,
-            }),
-        Err(err) if err.kind() == ErrorKind::AlreadyExists => Ok(()),
-        Err(source) => Err(ExecPolicyError::CreateDefaultPolicy {
-            path: default_path,
-            source,
-        }),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,16 +212,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn creates_policy_dir_and_default_file_when_missing() {
+    async fn collect_policy_files_returns_empty_when_dir_missing() {
         let temp_dir = tempdir().expect("create temp dir");
 
-        let _policy = exec_policy_for(&Features::with_defaults(), temp_dir.path())
-            .await
-            .expect("policy result");
-
         let policy_dir = temp_dir.path().join(POLICY_DIR_NAME);
-        assert!(policy_dir.exists());
-        assert!(policy_dir.join(DEFAULT_POLICY_FILENAME).exists());
+        let files = collect_policy_files(&policy_dir)
+            .await
+            .expect("collect policy files");
+
+        assert!(files.is_empty());
     }
 
     #[tokio::test]
