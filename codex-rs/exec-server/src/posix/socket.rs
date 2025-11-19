@@ -20,17 +20,20 @@ const MAX_FDS_PER_MESSAGE: usize = 16;
 const LENGTH_PREFIX_SIZE: usize = size_of::<u32>();
 const MAX_DATAGRAM_SIZE: usize = 8192;
 
-fn assume_init(buf: &[MaybeUninit<u8>]) -> &[u8] {
+/// Converts a slice of MaybeUninit<T> to a slice of T.
+///
+/// The caller guarantees that every element of `buf` is initialized.
+fn assume_init<T>(buf: &[MaybeUninit<T>]) -> &[T] {
     unsafe { std::slice::from_raw_parts(buf.as_ptr().cast(), buf.len()) }
 }
 
-fn assume_init_slice<const N: usize>(buf: &[MaybeUninit<u8>; N]) -> &[u8; N] {
-    unsafe { std::mem::transmute(buf) }
+fn assume_init_slice<T, const N: usize>(buf: &[MaybeUninit<T>; N]) -> &[T; N] {
+    unsafe { &*(buf as *const [MaybeUninit<T>; N] as *const [T; N]) }
 }
 
-fn assume_init_vec(mut buf: Vec<MaybeUninit<u8>>) -> Vec<u8> {
+fn assume_init_vec<T>(mut buf: Vec<MaybeUninit<T>>) -> Vec<T> {
     unsafe {
-        let ptr = buf.as_mut_ptr() as *mut u8;
+        let ptr = buf.as_mut_ptr() as *mut T;
         let len = buf.len();
         let cap = buf.capacity();
         std::mem::forget(buf);
