@@ -236,6 +236,7 @@ fn review_restores_context_window_indicator() {
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
             prompt: "Review the latest changes".to_string(),
             user_facing_hint: "feature branch".to_string(),
+            append_to_original_thread: true,
         }),
     });
 
