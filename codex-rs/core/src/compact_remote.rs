@@ -12,10 +12,19 @@ use crate::protocol::RolloutItem;
 use crate::protocol::TaskStartedEvent;
 use codex_protocol::models::ResponseItem;
 
-pub(crate) async fn run_remote_compact_task(
+pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-) -> Option<String> {
+) {
+    if let Err(err) = run_remote_compact_task_inner(&sess, &turn_context).await {
+        let event = EventMsg::Error(ErrorEvent {
+            message: format!("Error running remote compact task: {err}"),
+        });
+        sess.send_event(&turn_context, event).await;
+    }
+}
+
+pub(crate) async fn run_remote_compact_task(sess: Arc<Session>, turn_context: Arc<TurnContext>) {
     let start_event = EventMsg::TaskStarted(TaskStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
     });
@@ -35,8 +44,6 @@ pub(crate) async fn run_remote_compact_task(
             sess.send_event(&turn_context, event).await;
         }
     }
-
-    None
 }
 
 async fn run_remote_compact_task_inner(
