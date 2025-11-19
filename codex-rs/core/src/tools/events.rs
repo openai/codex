@@ -242,6 +242,15 @@ impl ToolEmitter {
         self.emit(ctx, ToolEventStage::Begin).await;
     }
 
+    fn format_exec_output_for_model(&self, output: &ExecToolCallOutput) -> String {
+        match self {
+            Self::Shell { freeform: true, .. } => {
+                super::format_exec_output_for_model_freeform(output)
+            }
+            _ => super::format_exec_output_for_model_structured(output),
+        }
+    }
+
     pub async fn finish(
         &self,
         ctx: ToolEventCtx<'_>,
@@ -249,12 +258,7 @@ impl ToolEmitter {
     ) -> Result<String, FunctionCallError> {
         let (event, result) = match out {
             Ok(output) => {
-                let content = match self {
-                    Self::Shell { freeform: true, .. } => {
-                        super::format_exec_output_for_model_freeform(&output)
-                    }
-                    _ => super::format_exec_output_for_model_structured(&output),
-                };
+                let content = self.format_exec_output_for_model(&output);
                 let exit_code = output.exit_code;
                 let event = ToolEventStage::Success(output);
                 let result = if exit_code == 0 {
@@ -266,7 +270,7 @@ impl ToolEmitter {
             }
             Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output })))
             | Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output }))) => {
-                let response = super::format_exec_output_for_model_structured(&output);
+                let response = self.format_exec_output_for_model(&output);
                 let event = ToolEventStage::Failure(ToolEventFailure::Output(*output));
                 let result = Err(FunctionCallError::RespondToModel(response));
                 (event, result)

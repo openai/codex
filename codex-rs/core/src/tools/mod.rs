@@ -71,8 +71,8 @@ pub fn format_exec_output_for_model_freeform(exec_output: &ExecToolCallOutput) -
     let formatted_output = truncate_formatted_exec_output(
         &exec_output.aggregated_output.text,
         total_lines,
-        TELEMETRY_PREVIEW_MAX_BYTES,
-        TELEMETRY_PREVIEW_MAX_LINES,
+        SHELL_OUTPUT_MAX_BYTES,
+        256, // TODO: to be removed
     );
 
     let mut sections = Vec::new();
