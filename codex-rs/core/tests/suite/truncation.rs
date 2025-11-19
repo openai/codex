@@ -616,7 +616,7 @@ async fn mcp_tool_call_output_not_truncated_with_custom_limit() -> Result<()> {
     let call_id = "rmcp-untruncated";
     let server_name = "rmcp";
     let tool_name = format!("mcp__{server_name}__echo");
-    let large_msg = "long-message-with-newlines-".repeat(6000);
+    let large_msg = "a".repeat(80_000);
     let args_json = serde_json::json!({ "message": large_msg });
 
     mount_sse_once(
@@ -681,6 +681,11 @@ async fn mcp_tool_call_output_not_truncated_with_custom_limit() -> Result<()> {
         .context("function_call_output present for rmcp call")?;
 
     let parsed: Value = serde_json::from_str(&output)?;
+    assert_eq!(
+        output.len(),
+        80031,
+        "parsed MCP output should retain its serialized length"
+    );
     let expected_echo = format!("ECHOING: {large_msg}");
     let echo_str = parsed["echo"]
         .as_str()
