@@ -268,6 +268,13 @@ pub fn audit_everyone_writable(
         for p in &flagged {
             list.push_str(&format!("\n - {}", p.display()));
         }
+        crate::logging::log_note(
+            &format!(
+                "AUDIT: world-writable scan FAILED; checked={checked}; duration_ms={elapsed_ms}; flagged:{}",
+                list
+            ),
+            logs_base_dir,
+        );
 
         return Ok(flagged);
     }

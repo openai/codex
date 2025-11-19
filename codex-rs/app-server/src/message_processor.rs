@@ -190,15 +190,10 @@ impl MessageProcessor {
             return;
         }
 
-        // This function is stubbed out to return None on non-Windows platforms
-        let cwd = match std::env::current_dir() {
-            Ok(cwd) => cwd,
-            Err(_) => return,
-        };
         if let Some((sample_paths, extra_count, failed_scan)) =
             codex_windows_sandbox::world_writable_warning_details(
                 self.config.codex_home.as_path(),
-                cwd,
+                self.config.cwd.as_path(),
             )
         {
             self.outgoing
