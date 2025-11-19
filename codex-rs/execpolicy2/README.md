@@ -19,15 +19,19 @@ prefix_rule(
 ```
 
 ## CLI
-- Provide one or more policy files (for example `src/default.codexpolicy`) to check a command:
+- From the Codex CLI, run `codex execpolicycheck` with one or more policy files (for example `src/default.codexpolicy`) to check a command:
 ```bash
-cargo run -p codex-execpolicy2 -- check --policy path/to/policy.codexpolicy git status
+codex execpolicycheck --policy path/to/policy.codexpolicy git status
 ```
 - Pass multiple `--policy` flags to merge rules, evaluated in the order provided:
 ```bash
-cargo run -p codex-execpolicy2 -- check --policy base.codexpolicy --policy overrides.codexpolicy git status
+codex execpolicycheck --policy base.codexpolicy --policy overrides.codexpolicy git status
 ```
 - Output is JSON by default; pass `--pretty` for pretty-printed JSON
+- You can also run the standalone dev binary directly during development:
+```bash
+cargo run -p codex-execpolicy2 -- check --policy path/to/policy.codexpolicy git status
+```
 - Example outcomes:
   - Match: `{"match": { ... "decision": "allow" ... }}`
   - No match: `"noMatch"`

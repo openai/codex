@@ -94,13 +94,13 @@ In this example rule, if Codex wants to run commands with the prefix `git push` 
 
 Note: If Codex wants to run a command that matches with multiple rules, it will use the strictest decision among the matched rules (forbidden > prompt > allow).
 
-Use the [`execpolicy2` CLI](./codex-rs/execpolicy2/README.md) to preview decisions before you save a rule:
+Use the `codex execpolicycheck` subcommand to preview decisions before you save a rule (see the [`execpolicy2` README](./codex-rs/execpolicy2/README.md) for syntax details):
 
 ```shell
-cargo run -p codex-execpolicy2 -- check --policy ~/.codex/policy/default.codexpolicy git push origin main
+codex execpolicycheck --policy ~/.codex/policy/default.codexpolicy git push origin main
 ```
 
-Pass multiple `--policy` flags to test how several files combine. See the [`codex-rs/execpolicy2` README](./codex-rs/execpolicy2/README.md) for a more detailed walkthrough of the available syntax.
+Pass multiple `--policy` flags to test how several files combine, and use `--pretty` for formatted JSON output. See the [`codex-rs/execpolicy2` README](./codex-rs/execpolicy2/README.md) for a more detailed walkthrough of the available syntax.
 
 ---
 

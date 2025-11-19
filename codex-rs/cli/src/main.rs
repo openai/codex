@@ -1,3 +1,4 @@
+use anyhow::Context;
 use clap::Args;
 use clap::CommandFactory;
 use clap::Parser;
@@ -18,11 +19,13 @@ use codex_cli::login::run_logout;
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_common::CliConfigOverrides;
 use codex_exec::Cli as ExecCli;
+use codex_execpolicy2::PolicyParser;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
 use codex_tui::update_action::UpdateAction;
 use owo_colors::OwoColorize;
+use std::fs;
 use std::path::PathBuf;
 use supports_color::Stream;
 
@@ -111,6 +114,10 @@ enum Subcommand {
     /// Internal: relay stdio to a Unix domain socket.
     #[clap(hide = true, name = "stdio-to-uds")]
     StdioToUds(StdioToUdsCommand),
+
+    /// Check execpolicy files against a command.
+    #[clap(name = "execpolicycheck")]
+    ExecPolicyCheck(ExecPolicyCheckCommand),
 
     /// Inspect feature flags.
     Features(FeaturesCli),
@@ -246,6 +253,26 @@ struct StdioToUdsCommand {
     socket_path: PathBuf,
 }
 
+#[derive(Debug, Parser)]
+struct ExecPolicyCheckCommand {
+    /// Paths to execpolicy files to evaluate (repeatable).
+    #[arg(short, long = "policy", value_name = "PATH", required = true)]
+    policies: Vec<PathBuf>,
+
+    /// Pretty-print the JSON output.
+    #[arg(long)]
+    pretty: bool,
+
+    /// Command tokens to check against the policy.
+    #[arg(
+        value_name = "COMMAND",
+        required = true,
+        trailing_var_arg = true,
+        allow_hyphen_values = true
+    )]
+    command: Vec<String>,
+}
+
 fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<String> {
     let AppExitInfo {
         token_usage,
@@ -321,6 +348,35 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     println!();
     println!("🎉 Update ran successfully! Please restart Codex.");
     Ok(())
+}
+
+fn run_execpolicy_check(cli: ExecPolicyCheckCommand) -> anyhow::Result<()> {
+    let policy = load_policies(&cli.policies)?;
+    let evaluation = policy.check(&cli.command);
+
+    let json = if cli.pretty {
+        serde_json::to_string_pretty(&evaluation)?
+    } else {
+        serde_json::to_string(&evaluation)?
+    };
+
+    println!("{json}");
+    Ok(())
+}
+
+fn load_policies(policy_paths: &[PathBuf]) -> anyhow::Result<codex_execpolicy2::Policy> {
+    let mut parser = PolicyParser::new();
+
+    for policy_path in policy_paths {
+        let policy_file_contents = fs::read_to_string(policy_path)
+            .with_context(|| format!("failed to read policy at {}", policy_path.display()))?;
+        let policy_identifier = policy_path.to_string_lossy().to_string();
+        parser
+            .parse(&policy_identifier, &policy_file_contents)
+            .with_context(|| format!("failed to parse policy at {}", policy_path.display()))?;
+    }
+
+    Ok(parser.build())
 }
 
 #[derive(Debug, Default, Parser, Clone)]
@@ -558,6 +614,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             let socket_path = cmd.socket_path;
             tokio::task::spawn_blocking(move || codex_stdio_to_uds::run(socket_path.as_path()))
                 .await??;
+        }
+        Some(Subcommand::ExecPolicyCheck(execpolicy_cli)) => {
+            run_execpolicy_check(execpolicy_cli)?;
         }
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
             FeaturesSubcommand::List => {
