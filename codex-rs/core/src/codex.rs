@@ -2619,7 +2619,7 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
-            exec_policy: Arc::new(codex_execpolicy2::PolicyParser::new().build()),
+            exec_policy: Arc::new(codex_execpolicy2::Policy::empty()),
             session_source: SessionSource::Exec,
         };
 
@@ -2697,7 +2697,7 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
-            exec_policy: Arc::new(codex_execpolicy2::PolicyParser::new().build()),
+            exec_policy: Arc::new(codex_execpolicy2::Policy::empty()),
             session_source: SessionSource::Exec,
         };
 
