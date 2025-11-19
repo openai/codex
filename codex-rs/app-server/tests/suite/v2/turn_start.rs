@@ -59,7 +59,7 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
         mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
     )
     .await??;
-    let ThreadStartResponse { thread } = to_response::<ThreadStartResponse>(thread_resp)?;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
 
     // Start a turn with only input and thread_id set (no overrides).
     let turn_req = mcp
@@ -163,7 +163,7 @@ async fn turn_start_accepts_local_image_input() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
     )
     .await??;
-    let ThreadStartResponse { thread } = to_response::<ThreadStartResponse>(thread_resp)?;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
 
     let image_path = codex_home.path().join("image.png");
     // No need to actually write the file; we just exercise the input path.
@@ -239,7 +239,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
     )
     .await??;
-    let ThreadStartResponse { thread } = to_response::<ThreadStartResponse>(start_resp)?;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
 
     // turn/start — expect CommandExecutionRequestApproval request from server
     let first_turn_id = mcp
@@ -378,7 +378,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
     )
     .await??;
-    let ThreadStartResponse { thread } = to_response::<ThreadStartResponse>(start_resp)?;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
 
     // first turn with workspace-write sandbox and first_cwd
     let first_turn = mcp

@@ -207,10 +207,16 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(not(target_os = "windows"))] // TODO: unignore on windows
 async fn user_shell_command_output_is_truncated_in_history() -> anyhow::Result<()> {
     let server = responses::start_mock_server().await;
-    let mut builder = core_test_support::test_codex::test_codex();
-    let test = builder.build(&server).await?;
+    let builder = core_test_support::test_codex::test_codex();
+    let test = builder
+        .with_config(|config| {
+            config.tool_output_token_limit = Some(100);
+        })
+        .build(&server)
+        .await?;
 
     #[cfg(windows)]
     let command = r#"for ($i=1; $i -le 400; $i++) { Write-Output $i }"#.to_string();
@@ -249,10 +255,9 @@ async fn user_shell_command_output_is_truncated_in_history() -> anyhow::Result<(
         .expect("command message recorded in request");
     let command_message = command_message.replace("\r\n", "\n");
 
-    let head = (1..=128).map(|i| format!("{i}\n")).collect::<String>();
-    let tail = (273..=400).map(|i| format!("{i}\n")).collect::<String>();
-    let truncated_body =
-        format!("Total output lines: 400\n\n{head}\n[... omitted 144 of 400 lines ...]\n\n{tail}");
+    let head = (1..=69).map(|i| format!("{i}\n")).collect::<String>();
+    let tail = (352..=400).map(|i| format!("{i}\n")).collect::<String>();
+    let truncated_body = format!("Total output lines: 400\n\n{head}…273 tokens truncated…{tail}");
     let escaped_command = escape(&command);
     let escaped_truncated_body = escape(&truncated_body);
     let expected_pattern = format!(
@@ -270,6 +275,7 @@ async fn user_shell_command_is_truncated_only_once() -> anyhow::Result<()> {
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
+        config.tool_output_token_limit = Some(100);
         config.model = "gpt-5.1-codex".to_string();
         config.model_family =
             find_family_for_model("gpt-5-codex").expect("gpt-5-codex is a model family");

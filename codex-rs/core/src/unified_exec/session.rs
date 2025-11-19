@@ -15,7 +15,7 @@ use crate::exec::SandboxType;
 use crate::exec::StreamOutput;
 use crate::exec::is_likely_sandbox_denied;
 use crate::truncate::TruncationPolicy;
-use crate::truncate::truncate_text;
+use crate::truncate::formatted_truncate_text;
 use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::SpawnedPty;
 
@@ -167,7 +167,7 @@ impl UnifiedExecSession {
         };
 
         if is_likely_sandbox_denied(self.sandbox_type(), &exec_output) {
-            let snippet = truncate_text(
+            let snippet = formatted_truncate_text(
                 &aggregated_text,
                 TruncationPolicy::Tokens(UNIFIED_EXEC_OUTPUT_MAX_TOKENS),
             );

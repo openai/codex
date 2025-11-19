@@ -402,6 +402,12 @@ pub struct ThreadStartParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadStartResponse {
     pub thread: Thread,
+    pub model: String,
+    pub model_provider: String,
+    pub cwd: PathBuf,
+    pub approval_policy: AskForApproval,
+    pub sandbox: SandboxPolicy,
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
@@ -444,6 +450,12 @@ pub struct ThreadResumeParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadResumeResponse {
     pub thread: Thread,
+    pub model: String,
+    pub model_provider: String,
+    pub cwd: PathBuf,
+    pub approval_policy: AskForApproval,
+    pub sandbox: SandboxPolicy,
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -505,6 +517,10 @@ pub struct Thread {
     pub created_at: i64,
     /// [UNSTABLE] Path to the thread on disk.
     pub path: PathBuf,
+    /// Only populated on a `thread/resume` response.
+    /// For all other responses and notifications returning a Thread,
+    /// the turns field will be an empty list.
+    pub turns: Vec<Turn>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -519,8 +535,9 @@ pub struct AccountUpdatedNotification {
 #[ts(export_to = "v2/")]
 pub struct Turn {
     pub id: String,
-    /// This is currently only populated for resumed threads.
-    /// TODO: properly populate items for all turns.
+    /// Only populated on a `thread/resume` response.
+    /// For all other responses and notifications returning a Turn,
+    /// the items field will be an empty list.
     pub items: Vec<ThreadItem>,
     #[serde(flatten)]
     pub status: TurnStatus,
@@ -920,6 +937,15 @@ pub struct CommandExecutionOutputDeltaNotification {
 pub struct McpToolCallProgressNotification {
     pub item_id: String,
     pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WindowsWorldWritableWarningNotification {
+    pub sample_paths: Vec<String>,
+    pub extra_count: usize,
+    pub failed_scan: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

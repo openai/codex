@@ -7,6 +7,7 @@ use crate::codex::TurnContext;
 use crate::codex::get_last_assistant_message_from_turn;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
+use crate::features::Feature;
 use crate::protocol::AgentMessageEvent;
 use crate::protocol::CompactedItem;
 use crate::protocol::ErrorEvent;
@@ -18,6 +19,7 @@ use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::truncate_text;
 use crate::util::backoff;
+use codex_app_server_protocol::AuthMode;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
@@ -31,12 +33,22 @@ pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt
 pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_prefix.md");
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 
+pub(crate) async fn should_use_remote_compact_task(session: &Session) -> bool {
+    session
+        .services
+        .auth_manager
+        .auth()
+        .is_some_and(|auth| auth.mode == AuthMode::ChatGPT)
+        && session.enabled(Feature::RemoteCompaction).await
+}
+
 pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
 ) {
     let prompt = turn_context.compact_prompt().to_string();
     let input = vec![UserInput::Text { text: prompt }];
+
     run_compact_task_inner(sess, turn_context, input).await;
 }
 
@@ -44,13 +56,12 @@ pub(crate) async fn run_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
-) -> Option<String> {
+) {
     let start_event = EventMsg::TaskStarted(TaskStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
     });
     sess.send_event(&turn_context, start_event).await;
     run_compact_task_inner(sess.clone(), turn_context, input).await;
-    None
 }
 
 async fn run_compact_task_inner(
@@ -160,15 +171,7 @@ async fn run_compact_task_inner(
         .collect();
     new_history.extend(ghost_snapshots);
     sess.replace_history(new_history).await;
-
-    if let Some(estimated_tokens) = sess
-        .clone_history()
-        .await
-        .estimate_token_count(&turn_context)
-    {
-        sess.override_last_token_usage_estimate(&turn_context, estimated_tokens)
-            .await;
-    }
+    sess.recompute_token_usage(&turn_context).await;
 
     let rollout_item = RolloutItem::Compacted(CompactedItem {
         message: summary_text.clone(),
