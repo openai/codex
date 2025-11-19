@@ -2370,7 +2370,7 @@ impl ChatWidget {
         } else {
             Line::from(vec![
                 "The Windows sandbox cannot protect writes to folders that are writable by Everyone.".into(),
-                "Consider removing write access for Everyone from the following folders:"
+                " Consider removing write access for Everyone from the following folders:"
             ])
         };
         header_children.push(Box::new(
