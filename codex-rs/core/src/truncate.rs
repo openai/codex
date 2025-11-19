@@ -349,7 +349,6 @@ mod tests {
         let s = "😀😀😀😀😀😀😀😀😀😀\nsecond line with text\n";
         let max_tokens = 8;
         let (out, tokens) = truncate_with_token_budget(s, TruncationPolicy::Tokens(max_tokens));
-        eprintln!("out: {}", out);
         assert!(out.contains("tokens truncated"));
         assert!(!out.contains('\u{fffd}'));
         assert_eq!(tokens, Some(approx_token_count(s) as u64));

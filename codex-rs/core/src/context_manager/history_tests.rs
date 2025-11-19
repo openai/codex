@@ -330,7 +330,6 @@ fn record_items_respects_custom_token_limit() {
         ResponseItem::FunctionCallOutput { output, .. } => output,
         other => panic!("unexpected history item: {other:?}"),
     };
-    eprintln!("stored: {}", stored.content);
     assert!(stored.content.contains("tokens truncated"));
 }
 
