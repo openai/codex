@@ -245,7 +245,7 @@ async fn tool_call_output_exceeds_limit_truncated_chars_limit() -> Result<()> {
         "expected truncated shell output to be plain text"
     );
 
-    assert_eq!(output.len(), 12026, "we should be almost 10k tokens");
+    assert_eq!(output.len(), 12026, "we should be almost 2.5k tokens");
     let truncated_pattern = r#"(?s)^\{"output":"Total output lines: 100000\\n\\n1\\n2\\n3\\n4\\n5\\n6\\n.*?…578898 chars truncated…\\n99168\\n99169\\n.*","metadata":\{"exit_code":0,"duration_seconds":0\.0\}\}$"#;
 
     assert_regex_match(truncated_pattern, &output);
