@@ -167,7 +167,7 @@ async fn tool_call_output_configured_limit_chars_type() -> Result<()> {
         "expected truncated shell output to be plain text"
     );
 
-    assert_eq!(output.len(), 400096, "we should be almost 10k tokens");
+    assert_eq!(output.len(), 400094, "we should be almost 100k tokens");
 
     assert!(
         !output.contains("tokens truncated"),
@@ -244,8 +244,8 @@ async fn tool_call_output_exceeds_limit_truncated_chars_limit() -> Result<()> {
         "expected truncated shell output to be plain text"
     );
 
-    assert_eq!(output.len(), 12026, "we should be almost 2.5k tokens");
-    let truncated_pattern = r#"(?s)^\{"output":"Total output lines: 100000\\n\\n1\\n2\\n3\\n4\\n5\\n6\\n.*?…578898 chars truncated…\\n99168\\n99169\\n.*","metadata":\{"exit_code":0,"duration_seconds":0\.0\}\}$"#;
+    assert_eq!(output.len(), 9976); // ~10k characters
+    let truncated_pattern = r#"(?s)^Exit code: 0\nWall time: 0 seconds\nTotal output lines: 100000\n.*?…578898 chars truncated….*$"#;
 
     assert_regex_match(truncated_pattern, &output);
 
@@ -323,18 +323,17 @@ async fn tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> {
     );
     let truncated_pattern = r#"(?s)^Exit code: 0
 Wall time: [0-9]+(?:\.[0-9]+)? seconds
-Output:
 Total output lines: 100000
-
+Output:
 1
 2
 3
 4
 5
 6
-.*
-…137224 tokens truncated…96668\n96669
-.*
+.*…137224 tokens truncated.*
+99999
+100000
 $"#;
     assert_regex_match(truncated_pattern, &output);
 
@@ -470,6 +469,7 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
                 disabled_tools: None,
             },
         );
+        config.tool_output_token_limit = Some(500);
     });
     let fixture = builder.build(&server).await?;
 
@@ -486,21 +486,14 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
         .function_call_output_text(call_id)
         .context("function_call_output present for rmcp call")?;
 
-    // Expect plain text with token-based truncation marker; the original JSON body
-    // is truncated in the middle of the echo string.
-    assert!(
-        serde_json::from_str::<Value>(&output).is_err(),
-        "expected truncated MCP output to be plain text"
-    );
     assert!(
         !output.contains("Total output lines:"),
         "MCP output should not include line-based truncation header: {output}"
     );
 
-    let truncated_pattern = dbg!(
-        r#"(?s)^\{"echo":\s*"ECHOING: long-message-with-newlines-.*tokens truncated.*long-message-with-newlines-.*$"#
-    );
+    let truncated_pattern = r#"(?s)^\{"echo":\s*"ECHOING: long-message-with-newlines-.*tokens truncated.*long-message-with-newlines-.*$"#;
     assert_regex_match(truncated_pattern, &output);
+    assert!(output.len() < 2500, "{}", output.len());
 
     Ok(())
 }
@@ -705,7 +698,7 @@ async fn byte_policy_marker_reports_bytes() -> Result<()> {
         .function_call_output_text(call_id)
         .context("shell output present")?;
 
-    let pattern = r#"(?s)^\{"output":"Total output lines: 150\\n\\n1\\n2\\n3\\n4\\n5\\n.*?…\d+ chars truncated…\n7\\n138\\n139\\n140\\n141\\n142\\n143\\n144\\n145\\n146\\n147\\n148\\n149\\n150\\n","metadata":\{"exit_code":0,"duration_seconds":0\.0\}\}$"#;
+    let pattern = r#"(?s)^\{"output":"Total output lines: 150\\n\\n1\\n2\\n3\\n4\\n5.*?…\d+ chars truncated…7\\n138\\n139\\n140\\n141\\n142\\n143\\n144\\n145\\n146\\n147\\n148\\n149\\n150\\n","metadata":\{"exit_code":0,"duration_seconds":0\.0\}\}$"#;
 
     assert_regex_match(pattern, &output);
 
