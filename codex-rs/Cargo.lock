@@ -1189,6 +1189,7 @@ dependencies = [
  "anyhow",
  "clap",
  "codex-core",
+ "codex-execpolicy2",
  "libc",
  "path-absolutize",
  "pretty_assertions",

@@ -59,11 +59,12 @@ use std::path::Path;
 
 use clap::Parser;
 use clap::Subcommand;
+use codex_execpolicy2::Decision;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::{self};
 
-use crate::posix::escalate_protocol::EscalateAction;
 use crate::posix::escalate_server::EscalateServer;
+use crate::posix::escalate_server::ExecPolicyOutcome;
 
 mod escalate_client;
 mod escalate_protocol;
@@ -71,16 +72,28 @@ mod escalate_server;
 mod mcp;
 mod socket;
 
-fn dummy_exec_policy(file: &Path, argv: &[String], _workdir: &Path) -> EscalateAction {
+fn dummy_exec_policy(file: &Path, argv: &[String], _workdir: &Path) -> ExecPolicyOutcome {
     // TODO: execpolicy
-    if file == Path::new("/opt/homebrew/bin/gh")
+    if file.ends_with("/git") {
+        ExecPolicyOutcome {
+            decision: Decision::Prompt,
+            run_with_escalated_permissions: false,
+        }
+    } else if file == Path::new("/opt/homebrew/bin/gh")
         && let [_, arg1, arg2, ..] = argv
         && arg1 == "issue"
         && arg2 == "list"
     {
-        return EscalateAction::Escalate;
+        ExecPolicyOutcome {
+            decision: Decision::Allow,
+            run_with_escalated_permissions: true,
+        }
+    } else {
+        ExecPolicyOutcome {
+            decision: Decision::Allow,
+            run_with_escalated_permissions: false,
+        }
     }
-    EscalateAction::Run
 }
 
 #[derive(Parser)]

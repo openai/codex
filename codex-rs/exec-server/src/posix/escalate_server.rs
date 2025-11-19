@@ -12,6 +12,7 @@ use codex_core::exec::SandboxType;
 use codex_core::exec::process_exec_tool_call;
 use codex_core::get_platform_sandbox;
 use codex_core::protocol::SandboxPolicy;
+use codex_execpolicy2::Decision as ExecPolicyDecision;
 use tokio::process::Command;
 
 use crate::posix::escalate_protocol::BASH_EXEC_WRAPPER_ENV_VAR;
@@ -30,7 +31,13 @@ use crate::posix::socket::AsyncSocket;
 /// `argv` is the argv, including the program name (`argv[0]`).
 /// `workdir` is the absolute, canonical path to the working directory in which to execute the
 /// command.
-pub(crate) type ExecPolicy = fn(file: &Path, argv: &[String], workdir: &Path) -> EscalateAction;
+pub(crate) type ExecPolicy = fn(file: &Path, argv: &[String], workdir: &Path) -> ExecPolicyOutcome;
+
+#[derive(Debug)]
+pub(crate) struct ExecPolicyOutcome {
+    pub(crate) decision: ExecPolicyDecision,
+    pub(crate) run_with_escalated_permissions: bool,
+}
 
 pub(crate) struct EscalateServer {
     bash_path: PathBuf,
@@ -132,8 +139,27 @@ async fn handle_escalate_session_with_policy(
     } = socket.receive::<EscalateRequest>().await?;
     let file = PathBuf::from(&file).absolutize()?.into_owned();
     let workdir = PathBuf::from(&workdir).absolutize()?.into_owned();
-    let action = policy(file.as_path(), &argv, &workdir);
-    tracing::debug!("decided {action:?} for {file:?} {argv:?} {workdir:?}");
+    let outcome = policy(file.as_path(), &argv, &workdir);
+
+    tracing::debug!("decided {outcome:?} for {file:?} {argv:?} {workdir:?}");
+    let ExecPolicyOutcome {
+        decision,
+        run_with_escalated_permissions,
+    } = outcome;
+    let action = match decision {
+        ExecPolicyDecision::Allow => {
+            if run_with_escalated_permissions {
+                EscalateAction::Escalate
+            } else {
+                EscalateAction::Run
+            }
+        }
+        ExecPolicyDecision::Prompt => {
+            todo!("prompting not yet implemented")
+        }
+        ExecPolicyDecision::Forbidden => EscalateAction::Deny,
+    };
+
     match action {
         EscalateAction::Run => {
             socket
@@ -195,6 +221,9 @@ async fn handle_escalate_session_with_policy(
                 })
                 .await?;
         }
+        EscalateAction::Deny => {
+            todo!("denying not yet implemented");
+        }
     }
     Ok(())
 }
@@ -211,7 +240,10 @@ mod tests {
         let (server, client) = AsyncSocket::pair()?;
         let server_task = tokio::spawn(handle_escalate_session_with_policy(
             server,
-            |_file, _argv, _workdir| EscalateAction::Run,
+            |_file, _argv, _workdir| ExecPolicyOutcome {
+                decision: ExecPolicyDecision::Allow,
+                run_with_escalated_permissions: false,
+            },
         ));
 
         client
@@ -238,7 +270,10 @@ mod tests {
         let (server, client) = AsyncSocket::pair()?;
         let server_task = tokio::spawn(handle_escalate_session_with_policy(
             server,
-            |_file, _argv, _workdir| EscalateAction::Escalate,
+            |_file, _argv, _workdir| ExecPolicyOutcome {
+                decision: ExecPolicyDecision::Allow,
+                run_with_escalated_permissions: true,
+            },
         ));
 
         client
