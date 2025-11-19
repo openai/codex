@@ -236,12 +236,9 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             ],
             is_default: false,
             upgrade: Some(ModelUpgrade {
-                id: "gpt-5.1",
-                reasoning_effort_mapping: Some(HashMap::from([(
-                    ReasoningEffort::Minimal,
-                    ReasoningEffort::Low,
-                )])),
-                migration_config_key: HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG,
+                id: "gpt-5.1-codex-max",
+                reasoning_effort_mapping: None,
+                migration_config_key: HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG,
             }),
             show_in_picker: false,
         },

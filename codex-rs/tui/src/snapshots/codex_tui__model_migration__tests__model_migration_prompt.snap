@@ -9,9 +9,6 @@ expression: terminal.backend()
   than its predecessors and capable of long-running
   project-scale work.
 
-  You can continue using legacy models by specifying them
-  directly with the -m option or in your config.toml.
-
   Learn more at www.openai.com/index/gpt-5-1-codex-max.
 
   Choose how you'd like Codex to proceed.
