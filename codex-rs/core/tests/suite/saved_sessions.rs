@@ -11,6 +11,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
+use codex_core::protocol::SaveSessionResponseEvent;
 use codex_core::protocol::SessionSource;
 use codex_core::resolve_saved_session;
 use codex_core::upsert_saved_session;
@@ -24,6 +25,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::path::Path;
@@ -95,6 +97,23 @@ async fn save_session(
     Ok(entry)
 }
 
+async fn save_session_via_op(
+    codex: &Arc<CodexConversation>,
+    name: &str,
+) -> Result<SaveSessionResponseEvent> {
+    codex
+        .submit(Op::SaveSession {
+            name: name.to_string(),
+        })
+        .await?;
+    let response: SaveSessionResponseEvent = wait_for_event_match(codex, |ev| match ev {
+        EventMsg::SaveSessionResponse(resp) => Some(resp.clone()),
+        _ => None,
+    })
+    .await;
+    Ok(response)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn save_and_resume_by_name() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -125,6 +144,101 @@ async fn save_and_resume_by_name() -> Result<()> {
     assert_eq!(
         serde_json::to_value(saved_items)?,
         serde_json::to_value(resumed_items)?
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn save_session_op_persists_and_emits_response() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    mount_sse_sequence(&server, vec![completion_body(1, "initial")]).await;
+
+    let mut builder = test_codex();
+    let initial = builder.build(&server).await?;
+    submit_text(&initial.codex, "first turn").await?;
+
+    let name = "via-op";
+    let response = save_session_via_op(&initial.codex, name).await?;
+
+    assert_eq!(response.name, name);
+    assert_eq!(
+        response.conversation_id,
+        initial.session_configured.session_id
+    );
+    assert!(response.rollout_path.exists());
+
+    let resolved = resolve_saved_session(&initial.config.codex_home, name)
+        .await?
+        .expect("saved session");
+    assert_eq!(resolved.rollout_path, response.rollout_path);
+    assert_eq!(resolved.conversation_id, response.conversation_id);
+    assert_eq!(session_meta_count(&resolved.rollout_path), 1);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fork_from_identifier_after_save_op() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    mount_sse_sequence(
+        &server,
+        vec![
+            completion_body(1, "seed"),
+            completion_body(2, "fork-extra-1"),
+            completion_body(3, "fork-extra-2"),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex();
+    let initial = builder.build(&server).await?;
+    submit_text(&initial.codex, "seeded").await?;
+
+    let name = "forkable-op";
+    let response = save_session_via_op(&initial.codex, name).await?;
+
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy"));
+    let conversation_manager = ConversationManager::new(auth_manager.clone(), SessionSource::Exec);
+    let forked = conversation_manager
+        .fork_from_identifier(initial.config.clone(), name, auth_manager)
+        .await?;
+
+    assert_ne!(
+        forked.session_configured.session_id,
+        response.conversation_id
+    );
+
+    // Record the baseline rollout for the saved session.
+    let base_items = rollout_items_without_meta(&response.rollout_path);
+
+    // Send additional turns to the forked conversation and flush.
+    submit_text(&forked.conversation, "fork one").await?;
+    submit_text(&forked.conversation, "fork two").await?;
+    forked.conversation.flush_rollout().await?;
+
+    // Re-read both rollouts: source should remain unchanged.
+    let base_after = rollout_items_without_meta(&response.rollout_path);
+    assert_eq!(
+        serde_json::to_value(&base_items)?,
+        serde_json::to_value(&base_after)?
+    );
+
+    // Forked rollout should extend the baseline.
+    let fork_items = rollout_items_without_meta(&forked.conversation.rollout_path());
+    assert!(
+        fork_items.len() > base_items.len(),
+        "expected forked rollout to contain additional items"
+    );
+    let fork_prefix: Vec<_> = fork_items.iter().take(base_items.len()).cloned().collect();
+    assert_eq!(
+        serde_json::to_value(&base_items)?,
+        serde_json::to_value(&fork_prefix)?,
+        "forked rollout should extend the baseline history"
     );
 
     Ok(())
