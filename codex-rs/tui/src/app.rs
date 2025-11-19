@@ -934,6 +934,8 @@ mod tests {
     use codex_core::AuthManager;
     use codex_core::CodexAuth;
     use codex_core::ConversationManager;
+    use codex_core::protocol::AskForApproval;
+    use codex_core::protocol::SandboxPolicy;
     use codex_core::protocol::SessionConfiguredEvent;
     use codex_protocol::ConversationId;
     use ratatui::prelude::Line;
@@ -1043,6 +1045,10 @@ mod tests {
             let event = SessionConfiguredEvent {
                 session_id: ConversationId::new(),
                 model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: None,
                 history_log_id: 0,
                 history_entry_count: 0,

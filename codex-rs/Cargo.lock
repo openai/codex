@@ -1420,6 +1420,7 @@ dependencies = [
  "icu_provider",
  "mcp-types",
  "mime_guess",
+ "pretty_assertions",
  "schemars 0.8.22",
  "serde",
  "serde_json",
