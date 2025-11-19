@@ -1518,13 +1518,13 @@ fn startup_prompts_for_windows_sandbox_when_auto_requested() {
 fn model_reasoning_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
-    chat.config.model = "gpt-5.1-codex".to_string();
+    chat.config.model = "arcticfox".to_string();
     chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::High);
 
     let preset = builtin_model_presets(None)
         .into_iter()
-        .find(|preset| preset.model == "gpt-5.1-codex")
-        .expect("gpt-5.1-codex preset");
+        .find(|preset| preset.model == "arcticfox")
+        .expect("arcticfox preset");
     chat.open_reasoning_popup(preset);
 
     let popup = render_bottom_popup(&chat, 80);
@@ -1548,6 +1548,7 @@ fn single_reasoning_option_skips_selection() {
         supported_reasoning_efforts: &SINGLE_EFFORT,
         is_default: false,
         upgrade: None,
+        show_in_picker: true,
     };
     chat.open_reasoning_popup(preset);
 

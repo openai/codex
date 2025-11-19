@@ -2079,8 +2079,9 @@ impl ChatWidget {
                 .filter(|text| !text.is_empty());
 
             let warning = "⚠ High reasoning effort can quickly consume Plus plan rate limits.";
-            let show_warning =
-                preset.model.starts_with("gpt-5.1-codex") && effort == ReasoningEffortConfig::High;
+            let show_warning = (preset.model.starts_with("gpt-5.1-codex")
+                || preset.model.starts_with("arcticfox"))
+                && effort == ReasoningEffortConfig::High;
             let selected_description = show_warning.then(|| {
                 description
                     .as_ref()

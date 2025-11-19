@@ -17,6 +17,8 @@ use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
+use codex_common::model_presets::HIDE_ARCTICFOX_MIGRATION_PROMPT_CONFIG;
+use codex_common::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_common::model_presets::ModelUpgrade;
 use codex_common::model_presets::all_model_presets;
 use codex_core::AuthManager;
@@ -97,6 +99,14 @@ fn should_show_model_migration_prompt(
         .any(|preset| preset.model == current_model)
 }
 
+fn migration_prompt_hidden(config: &Config, migration_config_key: &str) -> Option<bool> {
+    match migration_config_key {
+        HIDE_ARCTICFOX_MIGRATION_PROMPT_CONFIG => config.notices.hide_arcticfox_migration_prompt,
+        HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG => config.notices.hide_gpt5_1_migration_prompt,
+        _ => None,
+    }
+}
+
 async fn handle_model_migration_prompt_if_needed(
     tui: &mut tui::Tui,
     config: &mut Config,
@@ -110,10 +120,11 @@ async fn handle_model_migration_prompt_if_needed(
     if let Some(ModelUpgrade {
         id: target_model,
         reasoning_effort_mapping,
+        migration_config_key,
     }) = upgrade
     {
         let target_model = target_model.to_string();
-        let hide_prompt_flag = config.notices.hide_gpt5_1_migration_prompt;
+        let hide_prompt_flag = migration_prompt_hidden(config, migration_config_key);
         if !should_show_model_migration_prompt(&config.model, &target_model, hide_prompt_flag) {
             return None;
         }
@@ -121,7 +132,7 @@ async fn handle_model_migration_prompt_if_needed(
         match run_model_migration_prompt(tui).await {
             ModelMigrationOutcome::Accepted => {
                 app_event_tx.send(AppEvent::PersistModelMigrationPromptAcknowledged {
-                    migration_config: "hide_gpt5_1_migration_prompt".to_string(),
+                    migration_config: migration_config_key.to_string(),
                 });
                 config.model = target_model.to_string();
                 if let Some(family) = find_family_for_model(&target_model) {
@@ -983,6 +994,11 @@ mod tests {
         assert!(should_show_model_migration_prompt(
             "gpt-5-codex-mini",
             "gpt-5.1-codex-mini",
+            None
+        ));
+        assert!(should_show_model_migration_prompt(
+            "gpt-5.1-codex",
+            "arcticfox",
             None
         ));
         assert!(!should_show_model_migration_prompt(

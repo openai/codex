@@ -135,13 +135,13 @@ impl WidgetRef for &ModelMigrationScreen {
         column.push("");
         column.push(Line::from(vec![
             "> ".into(),
-            "Introducing our gpt-5.1 models".bold(),
+            "Introducing arcticfox".bold(),
         ]));
         column.push(Line::from(""));
 
         column.push(
             Paragraph::new(Line::from(
-                "We've upgraded our family of models supported in Codex to gpt-5.1, gpt-5.1-codex and gpt-5.1-codex-mini.",
+                "We've upgraded our family of models supported in Codex to arcticfox.",
             ))
             .wrap(Wrap { trim: false })
             .inset(Insets::tlbr(0, 2, 0, 0)),
@@ -158,7 +158,7 @@ impl WidgetRef for &ModelMigrationScreen {
         column.push(
             Line::from(vec![
                 "Learn more at ".into(),
-                "www.openai.com/index/gpt-5-1".cyan().underlined(),
+                "www.openai.com/index/arcticfox".cyan().underlined(),
                 ".".into(),
             ])
             .inset(Insets::tlbr(0, 2, 0, 0)),

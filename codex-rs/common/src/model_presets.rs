@@ -4,6 +4,9 @@ use codex_app_server_protocol::AuthMode;
 use codex_core::protocol_config_types::ReasoningEffort;
 use once_cell::sync::Lazy;
 
+pub const HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG: &str = "hide_gpt5_1_migration_prompt";
+pub const HIDE_ARCTICFOX_MIGRATION_PROMPT_CONFIG: &str = "hide_arcticfox_migration_prompt";
+
 /// A reasoning effort option that can be surfaced for a model.
 #[derive(Debug, Clone, Copy)]
 pub struct ReasoningEffortPreset {
@@ -17,6 +20,7 @@ pub struct ReasoningEffortPreset {
 pub struct ModelUpgrade {
     pub id: &'static str,
     pub reasoning_effort_mapping: Option<HashMap<ReasoningEffort, ReasoningEffort>>,
+    pub migration_config_key: &'static str,
 }
 
 /// Metadata describing a Codex-supported model.
@@ -38,10 +42,36 @@ pub struct ModelPreset {
     pub is_default: bool,
     /// recommended upgrade model
     pub upgrade: Option<ModelUpgrade>,
+    /// Whether this preset should appear in the picker UI.
+    pub show_in_picker: bool,
 }
 
 static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
     vec![
+        ModelPreset {
+            id: "arcticfox",
+            model: "arcticfox",
+            display_name: "arcticfox",
+            description: "Latest Codex-optimized flagship for deep and fast reasoning.",
+            default_reasoning_effort: ReasoningEffort::Medium,
+            supported_reasoning_efforts: &[
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Low,
+                    description: "Fast responses with lighter reasoning",
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Medium,
+                    description: "Balances speed and reasoning depth for everyday tasks",
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::High,
+                    description: "Maximizes reasoning depth for complex problems",
+                },
+            ],
+            is_default: true,
+            upgrade: None,
+            show_in_picker: true,
+        },
         ModelPreset {
             id: "gpt-5.1-codex",
             model: "gpt-5.1-codex",
@@ -62,8 +92,13 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                     description: "Maximizes reasoning depth for complex or ambiguous problems",
                 },
             ],
-            is_default: true,
-            upgrade: None,
+            is_default: false,
+            upgrade: Some(ModelUpgrade {
+                id: "arcticfox",
+                reasoning_effort_mapping: None,
+                migration_config_key: HIDE_ARCTICFOX_MIGRATION_PROMPT_CONFIG,
+            }),
+            show_in_picker: true,
         },
         ModelPreset {
             id: "gpt-5.1-codex-mini",
@@ -83,6 +118,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             ],
             is_default: false,
             upgrade: None,
+            show_in_picker: true,
         },
         ModelPreset {
             id: "gpt-5.1",
@@ -106,6 +142,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             ],
             is_default: false,
             upgrade: None,
+            show_in_picker: true,
         },
         // Deprecated models.
         ModelPreset {
@@ -132,7 +169,9 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             upgrade: Some(ModelUpgrade {
                 id: "gpt-5.1-codex",
                 reasoning_effort_mapping: None,
+                migration_config_key: HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG,
             }),
+            show_in_picker: false,
         },
         ModelPreset {
             id: "gpt-5-codex-mini",
@@ -154,7 +193,9 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             upgrade: Some(ModelUpgrade {
                 id: "gpt-5.1-codex-mini",
                 reasoning_effort_mapping: None,
+                migration_config_key: HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG,
             }),
+            show_in_picker: false,
         },
         ModelPreset {
             id: "gpt-5",
@@ -187,7 +228,9 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                     ReasoningEffort::Minimal,
                     ReasoningEffort::Low,
                 )])),
+                migration_config_key: HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG,
             }),
+            show_in_picker: false,
         },
     ]
 });
@@ -196,7 +239,7 @@ pub fn builtin_model_presets(_auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
     // leave auth mode for later use
     PRESETS
         .iter()
-        .filter(|preset| preset.upgrade.is_none())
+        .filter(|preset| preset.show_in_picker)
         .cloned()
         .collect()
 }

@@ -177,6 +177,7 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
     } else if slug.starts_with("gpt-5-codex")
         || slug.starts_with("gpt-5.1-codex")
         || slug.starts_with("codex-")
+        || slug.starts_with("arcticfox")
     {
         model_family!(
             slug, slug,
