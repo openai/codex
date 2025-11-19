@@ -2502,6 +2502,7 @@ fn stream_error_updates_status_indicator() {
         id: "sub-1".into(),
         msg: EventMsg::StreamError(StreamErrorEvent {
             message: msg.to_string(),
+            http_status_code: None,
         }),
     });
 
