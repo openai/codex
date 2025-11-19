@@ -75,6 +75,9 @@ impl TruncationPolicy {
 }
 
 pub(crate) fn formatted_truncate_text(content: &str, policy: TruncationPolicy) -> String {
+    if content.len() <= policy.byte_budget() {
+        return content.to_string();
+    }
     let total_lines = content.lines().count();
     let result = truncate_text(content, policy);
     format!("Total output lines: {total_lines}\n\n{result}")
@@ -397,9 +400,8 @@ mod tests {
     #[test]
     fn format_exec_output_returns_original_when_within_limits() {
         let content = "example output\n".repeat(10);
-        let expected = with_total_lines(10, &content);
 
-        assert_eq!(truncate_model_output(&content), expected);
+        assert_eq!(truncate_model_output(&content), content);
     }
 
     #[test]

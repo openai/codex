@@ -2474,7 +2474,7 @@ mod tests {
 
         assert_eq!(
             out,
-            "Total output lines: 2\n\ncommand timed out after 1000 milliseconds\nCommand output"
+            "command timed out after 1000 milliseconds\nCommand output"
         );
     }
 
