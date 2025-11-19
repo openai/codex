@@ -276,9 +276,9 @@ impl ModelClient {
         };
 
         let mut payload_json = serde_json::to_value(&payload)?;
-        if azure_workaround {
-            attach_item_ids(&mut payload_json, &input_with_instructions);
-        }
+
+        attach_item_ids(&mut payload_json, &input_with_instructions);
+
 
         let max_attempts = self.provider.request_max_retries();
         for attempt in 0..=max_attempts {
