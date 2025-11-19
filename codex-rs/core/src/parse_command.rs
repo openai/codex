@@ -919,17 +919,56 @@ mod tests {
             }],
         );
     }
+
+    #[test]
+    fn powershell_cd_is_stripped() {
+        assert_parsed(
+            &vec_str(&["powershell", "-Command", "cd foo; Get-ChildItem"]),
+            vec![ParsedCommand::Unknown {
+                cmd: "Get-ChildItem".to_string(),
+            }],
+        );
+    }
+    #[test]
+    fn powershell_pipes_are_preserved() {
+        assert_parsed(
+            &vec_str(&[
+                "powershell",
+                "-Command",
+                "Get-Content core/src/parse_command.rs | Select-Object -First 980 | Select-Object -Last 140",
+            ]),
+            vec![
+                ParsedCommand::Unknown {
+                    cmd: "Get-Content core/src/parse_command.rs".to_string(),
+                },
+                ParsedCommand::Unknown {
+                    cmd: "Select-Object -First 980".to_string(),
+                },
+                ParsedCommand::Unknown {
+                    cmd: "Select-Object -Last 140".to_string(),
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn powershell_at_escaping_is_preserved() {
+        assert_parsed(
+            &vec_str(&[
+                "powershell",
+                "-Command",
+                "@'\\nprint('Hello, world!')\\n'@ | python -",
+            ]),
+            vec![ParsedCommand::Unknown {
+                cmd: "@'\\nprint('Hello, world!')\\n'@ | python -".to_string(),
+            }],
+        );
+    }
 }
 
 pub fn parse_command_impl(command: &[String]) -> Vec<ParsedCommand> {
     if let Some(commands) = parse_shell_lc_commands(command) {
         return commands;
-    }
-
-    if let Some((_, script)) = extract_powershell_command(command) {
-        return vec![ParsedCommand::Unknown {
-            cmd: script.to_string(),
-        }];
     }
 
     let normalized = normalize_tokens(command);
@@ -1238,8 +1277,8 @@ fn parse_find_query_and_path(tail: &[String]) -> (Option<String>, Option<String>
 }
 
 fn parse_shell_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
-    // Only handle bash/zsh here; PowerShell is stripped separately without bash parsing.
-    let (_, script) = extract_bash_command(original)?;
+    let (_, script) =
+        extract_bash_command(original).or_else(|| extract_powershell_command(original))?;
 
     if let Some(tree) = try_parse_shell(script)
         && let Some(all_commands) = try_parse_word_only_commands_sequence(&tree, script)
