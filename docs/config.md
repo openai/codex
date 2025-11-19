@@ -64,7 +64,7 @@ Notes:
 The model that Codex should use.
 
 ```toml
-model = "gpt-5.1"  # overrides the default ("gpt-5.1-codex" on macOS/Linux, "gpt-5.1" on Windows)
+model = "gpt-5.1"  # overrides the default ("arcticfox" across platforms)
 ```
 
 ### model_providers
@@ -191,7 +191,7 @@ model = "mistral"
 
 ### model_reasoning_effort
 
-If the selected model is known to support reasoning (for example: `o3`, `o4-mini`, `codex-*`, `gpt-5.1`, `gpt-5.1-codex`), reasoning is enabled by default when using the Responses API. As explained in the [OpenAI Platform documentation](https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning), this can be set to:
+If the selected model is known to support reasoning (for example: `o3`, `o4-mini`, `codex-*`, `arcticfox`, `gpt-5.1`, `gpt-5.1-codex`), reasoning is enabled by default when using the Responses API. As explained in the [OpenAI Platform documentation](https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning), this can be set to:
 
 - `"minimal"`
 - `"low"`
@@ -835,7 +835,7 @@ Users can specify config values at multiple levels. Order of precedence is as fo
 1. custom command-line argument, e.g., `--model o3`
 2. as part of a profile, where the `--profile` is specified via a CLI (or in the config file itself)
 3. as an entry in `config.toml`, e.g., `model = "o3"`
-4. the default value that comes with Codex CLI (i.e., Codex CLI defaults to `gpt-5.1-codex`)
+4. the default value that comes with Codex CLI (i.e., Codex CLI defaults to `arcticfox`)
 
 ### history
 
@@ -938,7 +938,7 @@ Valid values:
 
 | Key                                              | Type / Values                                                     | Notes                                                                                                                      |
 | ------------------------------------------------ | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `model`                                          | string                                                            | Model to use (e.g., `gpt-5.1-codex`).                                                                                      |
+| `model`                                          | string                                                            | Model to use (e.g., `arcticfox`).                                                                                          |
 | `model_provider`                                 | string                                                            | Provider id from `model_providers` (default: `openai`).                                                                    |
 | `model_context_window`                           | number                                                            | Context window tokens.                                                                                                     |
 | `model_max_output_tokens`                        | number                                                            | Max output tokens.                                                                                                         |

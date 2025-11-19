@@ -118,6 +118,7 @@ use codex_core::parse_cursor;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewRequest;
+use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::read_head_for_summary;
 use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
@@ -154,6 +155,14 @@ use uuid::Uuid;
 type PendingInterruptQueue = Vec<(RequestId, ApiVersion)>;
 pub(crate) type PendingInterrupts = Arc<Mutex<HashMap<ConversationId, PendingInterruptQueue>>>;
 
+/// Per-conversation accumulation of the latest states e.g. error message while a turn runs.
+#[derive(Default, Clone)]
+pub(crate) struct TurnSummary {
+    pub(crate) last_error_message: Option<String>,
+}
+
+pub(crate) type TurnSummaryStore = Arc<Mutex<HashMap<ConversationId, TurnSummary>>>;
+
 // Duration before a ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 struct ActiveLogin {
@@ -178,6 +187,7 @@ pub(crate) struct CodexMessageProcessor {
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
     pending_interrupts: PendingInterrupts,
+    turn_summary_store: TurnSummaryStore,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     feedback: CodexFeedback,
 }
@@ -230,6 +240,7 @@ impl CodexMessageProcessor {
             conversation_listeners: HashMap::new(),
             active_login: Arc::new(Mutex::new(None)),
             pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
+            turn_summary_store: Arc::new(Mutex::new(HashMap::new())),
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
             feedback,
         }
@@ -1303,8 +1314,12 @@ impl CodexMessageProcessor {
 
         match self.conversation_manager.new_conversation(config).await {
             Ok(new_conv) => {
-                let conversation_id = new_conv.conversation_id;
-                let rollout_path = new_conv.session_configured.rollout_path.clone();
+                let NewConversation {
+                    conversation_id,
+                    session_configured,
+                    ..
+                } = new_conv;
+                let rollout_path = session_configured.rollout_path.clone();
                 let fallback_provider = self.config.model_provider_id.as_str();
 
                 // A bit hacky, but the summary contains a lot of useful information for the thread
@@ -1329,8 +1344,22 @@ impl CodexMessageProcessor {
                     }
                 };
 
+                let SessionConfiguredEvent {
+                    model,
+                    model_provider_id,
+                    cwd,
+                    approval_policy,
+                    sandbox_policy,
+                    ..
+                } = session_configured;
                 let response = ThreadStartResponse {
                     thread: thread.clone(),
+                    model,
+                    model_provider: model_provider_id,
+                    cwd,
+                    approval_policy: approval_policy.into(),
+                    sandbox: sandbox_policy.into(),
+                    reasoning_effort: session_configured.reasoning_effort,
                 };
 
                 // Auto-attach a conversation listener when starting a thread.
@@ -1643,7 +1672,15 @@ impl CodexMessageProcessor {
                         return;
                     }
                 };
-                let response = ThreadResumeResponse { thread };
+                let response = ThreadResumeResponse {
+                    thread,
+                    model: session_configured.model,
+                    model_provider: session_configured.model_provider_id,
+                    cwd: session_configured.cwd,
+                    approval_policy: session_configured.approval_policy.into(),
+                    sandbox: session_configured.sandbox_policy.into(),
+                    reasoning_effort: session_configured.reasoning_effort,
+                };
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(err) => {
@@ -2363,9 +2400,6 @@ impl CodexMessageProcessor {
             }
         };
 
-        // Keep a copy of v2 inputs for the notification payload.
-        let v2_inputs_for_notif = params.input.clone();
-
         // Map v2 input items to core input items.
         let mapped_items: Vec<CoreInputItem> = params
             .input
@@ -2405,12 +2439,8 @@ impl CodexMessageProcessor {
             Ok(turn_id) => {
                 let turn = Turn {
                     id: turn_id.clone(),
-                    items: vec![ThreadItem::UserMessage {
-                        id: turn_id,
-                        content: v2_inputs_for_notif,
-                    }],
+                    items: vec![],
                     status: TurnStatus::InProgress,
-                    error: None,
                 };
 
                 let response = TurnStartResponse { turn: turn.clone() };
@@ -2471,7 +2501,6 @@ impl CodexMessageProcessor {
                     id: turn_id.clone(),
                     items,
                     status: TurnStatus::InProgress,
-                    error: None,
                 };
                 let response = TurnStartResponse { turn: turn.clone() };
                 self.outgoing.send_response(request_id, response).await;
@@ -2591,6 +2620,7 @@ impl CodexMessageProcessor {
 
         let outgoing_for_task = self.outgoing.clone();
         let pending_interrupts = self.pending_interrupts.clone();
+        let turn_summary_store = self.turn_summary_store.clone();
         let api_version_for_task = api_version;
         tokio::spawn(async move {
             loop {
@@ -2647,6 +2677,7 @@ impl CodexMessageProcessor {
                             conversation.clone(),
                             outgoing_for_task.clone(),
                             pending_interrupts.clone(),
+                            turn_summary_store.clone(),
                             api_version_for_task,
                         )
                         .await;

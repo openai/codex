@@ -91,15 +91,15 @@ pub(crate) enum AppEvent {
         failed_scan: bool,
     },
 
-    /// Prompt to enable the Windows sandbox feature before using Auto mode.
+    /// Prompt to enable the Windows sandbox feature before using Agent mode.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     OpenWindowsSandboxEnablePrompt {
         preset: ApprovalPreset,
     },
 
-    /// Enable the Windows sandbox feature and switch to Auto mode.
+    /// Enable the Windows sandbox feature and switch to Agent mode.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-    EnableWindowsSandboxForAuto {
+    EnableWindowsSandboxForAgentMode {
         preset: ApprovalPreset,
     },
 

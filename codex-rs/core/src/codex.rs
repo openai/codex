@@ -293,7 +293,6 @@ impl TurnContext {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Clone)]
 pub(crate) struct SessionConfiguration {
     /// Provider identifier ("openai", "openrouter", ...).
@@ -581,6 +580,10 @@ impl Session {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
                 model: session_configuration.model.clone(),
+                model_provider_id: config.model_provider_id.clone(),
+                approval_policy: session_configuration.approval_policy,
+                sandbox_policy: session_configuration.sandbox_policy.clone(),
+                cwd: session_configuration.cwd.clone(),
                 reasoning_effort: session_configuration.model_reasoning_effort,
                 history_log_id,
                 history_entry_count,

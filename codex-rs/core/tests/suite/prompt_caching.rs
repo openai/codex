@@ -1,6 +1,5 @@
 #![allow(clippy::unwrap_used)]
 
-use codex_core::config::OPENAI_DEFAULT_MODEL;
 use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
@@ -19,7 +18,6 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
-use std::collections::HashMap;
 use tempfile::TempDir;
 
 fn text_user_input(text: String) -> serde_json::Value {
@@ -156,61 +154,15 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    // our internal implementation is responsible for keeping tools in sync
-    // with the OpenAI schema, so we just verify the tool presence here
-    let tools_by_model: HashMap<&'static str, Vec<&'static str>> = HashMap::from([
-        (
-            "gpt-5.1",
-            vec![
-                "shell_command",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
-                "update_plan",
-                "view_image",
-            ],
-        ),
-        (
-            "gpt-5.1",
-            vec![
-                "shell_command",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
-                "update_plan",
-                "apply_patch",
-                "view_image",
-            ],
-        ),
-        (
-            "gpt-5.1-codex",
-            vec![
-                "shell_command",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
-                "update_plan",
-                "apply_patch",
-                "view_image",
-            ],
-        ),
-        (
-            "gpt-5.1-codex",
-            vec![
-                "shell_command",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
-                "update_plan",
-                "apply_patch",
-                "view_image",
-            ],
-        ),
-    ]);
-    let expected_tools_names = tools_by_model
-        .get(OPENAI_DEFAULT_MODEL)
-        .unwrap_or_else(|| panic!("expected tools to be defined for model {OPENAI_DEFAULT_MODEL}"))
-        .as_slice();
+    let expected_tools_names = vec![
+        "shell_command",
+        "list_mcp_resources",
+        "list_mcp_resource_templates",
+        "read_mcp_resource",
+        "update_plan",
+        "apply_patch",
+        "view_image",
+    ];
     let body0 = req1.single_request().body_json();
 
     let expected_instructions = if expected_tools_names.contains(&"apply_patch") {
@@ -227,14 +179,14 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         body0["instructions"],
         serde_json::json!(expected_instructions),
     );
-    assert_tool_names(&body0, expected_tools_names);
+    assert_tool_names(&body0, &expected_tools_names);
 
     let body1 = req2.single_request().body_json();
     assert_eq!(
         body1["instructions"],
         serde_json::json!(expected_instructions),
     );
-    assert_tool_names(&body1, expected_tools_names);
+    assert_tool_names(&body1, &expected_tools_names);
 
     Ok(())
 }

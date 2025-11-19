@@ -2013,6 +2013,26 @@ impl ChatWidget {
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
         let supported = preset.supported_reasoning_efforts;
 
+        let warn_effort = if supported
+            .iter()
+            .any(|option| option.effort == ReasoningEffortConfig::XHigh)
+        {
+            Some(ReasoningEffortConfig::XHigh)
+        } else if supported
+            .iter()
+            .any(|option| option.effort == ReasoningEffortConfig::High)
+        {
+            Some(ReasoningEffortConfig::High)
+        } else {
+            None
+        };
+        let warning_text = warn_effort.map(|effort| {
+            let effort_label = Self::reasoning_effort_label(effort);
+            format!("⚠ {effort_label} reasoning effort can quickly consume Plus plan rate limits.")
+        });
+        let warn_for_model =
+            preset.model.starts_with("gpt-5.1-codex") || preset.model.starts_with("arcticfox");
+
         struct EffortChoice {
             stored: Option<ReasoningEffortConfig>,
             display: ReasoningEffortConfig,
@@ -2060,10 +2080,7 @@ impl ChatWidget {
         let mut items: Vec<SelectionItem> = Vec::new();
         for choice in choices.iter() {
             let effort = choice.display;
-            let mut effort_label = effort.to_string();
-            if let Some(first) = effort_label.get_mut(0..1) {
-                first.make_ascii_uppercase();
-            }
+            let mut effort_label = Self::reasoning_effort_label(effort).to_string();
             if choice.stored == default_choice {
                 effort_label.push_str(" (default)");
             }
@@ -2078,14 +2095,17 @@ impl ChatWidget {
                 })
                 .filter(|text| !text.is_empty());
 
-            let warning = "⚠ High reasoning effort can quickly consume Plus plan rate limits.";
-            let show_warning =
-                preset.model.starts_with("gpt-5.1-codex") && effort == ReasoningEffortConfig::High;
-            let selected_description = show_warning.then(|| {
-                description
-                    .as_ref()
-                    .map_or(warning.to_string(), |d| format!("{d}\n{warning}"))
-            });
+            let show_warning = warn_for_model && warn_effort == Some(effort);
+            let selected_description = if show_warning {
+                warning_text.as_ref().map(|warning_message| {
+                    description.as_ref().map_or_else(
+                        || warning_message.clone(),
+                        |d| format!("{d}\n{warning_message}"),
+                    )
+                })
+            } else {
+                None
+            };
 
             let model_for_action = model_slug.clone();
             let effort_for_action = choice.stored;
@@ -2137,6 +2157,17 @@ impl ChatWidget {
         });
     }
 
+    fn reasoning_effort_label(effort: ReasoningEffortConfig) -> &'static str {
+        match effort {
+            ReasoningEffortConfig::None => "None",
+            ReasoningEffortConfig::Minimal => "Minimal",
+            ReasoningEffortConfig::Low => "Low",
+            ReasoningEffortConfig::Medium => "Medium",
+            ReasoningEffortConfig::High => "High",
+            ReasoningEffortConfig::XHigh => "Extra high",
+        }
+    }
+
     fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
         self.app_event_tx
             .send(AppEvent::CodexOp(Op::OverrideTurnContext {
@@ -2169,11 +2200,6 @@ impl ChatWidget {
         let current_sandbox = self.config.sandbox_policy.clone();
         let mut items: Vec<SelectionItem> = Vec::new();
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
-        #[cfg(target_os = "windows")]
-        let forced_windows_read_only = self.config.forced_auto_mode_downgraded_on_windows
-            && codex_core::get_platform_sandbox().is_none();
-        #[cfg(not(target_os = "windows"))]
-        let forced_windows_read_only = false;
         for preset in presets.into_iter() {
             let is_current =
                 current_approval == preset.approval && current_sandbox == preset.sandbox;
@@ -2237,14 +2263,7 @@ impl ChatWidget {
         }
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some(
-                if forced_windows_read_only {
-                    "Select approval mode (Codex changed your permissions to Read Only because the Windows sandbox is off)"
-                        .to_string()
-                } else {
-                    "Select Approval Mode".to_string()
-                },
-            ),
+            title: Some("Select Approval Mode".to_string()),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             header: Box::new(()),
@@ -2367,11 +2386,15 @@ impl ChatWidget {
             None => (None, None),
         };
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
-        let mode_label = match self.config.sandbox_policy {
-            SandboxPolicy::WorkspaceWrite { .. } => "Auto mode",
+        let describe_policy = |policy: &SandboxPolicy| match policy {
+            SandboxPolicy::WorkspaceWrite { .. } => "Agent mode",
             SandboxPolicy::ReadOnly => "Read-Only mode",
-            _ => "Auto mode",
+            _ => "Agent mode",
         };
+        let mode_label = preset
+            .as_ref()
+            .map(|p| describe_policy(&p.sandbox))
+            .unwrap_or_else(|| describe_policy(&self.config.sandbox_policy));
         let info_line = if failed_scan {
             Line::from(vec![
                 "We couldn't complete the world-writable scan, so protections cannot be verified. "
@@ -2381,11 +2404,8 @@ impl ChatWidget {
             ])
         } else {
             Line::from(vec![
-                "Some important directories on this system are world-writable. ".into(),
-                format!(
-                    "The Windows sandbox cannot protect writes to these locations in {mode_label}."
-                )
-                .fg(Color::Red),
+                "The Windows sandbox cannot protect writes to folders that are writable by Everyone.".into(),
+                " Consider removing write access for Everyone from the following folders:".into(),
             ])
         };
         header_children.push(Box::new(
@@ -2395,7 +2415,6 @@ impl ChatWidget {
         if !sample_paths.is_empty() {
             // Show up to three examples and optionally an "and X more" line.
             let mut lines: Vec<Line> = Vec::new();
-            lines.push(Line::from("Examples:").bold());
             lines.push(Line::from(""));
             for p in &sample_paths {
                 lines.push(Line::from(format!("  - {p}")));
@@ -2470,37 +2489,39 @@ impl ChatWidget {
         use ratatui_macros::line;
 
         let mut header = ColumnRenderable::new();
-        header.push(line![
-            "Auto mode requires the experimental Windows sandbox.".bold(),
-            " Turn it on to enable sandboxed commands on Windows."
-        ]);
+        header.push(*Box::new(
+            Paragraph::new(vec![
+                line!["Agent mode on Windows uses an experimental sandbox to limit network and filesystem access.".bold()],
+                line![
+                    "Learn more: https://developers.openai.com/codex/windows"
+                ],
+            ])
+            .wrap(Wrap { trim: false }),
+        ));
 
         let preset_clone = preset;
-        let items = vec![SelectionItem {
-            name: "Turn on Windows sandbox and use Auto mode".to_string(),
-            description: Some(
-                "Adds enable_experimental_windows_sandbox = true to config.toml and switches to Auto mode."
-                    .to_string(),
-            ),
-            actions: vec![Box::new(move |tx| {
-                tx.send(AppEvent::EnableWindowsSandboxForAuto {
-                    preset: preset_clone.clone(),
-                });
-            })],
-            dismiss_on_select: true,
-            ..Default::default()
-        }, SelectionItem {
-            name: "Go Back".to_string(),
-            description: Some(
-                "Stay on read-only or full access without enabling the sandbox feature."
-                    .to_string(),
-            ),
-            actions: vec![Box::new(|tx| {
-                tx.send(AppEvent::OpenApprovalsPopup);
-            })],
-            dismiss_on_select: true,
-            ..Default::default()
-        }];
+        let items = vec![
+            SelectionItem {
+                name: "Enable experimental sandbox".to_string(),
+                description: None,
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
+                        preset: preset_clone.clone(),
+                    });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Go back".to_string(),
+                description: None,
+                actions: vec![Box::new(|tx| {
+                    tx.send(AppEvent::OpenApprovalsPopup);
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: None,
