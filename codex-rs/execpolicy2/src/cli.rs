@@ -32,7 +32,7 @@ pub struct ExecPolicyCheckCommand {
 
 impl ExecPolicyCheckCommand {
     /// Load the policies for this command, evaluate the command, and render JSON output.
-    pub fn to_json(&self) -> Result<String> {
+    pub fn run(&self) -> Result<String> {
         let policy = load_policies(&self.policies)?;
         let evaluation = policy.check(&self.command);
 

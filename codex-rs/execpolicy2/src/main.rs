@@ -18,7 +18,7 @@ fn main() -> Result<()> {
 }
 
 fn cmd_check(cmd: ExecPolicyCheckCommand) -> Result<()> {
-    let json = cmd.to_json()?;
+    let json = cmd.run()?;
     println!("{json}");
     Ok(())
 }

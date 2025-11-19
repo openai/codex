@@ -329,7 +329,7 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
 }
 
 fn run_execpolicy_check(cli: ExecPolicyCheckCommand) -> anyhow::Result<()> {
-    let json = cli.to_json()?;
+    let json = cli.run()?;
     println!("{json}");
     Ok(())
 }
