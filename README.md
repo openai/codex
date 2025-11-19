@@ -90,6 +90,10 @@ prefix_rule(
 - `decision` sets the severity; Codex picks the strictest decision when multiple rules match.
 - `match` and `not_match` act as (optional) unit tests. Codex validates them when it loads your policy, so you get feedback if an example has unexpected behavior.
 
+In this example rule, if Codex wants to run commands with the prefix `git push` or `git fetch`, it will first ask for user approval.
+
+Note: If Codex wants to run a command that matches with multiple rules, it will use the strictest decision among the matched rules (forbidden > prompt > allow).
+
 Use the [`execpolicy2` CLI](./codex-rs/execpolicy2/README.md) to preview decisions before you save a rule:
 
 ```shell
