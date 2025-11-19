@@ -141,6 +141,9 @@ file_opener = "vscode"
 # Examples: false | ["agent-turn-complete", "approval-requested"]
 notifications = false
 
+# Disable welcome/status/spinner animations. Default: true
+animations = false
+
 # Suppress internal reasoning events from output (default: false)
 hide_agent_reasoning = false
 

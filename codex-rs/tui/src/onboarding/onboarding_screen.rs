@@ -88,6 +88,7 @@ impl OnboardingScreen {
         steps.push(Step::Welcome(WelcomeWidget::new(
             !matches!(login_status, LoginStatus::NotAuthenticated),
             tui.frame_requester(),
+            config.animations,
         )));
         if show_login_screen {
             let highlighted_mode = match forced_login_method {
