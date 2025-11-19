@@ -98,5 +98,8 @@ pub(crate) async fn run(file: String, argv: Vec<String>) -> anyhow::Result<i32> 
 
             Err(err.into())
         }
+        EscalateAction::Deny => {
+            todo!("handle EscalateAction::Deny")
+        }
     }
 }
