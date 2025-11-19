@@ -4,13 +4,13 @@ use codex_app_server_protocol::ReasoningEffortOption;
 use codex_common::model_presets::ModelPreset;
 use codex_common::model_presets::ReasoningEffortPreset;
 use codex_common::model_presets::builtin_model_presets;
-use codex_common::model_presets::default_model_id_for_auth;
+use codex_core::config::default_model_for_auth;
 
 pub fn supported_models(auth_mode: Option<AuthMode>) -> Vec<Model> {
-    let default_model_id = default_model_id_for_auth(auth_mode);
+    let default_model_id = default_model_for_auth(auth_mode);
     builtin_model_presets(auth_mode)
         .into_iter()
-        .map(|preset| model_from_preset(preset, default_model_id))
+        .map(|preset| model_from_preset(preset, &default_model_id))
         .collect()
 }
 

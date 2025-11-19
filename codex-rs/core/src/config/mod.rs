@@ -1349,7 +1349,7 @@ fn default_model() -> String {
     OPENAI_DEFAULT_MODEL.to_string()
 }
 
-fn default_model_for_auth(auth_mode: Option<AuthMode>) -> String {
+pub fn default_model_for_auth(auth_mode: Option<AuthMode>) -> String {
     match auth_mode {
         Some(AuthMode::ApiKey) => OPENAI_DEFAULT_MODEL_API_KEY.to_string(),
         _ => default_model(),

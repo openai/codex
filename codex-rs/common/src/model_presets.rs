@@ -256,13 +256,6 @@ pub fn builtin_model_presets(auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
         .collect()
 }
 
-pub fn default_model_id_for_auth(auth_mode: Option<AuthMode>) -> &'static str {
-    match auth_mode {
-        Some(AuthMode::ApiKey) => "gpt-5.1-codex",
-        _ => "gpt-5.1-codex-max",
-    }
-}
-
 pub fn all_model_presets() -> &'static Vec<ModelPreset> {
     &PRESETS
 }
@@ -286,18 +279,5 @@ mod tests {
                 .iter()
                 .all(|preset| preset.id != "gpt-5.1-codex-max")
         );
-    }
-
-    #[test]
-    fn default_model_depends_on_auth_mode() {
-        assert_eq!(
-            default_model_id_for_auth(Some(AuthMode::ChatGPT)),
-            "gpt-5.1-codex-max"
-        );
-        assert_eq!(
-            default_model_id_for_auth(Some(AuthMode::ApiKey)),
-            "gpt-5.1-codex"
-        );
-        assert_eq!(default_model_id_for_auth(None), "gpt-5.1-codex-max");
     }
 }
