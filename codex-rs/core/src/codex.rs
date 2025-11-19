@@ -1085,11 +1085,13 @@ impl Session {
         self.send_token_count_event(turn_context).await;
     }
 
-    pub(crate) async fn override_last_token_usage_estimate(
+    pub(crate) async fn recompute_token_usage(
         &self,
-        turn_context: &TurnContext,
-        estimated_total_tokens: i64,
+        turn_context: &TurnContext
     ) {
+        let Some(estimated_total_tokens) = self.clone_history().await.estimate_token_count(turn_context) else {
+            return
+        };
         {
             let mut state = self.state.lock().await;
             let mut info = state.token_info().unwrap_or(TokenUsageInfo {
