@@ -235,7 +235,7 @@ fn truncate_with_byte_estimate(s: &str, max_bytes: usize, source: TruncationSour
     out
 }
 
-fn truncate_formatted_exec_output(
+pub(crate) fn truncate_formatted_exec_output(
     content: &str,
     total_lines: usize,
     limit_bytes: usize,

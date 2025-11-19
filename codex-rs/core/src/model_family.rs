@@ -207,7 +207,7 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             slug, "gpt-5",
             supports_reasoning_summaries: true,
             needs_special_apply_patch_instructions: true,
-            shell_type: ConfigShellToolType::ShellCommand,
+            shell_type: ConfigShellToolType::Default,
             support_verbosity: true,
             truncation_policy: TruncationPolicy::Bytes(10_000),
         )

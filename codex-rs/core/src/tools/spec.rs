@@ -1396,6 +1396,22 @@ mod tests {
     }
 
     #[test]
+    fn test_gpt_5_defaults() {
+        assert_model_tools(
+            "gpt-5",
+            &Features::with_defaults(),
+            &[
+                "shell",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "view_image",
+            ],
+        );
+    }
+
+    #[test]
     fn test_gpt_5_1_defaults() {
         assert_model_tools(
             "gpt-5.1",

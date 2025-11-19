@@ -760,7 +760,7 @@ Output:
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_command_output_is_structured() -> Result<()> {
+async fn shell_command_output_is_freeform() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -804,6 +804,7 @@ async fn shell_command_output_is_structured() -> Result<()> {
 
     let expected_pattern = r"(?s)^Exit code: 0
 Wall time: [0-9]+(?:\.[0-9]+)? seconds
+Total output lines: 1
 Output:
 shell command
 ?$";
