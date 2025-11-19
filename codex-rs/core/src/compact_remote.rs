@@ -66,15 +66,7 @@ async fn run_remote_compact_task_inner_impl(
         new_history.extend(ghost_snapshots);
     }
     sess.replace_history(new_history.clone()).await;
-
-    if let Some(estimated_tokens) = sess
-        .clone_history()
-        .await
-        .estimate_token_count(turn_context.as_ref())
-    {
-        sess.override_last_token_usage_estimate(turn_context.as_ref(), estimated_tokens)
-            .await;
-    }
+    sess.recompute_token_usage(turn_context).await;
 
     let compacted_item = CompactedItem {
         message: String::new(),

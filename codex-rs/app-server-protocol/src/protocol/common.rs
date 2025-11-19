@@ -494,6 +494,9 @@ server_notification_definitions! {
     ReasoningSummaryPartAdded => "item/reasoning/summaryPartAdded" (v2::ReasoningSummaryPartAddedNotification),
     ReasoningTextDelta => "item/reasoning/textDelta" (v2::ReasoningTextDeltaNotification),
 
+    /// Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.
+    WindowsWorldWritableWarning => "windows/worldWritableWarning" (v2::WindowsWorldWritableWarningNotification),
+
     #[serde(rename = "account/login/completed")]
     #[ts(rename = "account/login/completed")]
     #[strum(serialize = "account/login/completed")]

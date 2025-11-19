@@ -3,6 +3,7 @@
 use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
+use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
@@ -368,6 +369,89 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
         .concat()
     );
     assert_eq!(body2["input"], expected_body2);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn override_before_first_turn_emits_environment_context() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let req = mount_sse_once(&server, sse_completed("resp-1")).await;
+
+    let TestCodex { codex, .. } = test_codex().build(&server).await?;
+
+    codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: Some(AskForApproval::Never),
+            sandbox_policy: None,
+            model: None,
+            effort: None,
+            summary: None,
+        })
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "first message".into(),
+            }],
+        })
+        .await?;
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let body = req.single_request().body_json();
+    let input = body["input"]
+        .as_array()
+        .expect("input array must be present");
+    assert!(
+        !input.is_empty(),
+        "expected at least environment context and user message"
+    );
+
+    let env_msg = &input[1];
+    let env_text = env_msg["content"][0]["text"]
+        .as_str()
+        .expect("environment context text");
+    assert!(
+        env_text.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG),
+        "second entry should be environment context, got: {env_text}"
+    );
+    assert!(
+        env_text.contains("<approval_policy>never</approval_policy>"),
+        "environment context should reflect overridden approval policy: {env_text}"
+    );
+
+    let env_count = input
+        .iter()
+        .filter(|msg| {
+            msg["content"]
+                .as_array()
+                .and_then(|content| {
+                    content.iter().find(|item| {
+                        item["type"].as_str() == Some("input_text")
+                            && item["text"]
+                                .as_str()
+                                .map(|text| text.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG))
+                                .unwrap_or(false)
+                    })
+                })
+                .is_some()
+        })
+        .count();
+    assert_eq!(
+        env_count, 2,
+        "environment context should appear exactly twice, found {env_count}"
+    );
+
+    let user_msg = &input[2];
+    let user_text = user_msg["content"][0]["text"]
+        .as_str()
+        .expect("user message text");
+    assert_eq!(user_text, "first message");
 
     Ok(())
 }
