@@ -938,7 +938,7 @@ Valid values:
 
 | Key                                              | Type / Values                                                     | Notes                                                                                                                      |
 | ------------------------------------------------ | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `model`                                          | string                                                            | Model to use (e.g., `gpt-5.1-codex-max`).                                                                                          |
+| `model`                                          | string                                                            | Model to use (e.g., `gpt-5.1-codex-max`).                                                                                  |
 | `model_provider`                                 | string                                                            | Provider id from `model_providers` (default: `openai`).                                                                    |
 | `model_context_window`                           | number                                                            | Context window tokens.                                                                                                     |
 | `model_max_output_tokens`                        | number                                                            | Max output tokens.                                                                                                         |
