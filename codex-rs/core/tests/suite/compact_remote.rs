@@ -189,9 +189,7 @@ async fn remote_compact_runs_automatically() -> Result<()> {
     assert_eq!(message, "Compact task completed");
     assert_eq!(compact_mock.requests().len(), 1);
     let follow_up_body = responses_mock.single_request().body_json().to_string();
-    assert!(
-        follow_up_body.contains("REMOTE_COMPACTED_SUMMARY")
-    );
+    assert!(follow_up_body.contains("REMOTE_COMPACTED_SUMMARY"));
 
     Ok(())
 }
