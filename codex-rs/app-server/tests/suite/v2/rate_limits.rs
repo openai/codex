@@ -152,6 +152,7 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
                 window_duration_mins: Some(1440),
                 resets_at: Some(secondary_reset_timestamp),
             }),
+            credits: None,
         },
     };
     assert_eq!(received, expected);

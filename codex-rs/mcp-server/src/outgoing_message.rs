@@ -231,8 +231,12 @@ pub(crate) struct OutgoingError {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use anyhow::Result;
+    use codex_core::protocol::AskForApproval;
     use codex_core::protocol::EventMsg;
+    use codex_core::protocol::SandboxPolicy;
     use codex_core::protocol::SessionConfiguredEvent;
     use codex_protocol::ConversationId;
     use codex_protocol::config_types::ReasoningEffort;
@@ -254,6 +258,10 @@ mod tests {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
                 model: "gpt-4o".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: Some(ReasoningEffort::default()),
                 history_log_id: 1,
                 history_entry_count: 1000,
@@ -289,6 +297,10 @@ mod tests {
         let session_configured_event = SessionConfiguredEvent {
             session_id: conversation_id,
             model: "gpt-4o".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            cwd: PathBuf::from("/home/user/project"),
             reasoning_effort: Some(ReasoningEffort::default()),
             history_log_id: 1,
             history_entry_count: 1000,
@@ -318,12 +330,18 @@ mod tests {
             },
             "id": "1",
             "msg": {
+                "type": "session_configured",
                 "session_id": session_configured_event.session_id,
-                "model": session_configured_event.model,
+                "model": "gpt-4o",
+                "model_provider_id": "test-provider",
+                "approval_policy": "never",
+                "sandbox_policy": {
+                    "type": "read-only"
+                },
+                "cwd": "/home/user/project",
                 "reasoning_effort": session_configured_event.reasoning_effort,
                 "history_log_id": session_configured_event.history_log_id,
                 "history_entry_count": session_configured_event.history_entry_count,
-                "type": "session_configured",
                 "rollout_path": rollout_file.path().to_path_buf(),
             }
         });

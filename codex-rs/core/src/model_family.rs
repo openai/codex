@@ -12,6 +12,7 @@ const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
 
 const GPT_5_CODEX_INSTRUCTIONS: &str = include_str!("../gpt_5_codex_prompt.md");
 const GPT_5_1_INSTRUCTIONS: &str = include_str!("../gpt_5_1_prompt.md");
+const GPT_5_1_CODEX_MAX_INSTRUCTIONS: &str = include_str!("../gpt-5.1-codex-max_prompt.md");
 
 /// A model family is a group of models that share certain characteristics.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -174,6 +175,18 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
         )
 
     // Production models.
+    } else if slug.starts_with("gpt-5.1-codex-max") {
+        model_family!(
+            slug, slug,
+            supports_reasoning_summaries: true,
+            reasoning_summary_format: ReasoningSummaryFormat::Experimental,
+            base_instructions: GPT_5_1_CODEX_MAX_INSTRUCTIONS.to_string(),
+            apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+            shell_type: ConfigShellToolType::ShellCommand,
+            supports_parallel_tool_calls: true,
+            support_verbosity: false,
+            truncation_policy: TruncationPolicy::Tokens(10_000),
+        )
     } else if slug.starts_with("gpt-5-codex")
         || slug.starts_with("gpt-5.1-codex")
         || slug.starts_with("codex-")
@@ -207,7 +220,7 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             slug, "gpt-5",
             supports_reasoning_summaries: true,
             needs_special_apply_patch_instructions: true,
-            shell_type: ConfigShellToolType::ShellCommand,
+            shell_type: ConfigShellToolType::Default,
             support_verbosity: true,
             truncation_policy: TruncationPolicy::Bytes(10_000),
         )

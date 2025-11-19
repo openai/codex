@@ -122,7 +122,11 @@ impl SessionTask for UserShellCommandTask {
                     duration: Duration::ZERO,
                     timed_out: false,
                 };
-                let output_items = [user_shell_command_record_item(&raw_command, &exec_output)];
+                let output_items = [user_shell_command_record_item(
+                    &raw_command,
+                    &exec_output,
+                    &turn_context,
+                )];
                 session
                     .record_conversation_items(turn_context.as_ref(), &output_items)
                     .await;
@@ -164,12 +168,19 @@ impl SessionTask for UserShellCommandTask {
                             aggregated_output: output.aggregated_output.text.clone(),
                             exit_code: output.exit_code,
                             duration: output.duration,
-                            formatted_output: format_exec_output_str(&output),
+                            formatted_output: format_exec_output_str(
+                                &output,
+                                turn_context.truncation_policy,
+                            ),
                         }),
                     )
                     .await;
 
-                let output_items = [user_shell_command_record_item(&raw_command, &output)];
+                let output_items = [user_shell_command_record_item(
+                    &raw_command,
+                    &output,
+                    &turn_context,
+                )];
                 session
                     .record_conversation_items(turn_context.as_ref(), &output_items)
                     .await;
@@ -201,11 +212,18 @@ impl SessionTask for UserShellCommandTask {
                             aggregated_output: exec_output.aggregated_output.text.clone(),
                             exit_code: exec_output.exit_code,
                             duration: exec_output.duration,
-                            formatted_output: format_exec_output_str(&exec_output),
+                            formatted_output: format_exec_output_str(
+                                &exec_output,
+                                turn_context.truncation_policy,
+                            ),
                         }),
                     )
                     .await;
-                let output_items = [user_shell_command_record_item(&raw_command, &exec_output)];
+                let output_items = [user_shell_command_record_item(
+                    &raw_command,
+                    &exec_output,
+                    &turn_context,
+                )];
                 session
                     .record_conversation_items(turn_context.as_ref(), &output_items)
                     .await;

@@ -25,7 +25,7 @@ use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
 use crate::tools::sandboxing::ToolCtx;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
-use crate::truncate::truncate_text;
+use crate::truncate::formatted_truncate_text;
 
 use super::ExecCommandRequest;
 use super::SessionEntry;
@@ -72,7 +72,7 @@ impl UnifiedExecSessionManager {
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let text = String::from_utf8_lossy(&collected).to_string();
-        let output = truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
+        let output = formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
         let chunk_id = generate_chunk_id();
         let has_exited = session.has_exited();
         let stored_id = self
@@ -179,7 +179,7 @@ impl UnifiedExecSessionManager {
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let text = String::from_utf8_lossy(&collected).to_string();
-        let output = truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
+        let output = formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
         let original_token_count = approx_token_count(&text);
         let chunk_id = generate_chunk_id();
 

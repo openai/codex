@@ -12,6 +12,8 @@ use serde::Serialize;
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CreditStatusDetails {
+    #[serde(rename = "has_credits")]
+    pub has_credits: bool,
     #[serde(rename = "unlimited")]
     pub unlimited: bool,
     #[serde(
@@ -38,8 +40,9 @@ pub struct CreditStatusDetails {
 }
 
 impl CreditStatusDetails {
-    pub fn new(unlimited: bool) -> CreditStatusDetails {
+    pub fn new(has_credits: bool, unlimited: bool) -> CreditStatusDetails {
         CreditStatusDetails {
+            has_credits,
             unlimited,
             balance: None,
             approx_local_messages: None,

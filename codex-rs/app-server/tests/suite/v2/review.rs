@@ -251,7 +251,7 @@ async fn start_default_thread(mcp: &mut McpProcess) -> Result<String> {
         mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
     )
     .await??;
-    let ThreadStartResponse { thread } = to_response::<ThreadStartResponse>(thread_resp)?;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
     Ok(thread.id)
 }
 

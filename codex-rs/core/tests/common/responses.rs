@@ -460,6 +460,13 @@ pub fn ev_apply_patch_function_call(call_id: &str, patch: &str) -> Value {
     })
 }
 
+pub fn ev_shell_command_call(call_id: &str, command: &str) -> Value {
+    let args = serde_json::json!({ "command": command });
+    let arguments = serde_json::to_string(&args).expect("serialize shell arguments");
+
+    ev_function_call(call_id, "shell_command", &arguments)
+}
+
 pub fn ev_apply_patch_shell_call(call_id: &str, patch: &str) -> Value {
     let args = serde_json::json!({ "command": ["apply_patch", patch] });
     let arguments = serde_json::to_string(&args).expect("serialize apply_patch arguments");

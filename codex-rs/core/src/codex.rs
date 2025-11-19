@@ -7,6 +7,9 @@ use std::sync::atomic::AtomicU64;
 use crate::AuthManager;
 use crate::client_common::REVIEW_PROMPT;
 use crate::compact;
+use crate::compact::run_inline_auto_compact_task;
+use crate::compact::should_use_remote_compact_task;
+use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::parse_command::parse_command;
@@ -63,6 +66,7 @@ use crate::context_manager::ContextManager;
 use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
+use crate::error::http_status_code_value;
 #[cfg(test)]
 use crate::exec::StreamOutput;
 use crate::mcp::auth::compute_auth_statuses;
@@ -76,7 +80,6 @@ use crate::protocol::ApplyPatchApprovalRequestEvent;
 use crate::protocol::AskForApproval;
 use crate::protocol::BackgroundEventEvent;
 use crate::protocol::DeprecationNoticeEvent;
-use crate::protocol::ErrorEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecApprovalRequestEvent;
@@ -130,6 +133,7 @@ use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
 use codex_utils_tokenizer::warm_model_cache;
+use reqwest::StatusCode;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -293,7 +297,6 @@ impl TurnContext {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Clone)]
 pub(crate) struct SessionConfiguration {
     /// Provider identifier ("openai", "openrouter", ...).
@@ -581,6 +584,10 @@ impl Session {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
                 model: session_configuration.model.clone(),
+                model_provider_id: config.model_provider_id.clone(),
+                approval_policy: session_configuration.approval_policy,
+                sandbox_policy: session_configuration.sandbox_policy.clone(),
+                cwd: session_configuration.cwd.clone(),
                 reasoning_effort: session_configuration.model_reasoning_effort,
                 history_log_id,
                 history_entry_count,
@@ -1079,11 +1086,14 @@ impl Session {
         self.send_token_count_event(turn_context).await;
     }
 
-    pub(crate) async fn override_last_token_usage_estimate(
-        &self,
-        turn_context: &TurnContext,
-        estimated_total_tokens: i64,
-    ) {
+    pub(crate) async fn recompute_token_usage(&self, turn_context: &TurnContext) {
+        let Some(estimated_total_tokens) = self
+            .clone_history()
+            .await
+            .estimate_token_count(turn_context)
+        else {
+            return;
+        };
         {
             let mut state = self.state.lock().await;
             let mut info = state.token_info().unwrap_or(TokenUsageInfo {
@@ -1177,9 +1187,11 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         message: impl Into<String>,
+        http_status_code: Option<StatusCode>,
     ) {
         let event = EventMsg::StreamError(StreamErrorEvent {
             message: message.into(),
+            http_status_code: http_status_code_value(http_status_code),
         });
         self.send_event(turn_context, event).await;
     }
@@ -1326,7 +1338,10 @@ impl Session {
 }
 
 async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {
-    let mut previous_context: Option<Arc<TurnContext>> = None;
+    // Seed with context in case there is an OverrideTurnContext first.
+    let mut previous_context: Option<Arc<TurnContext>> =
+        Some(sess.new_turn(SessionSettingsUpdate::default()).await);
+
     // To break out of this loop, send Op::Shutdown.
     while let Ok(sub) = rx_sub.recv().await {
         debug!(?sub, "Submission");
@@ -1668,6 +1683,7 @@ mod handlers {
                 id: sub_id.clone(),
                 msg: EventMsg::Error(ErrorEvent {
                     message: "Failed to shutdown rollout recorder".to_string(),
+                    http_status_code: None,
                 }),
             };
             sess.send_event_raw(event).await;
@@ -1887,7 +1903,12 @@ pub(crate) async fn run_task(
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached {
-                    compact::run_inline_auto_compact_task(sess.clone(), turn_context.clone()).await;
+                    if should_use_remote_compact_task(&sess).await {
+                        run_inline_remote_auto_compact_task(sess.clone(), turn_context.clone())
+                            .await;
+                    } else {
+                        run_inline_auto_compact_task(sess.clone(), turn_context.clone()).await;
+                    }
                     continue;
                 }
 
@@ -1916,10 +1937,8 @@ pub(crate) async fn run_task(
             }
             Err(e) => {
                 info!("Turn error: {e:#}");
-                let event = EventMsg::Error(ErrorEvent {
-                    message: e.to_string(),
-                });
-                sess.send_event(&turn_context, event).await;
+                sess.send_event(&turn_context, EventMsg::Error(e.to_error_event(None)))
+                    .await;
                 // let the user continue the conversation
                 break;
             }
@@ -1971,12 +1990,14 @@ async fn run_turn(
     let mut base_instructions = turn_context.base_instructions.clone();
     if parallel_tool_calls {
         static INSTRUCTIONS: &str = include_str!("../templates/parallel/instructions.md");
-        static INSERTION_SPOT: &str = "## Editing constraints";
-        base_instructions
-            .as_mut()
-            .map(|base| base.replace(INSERTION_SPOT, INSTRUCTIONS));
+        if let Some(family) =
+            find_family_for_model(&sess.state.lock().await.session_configuration.model)
+        {
+            let mut new_instructions = base_instructions.unwrap_or(family.base_instructions);
+            new_instructions.push_str(INSTRUCTIONS);
+            base_instructions = Some(new_instructions);
+        }
     }
-
     let prompt = Prompt {
         input,
         tools: router.specs(),
@@ -2041,6 +2062,7 @@ async fn run_turn(
                     sess.notify_stream_error(
                         &turn_context,
                         format!("Reconnecting... {retries}/{max_retries}"),
+                        e.http_status_code(),
                     )
                     .await;
 
@@ -2468,8 +2490,9 @@ mod tests {
             duration: StdDuration::from_secs(1),
             timed_out: true,
         };
+        let (_, turn_context) = make_session_and_context();
 
-        let out = format_exec_output_str(&exec);
+        let out = format_exec_output_str(&exec, turn_context.truncation_policy);
 
         assert_eq!(
             out,
