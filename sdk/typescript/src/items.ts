@@ -1,5 +1,7 @@
 // based on item types from codex-rs/exec/src/exec_events.rs
 
+import type { ContentBlock as McpContentBlock } from "@modelcontextprotocol/sdk/types.js";
+
 /** The status of a command execution. */
 export type CommandExecutionStatus = "in_progress" | "completed" | "failed";
 
@@ -53,6 +55,17 @@ export type McpToolCallItem = {
   server: string;
   /** The tool invoked on the MCP server. */
   tool: string;
+  /** Arguments forwarded to the tool invocation. */
+  arguments: unknown;
+  /** Result payload returned by the MCP server for successful calls. */
+  result?: {
+    content: McpContentBlock[];
+    structured_content: unknown;
+  };
+  /** Error message reported for failed calls. */
+  error?: {
+    message: string;
+  };
   /** Current status of the tool invocation. */
   status: McpToolCallStatus;
 };
@@ -101,7 +114,6 @@ export type TodoListItem = {
   type: "todo_list";
   items: TodoItem[];
 };
-
 
 /** Canonical union of thread items and their type-specific payloads. */
 export type ThreadItem =

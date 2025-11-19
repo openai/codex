@@ -14,20 +14,21 @@ use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
 use codex_ansi_escape::ansi_escape_line;
 use codex_common::elapsed::format_duration;
+use codex_core::protocol::ExecCommandSource;
 use codex_protocol::parse_command::ParsedCommand;
 use itertools::Itertools;
 use ratatui::prelude::*;
 use ratatui::style::Modifier;
 use ratatui::style::Stylize;
-use ratatui::widgets::Paragraph;
-use ratatui::widgets::WidgetRef;
-use ratatui::widgets::Wrap;
 use textwrap::WordSplitter;
 use unicode_width::UnicodeWidthStr;
 
 pub(crate) const TOOL_CALL_MAX_LINES: usize = 5;
+const USER_SHELL_TOOL_CALL_MAX_LINES: usize = 50;
+const MAX_INTERACTION_PREVIEW_CHARS: usize = 80;
 
 pub(crate) struct OutputLinesParams {
+    pub(crate) line_limit: usize,
     pub(crate) only_err: bool,
     pub(crate) include_angle_pipe: bool,
     pub(crate) include_prefix: bool,
@@ -37,15 +38,45 @@ pub(crate) fn new_active_exec_command(
     call_id: String,
     command: Vec<String>,
     parsed: Vec<ParsedCommand>,
+    source: ExecCommandSource,
+    interaction_input: Option<String>,
 ) -> ExecCell {
     ExecCell::new(ExecCall {
         call_id,
         command,
         parsed,
         output: None,
+        source,
         start_time: Some(Instant::now()),
         duration: None,
+        interaction_input,
     })
+}
+
+fn format_unified_exec_interaction(command: &[String], input: Option<&str>) -> String {
+    let command_display = command.join(" ");
+    match input {
+        Some(data) if !data.is_empty() => {
+            let preview = summarize_interaction_input(data);
+            format!("Interacted with `{command_display}`, sent `{preview}`")
+        }
+        _ => format!("Waited for `{command_display}`"),
+    }
+}
+
+fn summarize_interaction_input(input: &str) -> String {
+    let single_line = input.replace('\n', "\\n");
+    let sanitized = single_line.replace('`', "\\`");
+    if sanitized.chars().count() <= MAX_INTERACTION_PREVIEW_CHARS {
+        return sanitized;
+    }
+
+    let mut preview = String::new();
+    for ch in sanitized.chars().take(MAX_INTERACTION_PREVIEW_CHARS) {
+        preview.push(ch);
+    }
+    preview.push_str("...");
+    preview
 }
 
 #[derive(Clone)]
@@ -59,15 +90,13 @@ pub(crate) fn output_lines(
     params: OutputLinesParams,
 ) -> OutputLines {
     let OutputLinesParams {
+        line_limit,
         only_err,
         include_angle_pipe,
         include_prefix,
     } = params;
     let CommandOutput {
-        exit_code,
-        stdout,
-        stderr,
-        ..
+        aggregated_output, ..
     } = match output {
         Some(output) if only_err && output.exit_code == 0 => {
             return OutputLines {
@@ -84,14 +113,12 @@ pub(crate) fn output_lines(
         }
     };
 
-    let src = if *exit_code == 0 { stdout } else { stderr };
+    let src = aggregated_output;
     let lines: Vec<&str> = src.lines().collect();
     let total = lines.len();
-    let limit = TOOL_CALL_MAX_LINES;
-
     let mut out: Vec<Line<'static>> = Vec::new();
 
-    let head_end = total.min(limit);
+    let head_end = total.min(line_limit);
     for (i, raw) in lines[..head_end].iter().enumerate() {
         let mut line = ansi_escape_line(raw);
         let prefix = if !include_prefix {
@@ -108,19 +135,19 @@ pub(crate) fn output_lines(
         out.push(line);
     }
 
-    let show_ellipsis = total > 2 * limit;
+    let show_ellipsis = total > 2 * line_limit;
     let omitted = if show_ellipsis {
-        Some(total - 2 * limit)
+        Some(total - 2 * line_limit)
     } else {
         None
     };
     if show_ellipsis {
-        let omitted = total - 2 * limit;
+        let omitted = total - 2 * line_limit;
         out.push(format!("… +{omitted} lines").into());
     }
 
     let tail_start = if show_ellipsis {
-        total - limit
+        total - line_limit
     } else {
         head_end
     };
@@ -184,7 +211,9 @@ impl HistoryCell for ExecCell {
             lines.extend(cmd_display);
 
             if let Some(output) = call.output.as_ref() {
-                lines.extend(output.formatted_output.lines().map(ansi_escape_line));
+                if !call.is_unified_exec_interaction() {
+                    lines.extend(output.formatted_output.lines().map(ansi_escape_line));
+                }
                 let duration = call
                     .duration
                     .map(format_duration)
@@ -202,31 +231,6 @@ impl HistoryCell for ExecCell {
             }
         }
         lines
-    }
-}
-
-impl WidgetRef for &ExecCell {
-    fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        if area.height == 0 {
-            return;
-        }
-        let content_area = Rect {
-            x: area.x,
-            y: area.y,
-            width: area.width,
-            height: area.height,
-        };
-        let lines = self.display_lines(area.width);
-        let max_rows = area.height as usize;
-        let rendered = if lines.len() > max_rows {
-            lines[lines.len() - max_rows..].to_vec()
-        } else {
-            lines
-        };
-
-        Paragraph::new(Text::from(rendered))
-            .wrap(Wrap { trim: false })
-            .render(content_area, buf);
     }
 }
 
@@ -345,13 +349,29 @@ impl ExecCell {
             Some(false) => "•".red().bold(),
             None => spinner(call.start_time),
         };
-        let title = if self.is_active() { "Running" } else { "Ran" };
+        let is_interaction = call.is_unified_exec_interaction();
+        let title = if is_interaction {
+            ""
+        } else if self.is_active() {
+            "Running"
+        } else if call.is_user_shell_command() {
+            "You ran"
+        } else {
+            "Ran"
+        };
 
-        let mut header_line =
-            Line::from(vec![bullet.clone(), " ".into(), title.bold(), " ".into()]);
+        let mut header_line = if is_interaction {
+            Line::from(vec![bullet.clone(), " ".into()])
+        } else {
+            Line::from(vec![bullet.clone(), " ".into(), title.bold(), " ".into()])
+        };
         let header_prefix_width = header_line.width();
 
-        let cmd_display = strip_bash_lc_and_escape(&call.command);
+        let cmd_display = if call.is_unified_exec_interaction() {
+            format_unified_exec_interaction(&call.command, call.interaction_input.as_deref())
+        } else {
+            strip_bash_lc_and_escape(&call.command)
+        };
         let highlighted_lines = highlight_bash_to_lines(&cmd_display);
 
         let continuation_wrap_width = layout.command_continuation.wrap_width(width);
@@ -395,25 +415,38 @@ impl ExecCell {
         }
 
         if let Some(output) = call.output.as_ref() {
+            let line_limit = if call.is_user_shell_command() {
+                USER_SHELL_TOOL_CALL_MAX_LINES
+            } else {
+                TOOL_CALL_MAX_LINES
+            };
             let raw_output = output_lines(
                 Some(output),
                 OutputLinesParams {
+                    line_limit,
                     only_err: false,
                     include_angle_pipe: false,
                     include_prefix: false,
                 },
             );
+            let display_limit = if call.is_user_shell_command() {
+                USER_SHELL_TOOL_CALL_MAX_LINES
+            } else {
+                layout.output_max_lines
+            };
 
             if raw_output.lines.is_empty() {
-                lines.extend(prefix_lines(
-                    vec![Line::from("(no output)".dim())],
-                    Span::from(layout.output_block.initial_prefix).dim(),
-                    Span::from(layout.output_block.subsequent_prefix),
-                ));
+                if !call.is_unified_exec_interaction() {
+                    lines.extend(prefix_lines(
+                        vec![Line::from("(no output)".dim())],
+                        Span::from(layout.output_block.initial_prefix).dim(),
+                        Span::from(layout.output_block.subsequent_prefix),
+                    ));
+                }
             } else {
                 let trimmed_output = Self::truncate_lines_middle(
                     &raw_output.lines,
-                    layout.output_max_lines,
+                    display_limit,
                     raw_output.omitted,
                 );
 

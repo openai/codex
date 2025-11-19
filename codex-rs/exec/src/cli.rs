@@ -18,8 +18,14 @@ pub struct Cli {
     #[arg(long, short = 'm')]
     pub model: Option<String>,
 
+    /// Use open-source provider.
     #[arg(long = "oss", default_value_t = false)]
     pub oss: bool,
+
+    /// Specify which local provider to use (lmstudio or ollama).
+    /// If not specified with --oss, will use config default or show selection.
+    #[arg(long = "local-provider")]
+    pub oss_provider: Option<String>,
 
     /// Select the sandbox policy to use when executing model-generated shell
     /// commands.
@@ -30,7 +36,7 @@ pub struct Cli {
     #[arg(long = "profile", short = 'p')]
     pub config_profile: Option<String>,
 
-    /// Convenience alias for low-friction sandboxed automatic execution (-a on-failure, --sandbox workspace-write).
+    /// Convenience alias for low-friction sandboxed automatic execution (-a on-request, --sandbox workspace-write).
     #[arg(long = "full-auto", default_value_t = false)]
     pub full_auto: bool,
 
@@ -52,6 +58,10 @@ pub struct Cli {
     #[arg(long = "skip-git-repo-check", default_value_t = false)]
     pub skip_git_repo_check: bool,
 
+    /// Additional directories that should be writable alongside the primary workspace.
+    #[arg(long = "add-dir", value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
+    pub add_dir: Vec<PathBuf>,
+
     /// Path to a JSON Schema file describing the model's final response shape.
     #[arg(long = "output-schema", value_name = "FILE")]
     pub output_schema: Option<PathBuf>,
@@ -66,10 +76,6 @@ pub struct Cli {
     /// Print events to stdout as JSONL.
     #[arg(long = "json", alias = "experimental-json", default_value_t = false)]
     pub json: bool,
-
-    /// Whether to include the plan tool in the conversation.
-    #[arg(long = "include-plan-tool", default_value_t = false)]
-    pub include_plan_tool: bool,
 
     /// Specifies file where the last message from the agent should be written.
     #[arg(long = "output-last-message", short = 'o', value_name = "FILE")]

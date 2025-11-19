@@ -4,16 +4,13 @@ use crate::tools::TELEMETRY_PREVIEW_MAX_BYTES;
 use crate::tools::TELEMETRY_PREVIEW_MAX_LINES;
 use crate::tools::TELEMETRY_PREVIEW_TRUNCATION_NOTICE;
 use crate::turn_diff_tracker::TurnDiffTracker;
-use codex_otel::otel_event_manager::OtelEventManager;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ShellToolCallParams;
-use codex_protocol::protocol::FileChange;
 use codex_utils_string::take_bytes_at_char_boundary;
 use mcp_types::CallToolResult;
 use std::borrow::Cow;
-use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -24,7 +21,6 @@ pub struct ToolInvocation {
     pub session: Arc<Session>,
     pub turn: Arc<TurnContext>,
     pub tracker: SharedTurnDiffTracker,
-    pub sub_id: String,
     pub call_id: String,
     pub tool_name: String,
     pub payload: ToolPayload,
@@ -66,7 +62,10 @@ impl ToolPayload {
 #[derive(Clone)]
 pub enum ToolOutput {
     Function {
+        // Plain text representation of the tool output.
         content: String,
+        // Some tool calls such as MCP calls may return structured content that can get parsed into an array of polymorphic content items.
+        content_items: Option<Vec<FunctionCallOutputContentItem>>,
         success: Option<bool>,
     },
     Mcp {
@@ -91,7 +90,11 @@ impl ToolOutput {
 
     pub fn into_response(self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
         match self {
-            ToolOutput::Function { content, success } => {
+            ToolOutput::Function {
+                content,
+                content_items,
+                success,
+            } => {
                 if matches!(payload, ToolPayload::Custom { .. }) {
                     ResponseInputItem::CustomToolCallOutput {
                         call_id: call_id.to_string(),
@@ -100,7 +103,11 @@ impl ToolOutput {
                 } else {
                     ResponseInputItem::FunctionCallOutput {
                         call_id: call_id.to_string(),
-                        output: FunctionCallOutputPayload { content, success },
+                        output: FunctionCallOutputPayload {
+                            content,
+                            content_items,
+                            success,
+                        },
                     }
                 }
             }
@@ -164,6 +171,7 @@ mod tests {
         };
         let response = ToolOutput::Function {
             content: "patched".to_string(),
+            content_items: None,
             success: Some(true),
         }
         .into_response("call-42", &payload);
@@ -184,6 +192,7 @@ mod tests {
         };
         let response = ToolOutput::Function {
             content: "ok".to_string(),
+            content_items: None,
             success: Some(true),
         }
         .into_response("fn-1", &payload);
@@ -192,6 +201,7 @@ mod tests {
             ResponseInputItem::FunctionCallOutput { call_id, output } => {
                 assert_eq!(call_id, "fn-1");
                 assert_eq!(output.content, "ok");
+                assert!(output.content_items.is_none());
                 assert_eq!(output.success, Some(true));
             }
             other => panic!("expected FunctionCallOutput, got {other:?}"),
@@ -229,21 +239,4 @@ mod tests {
         assert!(lines.len() <= TELEMETRY_PREVIEW_MAX_LINES + 1);
         assert_eq!(lines.last(), Some(&TELEMETRY_PREVIEW_TRUNCATION_NOTICE));
     }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct ExecCommandContext {
-    pub(crate) sub_id: String,
-    pub(crate) call_id: String,
-    pub(crate) command_for_display: Vec<String>,
-    pub(crate) cwd: PathBuf,
-    pub(crate) apply_patch: Option<ApplyPatchCommandContext>,
-    pub(crate) tool_name: String,
-    pub(crate) otel_event_manager: OtelEventManager,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct ApplyPatchCommandContext {
-    pub(crate) user_explicitly_approved_this_action: bool,
-    pub(crate) changes: HashMap<PathBuf, FileChange>,
 }

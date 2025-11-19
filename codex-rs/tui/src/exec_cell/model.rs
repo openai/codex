@@ -1,13 +1,15 @@
 use std::time::Duration;
 use std::time::Instant;
 
+use codex_core::protocol::ExecCommandSource;
 use codex_protocol::parse_command::ParsedCommand;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct CommandOutput {
     pub(crate) exit_code: i32,
-    pub(crate) stdout: String,
-    pub(crate) stderr: String,
+    /// The aggregated stderr + stdout interleaved.
+    pub(crate) aggregated_output: String,
+    /// The formatted output of the command, as seen by the model.
     pub(crate) formatted_output: String,
 }
 
@@ -17,8 +19,10 @@ pub(crate) struct ExecCall {
     pub(crate) command: Vec<String>,
     pub(crate) parsed: Vec<ParsedCommand>,
     pub(crate) output: Option<CommandOutput>,
+    pub(crate) source: ExecCommandSource,
     pub(crate) start_time: Option<Instant>,
     pub(crate) duration: Option<Duration>,
+    pub(crate) interaction_input: Option<String>,
 }
 
 #[derive(Debug)]
@@ -36,14 +40,18 @@ impl ExecCell {
         call_id: String,
         command: Vec<String>,
         parsed: Vec<ParsedCommand>,
+        source: ExecCommandSource,
+        interaction_input: Option<String>,
     ) -> Option<Self> {
         let call = ExecCall {
             call_id,
             command,
             parsed,
             output: None,
+            source,
             start_time: Some(Instant::now()),
             duration: None,
+            interaction_input,
         };
         if self.is_exploring_cell() && Self::is_exploring_call(&call) {
             Some(Self {
@@ -82,9 +90,8 @@ impl ExecCell {
                 call.duration = Some(elapsed);
                 call.output = Some(CommandOutput {
                     exit_code: 1,
-                    stdout: String::new(),
-                    stderr: String::new(),
                     formatted_output: String::new(),
+                    aggregated_output: String::new(),
                 });
             }
         }
@@ -119,5 +126,15 @@ impl ExecCell {
                         | ParsedCommand::Search { .. }
                 )
             })
+    }
+}
+
+impl ExecCall {
+    pub(crate) fn is_user_shell_command(&self) -> bool {
+        matches!(self.source, ExecCommandSource::UserShell)
+    }
+
+    pub(crate) fn is_unified_exec_interaction(&self) -> bool {
+        matches!(self.source, ExecCommandSource::UnifiedExecInteraction)
     }
 }

@@ -11,8 +11,6 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::Widget;
 use std::cell::RefCell;
-use textwrap::Options as WrapOptions;
-use textwrap::wrap;
 
 use crate::render::renderable::Renderable;
 
@@ -32,7 +30,6 @@ pub(crate) struct CustomPromptView {
     placeholder: String,
     context_label: Option<String>,
     on_submit: PromptSubmitted,
-    allow_empty_submit: bool,
 
     // UI state
     textarea: TextArea,
@@ -45,23 +42,14 @@ impl CustomPromptView {
         title: String,
         placeholder: String,
         context_label: Option<String>,
-        initial_text: Option<String>,
-        allow_empty_submit: bool,
         on_submit: PromptSubmitted,
     ) -> Self {
-        let mut textarea = TextArea::new();
-        if let Some(text) = initial_text {
-            textarea.set_text(&text);
-            textarea.set_cursor(text.len());
-        }
-
         Self {
             title,
             placeholder,
             context_label,
             on_submit,
-            allow_empty_submit,
-            textarea,
+            textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
             complete: false,
         }
@@ -82,11 +70,10 @@ impl BottomPaneView for CustomPromptView {
                 ..
             } => {
                 let text = self.textarea.text().trim().to_string();
-                if text.is_empty() && !self.allow_empty_submit {
-                    return;
+                if !text.is_empty() {
+                    (self.on_submit)(text);
+                    self.complete = true;
                 }
-                (self.on_submit)(text);
-                self.complete = true;
             }
             KeyEvent {
                 code: KeyCode::Enter,
@@ -116,32 +103,12 @@ impl BottomPaneView for CustomPromptView {
         self.textarea.insert_str(&pasted);
         true
     }
-
-    fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        if area.height < 2 || area.width <= 2 {
-            return None;
-        }
-        let text_area_height = self.input_height(area.width).saturating_sub(1);
-        if text_area_height == 0 {
-            return None;
-        }
-        let context_offset = self.context_line_count(area.width);
-        let top_line_count = 1u16 + context_offset;
-        let textarea_rect = Rect {
-            x: area.x.saturating_add(2),
-            y: area.y.saturating_add(top_line_count).saturating_add(1),
-            width: area.width.saturating_sub(2),
-            height: text_area_height,
-        };
-        let state = *self.textarea_state.borrow();
-        self.textarea.cursor_pos_with_state(textarea_rect, state)
-    }
 }
 
 impl Renderable for CustomPromptView {
     fn desired_height(&self, width: u16) -> u16 {
-        let context_height = self.context_line_count(width);
-        1u16 + context_height + self.input_height(width) + 3u16
+        let extra_top: u16 = if self.context_label.is_some() { 1 } else { 0 };
+        1u16 + extra_top + self.input_height(width) + 3u16
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -163,14 +130,14 @@ impl Renderable for CustomPromptView {
 
         // Optional context line
         let mut input_y = area.y.saturating_add(1);
-        for context_line in self.context_lines(area.width) {
+        if let Some(context_label) = &self.context_label {
             let context_area = Rect {
                 x: area.x,
                 y: input_y,
                 width: area.width,
                 height: 1,
             };
-            let spans: Vec<Span<'static>> = vec![gutter(), context_line.cyan()];
+            let spans: Vec<Span<'static>> = vec![gutter(), context_label.clone().cyan()];
             Paragraph::new(Line::from(spans)).render(context_area, buf);
             input_y = input_y.saturating_add(1);
         }
@@ -245,6 +212,26 @@ impl Renderable for CustomPromptView {
             );
         }
     }
+
+    fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+        if area.height < 2 || area.width <= 2 {
+            return None;
+        }
+        let text_area_height = self.input_height(area.width).saturating_sub(1);
+        if text_area_height == 0 {
+            return None;
+        }
+        let extra_offset: u16 = if self.context_label.is_some() { 1 } else { 0 };
+        let top_line_count = 1u16 + extra_offset;
+        let textarea_rect = Rect {
+            x: area.x.saturating_add(2),
+            y: area.y.saturating_add(top_line_count).saturating_add(1),
+            width: area.width.saturating_sub(2),
+            height: text_area_height,
+        };
+        let state = *self.textarea_state.borrow();
+        self.textarea.cursor_pos_with_state(textarea_rect, state)
+    }
 }
 
 impl CustomPromptView {
@@ -252,46 +239,6 @@ impl CustomPromptView {
         let usable_width = width.saturating_sub(2);
         let text_height = self.textarea.desired_height(usable_width).clamp(1, 8);
         text_height.saturating_add(1).min(9)
-    }
-
-    fn context_lines(&self, width: u16) -> Vec<String> {
-        let Some(context_label) = &self.context_label else {
-            return Vec::new();
-        };
-        let wrap_width = width.saturating_sub(2);
-        if wrap_width == 0 {
-            return vec![context_label.clone()];
-        }
-        let options = WrapOptions::new(wrap_width as usize);
-        let mut lines = Vec::new();
-        for raw_line in context_label.split('\n') {
-            if raw_line.is_empty() {
-                lines.push(String::new());
-                continue;
-            }
-            let wrapped_segments = wrap(raw_line, options.clone());
-            if wrapped_segments.is_empty() {
-                lines.push(String::new());
-            } else {
-                lines.extend(
-                    wrapped_segments
-                        .into_iter()
-                        .map(std::borrow::Cow::into_owned),
-                );
-            }
-        }
-        if lines.is_empty() {
-            vec![String::new()]
-        } else {
-            lines
-        }
-    }
-
-    fn context_line_count(&self, width: u16) -> u16 {
-        self.context_lines(width)
-            .len()
-            .try_into()
-            .unwrap_or(u16::MAX)
     }
 }
 

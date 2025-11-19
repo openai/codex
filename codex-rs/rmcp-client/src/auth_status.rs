@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::Error;
@@ -6,11 +7,14 @@ use codex_protocol::protocol::McpAuthStatus;
 use reqwest::Client;
 use reqwest::StatusCode;
 use reqwest::Url;
+use reqwest::header::HeaderMap;
 use serde::Deserialize;
 use tracing::debug;
 
 use crate::OAuthCredentialsStoreMode;
 use crate::oauth::has_oauth_tokens;
+use crate::utils::apply_default_headers;
+use crate::utils::build_default_headers;
 
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 const OAUTH_DISCOVERY_HEADER: &str = "MCP-Protocol-Version";
@@ -21,6 +25,8 @@ pub async fn determine_streamable_http_auth_status(
     server_name: &str,
     url: &str,
     bearer_token_env_var: Option<&str>,
+    http_headers: Option<HashMap<String, String>>,
+    env_http_headers: Option<HashMap<String, String>>,
     store_mode: OAuthCredentialsStoreMode,
 ) -> Result<McpAuthStatus> {
     if bearer_token_env_var.is_some() {
@@ -31,7 +37,9 @@ pub async fn determine_streamable_http_auth_status(
         return Ok(McpAuthStatus::OAuth);
     }
 
-    match supports_oauth_login(url).await {
+    let default_headers = build_default_headers(http_headers, env_http_headers)?;
+
+    match supports_oauth_login_with_headers(url, &default_headers).await {
         Ok(true) => Ok(McpAuthStatus::NotLoggedIn),
         Ok(false) => Ok(McpAuthStatus::Unsupported),
         Err(error) => {
@@ -45,8 +53,13 @@ pub async fn determine_streamable_http_auth_status(
 
 /// Attempt to determine whether a streamable HTTP MCP server advertises OAuth login.
 pub async fn supports_oauth_login(url: &str) -> Result<bool> {
+    supports_oauth_login_with_headers(url, &HeaderMap::new()).await
+}
+
+async fn supports_oauth_login_with_headers(url: &str, default_headers: &HeaderMap) -> Result<bool> {
     let base_url = Url::parse(url)?;
-    let client = Client::builder().timeout(DISCOVERY_TIMEOUT).build()?;
+    let builder = Client::builder().timeout(DISCOVERY_TIMEOUT);
+    let client = apply_default_headers(builder, default_headers).build()?;
 
     let mut last_error: Option<Error> = None;
     for candidate_path in discovery_paths(base_url.path()) {

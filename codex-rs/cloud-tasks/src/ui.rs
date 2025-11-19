@@ -945,9 +945,7 @@ pub fn draw_env_modal(frame: &mut Frame, area: Rect, app: &mut App) {
 
     // Subheader with usage hints (dim cyan)
     let subheader = Paragraph::new(Line::from(
-        "Type to search, Enter select, Esc cancel; r refresh"
-            .cyan()
-            .dim(),
+        "Type to search, Enter select, Esc cancel".cyan().dim(),
     ))
     .wrap(Wrap { trim: true });
     frame.render_widget(subheader, rows[0]);

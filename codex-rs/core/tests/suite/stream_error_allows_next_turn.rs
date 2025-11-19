@@ -1,15 +1,13 @@
-use std::time::Duration;
-
 use codex_core::ModelProviderInfo;
 use codex_core::WireApi;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
+use codex_protocol::user_input::UserInput;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event_with_timeout;
+use core_test_support::wait_for_event;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -66,6 +64,7 @@ async fn continue_after_stream_error() {
         base_url: Some(format!("{}/v1", server.uri())),
         env_key: Some("PATH".into()),
         env_key_instructions: None,
+        experimental_bearer_token: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
@@ -87,7 +86,7 @@ async fn continue_after_stream_error() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "first message".into(),
             }],
         })
@@ -95,36 +94,21 @@ async fn continue_after_stream_error() {
         .unwrap();
 
     // Expect an Error followed by TaskComplete so the session is released.
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::Error(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::Error(_))).await;
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TaskComplete(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // 2) Second turn: now send another prompt that should succeed using the
     // mock server SSE stream. If the agent failed to clear the running task on
     // error above, this submission would be rejected/queued indefinitely.
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "follow up".into(),
             }],
         })
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TaskComplete(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 }

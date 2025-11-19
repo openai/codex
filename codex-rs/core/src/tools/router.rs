@@ -54,7 +54,7 @@ impl ToolRouter {
             .any(|config| config.spec.name() == tool_name)
     }
 
-    pub fn build_tool_call(
+    pub async fn build_tool_call(
         session: &Session,
         item: ResponseItem,
     ) -> Result<Option<ToolCall>, FunctionCallError> {
@@ -65,7 +65,7 @@ impl ToolRouter {
                 call_id,
                 ..
             } => {
-                if let Some((server, tool)) = session.parse_mcp_tool_name(&name) {
+                if let Some((server, tool)) = session.parse_mcp_tool_name(&name).await {
                     Ok(Some(ToolCall {
                         tool_name: name,
                         call_id,
@@ -134,7 +134,6 @@ impl ToolRouter {
         session: Arc<Session>,
         turn: Arc<TurnContext>,
         tracker: SharedTurnDiffTracker,
-        sub_id: String,
         call: ToolCall,
     ) -> Result<ResponseInputItem, FunctionCallError> {
         let ToolCall {
@@ -149,7 +148,6 @@ impl ToolRouter {
             session,
             turn,
             tracker,
-            sub_id,
             call_id,
             tool_name,
             payload,
@@ -183,6 +181,7 @@ impl ToolRouter {
                 output: codex_protocol::models::FunctionCallOutputPayload {
                     content: message,
                     success: Some(false),
+                    ..Default::default()
                 },
             }
         }

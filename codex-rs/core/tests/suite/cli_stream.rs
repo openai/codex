@@ -1,4 +1,5 @@
 use assert_cmd::Command as AssertCommand;
+use assert_cmd::cargo::cargo_bin;
 use codex_core::RolloutRecorder;
 use codex_core::protocol::GitInfo;
 use core_test_support::fs_wait;
@@ -44,13 +45,9 @@ async fn chat_mode_stream_cli() {
         "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"PATH\", wire_api = \"chat\" }}",
         server.uri()
     );
-    let mut cmd = AssertCommand::new("cargo");
-    cmd.arg("run")
-        .arg("-p")
-        .arg("codex-cli")
-        .arg("--quiet")
-        .arg("--")
-        .arg("exec")
+    let bin = cargo_bin("codex");
+    let mut cmd = AssertCommand::new(bin);
+    cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-c")
         .arg(&provider_override)
@@ -75,9 +72,17 @@ async fn chat_mode_stream_cli() {
     server.verify().await;
 
     // Verify a new session rollout was created and is discoverable via list_conversations
-    let page = RolloutRecorder::list_conversations(home.path(), 10, None, &[])
-        .await
-        .expect("list conversations");
+    let provider_filter = vec!["mock".to_string()];
+    let page = RolloutRecorder::list_conversations(
+        home.path(),
+        10,
+        None,
+        &[],
+        Some(provider_filter.as_slice()),
+        "mock",
+    )
+    .await
+    .expect("list conversations");
     assert!(
         !page.items.is_empty(),
         "expected at least one session to be listed"
@@ -105,12 +110,7 @@ async fn exec_cli_applies_experimental_instructions_file() {
         "data: {\"type\":\"response.created\",\"response\":{}}\n\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n"
     );
-    let resp_mock = core_test_support::responses::mount_sse_once_match(
-        &server,
-        path("/v1/responses"),
-        sse.to_string(),
-    )
-    .await;
+    let resp_mock = core_test_support::responses::mount_sse_once(&server, sse.to_string()).await;
 
     // Create a temporary instructions file with a unique marker we can assert
     // appears in the outbound request payload.
@@ -128,13 +128,9 @@ async fn exec_cli_applies_experimental_instructions_file() {
     );
 
     let home = TempDir::new().unwrap();
-    let mut cmd = AssertCommand::new("cargo");
-    cmd.arg("run")
-        .arg("-p")
-        .arg("codex-cli")
-        .arg("--quiet")
-        .arg("--")
-        .arg("exec")
+    let bin = cargo_bin("codex");
+    let mut cmd = AssertCommand::new(bin);
+    cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-c")
         .arg(&provider_override)
@@ -186,13 +182,9 @@ async fn responses_api_stream_cli() {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cli_responses_fixture.sse");
 
     let home = TempDir::new().unwrap();
-    let mut cmd = AssertCommand::new("cargo");
-    cmd.arg("run")
-        .arg("-p")
-        .arg("codex-cli")
-        .arg("--quiet")
-        .arg("--")
-        .arg("exec")
+    let bin = cargo_bin("codex");
+    let mut cmd = AssertCommand::new(bin);
+    cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-C")
         .arg(env!("CARGO_MANIFEST_DIR"))
@@ -225,15 +217,10 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     let fixture =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cli_responses_fixture.sse");
 
-    // 4. Run the codex CLI through cargo (ensures the right bin is built) and invoke `exec`,
-    //    which is what records a session.
-    let mut cmd = AssertCommand::new("cargo");
-    cmd.arg("run")
-        .arg("-p")
-        .arg("codex-cli")
-        .arg("--quiet")
-        .arg("--")
-        .arg("exec")
+    // 4. Run the codex CLI and invoke `exec`, which is what records a session.
+    let bin = cargo_bin("codex");
+    let mut cmd = AssertCommand::new(bin);
+    cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-C")
         .arg(env!("CARGO_MANIFEST_DIR"))
@@ -352,13 +339,9 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     // Second run: resume should update the existing file.
     let marker2 = format!("integration-resume-{}", Uuid::new_v4());
     let prompt2 = format!("echo {marker2}");
-    let mut cmd2 = AssertCommand::new("cargo");
-    cmd2.arg("run")
-        .arg("-p")
-        .arg("codex-cli")
-        .arg("--quiet")
-        .arg("--")
-        .arg("exec")
+    let bin2 = cargo_bin("codex");
+    let mut cmd2 = AssertCommand::new(bin2);
+    cmd2.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-C")
         .arg(env!("CARGO_MANIFEST_DIR"))

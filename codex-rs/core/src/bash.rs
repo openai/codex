@@ -1,17 +1,22 @@
+use std::path::PathBuf;
+
 use tree_sitter::Node;
 use tree_sitter::Parser;
 use tree_sitter::Tree;
 use tree_sitter_bash::LANGUAGE as BASH;
 
+use crate::shell::ShellType;
+use crate::shell::detect_shell_type;
+
 /// Parse the provided bash source using tree-sitter-bash, returning a Tree on
 /// success or None if parsing failed.
-pub fn try_parse_bash(bash_lc_arg: &str) -> Option<Tree> {
+pub fn try_parse_shell(shell_lc_arg: &str) -> Option<Tree> {
     let lang = BASH.into();
     let mut parser = Parser::new();
     #[expect(clippy::expect_used)]
     parser.set_language(&lang).expect("load bash grammar");
     let old_tree: Option<&Tree> = None;
-    parser.parse(bash_lc_arg, old_tree)
+    parser.parse(shell_lc_arg, old_tree)
 }
 
 /// Parse a script which may contain multiple simple commands joined only by
@@ -88,18 +93,28 @@ pub fn try_parse_word_only_commands_sequence(tree: &Tree, src: &str) -> Option<V
     Some(commands)
 }
 
-/// Returns the sequence of plain commands within a `bash -lc "..."` invocation
-/// when the script only contains word-only commands joined by safe operators.
-pub fn parse_bash_lc_plain_commands(command: &[String]) -> Option<Vec<Vec<String>>> {
-    let [bash, flag, script] = command else {
+pub fn extract_bash_command(command: &[String]) -> Option<(&str, &str)> {
+    let [shell, flag, script] = command else {
         return None;
     };
-
-    if bash != "bash" || flag != "-lc" {
+    if !matches!(flag.as_str(), "-lc" | "-c")
+        || !matches!(
+            detect_shell_type(&PathBuf::from(shell)),
+            Some(ShellType::Zsh) | Some(ShellType::Bash)
+        )
+    {
         return None;
     }
+    Some((shell, script))
+}
 
-    let tree = try_parse_bash(script)?;
+/// Returns the sequence of plain commands within a `bash -lc "..."` or
+/// `zsh -lc "..."` invocation when the script only contains word-only commands
+/// joined by safe operators.
+pub fn parse_shell_lc_plain_commands(command: &[String]) -> Option<Vec<Vec<String>>> {
+    let (_, script) = extract_bash_command(command)?;
+
+    let tree = try_parse_shell(script)?;
     try_parse_word_only_commands_sequence(&tree, script)
 }
 
@@ -154,7 +169,7 @@ mod tests {
     use super::*;
 
     fn parse_seq(src: &str) -> Option<Vec<Vec<String>>> {
-        let tree = try_parse_bash(src)?;
+        let tree = try_parse_shell(src)?;
         try_parse_word_only_commands_sequence(&tree, src)
     }
 
@@ -233,5 +248,12 @@ mod tests {
     #[test]
     fn rejects_trailing_operator_parse_error() {
         assert!(parse_seq("ls &&").is_none());
+    }
+
+    #[test]
+    fn parse_zsh_lc_plain_commands() {
+        let command = vec!["zsh".to_string(), "-lc".to_string(), "ls".to_string()];
+        let parsed = parse_shell_lc_plain_commands(&command).unwrap();
+        assert_eq!(parsed, vec![vec!["ls".to_string()]]);
     }
 }

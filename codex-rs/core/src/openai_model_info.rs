@@ -1,5 +1,9 @@
 use crate::model_family::ModelFamily;
 
+// Shared constants for commonly used window/token sizes.
+pub(crate) const CONTEXT_WINDOW_272K: i64 = 272_000;
+pub(crate) const MAX_OUTPUT_TOKENS_128K: i64 = 128_000;
+
 /// Metadata about a model, particularly OpenAI models.
 /// We may want to consider including details like the pricing for
 /// input tokens, output tokens, etc., though users will need to be able to
@@ -8,10 +12,10 @@ use crate::model_family::ModelFamily;
 #[derive(Debug)]
 pub(crate) struct ModelInfo {
     /// Size of the context window in tokens. This is the maximum size of the input context.
-    pub(crate) context_window: u64,
+    pub(crate) context_window: i64,
 
     /// Maximum number of output tokens that can be generated for the model.
-    pub(crate) max_output_tokens: u64,
+    pub(crate) max_output_tokens: i64,
 
     /// Token threshold where we should automatically compact conversation history. This considers
     /// input tokens + output tokens of this turn.
@@ -19,12 +23,16 @@ pub(crate) struct ModelInfo {
 }
 
 impl ModelInfo {
-    const fn new(context_window: u64, max_output_tokens: u64) -> Self {
+    const fn new(context_window: i64, max_output_tokens: i64) -> Self {
         Self {
             context_window,
             max_output_tokens,
-            auto_compact_token_limit: None,
+            auto_compact_token_limit: Some(Self::default_auto_compact_limit(context_window)),
         }
+    }
+
+    const fn default_auto_compact_limit(context_window: i64) -> i64 {
+        (context_window * 9) / 10
     }
 }
 
@@ -62,15 +70,17 @@ pub(crate) fn get_model_info(model_family: &ModelFamily) -> Option<ModelInfo> {
         // https://platform.openai.com/docs/models/gpt-3.5-turbo
         "gpt-3.5-turbo" => Some(ModelInfo::new(16_385, 4_096)),
 
-        _ if slug.starts_with("gpt-5-codex") => Some(ModelInfo {
-            context_window: 272_000,
-            max_output_tokens: 128_000,
-            auto_compact_token_limit: Some(350_000),
-        }),
+        _ if slug.starts_with("gpt-5-codex") || slug.starts_with("gpt-5.1-codex") => {
+            Some(ModelInfo::new(CONTEXT_WINDOW_272K, MAX_OUTPUT_TOKENS_128K))
+        }
 
-        _ if slug.starts_with("gpt-5") => Some(ModelInfo::new(272_000, 128_000)),
+        _ if slug.starts_with("gpt-5") => {
+            Some(ModelInfo::new(CONTEXT_WINDOW_272K, MAX_OUTPUT_TOKENS_128K))
+        }
 
-        _ if slug.starts_with("codex-") => Some(ModelInfo::new(272_000, 128_000)),
+        _ if slug.starts_with("codex-") => {
+            Some(ModelInfo::new(CONTEXT_WINDOW_272K, MAX_OUTPUT_TOKENS_128K))
+        }
 
         _ => None,
     }

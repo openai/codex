@@ -4,7 +4,7 @@ This crate implements the business logic for Codex. It is designed to be used by
 
 ## Dependencies
 
-Note that `codex-core` makes some assumptions about certain helper utilities being available in the environment. Currently, this
+Note that `codex-core` makes some assumptions about certain helper utilities being available in the environment. Currently, this support matrix is:
 
 ### macOS
 

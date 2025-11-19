@@ -2,10 +2,10 @@
 
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
@@ -31,12 +31,12 @@ const SCHEMA: &str = r#"
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_returns_json_result_for_gpt5() -> anyhow::Result<()> {
-    codex_returns_json_result("gpt-5".to_string()).await
+    codex_returns_json_result("gpt-5.1".to_string()).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_returns_json_result_for_gpt5_codex() -> anyhow::Result<()> {
-    codex_returns_json_result("gpt-5-codex".to_string()).await
+    codex_returns_json_result("gpt-5.1-codex".to_string()).await
 }
 
 async fn codex_returns_json_result(model: String) -> anyhow::Result<()> {
@@ -74,7 +74,7 @@ async fn codex_returns_json_result(model: String) -> anyhow::Result<()> {
     // 1) Normal user input – should hit server once.
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello world".into(),
             }],
             final_output_json_schema: Some(serde_json::from_str(SCHEMA)?),

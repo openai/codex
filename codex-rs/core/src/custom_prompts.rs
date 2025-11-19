@@ -32,12 +32,11 @@ pub async fn discover_prompts_in_excluding(
 
     while let Ok(Some(entry)) = entries.next_entry().await {
         let path = entry.path();
-        let is_file = entry
-            .file_type()
+        let is_file_like = fs::metadata(&path)
             .await
-            .map(|ft| ft.is_file())
+            .map(|m| m.is_file())
             .unwrap_or(false);
-        if !is_file {
+        if !is_file_like {
             continue;
         }
         // Only include Markdown files with a .md extension.
@@ -195,6 +194,25 @@ mod tests {
         let found = discover_prompts_in(dir).await;
         let names: Vec<String> = found.into_iter().map(|e| e.name).collect();
         assert_eq!(names, vec!["good"]);
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn discovers_symlinked_md_files() {
+        let tmp = tempdir().expect("create TempDir");
+        let dir = tmp.path();
+
+        // Create a real file
+        fs::write(dir.join("real.md"), b"real content").unwrap();
+
+        // Create a symlink to the real file
+        std::os::unix::fs::symlink(dir.join("real.md"), dir.join("link.md")).unwrap();
+
+        let found = discover_prompts_in(dir).await;
+        let names: Vec<String> = found.into_iter().map(|e| e.name).collect();
+
+        // Both real and link should be discovered, sorted alphabetically
+        assert_eq!(names, vec!["link", "real"]);
     }
 
     #[tokio::test]

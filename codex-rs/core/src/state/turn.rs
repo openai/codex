@@ -4,11 +4,14 @@ use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio::task::AbortHandle;
+use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::AbortOnDropHandle;
 
 use codex_protocol::models::ResponseInputItem;
 use tokio::sync::oneshot;
 
+use crate::codex::TurnContext;
 use crate::protocol::ReviewDecision;
 use crate::tasks::SessionTask;
 
@@ -34,25 +37,19 @@ pub(crate) enum TaskKind {
     Compact,
 }
 
-impl TaskKind {
-    pub(crate) fn header_value(self) -> &'static str {
-        match self {
-            TaskKind::Regular => "standard",
-            TaskKind::Review => "review",
-            TaskKind::Compact => "compact",
-        }
-    }
-}
-
 #[derive(Clone)]
 pub(crate) struct RunningTask {
-    pub(crate) handle: AbortHandle,
+    pub(crate) done: Arc<Notify>,
     pub(crate) kind: TaskKind,
     pub(crate) task: Arc<dyn SessionTask>,
+    pub(crate) cancellation_token: CancellationToken,
+    pub(crate) handle: Arc<AbortOnDropHandle<()>>,
+    pub(crate) turn_context: Arc<TurnContext>,
 }
 
 impl ActiveTurn {
-    pub(crate) fn add_task(&mut self, sub_id: String, task: RunningTask) {
+    pub(crate) fn add_task(&mut self, task: RunningTask) {
+        let sub_id = task.turn_context.sub_id.clone();
         self.tasks.insert(sub_id, task);
     }
 
@@ -61,8 +58,8 @@ impl ActiveTurn {
         self.tasks.is_empty()
     }
 
-    pub(crate) fn drain_tasks(&mut self) -> IndexMap<String, RunningTask> {
-        std::mem::take(&mut self.tasks)
+    pub(crate) fn drain_tasks(&mut self) -> Vec<RunningTask> {
+        self.tasks.drain(..).map(|(_, task)| task).collect()
     }
 }
 
@@ -114,24 +111,5 @@ impl ActiveTurn {
     pub(crate) async fn clear_pending(&self) {
         let mut ts = self.turn_state.lock().await;
         ts.clear_pending();
-    }
-
-    /// Best-effort, non-blocking variant for synchronous contexts (Drop/interrupt).
-    pub(crate) fn try_clear_pending_sync(&self) {
-        if let Ok(mut ts) = self.turn_state.try_lock() {
-            ts.clear_pending();
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::TaskKind;
-
-    #[test]
-    fn header_value_matches_expected_labels() {
-        assert_eq!(TaskKind::Regular.header_value(), "standard");
-        assert_eq!(TaskKind::Review.header_value(), "review");
-        assert_eq!(TaskKind::Compact.header_value(), "compact");
     }
 }

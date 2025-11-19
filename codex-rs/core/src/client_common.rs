@@ -23,6 +23,11 @@ use tokio::sync::mpsc;
 /// Review thread system prompt. Edit `core/src/review_prompt.md` to customize.
 pub const REVIEW_PROMPT: &str = include_str!("../review_prompt.md");
 
+// Centralized templates for review-related user messages
+pub const REVIEW_EXIT_SUCCESS_TMPL: &str = include_str!("../templates/review/exit_success.xml");
+pub const REVIEW_EXIT_INTERRUPTED_TMPL: &str =
+    include_str!("../templates/review/exit_interrupted.xml");
+
 /// API request payload for a single model turn
 #[derive(Default, Debug, Clone)]
 pub struct Prompt {
@@ -131,7 +136,7 @@ fn reserialize_shell_outputs(items: &mut [ResponseItem]) {
 }
 
 fn is_shell_tool_name(name: &str) -> bool {
-    matches!(name, "shell" | "container.exec")
+    matches!(name, "shell" | "container.exec" | "shell_command")
 }
 
 #[derive(Deserialize)]
@@ -192,16 +197,22 @@ fn strip_total_output_header(output: &str) -> Option<&str> {
 pub enum ResponseEvent {
     Created,
     OutputItemDone(ResponseItem),
+    OutputItemAdded(ResponseItem),
     Completed {
         response_id: String,
         token_usage: Option<TokenUsage>,
     },
     OutputTextDelta(String),
-    ReasoningSummaryDelta(String),
-    ReasoningContentDelta(String),
-    ReasoningSummaryPartAdded,
-    WebSearchCallBegin {
-        call_id: String,
+    ReasoningSummaryDelta {
+        delta: String,
+        summary_index: i64,
+    },
+    ReasoningContentDelta {
+        delta: String,
+        content_index: i64,
+    },
+    ReasoningSummaryPartAdded {
+        summary_index: i64,
     },
     RateLimits(RateLimitSnapshot),
 }
@@ -281,7 +292,7 @@ pub(crate) struct ResponsesApiRequest<'a> {
 }
 
 pub(crate) mod tools {
-    use crate::openai_tools::JsonSchema;
+    use crate::tools::spec::JsonSchema;
     use serde::Deserialize;
     use serde::Serialize;
 
@@ -337,21 +348,6 @@ pub(crate) mod tools {
         pub(crate) strict: bool,
         pub(crate) parameters: JsonSchema,
     }
-}
-
-pub(crate) fn create_reasoning_param_for_request(
-    model_family: &ModelFamily,
-    effort: Option<ReasoningEffortConfig>,
-    summary: ReasoningSummaryConfig,
-) -> Option<Reasoning> {
-    if !model_family.supports_reasoning_summaries {
-        return None;
-    }
-
-    Some(Reasoning {
-        effort,
-        summary: Some(summary),
-    })
 }
 
 pub(crate) fn create_text_param_for_request(
@@ -419,6 +415,10 @@ mod tests {
                 expects_apply_patch_instructions: true,
             },
             InstructionsTestCase {
+                slug: "gpt-5.1",
+                expects_apply_patch_instructions: false,
+            },
+            InstructionsTestCase {
                 slug: "codex-mini-latest",
                 expects_apply_patch_instructions: true,
             },
@@ -427,7 +427,11 @@ mod tests {
                 expects_apply_patch_instructions: false,
             },
             InstructionsTestCase {
-                slug: "gpt-5-codex",
+                slug: "gpt-5.1-codex",
+                expects_apply_patch_instructions: false,
+            },
+            InstructionsTestCase {
+                slug: "gpt-5.1-codex",
                 expects_apply_patch_instructions: false,
             },
         ];
@@ -453,7 +457,7 @@ mod tests {
         let input: Vec<ResponseItem> = vec![];
         let tools: Vec<serde_json::Value> = vec![];
         let req = ResponsesApiRequest {
-            model: "gpt-5",
+            model: "gpt-5.1",
             instructions: "i",
             input: &input,
             tools: &tools,
@@ -494,7 +498,7 @@ mod tests {
             create_text_param_for_request(None, &Some(schema.clone())).expect("text controls");
 
         let req = ResponsesApiRequest {
-            model: "gpt-5",
+            model: "gpt-5.1",
             instructions: "i",
             input: &input,
             tools: &tools,
@@ -530,7 +534,7 @@ mod tests {
         let input: Vec<ResponseItem> = vec![];
         let tools: Vec<serde_json::Value> = vec![];
         let req = ResponsesApiRequest {
-            model: "gpt-5",
+            model: "gpt-5.1",
             instructions: "i",
             input: &input,
             tools: &tools,

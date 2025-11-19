@@ -93,6 +93,25 @@ impl EnvironmentContext {
             && self.network_access == *network_access
             && self.writable_roots == *writable_roots
     }
+
+    pub fn diff(before: &TurnContext, after: &TurnContext) -> Self {
+        let cwd = if before.cwd != after.cwd {
+            Some(after.cwd.clone())
+        } else {
+            None
+        };
+        let approval_policy = if before.approval_policy != after.approval_policy {
+            Some(after.approval_policy)
+        } else {
+            None
+        };
+        let sandbox_policy = if before.sandbox_policy != after.sandbox_policy {
+            Some(after.sandbox_policy.clone())
+        } else {
+            None
+        };
+        EnvironmentContext::new(cwd, approval_policy, sandbox_policy, None)
+    }
 }
 
 impl From<&TurnContext> for EnvironmentContext {
@@ -310,7 +329,6 @@ mod tests {
             Some(workspace_write_policy(vec!["/repo"], false)),
             Some(Shell::Bash(BashShell {
                 shell_path: "/bin/bash".into(),
-                bashrc_path: "/home/user/.bashrc".into(),
             })),
         );
         let context2 = EnvironmentContext::new(
@@ -319,7 +337,6 @@ mod tests {
             Some(workspace_write_policy(vec!["/repo"], false)),
             Some(Shell::Zsh(ZshShell {
                 shell_path: "/bin/zsh".into(),
-                zshrc_path: "/home/user/.zshrc".into(),
             })),
         );
 

@@ -2,7 +2,7 @@
 source: tui/src/chatwidget/tests.rs
 expression: popup
 ---
-  Select Reasoning Level for gpt-5-codex
+  Select Reasoning Level for gpt-5.1-codex
 
   1. Low               Fastest responses with limited reasoning
   2. Medium (default)  Dynamically adjusts reasoning based on the task

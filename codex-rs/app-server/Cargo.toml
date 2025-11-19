@@ -19,11 +19,14 @@ anyhow = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-common = { workspace = true, features = ["cli"] }
 codex-core = { workspace = true }
+codex-backend-client = { workspace = true }
 codex-file-search = { workspace = true }
 codex-login = { workspace = true }
 codex-protocol = { workspace = true }
 codex-app-server-protocol = { workspace = true }
+codex-feedback = { workspace = true }
 codex-utils-json-to-toml = { workspace = true }
+chrono = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = [
@@ -35,6 +38,7 @@ tokio = { workspace = true, features = [
 ] }
 tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
+opentelemetry-appender-tracing = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v7"] }
 
 [dev-dependencies]
@@ -42,8 +46,10 @@ app_test_support = { workspace = true }
 assert_cmd = { workspace = true }
 base64 = { workspace = true }
 core_test_support = { workspace = true }
+mcp-types = { workspace = true }
 os_info = { workspace = true }
 pretty_assertions = { workspace = true }
+serial_test = { workspace = true }
 tempfile = { workspace = true }
 toml = { workspace = true }
 wiremock = { workspace = true }

@@ -1,0 +1,26 @@
+[package]
+edition = "2024"
+name = "codex-stdio-to-uds"
+version = { workspace = true }
+
+[[bin]]
+name = "codex-stdio-to-uds"
+path = "src/main.rs"
+
+[lib]
+name = "codex_stdio_to_uds"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+uds_windows = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

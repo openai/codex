@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::app::App;
-use crate::history_cell::CompositeHistoryCell;
+use crate::history_cell::SessionInfoCell;
 use crate::history_cell::UserHistoryCell;
 use crate::pager_overlay::Overlay;
 use crate::tui;
@@ -103,9 +103,16 @@ impl App {
         nth_user_message: usize,
     ) {
         self.backtrack.pending = Some((base_id, nth_user_message, prefill));
-        self.app_event_tx.send(crate::app_event::AppEvent::CodexOp(
-            codex_core::protocol::Op::GetPath,
-        ));
+        if let Some(path) = self.chat_widget.rollout_path() {
+            let ev = ConversationPathResponseEvent {
+                conversation_id: base_id,
+                path,
+            };
+            self.app_event_tx
+                .send(crate::app_event::AppEvent::ConversationHistory(ev));
+        } else {
+            tracing::error!("rollout path unavailable; cannot backtrack");
+        }
     }
 
     /// Open transcript overlay (enters alternate screen and shows full transcript).
@@ -339,6 +346,7 @@ impl App {
             initial_images: Vec::new(),
             enhanced_keys_supported: self.enhanced_keys_supported,
             auth_manager: self.auth_manager.clone(),
+            feedback: self.feedback.clone(),
         };
         self.chat_widget =
             crate::chatwidget::ChatWidget::new_from_existing(init, conv, session_configured);
@@ -386,13 +394,13 @@ fn nth_user_position(
 fn user_positions_iter(
     cells: &[Arc<dyn crate::history_cell::HistoryCell>],
 ) -> impl Iterator<Item = usize> + '_ {
-    let header_type = TypeId::of::<CompositeHistoryCell>();
+    let session_start_type = TypeId::of::<SessionInfoCell>();
     let user_type = TypeId::of::<UserHistoryCell>();
     let type_of = |cell: &Arc<dyn crate::history_cell::HistoryCell>| cell.as_any().type_id();
 
     let start = cells
         .iter()
-        .rposition(|cell| type_of(cell) == header_type)
+        .rposition(|cell| type_of(cell) == session_start_type)
         .map_or(0, |idx| idx + 1);
 
     cells

@@ -1,5 +1,4 @@
-use std::path::Path;
-
+use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use codex_app_server_protocol::ArchiveConversationParams;
@@ -9,45 +8,37 @@ use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::NewConversationResponse;
 use codex_app_server_protocol::RequestId;
 use codex_core::ARCHIVED_SESSIONS_SUBDIR;
+use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn archive_conversation_moves_rollout_into_archived_directory() {
-    let codex_home = TempDir::new().expect("create temp dir");
-    create_config_toml(codex_home.path()).expect("write config.toml");
+async fn archive_conversation_moves_rollout_into_archived_directory() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path())?;
 
-    let mut mcp = McpProcess::new(codex_home.path())
-        .await
-        .expect("spawn mcp process");
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize())
-        .await
-        .expect("initialize timeout")
-        .expect("initialize request");
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let new_request_id = mcp
         .send_new_conversation_request(NewConversationParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
-        .await
-        .expect("send newConversation");
+        .await?;
     let new_response: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(new_request_id)),
     )
-    .await
-    .expect("newConversation timeout")
-    .expect("newConversation response");
+    .await??;
 
     let NewConversationResponse {
         conversation_id,
         rollout_path,
         ..
-    } = to_response::<NewConversationResponse>(new_response)
-        .expect("deserialize newConversation response");
+    } = to_response::<NewConversationResponse>(new_response)?;
 
     assert!(
         rollout_path.exists(),
@@ -60,19 +51,15 @@ async fn archive_conversation_moves_rollout_into_archived_directory() {
             conversation_id,
             rollout_path: rollout_path.clone(),
         })
-        .await
-        .expect("send archiveConversation");
+        .await?;
     let archive_response: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(archive_request_id)),
     )
-    .await
-    .expect("archiveConversation timeout")
-    .expect("archiveConversation response");
+    .await??;
 
     let _: ArchiveConversationResponse =
-        to_response::<ArchiveConversationResponse>(archive_response)
-            .expect("deserialize archiveConversation response");
+        to_response::<ArchiveConversationResponse>(archive_response)?;
 
     let archived_directory = codex_home.path().join(ARCHIVED_SESSIONS_SUBDIR);
     let archived_rollout_path =
@@ -90,6 +77,8 @@ async fn archive_conversation_moves_rollout_into_archived_directory() {
         "expected archived rollout path {} to exist",
         archived_rollout_path.display()
     );
+
+    Ok(())
 }
 
 fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {

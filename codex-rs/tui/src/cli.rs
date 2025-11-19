@@ -1,4 +1,5 @@
 use clap::Parser;
+use clap::ValueHint;
 use codex_common::ApprovalModeCliArg;
 use codex_common::CliConfigOverrides;
 use std::path::PathBuf;
@@ -27,15 +28,23 @@ pub struct Cli {
     #[clap(skip)]
     pub resume_session_id: Option<String>,
 
+    /// Internal: show all sessions (disables cwd filtering and shows CWD column).
+    #[clap(skip)]
+    pub resume_show_all: bool,
+
     /// Model the agent should use.
     #[arg(long, short = 'm')]
     pub model: Option<String>,
 
-    /// Convenience flag to select the local open source model provider.
-    /// Equivalent to -c model_provider=oss; verifies a local Ollama server is
-    /// running.
+    /// Convenience flag to select the local open source model provider. Equivalent to -c
+    /// model_provider=oss; verifies a local LM Studio or Ollama server is running.
     #[arg(long = "oss", default_value_t = false)]
     pub oss: bool,
+
+    /// Specify which local provider to use (lmstudio or ollama).
+    /// If not specified with --oss, will use config default or show selection.
+    #[arg(long = "local-provider")]
+    pub oss_provider: Option<String>,
 
     /// Configuration profile from config.toml to specify default options.
     #[arg(long = "profile", short = 'p')]
@@ -50,7 +59,7 @@ pub struct Cli {
     #[arg(long = "ask-for-approval", short = 'a')]
     pub approval_policy: Option<ApprovalModeCliArg>,
 
-    /// Convenience alias for low-friction sandboxed automatic execution (-a on-failure, --sandbox workspace-write).
+    /// Convenience alias for low-friction sandboxed automatic execution (-a on-request, --sandbox workspace-write).
     #[arg(long = "full-auto", default_value_t = false)]
     pub full_auto: bool,
 
@@ -71,6 +80,10 @@ pub struct Cli {
     /// Enable web search (off by default). When enabled, the native Responses `web_search` tool is available to the model (no per‑call approval).
     #[arg(long = "search", default_value_t = false)]
     pub web_search: bool,
+
+    /// Additional directories that should be writable alongside the primary workspace.
+    #[arg(long = "add-dir", value_name = "DIR", value_hint = ValueHint::DirPath)]
+    pub add_dir: Vec<PathBuf>,
 
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,

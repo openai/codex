@@ -3,7 +3,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 
-import { SandboxMode } from "./threadOptions";
+import { SandboxMode, ModelReasoningEffort, ApprovalMode } from "./threadOptions";
 
 export type CodexExecArgs = {
   input: string;
@@ -11,16 +11,29 @@ export type CodexExecArgs = {
   baseUrl?: string;
   apiKey?: string;
   threadId?: string | null;
+  images?: string[];
   // --model
   model?: string;
   // --sandbox
   sandboxMode?: SandboxMode;
   // --cd
   workingDirectory?: string;
+  // --add-dir
+  additionalDirectories?: string[];
   // --skip-git-repo-check
   skipGitRepoCheck?: boolean;
   // --output-schema
   outputSchemaFile?: string;
+  // --config model_reasoning_effort
+  modelReasoningEffort?: ModelReasoningEffort;
+  // AbortSignal to cancel the execution
+  signal?: AbortSignal;
+  // --config sandbox_workspace_write.network_access
+  networkAccessEnabled?: boolean;
+  // --config features.web_search_request
+  webSearchEnabled?: boolean;
+  // --config approval_policy
+  approvalPolicy?: ApprovalMode;
 };
 
 const INTERNAL_ORIGINATOR_ENV = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
@@ -28,8 +41,11 @@ const TYPESCRIPT_SDK_ORIGINATOR = "codex_sdk_ts";
 
 export class CodexExec {
   private executablePath: string;
-  constructor(executablePath: string | null = null) {
+  private envOverride?: Record<string, string>;
+
+  constructor(executablePath: string | null = null, env?: Record<string, string>) {
     this.executablePath = executablePath || findCodexPath();
+    this.envOverride = env;
   }
 
   async *run(args: CodexExecArgs): AsyncGenerator<string> {
@@ -47,6 +63,12 @@ export class CodexExec {
       commandArgs.push("--cd", args.workingDirectory);
     }
 
+    if (args.additionalDirectories?.length) {
+      for (const dir of args.additionalDirectories) {
+        commandArgs.push("--add-dir", dir);
+      }
+    }
+
     if (args.skipGitRepoCheck) {
       commandArgs.push("--skip-git-repo-check");
     }
@@ -55,13 +77,45 @@ export class CodexExec {
       commandArgs.push("--output-schema", args.outputSchemaFile);
     }
 
+    if (args.modelReasoningEffort) {
+      commandArgs.push("--config", `model_reasoning_effort="${args.modelReasoningEffort}"`);
+    }
+
+    if (args.networkAccessEnabled !== undefined) {
+      commandArgs.push(
+        "--config",
+        `sandbox_workspace_write.network_access=${args.networkAccessEnabled}`,
+      );
+    }
+
+    if (args.webSearchEnabled !== undefined) {
+      commandArgs.push("--config", `features.web_search_request=${args.webSearchEnabled}`);
+    }
+
+    if (args.approvalPolicy) {
+      commandArgs.push("--config", `approval_policy="${args.approvalPolicy}"`);
+    }
+
+    if (args.images?.length) {
+      for (const image of args.images) {
+        commandArgs.push("--image", image);
+      }
+    }
+
     if (args.threadId) {
       commandArgs.push("resume", args.threadId);
     }
 
-    const env = {
-      ...process.env,
-    };
+    const env: Record<string, string> = {};
+    if (this.envOverride) {
+      Object.assign(env, this.envOverride);
+    } else {
+      for (const [key, value] of Object.entries(process.env)) {
+        if (value !== undefined) {
+          env[key] = value;
+        }
+      }
+    }
     if (!env[INTERNAL_ORIGINATOR_ENV]) {
       env[INTERNAL_ORIGINATOR_ENV] = TYPESCRIPT_SDK_ORIGINATOR;
     }
@@ -74,6 +128,7 @@ export class CodexExec {
 
     const child = spawn(this.executablePath, commandArgs, {
       env,
+      signal: args.signal,
     });
 
     let spawnError: unknown | null = null;

@@ -6,6 +6,11 @@ use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Span;
 
+#[cfg(test)]
+const ALT_PREFIX: &str = "⌥ + ";
+#[cfg(all(not(test), target_os = "macos"))]
+const ALT_PREFIX: &str = "⌥ + ";
+#[cfg(all(not(test), not(target_os = "macos")))]
 const ALT_PREFIX: &str = "alt + ";
 const CTRL_PREFIX: &str = "ctrl + ";
 const SHIFT_PREFIX: &str = "shift + ";
@@ -83,4 +88,20 @@ impl From<&KeyBinding> for Span<'static> {
 
 fn key_hint_style() -> Style {
     Style::default().dim()
+}
+
+pub(crate) fn has_ctrl_or_alt(mods: KeyModifiers) -> bool {
+    (mods.contains(KeyModifiers::CONTROL) || mods.contains(KeyModifiers::ALT)) && !is_altgr(mods)
+}
+
+#[cfg(windows)]
+#[inline]
+pub(crate) fn is_altgr(mods: KeyModifiers) -> bool {
+    mods.contains(KeyModifiers::ALT) && mods.contains(KeyModifiers::CONTROL)
+}
+
+#[cfg(not(windows))]
+#[inline]
+pub(crate) fn is_altgr(_mods: KeyModifiers) -> bool {
+    false
 }

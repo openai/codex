@@ -7,11 +7,9 @@ use codex_core::REVIEW_PROMPT;
 use codex_core::ResponseItem;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
-use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExitedReviewModeEvent;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewCodeLocation;
 use codex_core::protocol::ReviewFinding;
@@ -20,11 +18,11 @@ use codex_core::protocol::ReviewOutputEvent;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
+use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id_from_str;
 use core_test_support::skip_if_no_network;
 use core_test_support::wait_for_event;
-use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -84,6 +82,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
             review_request: ReviewRequest {
                 prompt: "Please review my changes".to_string(),
                 user_facing_hint: "my changes".to_string(),
+                append_to_original_thread: true,
             },
         })
         .await
@@ -120,13 +119,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
 
     // Also verify that a user message with the header and a formatted finding
     // was recorded back in the parent session's rollout.
-    codex.submit(Op::GetPath).await.unwrap();
-    let history_event =
-        wait_for_event(&codex, |ev| matches!(ev, EventMsg::ConversationPath(_))).await;
-    let path = match history_event {
-        EventMsg::ConversationPath(ConversationPathResponseEvent { path, .. }) => path,
-        other => panic!("expected ConversationPath event, got {other:?}"),
-    };
+    let path = codex.rollout_path();
     let text = std::fs::read_to_string(&path).expect("read rollout file");
 
     let mut saw_header = false;
@@ -186,6 +179,7 @@ async fn review_op_with_plain_text_emits_review_fallback() {
             review_request: ReviewRequest {
                 prompt: "Plain text review".to_string(),
                 user_facing_hint: "plain text review".to_string(),
+                append_to_original_thread: true,
             },
         })
         .await
@@ -207,6 +201,80 @@ async fn review_op_with_plain_text_emits_review_fallback() {
     };
     assert_eq!(expected, review);
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    server.verify().await;
+}
+
+/// Ensure review flow suppresses assistant-specific streaming/completion events:
+/// - AgentMessageContentDelta
+/// - AgentMessageDelta (legacy)
+/// - ItemCompleted for TurnItem::AgentMessage
+// Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
+#[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
+#[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
+async fn review_filters_agent_message_related_events() {
+    skip_if_no_network!();
+
+    // Stream simulating a typing assistant message with deltas and finalization.
+    let sse_raw = r#"[
+        {"type":"response.output_item.added", "item":{
+            "type":"message", "role":"assistant", "id":"msg-1",
+            "content":[{"type":"output_text","text":""}]
+        }},
+        {"type":"response.output_text.delta", "delta":"Hi"},
+        {"type":"response.output_text.delta", "delta":" there"},
+        {"type":"response.output_item.done", "item":{
+            "type":"message", "role":"assistant", "id":"msg-1",
+            "content":[{"type":"output_text","text":"Hi there"}]
+        }},
+        {"type":"response.completed", "response": {"id": "__ID__"}}
+    ]"#;
+    let server = start_responses_server_with_sse(sse_raw, 1).await;
+    let codex_home = TempDir::new().unwrap();
+    let codex = new_conversation_for_server(&server, &codex_home, |_| {}).await;
+
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                prompt: "Filter streaming events".to_string(),
+                user_facing_hint: "Filter streaming events".to_string(),
+                append_to_original_thread: true,
+            },
+        })
+        .await
+        .unwrap();
+
+    let mut saw_entered = false;
+    let mut saw_exited = false;
+
+    // Drain until TaskComplete; assert filtered events never surface.
+    wait_for_event(&codex, |event| match event {
+        EventMsg::TaskComplete(_) => true,
+        EventMsg::EnteredReviewMode(_) => {
+            saw_entered = true;
+            false
+        }
+        EventMsg::ExitedReviewMode(_) => {
+            saw_exited = true;
+            false
+        }
+        // The following must be filtered by review flow
+        EventMsg::AgentMessageContentDelta(_) => {
+            panic!("unexpected AgentMessageContentDelta surfaced during review")
+        }
+        EventMsg::AgentMessageDelta(_) => {
+            panic!("unexpected AgentMessageDelta surfaced during review")
+        }
+        EventMsg::ItemCompleted(ev) => match &ev.item {
+            codex_protocol::items::TurnItem::AgentMessage(_) => {
+                panic!("unexpected ItemCompleted for TurnItem::AgentMessage surfaced during review")
+            }
+            _ => false,
+        },
+        _ => false,
+    })
+    .await;
+    assert!(saw_entered && saw_exited, "missing review lifecycle events");
 
     server.verify().await;
 }
@@ -255,6 +323,7 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
             review_request: ReviewRequest {
                 prompt: "check structured".to_string(),
                 user_facing_hint: "check structured".to_string(),
+                append_to_original_thread: true,
             },
         })
         .await
@@ -263,25 +332,21 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
     // Drain events until TaskComplete; ensure none are AgentMessage.
     let mut saw_entered = false;
     let mut saw_exited = false;
-    wait_for_event_with_timeout(
-        &codex,
-        |event| match event {
-            EventMsg::TaskComplete(_) => true,
-            EventMsg::AgentMessage(_) => {
-                panic!("unexpected AgentMessage during review with structured output")
-            }
-            EventMsg::EnteredReviewMode(_) => {
-                saw_entered = true;
-                false
-            }
-            EventMsg::ExitedReviewMode(_) => {
-                saw_exited = true;
-                false
-            }
-            _ => false,
-        },
-        tokio::time::Duration::from_secs(5),
-    )
+    wait_for_event(&codex, |event| match event {
+        EventMsg::TaskComplete(_) => true,
+        EventMsg::AgentMessage(_) => {
+            panic!("unexpected AgentMessage during review with structured output")
+        }
+        EventMsg::EnteredReviewMode(_) => {
+            saw_entered = true;
+            false
+        }
+        EventMsg::ExitedReviewMode(_) => {
+            saw_exited = true;
+            false
+        }
+        _ => false,
+    })
     .await;
     assert!(saw_entered && saw_exited, "missing review lifecycle events");
 
@@ -303,7 +368,7 @@ async fn review_uses_custom_review_model_from_config() {
     // Choose a review model different from the main model; ensure it is used.
     let codex = new_conversation_for_server(&server, &codex_home, |cfg| {
         cfg.model = "gpt-4.1".to_string();
-        cfg.review_model = "gpt-5".to_string();
+        cfg.review_model = "gpt-5.1".to_string();
     })
     .await;
 
@@ -312,6 +377,7 @@ async fn review_uses_custom_review_model_from_config() {
             review_request: ReviewRequest {
                 prompt: "use custom model".to_string(),
                 user_facing_hint: "use custom model".to_string(),
+                append_to_original_thread: true,
             },
         })
         .await
@@ -333,7 +399,7 @@ async fn review_uses_custom_review_model_from_config() {
     // Assert the request body model equals the configured review model
     let request = &server.received_requests().await.unwrap()[0];
     let body = request.body_json::<serde_json::Value>().unwrap();
-    assert_eq!(body["model"].as_str().unwrap(), "gpt-5");
+    assert_eq!(body["model"].as_str().unwrap(), "gpt-5.1");
 
     server.verify().await;
 }
@@ -375,7 +441,8 @@ async fn review_input_isolated_from_parent_history() {
                 "instructions": null,
                 "cwd": ".",
                 "originator": "test_originator",
-                "cli_version": "test_version"
+                "cli_version": "test_version",
+                "model_provider": "test-provider"
             }
         });
         f.write_all(format!("{meta_line}\n").as_bytes())
@@ -428,6 +495,7 @@ async fn review_input_isolated_from_parent_history() {
             review_request: ReviewRequest {
                 prompt: review_prompt.clone(),
                 user_facing_hint: review_prompt.clone(),
+                append_to_original_thread: true,
             },
         })
         .await
@@ -482,13 +550,7 @@ async fn review_input_isolated_from_parent_history() {
     assert_eq!(instructions, REVIEW_PROMPT);
 
     // Also verify that a user interruption note was recorded in the rollout.
-    codex.submit(Op::GetPath).await.unwrap();
-    let history_event =
-        wait_for_event(&codex, |ev| matches!(ev, EventMsg::ConversationPath(_))).await;
-    let path = match history_event {
-        EventMsg::ConversationPath(ConversationPathResponseEvent { path, .. }) => path,
-        other => panic!("expected ConversationPath event, got {other:?}"),
-    };
+    let path = codex.rollout_path();
     let text = std::fs::read_to_string(&path).expect("read rollout file");
     let mut saw_interruption_message = false;
     for line in text.lines() {
@@ -546,6 +608,7 @@ async fn review_history_does_not_leak_into_parent_session() {
             review_request: ReviewRequest {
                 prompt: "Start a review".to_string(),
                 user_facing_hint: "Start a review".to_string(),
+                append_to_original_thread: true,
             },
         })
         .await
@@ -566,7 +629,7 @@ async fn review_history_does_not_leak_into_parent_session() {
     let followup = "back to parent".to_string();
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: followup.clone(),
             }],
         })

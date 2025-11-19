@@ -1,12 +1,11 @@
 use std::cmp::Reverse;
 use std::io::{self};
+use std::num::NonZero;
 use std::path::Path;
 use std::path::PathBuf;
-
-use codex_file_search as file_search;
-use std::num::NonZero;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+
 use time::OffsetDateTime;
 use time::PrimitiveDateTime;
 use time::format_description::FormatItem;
@@ -15,6 +14,7 @@ use uuid::Uuid;
 
 use super::SESSIONS_SUBDIR;
 use crate::protocol::EventMsg;
+use codex_file_search as file_search;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionSource;
@@ -54,6 +54,7 @@ struct HeadTailSummary {
     saw_session_meta: bool,
     saw_user_event: bool,
     source: Option<SessionSource>,
+    model_provider: Option<String>,
     created_at: Option<String>,
     updated_at: Option<String>,
 }
@@ -109,6 +110,8 @@ pub(crate) async fn get_conversations(
     page_size: usize,
     cursor: Option<&Cursor>,
     allowed_sources: &[SessionSource],
+    model_providers: Option<&[String]>,
+    default_provider: &str,
 ) -> io::Result<ConversationsPage> {
     let mut root = codex_home.to_path_buf();
     root.push(SESSIONS_SUBDIR);
@@ -124,8 +127,17 @@ pub(crate) async fn get_conversations(
 
     let anchor = cursor.cloned();
 
-    let result =
-        traverse_directories_for_paths(root.clone(), page_size, anchor, allowed_sources).await?;
+    let provider_matcher =
+        model_providers.and_then(|filters| ProviderMatcher::new(filters, default_provider));
+
+    let result = traverse_directories_for_paths(
+        root.clone(),
+        page_size,
+        anchor,
+        allowed_sources,
+        provider_matcher.as_ref(),
+    )
+    .await?;
     Ok(result)
 }
 
@@ -145,6 +157,7 @@ async fn traverse_directories_for_paths(
     page_size: usize,
     anchor: Option<Cursor>,
     allowed_sources: &[SessionSource],
+    provider_matcher: Option<&ProviderMatcher<'_>>,
 ) -> io::Result<ConversationsPage> {
     let mut items: Vec<ConversationItem> = Vec::with_capacity(page_size);
     let mut scanned_files = 0usize;
@@ -153,6 +166,7 @@ async fn traverse_directories_for_paths(
         Some(c) => (c.ts, c.id),
         None => (OffsetDateTime::UNIX_EPOCH, Uuid::nil()),
     };
+    let mut more_matches_available = false;
 
     let year_dirs = collect_dirs_desc(&root, |s| s.parse::<u16>().ok()).await?;
 
@@ -184,6 +198,7 @@ async fn traverse_directories_for_paths(
                 for (ts, sid, _name_str, path) in day_files.into_iter() {
                     scanned_files += 1;
                     if scanned_files >= MAX_SCAN_FILES && items.len() >= page_size {
+                        more_matches_available = true;
                         break 'outer;
                     }
                     if !anchor_passed {
@@ -194,6 +209,7 @@ async fn traverse_directories_for_paths(
                         }
                     }
                     if items.len() == page_size {
+                        more_matches_available = true;
                         break 'outer;
                     }
                     // Read head and simultaneously detect message events within the same
@@ -205,6 +221,11 @@ async fn traverse_directories_for_paths(
                         && !summary
                             .source
                             .is_some_and(|source| allowed_sources.iter().any(|s| s == &source))
+                    {
+                        continue;
+                    }
+                    if let Some(matcher) = provider_matcher
+                        && !matcher.matches(summary.model_provider.as_deref())
                     {
                         continue;
                     }
@@ -231,19 +252,28 @@ async fn traverse_directories_for_paths(
         }
     }
 
-    let next = build_next_cursor(&items);
+    let reached_scan_cap = scanned_files >= MAX_SCAN_FILES;
+    if reached_scan_cap && !items.is_empty() {
+        more_matches_available = true;
+    }
+
+    let next = if more_matches_available {
+        build_next_cursor(&items)
+    } else {
+        None
+    };
     Ok(ConversationsPage {
         items,
         next_cursor: next,
         num_scanned_files: scanned_files,
-        reached_scan_cap: scanned_files >= MAX_SCAN_FILES,
+        reached_scan_cap,
     })
 }
 
 /// Pagination cursor token format: "<file_ts>|<uuid>" where `file_ts` matches the
 /// filename timestamp portion (YYYY-MM-DDThh-mm-ss) used in rollout filenames.
 /// The cursor orders files by timestamp desc, then UUID desc.
-fn parse_cursor(token: &str) -> Option<Cursor> {
+pub fn parse_cursor(token: &str) -> Option<Cursor> {
     let (file_ts, uuid_str) = token.split_once('|')?;
 
     let Ok(uuid) = Uuid::parse_str(uuid_str) else {
@@ -328,6 +358,32 @@ fn parse_timestamp_uuid_from_filename(name: &str) -> Option<(OffsetDateTime, Uui
     Some((ts, uuid))
 }
 
+struct ProviderMatcher<'a> {
+    filters: &'a [String],
+    matches_default_provider: bool,
+}
+
+impl<'a> ProviderMatcher<'a> {
+    fn new(filters: &'a [String], default_provider: &'a str) -> Option<Self> {
+        if filters.is_empty() {
+            return None;
+        }
+
+        let matches_default_provider = filters.iter().any(|provider| provider == default_provider);
+        Some(Self {
+            filters,
+            matches_default_provider,
+        })
+    }
+
+    fn matches(&self, session_provider: Option<&str>) -> bool {
+        match session_provider {
+            Some(provider) => self.filters.iter().any(|candidate| candidate == provider),
+            None => self.matches_default_provider,
+        }
+    }
+}
+
 async fn read_head_and_tail(
     path: &Path,
     head_limit: usize,
@@ -353,7 +409,8 @@ async fn read_head_and_tail(
 
         match rollout_line.item {
             RolloutItem::SessionMeta(session_meta_line) => {
-                summary.source = Some(session_meta_line.meta.source);
+                summary.source = Some(session_meta_line.meta.source.clone());
+                summary.model_provider = session_meta_line.meta.model_provider.clone();
                 summary.created_at = summary
                     .created_at
                     .clone()
@@ -392,6 +449,13 @@ async fn read_head_and_tail(
         summary.updated_at = updated_at;
     }
     Ok(summary)
+}
+
+/// Read up to `HEAD_RECORD_LIMIT` records from the start of the rollout file at `path`.
+/// This should be enough to produce a summary including the session meta line.
+pub async fn read_head_for_summary(path: &Path) -> io::Result<Vec<serde_json::Value>> {
+    let summary = read_head_and_tail(path, HEAD_RECORD_LIMIT, 0).await?;
+    Ok(summary.head)
 }
 
 async fn read_tail_records(
@@ -515,6 +579,7 @@ pub async fn find_conversation_path_by_id_str(
         threads,
         cancel,
         compute_indices,
+        false,
     )
     .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
 

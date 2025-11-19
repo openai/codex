@@ -33,6 +33,7 @@ use crossterm::style::SetBackgroundColor;
 use crossterm::style::SetColors;
 use crossterm::style::SetForegroundColor;
 use crossterm::terminal::Clear;
+use derive_more::IsVariant;
 use ratatui::backend::Backend;
 use ratatui::backend::ClearType;
 use ratatui::buffer::Buffer;
@@ -120,8 +121,6 @@ where
     /// Last known position of the cursor. Used to find the new area when the viewport is inlined
     /// and the terminal resized.
     pub last_known_cursor_pos: Position,
-
-    use_custom_flush: bool,
 }
 
 impl<B> Drop for Terminal<B>
@@ -151,16 +150,12 @@ where
         let cursor_pos = backend.get_cursor_position()?;
         Ok(Self {
             backend,
-            buffers: [
-                Buffer::empty(Rect::new(0, 0, 0, 0)),
-                Buffer::empty(Rect::new(0, 0, 0, 0)),
-            ],
+            buffers: [Buffer::empty(Rect::ZERO), Buffer::empty(Rect::ZERO)],
             current: 0,
             hidden_cursor: false,
             viewport_area: Rect::new(0, cursor_pos.y, 0, 0),
             last_known_screen_size: screen_size,
             last_known_cursor_pos: cursor_pos,
-            use_custom_flush: true,
         })
     }
 
@@ -173,9 +168,24 @@ where
         }
     }
 
+    /// Gets the current buffer as a reference.
+    fn current_buffer(&self) -> &Buffer {
+        &self.buffers[self.current]
+    }
+
     /// Gets the current buffer as a mutable reference.
-    pub fn current_buffer_mut(&mut self) -> &mut Buffer {
+    fn current_buffer_mut(&mut self) -> &mut Buffer {
         &mut self.buffers[self.current]
+    }
+
+    /// Gets the previous buffer as a reference.
+    fn previous_buffer(&self) -> &Buffer {
+        &self.buffers[1 - self.current]
+    }
+
+    /// Gets the previous buffer as a mutable reference.
+    fn previous_buffer_mut(&mut self) -> &mut Buffer {
+        &mut self.buffers[1 - self.current]
     }
 
     /// Gets the backend
@@ -191,26 +201,12 @@ where
     /// Obtains a difference between the previous and the current buffer and passes it to the
     /// current backend for drawing.
     pub fn flush(&mut self) -> io::Result<()> {
-        let previous_buffer = &self.buffers[1 - self.current];
-        let current_buffer = &self.buffers[self.current];
-
-        if self.use_custom_flush {
-            let updates = diff_buffers(previous_buffer, current_buffer);
-            if let Some(DrawCommand::Put { x, y, .. }) = updates
-                .iter()
-                .rev()
-                .find(|cmd| matches!(cmd, DrawCommand::Put { .. }))
-            {
-                self.last_known_cursor_pos = Position { x: *x, y: *y };
-            }
-            draw(&mut self.backend, updates.into_iter())
-        } else {
-            let updates = previous_buffer.diff(current_buffer);
-            if let Some((x, y, _)) = updates.last() {
-                self.last_known_cursor_pos = Position { x: *x, y: *y };
-            }
-            self.backend.draw(updates.into_iter())
+        let updates = diff_buffers(self.previous_buffer(), self.current_buffer());
+        let last_put_command = updates.iter().rfind(|command| command.is_put());
+        if let Some(&DrawCommand::Put { x, y, .. }) = last_put_command {
+            self.last_known_cursor_pos = Position { x, y };
         }
+        draw(&mut self.backend, updates.into_iter())
     }
 
     /// Updates the Terminal so that internal buffers match the requested area.
@@ -224,8 +220,8 @@ where
 
     /// Sets the viewport area.
     pub fn set_viewport_area(&mut self, area: Rect) {
-        self.buffers[self.current].resize(area);
-        self.buffers[1 - self.current].resize(area);
+        self.current_buffer_mut().resize(area);
+        self.previous_buffer_mut().resize(area);
         self.viewport_area = area;
     }
 
@@ -337,7 +333,7 @@ where
 
         self.swap_buffers();
 
-        ratatui::backend::Backend::flush(&mut self.backend)?;
+        Backend::flush(&mut self.backend)?;
 
         Ok(())
     }
@@ -381,13 +377,13 @@ where
             .set_cursor_position(self.viewport_area.as_position())?;
         self.backend.clear_region(ClearType::AfterCursor)?;
         // Reset the back buffer to make sure the next update will redraw everything.
-        self.buffers[1 - self.current].reset();
+        self.previous_buffer_mut().reset();
         Ok(())
     }
 
     /// Clears the inactive buffer and swaps it with the current buffer
     pub fn swap_buffers(&mut self) {
-        self.buffers[1 - self.current].reset();
+        self.previous_buffer_mut().reset();
         self.current = 1 - self.current;
     }
 
@@ -400,39 +396,46 @@ where
 use ratatui::buffer::Cell;
 use unicode_width::UnicodeWidthStr;
 
-#[derive(Debug)]
-enum DrawCommand<'a> {
-    Put { x: u16, y: u16, cell: &'a Cell },
+#[derive(Debug, IsVariant)]
+enum DrawCommand {
+    Put { x: u16, y: u16, cell: Cell },
     ClearToEnd { x: u16, y: u16, bg: Color },
 }
 
-fn diff_buffers<'a>(a: &'a Buffer, b: &'a Buffer) -> Vec<DrawCommand<'a>> {
+fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
     let previous_buffer = &a.content;
     let next_buffer = &b.content;
 
     let mut updates = vec![];
-    let mut last_nonblank_column = vec![0; a.area.height as usize];
+    let mut last_nonblank_columns = vec![0; a.area.height as usize];
     for y in 0..a.area.height {
         let row_start = y as usize * a.area.width as usize;
         let row_end = row_start + a.area.width as usize;
         let row = &next_buffer[row_start..row_end];
         let bg = row.last().map(|cell| cell.bg).unwrap_or(Color::Reset);
 
-        let x = row
-            .iter()
-            .rposition(|cell| {
-                cell.symbol() != " " || cell.bg != bg || cell.modifier != Modifier::empty()
-            })
-            .unwrap_or(0);
-        last_nonblank_column[y as usize] = x as u16;
-        if x < (a.area.width as usize).saturating_sub(1) {
-            let (x_abs, y_abs) = a.pos_of(row_start + x + 1);
-            updates.push(DrawCommand::ClearToEnd {
-                x: x_abs,
-                y: y_abs,
-                bg,
-            });
+        // Scan the row to find the rightmost column that still matters: any non-space glyph,
+        // any cell whose bg differs from the row’s trailing bg, or any cell with modifiers.
+        // Multi-width glyphs extend that region through their full displayed width.
+        // After that point the rest of the row can be cleared with a single ClearToEnd, a perf win
+        // versus emitting multiple space Put commands.
+        let mut last_nonblank_column = 0usize;
+        let mut column = 0usize;
+        while column < row.len() {
+            let cell = &row[column];
+            let width = cell.symbol().width();
+            if cell.symbol() != " " || cell.bg != bg || cell.modifier != Modifier::empty() {
+                last_nonblank_column = column + (width.saturating_sub(1));
+            }
+            column += width.max(1); // treat zero-width symbols as width 1
         }
+
+        if last_nonblank_column + 1 < row.len() {
+            let (x, y) = a.pos_of(row_start + last_nonblank_column + 1);
+            updates.push(DrawCommand::ClearToEnd { x, y, bg });
+        }
+
+        last_nonblank_columns[y as usize] = last_nonblank_column as u16;
     }
 
     // Cells invalidated by drawing/replacing preceding multi-width characters:
@@ -444,11 +447,11 @@ fn diff_buffers<'a>(a: &'a Buffer, b: &'a Buffer) -> Vec<DrawCommand<'a>> {
         if !current.skip && (current != previous || invalidated > 0) && to_skip == 0 {
             let (x, y) = a.pos_of(i);
             let row = i / a.area.width as usize;
-            if x <= last_nonblank_column[row] {
+            if x <= last_nonblank_columns[row] {
                 updates.push(DrawCommand::Put {
                     x,
                     y,
-                    cell: &next_buffer[i],
+                    cell: next_buffer[i].clone(),
                 });
             }
         }
@@ -461,9 +464,9 @@ fn diff_buffers<'a>(a: &'a Buffer, b: &'a Buffer) -> Vec<DrawCommand<'a>> {
     updates
 }
 
-fn draw<'a, I>(writer: &mut impl Write, commands: I) -> io::Result<()>
+fn draw<I>(writer: &mut impl Write, commands: I) -> io::Result<()>
 where
-    I: Iterator<Item = DrawCommand<'a>>,
+    I: Iterator<Item = DrawCommand>,
 {
     let mut fg = Color::Reset;
     let mut bg = Color::Reset;
@@ -592,6 +595,7 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use ratatui::layout::Rect;
+    use ratatui::style::Style;
 
     #[test]
     fn diff_buffers_does_not_emit_clear_to_end_for_full_width_row() {
@@ -618,6 +622,24 @@ mod tests {
                 .iter()
                 .any(|command| matches!(command, DrawCommand::Put { x: 2, y: 0, .. })),
             "expected diff_buffers to update the final cell; commands: {commands:?}",
+        );
+    }
+
+    #[test]
+    fn diff_buffers_clear_to_end_starts_after_wide_char() {
+        let area = Rect::new(0, 0, 10, 1);
+        let mut previous = Buffer::empty(area);
+        let mut next = Buffer::empty(area);
+
+        previous.set_string(0, 0, "中文", Style::default());
+        next.set_string(0, 0, "中", Style::default());
+
+        let commands = diff_buffers(&previous, &next);
+        assert!(
+            commands
+                .iter()
+                .any(|command| matches!(command, DrawCommand::ClearToEnd { x: 2, y: 0, .. })),
+            "expected clear-to-end to start after the remaining wide char; commands: {commands:?}"
         );
     }
 }

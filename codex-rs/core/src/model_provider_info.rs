@@ -6,6 +6,9 @@
 //!      key. These override or extend the defaults at runtime.
 
 use crate::CodexAuth;
+use crate::default_client::CodexHttpClient;
+use crate::default_client::CodexRequestBuilder;
+use crate::error::CodexErr;
 use codex_app_server_protocol::AuthMode;
 use serde::Deserialize;
 use serde::Serialize;
@@ -53,6 +56,11 @@ pub struct ModelProviderInfo {
     /// variable and set it.
     pub env_key_instructions: Option<String>,
 
+    /// Value to use with `Authorization: Bearer <token>` header. Use of this
+    /// config is discouraged in favor of `env_key` for security reasons, but
+    /// this may be necessary when using this programmatically.
+    pub experimental_bearer_token: Option<String>,
+
     /// Which wire protocol this provider expects.
     #[serde(default)]
     pub wire_api: WireApi,
@@ -90,7 +98,7 @@ pub struct ModelProviderInfo {
 
 impl ModelProviderInfo {
     /// Construct a `POST` RequestBuilder for the given URL using the provided
-    /// reqwest Client applying:
+    /// [`CodexHttpClient`] applying:
     ///   • provider-specific headers (static + env based)
     ///   • Bearer auth header when an API key is available.
     ///   • Auth token for OAuth.
@@ -99,20 +107,10 @@ impl ModelProviderInfo {
     /// one produced by [`ModelProviderInfo::api_key`].
     pub async fn create_request_builder<'a>(
         &'a self,
-        client: &'a reqwest::Client,
+        client: &'a CodexHttpClient,
         auth: &Option<CodexAuth>,
-    ) -> crate::error::Result<reqwest::RequestBuilder> {
-        let effective_auth = match self.api_key() {
-            Ok(Some(key)) => Some(CodexAuth::from_api_key(&key)),
-            Ok(None) => auth.clone(),
-            Err(err) => {
-                if auth.is_some() {
-                    auth.clone()
-                } else {
-                    return Err(err);
-                }
-            }
-        };
+    ) -> crate::error::Result<CodexRequestBuilder> {
+        let effective_auth = self.effective_auth(auth)?;
 
         let url = self.get_full_url(&effective_auth);
 
@@ -123,6 +121,51 @@ impl ModelProviderInfo {
         }
 
         Ok(self.apply_http_headers(builder))
+    }
+
+    pub async fn create_compact_request_builder<'a>(
+        &'a self,
+        client: &'a CodexHttpClient,
+        auth: &Option<CodexAuth>,
+    ) -> crate::error::Result<CodexRequestBuilder> {
+        if self.wire_api != WireApi::Responses {
+            return Err(CodexErr::UnsupportedOperation(
+                "Compaction endpoint requires Responses API providers".to_string(),
+            ));
+        }
+        let effective_auth = self.effective_auth(auth)?;
+
+        let url = self.get_compact_url(&effective_auth).ok_or_else(|| {
+            CodexErr::UnsupportedOperation(
+                "Compaction endpoint requires Responses API providers".to_string(),
+            )
+        })?;
+
+        let mut builder = client.post(url);
+
+        if let Some(auth) = effective_auth.as_ref() {
+            builder = builder.bearer_auth(auth.get_token().await?);
+        }
+
+        Ok(self.apply_http_headers(builder))
+    }
+
+    fn effective_auth(&self, auth: &Option<CodexAuth>) -> crate::error::Result<Option<CodexAuth>> {
+        if let Some(secret_key) = &self.experimental_bearer_token {
+            return Ok(Some(CodexAuth::from_api_key(secret_key)));
+        }
+
+        match self.api_key() {
+            Ok(Some(key)) => Ok(Some(CodexAuth::from_api_key(&key))),
+            Ok(None) => Ok(auth.clone()),
+            Err(err) => {
+                if auth.is_some() {
+                    Ok(auth.clone())
+                } else {
+                    Err(err)
+                }
+            }
+        }
     }
 
     fn get_query_string(&self) -> String {
@@ -162,6 +205,18 @@ impl ModelProviderInfo {
         }
     }
 
+    pub(crate) fn get_compact_url(&self, auth: &Option<CodexAuth>) -> Option<String> {
+        if self.wire_api != WireApi::Responses {
+            return None;
+        }
+        let full = self.get_full_url(auth);
+        if let Some((path, query)) = full.split_once('?') {
+            Some(format!("{path}/compact?{query}"))
+        } else {
+            Some(format!("{full}/compact"))
+        }
+    }
+
     pub(crate) fn is_azure_responses_endpoint(&self) -> bool {
         if self.wire_api != WireApi::Responses {
             return false;
@@ -178,9 +233,9 @@ impl ModelProviderInfo {
     }
 
     /// Apply provider-specific HTTP headers (both static and environment-based)
-    /// onto an existing `reqwest::RequestBuilder` and return the updated
+    /// onto an existing [`CodexRequestBuilder`] and return the updated
     /// builder.
-    fn apply_http_headers(&self, mut builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    fn apply_http_headers(&self, mut builder: CodexRequestBuilder) -> CodexRequestBuilder {
         if let Some(extra) = &self.http_headers {
             for (k, v) in extra {
                 builder = builder.header(k, v);
@@ -247,9 +302,11 @@ impl ModelProviderInfo {
     }
 }
 
-const DEFAULT_OLLAMA_PORT: u32 = 11434;
+pub const DEFAULT_LMSTUDIO_PORT: u16 = 1234;
+pub const DEFAULT_OLLAMA_PORT: u16 = 11434;
 
-pub const BUILT_IN_OSS_MODEL_PROVIDER_ID: &str = "oss";
+pub const LMSTUDIO_OSS_PROVIDER_ID: &str = "lmstudio";
+pub const OLLAMA_OSS_PROVIDER_ID: &str = "ollama";
 
 /// Built-in default provider list.
 pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
@@ -274,6 +331,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                     .filter(|v| !v.trim().is_empty()),
                 env_key: None,
                 env_key_instructions: None,
+                experimental_bearer_token: None,
                 wire_api: WireApi::Responses,
                 query_params: None,
                 http_headers: Some(
@@ -299,14 +357,21 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 requires_openai_auth: true,
             },
         ),
-        (BUILT_IN_OSS_MODEL_PROVIDER_ID, create_oss_provider()),
+        (
+            OLLAMA_OSS_PROVIDER_ID,
+            create_oss_provider(DEFAULT_OLLAMA_PORT, WireApi::Chat),
+        ),
+        (
+            LMSTUDIO_OSS_PROVIDER_ID,
+            create_oss_provider(DEFAULT_LMSTUDIO_PORT, WireApi::Responses),
+        ),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
     .collect()
 }
 
-pub fn create_oss_provider() -> ModelProviderInfo {
+pub fn create_oss_provider(default_provider_port: u16, wire_api: WireApi) -> ModelProviderInfo {
     // These CODEX_OSS_ environment variables are experimental: we may
     // switch to reading values from config.toml instead.
     let codex_oss_base_url = match std::env::var("CODEX_OSS_BASE_URL")
@@ -319,21 +384,21 @@ pub fn create_oss_provider() -> ModelProviderInfo {
             port = std::env::var("CODEX_OSS_PORT")
                 .ok()
                 .filter(|v| !v.trim().is_empty())
-                .and_then(|v| v.parse::<u32>().ok())
-                .unwrap_or(DEFAULT_OLLAMA_PORT)
+                .and_then(|v| v.parse::<u16>().ok())
+                .unwrap_or(default_provider_port)
         ),
     };
-
-    create_oss_provider_with_base_url(&codex_oss_base_url)
+    create_oss_provider_with_base_url(&codex_oss_base_url, wire_api)
 }
 
-pub fn create_oss_provider_with_base_url(base_url: &str) -> ModelProviderInfo {
+pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> ModelProviderInfo {
     ModelProviderInfo {
         name: "gpt-oss".into(),
         base_url: Some(base_url.into()),
         env_key: None,
         env_key_instructions: None,
-        wire_api: WireApi::Chat,
+        experimental_bearer_token: None,
+        wire_api,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -372,6 +437,7 @@ base_url = "http://localhost:11434/v1"
             base_url: Some("http://localhost:11434/v1".into()),
             env_key: None,
             env_key_instructions: None,
+            experimental_bearer_token: None,
             wire_api: WireApi::Chat,
             query_params: None,
             http_headers: None,
@@ -399,6 +465,7 @@ query_params = { api-version = "2025-04-01-preview" }
             base_url: Some("https://xxxxx.openai.azure.com/openai".into()),
             env_key: Some("AZURE_OPENAI_API_KEY".into()),
             env_key_instructions: None,
+            experimental_bearer_token: None,
             wire_api: WireApi::Chat,
             query_params: Some(maplit::hashmap! {
                 "api-version".to_string() => "2025-04-01-preview".to_string(),
@@ -429,6 +496,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             base_url: Some("https://example.com".into()),
             env_key: Some("API_KEY".into()),
             env_key_instructions: None,
+            experimental_bearer_token: None,
             wire_api: WireApi::Chat,
             query_params: None,
             http_headers: Some(maplit::hashmap! {
@@ -455,6 +523,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
                 base_url: Some(base_url.into()),
                 env_key: None,
                 env_key_instructions: None,
+                experimental_bearer_token: None,
                 wire_api: WireApi::Responses,
                 query_params: None,
                 http_headers: None,
@@ -487,6 +556,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             base_url: Some("https://example.com".into()),
             env_key: None,
             env_key_instructions: None,
+            experimental_bearer_token: None,
             wire_api: WireApi::Responses,
             query_params: None,
             http_headers: None,

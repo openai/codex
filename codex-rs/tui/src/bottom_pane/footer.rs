@@ -17,7 +17,7 @@ pub(crate) struct FooterProps {
     pub(crate) esc_backtrack_hint: bool,
     pub(crate) use_shift_enter_hint: bool,
     pub(crate) is_task_running: bool,
-    pub(crate) context_window_percent: Option<u8>,
+    pub(crate) context_window_percent: Option<i64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -221,8 +221,8 @@ fn build_columns(entries: Vec<Line<'static>>) -> Vec<Line<'static>> {
         .collect()
 }
 
-fn context_window_line(percent: Option<u8>) -> Line<'static> {
-    let percent = percent.unwrap_or(100);
+fn context_window_line(percent: Option<i64>) -> Line<'static> {
+    let percent = percent.unwrap_or(100).clamp(0, 100);
     Line::from(vec![Span::from(format!("{percent}% context left")).dim()])
 }
 

@@ -134,6 +134,14 @@ where
     wait_for_event_with_timeout(codex, predicate, Duration::from_secs(1)).await
 }
 
+pub async fn wait_for_event_match<T, F>(codex: &CodexConversation, matcher: F) -> T
+where
+    F: Fn(&codex_core::protocol::EventMsg) -> Option<T>,
+{
+    let ev = wait_for_event(codex, |ev| matcher(ev).is_some()).await;
+    matcher(&ev).unwrap()
+}
+
 pub async fn wait_for_event_with_timeout<F>(
     codex: &CodexConversation,
     mut predicate: F,
@@ -236,7 +244,7 @@ pub mod fs_wait {
         if path.exists() {
             Ok(path)
         } else {
-            Err(anyhow!("timed out waiting for {:?}", path))
+            Err(anyhow!("timed out waiting for {path:?}"))
         }
     }
 
@@ -276,7 +284,7 @@ pub mod fs_wait {
         if let Some(found) = scan_for_match(&root, predicate) {
             Ok(found)
         } else {
-            Err(anyhow!("timed out waiting for matching file in {:?}", root))
+            Err(anyhow!("timed out waiting for matching file in {root:?}"))
         }
     }
 
