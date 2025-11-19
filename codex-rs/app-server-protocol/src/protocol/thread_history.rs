@@ -136,8 +136,6 @@ impl ThreadHistoryBuilder {
             return true;
         };
         turn.status = TurnStatus::Interrupted;
-        let message = format!("Turn aborted: {}", describe_abort_reason(&payload.reason));
-        turn.error = Some(TurnError { message });
         true
     }
 
@@ -155,7 +153,6 @@ impl ThreadHistoryBuilder {
             id: self.next_turn_id(),
             items: Vec::new(),
             status: TurnStatus::Completed,
-            error: None,
         }
     }
 
@@ -204,7 +201,6 @@ struct PendingTurn {
     id: String,
     items: Vec<ThreadItem>,
     status: TurnStatus,
-    error: Option<TurnError>,
 }
 
 impl From<PendingTurn> for Turn {
@@ -213,7 +209,6 @@ impl From<PendingTurn> for Turn {
             id: value.id,
             items: value.items,
             status: value.status,
-            error: value.error,
         }
     }
 }
