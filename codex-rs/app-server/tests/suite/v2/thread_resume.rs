@@ -91,7 +91,7 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
     )
     .await??;
-    let ThreadResumeResponse { thread } = to_response::<ThreadResumeResponse>(resume_resp)?;
+    let ThreadResumeResponse { thread, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
 
     assert_eq!(thread.id, conversation_id);
     assert_eq!(thread.preview, preview);
@@ -105,7 +105,6 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
     );
     let turn = &thread.turns[0];
     assert_eq!(turn.status, TurnStatus::Completed);
-    assert!(turn.error.is_none());
     assert_eq!(turn.items.len(), 1, "expected user message item");
     match &turn.items[0] {
         ThreadItem::UserMessage { content, .. } => {
