@@ -145,13 +145,17 @@ impl ContextManager {
     }
 
     fn process_item(&self, item: &ResponseItem, policy: TruncationPolicy) -> ResponseItem {
+        let policy_with_serialization_budget = policy.mul(1.2);
         match item {
             ResponseItem::FunctionCallOutput { call_id, output } => {
-                let truncated = truncate_text(output.content.as_str(), policy);
-                let truncated_items = output
-                    .content_items
-                    .as_ref()
-                    .map(|items| truncate_function_output_items_with_policy(items, policy));
+                let truncated =
+                    truncate_text(output.content.as_str(), policy_with_serialization_budget);
+                let truncated_items = output.content_items.as_ref().map(|items| {
+                    truncate_function_output_items_with_policy(
+                        items,
+                        policy_with_serialization_budget,
+                    )
+                });
                 ResponseItem::FunctionCallOutput {
                     call_id: call_id.clone(),
                     output: FunctionCallOutputPayload {
@@ -162,7 +166,7 @@ impl ContextManager {
                 }
             }
             ResponseItem::CustomToolCallOutput { call_id, output } => {
-                let truncated = truncate_text(output, policy);
+                let truncated = truncate_text(output, policy_with_serialization_budget);
                 ResponseItem::CustomToolCallOutput {
                     call_id: call_id.clone(),
                     output: truncated,

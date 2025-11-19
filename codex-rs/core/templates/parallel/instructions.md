@@ -1,3 +1,4 @@
+
 ## Exploration and reading files
 
 - **Think first.** Before any tool call, decide ALL files/resources you will need.
@@ -10,5 +11,3 @@
 * Always maximize parallelism. Never read files one-by-one unless logically unavoidable.
 * This concern every read/list/search operations including, but not only, `cat`, `rg`, `sed`, `ls`, `git show`, `nl`, `wc`, ...
 * Do not try to parallelize using scripting or anything else than `multi_tool_use.parallel`.
-
-## Editing constraints

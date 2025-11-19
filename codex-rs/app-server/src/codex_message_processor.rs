@@ -111,6 +111,7 @@ use codex_core::config_loader::load_config_as_toml;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
+use codex_core::features::Feature;
 use codex_core::find_conversation_path_by_id_str;
 use codex_core::get_platform_sandbox;
 use codex_core::git_info::git_diff_to_remote;
@@ -118,6 +119,7 @@ use codex_core::parse_cursor;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewRequest;
+use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::read_head_for_summary;
 use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
@@ -1248,7 +1250,17 @@ impl CodexMessageProcessor {
             ..Default::default()
         };
 
-        let config = match derive_config_from_params(overrides, cli_overrides).await {
+        // Persist windows sandbox feature.
+        // TODO: persist default config in general.
+        let mut cli_overrides = cli_overrides.unwrap_or_default();
+        if cfg!(target_os = "windows") && self.config.features.enabled(Feature::WindowsSandbox) {
+            cli_overrides.insert(
+                "features.enable_experimental_windows_sandbox".to_string(),
+                serde_json::json!(true),
+            );
+        }
+
+        let config = match derive_config_from_params(overrides, Some(cli_overrides)).await {
             Ok(config) => config,
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -1313,8 +1325,12 @@ impl CodexMessageProcessor {
 
         match self.conversation_manager.new_conversation(config).await {
             Ok(new_conv) => {
-                let conversation_id = new_conv.conversation_id;
-                let rollout_path = new_conv.session_configured.rollout_path.clone();
+                let NewConversation {
+                    conversation_id,
+                    session_configured,
+                    ..
+                } = new_conv;
+                let rollout_path = session_configured.rollout_path.clone();
                 let fallback_provider = self.config.model_provider_id.as_str();
 
                 // A bit hacky, but the summary contains a lot of useful information for the thread
@@ -1339,8 +1355,22 @@ impl CodexMessageProcessor {
                     }
                 };
 
+                let SessionConfiguredEvent {
+                    model,
+                    model_provider_id,
+                    cwd,
+                    approval_policy,
+                    sandbox_policy,
+                    ..
+                } = session_configured;
                 let response = ThreadStartResponse {
                     thread: thread.clone(),
+                    model,
+                    model_provider: model_provider_id,
+                    cwd,
+                    approval_policy: approval_policy.into(),
+                    sandbox: sandbox_policy.into(),
+                    reasoning_effort: session_configured.reasoning_effort,
                 };
 
                 // Auto-attach a conversation listener when starting a thread.
@@ -1653,7 +1683,15 @@ impl CodexMessageProcessor {
                         return;
                     }
                 };
-                let response = ThreadResumeResponse { thread };
+                let response = ThreadResumeResponse {
+                    thread,
+                    model: session_configured.model,
+                    model_provider: session_configured.model_provider_id,
+                    cwd: session_configured.cwd,
+                    approval_policy: session_configured.approval_policy.into(),
+                    sandbox: session_configured.sandbox_policy.into(),
+                    reasoning_effort: session_configured.reasoning_effort,
+                };
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(err) => {

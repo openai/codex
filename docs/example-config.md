@@ -18,12 +18,11 @@ Use this example configuration as a starting point. For an explanation of each f
 # Core Model Selection
 ################################################################################
 
-# Primary model used by Codex. Default differs by OS; non-Windows defaults here.
-# Linux/macOS default: "gpt-5.1-codex"; Windows default: "gpt-5.1".
-model = "gpt-5.1-codex"
+# Primary model used by Codex. Default: "arcticfox" on all platforms.
+model = "arcticfox"
 
-# Model used by the /review feature (code reviews). Default: "gpt-5.1-codex".
-review_model = "gpt-5.1-codex"
+# Model used by the /review feature (code reviews). Default: "arcticfox".
+review_model = "arcticfox"
 
 # Provider id selected from [model_providers]. Default: "openai".
 model_provider = "openai"
@@ -33,7 +32,7 @@ model_provider = "openai"
 # model_context_window = 128000       # tokens; default: auto for model
 # model_max_output_tokens = 8192      # tokens; default: auto for model
 # model_auto_compact_token_limit = 0  # disable/override auto; default: model family specific
-# tool_output_token_limit = 10000  # tokens stored per tool output; default: 10000 for gpt-5.1-codex
+# tool_output_token_limit = 10000  # tokens stored per tool output; default: 10000 for arcticfox
 
 ################################################################################
 # Reasoning & Verbosity (Responses API capable models)
@@ -316,7 +315,7 @@ mcp_oauth_credentials_store = "auto"
 [profiles]
 
 # [profiles.default]
-# model = "gpt-5.1-codex"
+# model = "arcticfox"
 # model_provider = "openai"
 # approval_policy = "on-request"
 # sandbox_mode = "read-only"

@@ -378,6 +378,8 @@ pub struct Notice {
     pub hide_rate_limit_model_nudge: Option<bool>,
     /// Tracks whether the user has seen the model migration prompt
     pub hide_gpt5_1_migration_prompt: Option<bool>,
+    /// Tracks whether the user has seen the arcticfox migration prompt
+    pub hide_arcticfox_migration_prompt: Option<bool>,
 }
 
 impl Notice {

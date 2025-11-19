@@ -5,6 +5,8 @@ use crate::render::renderable::RenderableExt as _;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
+use codex_common::model_presets::HIDE_ARCTICFOX_MIGRATION_PROMPT_CONFIG;
+use codex_common::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -12,6 +14,7 @@ use crossterm::event::KeyModifiers;
 use ratatui::prelude::Stylize as _;
 use ratatui::prelude::Widget;
 use ratatui::text::Line;
+use ratatui::text::Span;
 use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
@@ -24,7 +27,24 @@ pub(crate) enum ModelMigrationOutcome {
     Exit,
 }
 
-pub(crate) async fn run_model_migration_prompt(tui: &mut Tui) -> ModelMigrationOutcome {
+#[derive(Clone)]
+pub(crate) struct ModelMigrationCopy {
+    pub heading: Vec<Span<'static>>,
+    pub content: Vec<Line<'static>>,
+}
+
+pub(crate) fn migration_copy_for_config(migration_config_key: &str) -> ModelMigrationCopy {
+    match migration_config_key {
+        HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG => gpt5_migration_copy(),
+        HIDE_ARCTICFOX_MIGRATION_PROMPT_CONFIG => arcticfox_migration_copy(),
+        _ => arcticfox_migration_copy(),
+    }
+}
+
+pub(crate) async fn run_model_migration_prompt(
+    tui: &mut Tui,
+    copy: ModelMigrationCopy,
+) -> ModelMigrationOutcome {
     // Render the prompt on the terminal's alternate screen so exiting or cancelling
     // does not leave a large blank region in the normal scrollback. This does not
     // change the prompt's appearance – only where it is drawn.
@@ -45,7 +65,7 @@ pub(crate) async fn run_model_migration_prompt(tui: &mut Tui) -> ModelMigrationO
 
     let alt = AltScreenGuard::enter(tui);
 
-    let mut screen = ModelMigrationScreen::new(alt.tui.frame_requester());
+    let mut screen = ModelMigrationScreen::new(alt.tui.frame_requester(), copy);
 
     let _ = alt.tui.draw(u16::MAX, |frame| {
         frame.render_widget_ref(&screen, frame.area());
@@ -76,14 +96,16 @@ pub(crate) async fn run_model_migration_prompt(tui: &mut Tui) -> ModelMigrationO
 
 struct ModelMigrationScreen {
     request_frame: FrameRequester,
+    copy: ModelMigrationCopy,
     done: bool,
     should_exit: bool,
 }
 
 impl ModelMigrationScreen {
-    fn new(request_frame: FrameRequester) -> Self {
+    fn new(request_frame: FrameRequester, copy: ModelMigrationCopy) -> Self {
         Self {
             request_frame,
+            copy,
             done: false,
             should_exit: false,
         }
@@ -133,51 +155,74 @@ impl WidgetRef for &ModelMigrationScreen {
         let mut column = ColumnRenderable::new();
 
         column.push("");
-        column.push(Line::from(vec![
-            "> ".into(),
-            "Introducing our gpt-5.1 models".bold(),
-        ]));
+        let mut heading = vec![Span::raw("> ")];
+        heading.extend(self.copy.heading.clone());
+        column.push(Line::from(heading));
         column.push(Line::from(""));
 
-        column.push(
-            Paragraph::new(Line::from(
-                "We've upgraded our family of models supported in Codex to gpt-5.1, gpt-5.1-codex and gpt-5.1-codex-mini.",
-            ))
-            .wrap(Wrap { trim: false })
-            .inset(Insets::tlbr(0, 2, 0, 0)),
-        );
-        column.push(Line::from(""));
-        column.push(
-            Paragraph::new(Line::from(
+        for (idx, line) in self.copy.content.iter().enumerate() {
+            if idx != 0 {
+                column.push(Line::from(""));
+            }
+
+            column.push(
+                Paragraph::new(line.clone())
+                    .wrap(Wrap { trim: false })
+                    .inset(Insets::tlbr(0, 2, 0, 0)),
+            );
+        }
+
+        column.render(area, buf);
+    }
+}
+
+fn arcticfox_migration_copy() -> ModelMigrationCopy {
+    ModelMigrationCopy {
+        heading: vec!["Introducing arcticfox".bold()],
+        content: vec![
+            Line::from("We've upgraded our family of models supported in Codex to arcticfox."),
+            Line::from(
                 "You can continue using legacy models by specifying them directly with the -m option or in your config.toml.",
-            ))
-            .wrap(Wrap { trim: false })
-            .inset(Insets::tlbr(0, 2, 0, 0)),
-        );
-        column.push(Line::from(""));
-        column.push(
+            ),
+            Line::from(vec![
+                "Learn more at ".into(),
+                "www.openai.com/index/arcticfox".cyan().underlined(),
+                ".".into(),
+            ]),
+            Line::from(vec!["Press enter to continue".dim()]),
+        ],
+    }
+}
+
+fn gpt5_migration_copy() -> ModelMigrationCopy {
+    ModelMigrationCopy {
+        heading: vec!["Introducing our gpt-5.1 models".bold()],
+        content: vec![
+            Line::from(
+                "We've upgraded our family of models supported in Codex to gpt-5.1, gpt-5.1-codex and gpt-5.1-codex-mini.",
+            ),
+            Line::from(
+                "You can continue using legacy models by specifying them directly with the -m option or in your config.toml.",
+            ),
             Line::from(vec![
                 "Learn more at ".into(),
                 "www.openai.com/index/gpt-5-1".cyan().underlined(),
                 ".".into(),
-            ])
-            .inset(Insets::tlbr(0, 2, 0, 0)),
-        );
-        column.push(Line::from(""));
-        column.push(
-            Line::from(vec!["Press enter to continue".dim()]).inset(Insets::tlbr(0, 2, 0, 0)),
-        );
-
-        column.render(area, buf);
+            ]),
+            Line::from(vec!["Press enter to continue".dim()]),
+        ],
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::ModelMigrationScreen;
+    use super::arcticfox_migration_copy;
+    use super::migration_copy_for_config;
     use crate::custom_terminal::Terminal;
     use crate::test_backend::VT100Backend;
     use crate::tui::FrameRequester;
+    use codex_common::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use insta::assert_snapshot;
@@ -191,7 +236,8 @@ mod tests {
         let mut terminal = Terminal::with_options(backend).expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, width, height));
 
-        let screen = ModelMigrationScreen::new(FrameRequester::test_dummy());
+        let screen =
+            ModelMigrationScreen::new(FrameRequester::test_dummy(), arcticfox_migration_copy());
 
         {
             let mut frame = terminal.get_frame();
@@ -208,7 +254,10 @@ mod tests {
         let mut terminal = Terminal::with_options(backend).expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, 65, 12));
 
-        let screen = ModelMigrationScreen::new(FrameRequester::test_dummy());
+        let screen = ModelMigrationScreen::new(
+            FrameRequester::test_dummy(),
+            migration_copy_for_config(HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG),
+        );
         {
             let mut frame = terminal.get_frame();
             frame.render_widget_ref(&screen, frame.area());
@@ -223,7 +272,10 @@ mod tests {
         let mut terminal = Terminal::with_options(backend).expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, 60, 12));
 
-        let screen = ModelMigrationScreen::new(FrameRequester::test_dummy());
+        let screen = ModelMigrationScreen::new(
+            FrameRequester::test_dummy(),
+            migration_copy_for_config(HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG),
+        );
         {
             let mut frame = terminal.get_frame();
             frame.render_widget_ref(&screen, frame.area());
@@ -238,7 +290,10 @@ mod tests {
         let mut terminal = Terminal::with_options(backend).expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, 60, 12));
 
-        let screen = ModelMigrationScreen::new(FrameRequester::test_dummy());
+        let screen = ModelMigrationScreen::new(
+            FrameRequester::test_dummy(),
+            migration_copy_for_config(HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG),
+        );
         {
             let mut frame = terminal.get_frame();
             frame.render_widget_ref(&screen, frame.area());
@@ -249,7 +304,8 @@ mod tests {
 
     #[test]
     fn escape_key_accepts_prompt() {
-        let mut screen = ModelMigrationScreen::new(FrameRequester::test_dummy());
+        let mut screen =
+            ModelMigrationScreen::new(FrameRequester::test_dummy(), arcticfox_migration_copy());
 
         // Simulate pressing Escape
         screen.handle_key(KeyEvent::new(

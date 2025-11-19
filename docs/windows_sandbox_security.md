@@ -1,4 +1,6 @@
-# Windows Sandbox Status
+# Windows Sandbox Security Details
+
+For overall context on sandboxing in Codex, see [sandbox.md](./sandbox.md).
 
 ## Implementation Overview
 

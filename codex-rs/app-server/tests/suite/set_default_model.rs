@@ -57,7 +57,7 @@ fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
     std::fs::write(
         config_toml,
         r#"
-model = "gpt-5.1-codex"
+model = "arcticfox"
 model_reasoning_effort = "medium"
 "#,
     )

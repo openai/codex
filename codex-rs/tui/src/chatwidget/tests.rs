@@ -93,6 +93,10 @@ fn resumed_initial_messages_render_history() {
     let configured = codex_core::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::ReadOnly,
+        cwd: PathBuf::from("/home/user/project"),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
@@ -1490,14 +1494,14 @@ fn windows_auto_mode_prompt_requests_enabling_sandbox_feature() {
 
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        popup.contains("experimental Windows sandbox"),
+        popup.contains("Agent mode on Windows uses an experimental sandbox"),
         "expected auto mode prompt to mention enabling the sandbox feature, popup: {popup}"
     );
 }
 
 #[cfg(target_os = "windows")]
 #[test]
-fn startup_prompts_for_windows_sandbox_when_auto_requested() {
+fn startup_prompts_for_windows_sandbox_when_agent_requested() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
     set_windows_sandbox_enabled(false);
@@ -1507,7 +1511,11 @@ fn startup_prompts_for_windows_sandbox_when_auto_requested() {
 
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        popup.contains("Turn on Windows sandbox and use Auto mode"),
+        popup.contains("Agent mode on Windows uses an experimental sandbox"),
+        "expected startup prompt to explain sandbox: {popup}"
+    );
+    assert!(
+        popup.contains("Enable experimental sandbox"),
         "expected startup prompt to offer enabling the sandbox: {popup}"
     );
 
@@ -1518,17 +1526,57 @@ fn startup_prompts_for_windows_sandbox_when_auto_requested() {
 fn model_reasoning_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
-    chat.config.model = "gpt-5.1-codex".to_string();
+    chat.config.model = "arcticfox".to_string();
     chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::High);
 
     let preset = builtin_model_presets(None)
         .into_iter()
-        .find(|preset| preset.model == "gpt-5.1-codex")
-        .expect("gpt-5.1-codex preset");
+        .find(|preset| preset.model == "arcticfox")
+        .expect("arcticfox preset");
     chat.open_reasoning_popup(preset);
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("model_reasoning_selection_popup", popup);
+}
+
+#[test]
+fn model_reasoning_selection_popup_extra_high_warning_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.config.model = "arcticfox".to_string();
+    chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::XHigh);
+
+    let preset = builtin_model_presets(None)
+        .into_iter()
+        .find(|preset| preset.model == "arcticfox")
+        .expect("arcticfox preset");
+    chat.open_reasoning_popup(preset);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("model_reasoning_selection_popup_extra_high_warning", popup);
+}
+
+#[test]
+fn reasoning_popup_shows_extra_high_with_space() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.config.model = "arcticfox".to_string();
+
+    let preset = builtin_model_presets(None)
+        .into_iter()
+        .find(|preset| preset.model == "arcticfox")
+        .expect("arcticfox preset");
+    chat.open_reasoning_popup(preset);
+
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup.contains("Extra high"),
+        "expected popup to include 'Extra high'; popup: {popup}"
+    );
+    assert!(
+        !popup.contains("Extrahigh"),
+        "expected popup not to include 'Extrahigh'; popup: {popup}"
+    );
 }
 
 #[test]
@@ -1548,6 +1596,7 @@ fn single_reasoning_option_skips_selection() {
         supported_reasoning_efforts: &SINGLE_EFFORT,
         is_default: false,
         upgrade: None,
+        show_in_picker: true,
     };
     chat.open_reasoning_popup(preset);
 

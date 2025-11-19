@@ -8,6 +8,7 @@ use crate::exec_command::strip_bash_lc_and_escape;
 use crate::file_search::FileSearchManager;
 use crate::history_cell::HistoryCell;
 use crate::model_migration::ModelMigrationOutcome;
+use crate::model_migration::migration_copy_for_config;
 use crate::model_migration::run_model_migration_prompt;
 use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
@@ -17,6 +18,9 @@ use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
+use codex_app_server_protocol::AuthMode;
+use codex_common::model_presets::HIDE_ARCTICFOX_MIGRATION_PROMPT_CONFIG;
+use codex_common::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_common::model_presets::ModelUpgrade;
 use codex_common::model_presets::all_model_presets;
 use codex_core::AuthManager;
@@ -51,6 +55,9 @@ use tokio::sync::mpsc::unbounded_channel;
 
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
+
+const GPT_5_1_MIGRATION_AUTH_MODES: [AuthMode; 2] = [AuthMode::ChatGPT, AuthMode::ApiKey];
+const ARCTICFOX_MIGRATION_AUTH_MODES: [AuthMode; 1] = [AuthMode::ChatGPT];
 
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
@@ -97,10 +104,19 @@ fn should_show_model_migration_prompt(
         .any(|preset| preset.model == current_model)
 }
 
+fn migration_prompt_hidden(config: &Config, migration_config_key: &str) -> Option<bool> {
+    match migration_config_key {
+        HIDE_ARCTICFOX_MIGRATION_PROMPT_CONFIG => config.notices.hide_arcticfox_migration_prompt,
+        HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG => config.notices.hide_gpt5_1_migration_prompt,
+        _ => None,
+    }
+}
+
 async fn handle_model_migration_prompt_if_needed(
     tui: &mut tui::Tui,
     config: &mut Config,
     app_event_tx: &AppEventSender,
+    auth_mode: Option<AuthMode>,
 ) -> Option<AppExitInfo> {
     let upgrade = all_model_presets()
         .iter()
@@ -110,18 +126,24 @@ async fn handle_model_migration_prompt_if_needed(
     if let Some(ModelUpgrade {
         id: target_model,
         reasoning_effort_mapping,
+        migration_config_key,
     }) = upgrade
     {
+        if !migration_prompt_allows_auth_mode(auth_mode, migration_config_key) {
+            return None;
+        }
+
         let target_model = target_model.to_string();
-        let hide_prompt_flag = config.notices.hide_gpt5_1_migration_prompt;
+        let hide_prompt_flag = migration_prompt_hidden(config, migration_config_key);
         if !should_show_model_migration_prompt(&config.model, &target_model, hide_prompt_flag) {
             return None;
         }
 
-        match run_model_migration_prompt(tui).await {
+        let prompt_copy = migration_copy_for_config(migration_config_key);
+        match run_model_migration_prompt(tui, prompt_copy).await {
             ModelMigrationOutcome::Accepted => {
                 app_event_tx.send(AppEvent::PersistModelMigrationPromptAcknowledged {
-                    migration_config: "hide_gpt5_1_migration_prompt".to_string(),
+                    migration_config: migration_config_key.to_string(),
                 });
                 config.model = target_model.to_string();
                 if let Some(family) = find_family_for_model(&target_model) {
@@ -211,8 +233,10 @@ impl App {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
 
+        let auth_mode = auth_manager.auth().map(|auth| auth.mode);
         let exit_info =
-            handle_model_migration_prompt_if_needed(tui, &mut config, &app_event_tx).await;
+            handle_model_migration_prompt_if_needed(tui, &mut config, &app_event_tx, auth_mode)
+                .await;
         if let Some(exit_info) = exit_info {
             return Ok(exit_info);
         }
@@ -293,7 +317,7 @@ impl App {
             skip_world_writable_scan_once: false,
         };
 
-        // On startup, if Auto mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
+        // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
         {
             let should_check = codex_core::get_platform_sandbox().is_some()
@@ -546,7 +570,7 @@ impl App {
             AppEvent::OpenWindowsSandboxEnablePrompt { preset } => {
                 self.chat_widget.open_windows_sandbox_enable_prompt(preset);
             }
-            AppEvent::EnableWindowsSandboxForAuto { preset } => {
+            AppEvent::EnableWindowsSandboxForAgentMode { preset } => {
                 #[cfg(target_os = "windows")]
                 {
                     let profile = self.active_profile.as_deref();
@@ -587,8 +611,7 @@ impl App {
                                 self.app_event_tx
                                     .send(AppEvent::UpdateSandboxPolicy(preset.sandbox.clone()));
                                 self.chat_widget.add_info_message(
-                                    "Enabled the Windows sandbox feature and switched to Auto mode."
-                                        .to_string(),
+                                    "Enabled experimental Windows sandbox.".to_string(),
                                     None,
                                 );
                             }
@@ -732,7 +755,7 @@ impl App {
                         "failed to persist world-writable warning acknowledgement"
                     );
                     self.chat_widget.add_error_message(format!(
-                        "Failed to save Auto mode warning preference: {err}"
+                        "Failed to save Agent mode warning preference: {err}"
                     ));
                 }
             }
@@ -920,6 +943,28 @@ impl App {
     }
 }
 
+fn migration_prompt_allowed_auth_modes(migration_config_key: &str) -> Option<&'static [AuthMode]> {
+    match migration_config_key {
+        HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG => Some(&GPT_5_1_MIGRATION_AUTH_MODES),
+        HIDE_ARCTICFOX_MIGRATION_PROMPT_CONFIG => Some(&ARCTICFOX_MIGRATION_AUTH_MODES),
+        _ => None,
+    }
+}
+
+fn migration_prompt_allows_auth_mode(
+    auth_mode: Option<AuthMode>,
+    migration_config_key: &str,
+) -> bool {
+    if let Some(allowed_modes) = migration_prompt_allowed_auth_modes(migration_config_key) {
+        match auth_mode {
+            None => true,
+            Some(mode) => allowed_modes.contains(&mode),
+        }
+    } else {
+        auth_mode != Some(AuthMode::ApiKey)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -934,6 +979,8 @@ mod tests {
     use codex_core::AuthManager;
     use codex_core::CodexAuth;
     use codex_core::ConversationManager;
+    use codex_core::protocol::AskForApproval;
+    use codex_core::protocol::SandboxPolicy;
     use codex_core::protocol::SessionConfiguredEvent;
     use codex_protocol::ConversationId;
     use ratatui::prelude::Line;
@@ -983,6 +1030,11 @@ mod tests {
         assert!(should_show_model_migration_prompt(
             "gpt-5-codex-mini",
             "gpt-5.1-codex-mini",
+            None
+        ));
+        assert!(should_show_model_migration_prompt(
+            "gpt-5.1-codex",
+            "arcticfox",
             None
         ));
         assert!(!should_show_model_migration_prompt(
@@ -1043,6 +1095,10 @@ mod tests {
             let event = SessionConfiguredEvent {
                 session_id: ConversationId::new(),
                 model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: None,
                 history_log_id: 0,
                 history_entry_count: 0,
@@ -1110,5 +1166,41 @@ mod tests {
             summary.resume_command,
             Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
         );
+    }
+
+    #[test]
+    fn gpt5_migration_allows_api_key_and_chatgpt() {
+        assert!(migration_prompt_allows_auth_mode(
+            Some(AuthMode::ApiKey),
+            HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG,
+        ));
+        assert!(migration_prompt_allows_auth_mode(
+            Some(AuthMode::ChatGPT),
+            HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG,
+        ));
+    }
+
+    #[test]
+    fn arcticfox_migration_limits_to_chatgpt() {
+        assert!(migration_prompt_allows_auth_mode(
+            Some(AuthMode::ChatGPT),
+            HIDE_ARCTICFOX_MIGRATION_PROMPT_CONFIG,
+        ));
+        assert!(!migration_prompt_allows_auth_mode(
+            Some(AuthMode::ApiKey),
+            HIDE_ARCTICFOX_MIGRATION_PROMPT_CONFIG,
+        ));
+    }
+
+    #[test]
+    fn other_migrations_block_api_key() {
+        assert!(!migration_prompt_allows_auth_mode(
+            Some(AuthMode::ApiKey),
+            "unknown"
+        ));
+        assert!(migration_prompt_allows_auth_mode(
+            Some(AuthMode::ChatGPT),
+            "unknown"
+        ));
     }
 }

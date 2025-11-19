@@ -1155,7 +1155,7 @@ async fn token_count_includes_rate_limits_snapshot() {
                     "reasoning_output_tokens": 0,
                     "total_tokens": 123
                 },
-                // Default model is gpt-5.1-codex in tests → 95% usable context window
+                // Default model is arcticfox in tests → 95% usable context window
                 "model_context_window": 258400
             },
             "rate_limits": {

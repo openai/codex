@@ -10,7 +10,7 @@ expression: sanitized
 │ Visit https://chatgpt.com/codex/settings/usage for up-to-date       │
 │ information on rate limits and credits                              │
 │                                                                     │
-│  Model:            gpt-5.1-codex (reasoning none, summaries auto)   │
+│  Model:            arcticfox (reasoning none, summaries auto)       │
 │  Directory: [[workspace]]                                           │
 │  Approval:         on-request                                       │
 │  Sandbox:          read-only                                        │
