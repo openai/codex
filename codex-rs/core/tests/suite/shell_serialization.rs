@@ -449,9 +449,11 @@ async fn shell_output_reserializes_truncated_content(output_type: ShellModelOutp
         serde_json::from_str::<Value>(output).is_err(),
         "expected truncated shell output to be plain text",
     );
-    let truncated_pattern = r#"(?s)^Exit code: 0
+    let truncated_pattern = r"(?s)^Exit code: 0
 Wall time: [0-9]+(?:\.[0-9]+)? seconds
 Output:
+Total output lines: \d+
+
 1
 2
 3
@@ -459,9 +461,9 @@ Output:
 5
 6
 .*
-\[…137224 tokens truncated…]
+…137224 tokens truncated…\n96668\n96669
 .*
-$"#;
+$";
 
     assert_regex_match(truncated_pattern, output);
 
