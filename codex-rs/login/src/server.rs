@@ -810,7 +810,7 @@ mod tests {
         restore_env(CODEX_CA_CERT_ENV, codex_env_before);
         restore_env(SSL_CERT_FILE_ENV, ssl_env_before);
 
-        assert!(client.is_ok());
+        assert!(client.is_ok(), "Failed to build client: {:?}", client.err());
     }
 
     #[serial(login_cert_env)]
@@ -828,7 +828,7 @@ mod tests {
         restore_env(CODEX_CA_CERT_ENV, codex_env_before);
         restore_env(SSL_CERT_FILE_ENV, ssl_env_before);
 
-        assert!(client.is_ok());
+        assert!(client.is_ok(), "Failed to build client: {:?}", client.err());
     }
 
     #[serial(login_cert_env)]
