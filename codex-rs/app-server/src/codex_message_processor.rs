@@ -91,6 +91,8 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInfoResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_app_server_protocol::UserSavedConfig;
+use codex_app_server_protocol::WindowsWorldWritableWarningNotification;
+use codex_app_server_protocol::build_turns_from_event_msgs;
 use codex_backend_client::Client as BackendClient;
 use codex_core::AuthManager;
 use codex_core::CodexConversation;
@@ -1238,7 +1240,7 @@ impl CodexMessageProcessor {
         let overrides = ConfigOverrides {
             model,
             config_profile: profile,
-            cwd: cwd.map(PathBuf::from),
+            cwd: cwd.clone().map(PathBuf::from),
             approval_policy,
             sandbox_mode,
             model_provider,
@@ -1253,7 +1255,7 @@ impl CodexMessageProcessor {
         // Persist windows sandbox feature.
         // TODO: persist default config in general.
         let mut cli_overrides = cli_overrides.unwrap_or_default();
-        if cfg!(target_os = "windows") && self.config.features.enabled(Feature::WindowsSandbox) {
+        if cfg!(windows) && self.config.features.enabled(Feature::WindowsSandbox) {
             cli_overrides.insert(
                 "features.enable_experimental_windows_sandbox".to_string(),
                 serde_json::json!(true),
@@ -1272,6 +1274,10 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        if cfg!(windows) && config.features.enabled(Feature::WindowsSandbox) {
+            self.handle_windows_world_writable_warning(config.cwd.clone())
+                .await;
+        }
 
         match self.conversation_manager.new_conversation(config).await {
             Ok(conversation_id) => {
@@ -1652,6 +1658,11 @@ impl CodexMessageProcessor {
                 session_configured,
                 ..
             }) => {
+                let SessionConfiguredEvent {
+                    rollout_path,
+                    initial_messages,
+                    ..
+                } = session_configured;
                 // Auto-attach a conversation listener when resuming a thread.
                 if let Err(err) = self
                     .attach_conversation_listener(conversation_id, false, ApiVersion::V2)
@@ -1664,8 +1675,8 @@ impl CodexMessageProcessor {
                     );
                 }
 
-                let thread = match read_summary_from_rollout(
-                    session_configured.rollout_path.as_path(),
+                let mut thread = match read_summary_from_rollout(
+                    rollout_path.as_path(),
                     fallback_model_provider.as_str(),
                 )
                 .await
@@ -1676,13 +1687,17 @@ impl CodexMessageProcessor {
                             request_id,
                             format!(
                                 "failed to load rollout `{}` for conversation {conversation_id}: {err}",
-                                session_configured.rollout_path.display()
+                                rollout_path.display()
                             ),
                         )
                         .await;
                         return;
                     }
                 };
+                thread.turns = initial_messages
+                    .as_deref()
+                    .map_or_else(Vec::new, build_turns_from_event_msgs);
+
                 let response = ThreadResumeResponse {
                     thread,
                     model: session_configured.model,
@@ -1692,6 +1707,7 @@ impl CodexMessageProcessor {
                     sandbox: session_configured.sandbox_policy.into(),
                     reasoning_effort: session_configured.reasoning_effort,
                 };
+
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(err) => {
@@ -1942,6 +1958,15 @@ impl CodexMessageProcessor {
                     include_apply_patch_tool,
                 } = overrides;
 
+                // Persist windows sandbox feature.
+                let mut cli_overrides = cli_overrides.unwrap_or_default();
+                if cfg!(windows) && self.config.features.enabled(Feature::WindowsSandbox) {
+                    cli_overrides.insert(
+                        "features.enable_experimental_windows_sandbox".to_string(),
+                        serde_json::json!(true),
+                    );
+                }
+
                 let overrides = ConfigOverrides {
                     model,
                     config_profile: profile,
@@ -1957,7 +1982,7 @@ impl CodexMessageProcessor {
                     ..Default::default()
                 };
 
-                derive_config_from_params(overrides, cli_overrides).await
+                derive_config_from_params(overrides, Some(cli_overrides)).await
             }
             None => Ok(self.config.as_ref().clone()),
         };
@@ -1972,6 +1997,10 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        if cfg!(windows) && config.features.enabled(Feature::WindowsSandbox) {
+            self.handle_windows_world_writable_warning(config.cwd.clone())
+                .await;
+        }
 
         let conversation_history = if let Some(path) = path {
             match RolloutRecorder::get_rollout_history(&path).await {
@@ -2831,6 +2860,53 @@ impl CodexMessageProcessor {
             Err(_) => None,
         }
     }
+
+    /// On Windows, when using the experimental sandbox, we need to warn the user about world-writable directories.
+    async fn handle_windows_world_writable_warning(&self, cwd: PathBuf) {
+        if !cfg!(windows) {
+            return;
+        }
+
+        if !self.config.features.enabled(Feature::WindowsSandbox) {
+            return;
+        }
+
+        if !matches!(
+            self.config.sandbox_policy,
+            codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
+                | codex_protocol::protocol::SandboxPolicy::ReadOnly
+        ) {
+            return;
+        }
+
+        if self
+            .config
+            .notices
+            .hide_world_writable_warning
+            .unwrap_or(false)
+        {
+            return;
+        }
+
+        // This function is stubbed out to return None on non-Windows platforms
+        if let Some((sample_paths, extra_count, failed_scan)) =
+            codex_windows_sandbox::world_writable_warning_details(
+                self.config.codex_home.as_path(),
+                cwd,
+            )
+        {
+            tracing::warn!("world writable warning: {sample_paths:?} {extra_count} {failed_scan}");
+            self.outgoing
+                .send_server_notification(ServerNotification::WindowsWorldWritableWarning(
+                    WindowsWorldWritableWarningNotification {
+                        sample_paths,
+                        extra_count,
+                        failed_scan,
+                    },
+                ))
+                .await;
+        }
+    }
 }
 
 async fn derive_config_from_params(
@@ -2984,6 +3060,7 @@ fn summary_to_thread(summary: ConversationSummary) -> Thread {
         model_provider,
         created_at: created_at.map(|dt| dt.timestamp()).unwrap_or(0),
         path,
+        turns: Vec::new(),
     }
 }
 

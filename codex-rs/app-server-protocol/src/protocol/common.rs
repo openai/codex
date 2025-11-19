@@ -531,7 +531,7 @@ mod tests {
         let request = ClientRequest::NewConversation {
             request_id: RequestId::Integer(42),
             params: v1::NewConversationParams {
-                model: Some("arcticfox".to_string()),
+                model: Some("gpt-5.1-codex-max".to_string()),
                 model_provider: None,
                 profile: None,
                 cwd: None,
@@ -549,7 +549,7 @@ mod tests {
                 "method": "newConversation",
                 "id": 42,
                 "params": {
-                    "model": "arcticfox",
+                    "model": "gpt-5.1-codex-max",
                     "modelProvider": null,
                     "profile": null,
                     "cwd": null,

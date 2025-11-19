@@ -66,6 +66,7 @@ use crate::context_manager::ContextManager;
 use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
+use crate::error::http_status_code_value;
 #[cfg(test)]
 use crate::exec::StreamOutput;
 use crate::mcp::auth::compute_auth_statuses;
@@ -79,7 +80,6 @@ use crate::protocol::ApplyPatchApprovalRequestEvent;
 use crate::protocol::AskForApproval;
 use crate::protocol::BackgroundEventEvent;
 use crate::protocol::DeprecationNoticeEvent;
-use crate::protocol::ErrorEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecApprovalRequestEvent;
@@ -136,6 +136,7 @@ use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
 use codex_utils_tokenizer::warm_model_cache;
 use std::path::Path;
+use reqwest::StatusCode;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -1252,9 +1253,11 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         message: impl Into<String>,
+        http_status_code: Option<StatusCode>,
     ) {
         let event = EventMsg::StreamError(StreamErrorEvent {
             message: message.into(),
+            http_status_code: http_status_code_value(http_status_code),
         });
         self.send_event(turn_context, event).await;
     }
@@ -1779,6 +1782,7 @@ mod handlers {
                 id: sub_id.clone(),
                 msg: EventMsg::Error(ErrorEvent {
                     message: "Failed to shutdown rollout recorder".to_string(),
+                    http_status_code: None,
                 }),
             };
             sess.send_event_raw(event).await;
@@ -2032,10 +2036,8 @@ pub(crate) async fn run_task(
             }
             Err(e) => {
                 info!("Turn error: {e:#}");
-                let event = EventMsg::Error(ErrorEvent {
-                    message: e.to_string(),
-                });
-                sess.send_event(&turn_context, event).await;
+                sess.send_event(&turn_context, EventMsg::Error(e.to_error_event(None)))
+                    .await;
                 // let the user continue the conversation
                 break;
             }
@@ -2159,6 +2161,7 @@ async fn run_turn(
                     sess.notify_stream_error(
                         &turn_context,
                         format!("Reconnecting... {retries}/{max_retries}"),
+                        e.http_status_code(),
                     )
                     .await;
 

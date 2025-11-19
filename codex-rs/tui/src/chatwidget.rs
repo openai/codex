@@ -1655,7 +1655,7 @@ impl ChatWidget {
                 self.on_rate_limit_snapshot(ev.rate_limits);
             }
             EventMsg::Warning(WarningEvent { message }) => self.on_warning(message),
-            EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
+            EventMsg::Error(ErrorEvent { message, .. }) => self.on_error(message),
             EventMsg::McpStartupUpdate(ev) => self.on_mcp_startup_update(ev),
             EventMsg::McpStartupComplete(ev) => self.on_mcp_startup_complete(ev),
             EventMsg::SaveSessionResponse(ev) => {
@@ -1704,7 +1704,9 @@ impl ChatWidget {
             }
             EventMsg::UndoStarted(ev) => self.on_undo_started(ev),
             EventMsg::UndoCompleted(ev) => self.on_undo_completed(ev),
-            EventMsg::StreamError(StreamErrorEvent { message }) => self.on_stream_error(message),
+            EventMsg::StreamError(StreamErrorEvent { message, .. }) => {
+                self.on_stream_error(message)
+            }
             EventMsg::UserMessage(ev) => {
                 if from_replay {
                     self.on_user_message_event(ev);
@@ -2064,8 +2066,8 @@ impl ChatWidget {
             let effort_label = Self::reasoning_effort_label(effort);
             format!("⚠ {effort_label} reasoning effort can quickly consume Plus plan rate limits.")
         });
-        let warn_for_model =
-            preset.model.starts_with("gpt-5.1-codex") || preset.model.starts_with("arcticfox");
+        let warn_for_model = preset.model.starts_with("gpt-5.1-codex")
+            || preset.model.starts_with("gpt-5.1-codex-max");
 
         struct EffortChoice {
             stored: Option<ReasoningEffortConfig>,
@@ -2334,7 +2336,11 @@ impl ChatWidget {
         {
             return None;
         }
-        codex_windows_sandbox::world_writable_warning_details(self.config.codex_home.as_path())
+        let cwd = match std::env::current_dir() {
+            Ok(cwd) => cwd,
+            Err(_) => return Some((Vec::new(), 0, true)),
+        };
+        codex_windows_sandbox::world_writable_warning_details(self.config.codex_home.as_path(), cwd)
     }
 
     #[cfg(not(target_os = "windows"))]
