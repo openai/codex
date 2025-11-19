@@ -207,6 +207,8 @@ pub async fn default_user_shell() -> Shell {
         get_user_shell_path()
             .and_then(|shell| detect_shell_type(&shell))
             .and_then(|shell_type| get_shell(shell_type, None))
+            .or_else(|| get_shell(ShellType::Zsh, None))
+            .or_else(|| get_shell(ShellType::Bash, None))
             .unwrap_or(Shell::Unknown)
     }
 }
