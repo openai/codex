@@ -1,5 +1,7 @@
 use crate::codex_message_processor::ApiVersion;
 use crate::codex_message_processor::PendingInterrupts;
+use crate::codex_message_processor::TurnSummary;
+use crate::codex_message_processor::TurnSummaryStore;
 use crate::outgoing_message::OutgoingMessageSender;
 use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
@@ -26,7 +28,11 @@ use codex_app_server_protocol::SandboxCommandAssessment as V2SandboxCommandAsses
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::Turn;
+use codex_app_server_protocol::TurnCompletedNotification;
+use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptResponse;
+use codex_app_server_protocol::TurnStatus;
 use codex_core::CodexConversation;
 use codex_core::parse_command::shlex_join;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
@@ -38,7 +44,9 @@ use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
+use codex_core::review_format::format_review_findings_block;
 use codex_protocol::ConversationId;
+use codex_protocol::protocol::ReviewOutputEvent;
 use std::convert::TryFrom;
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -52,10 +60,14 @@ pub(crate) async fn apply_bespoke_event_handling(
     conversation: Arc<CodexConversation>,
     outgoing: Arc<OutgoingMessageSender>,
     pending_interrupts: PendingInterrupts,
+    turn_summary_store: TurnSummaryStore,
     api_version: ApiVersion,
 ) {
     let Event { id: event_id, msg } = event;
     match msg {
+        EventMsg::TaskComplete(_ev) => {
+            handle_turn_complete(conversation_id, event_id, &outgoing, &turn_summary_store).await;
+        }
         EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id,
             changes,
@@ -189,6 +201,20 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .await;
             }
         }
+        EventMsg::Error(ev) => {
+            handle_error(conversation_id, ev.message, &turn_summary_store).await;
+        }
+        EventMsg::EnteredReviewMode(review_request) => {
+            let notification = ItemStartedNotification {
+                item: ThreadItem::CodeReview {
+                    id: event_id.clone(),
+                    review: review_request.user_facing_hint,
+                },
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemStarted(notification))
+                .await;
+        }
         EventMsg::ItemStarted(item_started_event) => {
             let item: ThreadItem = item_started_event.item.clone().into();
             let notification = ItemStartedNotification { item };
@@ -199,6 +225,21 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::ItemCompleted(item_completed_event) => {
             let item: ThreadItem = item_completed_event.item.clone().into();
             let notification = ItemCompletedNotification { item };
+            outgoing
+                .send_server_notification(ServerNotification::ItemCompleted(notification))
+                .await;
+        }
+        EventMsg::ExitedReviewMode(review_event) => {
+            let review_text = match review_event.review_output {
+                Some(output) => render_review_output_text(&output),
+                None => REVIEW_FALLBACK_MESSAGE.to_string(),
+            };
+            let notification = ItemCompletedNotification {
+                item: ThreadItem::CodeReview {
+                    id: event_id,
+                    review: review_text,
+                },
+            };
             outgoing
                 .send_server_notification(ServerNotification::ItemCompleted(notification))
                 .await;
@@ -298,10 +339,77 @@ pub(crate) async fn apply_bespoke_event_handling(
                     }
                 }
             }
+
+            handle_turn_interrupted(conversation_id, event_id, &outgoing, &turn_summary_store)
+                .await;
         }
 
         _ => {}
     }
+}
+
+async fn emit_turn_completed_with_status(
+    event_id: String,
+    status: TurnStatus,
+    outgoing: &OutgoingMessageSender,
+) {
+    let notification = TurnCompletedNotification {
+        turn: Turn {
+            id: event_id,
+            items: vec![],
+            status,
+        },
+    };
+    outgoing
+        .send_server_notification(ServerNotification::TurnCompleted(notification))
+        .await;
+}
+
+async fn find_and_remove_turn_summary(
+    conversation_id: ConversationId,
+    turn_summary_store: &TurnSummaryStore,
+) -> TurnSummary {
+    let mut map = turn_summary_store.lock().await;
+    map.remove(&conversation_id).unwrap_or_default()
+}
+
+async fn handle_turn_complete(
+    conversation_id: ConversationId,
+    event_id: String,
+    outgoing: &OutgoingMessageSender,
+    turn_summary_store: &TurnSummaryStore,
+) {
+    let turn_summary = find_and_remove_turn_summary(conversation_id, turn_summary_store).await;
+
+    let status = if let Some(message) = turn_summary.last_error_message {
+        TurnStatus::Failed {
+            error: TurnError { message },
+        }
+    } else {
+        TurnStatus::Completed
+    };
+
+    emit_turn_completed_with_status(event_id, status, outgoing).await;
+}
+
+async fn handle_turn_interrupted(
+    conversation_id: ConversationId,
+    event_id: String,
+    outgoing: &OutgoingMessageSender,
+    turn_summary_store: &TurnSummaryStore,
+) {
+    find_and_remove_turn_summary(conversation_id, turn_summary_store).await;
+
+    emit_turn_completed_with_status(event_id, TurnStatus::Interrupted, outgoing).await;
+}
+
+async fn handle_error(
+    conversation_id: ConversationId,
+    message: String,
+    turn_summary_store: &TurnSummaryStore,
+) {
+    let mut map = turn_summary_store.lock().await;
+    map.entry(conversation_id).or_default().last_error_message = Some(message);
 }
 
 async fn on_patch_approval_response(
@@ -379,6 +487,28 @@ async fn on_exec_approval_response(
         .await
     {
         error!("failed to submit ExecApproval: {err}");
+    }
+}
+
+const REVIEW_FALLBACK_MESSAGE: &str = "Reviewer failed to output a response.";
+
+fn render_review_output_text(output: &ReviewOutputEvent) -> String {
+    let mut sections = Vec::new();
+    let explanation = output.overall_explanation.trim();
+    if !explanation.is_empty() {
+        sections.push(explanation.to_string());
+    }
+    if !output.findings.is_empty() {
+        let findings = format_review_findings_block(&output.findings, None);
+        let trimmed = findings.trim();
+        if !trimmed.is_empty() {
+            sections.push(trimmed.to_string());
+        }
+    }
+    if sections.is_empty() {
+        REVIEW_FALLBACK_MESSAGE.to_string()
+    } else {
+        sections.join("\n\n")
     }
 }
 
@@ -486,13 +616,140 @@ async fn construct_mcp_tool_call_end_notification(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CHANNEL_CAPACITY;
+    use crate::outgoing_message::OutgoingMessage;
+    use crate::outgoing_message::OutgoingMessageSender;
+    use anyhow::Result;
+    use anyhow::anyhow;
+    use anyhow::bail;
     use codex_core::protocol::McpInvocation;
     use mcp_types::CallToolResult;
     use mcp_types::ContentBlock;
     use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
     use serde_json::Value as JsonValue;
+    use std::collections::HashMap;
     use std::time::Duration;
+    use tokio::sync::Mutex;
+    use tokio::sync::mpsc;
+
+    fn new_turn_summary_store() -> TurnSummaryStore {
+        Arc::new(Mutex::new(HashMap::new()))
+    }
+
+    #[tokio::test]
+    async fn test_handle_error_records_message() -> Result<()> {
+        let conversation_id = ConversationId::new();
+        let turn_summary_store = new_turn_summary_store();
+
+        handle_error(conversation_id, "boom".to_string(), &turn_summary_store).await;
+
+        let turn_summary = find_and_remove_turn_summary(conversation_id, &turn_summary_store).await;
+        assert_eq!(turn_summary.last_error_message, Some("boom".to_string()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_turn_complete_emits_completed_without_error() -> Result<()> {
+        let conversation_id = ConversationId::new();
+        let event_id = "complete1".to_string();
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let turn_summary_store = new_turn_summary_store();
+
+        handle_turn_complete(
+            conversation_id,
+            event_id.clone(),
+            &outgoing,
+            &turn_summary_store,
+        )
+        .await;
+
+        let msg = rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("should send one notification"))?;
+        match msg {
+            OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
+                assert_eq!(n.turn.id, event_id);
+                assert_eq!(n.turn.status, TurnStatus::Completed);
+            }
+            other => bail!("unexpected message: {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "no extra messages expected");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_turn_interrupted_emits_interrupted_with_error() -> Result<()> {
+        let conversation_id = ConversationId::new();
+        let event_id = "interrupt1".to_string();
+        let turn_summary_store = new_turn_summary_store();
+        handle_error(conversation_id, "oops".to_string(), &turn_summary_store).await;
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+
+        handle_turn_interrupted(
+            conversation_id,
+            event_id.clone(),
+            &outgoing,
+            &turn_summary_store,
+        )
+        .await;
+
+        let msg = rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("should send one notification"))?;
+        match msg {
+            OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
+                assert_eq!(n.turn.id, event_id);
+                assert_eq!(n.turn.status, TurnStatus::Interrupted);
+            }
+            other => bail!("unexpected message: {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "no extra messages expected");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_turn_complete_emits_failed_with_error() -> Result<()> {
+        let conversation_id = ConversationId::new();
+        let event_id = "complete_err1".to_string();
+        let turn_summary_store = new_turn_summary_store();
+        handle_error(conversation_id, "bad".to_string(), &turn_summary_store).await;
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+
+        handle_turn_complete(
+            conversation_id,
+            event_id.clone(),
+            &outgoing,
+            &turn_summary_store,
+        )
+        .await;
+
+        let msg = rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("should send one notification"))?;
+        match msg {
+            OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
+                assert_eq!(n.turn.id, event_id);
+                assert_eq!(
+                    n.turn.status,
+                    TurnStatus::Failed {
+                        error: TurnError {
+                            message: "bad".to_string(),
+                        }
+                    }
+                );
+            }
+            other => bail!("unexpected message: {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "no extra messages expected");
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_construct_mcp_tool_call_begin_notification_with_args() {
@@ -520,6 +777,105 @@ mod tests {
         };
 
         assert_eq!(notification, expected);
+    }
+
+    #[tokio::test]
+    async fn test_handle_turn_complete_emits_error_multiple_turns() -> Result<()> {
+        // Conversation A will have two turns; Conversation B will have one turn.
+        let conversation_a = ConversationId::new();
+        let conversation_b = ConversationId::new();
+        let turn_summary_store = new_turn_summary_store();
+
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+
+        // Turn 1 on conversation A
+        let a_turn1 = "a_turn1".to_string();
+        handle_error(conversation_a, "a1".to_string(), &turn_summary_store).await;
+        handle_turn_complete(
+            conversation_a,
+            a_turn1.clone(),
+            &outgoing,
+            &turn_summary_store,
+        )
+        .await;
+
+        // Turn 1 on conversation B
+        let b_turn1 = "b_turn1".to_string();
+        handle_error(conversation_b, "b1".to_string(), &turn_summary_store).await;
+        handle_turn_complete(
+            conversation_b,
+            b_turn1.clone(),
+            &outgoing,
+            &turn_summary_store,
+        )
+        .await;
+
+        // Turn 2 on conversation A
+        let a_turn2 = "a_turn2".to_string();
+        handle_turn_complete(
+            conversation_a,
+            a_turn2.clone(),
+            &outgoing,
+            &turn_summary_store,
+        )
+        .await;
+
+        // Verify: A turn 1
+        let msg = rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("should send first notification"))?;
+        match msg {
+            OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
+                assert_eq!(n.turn.id, a_turn1);
+                assert_eq!(
+                    n.turn.status,
+                    TurnStatus::Failed {
+                        error: TurnError {
+                            message: "a1".to_string(),
+                        }
+                    }
+                );
+            }
+            other => bail!("unexpected message: {other:?}"),
+        }
+
+        // Verify: B turn 1
+        let msg = rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("should send second notification"))?;
+        match msg {
+            OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
+                assert_eq!(n.turn.id, b_turn1);
+                assert_eq!(
+                    n.turn.status,
+                    TurnStatus::Failed {
+                        error: TurnError {
+                            message: "b1".to_string(),
+                        }
+                    }
+                );
+            }
+            other => bail!("unexpected message: {other:?}"),
+        }
+
+        // Verify: A turn 2
+        let msg = rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("should send third notification"))?;
+        match msg {
+            OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
+                assert_eq!(n.turn.id, a_turn2);
+                assert_eq!(n.turn.status, TurnStatus::Completed);
+            }
+            other => bail!("unexpected message: {other:?}"),
+        }
+
+        assert!(rx.try_recv().is_err(), "no extra messages expected");
+        Ok(())
     }
 
     #[tokio::test]

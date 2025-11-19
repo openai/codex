@@ -60,6 +60,8 @@ use codex_app_server_protocol::RemoveConversationSubscriptionResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ResumeConversationParams;
 use codex_app_server_protocol::ResumeConversationResponse;
+use codex_app_server_protocol::ReviewStartParams;
+use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserMessageResponse;
@@ -115,6 +117,7 @@ use codex_core::git_info::git_diff_to_remote;
 use codex_core::parse_cursor;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
+use codex_core::protocol::ReviewRequest;
 use codex_core::read_head_for_summary;
 use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
@@ -151,6 +154,14 @@ use uuid::Uuid;
 type PendingInterruptQueue = Vec<(RequestId, ApiVersion)>;
 pub(crate) type PendingInterrupts = Arc<Mutex<HashMap<ConversationId, PendingInterruptQueue>>>;
 
+/// Per-conversation accumulation of the latest states e.g. error message while a turn runs.
+#[derive(Default, Clone)]
+pub(crate) struct TurnSummary {
+    pub(crate) last_error_message: Option<String>,
+}
+
+pub(crate) type TurnSummaryStore = Arc<Mutex<HashMap<ConversationId, TurnSummary>>>;
+
 // Duration before a ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 struct ActiveLogin {
@@ -175,6 +186,7 @@ pub(crate) struct CodexMessageProcessor {
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
     pending_interrupts: PendingInterrupts,
+    turn_summary_store: TurnSummaryStore,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     feedback: CodexFeedback,
 }
@@ -227,8 +239,94 @@ impl CodexMessageProcessor {
             conversation_listeners: HashMap::new(),
             active_login: Arc::new(Mutex::new(None)),
             pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
+            turn_summary_store: Arc::new(Mutex::new(HashMap::new())),
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
             feedback,
+        }
+    }
+
+    fn review_request_from_target(
+        target: ReviewTarget,
+        append_to_original_thread: bool,
+    ) -> Result<(ReviewRequest, String), JSONRPCErrorError> {
+        fn invalid_request(message: String) -> JSONRPCErrorError {
+            JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message,
+                data: None,
+            }
+        }
+
+        match target {
+            // TODO(jif) those messages will be extracted in a follow-up PR.
+            ReviewTarget::UncommittedChanges => Ok((
+                ReviewRequest {
+                    prompt: "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.".to_string(),
+                    user_facing_hint: "current changes".to_string(),
+                    append_to_original_thread,
+                },
+                "Review uncommitted changes".to_string(),
+            )),
+            ReviewTarget::BaseBranch { branch } => {
+                let branch = branch.trim().to_string();
+                if branch.is_empty() {
+                    return Err(invalid_request("branch must not be empty".to_string()));
+                }
+                let prompt = format!("Review the code changes against the base branch '{branch}'. Start by finding the merge diff between the current branch and {branch}'s upstream e.g. (`git merge-base HEAD \"$(git rev-parse --abbrev-ref \"{branch}@{{upstream}}\")\"`), then run `git diff` against that SHA to see what changes we would merge into the {branch} branch. Provide prioritized, actionable findings.");
+                let hint = format!("changes against '{branch}'");
+                let display = format!("Review changes against base branch '{branch}'");
+                Ok((
+                    ReviewRequest {
+                        prompt,
+                        user_facing_hint: hint,
+                        append_to_original_thread,
+                    },
+                    display,
+                ))
+            }
+            ReviewTarget::Commit { sha, title } => {
+                let sha = sha.trim().to_string();
+                if sha.is_empty() {
+                    return Err(invalid_request("sha must not be empty".to_string()));
+                }
+                let brief_title = title
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty());
+                let prompt = if let Some(title) = brief_title.clone() {
+                    format!("Review the code changes introduced by commit {sha} (\"{title}\"). Provide prioritized, actionable findings.")
+                } else {
+                    format!("Review the code changes introduced by commit {sha}. Provide prioritized, actionable findings.")
+                };
+                let short_sha = sha.chars().take(7).collect::<String>();
+                let hint = format!("commit {short_sha}");
+                let display = if let Some(title) = brief_title {
+                    format!("Review commit {short_sha}: {title}")
+                } else {
+                    format!("Review commit {short_sha}")
+                };
+                Ok((
+                    ReviewRequest {
+                        prompt,
+                        user_facing_hint: hint,
+                        append_to_original_thread,
+                    },
+                    display,
+                ))
+            }
+            ReviewTarget::Custom { instructions } => {
+                let trimmed = instructions.trim().to_string();
+                if trimmed.is_empty() {
+                    return Err(invalid_request("instructions must not be empty".to_string()));
+                }
+                Ok((
+                    ReviewRequest {
+                        prompt: trimmed.clone(),
+                        user_facing_hint: trimmed.clone(),
+                        append_to_original_thread,
+                    },
+                    trimmed,
+                ))
+            }
         }
     }
 
@@ -262,6 +360,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::TurnInterrupt { request_id, params } => {
                 self.turn_interrupt(request_id, params).await;
+            }
+            ClientRequest::ReviewStart { request_id, params } => {
+                self.review_start(request_id, params).await;
             }
             ClientRequest::NewConversation { request_id, params } => {
                 // Do not tokio::spawn() to process new_conversation()
@@ -2272,9 +2373,6 @@ impl CodexMessageProcessor {
             }
         };
 
-        // Keep a copy of v2 inputs for the notification payload.
-        let v2_inputs_for_notif = params.input.clone();
-
         // Map v2 input items to core input items.
         let mapped_items: Vec<CoreInputItem> = params
             .input
@@ -2314,12 +2412,8 @@ impl CodexMessageProcessor {
             Ok(turn_id) => {
                 let turn = Turn {
                     id: turn_id.clone(),
-                    items: vec![ThreadItem::UserMessage {
-                        id: turn_id,
-                        content: v2_inputs_for_notif,
-                    }],
+                    items: vec![],
                     status: TurnStatus::InProgress,
-                    error: None,
                 };
 
                 let response = TurnStartResponse { turn: turn.clone() };
@@ -2335,6 +2429,64 @@ impl CodexMessageProcessor {
                 let error = JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
                     message: format!("failed to start turn: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn review_start(&self, request_id: RequestId, params: ReviewStartParams) {
+        let ReviewStartParams {
+            thread_id,
+            target,
+            append_to_original_thread,
+        } = params;
+        let (_, conversation) = match self.conversation_from_thread_id(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let (review_request, display_text) =
+            match Self::review_request_from_target(target, append_to_original_thread) {
+                Ok(value) => value,
+                Err(err) => {
+                    self.outgoing.send_error(request_id, err).await;
+                    return;
+                }
+            };
+
+        let turn_id = conversation.submit(Op::Review { review_request }).await;
+
+        match turn_id {
+            Ok(turn_id) => {
+                let mut items = Vec::new();
+                if !display_text.is_empty() {
+                    items.push(ThreadItem::UserMessage {
+                        id: turn_id.clone(),
+                        content: vec![V2UserInput::Text { text: display_text }],
+                    });
+                }
+                let turn = Turn {
+                    id: turn_id.clone(),
+                    items,
+                    status: TurnStatus::InProgress,
+                };
+                let response = TurnStartResponse { turn: turn.clone() };
+                self.outgoing.send_response(request_id, response).await;
+
+                let notif = TurnStartedNotification { turn };
+                self.outgoing
+                    .send_server_notification(ServerNotification::TurnStarted(notif))
+                    .await;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to start review: {err}"),
                     data: None,
                 };
                 self.outgoing.send_error(request_id, error).await;
@@ -2441,6 +2593,7 @@ impl CodexMessageProcessor {
 
         let outgoing_for_task = self.outgoing.clone();
         let pending_interrupts = self.pending_interrupts.clone();
+        let turn_summary_store = self.turn_summary_store.clone();
         let api_version_for_task = api_version;
         tokio::spawn(async move {
             loop {
@@ -2497,6 +2650,7 @@ impl CodexMessageProcessor {
                             conversation.clone(),
                             outgoing_for_task.clone(),
                             pending_interrupts.clone(),
+                            turn_summary_store.clone(),
                             api_version_for_task,
                         )
                         .await;

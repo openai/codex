@@ -33,6 +33,7 @@ model_provider = "openai"
 # model_context_window = 128000       # tokens; default: auto for model
 # model_max_output_tokens = 8192      # tokens; default: auto for model
 # model_auto_compact_token_limit = 0  # disable/override auto; default: model family specific
+# tool_output_token_limit = 10000  # tokens stored per tool output; default: 10000 for gpt-5.1-codex
 
 ################################################################################
 # Reasoning & Verbosity (Responses API capable models)
@@ -367,5 +368,18 @@ exporter = "none"
 # exporter = { otlp-grpc = {
 #   endpoint = "https://otel.example.com:4317",
 #   headers = { "x-otlp-meta" = "abc123" }
+# }}
+
+# Example OTLP exporter with mutual TLS
+# [otel]
+# exporter = { otlp-http = {
+#   endpoint = "https://otel.example.com/v1/logs",
+#   protocol = "binary",
+#   headers = { "x-otlp-api-key" = "${OTLP_TOKEN}" },
+#   tls = {
+#     ca-certificate = "certs/otel-ca.pem",
+#     client-certificate = "/etc/codex/certs/client.pem",
+#     client-private-key = "/etc/codex/certs/client-key.pem",
+#   }
 # }}
 ```
