@@ -191,22 +191,19 @@ async fn summarize_context_three_requests_and_instructions() {
     let body2_str = body2.to_string();
     let input2 = body2.get("input").and_then(|v| v.as_array()).unwrap();
     let has_compact_prompt = body_contains_text(&body2_str, SUMMARIZATION_PROMPT);
-    if has_compact_prompt {
-        // The last item is the user message created from the injected input.
-        let last2 = input2.last().unwrap();
-        assert_eq!(last2.get("type").unwrap().as_str().unwrap(), "message");
-        assert_eq!(last2.get("role").unwrap().as_str().unwrap(), "user");
-        let text2 = last2["content"][0]["text"].as_str().unwrap();
-        assert_eq!(
-            text2, SUMMARIZATION_PROMPT,
-            "expected summarize trigger, got `{text2}`"
-        );
-    } else {
-        assert!(
-            !has_compact_prompt,
-            "compaction request should not unexpectedly include the summarize trigger"
-        );
-    }
+    assert!(
+        has_compact_prompt,
+        "compaction request should include the summarize trigger"
+    );
+    // The last item is the user message created from the injected input.
+    let last2 = input2.last().unwrap();
+    assert_eq!(last2.get("type").unwrap().as_str().unwrap(), "message");
+    assert_eq!(last2.get("role").unwrap().as_str().unwrap(), "user");
+    let text2 = last2["content"][0]["text"].as_str().unwrap();
+    assert_eq!(
+        text2, SUMMARIZATION_PROMPT,
+        "expected summarize trigger, got `{text2}`"
+    );
 
     // Third request must contain the refreshed instructions, compacted user history, and new user message.
     let input3 = body3.get("input").and_then(|v| v.as_array()).unwrap();

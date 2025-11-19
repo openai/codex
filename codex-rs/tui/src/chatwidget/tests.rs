@@ -58,6 +58,11 @@ use tempfile::tempdir;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::unbounded_channel;
 
+#[cfg(target_os = "windows")]
+fn set_windows_sandbox_enabled(enabled: bool) {
+    codex_core::set_windows_sandbox_enabled(enabled);
+}
+
 fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
     Config::load_from_base_config_with_overrides(
@@ -76,6 +81,7 @@ fn snapshot(percent: f64) -> RateLimitSnapshot {
             resets_at: None,
         }),
         secondary: None,
+        credits: None,
     }
 }
 
@@ -88,6 +94,10 @@ fn resumed_initial_messages_render_history() {
     let configured = codex_core::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::ReadOnly,
+        cwd: PathBuf::from("/home/user/project"),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
@@ -140,6 +150,7 @@ fn entered_review_mode_uses_request_hint() {
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
             prompt: "Review the latest changes".to_string(),
             user_facing_hint: "feature branch".to_string(),
+            append_to_original_thread: true,
         }),
     });
 
@@ -159,6 +170,7 @@ fn entered_review_mode_defaults_to_current_changes_banner() {
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
             prompt: "Review the current changes".to_string(),
             user_facing_hint: "current changes".to_string(),
+            append_to_original_thread: true,
         }),
     });
 
@@ -1457,28 +1469,6 @@ fn approvals_selection_popup_snapshot() {
 }
 
 #[test]
-fn approvals_popup_includes_wsl_note_for_auto_mode() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
-
-    if cfg!(target_os = "windows") {
-        chat.config.forced_auto_mode_downgraded_on_windows = true;
-    }
-    chat.open_approvals_popup();
-
-    let popup = render_bottom_popup(&chat, 80);
-    assert_eq!(
-        popup.contains("Requires Windows Subsystem for Linux (WSL)"),
-        cfg!(target_os = "windows"),
-        "expected auto preset description to mention WSL requirement only on Windows, popup: {popup}"
-    );
-    assert_eq!(
-        popup.contains("Codex forced your settings back to Read Only on this Windows machine."),
-        cfg!(target_os = "windows") && chat.config.forced_auto_mode_downgraded_on_windows,
-        "expected downgrade notice only when auto mode is forced off on Windows, popup: {popup}"
-    );
-}
-
-#[test]
 fn full_access_confirmation_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
@@ -1494,33 +1484,100 @@ fn full_access_confirmation_popup_snapshot() {
 
 #[cfg(target_os = "windows")]
 #[test]
-fn windows_auto_mode_instructions_popup_lists_install_steps() {
+fn windows_auto_mode_prompt_requests_enabling_sandbox_feature() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
-    chat.open_windows_auto_mode_instructions();
+    let preset = builtin_approval_presets()
+        .into_iter()
+        .find(|preset| preset.id == "auto")
+        .expect("auto preset");
+    chat.open_windows_sandbox_enable_prompt(preset);
 
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        popup.contains("wsl --install"),
-        "expected WSL instructions popup to include install command, popup: {popup}"
+        popup.contains("Agent mode on Windows uses an experimental sandbox"),
+        "expected auto mode prompt to mention enabling the sandbox feature, popup: {popup}"
     );
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn startup_prompts_for_windows_sandbox_when_agent_requested() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    set_windows_sandbox_enabled(false);
+    chat.config.forced_auto_mode_downgraded_on_windows = true;
+
+    chat.maybe_prompt_windows_sandbox_enable();
+
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup.contains("Agent mode on Windows uses an experimental sandbox"),
+        "expected startup prompt to explain sandbox: {popup}"
+    );
+    assert!(
+        popup.contains("Enable experimental sandbox"),
+        "expected startup prompt to offer enabling the sandbox: {popup}"
+    );
+
+    set_windows_sandbox_enabled(true);
 }
 
 #[test]
 fn model_reasoning_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
-    chat.config.model = "gpt-5.1-codex".to_string();
+    chat.config.model = "gpt-5.1-codex-max".to_string();
     chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::High);
 
     let preset = builtin_model_presets(None)
         .into_iter()
-        .find(|preset| preset.model == "gpt-5.1-codex")
-        .expect("gpt-5.1-codex preset");
+        .find(|preset| preset.model == "gpt-5.1-codex-max")
+        .expect("gpt-5.1-codex-max preset");
     chat.open_reasoning_popup(preset);
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("model_reasoning_selection_popup", popup);
+}
+
+#[test]
+fn model_reasoning_selection_popup_extra_high_warning_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.config.model = "gpt-5.1-codex-max".to_string();
+    chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::XHigh);
+
+    let preset = builtin_model_presets(None)
+        .into_iter()
+        .find(|preset| preset.model == "gpt-5.1-codex-max")
+        .expect("gpt-5.1-codex-max preset");
+    chat.open_reasoning_popup(preset);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("model_reasoning_selection_popup_extra_high_warning", popup);
+}
+
+#[test]
+fn reasoning_popup_shows_extra_high_with_space() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.config.model = "gpt-5.1-codex-max".to_string();
+
+    let preset = builtin_model_presets(None)
+        .into_iter()
+        .find(|preset| preset.model == "gpt-5.1-codex-max")
+        .expect("gpt-5.1-codex-max preset");
+    chat.open_reasoning_popup(preset);
+
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup.contains("Extra high"),
+        "expected popup to include 'Extra high'; popup: {popup}"
+    );
+    assert!(
+        !popup.contains("Extrahigh"),
+        "expected popup not to include 'Extrahigh'; popup: {popup}"
+    );
 }
 
 #[test]
@@ -1540,6 +1597,7 @@ fn single_reasoning_option_skips_selection() {
         supported_reasoning_efforts: &SINGLE_EFFORT,
         is_default: false,
         upgrade: None,
+        show_in_picker: true,
     };
     chat.open_reasoning_popup(preset);
 
@@ -2444,6 +2502,7 @@ fn stream_error_updates_status_indicator() {
         id: "sub-1".into(),
         msg: EventMsg::StreamError(StreamErrorEvent {
             message: msg.to_string(),
+            http_status_code: None,
         }),
     });
 

@@ -260,6 +260,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Stable,
         default_enabled: true,
     },
+    FeatureSpec {
+        id: Feature::ViewImageTool,
+        key: "view_image_tool",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
     // Unstable features.
     FeatureSpec {
         id: Feature::UnifiedExec,
@@ -286,12 +292,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::ViewImageTool,
-        key: "view_image_tool",
-        stage: Stage::Stable,
-        default_enabled: true,
-    },
-    FeatureSpec {
         id: Feature::WebSearchRequest,
         key: "web_search_request",
         stage: Stage::Stable,
@@ -313,7 +313,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::RemoteCompaction,
         key: "remote_compaction",
         stage: Stage::Experimental,
-        default_enabled: false,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::ParallelToolCalls,

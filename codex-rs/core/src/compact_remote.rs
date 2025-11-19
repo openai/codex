@@ -6,53 +6,39 @@ use crate::codex::TurnContext;
 use crate::error::Result as CodexResult;
 use crate::protocol::AgentMessageEvent;
 use crate::protocol::CompactedItem;
-use crate::protocol::ErrorEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::RolloutItem;
 use crate::protocol::TaskStartedEvent;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::user_input::UserInput;
 
-pub(crate) async fn run_remote_compact_task(
+pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    input: Vec<UserInput>,
-) -> Option<String> {
+) {
+    run_remote_compact_task_inner(&sess, &turn_context).await;
+}
+
+pub(crate) async fn run_remote_compact_task(sess: Arc<Session>, turn_context: Arc<TurnContext>) {
     let start_event = EventMsg::TaskStarted(TaskStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
     });
     sess.send_event(&turn_context, start_event).await;
 
-    match run_remote_compact_task_inner(&sess, &turn_context, input).await {
-        Ok(()) => {
-            let event = EventMsg::AgentMessage(AgentMessageEvent {
-                message: "Compact task completed".to_string(),
-            });
-            sess.send_event(&turn_context, event).await;
-        }
-        Err(err) => {
-            let event = EventMsg::Error(ErrorEvent {
-                message: err.to_string(),
-            });
-            sess.send_event(&turn_context, event).await;
-        }
-    }
-
-    None
+    run_remote_compact_task_inner(&sess, &turn_context).await;
 }
 
-async fn run_remote_compact_task_inner(
+async fn run_remote_compact_task_inner(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) {
+    if let Err(err) = run_remote_compact_task_inner_impl(sess, turn_context).await {
+        let event = err.to_error_event(Some("Error running remote compact task".to_string()));
+        sess.send_event(turn_context, EventMsg::Error(event)).await;
+    }
+}
+
+async fn run_remote_compact_task_inner_impl(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    input: Vec<UserInput>,
 ) -> CodexResult<()> {
     let mut history = sess.clone_history().await;
-    if !input.is_empty() {
-        let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
-        history.record_items(&[initial_input_for_turn.into()]);
-    }
-
     let prompt = Prompt {
         input: history.get_history_for_prompt(),
         tools: vec![],
@@ -77,15 +63,7 @@ async fn run_remote_compact_task_inner(
         new_history.extend(ghost_snapshots);
     }
     sess.replace_history(new_history.clone()).await;
-
-    if let Some(estimated_tokens) = sess
-        .clone_history()
-        .await
-        .estimate_token_count(turn_context.as_ref())
-    {
-        sess.override_last_token_usage_estimate(turn_context.as_ref(), estimated_tokens)
-            .await;
-    }
+    sess.recompute_token_usage(turn_context).await;
 
     let compacted_item = CompactedItem {
         message: String::new(),
@@ -93,5 +71,11 @@ async fn run_remote_compact_task_inner(
     };
     sess.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])
         .await;
+
+    let event = EventMsg::AgentMessage(AgentMessageEvent {
+        message: "Compact task completed".to_string(),
+    });
+    sess.send_event(turn_context, event).await;
+
     Ok(())
 }

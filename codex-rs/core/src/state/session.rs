@@ -7,6 +7,7 @@ use crate::context_manager::ContextManager;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
+use crate::truncate::TruncationPolicy;
 
 /// Persistent, session-scoped state previously stored directly on `Session`.
 pub(crate) struct SessionState {
@@ -18,20 +19,21 @@ pub(crate) struct SessionState {
 impl SessionState {
     /// Create a new session state mirroring previous `State::default()` semantics.
     pub(crate) fn new(session_configuration: SessionConfiguration) -> Self {
+        let history = ContextManager::new();
         Self {
             session_configuration,
-            history: ContextManager::new(),
+            history,
             latest_rate_limits: None,
         }
     }
 
     // History helpers
-    pub(crate) fn record_items<I>(&mut self, items: I)
+    pub(crate) fn record_items<I>(&mut self, items: I, policy: TruncationPolicy)
     where
         I: IntoIterator,
         I::Item: std::ops::Deref<Target = ResponseItem>,
     {
-        self.history.record_items(items)
+        self.history.record_items(items, policy);
     }
 
     pub(crate) fn clone_history(&self) -> ContextManager {

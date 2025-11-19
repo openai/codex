@@ -1121,7 +1121,8 @@ async fn token_count_includes_rate_limits_snapshot() {
                     "used_percent": 40.0,
                     "window_minutes": 60,
                     "resets_at": 1704074400
-                }
+                },
+                "credits": null
             }
         })
     );
@@ -1155,7 +1156,7 @@ async fn token_count_includes_rate_limits_snapshot() {
                     "reasoning_output_tokens": 0,
                     "total_tokens": 123
                 },
-                // Default model is gpt-5.1-codex in tests → 95% usable context window
+                // Default model is gpt-5.1-codex-max in tests → 95% usable context window
                 "model_context_window": 258400
             },
             "rate_limits": {
@@ -1168,7 +1169,8 @@ async fn token_count_includes_rate_limits_snapshot() {
                     "used_percent": 40.0,
                     "window_minutes": 60,
                     "resets_at": 1704074400
-                }
+                },
+                "credits": null
             }
         })
     );
@@ -1238,7 +1240,8 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
             "used_percent": 87.5,
             "window_minutes": 60,
             "resets_at": null
-        }
+        },
+        "credits": null
     });
 
     let submission_id = codex

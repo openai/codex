@@ -129,6 +129,10 @@ client_request_definitions! {
         params: v2::TurnInterruptParams,
         response: v2::TurnInterruptResponse,
     },
+    ReviewStart => "review/start" {
+        params: v2::ReviewStartParams,
+        response: v2::TurnStartResponse,
+    },
 
     ModelList => "model/list" {
         params: v2::ModelListParams,
@@ -490,6 +494,9 @@ server_notification_definitions! {
     ReasoningSummaryPartAdded => "item/reasoning/summaryPartAdded" (v2::ReasoningSummaryPartAddedNotification),
     ReasoningTextDelta => "item/reasoning/textDelta" (v2::ReasoningTextDeltaNotification),
 
+    /// Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.
+    WindowsWorldWritableWarning => "windows/worldWritableWarning" (v2::WindowsWorldWritableWarningNotification),
+
     #[serde(rename = "account/login/completed")]
     #[ts(rename = "account/login/completed")]
     #[strum(serialize = "account/login/completed")]
@@ -524,7 +531,7 @@ mod tests {
         let request = ClientRequest::NewConversation {
             request_id: RequestId::Integer(42),
             params: v1::NewConversationParams {
-                model: Some("gpt-5.1-codex".to_string()),
+                model: Some("gpt-5.1-codex-max".to_string()),
                 model_provider: None,
                 profile: None,
                 cwd: None,
@@ -542,7 +549,7 @@ mod tests {
                 "method": "newConversation",
                 "id": 42,
                 "params": {
-                    "model": "gpt-5.1-codex",
+                    "model": "gpt-5.1-codex-max",
                     "modelProvider": null,
                     "profile": null,
                     "cwd": null,
