@@ -12,6 +12,8 @@ use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
+use crate::leader_worker::CompletedAssignment;
+use crate::leader_worker::LeaderWorkerError;
 use crate::leader_worker::LeaderWorkerManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
@@ -84,9 +86,13 @@ use crate::protocol::DeprecationNoticeEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecApprovalRequestEvent;
+use crate::protocol::LeaderWorkerAggregationSummaryEvent;
+use crate::protocol::LeaderWorkerAssignmentResultEvent;
+use crate::protocol::LeaderWorkerAssignmentStatus;
 use crate::protocol::LeaderWorkerMode;
 use crate::protocol::LeaderWorkerSessionDescriptor;
 use crate::protocol::LeaderWorkerStatusEvent;
+use crate::protocol::LeaderWorkerWorkerState;
 use crate::protocol::Op;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::ReasoningContentDeltaEvent;
@@ -1340,6 +1346,113 @@ impl Session {
         &self.services.user_shell
     }
 
+    pub async fn leader_worker_register_worker(
+        &self,
+        worker_id: impl Into<String>,
+    ) -> Result<(), LeaderWorkerError> {
+        let worker_id = worker_id.into();
+        let mut manager = self.leader_worker.lock().await;
+        let result = manager.register_worker(worker_id);
+        let should_emit = result.is_ok();
+        drop(manager);
+        if should_emit {
+            self.emit_leader_worker_status().await;
+        }
+        result
+    }
+
+    pub async fn leader_worker_update_worker_state(
+        &self,
+        worker_id: &str,
+        state: LeaderWorkerWorkerState,
+        summary: Option<String>,
+    ) -> Result<(), LeaderWorkerError> {
+        let mut manager = self.leader_worker.lock().await;
+        let result = manager.update_worker_state(worker_id, state, summary);
+        let should_emit = result.is_ok();
+        drop(manager);
+        if should_emit {
+            self.emit_leader_worker_status().await;
+        }
+        result
+    }
+
+    pub async fn leader_worker_begin_assignment(
+        &self,
+        worker_id: &str,
+        subtask_id: &str,
+    ) -> Result<(), LeaderWorkerError> {
+        let mut manager = self.leader_worker.lock().await;
+        let result = manager.begin_assignment(worker_id, subtask_id);
+        let should_emit = result.is_ok();
+        drop(manager);
+        if should_emit {
+            self.emit_leader_worker_status().await;
+        }
+        result
+    }
+
+    pub async fn leader_worker_finish_assignment(
+        &self,
+        worker_id: &str,
+        subtask_id: &str,
+    ) -> Result<(), LeaderWorkerError> {
+        let mut manager = self.leader_worker.lock().await;
+        let result = manager.finish_assignment(worker_id, subtask_id);
+        let should_emit = result.is_ok();
+        drop(manager);
+        if should_emit {
+            self.emit_leader_worker_status().await;
+        }
+        result
+    }
+
+    pub async fn leader_worker_complete_assignment(
+        &self,
+        worker_id: &str,
+        subtask_id: &str,
+        status: LeaderWorkerAssignmentStatus,
+        summary: Option<String>,
+        files_changed: Vec<String>,
+    ) -> Result<(), LeaderWorkerError> {
+        let mut manager = self.leader_worker.lock().await;
+        let completion =
+            manager.complete_assignment(worker_id, subtask_id, status, summary, files_changed);
+        let plan_complete = completion.is_ok() && manager.is_plan_complete();
+        let aggregation = if plan_complete {
+            Some(manager.aggregate_summary())
+        } else {
+            None
+        };
+        let result_event = completion
+            .as_ref()
+            .ok()
+            .and_then(|_| manager.latest_completed().map(completed_to_event));
+        drop(manager);
+
+        if let Some(event) = result_event {
+            self.send_event_raw(Event {
+                id: INITIAL_SUBMIT_ID.to_owned(),
+                msg: EventMsg::LeaderWorkerAssignmentResult(event),
+            })
+            .await;
+        }
+
+        if completion.is_ok() {
+            self.emit_leader_worker_status().await;
+        }
+
+        if let Some(summary) = aggregation {
+            self.send_event_raw(Event {
+                id: INITIAL_SUBMIT_ID.to_owned(),
+                msg: EventMsg::LeaderWorkerAggregationSummary(summary),
+            })
+            .await;
+        }
+
+        completion.map(|_| ())
+    }
+
     pub(crate) async fn plan_leader_worker_subtasks(&self, items: &[UserInput]) {
         if items.is_empty() {
             return;
@@ -1351,10 +1464,14 @@ impl Session {
         let request_text = flatten_user_inputs(items);
         if request_text.trim().is_empty() {
             manager.set_pending_subtasks(Vec::new());
+            manager.clear_assignments();
+            drop(manager);
+            self.emit_leader_worker_status().await;
             return;
         }
         let planned = manager.plan_subtasks_from_text(&request_text);
         manager.set_pending_subtasks(planned);
+        manager.clear_assignments();
         drop(manager);
         self.emit_leader_worker_status().await;
     }
@@ -2433,6 +2550,16 @@ fn flatten_user_inputs(items: &[UserInput]) -> String {
         }
     }
     buffer
+}
+
+fn completed_to_event(completed: &CompletedAssignment) -> LeaderWorkerAssignmentResultEvent {
+    LeaderWorkerAssignmentResultEvent {
+        worker_id: completed.worker_id.clone(),
+        subtask_id: completed.subtask_id.clone(),
+        status: completed.status,
+        summary: completed.summary.clone(),
+        files_changed: completed.files_changed.clone(),
+    }
 }
 
 use crate::features::Features;

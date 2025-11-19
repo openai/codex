@@ -283,6 +283,7 @@
         <div class="content">
             <div class="highlight-box">
                 <p><strong>Note:</strong> This leader–worker workflow narrative was implemented entirely by Codex CLI without human intervention and has not been tested. It is intended to communicate the concept rather than represent production-ready code.</p>
+                <p><em>Preview status:</em> The implementation behind the <code>[leader_worker]</code> flag only emits telemetry/events in current builds; it does not perform real multi-worker task execution. Expect breaking changes until the hardening phase concludes.</p>
             </div>
             <h2>Document Overview</h2>
             <p>This document describes a proposed <strong>leader–worker workflow</strong> for Codex CLI, enabling a single leader session to orchestrate multiple worker sessions for parallel software engineering tasks. It also outlines the implementation strategy, rollout plan, and supporting communications for the workflow.</p>
@@ -474,6 +475,7 @@ max_workers = 8
                 <li><input type="checkbox"> Failed workers are marked with ✗ and display error summary.</li>
                 <li><input type="checkbox"> User can expand individual worker to view detailed transcript.</li>
             </ul>
+            <p>The current scaffolding exposes <code>LeaderWorkerStatus</code> events containing pending subtasks, in-flight assignments, and worker states so future UX work can build the live dashboard described here.</p>
             
             <h3>Story 4: Result Aggregation and Presentation</h3>
             <div class="story-box">
@@ -490,6 +492,7 @@ max_workers = 8
                 <li><input type="checkbox"> If any worker fails, leader surfaces that failure prominently.</li>
                 <li><input type="checkbox"> User can review detailed logs/transcripts of individual workers if needed.</li>
             </ul>
+            <p>To support this story, Codex CLI now emits <code>LeaderWorkerAssignmentResult</code> events for each completed subtask plus a final <code>LeaderWorkerAggregationSummary</code> once all work is finished. Future UI code can subscribe to these events to render consolidated change summaries.</p>
             
             <h3>Story 5: View Individual Worker Session</h3>
             <div class="story-box">

@@ -1,9 +1,15 @@
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
 use codex_protocol::ConversationId;
+use tracing::warn;
 
 use crate::config::LeaderWorkerSettings;
+use crate::protocol::LeaderWorkerAggregationSummaryEvent;
+use crate::protocol::LeaderWorkerAssignmentResultEvent;
+use crate::protocol::LeaderWorkerAssignmentStatus;
+use crate::protocol::LeaderWorkerInFlightAssignment;
 use crate::protocol::LeaderWorkerMode;
 use crate::protocol::LeaderWorkerPendingSubtask;
 use crate::protocol::LeaderWorkerStatusEvent;
@@ -22,6 +28,10 @@ pub enum LeaderWorkerError {
     DuplicateWorker,
     #[error("worker not found")]
     WorkerNotFound,
+    #[error("subtask not found")]
+    SubtaskNotFound,
+    #[error("assignment not found")]
+    AssignmentNotFound,
 }
 
 #[derive(Debug, Clone)]
@@ -57,6 +67,8 @@ pub struct LeaderWorkerManager {
     worker_id: Option<String>,
     workers: HashMap<String, WorkerRecord>,
     pending_subtasks: Vec<PlannedSubtask>,
+    in_flight: Vec<LeaderWorkerInFlightAssignment>,
+    completed: Vec<CompletedAssignment>,
 }
 
 impl LeaderWorkerManager {
@@ -66,6 +78,11 @@ impl LeaderWorkerManager {
         } else {
             LeaderWorkerMode::Standard
         };
+        if settings.enabled {
+            warn!(
+                "leader-worker workflow enabled in preview mode; feature is not production ready"
+            );
+        }
         Self {
             settings,
             mode,
@@ -74,6 +91,8 @@ impl LeaderWorkerManager {
             worker_id: None,
             workers: HashMap::new(),
             pending_subtasks: Vec::new(),
+            in_flight: Vec::new(),
+            completed: Vec::new(),
         }
     }
 
@@ -171,6 +190,11 @@ impl LeaderWorkerManager {
             mode: self.mode,
             workers,
             pending_subtasks,
+            in_flight_assignments: if self.in_flight.is_empty() {
+                None
+            } else {
+                Some(self.in_flight.clone())
+            },
         }
     }
 
@@ -231,6 +255,125 @@ impl LeaderWorkerManager {
     pub fn pending_subtasks(&self) -> &[PlannedSubtask] {
         &self.pending_subtasks
     }
+
+    pub fn clear_assignments(&mut self) {
+        self.in_flight.clear();
+        self.completed.clear();
+        for record in self.workers.values_mut() {
+            record.active_paths.clear();
+        }
+    }
+
+    pub fn is_plan_complete(&self) -> bool {
+        self.pending_subtasks.is_empty() && self.in_flight.is_empty()
+    }
+
+    pub fn clear_assignments(&mut self) {
+        self.in_flight.clear();
+        for record in self.workers.values_mut() {
+            record.active_paths.clear();
+        }
+    }
+
+    pub fn begin_assignment(
+        &mut self,
+        worker_id: &str,
+        subtask_id: &str,
+    ) -> Result<(), LeaderWorkerError> {
+        if !self.settings.enabled {
+            return Err(LeaderWorkerError::Disabled);
+        }
+        if !self.workers.contains_key(worker_id) {
+            return Err(LeaderWorkerError::WorkerNotFound);
+        }
+        let idx = self
+            .pending_subtasks
+            .iter()
+            .position(|subtask| subtask.id == subtask_id)
+            .ok_or(LeaderWorkerError::SubtaskNotFound)?;
+        let subtask = self.pending_subtasks.remove(idx);
+        self.in_flight.push(LeaderWorkerInFlightAssignment {
+            worker_id: worker_id.to_string(),
+            subtask_id: subtask.id.clone(),
+            description: subtask.summary.clone(),
+            target_paths: subtask.target_paths.clone(),
+        });
+        if let Some(record) = self.workers.get_mut(worker_id) {
+            record
+                .active_paths
+                .extend(subtask.target_paths.iter().cloned());
+        }
+        Ok(())
+    }
+
+    pub fn finish_assignment(
+        &mut self,
+        worker_id: &str,
+        subtask_id: &str,
+    ) -> Result<(), LeaderWorkerError> {
+        if !self.settings.enabled {
+            return Err(LeaderWorkerError::Disabled);
+        }
+        if !self.workers.contains_key(worker_id) {
+            return Err(LeaderWorkerError::WorkerNotFound);
+        }
+        let before = self.in_flight.len();
+        self.in_flight.retain(|assignment| {
+            !(assignment.worker_id == worker_id && assignment.subtask_id == subtask_id)
+        });
+        if self.in_flight.len() == before {
+            return Err(LeaderWorkerError::AssignmentNotFound);
+        }
+        if let Some(record) = self.workers.get_mut(worker_id) {
+            record.active_paths.clear();
+        }
+        Ok(())
+    }
+
+    pub fn complete_assignment(
+        &mut self,
+        worker_id: &str,
+        subtask_id: &str,
+        status: LeaderWorkerAssignmentStatus,
+        summary: Option<String>,
+        files_changed: Vec<String>,
+    ) -> Result<CompletedAssignment, LeaderWorkerError> {
+        self.finish_assignment(worker_id, subtask_id)?;
+        let completed = CompletedAssignment {
+            worker_id: worker_id.to_string(),
+            subtask_id: subtask_id.to_string(),
+            status,
+            summary,
+            files_changed,
+        };
+        self.completed.push(completed.clone());
+        Ok(completed)
+    }
+
+    pub fn latest_completed(&self) -> Option<&CompletedAssignment> {
+        self.completed.last()
+    }
+
+    pub fn aggregate_summary(&self) -> LeaderWorkerAggregationSummaryEvent {
+        let mut files = BTreeSet::new();
+        let mut success = 0u32;
+        let mut failure = 0u32;
+        for completed in &self.completed {
+            match completed.status {
+                LeaderWorkerAssignmentStatus::Success => success += 1,
+                LeaderWorkerAssignmentStatus::Failure => failure += 1,
+                LeaderWorkerAssignmentStatus::Cancelled => {}
+            }
+            for path in &completed.files_changed {
+                files.insert(path.clone());
+            }
+        }
+        LeaderWorkerAggregationSummaryEvent {
+            success_count: success,
+            failure_count: failure,
+            files_changed: files.into_iter().collect(),
+        }
+    }
 }
 
 impl LeaderWorkerSettings {
@@ -239,6 +382,15 @@ impl LeaderWorkerSettings {
             .map(|value| LeaderWorkerSettings::sanitize_worker_count(value, self.max_workers))
             .unwrap_or(self.default_worker_count)
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct CompletedAssignment {
+    pub worker_id: String,
+    pub subtask_id: String,
+    pub status: LeaderWorkerAssignmentStatus,
+    pub summary: Option<String>,
+    pub files_changed: Vec<String>,
 }
 
 fn extract_path_hints(text: &str) -> Vec<String> {

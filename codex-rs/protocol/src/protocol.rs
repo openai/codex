@@ -481,6 +481,12 @@ pub enum EventMsg {
     /// Status update for the leader–worker workflow.
     LeaderWorkerStatus(LeaderWorkerStatusEvent),
 
+    /// Result of a worker finishing a subtask.
+    LeaderWorkerAssignmentResult(LeaderWorkerAssignmentResultEvent),
+
+    /// Aggregated summary emitted once all subtasks are processed.
+    LeaderWorkerAggregationSummary(LeaderWorkerAggregationSummaryEvent),
+
     /// Incremental MCP startup progress updates.
     McpStartupUpdate(McpStartupUpdateEvent),
 
@@ -1556,6 +1562,8 @@ pub struct LeaderWorkerStatusEvent {
     pub workers: Vec<LeaderWorkerWorkerStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pending_subtasks: Option<Vec<LeaderWorkerPendingSubtask>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub in_flight_assignments: Option<Vec<LeaderWorkerInFlightAssignment>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1573,6 +1581,14 @@ pub struct LeaderWorkerPendingSubtask {
     pub target_paths: Vec<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct LeaderWorkerInFlightAssignment {
+    pub worker_id: String,
+    pub subtask_id: String,
+    pub description: String,
+    pub target_paths: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS, Display)]
 #[serde(rename_all = "snake_case")]
 pub enum LeaderWorkerWorkerState {
@@ -1582,6 +1598,33 @@ pub enum LeaderWorkerWorkerState {
     Blocked,
     Error,
     Offline,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS, Display)]
+#[serde(rename_all = "snake_case")]
+pub enum LeaderWorkerAssignmentStatus {
+    Success,
+    Failure,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct LeaderWorkerAssignmentResultEvent {
+    pub worker_id: String,
+    pub subtask_id: String,
+    pub status: LeaderWorkerAssignmentStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files_changed: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct LeaderWorkerAggregationSummaryEvent {
+    pub success_count: u32,
+    pub failure_count: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files_changed: Vec<String>,
 }
 
 /// User's decision in response to an ExecApprovalRequest.
