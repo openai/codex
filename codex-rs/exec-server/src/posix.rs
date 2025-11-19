@@ -56,32 +56,26 @@
 //!   o<-----x
 //!
 use std::path::Path;
+use std::sync::Arc;
 
 use clap::Parser;
 use clap::Subcommand;
+use codex_execpolicy2::Decision;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::{self};
 
 use crate::posix::escalate_protocol::EscalateAction;
 use crate::posix::escalate_server::EscalateServer;
+use crate::posix::escalation_policy::EscalationPolicy;
+use crate::posix::mcp_exec_policy::ExecPolicyOutcome;
 
 mod escalate_client;
 mod escalate_protocol;
 mod escalate_server;
+mod escalation_policy;
 mod mcp;
+mod mcp_exec_policy;
 mod socket;
-
-fn dummy_exec_policy(file: &Path, argv: &[String], _workdir: &Path) -> EscalateAction {
-    // TODO: execpolicy
-    if file == Path::new("/opt/homebrew/bin/gh")
-        && let [_, arg1, arg2, ..] = argv
-        && arg1 == "issue"
-        && arg2 == "list"
-    {
-        return EscalateAction::Escalate;
-    }
-    EscalateAction::Run
-}
 
 #[derive(Parser)]
 #[command(version)]
@@ -135,7 +129,8 @@ pub async fn main() -> anyhow::Result<()> {
         }
         Some(Commands::ShellExec(args)) => {
             let bash_path = mcp::get_bash_path()?;
-            let escalate_server = EscalateServer::new(bash_path, dummy_exec_policy);
+            let escalate_server =
+                EscalateServer::new(bash_path, Arc::new(DummyEscalationPolicy {}));
             let result = escalate_server
                 .exec(
                     args.command.clone(),
@@ -159,6 +154,65 @@ pub async fn main() -> anyhow::Result<()> {
 
             service.waiting().await?;
             Ok(())
+        }
+    }
+}
+
+// TODO: replace with execpolicy2
+
+struct DummyEscalationPolicy;
+
+#[async_trait::async_trait]
+impl EscalationPolicy for DummyEscalationPolicy {
+    async fn determine_action(
+        &self,
+        file: &Path,
+        argv: &[String],
+        workdir: &Path,
+    ) -> Result<EscalateAction, rmcp::ErrorData> {
+        let outcome = dummy_exec_policy(file, argv, workdir);
+        let ExecPolicyOutcome {
+            decision,
+            run_with_escalated_permissions,
+        } = outcome;
+        let action = match decision {
+            Decision::Allow => {
+                if run_with_escalated_permissions {
+                    EscalateAction::Escalate
+                } else {
+                    EscalateAction::Run
+                }
+            }
+            Decision::Forbidden => EscalateAction::Deny {
+                reason: Some("Execution forbidden by policy".to_string()),
+            },
+            Decision::Prompt => EscalateAction::Deny {
+                reason: Some("Could not prompt user for permission".to_string()),
+            },
+        };
+        Ok(action)
+    }
+}
+
+fn dummy_exec_policy(file: &Path, argv: &[String], _workdir: &Path) -> ExecPolicyOutcome {
+    if file.ends_with("/git") {
+        ExecPolicyOutcome {
+            decision: Decision::Prompt,
+            run_with_escalated_permissions: false,
+        }
+    } else if file == Path::new("/opt/homebrew/bin/gh")
+        && let [_, arg1, arg2, ..] = argv
+        && arg1 == "issue"
+        && arg2 == "list"
+    {
+        ExecPolicyOutcome {
+            decision: Decision::Allow,
+            run_with_escalated_permissions: true,
+        }
+    } else {
+        ExecPolicyOutcome {
+            decision: Decision::Allow,
+            run_with_escalated_permissions: false,
         }
     }
 }
