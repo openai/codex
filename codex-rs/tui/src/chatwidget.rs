@@ -2369,11 +2369,8 @@ impl ChatWidget {
             ])
         } else {
             Line::from(vec![
-                "Some important directories on this system are world-writable. ".into(),
-                format!(
-                    "The Windows sandbox cannot protect writes to these locations in {mode_label}."
-                )
-                .fg(Color::Red),
+                "The Windows sandbox cannot protect writes to folders that are writable by Everyone.".into(),
+                "Consider removing write access for Everyone from the following folders:"
             ])
         };
         header_children.push(Box::new(
@@ -2383,7 +2380,6 @@ impl ChatWidget {
         if !sample_paths.is_empty() {
             // Show up to three examples and optionally an "and X more" line.
             let mut lines: Vec<Line> = Vec::new();
-            lines.push(Line::from("Examples:").bold());
             lines.push(Line::from(""));
             for p in &sample_paths {
                 lines.push(Line::from(format!("  - {p}")));
