@@ -93,6 +93,7 @@ pub async fn build_saved_session_entry(
     })
 }
 
+/// Insert or replace a saved session entry in `saved_sessions.json`.
 pub async fn upsert_saved_session(
     codex_home: &Path,
     entry: SavedSessionEntry,
@@ -103,6 +104,7 @@ pub async fn upsert_saved_session(
     write_saved_sessions_file(&path, &file).await
 }
 
+/// Lookup a saved session by name, if present.
 pub async fn resolve_saved_session(
     codex_home: &Path,
     name: &str,
@@ -112,6 +114,7 @@ pub async fn resolve_saved_session(
     Ok(file.entries.get(name).cloned())
 }
 
+/// Return all saved sessions ordered by newest `saved_at` first.
 pub async fn list_saved_sessions(codex_home: &Path) -> std::io::Result<Vec<SavedSessionEntry>> {
     let path = saved_sessions_path(codex_home);
     let file = load_saved_sessions_file(&path).await?;

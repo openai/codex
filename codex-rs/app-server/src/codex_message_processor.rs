@@ -2265,16 +2265,7 @@ impl CodexMessageProcessor {
                 .join(codex_core::ARCHIVED_SESSIONS_SUBDIR);
             tokio::fs::create_dir_all(&archive_folder).await?;
             let destination = archive_folder.join(&file_name);
-            tracing::debug!(
-                "archiving {conversation_id}: moving {} -> {}",
-                canonical_rollout_path.display(),
-                destination.display()
-            );
             tokio::fs::rename(&canonical_rollout_path, &destination).await?;
-            tracing::debug!(
-                "archiving {conversation_id}: archived rollout moved to {}",
-                destination.display()
-            );
             Ok(())
         }
         .await;
