@@ -28,12 +28,14 @@ pub(super) struct EscalateResponse {
     pub(super) action: EscalateAction,
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub(super) enum EscalateAction {
     /// The command should be run directly by the client.
     Run,
     /// The command should be escalated to the server for execution.
     Escalate,
+    /// The command should be denied.
+    Deny,
 }
 
 /// The client sends this to the server to forward its open FDs.
