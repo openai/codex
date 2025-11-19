@@ -251,7 +251,6 @@ fn assemble_truncated_output(prefix: &str, suffix: &str, marker: &str) -> String
     let mut out = String::with_capacity(prefix.len() + marker.len() + suffix.len() + 1);
     out.push_str(prefix);
     out.push_str(marker);
-    out.push('\n');
     out.push_str(suffix);
     out
 }
@@ -313,25 +312,95 @@ mod tests {
     use super::approx_token_count;
     use super::formatted_truncate_text;
     use super::truncate_function_output_items_with_policy;
+    use super::truncate_text;
     use super::truncate_with_token_budget;
     use codex_protocol::models::FunctionCallOutputContentItem;
     use pretty_assertions::assert_eq;
 
-    const MODEL_FORMAT_MAX_TOKENS_FOR_TESTS: usize = 2_500;
+    #[test]
+    fn truncate_bytes_less_than_placeholder_returns_placeholder() {
+        let content = "example output";
 
-    fn truncate_model_output(content: &str) -> String {
-        formatted_truncate_text(
-            content,
-            TruncationPolicy::Tokens(MODEL_FORMAT_MAX_TOKENS_FOR_TESTS),
-        )
-    }
-
-    fn with_total_lines(total_lines: usize, body: &str) -> String {
-        format!("Total output lines: {total_lines}\n\n{body}")
+        assert_eq!(
+            "Total output lines: 1\n\n…13 chars truncated…t",
+            formatted_truncate_text(content, TruncationPolicy::Bytes(1)),
+        );
     }
 
     #[test]
-    fn truncate_middle_returns_original_when_under_limit() {
+    fn truncate_tokens_less_than_placeholder_returns_placeholder() {
+        let content = "example output";
+
+        assert_eq!(
+            "Total output lines: 1\n\nex…3 tokens truncated…ut",
+            formatted_truncate_text(content, TruncationPolicy::Tokens(1)),
+        );
+    }
+
+    #[test]
+    fn truncate_tokens_under_limit_returns_original() {
+        let content = "example output";
+
+        assert_eq!(
+            content,
+            formatted_truncate_text(content, TruncationPolicy::Tokens(10)),
+        );
+    }
+
+    #[test]
+    fn truncate_bytes_under_limit_returns_original() {
+        let content = "example output";
+
+        assert_eq!(
+            content,
+            formatted_truncate_text(content, TruncationPolicy::Bytes(20)),
+        );
+    }
+
+    #[test]
+    fn truncate_tokens_over_limit_returns_truncated() {
+        let content = "this is an example of a long output that should be truncated";
+
+        assert_eq!(
+            "Total output lines: 1\n\nthis is an…10 tokens truncated… truncated",
+            formatted_truncate_text(content, TruncationPolicy::Tokens(5)),
+        );
+    }
+
+    #[test]
+    fn truncate_bytes_over_limit_returns_truncated() {
+        let content = "this is an example of a long output that should be truncated";
+
+        assert_eq!(
+            "Total output lines: 1\n\nthis is an exam…30 chars truncated…ld be truncated",
+            formatted_truncate_text(content, TruncationPolicy::Bytes(30)),
+        );
+    }
+
+    #[test]
+    fn truncate_bytes_reports_original_line_count_when_truncated() {
+        let content =
+            "this is an example of a long output that should be truncated\nalso some other line";
+
+        assert_eq!(
+            "Total output lines: 2\n\nthis is an exam…51 chars truncated…some other line",
+            formatted_truncate_text(content, TruncationPolicy::Bytes(30)),
+        );
+    }
+
+    #[test]
+    fn truncate_tokens_reports_original_line_count_when_truncated() {
+        let content =
+            "this is an example of a long output that should be truncated\nalso some other line";
+
+        assert_eq!(
+            "Total output lines: 2\n\nthis is an example o…11 tokens truncated…also some other line",
+            formatted_truncate_text(content, TruncationPolicy::Tokens(10)),
+        );
+    }
+
+    #[test]
+    fn truncate_with_token_budget_returns_original_when_under_limit() {
         let s = "short output";
         let limit = 100;
         let (out, original) = truncate_with_token_budget(s, TruncationPolicy::Tokens(limit));
@@ -340,114 +409,26 @@ mod tests {
     }
 
     #[test]
-    fn truncate_middle_reports_truncation_at_zero_limit() {
+    fn truncate_with_token_budget_reports_truncation_at_zero_limit() {
         let s = "abcdef";
         let (out, original) = truncate_with_token_budget(s, TruncationPolicy::Tokens(0));
         assert_eq!(out, "…2 tokens truncated…");
-        assert_eq!(original, Some(approx_token_count(s) as u64));
+        assert_eq!(original, Some(2));
     }
 
     #[test]
-    fn truncate_middle_enforces_token_budget() {
-        let s = "alpha beta gamma delta epsilon zeta eta theta iota kappa";
-        let max_tokens = 12;
-        let (out, original) = truncate_with_token_budget(s, TruncationPolicy::Tokens(max_tokens));
-        assert!(out.contains("tokens truncated"));
-        assert_eq!(original, Some(approx_token_count(s) as u64));
-        assert_ne!(out, s, "truncated output should change when truncated");
-    }
-
-    #[test]
-    fn truncate_middle_handles_utf8_content() {
+    fn truncate_middle_tokens_handles_utf8_content() {
         let s = "😀😀😀😀😀😀😀😀😀😀\nsecond line with text\n";
-        let max_tokens = 8;
-        let (out, tokens) = truncate_with_token_budget(s, TruncationPolicy::Tokens(max_tokens));
-        assert!(out.contains("tokens truncated"));
-        assert!(!out.contains('\u{fffd}'));
-        assert_eq!(tokens, Some(approx_token_count(s) as u64));
-        assert!(out.len() < s.len(), "UTF-8 content should be shortened");
+        let (out, tokens) = truncate_with_token_budget(s, TruncationPolicy::Tokens(8));
+        assert_eq!(out, "😀😀😀😀…8 tokens truncated…");
+        assert_eq!(tokens, Some(16));
     }
 
     #[test]
-    fn format_exec_output_truncates_large_error() {
-        let line = "very long execution error line that should trigger truncation\n";
-        let large_error = line.repeat(120); // keep test output small but still over budget
-
-        let truncated = formatted_truncate_text(&large_error, TruncationPolicy::Tokens(60));
-        dbg!(&truncated);
-        // Assert the exact truncated output to avoid regex/indirection.
-        let body = "very long execution error line that should trigger truncation\n…1800 tokens truncated…\nvery long execution error line that should trigger truncation\n";
-        let expected = with_total_lines(120, body);
-        assert_eq!(truncated, expected);
-    }
-
-    #[test]
-    fn format_exec_output_marks_byte_truncation_without_omitted_lines() {
-        // Force byte-based truncation on a long single line.
-        let long_line = "a".repeat(300);
-        let truncated = formatted_truncate_text(&long_line, TruncationPolicy::Bytes(80));
-        dbg!(&truncated);
-
-        let body = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa…220 chars truncated…\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        let expected = with_total_lines(1, body);
-        assert_eq!(truncated, expected);
-        assert!(
-            !truncated.contains("omitted"),
-            "line omission marker should not appear when no lines were dropped: {truncated}"
-        );
-    }
-
-    #[test]
-    fn format_exec_output_returns_original_when_within_limits() {
-        let content = "example output\n".repeat(10);
-
-        assert_eq!(truncate_model_output(&content), content);
-    }
-
-    #[test]
-    fn format_exec_output_preserves_head_and_tail_after_truncation() {
-        let total_lines = 2_000;
-        let filler = "x".repeat(64);
-        let content: String = (0..total_lines)
-            .map(|idx| format!("line-{idx}-{filler}\n"))
-            .collect();
-
-        let truncated = formatted_truncate_text(&content, TruncationPolicy::Tokens(80));
-        let body = "line-0-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-line-1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-…37143 tokens truncated…
-line-1998-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-line-1999-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-";
-        assert_eq!(truncated, with_total_lines(2_000, body));
-        assert!(
-            truncated.contains("line-0-"),
-            "expected head line to remain: {truncated}"
-        );
-
-        let last_line = format!("line-{}-", total_lines - 1);
-        assert!(
-            truncated.contains(&last_line),
-            "expected tail line to remain: {truncated}"
-        );
-    }
-
-    #[test]
-    fn format_exec_output_prefers_line_marker_when_both_limits_exceeded() {
-        let total_lines = 300;
-        let long_line = "x".repeat(50);
-        let content: String = (0..total_lines)
-            .map(|idx| format!("line-{idx}-{long_line}\n"))
-            .collect();
-
-        let truncated = formatted_truncate_text(&content, TruncationPolicy::Tokens(60));
-        dbg!(&truncated);
-        let body = "line-0-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-line-1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-…4413 tokens truncated…
-line-299-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-";
-        assert_eq!(truncated, with_total_lines(300, body));
+    fn truncate_middle_bytes_handles_utf8_content() {
+        let s = "😀😀😀😀😀😀😀😀😀😀\nsecond line with text\n";
+        let out = truncate_text(s, TruncationPolicy::Bytes(20));
+        assert_eq!(out, "😀😀…31 chars truncated…");
     }
 
     #[test]

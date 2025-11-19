@@ -333,7 +333,7 @@ Total output lines: 100000
 5
 6
 .*
-…137224 tokens truncated…\n96668\n96669
+…137224 tokens truncated…96668\n96669
 .*
 $"#;
     assert_regex_match(truncated_pattern, &output);
@@ -652,7 +652,7 @@ async fn token_policy_marker_reports_tokens() -> Result<()> {
         .function_call_output_text(call_id)
         .context("shell output present")?;
 
-    let pattern = r#"(?s)^\{"output":"Total output lines: 150\\n\\n1\\n2\\n3\\n4\\n5\\n.*?…\d+ tokens truncated…\n7\\n138\\n139\\n140\\n141\\n142\\n143\\n144\\n145\\n146\\n147\\n148\\n149\\n150\\n","metadata":\{"exit_code":0,"duration_seconds":0\.0\}\}$"#;
+    let pattern = r#"(?s)^\{"output":"Total output lines: 150\\n\\n1\\n2\\n3\\n4\\n5\\n.*?…\d+ tokens truncated…7\\n138\\n139\\n140\\n141\\n142\\n143\\n144\\n145\\n146\\n147\\n148\\n149\\n150\\n","metadata":\{"exit_code":0,"duration_seconds":0\.0\}\}$"#;
 
     assert_regex_match(pattern, &output);
 

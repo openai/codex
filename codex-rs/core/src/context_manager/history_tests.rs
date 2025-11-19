@@ -11,6 +11,7 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
+
 const EXEC_FORMAT_MAX_BYTES: usize = 10_000;
 const EXEC_FORMAT_MAX_TOKENS: usize = 2_500;
 
@@ -361,9 +362,7 @@ fn assert_truncated_message_matches(message: &str, line: &str, expected_removed:
 
 fn truncated_message_pattern(line: &str) -> String {
     let escaped_line = regex_lite::escape(line);
-    format!(
-        r"(?s)^(?P<body>{escaped_line}.*?)(?:\r?\n)?…(?P<removed>\d+) tokens truncated…(?:\r?\n.*)?$"
-    )
+    format!(r"(?s)^(?P<body>{escaped_line}.*?)(?:\r?)?…(?P<removed>\d+) tokens truncated…(?:.*)?$")
 }
 
 #[test]

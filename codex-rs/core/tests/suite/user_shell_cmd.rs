@@ -209,8 +209,13 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_shell_command_output_is_truncated_in_history() -> anyhow::Result<()> {
     let server = responses::start_mock_server().await;
-    let mut builder = core_test_support::test_codex::test_codex();
-    let test = builder.build(&server).await?;
+    let builder = core_test_support::test_codex::test_codex();
+    let test = builder
+        .with_config(|config| {
+            config.tool_output_token_limit = Some(100);
+        })
+        .build(&server)
+        .await?;
 
     #[cfg(windows)]
     let command = r#"for ($i=1; $i -le 400; $i++) { Write-Output $i }"#.to_string();
@@ -249,11 +254,13 @@ async fn user_shell_command_output_is_truncated_in_history() -> anyhow::Result<(
         .expect("command message recorded in request");
     let command_message = command_message.replace("\r\n", "\n");
 
-    let body = (1..=400).map(|i| format!("{i}\n")).collect::<String>();
+    let head = (1..=69).map(|i| format!("{i}\n")).collect::<String>();
+    let tail = (352..=400).map(|i| format!("{i}\n")).collect::<String>();
+    let truncated_body = format!("Total output lines: 400\n\n{head}…273 tokens truncated…{tail}");
     let escaped_command = escape(&command);
-    let escaped_body = escape(&body);
+    let escaped_truncated_body = escape(&truncated_body);
     let expected_pattern = format!(
-        r"(?m)\A<user_shell_command>\n<command>\n{escaped_command}\n</command>\n<result>\nExit code: 0\nDuration: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\n{escaped_body}\n</result>\n</user_shell_command>\z"
+        r"(?m)\A<user_shell_command>\n<command>\n{escaped_command}\n</command>\n<result>\nExit code: 0\nDuration: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\n{escaped_truncated_body}\n</result>\n</user_shell_command>\z"
     );
     assert_regex_match(&expected_pattern, &command_message);
 
@@ -266,13 +273,11 @@ async fn user_shell_command_is_truncated_only_once() -> anyhow::Result<()> {
 
     let server = start_mock_server().await;
 
-    let mut builder = test_codex()
-        .with_model("gpt-5.1-codex")
-        .with_config(|config| {
-            config.model = "gpt-5.1-codex".to_string();
-            config.model_family =
-                find_family_for_model("gpt-5-codex").expect("gpt-5-codex is a model family");
-        });
+    let mut builder = test_codex().with_config(|config| {
+        config.model = "gpt-5.1-codex".to_string();
+        config.model_family =
+            find_family_for_model("gpt-5-codex").expect("gpt-5-codex is a model family");
+    });
     let fixture = builder.build(&server).await?;
 
     let call_id = "user-shell-double-truncation";
@@ -281,13 +286,13 @@ async fn user_shell_command_is_truncated_only_once() -> anyhow::Result<()> {
             "command": [
                 "powershell",
                 "-Command",
-                "for ($i=1; $i -le 10000; $i++) { Write-Output $i }"
+                "for ($i=1; $i -le 2000; $i++) { Write-Output $i }"
             ],
             "timeout_ms": 5_000,
         })
     } else {
         serde_json::json!({
-            "command": ["/bin/sh", "-c", "seq 1 10000"],
+            "command": ["/bin/sh", "-c", "seq 1 2000"],
             "timeout_ms": 5_000,
         })
     };
@@ -319,11 +324,11 @@ async fn user_shell_command_is_truncated_only_once() -> anyhow::Result<()> {
         .function_call_output_text(call_id)
         .context("function_call_output present for shell call")?;
 
-    let truncation_markers = output.matches("tokens truncated").count();
+    let truncation_headers = output.matches("Total output lines:").count();
 
     assert_eq!(
-        truncation_markers, 1,
-        "shell output should carry only one truncation marker: {output}"
+        truncation_headers, 1,
+        "shell output should carry only one truncation header: {output}"
     );
 
     Ok(())

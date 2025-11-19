@@ -419,6 +419,7 @@ async fn shell_output_reserializes_truncated_content(output_type: ShellModelOutp
         config.model = "gpt-5.1-codex".to_string();
         config.model_family =
             find_family_for_model("gpt-5.1-codex").expect("gpt-5.1-codex is a model family");
+        config.tool_output_token_limit = Some(200);
         if matches!(output_type, ShellModelOutput::ShellCommand) {
             config.features.enable(Feature::ShellCommandTool);
         }
@@ -427,7 +428,7 @@ async fn shell_output_reserializes_truncated_content(output_type: ShellModelOutp
     let test = builder.build(&server).await?;
 
     let call_id = "shell-truncated";
-    let responses = shell_responses(call_id, vec!["/bin/sh", "-c", "seq 1 100000"], output_type)?;
+    let responses = shell_responses(call_id, vec!["/bin/sh", "-c", "seq 1 400"], output_type)?;
     let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
@@ -449,22 +450,23 @@ async fn shell_output_reserializes_truncated_content(output_type: ShellModelOutp
         serde_json::from_str::<Value>(output).is_err(),
         "expected truncated shell output to be plain text",
     );
-    let truncated_pattern = r"(?s)^Exit code: 0
+    let truncated_pattern = r#"(?s)^Exit code: 0
 Wall time: [0-9]+(?:\.[0-9]+)? seconds
+Total output lines: 400
 Output:
-Total output lines: \d+
-
 1
 2
 3
 4
 5
 6
-.*
-…137224 tokens truncated…\n96668\n96669
-.*
-$";
-
+.*…45 tokens truncated….*
+396
+397
+398
+399
+400
+$"#;
     assert_regex_match(truncated_pattern, output);
 
     Ok(())
