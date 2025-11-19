@@ -2013,6 +2013,26 @@ impl ChatWidget {
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
         let supported = preset.supported_reasoning_efforts;
 
+        let warn_effort = if supported
+            .iter()
+            .any(|option| option.effort == ReasoningEffortConfig::ExtraHigh)
+        {
+            Some(ReasoningEffortConfig::ExtraHigh)
+        } else if supported
+            .iter()
+            .any(|option| option.effort == ReasoningEffortConfig::High)
+        {
+            Some(ReasoningEffortConfig::High)
+        } else {
+            None
+        };
+        let warning_text = warn_effort.map(|effort| {
+            let effort_label = Self::reasoning_effort_label(effort);
+            format!("⚠ {effort_label} reasoning effort can quickly consume Plus plan rate limits.")
+        });
+        let warn_for_model =
+            preset.model.starts_with("gpt-5.1-codex") || preset.model.starts_with("arcticfox");
+
         struct EffortChoice {
             stored: Option<ReasoningEffortConfig>,
             display: ReasoningEffortConfig,
@@ -2075,16 +2095,17 @@ impl ChatWidget {
                 })
                 .filter(|text| !text.is_empty());
 
-            let warning = "⚠ High reasoning effort can quickly consume Plus plan rate limits.";
-            let show_warning = (preset.model.starts_with("gpt-5.1-codex")
-                || preset.model.starts_with("arcticfox"))
-                && (effort == ReasoningEffortConfig::ExtraHigh
-                    || effort == ReasoningEffortConfig::High);
-            let selected_description = show_warning.then(|| {
-                description
-                    .as_ref()
-                    .map_or(warning.to_string(), |d| format!("{d}\n{warning}"))
-            });
+            let show_warning = warn_for_model && warn_effort == Some(effort);
+            let selected_description = if show_warning {
+                warning_text.as_ref().map(|warning_message| {
+                    description.as_ref().map_or_else(
+                        || warning_message.clone(),
+                        |d| format!("{d}\n{warning_message}"),
+                    )
+                })
+            } else {
+                None
+            };
 
             let model_for_action = model_slug.clone();
             let effort_for_action = choice.stored;

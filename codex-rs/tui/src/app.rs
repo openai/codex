@@ -56,6 +56,9 @@ use tokio::sync::mpsc::unbounded_channel;
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
 
+const GPT_5_1_MIGRATION_AUTH_MODES: [AuthMode; 2] = [AuthMode::ChatGPT, AuthMode::ApiKey];
+const ARCTICFOX_MIGRATION_AUTH_MODES: [AuthMode; 1] = [AuthMode::ChatGPT];
+
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
     pub token_usage: TokenUsage,
@@ -115,10 +118,6 @@ async fn handle_model_migration_prompt_if_needed(
     app_event_tx: &AppEventSender,
     auth_mode: Option<AuthMode>,
 ) -> Option<AppExitInfo> {
-    if matches!(auth_mode, Some(AuthMode::ApiKey)) {
-        return None;
-    }
-
     let upgrade = all_model_presets()
         .iter()
         .find(|preset| preset.model == config.model)
@@ -130,6 +129,10 @@ async fn handle_model_migration_prompt_if_needed(
         migration_config_key,
     }) = upgrade
     {
+        if !migration_prompt_allows_auth_mode(auth_mode, migration_config_key) {
+            return None;
+        }
+
         let target_model = target_model.to_string();
         let hide_prompt_flag = migration_prompt_hidden(config, migration_config_key);
         if !should_show_model_migration_prompt(&config.model, &target_model, hide_prompt_flag) {
@@ -941,6 +944,28 @@ impl App {
     }
 }
 
+fn migration_prompt_allowed_auth_modes(migration_config_key: &str) -> Option<&'static [AuthMode]> {
+    match migration_config_key {
+        HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG => Some(&GPT_5_1_MIGRATION_AUTH_MODES),
+        HIDE_ARCTICFOX_MIGRATION_PROMPT_CONFIG => Some(&ARCTICFOX_MIGRATION_AUTH_MODES),
+        _ => None,
+    }
+}
+
+fn migration_prompt_allows_auth_mode(
+    auth_mode: Option<AuthMode>,
+    migration_config_key: &str,
+) -> bool {
+    if let Some(allowed_modes) = migration_prompt_allowed_auth_modes(migration_config_key) {
+        match auth_mode {
+            None => true,
+            Some(mode) => allowed_modes.contains(&mode),
+        }
+    } else {
+        auth_mode != Some(AuthMode::ApiKey)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1136,5 +1161,41 @@ mod tests {
             summary.resume_command,
             Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
         );
+    }
+
+    #[test]
+    fn gpt5_migration_allows_api_key_and_chatgpt() {
+        assert!(migration_prompt_allows_auth_mode(
+            Some(AuthMode::ApiKey),
+            HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG,
+        ));
+        assert!(migration_prompt_allows_auth_mode(
+            Some(AuthMode::ChatGPT),
+            HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG,
+        ));
+    }
+
+    #[test]
+    fn arcticfox_migration_limits_to_chatgpt() {
+        assert!(migration_prompt_allows_auth_mode(
+            Some(AuthMode::ChatGPT),
+            HIDE_ARCTICFOX_MIGRATION_PROMPT_CONFIG,
+        ));
+        assert!(!migration_prompt_allows_auth_mode(
+            Some(AuthMode::ApiKey),
+            HIDE_ARCTICFOX_MIGRATION_PROMPT_CONFIG,
+        ));
+    }
+
+    #[test]
+    fn other_migrations_block_api_key() {
+        assert!(!migration_prompt_allows_auth_mode(
+            Some(AuthMode::ApiKey),
+            "unknown"
+        ));
+        assert!(migration_prompt_allows_auth_mode(
+            Some(AuthMode::ChatGPT),
+            "unknown"
+        ));
     }
 }
