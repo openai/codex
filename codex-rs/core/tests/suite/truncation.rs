@@ -167,8 +167,19 @@ async fn tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> {
         serde_json::from_str::<Value>(&output).is_err(),
         "expected truncated shell output to be plain text"
     );
-    let truncated_pattern = r"(?s)^Exit code: 0\nWall time: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\n1\n2\n3\n4\n5\n6\n.*99996\n99997\n99998\n99999\n100000\n$";
-    let truncated_pattern = dbg!(truncated_pattern);
+    let truncated_pattern = r#"(?s)^Exit code: 0
+Wall time: [0-9]+(?:\.[0-9]+)? seconds
+Output:
+1
+2
+3
+4
+5
+6
+.*
+\[…137224 tokens truncated…]
+.*
+$"#;
     assert_regex_match(truncated_pattern, &output);
 
     Ok(())
