@@ -12,8 +12,8 @@ use codex_protocol::models::ReasoningItemReasoningSummary;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 
-const EXEC_FORMAT_MAX_LINES: usize = 256;
 const EXEC_FORMAT_MAX_BYTES: usize = 10_000;
+const EXEC_FORMAT_MAX_TOKENS: usize = 2_500;
 
 fn assistant_msg(text: &str) -> ResponseItem {
     ResponseItem::Message {
@@ -54,6 +54,10 @@ fn reasoning_msg(text: &str) -> ResponseItem {
         }]),
         encrypted_content: None,
     }
+}
+
+fn truncate_exec_output(content: &str) -> String {
+    truncate::truncate_text(content, TruncationPolicy::Tokens(EXEC_FORMAT_MAX_TOKENS))
 }
 
 #[test]
@@ -228,7 +232,7 @@ fn normalization_retains_local_shell_outputs() {
         ResponseItem::FunctionCallOutput {
             call_id: "shell-1".to_string(),
             output: FunctionCallOutputPayload {
-                content: "ok".to_string(),
+                content: "Total output lines: 1\n\nok".to_string(),
                 ..Default::default()
             },
         },
@@ -330,8 +334,8 @@ fn record_items_respects_custom_token_limit() {
     assert!(stored.content.contains("tokens truncated"));
 }
 
-fn assert_truncated_message_matches(message: &str, line: &str, total_lines: usize) {
-    let pattern = truncated_message_pattern(line, total_lines);
+fn assert_truncated_message_matches(message: &str, line: &str, expected_removed: usize) {
+    let pattern = truncated_message_pattern(line);
     let regex = Regex::new(&pattern).unwrap_or_else(|err| {
         panic!("failed to compile regex {pattern}: {err}");
     });
@@ -347,23 +351,18 @@ fn assert_truncated_message_matches(message: &str, line: &str, total_lines: usiz
         "body exceeds byte limit: {} bytes",
         body.len()
     );
+    let removed: usize = captures
+        .name("removed")
+        .expect("missing removed capture")
+        .as_str()
+        .parse()
+        .unwrap_or_else(|err| panic!("invalid removed tokens: {err}"));
+    assert_eq!(removed, expected_removed, "mismatched removed token count");
 }
 
-fn truncated_message_pattern(line: &str, total_lines: usize) -> String {
-    let head_lines = EXEC_FORMAT_MAX_LINES / 2;
-    let tail_lines = EXEC_FORMAT_MAX_LINES - head_lines;
-    let head_take = head_lines.min(total_lines);
-    let tail_take = tail_lines.min(total_lines.saturating_sub(head_take));
-    let omitted = total_lines.saturating_sub(head_take + tail_take);
+fn truncated_message_pattern(line: &str) -> String {
     let escaped_line = regex_lite::escape(line);
-    if omitted == 0 {
-        return format!(
-            r"(?s)^Total output lines: {total_lines}\n\n(?P<body>{escaped_line}.*\n\[\.{{3}} removed \d+ bytes to fit {EXEC_FORMAT_MAX_BYTES} byte limit \.{{3}}]\n\n.*)$",
-        );
-    }
-    format!(
-        r"(?s)^Total output lines: {total_lines}\n\n(?P<body>{escaped_line}.*\n\[\.{{3}} omitted {omitted} of {total_lines} lines \.{{3}}]\n\n.*)$",
-    )
+    format!(r"(?s)^(?P<body>{escaped_line}.*?)(?:\r?)?…(?P<removed>\d+) tokens truncated…(?:.*)?$")
 }
 
 #[test]
@@ -371,27 +370,18 @@ fn format_exec_output_truncates_large_error() {
     let line = "very long execution error line that should trigger truncation\n";
     let large_error = line.repeat(2_500); // way beyond both byte and line limits
 
-    let truncated = truncate::truncate_with_line_bytes_budget(&large_error, EXEC_FORMAT_MAX_BYTES);
+    let truncated = truncate_exec_output(&large_error);
 
-    let total_lines = large_error.lines().count();
-    assert_truncated_message_matches(&truncated, line, total_lines);
+    assert_truncated_message_matches(&truncated, line, 36250);
     assert_ne!(truncated, large_error);
 }
 
 #[test]
 fn format_exec_output_marks_byte_truncation_without_omitted_lines() {
-    let long_line = "a".repeat(EXEC_FORMAT_MAX_BYTES + 50);
-    let truncated = truncate::truncate_with_line_bytes_budget(&long_line, EXEC_FORMAT_MAX_BYTES);
-
+    let long_line = "a".repeat(EXEC_FORMAT_MAX_BYTES + 10000);
+    let truncated = truncate_exec_output(&long_line);
     assert_ne!(truncated, long_line);
-    let removed_bytes = long_line.len().saturating_sub(EXEC_FORMAT_MAX_BYTES);
-    let marker_line = format!(
-        "[... removed {removed_bytes} bytes to fit {EXEC_FORMAT_MAX_BYTES} byte limit ...]"
-    );
-    assert!(
-        truncated.contains(&marker_line),
-        "missing byte truncation marker: {truncated}"
-    );
+    assert_truncated_message_matches(&truncated, "a", 2500);
     assert!(
         !truncated.contains("omitted"),
         "line omission marker should not appear when no lines were dropped: {truncated}"
@@ -401,34 +391,25 @@ fn format_exec_output_marks_byte_truncation_without_omitted_lines() {
 #[test]
 fn format_exec_output_returns_original_when_within_limits() {
     let content = "example output\n".repeat(10);
-
-    assert_eq!(
-        truncate::truncate_with_line_bytes_budget(&content, EXEC_FORMAT_MAX_BYTES),
-        content
-    );
+    assert_eq!(truncate_exec_output(&content), content);
 }
 
 #[test]
 fn format_exec_output_reports_omitted_lines_and_keeps_head_and_tail() {
-    let total_lines = EXEC_FORMAT_MAX_LINES + 100;
+    let total_lines = 2_000;
+    let filler = "x".repeat(64);
     let content: String = (0..total_lines)
-        .map(|idx| format!("line-{idx}\n"))
+        .map(|idx| format!("line-{idx}-{filler}\n"))
         .collect();
 
-    let truncated = truncate::truncate_with_line_bytes_budget(&content, EXEC_FORMAT_MAX_BYTES);
-    let omitted = total_lines - EXEC_FORMAT_MAX_LINES;
-    let expected_marker = format!("[... omitted {omitted} of {total_lines} lines ...]");
-
+    let truncated = truncate_exec_output(&content);
+    assert_truncated_message_matches(&truncated, "line-0-", 34_723);
     assert!(
-        truncated.contains(&expected_marker),
-        "missing omitted marker: {truncated}"
-    );
-    assert!(
-        truncated.contains("line-0\n"),
+        truncated.contains("line-0-"),
         "expected head line to remain: {truncated}"
     );
 
-    let last_line = format!("line-{}\n", total_lines - 1);
+    let last_line = format!("line-{}-", total_lines - 1);
     assert!(
         truncated.contains(&last_line),
         "expected tail line to remain: {truncated}"
@@ -437,22 +418,15 @@ fn format_exec_output_reports_omitted_lines_and_keeps_head_and_tail() {
 
 #[test]
 fn format_exec_output_prefers_line_marker_when_both_limits_exceeded() {
-    let total_lines = EXEC_FORMAT_MAX_LINES + 42;
+    let total_lines = 300;
     let long_line = "x".repeat(256);
     let content: String = (0..total_lines)
         .map(|idx| format!("line-{idx}-{long_line}\n"))
         .collect();
 
-    let truncated = truncate::truncate_with_line_bytes_budget(&content, EXEC_FORMAT_MAX_BYTES);
+    let truncated = truncate_exec_output(&content);
 
-    assert!(
-        truncated.contains("[... omitted 42 of 298 lines ...]"),
-        "expected omitted marker when line count exceeds limit: {truncated}"
-    );
-    assert!(
-        !truncated.contains("byte limit"),
-        "line omission marker should take precedence over byte marker: {truncated}"
-    );
+    assert_truncated_message_matches(&truncated, "line-0-", 17_423);
 }
 
 //TODO(aibrahim): run CI in release mode.

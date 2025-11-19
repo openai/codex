@@ -328,7 +328,7 @@ impl ChatComposer {
                     return true;
                 }
 
-                tracing::info!("ERR: {err}");
+                tracing::trace!("ERR: {err}");
                 false
             }
         }

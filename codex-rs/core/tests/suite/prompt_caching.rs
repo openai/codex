@@ -1,13 +1,9 @@
 #![allow(clippy::unwrap_used)]
 
-use codex_core::CodexAuth;
-use codex_core::ConversationManager;
-use codex_core::ModelProviderInfo;
-use codex_core::built_in_model_providers;
-use codex_core::config::OPENAI_DEFAULT_MODEL;
 use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
+use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
@@ -20,7 +16,6 @@ use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::skip_if_no_network;
 use core_test_support::wait_for_event;
-use std::collections::HashMap;
 use tempfile::TempDir;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -250,65 +245,16 @@ async fn prompt_tools_are_consistent_across_requests() {
         .unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    let requests = server.received_requests().await.unwrap();
-    assert_eq!(requests.len(), 2, "expected two POST requests");
-
-    // our internal implementation is responsible for keeping tools in sync
-    // with the OpenAI schema, so we just verify the tool presence here
-    let tools_by_model: HashMap<&'static str, Vec<&'static str>> = HashMap::from([
-        (
-            "gpt-5.1",
-            vec![
-                "shell_command",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
-                "update_plan",
-                "view_image",
-            ],
-        ),
-        (
-            "gpt-5.1",
-            vec![
-                "shell_command",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
-                "update_plan",
-                "apply_patch",
-                "view_image",
-            ],
-        ),
-        (
-            "gpt-5.1-codex",
-            vec![
-                "shell_command",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
-                "update_plan",
-                "apply_patch",
-                "view_image",
-            ],
-        ),
-        (
-            "gpt-5.1-codex",
-            vec![
-                "shell_command",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
-                "update_plan",
-                "apply_patch",
-                "view_image",
-            ],
-        ),
-    ]);
-    let expected_tools_names = tools_by_model
-        .get(OPENAI_DEFAULT_MODEL)
-        .unwrap_or_else(|| panic!("expected tools to be defined for model {OPENAI_DEFAULT_MODEL}"))
-        .as_slice();
-    let body0 = requests[0].body_json::<serde_json::Value>().unwrap();
+    let expected_tools_names = vec![
+        "shell_command",
+        "list_mcp_resources",
+        "list_mcp_resource_templates",
+        "read_mcp_resource",
+        "update_plan",
+        "apply_patch",
+        "view_image",
+    ];
+    let body0 = req1.single_request().body_json();
 
     let expected_instructions = if expected_tools_names.contains(&"apply_patch") {
         base_instructions
@@ -324,14 +270,16 @@ async fn prompt_tools_are_consistent_across_requests() {
         body0["instructions"],
         serde_json::json!(expected_instructions),
     );
-    assert_tool_names(&body0, expected_tools_names);
+    assert_tool_names(&body0, &expected_tools_names);
 
     let body1 = requests[1].body_json::<serde_json::Value>().unwrap();
     assert_eq!(
         body1["instructions"],
         serde_json::json!(expected_instructions),
     );
-    assert_tool_names(&body1, expected_tools_names);
+    assert_tool_names(&body1, &expected_tools_names);
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -572,8 +520,91 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn per_turn_overrides_keep_cached_prefix_and_key_constant() {
-    skip_if_no_network!();
+async fn override_before_first_turn_emits_environment_context() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let req = mount_sse_once(&server, sse_completed("resp-1")).await;
+
+    let TestCodex { codex, .. } = test_codex().build(&server).await?;
+
+    codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: Some(AskForApproval::Never),
+            sandbox_policy: None,
+            model: None,
+            effort: None,
+            summary: None,
+        })
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "first message".into(),
+            }],
+        })
+        .await?;
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let body = req.single_request().body_json();
+    let input = body["input"]
+        .as_array()
+        .expect("input array must be present");
+    assert!(
+        !input.is_empty(),
+        "expected at least environment context and user message"
+    );
+
+    let env_msg = &input[1];
+    let env_text = env_msg["content"][0]["text"]
+        .as_str()
+        .expect("environment context text");
+    assert!(
+        env_text.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG),
+        "second entry should be environment context, got: {env_text}"
+    );
+    assert!(
+        env_text.contains("<approval_policy>never</approval_policy>"),
+        "environment context should reflect overridden approval policy: {env_text}"
+    );
+
+    let env_count = input
+        .iter()
+        .filter(|msg| {
+            msg["content"]
+                .as_array()
+                .and_then(|content| {
+                    content.iter().find(|item| {
+                        item["type"].as_str() == Some("input_text")
+                            && item["text"]
+                                .as_str()
+                                .map(|text| text.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG))
+                                .unwrap_or(false)
+                    })
+                })
+                .is_some()
+        })
+        .count();
+    assert_eq!(
+        env_count, 2,
+        "environment context should appear exactly twice, found {env_count}"
+    );
+
+    let user_msg = &input[2];
+    let user_text = user_msg["content"][0]["text"]
+        .as_str()
+        .expect("user message text");
+    assert_eq!(user_text, "first message");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
     use pretty_assertions::assert_eq;
 
     let server = MockServer::start().await;

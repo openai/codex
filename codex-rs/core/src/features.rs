@@ -260,6 +260,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Stable,
         default_enabled: true,
     },
+    FeatureSpec {
+        id: Feature::ViewImageTool,
+        key: "view_image_tool",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
     // Unstable features.
     FeatureSpec {
         id: Feature::UnifiedExec,
@@ -284,12 +290,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "apply_patch_freeform",
         stage: Stage::Beta,
         default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::ViewImageTool,
-        key: "view_image_tool",
-        stage: Stage::Stable,
-        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::WebSearchRequest,

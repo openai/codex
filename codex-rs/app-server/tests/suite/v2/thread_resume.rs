@@ -27,7 +27,7 @@ async fn thread_resume_returns_original_thread() -> Result<()> {
     // Start a thread.
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-5.1-codex".to_string()),
+            model: Some("arcticfox".to_string()),
             ..Default::default()
         })
         .await?;
@@ -36,7 +36,7 @@ async fn thread_resume_returns_original_thread() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
     )
     .await??;
-    let ThreadStartResponse { thread } = to_response::<ThreadStartResponse>(start_resp)?;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
 
     // Resume it via v2 API.
     let resume_id = mcp
@@ -50,8 +50,9 @@ async fn thread_resume_returns_original_thread() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
     )
     .await??;
-    let ThreadResumeResponse { thread: resumed } =
-        to_response::<ThreadResumeResponse>(resume_resp)?;
+    let ThreadResumeResponse {
+        thread: resumed, ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
     assert_eq!(resumed, thread);
 
     Ok(())
@@ -68,7 +69,7 @@ async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
 
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-5.1-codex".to_string()),
+            model: Some("arcticfox".to_string()),
             ..Default::default()
         })
         .await?;
@@ -77,7 +78,7 @@ async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
     )
     .await??;
-    let ThreadStartResponse { thread } = to_response::<ThreadStartResponse>(start_resp)?;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
 
     let thread_path = thread.path.clone();
     let resume_id = mcp
@@ -93,8 +94,9 @@ async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
     )
     .await??;
-    let ThreadResumeResponse { thread: resumed } =
-        to_response::<ThreadResumeResponse>(resume_resp)?;
+    let ThreadResumeResponse {
+        thread: resumed, ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
     assert_eq!(resumed, thread);
 
     Ok(())
@@ -112,7 +114,7 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
     // Start a thread.
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-5.1-codex".to_string()),
+            model: Some("arcticfox".to_string()),
             ..Default::default()
         })
         .await?;
@@ -121,7 +123,7 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
     )
     .await??;
-    let ThreadStartResponse { thread } = to_response::<ThreadStartResponse>(start_resp)?;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
 
     let history_text = "Hello from history";
     let history = vec![ResponseItem::Message {
@@ -147,10 +149,13 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
     )
     .await??;
-    let ThreadResumeResponse { thread: resumed } =
-        to_response::<ThreadResumeResponse>(resume_resp)?;
+    let ThreadResumeResponse {
+        thread: resumed,
+        model_provider,
+        ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
     assert!(!resumed.id.is_empty());
-    assert_eq!(resumed.model_provider, "mock_provider");
+    assert_eq!(model_provider, "mock_provider");
     assert_eq!(resumed.preview, history_text);
 
     Ok(())
