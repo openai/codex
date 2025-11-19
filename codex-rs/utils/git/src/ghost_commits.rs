@@ -320,6 +320,7 @@ fn restore_to_commit_inner(
         OsString::from("restore"),
         OsString::from("--source"),
         OsString::from(commit_id),
+        OsString::from("--staged"),
         OsString::from("--worktree"),
         OsString::from("--"),
     ];
