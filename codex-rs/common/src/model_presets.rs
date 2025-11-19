@@ -167,9 +167,9 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             ],
             is_default: false,
             upgrade: Some(ModelUpgrade {
-                id: "gpt-5.1-codex",
+                id: "arcticfox",
                 reasoning_effort_mapping: None,
-                migration_config_key: HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG,
+                migration_config_key: HIDE_ARCTICFOX_MIGRATION_PROMPT_CONFIG,
             }),
             show_in_picker: false,
         },
