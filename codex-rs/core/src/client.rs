@@ -762,7 +762,7 @@ fn parse_rate_limit_window(
 
 fn parse_credits_snapshot(headers: &HeaderMap) -> Option<CreditsSnapshot> {
     let has_credits = parse_header_bool(headers, "x-codex-credits-has-credits")?;
-    let unlimited = parse_header_bool(headers, "x-codex-credits-unlimited").unwrap_or(false);
+    let unlimited = parse_header_bool(headers, "x-codex-credits-unlimited")?;
     let balance = parse_header_str(headers, "x-codex-credits-balance")
         .map(str::trim)
         .filter(|value| !value.is_empty())
