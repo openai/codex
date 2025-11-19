@@ -21,7 +21,11 @@
 3. 🧠 **RAG 시각화** - 관련 파일이 자동으로 찾아지는 모습
 4. ✨ **스트리밍 애니메이션** - AI가 타이핑하는 것처럼 표시
 5. 🎨 **아름다운 UI** - 다크 모드, 부드러운 애니메이션
-6. 🔒 **샌드박스 시각화** - 보안 상태를 실시간 표시
+6. 🔒 **지능형 도구 승인** - 명령의 영향 분석 + 위험도 표시 + 샌드박스 차단 증명
+7. 📁 **VS Code 스타일 파일 브라우저** - 색상 아이콘 + 애니메이션
+8. 📈 **실시간 진행 상황** - 프로그레스 바 + 현재 작업 표시
+9. 🎉 **토스트 알림** - 작업 완료 피드백
+10. 🌊 **부드러운 전환** - 모든 UI 요소에 애니메이션
 
 ---
 
@@ -328,45 +332,67 @@
 
 ---
 
-### 📅 Day 9: 쉘 명령 미리보기 & 샌드박스 시각화 (WOW 요소 7)
+### 📅 Day 9: 지능형 도구 승인 UI & 보안 데모 (WOW 요소 7)
 
 #### 오전 (4시간)
-- [ ] 쉘 명령 승인 UI
+- [ ] **강화된 명령 미리보기** (WOW!)
   ```tsx
-  <ShellCommandPreview>
-    <Terminal>
-      $ npm install express
-    </Terminal>
-    <Warning>
-      This command will modify package.json
-    </Warning>
-  </ShellCommandPreview>
+  <CommandApprovalDialog>
+    <Terminal>$ npm install express</Terminal>
+
+    <ImpactAnalysis>
+      <h4>📋 이 명령이 수행할 작업:</h4>
+      ✅ Allowed: Read package.json
+      ✅ Allowed: Write package.json
+      ✅ Allowed: Write node_modules/
+      ⚠️  Network: Download from npmjs.org
+    </ImpactAnalysis>
+  </CommandApprovalDialog>
   ```
-- [ ] **위험도 표시** (WOW!)
-  - [ ] 안전: 녹색 (npm install, ls 등)
-  - [ ] 주의: 노란색 (rm, mv 등)
-  - [ ] 위험: 빨간색 (rm -rf, sudo 등)
+- [ ] **위험도 자동 분석** (WOW!)
+  - [ ] 안전 (녹색): `npm install`, `git status`
+  - [ ] 주의 (노란색): `rm file.txt`, `mv src/ backup/`
+  - [ ] 위험 (빨간색): `rm -rf`, `sudo`, `/etc/*` 접근
+  - [ ] 위험 명령 감지 시 큰 경고 배너
 
 #### 오후 (4시간)
-- [ ] **샌드박스 상태 실시간 시각화** (WOW!)
-  - [ ] StatusBar에 샌드박스 인디케이터
-    ```tsx
-    <SandboxIndicator mode="workspace-write">
-      🔒 Workspace Write
-    </SandboxIndicator>
+- [ ] **보안 데모 시나리오 준비** (WOW!)
+  - [ ] 시나리오 A: 안전한 작업
     ```
-  - [ ] 툴팁으로 상세 정보
+    "Add authentication"
+    → workspace 파일만 수정
+    → 승인 → 성공 ✅
     ```
-    ✅ Read: Workspace
-    ✅ Write: Workspace only
-    ❌ Network: Disabled
-    ❌ System files: Read-only
+  - [ ] 시나리오 B: 위험한 시도
     ```
-- [ ] **샌드박스 위반 시 경고** (WOW!)
-  - [ ] 빨간 경고창
-  - [ ] "Blocked by sandbox" 메시지
+    "Delete all files in /Users"
+    → 경고 다이얼로그 표시
+    → 시도 시 샌드박스 차단
+    → 에러 메시지: "Permission denied (sandbox)"
+    ```
+- [ ] **샌드박스 차단 시 명확한 피드백**
+  ```tsx
+  <ErrorDialog type="sandbox-blocked">
+    <Icon>🚫</Icon>
+    <Title>작업이 차단되었습니다</Title>
+    <Message>
+      샌드박스가 workspace 외부 접근을 차단했습니다.
+      경로: /Users/...
+    </Message>
+    <Details>
+      현재 모드: Workspace Write
+      허용 범위: /project/workspace/ 만
+    </Details>
+  </ErrorDialog>
+  ```
+- [ ] StatusBar에 샌드박스 모드 표시 (간단히)
+  ```tsx
+  <SandboxBadge mode="workspace-write">
+    🔒 Workspace
+  </SandboxBadge>
+  ```
 
-**산출물**: ✅ 보안 상태 시각화 (WOW!)
+**산출물**: ✅ 지능형 도구 승인 + 보안 데모 시나리오 (WOW!)
 
 ---
 
