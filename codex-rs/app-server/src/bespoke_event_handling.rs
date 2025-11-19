@@ -102,6 +102,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 // Until we migrate the core to be aware of a first class FileChangeItem
                 // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
                 let item_id = call_id.clone();
+                let patch_changes = convert_patch_changes(&changes);
 
                 let first_start = {
                     let mut map = turn_summary_store.lock().await;
@@ -111,7 +112,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 if first_start {
                     let item = ThreadItem::FileChange {
                         id: item_id.clone(),
-                        changes: convert_patch_changes(&changes),
+                        changes: patch_changes.clone(),
                         status: PatchApplyStatus::InProgress,
                     };
                     let notification = ItemStartedNotification { item };
@@ -123,7 +124,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 let params = FileChangeRequestApprovalParams {
                     thread_id: conversation_id.to_string(),
                     turn_id: turn_id.clone(),
-                    item_id,
+                    item_id: item_id.clone(),
                     reason,
                     grant_root,
                 };
@@ -131,7 +132,17 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .send_request(ServerRequestPayload::FileChangeRequestApproval(params))
                     .await;
                 tokio::spawn(async move {
-                    on_file_change_request_approval_response(event_id, rx, conversation).await;
+                    on_file_change_request_approval_response(
+                        event_id,
+                        conversation_id,
+                        item_id,
+                        patch_changes,
+                        rx,
+                        conversation,
+                        outgoing,
+                        turn_summary_store,
+                    )
+                    .await;
                 });
             }
         },
@@ -323,21 +334,16 @@ pub(crate) async fn apply_bespoke_event_handling(
             } else {
                 PatchApplyStatus::Failed
             };
-            {
-                let mut map = turn_summary_store.lock().await;
-                if let Some(summary) = map.get_mut(&conversation_id) {
-                    summary.file_change_started.remove(&item_id.clone());
-                }
-            }
-            let item = ThreadItem::FileChange {
-                id: item_id.clone(),
-                changes: convert_patch_changes(&patch_end_event.changes),
+            let changes = convert_patch_changes(&patch_end_event.changes);
+            complete_file_change_item(
+                conversation_id,
+                item_id,
+                changes,
                 status,
-            };
-            let notification = ItemCompletedNotification { item };
-            outgoing
-                .send_server_notification(ServerNotification::ItemCompleted(notification))
-                .await;
+                outgoing.as_ref(),
+                &turn_summary_store,
+            )
+            .await;
         }
         EventMsg::ExecCommandBegin(exec_command_begin_event) => {
             let item = ThreadItem::CommandExecution {
@@ -457,6 +463,32 @@ async fn emit_turn_completed_with_status(
     };
     outgoing
         .send_server_notification(ServerNotification::TurnCompleted(notification))
+        .await;
+}
+
+async fn complete_file_change_item(
+    conversation_id: ConversationId,
+    item_id: String,
+    changes: Vec<FileUpdateChange>,
+    status: PatchApplyStatus,
+    outgoing: &OutgoingMessageSender,
+    turn_summary_store: &TurnSummaryStore,
+) {
+    {
+        let mut map = turn_summary_store.lock().await;
+        if let Some(summary) = map.get_mut(&conversation_id) {
+            summary.file_change_started.remove(&item_id);
+        }
+    }
+
+    let item = ThreadItem::FileChange {
+        id: item_id,
+        changes,
+        status,
+    };
+    let notification = ItemCompletedNotification { item };
+    outgoing
+        .send_server_notification(ServerNotification::ItemCompleted(notification))
         .await;
 }
 
@@ -647,40 +679,53 @@ fn format_file_change_diff(change: &CoreFileChange) -> String {
 
 async fn on_file_change_request_approval_response(
     event_id: String,
+    conversation_id: ConversationId,
+    item_id: String,
+    changes: Vec<FileUpdateChange>,
     receiver: oneshot::Receiver<JsonValue>,
     codex: Arc<CodexConversation>,
+    outgoing: Arc<OutgoingMessageSender>,
+    turn_summary_store: TurnSummaryStore,
 ) {
     let response = receiver.await;
-    let value = match response {
-        Ok(value) => value,
+    let (decision, should_complete_item) = match response {
+        Ok(value) => {
+            let response = serde_json::from_value::<FileChangeRequestApprovalResponse>(value)
+                .unwrap_or_else(|err| {
+                    error!("failed to deserialize FileChangeRequestApprovalResponse: {err}");
+                    FileChangeRequestApprovalResponse {
+                        decision: ApprovalDecision::Decline,
+                    }
+                });
+
+            let decision = match response.decision {
+                ApprovalDecision::Accept => ReviewDecision::Approved,
+                ApprovalDecision::Decline => ReviewDecision::Denied,
+                ApprovalDecision::Cancel => ReviewDecision::Abort,
+            };
+            // Allow EventMsg::PatchApplyEnd to emit ItemCompleted for accepted patches.
+            // Only short-circuit on declines/cancels/failures.
+            let should_complete_item = !matches!(decision, ReviewDecision::Approved);
+            (decision, should_complete_item)
+        }
         Err(err) => {
             error!("request failed: {err:?}");
-            if let Err(submit_err) = codex
-                .submit(Op::PatchApproval {
-                    id: event_id.clone(),
-                    decision: ReviewDecision::Denied,
-                })
-                .await
-            {
-                error!("failed to submit denied PatchApproval after request failure: {submit_err}");
-            }
-            return;
+            (ReviewDecision::Denied, true)
         }
     };
 
-    let response = serde_json::from_value::<FileChangeRequestApprovalResponse>(value)
-        .unwrap_or_else(|err| {
-            error!("failed to deserialize FileChangeRequestApprovalResponse: {err}");
-            FileChangeRequestApprovalResponse {
-                decision: ApprovalDecision::Decline,
-            }
-        });
+    if should_complete_item {
+        complete_file_change_item(
+            conversation_id,
+            item_id,
+            changes,
+            PatchApplyStatus::Failed,
+            outgoing.as_ref(),
+            &turn_summary_store,
+        )
+        .await;
+    }
 
-    let decision = match response.decision {
-        ApprovalDecision::Accept => ReviewDecision::Approved,
-        ApprovalDecision::Decline => ReviewDecision::Denied,
-        ApprovalDecision::Cancel => ReviewDecision::Abort,
-    };
     if let Err(err) = codex
         .submit(Op::PatchApproval {
             id: event_id,
