@@ -10,6 +10,7 @@ use codex_execpolicy2::rule::PatternToken;
 use codex_execpolicy2::rule::PrefixPattern;
 use codex_execpolicy2::rule::PrefixRule;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 
 fn tokens(cmd: &[&str]) -> Vec<String> {
     cmd.iter().map(std::string::ToString::to_string).collect()
@@ -58,6 +59,14 @@ prefix_rule(
         },
         evaluation
     );
+}
+
+#[test]
+fn serializes_no_match_as_object() {
+    let serialized =
+        serde_json::to_value(&Evaluation::NoMatch {}).expect("should serialize evaluation");
+
+    assert_eq!(json!({"noMatch": {}}), serialized);
 }
 
 #[test]
@@ -288,7 +297,7 @@ prefix_rule(
         "color.status=always",
         "status",
     ]));
-    assert_eq!(Evaluation::NoMatch, no_match_eval);
+    assert_eq!(Evaluation::NoMatch {}, no_match_eval);
 }
 
 #[test]

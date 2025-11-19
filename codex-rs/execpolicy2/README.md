@@ -34,7 +34,7 @@ cargo run -p codex-execpolicy2 -- check --policy path/to/policy.codexpolicy git 
 ```
 - Example outcomes:
   - Match: `{"match": { ... "decision": "allow" ... }}`
-  - No match: `"noMatch"`
+  - No match: `{"noMatch": {}}`
 
 ## Response shapes
 - Match:
@@ -56,7 +56,7 @@ cargo run -p codex-execpolicy2 -- check --policy path/to/policy.codexpolicy git 
 
 - No match:
 ```json
-"noMatch"
+{"noMatch": {}}
 ```
 
 - `matchedRules` lists every rule whose prefix matched the command; `matchedPrefix` is the exact prefix that matched.

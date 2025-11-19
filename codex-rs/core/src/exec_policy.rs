@@ -109,7 +109,7 @@ fn evaluate_with_policy(
             }
             Decision::Allow => Some(ApprovalRequirement::Skip),
         },
-        Evaluation::NoMatch => None,
+        Evaluation::NoMatch { .. } => None,
     }
 }
 
@@ -206,7 +206,7 @@ mod tests {
         let commands = [vec!["rm".to_string()]];
         assert!(matches!(
             policy.check_multiple(commands.iter()),
-            Evaluation::NoMatch
+            Evaluation::NoMatch { .. }
         ));
         assert!(!temp_dir.path().join(POLICY_DIR_NAME).exists());
     }
@@ -259,7 +259,7 @@ mod tests {
         let command = [vec!["ls".to_string()]];
         assert!(matches!(
             policy.check_multiple(command.iter()),
-            Evaluation::NoMatch
+            Evaluation::NoMatch { .. }
         ));
     }
 
