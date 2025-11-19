@@ -584,11 +584,7 @@ pub(crate) fn new_session_info(
     let SessionConfiguredEvent {
         model,
         reasoning_effort,
-        session_id: _,
-        history_log_id: _,
-        history_entry_count: _,
-        initial_messages: _,
-        rollout_path: _,
+        ..
     } = event;
     SessionInfoCell(if is_first_event {
         // Header box rendered as history (so it appears at the very top)
