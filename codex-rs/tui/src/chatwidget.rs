@@ -2355,11 +2355,15 @@ impl ChatWidget {
             None => (None, None),
         };
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
-        let mode_label = match self.config.sandbox_policy {
+        let describe_policy = |policy: &SandboxPolicy| match policy {
             SandboxPolicy::WorkspaceWrite { .. } => "Agent mode",
             SandboxPolicy::ReadOnly => "Read-Only mode",
             _ => "Agent mode",
         };
+        let mode_label = preset
+            .as_ref()
+            .map(|p| describe_policy(&p.sandbox))
+            .unwrap_or_else(|| describe_policy(&self.config.sandbox_policy));
         let info_line = if failed_scan {
             Line::from(vec![
                 "We couldn't complete the world-writable scan, so protections cannot be verified. "
@@ -2370,7 +2374,7 @@ impl ChatWidget {
         } else {
             Line::from(vec![
                 "The Windows sandbox cannot protect writes to folders that are writable by Everyone.".into(),
-                " Consider removing write access for Everyone from the following folders:"
+                " Consider removing write access for Everyone from the following folders:".into(),
             ])
         };
         header_children.push(Box::new(
@@ -2454,13 +2458,15 @@ impl ChatWidget {
         use ratatui_macros::line;
 
         let mut header = ColumnRenderable::new();
-        header.push(line![
-            "Agent mode on Windows uses an experimental sandbox".bold()
-        ]);
-        header.push(line!["to limit network and filesystem access.".bold()]);
-        header.push(line![
-            "Learn more: https://github.com/openai/codex/blob/main/docs/sandbox.md#windows"
-        ]);
+        header.push(*Box::new(
+            Paragraph::new(vec![
+                line!["Agent mode on Windows uses an experimental sandbox to limit network and filesystem access.".bold()],
+                line![
+                    "Learn more: https://github.com/openai/codex/blob/main/docs/sandbox.md#windows"
+                ],
+            ])
+            .wrap(Wrap { trim: false }),
+        ));
 
         let preset_clone = preset;
         let items = vec![
@@ -2468,7 +2474,7 @@ impl ChatWidget {
                 name: "Enable experimental sandbox".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
-                    tx.send(AppEvent::EnableWindowsSandboxForAuto {
+                    tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
                         preset: preset_clone.clone(),
                     });
                 })],
