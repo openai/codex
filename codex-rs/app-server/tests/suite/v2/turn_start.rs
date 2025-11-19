@@ -34,7 +34,7 @@ use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[tokio::test]
 async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<()> {
@@ -533,6 +533,31 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
     .await??;
     let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
 
+    let started_file_change = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let started_notif = mcp
+                .read_stream_until_notification_message("item/started")
+                .await?;
+            let started: ItemStartedNotification =
+                serde_json::from_value(started_notif.params.clone().expect("item/started params"))?;
+            if let ThreadItem::FileChange { .. } = started.item {
+                return Ok::<ThreadItem, anyhow::Error>(started.item);
+            }
+        }
+    })
+    .await??;
+    let ThreadItem::FileChange {
+        ref id,
+        status,
+        ref changes,
+    } = started_file_change
+    else {
+        unreachable!("loop ensures we break on file change items");
+    };
+    assert_eq!(id, "patch-call");
+    assert_eq!(status, PatchApplyStatus::InProgress);
+    let started_changes = changes.clone();
+
     let server_req = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_request_message(),
@@ -555,6 +580,7 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
             diff: "new line\n".to_string(),
         }]
     );
+    pretty_assertions::assert_eq!(started_changes, approval_changes);
 
     mcp.send_response(
         request_id,
@@ -564,40 +590,28 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
     )
     .await?;
 
-    let started_notif: JSONRPCNotification = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("item/started"),
-    )
-    .await??;
-    let started: ItemStartedNotification =
-        serde_json::from_value(started_notif.params.expect("item/started params"))?;
-    match started.item {
-        ThreadItem::FileChange {
-            ref id,
-            status,
-            ref changes,
-        } => {
-            assert_eq!(id, "patch-call");
-            assert_eq!(status, PatchApplyStatus::InProgress);
-            assert_eq!(changes, &approval_changes);
+    let completed_file_change = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let completed_notif = mcp
+                .read_stream_until_notification_message("item/completed")
+                .await?;
+            let completed: ItemCompletedNotification = serde_json::from_value(
+                completed_notif
+                    .params
+                    .clone()
+                    .expect("item/completed params"),
+            )?;
+            if let ThreadItem::FileChange { .. } = completed.item {
+                return Ok::<ThreadItem, anyhow::Error>(completed.item);
+            }
         }
-        other => panic!("expected FileChange item, got {other:?}"),
-    }
-
-    let completed_notif: JSONRPCNotification = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("item/completed"),
-    )
+    })
     .await??;
-    let completed: ItemCompletedNotification =
-        serde_json::from_value(completed_notif.params.expect("item/completed params"))?;
-    match completed.item {
-        ThreadItem::FileChange { ref id, status, .. } => {
-            assert_eq!(id, "patch-call");
-            assert_eq!(status, PatchApplyStatus::Completed);
-        }
-        other => panic!("expected FileChange item, got {other:?}"),
-    }
+    let ThreadItem::FileChange { ref id, status, .. } = completed_file_change else {
+        unreachable!("loop ensures we break on file change items");
+    };
+    assert_eq!(id, "patch-call");
+    assert_eq!(status, PatchApplyStatus::Completed);
 
     timeout(
         DEFAULT_READ_TIMEOUT,

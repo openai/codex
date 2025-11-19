@@ -102,6 +102,24 @@ pub(crate) async fn apply_bespoke_event_handling(
                 // Until we migrate the core to be aware of a first class FileChangeItem
                 // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
                 let item_id = call_id.clone();
+
+                let first_start = {
+                    let mut map = turn_summary_store.lock().await;
+                    let summary = map.entry(conversation_id).or_default();
+                    summary.file_change_started.insert(item_id.clone())
+                };
+                if first_start {
+                    let item = ThreadItem::FileChange {
+                        id: item_id.clone(),
+                        changes: convert_patch_changes(&changes),
+                        status: PatchApplyStatus::InProgress,
+                    };
+                    let notification = ItemStartedNotification { item };
+                    outgoing
+                        .send_server_notification(ServerNotification::ItemStarted(notification))
+                        .await;
+                }
+
                 let converted_changes = convert_patch_changes(&changes);
                 let params = FileChangeRequestApprovalParams {
                     thread_id: conversation_id.to_string(),
@@ -276,24 +294,45 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::PatchApplyBegin(patch_begin_event) => {
-            let item = ThreadItem::FileChange {
-                id: patch_begin_event.call_id.clone(),
-                changes: convert_patch_changes(&patch_begin_event.changes),
-                status: PatchApplyStatus::InProgress,
+            // Until we migrate the core to be aware of a first class FileChangeItem
+            // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
+            let item_id = patch_begin_event.call_id.clone();
+
+            let first_start = {
+                let mut map = turn_summary_store.lock().await;
+                let summary = map.entry(conversation_id).or_default();
+                summary.file_change_started.insert(item_id.clone())
             };
-            let notification = ItemStartedNotification { item };
-            outgoing
-                .send_server_notification(ServerNotification::ItemStarted(notification))
-                .await;
+            if first_start {
+                let item = ThreadItem::FileChange {
+                    id: item_id.clone(),
+                    changes: convert_patch_changes(&patch_begin_event.changes),
+                    status: PatchApplyStatus::InProgress,
+                };
+                let notification = ItemStartedNotification { item };
+                outgoing
+                    .send_server_notification(ServerNotification::ItemStarted(notification))
+                    .await;
+            }
         }
         EventMsg::PatchApplyEnd(patch_end_event) => {
+            // Until we migrate the core to be aware of a first class FileChangeItem
+            // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
+            let item_id = patch_end_event.call_id.clone();
+
             let status = if patch_end_event.success {
                 PatchApplyStatus::Completed
             } else {
                 PatchApplyStatus::Failed
             };
+            {
+                let mut map = turn_summary_store.lock().await;
+                if let Some(summary) = map.get_mut(&conversation_id) {
+                    summary.file_change_started.remove(&item_id.clone());
+                }
+            }
             let item = ThreadItem::FileChange {
-                id: patch_end_event.call_id.clone(),
+                id: item_id.clone(),
                 changes: convert_patch_changes(&patch_end_event.changes),
                 status,
             };
