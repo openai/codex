@@ -64,18 +64,18 @@ fn operating_system_context_block() -> String {
 }
 
 fn default_env_context_str(cwd: &str, shell: &Shell) -> String {
+    let shell_line = match shell.name() {
+        Some(name) => format!("  <shell>{name}</shell>\n"),
+        None => String::new(),
+    };
+    let os_block = operating_system_context_block();
     format!(
         r#"<environment_context>
-  <cwd>{}</cwd>
+  <cwd>{cwd}</cwd>
   <approval_policy>on-request</approval_policy>
   <sandbox_mode>read-only</sandbox_mode>
   <network_access>restricted</network_access>
-{}</environment_context>"#,
-        cwd,
-        match shell.name() {
-            Some(name) => format!("  <shell>{name}</shell>\n"),
-            None => String::new(),
-        }
+{shell_line}{os_block}</environment_context>"#
     )
 }
 
