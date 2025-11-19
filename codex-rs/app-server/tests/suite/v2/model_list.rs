@@ -64,6 +64,10 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
                     reasoning_effort: ReasoningEffort::High,
                     description: "Maximizes reasoning depth for complex problems".to_string(),
                 },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::ExtraHigh,
+                    description: "Extra high reasoning depth for complex problems".to_string(),
+                },
             ],
             default_reasoning_effort: ReasoningEffort::Medium,
             is_default: true,
