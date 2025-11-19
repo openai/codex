@@ -135,8 +135,8 @@ use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
 use codex_utils_tokenizer::warm_model_cache;
-use std::path::Path;
 use reqwest::StatusCode;
+use std::path::Path;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -1757,7 +1757,10 @@ mod handlers {
                 let message = format!("Failed to save session '{name}': {err}");
                 let event = Event {
                     id: sub_id,
-                    msg: EventMsg::Error(ErrorEvent { message }),
+                    msg: EventMsg::Error(ErrorEvent {
+                        message,
+                        http_status_code: None,
+                    }),
                 };
                 sess.send_event_raw(event).await;
             }
