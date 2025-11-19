@@ -34,7 +34,7 @@ impl SessionTask for CompactTask {
             .is_some_and(|auth| auth.mode == AuthMode::ChatGPT)
             && session.enabled(Feature::RemoteCompaction).await
         {
-            crate::compact_remote::run_remote_compact_task(session, ctx, input).await
+            crate::compact_remote::run_remote_compact_task(session, ctx).await
         } else {
             crate::compact::run_compact_task(session, ctx, input).await
         }
