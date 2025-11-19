@@ -11,7 +11,7 @@ pub mod spec;
 
 use crate::exec::ExecToolCallOutput;
 use crate::truncate::TruncationPolicy;
-use crate::truncate::truncate_text;
+use crate::truncate::formatted_truncate_text;
 pub use router::ToolRouter;
 use serde::Serialize;
 
@@ -82,5 +82,5 @@ pub fn format_exec_output_str(
     };
 
     // Truncate for model consumption before serialization.
-    truncate_text(&body, truncation_policy)
+    formatted_truncate_text(&body, truncation_policy)
 }

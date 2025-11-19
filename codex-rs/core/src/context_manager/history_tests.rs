@@ -231,7 +231,7 @@ fn normalization_retains_local_shell_outputs() {
         ResponseItem::FunctionCallOutput {
             call_id: "shell-1".to_string(),
             output: FunctionCallOutputPayload {
-                content: "ok".to_string(),
+                content: "Total output lines: 1\n\nok".to_string(),
                 ..Default::default()
             },
         },
@@ -362,7 +362,7 @@ fn assert_truncated_message_matches(message: &str, line: &str, expected_removed:
 fn truncated_message_pattern(line: &str) -> String {
     let escaped_line = regex_lite::escape(line);
     format!(
-        r"(?s)^(?P<body>{escaped_line}.*?)(?:\r?\n)?\[…(?P<removed>\d+) tokens truncated…](?:\r?\n.*)?$"
+        r"(?s)^(?P<body>{escaped_line}.*?)(?:\r?\n)?…(?P<removed>\d+) tokens truncated…(?:\r?\n.*)?$"
     )
 }
 
@@ -392,7 +392,6 @@ fn format_exec_output_marks_byte_truncation_without_omitted_lines() {
 #[test]
 fn format_exec_output_returns_original_when_within_limits() {
     let content = "example output\n".repeat(10);
-
     assert_eq!(truncate_exec_output(&content), content);
 }
 

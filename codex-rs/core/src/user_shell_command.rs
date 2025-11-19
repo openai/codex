@@ -100,7 +100,7 @@ mod tests {
         };
         assert_eq!(
             text,
-            "<user_shell_command>\n<command>\necho hi\n</command>\n<result>\nExit code: 0\nDuration: 1.0000 seconds\nOutput:\nhi\n</result>\n</user_shell_command>"
+            "<user_shell_command>\n<command>\necho hi\n</command>\n<result>\nExit code: 0\nDuration: 1.0000 seconds\nOutput:\nTotal output lines: 1\n\nhi\n</result>\n</user_shell_command>"
         );
     }
 
@@ -118,7 +118,7 @@ mod tests {
         let record = format_user_shell_command_record("false", &exec_output, &turn_context);
         assert_eq!(
             record,
-            "<user_shell_command>\n<command>\nfalse\n</command>\n<result>\nExit code: 42\nDuration: 0.1200 seconds\nOutput:\ncombined output wins\n</result>\n</user_shell_command>"
+            "<user_shell_command>\n<command>\nfalse\n</command>\n<result>\nExit code: 42\nDuration: 0.1200 seconds\nOutput:\nTotal output lines: 1\n\ncombined output wins\n</result>\n</user_shell_command>"
         );
     }
 }
