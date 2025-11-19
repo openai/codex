@@ -1,4 +1,5 @@
 use crate::auth::AuthCredentialsStoreMode;
+use crate::auth::CodexAuth;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config::types::History;
 use crate::config::types::McpServerConfig;
@@ -34,6 +35,7 @@ use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -65,6 +67,7 @@ pub mod types;
 pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5.1-codex-max";
 #[cfg(not(target_os = "windows"))]
 pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5.1-codex-max";
+pub const OPENAI_DEFAULT_MODEL_API_KEY: &str = "gpt-5.1-codex";
 const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5.1-codex-max";
 pub const GPT_5_CODEX_MEDIUM_MODEL: &str = "gpt-5.1-codex-max";
 
@@ -1103,10 +1106,20 @@ impl Config {
 
         let forced_login_method = cfg.forced_login_method;
 
+        let cli_auth_credentials_store_mode = cfg.cli_auth_credentials_store.unwrap_or_default();
+        let auth_mode = match forced_login_method {
+            Some(ForcedLoginMethod::Api) => Some(AuthMode::ApiKey),
+            Some(ForcedLoginMethod::Chatgpt) => Some(AuthMode::ChatGPT),
+            None => CodexAuth::from_auth_storage(&codex_home, cli_auth_credentials_store_mode)
+                .ok()
+                .flatten()
+                .map(|auth| auth.mode),
+        };
+
         let model = model
             .or(config_profile.model)
             .or(cfg.model)
-            .unwrap_or_else(default_model);
+            .unwrap_or_else(|| default_model_for_auth(auth_mode));
 
         let mut model_family =
             find_family_for_model(&model).unwrap_or_else(|| derive_default_model_family(&model));
@@ -1195,7 +1208,7 @@ impl Config {
             compact_prompt,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
-            cli_auth_credentials_store_mode: cfg.cli_auth_credentials_store.unwrap_or_default(),
+            cli_auth_credentials_store_mode,
             mcp_servers: cfg.mcp_servers,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
@@ -1336,6 +1349,13 @@ fn default_model() -> String {
     OPENAI_DEFAULT_MODEL.to_string()
 }
 
+fn default_model_for_auth(auth_mode: Option<AuthMode>) -> String {
+    match auth_mode {
+        Some(AuthMode::ApiKey) => OPENAI_DEFAULT_MODEL_API_KEY.to_string(),
+        _ => default_model(),
+    }
+}
+
 fn default_review_model() -> String {
     OPENAI_DEFAULT_REVIEW_MODEL.to_string()
 }
@@ -1390,6 +1410,22 @@ mod tests {
 
     use std::time::Duration;
     use tempfile::TempDir;
+
+    #[test]
+    fn default_model_uses_auth_mode() {
+        assert_eq!(
+            default_model_for_auth(Some(AuthMode::ApiKey)),
+            OPENAI_DEFAULT_MODEL_API_KEY.to_string()
+        );
+        assert_eq!(
+            default_model_for_auth(Some(AuthMode::ChatGPT)),
+            OPENAI_DEFAULT_MODEL.to_string()
+        );
+        assert_eq!(
+            default_model_for_auth(None),
+            OPENAI_DEFAULT_MODEL.to_string()
+        );
+    }
 
     #[test]
     fn test_toml_parsing() {
