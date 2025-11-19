@@ -1188,14 +1188,17 @@ name = "codex-exec-server"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "clap",
  "codex-core",
+ "codex-execpolicy2",
  "libc",
  "path-absolutize",
  "pretty_assertions",
  "rmcp",
  "serde",
  "serde_json",
+ "shlex",
  "socket2 0.6.0",
  "tempfile",
  "tokio",
