@@ -2479,8 +2479,9 @@ mod tests {
             duration: StdDuration::from_secs(1),
             timed_out: true,
         };
+        let (_, turn_context) = make_session_and_context();
 
-        let out = format_exec_output_str(&exec);
+        let out = format_exec_output_str(&exec, turn_context.truncation_policy);
 
         assert_eq!(
             out,

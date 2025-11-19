@@ -242,12 +242,16 @@ impl ToolEmitter {
         self.emit(ctx, ToolEventStage::Begin).await;
     }
 
-    fn format_exec_output_for_model(&self, output: &ExecToolCallOutput) -> String {
+    fn format_exec_output_for_model(
+        &self,
+        output: &ExecToolCallOutput,
+        ctx: ToolEventCtx<'_>,
+    ) -> String {
         match self {
             Self::Shell { freeform: true, .. } => {
-                super::format_exec_output_for_model_freeform(output)
+                super::format_exec_output_for_model_freeform(output, ctx.turn.truncation_policy)
             }
-            _ => super::format_exec_output_for_model_structured(output),
+            _ => super::format_exec_output_for_model_structured(output, ctx.turn.truncation_policy),
         }
     }
 
@@ -258,7 +262,7 @@ impl ToolEmitter {
     ) -> Result<String, FunctionCallError> {
         let (event, result) = match out {
             Ok(output) => {
-                let content = self.format_exec_output_for_model(&output);
+                let content = self.format_exec_output_for_model(&output, ctx);
                 let exit_code = output.exit_code;
                 let event = ToolEventStage::Success(output);
                 let result = if exit_code == 0 {
@@ -270,7 +274,7 @@ impl ToolEmitter {
             }
             Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output })))
             | Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output }))) => {
-                let response = self.format_exec_output_for_model(&output);
+                let response = self.format_exec_output_for_model(&output, ctx);
                 let event = ToolEventStage::Failure(ToolEventFailure::Output(*output));
                 let result = Err(FunctionCallError::RespondToModel(response));
                 (event, result)
@@ -359,7 +363,7 @@ async fn emit_exec_stage(
                 aggregated_output: output.aggregated_output.text.clone(),
                 exit_code: output.exit_code,
                 duration: output.duration,
-                formatted_output: format_exec_output_str(&output),
+                formatted_output: format_exec_output_str(&output, ctx.turn.truncation_policy),
             };
             emit_exec_end(ctx, exec_input, exec_result).await;
         }

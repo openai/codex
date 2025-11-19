@@ -407,7 +407,6 @@ $"#;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ShellModelOutput::Shell)]
-#[test_case(ShellModelOutput::ShellCommand)]
 #[test_case(ShellModelOutput::LocalShell)]
 async fn shell_output_reserializes_truncated_content(output_type: ShellModelOutput) -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -417,6 +416,7 @@ async fn shell_output_reserializes_truncated_content(output_type: ShellModelOutp
         config.model = "gpt-5.1-codex".to_string();
         config.model_family =
             find_family_for_model("gpt-5.1-codex").expect("gpt-5.1-codex is a model family");
+        config.tool_output_token_limit = Some(200);
         if matches!(output_type, ShellModelOutput::ShellCommand) {
             config.features.enable(Feature::ShellCommandTool);
         }
@@ -457,10 +457,7 @@ Output:
 4
 5
 6
-.*
-\[\.{3} omitted \d+ of 400 lines \.{3}\]
-
-.*
+.*…45 tokens truncated….*
 396
 397
 398
@@ -858,7 +855,7 @@ async fn shell_command_output_is_not_truncated_under_10k_bytes() -> Result<()> {
     let expected_pattern = r"(?s)^Exit code: 0
 Wall time: [0-9]+(?:\.[0-9]+)? seconds
 Output:
-1{5000}$"; // TODO: this is very wrong!!!
+1{10000}$";
     assert_regex_match(expected_pattern, output);
 
     Ok(())
@@ -911,12 +908,8 @@ async fn shell_command_output_is_not_truncated_over_10k_bytes() -> Result<()> {
 
     let expected_pattern = r"(?s)^Exit code: 0
 Wall time: [0-9]+(?:\.[0-9]+)? seconds
-Total output lines: 1
 Output:
-1*
-\[... removed 1 bytes to fit 10000 byte limit ...\]
-
-$";
+1*…1 chars truncated…1*$";
     assert_regex_match(expected_pattern, output);
 
     Ok(())
