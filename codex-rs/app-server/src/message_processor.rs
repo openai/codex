@@ -11,14 +11,11 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::ServerNotification;
-use codex_app_server_protocol::WindowsWorldWritableWarningNotification;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::default_client::USER_AGENT_SUFFIX;
 use codex_core::default_client::get_codex_user_agent;
-use codex_core::features::Feature;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
 use std::sync::Arc;
@@ -26,7 +23,6 @@ use std::sync::Arc;
 pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     codex_message_processor: CodexMessageProcessor,
-    config: Arc<Config>,
     initialized: bool,
 }
 
@@ -54,14 +50,13 @@ impl MessageProcessor {
             conversation_manager,
             outgoing.clone(),
             codex_linux_sandbox_exe,
-            config.clone(),
+            config,
             feedback,
         );
 
         Self {
             outgoing,
             codex_message_processor,
-            config,
             initialized: false,
         }
     }
@@ -122,7 +117,6 @@ impl MessageProcessor {
                     self.outgoing.send_response(request_id, response).await;
 
                     self.initialized = true;
-                    self.handle_windows_world_writable_warning().await;
 
                     return;
                 }
@@ -161,55 +155,5 @@ impl MessageProcessor {
     /// Handle an error object received from the peer.
     pub(crate) fn process_error(&mut self, err: JSONRPCError) {
         tracing::error!("<- error: {:?}", err);
-    }
-
-    /// On Windows, when using the experimental sandbox, we need to warn the user about world-writable directories.
-    async fn handle_windows_world_writable_warning(&self) {
-        if !cfg!(windows) {
-            return;
-        }
-
-        if !self.config.features.enabled(Feature::WindowsSandbox) {
-            return;
-        }
-
-        if !matches!(
-            self.config.sandbox_policy,
-            codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                | codex_protocol::protocol::SandboxPolicy::ReadOnly
-        ) {
-            return;
-        }
-
-        if self
-            .config
-            .notices
-            .hide_world_writable_warning
-            .unwrap_or(false)
-        {
-            return;
-        }
-
-        // This function is stubbed out to return None on non-Windows platforms
-        let cwd = match std::env::current_dir() {
-            Ok(cwd) => cwd,
-            Err(_) => return,
-        };
-        if let Some((sample_paths, extra_count, failed_scan)) =
-            codex_windows_sandbox::world_writable_warning_details(
-                self.config.codex_home.as_path(),
-                cwd,
-            )
-        {
-            self.outgoing
-                .send_server_notification(ServerNotification::WindowsWorldWritableWarning(
-                    WindowsWorldWritableWarningNotification {
-                        sample_paths,
-                        extra_count,
-                        failed_scan,
-                    },
-                ))
-                .await;
-        }
     }
 }
