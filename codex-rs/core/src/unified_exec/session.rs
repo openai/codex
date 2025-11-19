@@ -67,13 +67,14 @@ impl OutputBufferState {
 }
 
 pub(crate) type OutputBuffer = Arc<Mutex<OutputBufferState>>;
-pub(crate) type OutputHandles = (OutputBuffer, Arc<Notify>);
+pub(crate) type OutputHandles = (OutputBuffer, Arc<Notify>, Arc<Notify>);
 
 #[derive(Debug)]
 pub(crate) struct UnifiedExecSession {
     session: ExecCommandSession,
     output_buffer: OutputBuffer,
     output_notify: Arc<Notify>,
+    exit_notify: Arc<Notify>,
     output_task: JoinHandle<()>,
     sandbox_type: SandboxType,
 }
@@ -83,12 +84,14 @@ impl UnifiedExecSession {
         session: ExecCommandSession,
         initial_output_rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
         sandbox_type: SandboxType,
+        exit_notify: Arc<Notify>,
     ) -> Self {
         let output_buffer = Arc::new(Mutex::new(OutputBufferState::default()));
         let output_notify = Arc::new(Notify::new());
         let mut receiver = initial_output_rx;
         let buffer_clone = Arc::clone(&output_buffer);
         let notify_clone = Arc::clone(&output_notify);
+        let exit_notify_clone = Arc::clone(&exit_notify);
         let output_task = tokio::spawn(async move {
             loop {
                 match receiver.recv().await {
@@ -99,7 +102,10 @@ impl UnifiedExecSession {
                         notify_clone.notify_waiters();
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        exit_notify_clone.notify_waiters();
+                        break;
+                    }
                 }
             }
         });
@@ -108,6 +114,7 @@ impl UnifiedExecSession {
             session,
             output_buffer,
             output_notify,
+            exit_notify,
             output_task,
             sandbox_type,
         }
@@ -121,6 +128,7 @@ impl UnifiedExecSession {
         (
             Arc::clone(&self.output_buffer),
             Arc::clone(&self.output_notify),
+            Arc::clone(&self.exit_notify),
         )
     }
 
@@ -191,7 +199,8 @@ impl UnifiedExecSession {
             output_rx,
             mut exit_rx,
         } = spawned;
-        let managed = Self::new(session, output_rx, sandbox_type);
+        let exit_notify = Arc::new(Notify::new());
+        let managed = Self::new(session, output_rx, sandbox_type, Arc::clone(&exit_notify));
 
         let exit_ready = match exit_rx.try_recv() {
             Ok(_) | Err(TryRecvError::Closed) => true,
@@ -199,17 +208,27 @@ impl UnifiedExecSession {
         };
 
         if exit_ready {
+            exit_notify.notify_waiters();
             managed.check_for_sandbox_denial().await?;
             return Ok(managed);
         }
 
-        tokio::pin!(exit_rx);
         if tokio::time::timeout(Duration::from_millis(50), &mut exit_rx)
             .await
             .is_ok()
         {
+            exit_notify.notify_waiters();
             managed.check_for_sandbox_denial().await?;
+            return Ok(managed);
         }
+
+        tokio::spawn({
+            let notify = Arc::clone(&exit_notify);
+            async move {
+                let _ = exit_rx.await;
+                notify.notify_waiters();
+            }
+        });
 
         Ok(managed)
     }
