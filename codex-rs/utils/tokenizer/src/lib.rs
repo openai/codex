@@ -1,7 +1,9 @@
 use std::fmt;
+use std::num::NonZeroUsize;
+use std::sync::OnceLock;
 
-use anyhow::Context;
 use anyhow::Error as AnyhowError;
+use codex_utils_cache::BlockingLruCache;
 use thiserror::Error;
 use tiktoken_rs::CoreBPE;
 
@@ -37,6 +39,26 @@ pub enum TokenizerError {
     },
 }
 
+fn model_cache() -> &'static BlockingLruCache<String, CoreBPE> {
+    static MODEL_CACHE: OnceLock<BlockingLruCache<String, CoreBPE>> = OnceLock::new();
+    MODEL_CACHE
+        .get_or_init(|| BlockingLruCache::new(NonZeroUsize::new(64).unwrap_or(NonZeroUsize::MIN)))
+}
+
+/// Fire-and-forget function used to pre-warm model tokenizer loading. This is done
+/// on a best-effort basis, without any guarantee about the state of the cache
+/// before or after.
+/// Only working in Tokio runtimes
+pub fn warm_model_cache(model: &str) {
+    if tokio::runtime::Handle::try_current().is_err() {
+        return;
+    }
+    let model = model.to_string();
+    tokio::spawn(async move {
+        let _ = Tokenizer::for_model(&model);
+    });
+}
+
 /// Thin wrapper around a `tiktoken_rs::CoreBPE` tokenizer.
 #[derive(Clone)]
 pub struct Tokenizer {
@@ -63,20 +85,13 @@ impl Tokenizer {
     /// Build a tokenizer using an `OpenAI` model name (maps to an encoding).
     /// Falls back to the `O200kBase` encoding when the model is unknown.
     pub fn for_model(model: &str) -> Result<Self, TokenizerError> {
-        match tiktoken_rs::get_bpe_from_model(model) {
-            Ok(inner) => Ok(Self { inner }),
-            Err(model_error) => {
-                let inner = tiktoken_rs::o200k_base()
-                    .with_context(|| {
-                        format!("fallback after model lookup failure for {model}: {model_error}")
-                    })
-                    .map_err(|source| TokenizerError::LoadEncoding {
-                        kind: EncodingKind::O200kBase,
-                        source,
-                    })?;
-                Ok(Self { inner })
+        let inner = model_cache().get_or_try_insert_with(model.to_owned(), || {
+            match tiktoken_rs::get_bpe_from_model(model) {
+                Ok(inner) => Ok(inner),
+                Err(_model_error) => Tokenizer::new(EncodingKind::O200kBase).map(|e| e.inner),
             }
-        }
+        })?;
+        Ok(Self { inner })
     }
 
     /// Encode text to token IDs. If `with_special_tokens` is true, special
@@ -107,6 +122,11 @@ impl Tokenizer {
     }
 }
 
+impl fmt::Debug for Tokenizer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Tokenizer {{ inner: <CoreBPE> }}")
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,7 +163,7 @@ mod tests {
     #[test]
     fn model_mapping_builds_tokenizer() -> Result<(), TokenizerError> {
         // Choose a long-standing model alias that maps to cl100k_base.
-        let tok = Tokenizer::for_model("gpt-5")?;
+        let tok = Tokenizer::for_model("gpt-5.1")?;
         let ids = tok.encode("ok", false);
         let back = tok.decode(&ids)?;
         assert_eq!(back, "ok");
@@ -157,5 +177,10 @@ mod tests {
         let text = "fallback please";
         assert_eq!(tok.encode(text, false), fallback.encode(text, false));
         Ok(())
+    }
+
+    #[test]
+    fn warm_model_cache_without_runtime_is_noop() {
+        warm_model_cache("gpt-5");
     }
 }

@@ -5,6 +5,7 @@ members = [
     "async-utils",
     "app-server",
     "app-server-protocol",
+    "app-server-test-client",
     "apply-patch",
     "arg0",
     "feedback",
@@ -15,10 +16,13 @@ members = [
     "common",
     "core",
     "exec",
+    "exec-server",
     "execpolicy",
+    "execpolicy2",
     "keyring-store",
     "file-search",
     "linux-sandbox",
+    "lmstudio",
     "login",
     "mcp-server",
     "mcp-types",
@@ -68,6 +72,7 @@ codex-file-search = { path = "file-search" }
 codex-git = { path = "utils/git" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
+codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
 codex-mcp-server = { path = "mcp-server" }
 codex-ollama = { path = "ollama" }
@@ -122,14 +127,14 @@ eventsource-stream = "0.2.3"
 futures = { version = "0.3", default-features = false }
 http = "1.3.1"
 icu_decimal = "2.1"
-icu_provider = { version = "2.1", features = ["sync"] }
 icu_locale_core = "2.1"
+icu_provider = { version = "2.1", features = ["sync"] }
 ignore = "0.4.23"
 image = { version = "^0.25.8", default-features = false }
 indexmap = "2.12.0"
 insta = "1.43.2"
 itertools = "0.14.0"
-keyring = "3.6"
+keyring = { version = "3.6", default-features = false }
 landlock = "0.4.1"
 lazy_static = "1"
 libc = "0.2.175"
@@ -140,6 +145,7 @@ mime_guess = "2.0.5"
 multimap = "0.10.0"
 notify = "8.2.0"
 nucleo-matcher = "0.3.1"
+once_cell = "1"
 openssl-sys = "*"
 opentelemetry = "0.30.0"
 opentelemetry-appender-tracing = "0.30.0"
@@ -148,7 +154,6 @@ opentelemetry-semantic-conventions = "0.30.0"
 opentelemetry_sdk = "0.30.0"
 os_info = "3.12.0"
 owo-colors = "4.2.0"
-paste = "1.0.15"
 path-absolutize = "3.1.1"
 pathdiff = "0.2"
 portable-pty = "0.9.0"
@@ -172,6 +177,7 @@ sha1 = "0.10.6"
 sha2 = "0.10"
 shlex = "1.3.0"
 similar = "2.7.0"
+socket2 = "0.6.0"
 starlark = "0.13.0"
 strum = "0.27.2"
 strum_macros = "0.27.2"
@@ -181,6 +187,7 @@ tempfile = "3.23.0"
 test-log = "0.2.18"
 textwrap = "0.16.2"
 thiserror = "2.0.17"
+tiktoken-rs = "0.9"
 time = "0.3"
 tiny_http = "0.12"
 tokio = "1"
@@ -278,8 +285,8 @@ opt-level = 0
 [patch.crates-io]
 # Uncomment to debug local changes.
 # ratatui = { path = "../../ratatui" }
-ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.29.0-patch" }
 crossterm = { git = "https://github.com/nornagon/crossterm", branch = "nornagon/color-query" }
+ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.29.0-patch" }
 
 # Uncomment to debug local changes.
 # rmcp = { path = "../../rust-sdk/crates/rmcp" }

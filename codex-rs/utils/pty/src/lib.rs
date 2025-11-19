@@ -111,6 +111,7 @@ pub async fn spawn_pty_process(
     args: &[String],
     cwd: &Path,
     env: &HashMap<String, String>,
+    arg0: &Option<String>,
 ) -> Result<SpawnedPty> {
     if program.is_empty() {
         anyhow::bail!("missing program for PTY spawn");
@@ -124,7 +125,7 @@ pub async fn spawn_pty_process(
         pixel_height: 0,
     })?;
 
-    let mut command_builder = CommandBuilder::new(program);
+    let mut command_builder = CommandBuilder::new(arg0.as_ref().unwrap_or(&program.to_string()));
     command_builder.cwd(cwd);
     command_builder.env_clear();
     for arg in args {

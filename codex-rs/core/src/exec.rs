@@ -182,23 +182,26 @@ async fn exec_windows_sandbox(
         ..
     } = params;
 
-    let policy_str = match sandbox_policy {
-        SandboxPolicy::DangerFullAccess => "workspace-write",
-        SandboxPolicy::ReadOnly => "read-only",
-        SandboxPolicy::WorkspaceWrite { .. } => "workspace-write",
-    };
-
+    let policy_str = serde_json::to_string(sandbox_policy).map_err(|err| {
+        CodexErr::Io(io::Error::other(format!(
+            "failed to serialize Windows sandbox policy: {err}"
+        )))
+    })?;
     let sandbox_cwd = cwd.clone();
-    let logs_base_dir = find_codex_home().ok();
+    let codex_home = find_codex_home().map_err(|err| {
+        CodexErr::Io(io::Error::other(format!(
+            "windows sandbox: failed to resolve codex_home: {err}"
+        )))
+    })?;
     let spawn_res = tokio::task::spawn_blocking(move || {
         run_windows_sandbox_capture(
-            policy_str,
+            policy_str.as_str(),
             &sandbox_cwd,
+            codex_home.as_ref(),
             command,
             &cwd,
             env,
             timeout_ms,
-            logs_base_dir.as_deref(),
         )
     })
     .await;
@@ -440,7 +443,9 @@ async fn exec(
     stdout_stream: Option<StdoutStream>,
 ) -> Result<RawExecToolCallOutput> {
     #[cfg(target_os = "windows")]
-    if sandbox == SandboxType::WindowsRestrictedToken {
+    if sandbox == SandboxType::WindowsRestrictedToken
+        && !matches!(sandbox_policy, SandboxPolicy::DangerFullAccess)
+    {
         return exec_windows_sandbox(params, sandbox_policy).await;
     }
     let timeout = params.timeout_duration();
@@ -532,8 +537,52 @@ async fn consume_truncated_output(
         }
     };
 
-    let stdout = stdout_handle.await??;
-    let stderr = stderr_handle.await??;
+    // Wait for the stdout/stderr collection tasks but guard against them
+    // hanging forever. In the normal case, both pipes are closed once the child
+    // terminates so the tasks exit quickly. However, if the child process
+    // spawned grandchildren that inherited its stdout/stderr file descriptors
+    // those pipes may stay open after we `kill` the direct child on timeout.
+    // That would cause the `read_capped` tasks to block on `read()`
+    // indefinitely, effectively hanging the whole agent.
+
+    const IO_DRAIN_TIMEOUT_MS: u64 = 2_000; // 2 s should be plenty for local pipes
+
+    // We need mutable bindings so we can `abort()` them on timeout.
+    use tokio::task::JoinHandle;
+
+    async fn await_with_timeout(
+        handle: &mut JoinHandle<std::io::Result<StreamOutput<Vec<u8>>>>,
+        timeout: Duration,
+    ) -> std::io::Result<StreamOutput<Vec<u8>>> {
+        match tokio::time::timeout(timeout, &mut *handle).await {
+            Ok(join_res) => match join_res {
+                Ok(io_res) => io_res,
+                Err(join_err) => Err(std::io::Error::other(join_err)),
+            },
+            Err(_elapsed) => {
+                // Timeout: abort the task to avoid hanging on open pipes.
+                handle.abort();
+                Ok(StreamOutput {
+                    text: Vec::new(),
+                    truncated_after_lines: None,
+                })
+            }
+        }
+    }
+
+    let mut stdout_handle = stdout_handle;
+    let mut stderr_handle = stderr_handle;
+
+    let stdout = await_with_timeout(
+        &mut stdout_handle,
+        Duration::from_millis(IO_DRAIN_TIMEOUT_MS),
+    )
+    .await?;
+    let stderr = await_with_timeout(
+        &mut stderr_handle,
+        Duration::from_millis(IO_DRAIN_TIMEOUT_MS),
+    )
+    .await?;
 
     drop(agg_tx);
 

@@ -282,6 +282,14 @@ pub enum OtelHttpProtocol {
     Json,
 }
 
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub struct OtelTlsConfig {
+    pub ca_certificate: Option<PathBuf>,
+    pub client_certificate: Option<PathBuf>,
+    pub client_private_key: Option<PathBuf>,
+}
+
 /// Which OTEL exporter to use.
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "kebab-case")]
@@ -289,12 +297,18 @@ pub enum OtelExporterKind {
     None,
     OtlpHttp {
         endpoint: String,
+        #[serde(default)]
         headers: HashMap<String, String>,
         protocol: OtelHttpProtocol,
+        #[serde(default)]
+        tls: Option<OtelTlsConfig>,
     },
     OtlpGrpc {
         endpoint: String,
+        #[serde(default)]
         headers: HashMap<String, String>,
+        #[serde(default)]
+        tls: Option<OtelTlsConfig>,
     },
 }
 
@@ -338,7 +352,7 @@ pub enum Notifications {
 
 impl Default for Notifications {
     fn default() -> Self {
-        Self::Enabled(false)
+        Self::Enabled(true)
     }
 }
 
@@ -346,7 +360,7 @@ impl Default for Notifications {
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct Tui {
     /// Enable desktop notifications from the TUI when the terminal is unfocused.
-    /// Defaults to `false`.
+    /// Defaults to `true`.
     #[serde(default)]
     pub notifications: Notifications,
 }
@@ -362,6 +376,8 @@ pub struct Notice {
     pub hide_world_writable_warning: Option<bool>,
     /// Tracks whether the user opted out of the rate limit model switch reminder.
     pub hide_rate_limit_model_nudge: Option<bool>,
+    /// Tracks whether the user has seen the model migration prompt
+    pub hide_gpt5_1_migration_prompt: Option<bool>,
 }
 
 impl Notice {

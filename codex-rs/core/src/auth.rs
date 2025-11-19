@@ -227,6 +227,14 @@ impl CodexAuth {
             })
     }
 
+    /// Raw plan string from the ID token (including unknown/new plan types).
+    pub fn raw_plan_type(&self) -> Option<String> {
+        self.get_plan_type().map(|plan| match plan {
+            InternalPlanType::Known(k) => format!("{k:?}"),
+            InternalPlanType::Unknown(raw) => raw,
+        })
+    }
+
     /// Raw internal plan value from the ID token.
     /// Exposes the underlying `token_data::PlanType` without mapping it to the
     /// public `AccountPlanType`. Use this when downstream code needs to inspect
@@ -335,7 +343,10 @@ pub fn save_auth(
 }
 
 /// Load CLI auth data using the configured credential store backend.
-/// Returns `None` when no credentials are stored.
+/// Returns `None` when no credentials are stored. This function is
+/// provided only for tests. Production code should not directly load
+/// from the auth.json storage. It should use the AuthManager abstraction
+/// instead.
 pub fn load_auth_dot_json(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,

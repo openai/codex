@@ -850,6 +850,7 @@ dependencies = [
  "codex-protocol",
  "codex-utils-json-to-toml",
  "core_test_support",
+ "mcp-types",
  "opentelemetry-appender-tracing",
  "os_info",
  "pretty_assertions",
@@ -873,13 +874,25 @@ dependencies = [
  "clap",
  "codex-protocol",
  "mcp-types",
- "paste",
  "pretty_assertions",
  "schemars 0.8.22",
  "serde",
  "serde_json",
  "strum_macros 0.27.2",
  "ts-rs",
+ "uuid",
+]
+
+[[package]]
+name = "codex-app-server-test-client"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "codex-app-server-protocol",
+ "codex-protocol",
+ "serde",
+ "serde_json",
  "uuid",
 ]
 
@@ -1047,7 +1060,10 @@ dependencies = [
  "clap",
  "codex-app-server-protocol",
  "codex-core",
+ "codex-lmstudio",
+ "codex-ollama",
  "codex-protocol",
+ "once_cell",
  "serde",
  "toml",
 ]
@@ -1067,6 +1083,7 @@ dependencies = [
  "chrono",
  "codex-app-server-protocol",
  "codex-apply-patch",
+ "codex-arg0",
  "codex-async-utils",
  "codex-file-search",
  "codex-git",
@@ -1081,6 +1098,7 @@ dependencies = [
  "codex-windows-sandbox",
  "core-foundation 0.9.4",
  "core_test_support",
+ "ctor 0.5.0",
  "dirs",
  "dunce",
  "env-flags",
@@ -1112,6 +1130,7 @@ dependencies = [
  "similar",
  "strum_macros 0.27.2",
  "tempfile",
+ "test-case",
  "test-log",
  "thiserror 2.0.17",
  "time",
@@ -1141,7 +1160,6 @@ dependencies = [
  "codex-arg0",
  "codex-common",
  "codex-core",
- "codex-ollama",
  "codex-protocol",
  "core_test_support",
  "libc",
@@ -1165,6 +1183,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-exec-server"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "codex-core",
+ "libc",
+ "path-absolutize",
+ "pretty_assertions",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "socket2 0.6.0",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "codex-execpolicy"
 version = "0.0.0"
 dependencies = [
@@ -1182,6 +1220,21 @@ dependencies = [
  "serde_with",
  "starlark",
  "tempfile",
+]
+
+[[package]]
+name = "codex-execpolicy2"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "multimap",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "shlex",
+ "starlark",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -1243,6 +1296,19 @@ dependencies = [
  "seccompiler",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "codex-lmstudio"
+version = "0.0.0"
+dependencies = [
+ "codex-core",
+ "reqwest",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "which",
+ "wiremock",
 ]
 
 [[package]]
@@ -1320,6 +1386,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-protocol",
  "eventsource-stream",
+ "http",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry-semantic-conventions",
@@ -1409,6 +1476,7 @@ dependencies = [
  "tracing",
  "urlencoding",
  "webbrowser",
+ "which",
 ]
 
 [[package]]
@@ -1436,12 +1504,12 @@ dependencies = [
  "codex-ansi-escape",
  "codex-app-server-protocol",
  "codex-arg0",
+ "codex-backend-client",
  "codex-common",
  "codex-core",
  "codex-feedback",
  "codex-file-search",
  "codex-login",
- "codex-ollama",
  "codex-protocol",
  "codex-windows-sandbox",
  "color-eyre",
@@ -1464,6 +1532,7 @@ dependencies = [
  "ratatui",
  "ratatui-macros",
  "regex-lite",
+ "reqwest",
  "serde",
  "serde_json",
  "serial_test",
@@ -1546,9 +1615,11 @@ name = "codex-utils-tokenizer"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "codex-utils-cache",
  "pretty_assertions",
  "thiserror 2.0.17",
  "tiktoken-rs",
+ "tokio",
 ]
 
 [[package]]
@@ -1556,6 +1627,7 @@ name = "codex-windows-sandbox"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "codex-protocol",
  "dirs-next",
  "dunce",
  "rand 0.8.5",
@@ -4448,7 +4520,7 @@ checksum = "3af6b589e163c5a788fab00ce0c0366f6efbb9959c2f9874b224936af7fce7e1"
 dependencies = [
  "base64",
  "indexmap 2.12.0",
- "quick-xml",
+ "quick-xml 0.38.0",
  "serde",
  "time",
 ]
@@ -5124,6 +5196,7 @@ version = "0.23.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2491382039b29b9b11ff08b76ff6c97cf287671dbb74f0be44bda389fffe9bd1"
 dependencies = [
+ "log",
  "once_cell",
  "ring",
  "rustls-pki-types",
@@ -6159,6 +6232,39 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f50febec83f5ee1df3015341d8bd429f2d1cc62bcba7ea2076759d315084683"
 
 [[package]]
+name = "test-case"
+version = "3.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb2550dd13afcd286853192af8601920d959b14c401fcece38071d53bf0768a8"
+dependencies = [
+ "test-case-macros",
+]
+
+[[package]]
+name = "test-case-core"
+version = "3.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adcb7fd841cd518e279be3d5a3eb0636409487998a4aff22f3de87b81e88384f"
+dependencies = [
+ "cfg-if",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.104",
+]
+
+[[package]]
+name = "test-case-macros"
+version = "3.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c89e72a01ed4c579669add59014b9a524d609c0c88c6a585ce37485879f6ffb"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.104",
+ "test-case-core",
+]
+
+[[package]]
 name = "test-log"
 version = "0.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6265,9 +6371,9 @@ dependencies = [
 
 [[package]]
 name = "tiktoken-rs"
-version = "0.7.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25563eeba904d770acf527e8b370fe9a5547bacd20ff84a0b6c3bc41288e5625"
+checksum = "3a19830747d9034cd9da43a60eaa8e552dfda7712424aebf187b7a60126bae0d"
 dependencies = [
  "anyhow",
  "base64",
@@ -6518,8 +6624,10 @@ dependencies = [
  "percent-encoding",
  "pin-project",
  "prost",
+ "rustls-native-certs",
  "socket2 0.5.10",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "tower",
  "tower-layer",
@@ -7091,7 +7199,7 @@ version = "0.31.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c66a47e840dc20793f2264eb4b3e4ecb4b75d91c0dd4af04b456128e0bdd449d"
 dependencies = [
- "bitflags 2.9.1",
+ "bitflags 2.10.0",
  "rustix 1.0.8",
  "wayland-backend",
  "wayland-scanner",
@@ -7103,7 +7211,7 @@ version = "0.32.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "efa790ed75fbfd71283bd2521a1cfdc022aabcc28bdcff00851f9e4ae88d9901"
 dependencies = [
- "bitflags 2.9.1",
+ "bitflags 2.10.0",
  "wayland-backend",
  "wayland-client",
  "wayland-scanner",
@@ -7115,7 +7223,7 @@ version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "efd94963ed43cf9938a090ca4f7da58eb55325ec8200c3848963e98dc25b78ec"
 dependencies = [
- "bitflags 2.9.1",
+ "bitflags 2.10.0",
  "wayland-backend",
  "wayland-client",
  "wayland-protocols",
@@ -7724,7 +7832,7 @@ dependencies = [
  "os_pipe",
  "rustix 0.38.44",
  "tempfile",
- "thiserror 2.0.16",
+ "thiserror 2.0.17",
  "tree_magic_mini",
  "wayland-backend",
  "wayland-client",

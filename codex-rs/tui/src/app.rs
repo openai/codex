@@ -7,6 +7,8 @@ use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::file_search::FileSearchManager;
 use crate::history_cell::HistoryCell;
+use crate::model_migration::ModelMigrationOutcome;
+use crate::model_migration::run_model_migration_prompt;
 use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
@@ -15,11 +17,18 @@ use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
+use codex_common::model_presets::ModelUpgrade;
+use codex_common::model_presets::all_model_presets;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
+#[cfg(target_os = "windows")]
+use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
+use codex_core::protocol::FinalOutput;
+#[cfg(target_os = "windows")]
+use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
@@ -48,6 +57,108 @@ pub struct AppExitInfo {
     pub token_usage: TokenUsage,
     pub conversation_id: Option<ConversationId>,
     pub update_action: Option<UpdateAction>,
+}
+
+fn session_summary(
+    token_usage: TokenUsage,
+    conversation_id: Option<ConversationId>,
+) -> Option<SessionSummary> {
+    if token_usage.is_zero() {
+        return None;
+    }
+
+    let usage_line = FinalOutput::from(token_usage).to_string();
+    let resume_command =
+        conversation_id.map(|conversation_id| format!("codex resume {conversation_id}"));
+    Some(SessionSummary {
+        usage_line,
+        resume_command,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SessionSummary {
+    usage_line: String,
+    resume_command: Option<String>,
+}
+
+fn should_show_model_migration_prompt(
+    current_model: &str,
+    target_model: &str,
+    hide_prompt_flag: Option<bool>,
+) -> bool {
+    if target_model == current_model || hide_prompt_flag.unwrap_or(false) {
+        return false;
+    }
+
+    all_model_presets()
+        .iter()
+        .filter(|preset| preset.upgrade.is_some())
+        .any(|preset| preset.model == current_model)
+}
+
+async fn handle_model_migration_prompt_if_needed(
+    tui: &mut tui::Tui,
+    config: &mut Config,
+    app_event_tx: &AppEventSender,
+) -> Option<AppExitInfo> {
+    let upgrade = all_model_presets()
+        .iter()
+        .find(|preset| preset.model == config.model)
+        .and_then(|preset| preset.upgrade.as_ref());
+
+    if let Some(ModelUpgrade {
+        id: target_model,
+        reasoning_effort_mapping,
+    }) = upgrade
+    {
+        let target_model = target_model.to_string();
+        let hide_prompt_flag = config.notices.hide_gpt5_1_migration_prompt;
+        if !should_show_model_migration_prompt(&config.model, &target_model, hide_prompt_flag) {
+            return None;
+        }
+
+        match run_model_migration_prompt(tui).await {
+            ModelMigrationOutcome::Accepted => {
+                app_event_tx.send(AppEvent::PersistModelMigrationPromptAcknowledged {
+                    migration_config: "hide_gpt5_1_migration_prompt".to_string(),
+                });
+                config.model = target_model.to_string();
+                if let Some(family) = find_family_for_model(&target_model) {
+                    config.model_family = family;
+                }
+
+                let mapped_effort = if let Some(reasoning_effort_mapping) = reasoning_effort_mapping
+                    && let Some(reasoning_effort) = config.model_reasoning_effort
+                {
+                    reasoning_effort_mapping
+                        .get(&reasoning_effort)
+                        .cloned()
+                        .or(config.model_reasoning_effort)
+                } else {
+                    config.model_reasoning_effort
+                };
+
+                config.model_reasoning_effort = mapped_effort;
+
+                app_event_tx.send(AppEvent::UpdateModel(target_model.clone()));
+                app_event_tx.send(AppEvent::UpdateReasoningEffort(mapped_effort));
+                app_event_tx.send(AppEvent::PersistModelSelection {
+                    model: target_model.clone(),
+                    effort: mapped_effort,
+                });
+            }
+            ModelMigrationOutcome::Exit => {
+                return Some(AppExitInfo {
+                    token_usage: TokenUsage::default(),
+                    conversation_id: None,
+                    update_action: None,
+                });
+            }
+        }
+    }
+
+    None
 }
 
 pub(crate) struct App {
@@ -89,7 +200,7 @@ impl App {
     pub async fn run(
         tui: &mut tui::Tui,
         auth_manager: Arc<AuthManager>,
-        config: Config,
+        mut config: Config,
         active_profile: Option<String>,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
@@ -100,6 +211,12 @@ impl App {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
 
+        let exit_info =
+            handle_model_migration_prompt_if_needed(tui, &mut config, &app_event_tx).await;
+        if let Some(exit_info) = exit_info {
+            return Ok(exit_info);
+        }
+
         let conversation_manager = Arc::new(ConversationManager::new(
             auth_manager.clone(),
             SessionSource::Cli,
@@ -107,7 +224,7 @@ impl App {
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
 
-        let chat_widget = match resume_selection {
+        let mut chat_widget = match resume_selection {
             ResumeSelection::StartFresh | ResumeSelection::Exit => {
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
@@ -149,6 +266,8 @@ impl App {
                 )
             }
         };
+
+        chat_widget.maybe_prompt_windows_sandbox_enable();
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         #[cfg(not(debug_assertions))]
@@ -276,6 +395,10 @@ impl App {
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
         match event {
             AppEvent::NewSession => {
+                let summary = session_summary(
+                    self.chat_widget.token_usage(),
+                    self.chat_widget.conversation_id(),
+                );
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: self.config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -287,6 +410,14 @@ impl App {
                     feedback: self.feedback.clone(),
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
+                if let Some(summary) = summary {
+                    let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
+                    if let Some(command) = summary.resume_command {
+                        let spans = vec!["To continue this session, run ".into(), command.cyan()];
+                        lines.push(spans.into());
+                    }
+                    self.chat_widget.add_plain_history_lines(lines);
+                }
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::InsertHistoryCell(cell) => {
@@ -371,6 +502,9 @@ impl App {
             AppEvent::FileSearchResult { query, matches } => {
                 self.chat_widget.apply_file_search_result(query, matches);
             }
+            AppEvent::RateLimitSnapshotFetched(snapshot) => {
+                self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
+            }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort);
             }
@@ -409,8 +543,71 @@ impl App {
             AppEvent::OpenFeedbackConsent { category } => {
                 self.chat_widget.open_feedback_consent(category);
             }
-            AppEvent::ShowWindowsAutoModeInstructions => {
-                self.chat_widget.open_windows_auto_mode_instructions();
+            AppEvent::OpenWindowsSandboxEnablePrompt { preset } => {
+                self.chat_widget.open_windows_sandbox_enable_prompt(preset);
+            }
+            AppEvent::EnableWindowsSandboxForAuto { preset } => {
+                #[cfg(target_os = "windows")]
+                {
+                    let profile = self.active_profile.as_deref();
+                    let feature_key = Feature::WindowsSandbox.key();
+                    match ConfigEditsBuilder::new(&self.config.codex_home)
+                        .with_profile(profile)
+                        .set_feature_enabled(feature_key, true)
+                        .apply()
+                        .await
+                    {
+                        Ok(()) => {
+                            self.config.set_windows_sandbox_globally(true);
+                            self.chat_widget.clear_forced_auto_mode_downgrade();
+                            if let Some((sample_paths, extra_count, failed_scan)) =
+                                self.chat_widget.world_writable_warning_details()
+                            {
+                                self.app_event_tx.send(
+                                    AppEvent::OpenWorldWritableWarningConfirmation {
+                                        preset: Some(preset.clone()),
+                                        sample_paths,
+                                        extra_count,
+                                        failed_scan,
+                                    },
+                                );
+                            } else {
+                                self.app_event_tx.send(AppEvent::CodexOp(
+                                    Op::OverrideTurnContext {
+                                        cwd: None,
+                                        approval_policy: Some(preset.approval),
+                                        sandbox_policy: Some(preset.sandbox.clone()),
+                                        model: None,
+                                        effort: None,
+                                        summary: None,
+                                    },
+                                ));
+                                self.app_event_tx
+                                    .send(AppEvent::UpdateAskForApprovalPolicy(preset.approval));
+                                self.app_event_tx
+                                    .send(AppEvent::UpdateSandboxPolicy(preset.sandbox.clone()));
+                                self.chat_widget.add_info_message(
+                                    "Enabled the Windows sandbox feature and switched to Auto mode."
+                                        .to_string(),
+                                    None,
+                                );
+                            }
+                        }
+                        Err(err) => {
+                            tracing::error!(
+                                error = %err,
+                                "failed to enable Windows sandbox feature"
+                            );
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to enable the Windows sandbox feature: {err}"
+                            ));
+                        }
+                    }
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = preset;
+                }
             }
             AppEvent::PersistModelSelection { model, effort } => {
                 let profile = self.active_profile.as_deref();
@@ -465,6 +662,13 @@ impl App {
                         | codex_core::protocol::SandboxPolicy::ReadOnly
                 );
 
+                self.config.sandbox_policy = policy.clone();
+                #[cfg(target_os = "windows")]
+                if !matches!(policy, codex_core::protocol::SandboxPolicy::ReadOnly)
+                    || codex_core::get_platform_sandbox().is_some()
+                {
+                    self.config.forced_auto_mode_downgraded_on_windows = false;
+                }
                 self.chat_widget.set_sandbox_policy(policy);
 
                 // If sandbox policy becomes workspace-write or read-only, run the Windows world-writable scan.
@@ -544,6 +748,18 @@ impl App {
                     );
                     self.chat_widget.add_error_message(format!(
                         "Failed to save rate limit reminder preference: {err}"
+                    ));
+                }
+            }
+            AppEvent::PersistModelMigrationPromptAcknowledged { migration_config } => {
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .set_hide_model_migration_prompt(&migration_config, true)
+                    .apply()
+                    .await
+                {
+                    tracing::error!(error = %err, "failed to persist model migration prompt acknowledgement");
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to save model migration prompt preference: {err}"
                     ));
                 }
             }
@@ -728,7 +944,6 @@ mod tests {
     fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender();
         let config = chat_widget.config_ref().clone();
-
         let server = Arc::new(ConversationManager::with_auth(CodexAuth::from_api_key(
             "Test API Key",
         )));
@@ -755,6 +970,38 @@ mod tests {
             pending_update_action: None,
             skip_world_writable_scan_once: false,
         }
+    }
+
+    #[test]
+    fn model_migration_prompt_only_shows_for_deprecated_models() {
+        assert!(should_show_model_migration_prompt("gpt-5", "gpt-5.1", None));
+        assert!(should_show_model_migration_prompt(
+            "gpt-5-codex",
+            "gpt-5.1-codex",
+            None
+        ));
+        assert!(should_show_model_migration_prompt(
+            "gpt-5-codex-mini",
+            "gpt-5.1-codex-mini",
+            None
+        ));
+        assert!(!should_show_model_migration_prompt(
+            "gpt-5.1-codex",
+            "gpt-5.1-codex",
+            None
+        ));
+    }
+
+    #[test]
+    fn model_migration_prompt_respects_hide_flag_and_self_target() {
+        assert!(!should_show_model_migration_prompt(
+            "gpt-5",
+            "gpt-5.1",
+            Some(true)
+        ));
+        assert!(!should_show_model_migration_prompt(
+            "gpt-5.1", "gpt-5.1", None
+        ));
     }
 
     #[test]
@@ -836,5 +1083,32 @@ mod tests {
         let (_, nth, prefill) = app.backtrack.pending.clone().expect("pending backtrack");
         assert_eq!(nth, 1);
         assert_eq!(prefill, "follow-up (edited)");
+    }
+
+    #[test]
+    fn session_summary_skip_zero_usage() {
+        assert!(session_summary(TokenUsage::default(), None).is_none());
+    }
+
+    #[test]
+    fn session_summary_includes_resume_hint() {
+        let usage = TokenUsage {
+            input_tokens: 10,
+            output_tokens: 2,
+            total_tokens: 12,
+            ..Default::default()
+        };
+        let conversation =
+            ConversationId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
+
+        let summary = session_summary(usage, Some(conversation)).expect("summary");
+        assert_eq!(
+            summary.usage_line,
+            "Token usage: total=12 input=10 output=2"
+        );
+        assert_eq!(
+            summary.resume_command,
+            Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
+        );
     }
 }

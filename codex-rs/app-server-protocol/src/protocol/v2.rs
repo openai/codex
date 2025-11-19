@@ -4,8 +4,13 @@ use std::path::PathBuf;
 use crate::protocol::common::AuthMode;
 use codex_protocol::ConversationId;
 use codex_protocol::account::PlanType;
+use codex_protocol::approvals::SandboxCommandAssessment as CoreSandboxCommandAssessment;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
+use codex_protocol::items::TurnItem as CoreTurnItem;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::user_input::UserInput as CoreUserInput;
@@ -17,7 +22,7 @@ use serde_json::Value as JsonValue;
 use ts_rs::TS;
 
 // Macro to declare a camelCased API v2 enum mirroring a core enum which
-// tends to use kebab-case.
+// tends to use either snake_case or kebab-case.
 macro_rules! v2_enum_from_core {
     (
         pub enum $Name:ident from $Src:path { $( $Variant:ident ),+ $(,)? }
@@ -53,13 +58,32 @@ v2_enum_from_core!(
     }
 );
 
+v2_enum_from_core!(
+    pub enum CommandRiskLevel from codex_protocol::approvals::SandboxRiskLevel {
+        Low,
+        Medium,
+        High
+    }
+);
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(tag = "mode", rename_all = "camelCase")]
-#[ts(tag = "mode")]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ApprovalDecision {
+    Accept,
+    Decline,
+    Cancel,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum SandboxPolicy {
     DangerFullAccess,
     ReadOnly,
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     WorkspaceWrite {
         #[serde(default)]
         writable_roots: Vec<PathBuf>,
@@ -112,6 +136,98 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             },
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SandboxCommandAssessment {
+    pub description: String,
+    pub risk_level: CommandRiskLevel,
+}
+
+impl SandboxCommandAssessment {
+    pub fn into_core(self) -> CoreSandboxCommandAssessment {
+        CoreSandboxCommandAssessment {
+            description: self.description,
+            risk_level: self.risk_level.to_core(),
+        }
+    }
+}
+
+impl From<CoreSandboxCommandAssessment> for SandboxCommandAssessment {
+    fn from(value: CoreSandboxCommandAssessment) -> Self {
+        Self {
+            description: value.description,
+            risk_level: CommandRiskLevel::from(value.risk_level),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+#[ts(export_to = "v2/")]
+pub enum CommandAction {
+    Read {
+        command: String,
+        name: String,
+        path: PathBuf,
+    },
+    ListFiles {
+        command: String,
+        path: Option<String>,
+    },
+    Search {
+        command: String,
+        query: Option<String>,
+        path: Option<String>,
+    },
+    Unknown {
+        command: String,
+    },
+}
+
+impl CommandAction {
+    pub fn into_core(self) -> CoreParsedCommand {
+        match self {
+            CommandAction::Read {
+                command: cmd,
+                name,
+                path,
+            } => CoreParsedCommand::Read { cmd, name, path },
+            CommandAction::ListFiles { command: cmd, path } => {
+                CoreParsedCommand::ListFiles { cmd, path }
+            }
+            CommandAction::Search {
+                command: cmd,
+                query,
+                path,
+            } => CoreParsedCommand::Search { cmd, query, path },
+            CommandAction::Unknown { command: cmd } => CoreParsedCommand::Unknown { cmd },
+        }
+    }
+}
+
+impl From<CoreParsedCommand> for CommandAction {
+    fn from(value: CoreParsedCommand) -> Self {
+        match value {
+            CoreParsedCommand::Read { cmd, name, path } => CommandAction::Read {
+                command: cmd,
+                name,
+                path,
+            },
+            CoreParsedCommand::ListFiles { cmd, path } => {
+                CommandAction::ListFiles { command: cmd, path }
+            }
+            CoreParsedCommand::Search { cmd, query, path } => CommandAction::Search {
+                command: cmd,
+                query,
+                path,
+            },
+            CoreParsedCommand::Unknown { cmd } => CommandAction::Unknown { command: cmd },
         }
     }
 }
@@ -276,7 +392,7 @@ pub struct ThreadStartParams {
     pub cwd: Option<String>,
     pub approval_policy: Option<AskForApproval>,
     pub sandbox: Option<SandboxMode>,
-    pub config: Option<HashMap<String, serde_json::Value>>,
+    pub config: Option<HashMap<String, JsonValue>>,
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
 }
@@ -288,11 +404,39 @@ pub struct ThreadStartResponse {
     pub thread: Thread,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+/// There are three ways to resume a thread:
+/// 1. By thread_id: load the thread from disk by thread_id and resume it.
+/// 2. By history: instantiate the thread from memory and resume it.
+/// 3. By path: load the thread from disk by path and resume it.
+///
+/// The precedence is: history > path > thread_id.
+/// If using history or path, the thread_id param will be ignored.
+///
+/// Prefer using thread_id whenever possible.
 pub struct ThreadResumeParams {
     pub thread_id: String,
+
+    /// [UNSTABLE] FOR CODEX CLOUD - DO NOT USE.
+    /// If specified, the thread will be resumed with the provided history
+    /// instead of loaded from disk.
+    pub history: Option<Vec<ResponseItem>>,
+
+    /// [UNSTABLE] Specify the rollout path to resume from.
+    /// If specified, the thread_id param will be ignored.
+    pub path: Option<PathBuf>,
+
+    /// Configuration overrides for the resumed thread, if any.
+    pub model: Option<String>,
+    pub model_provider: Option<String>,
+    pub cwd: Option<String>,
+    pub approval_policy: Option<AskForApproval>,
+    pub sandbox: Option<SandboxMode>,
+    pub config: Option<HashMap<String, serde_json::Value>>,
+    pub base_instructions: Option<String>,
+    pub developer_instructions: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -359,6 +503,8 @@ pub struct Thread {
     pub model_provider: String,
     /// Unix timestamp (in seconds) when the thread was created.
     pub created_at: i64,
+    /// [UNSTABLE] Path to the thread on disk.
+    pub path: PathBuf,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -419,6 +565,45 @@ pub struct TurnStartParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ReviewStartParams {
+    pub thread_id: String,
+    pub target: ReviewTarget,
+
+    /// When true, also append the final review message to the original thread.
+    #[serde(default)]
+    pub append_to_original_thread: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type", export_to = "v2/")]
+pub enum ReviewTarget {
+    /// Review the working tree: staged, unstaged, and untracked files.
+    UncommittedChanges,
+
+    /// Review changes between the current branch and the given base branch.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    BaseBranch { branch: String },
+
+    /// Review the changes introduced by a specific commit.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Commit {
+        sha: String,
+        /// Optional human-readable label (e.g., commit subject) for UIs.
+        title: Option<String>,
+    },
+
+    /// Arbitrary instructions, equivalent to the old free-form prompt.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Custom { instructions: String },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct TurnStartResponse {
     pub turn: Turn,
 }
@@ -457,36 +642,66 @@ impl UserInput {
     }
 }
 
+impl From<CoreUserInput> for UserInput {
+    fn from(value: CoreUserInput) -> Self {
+        match value {
+            CoreUserInput::Text { text } => UserInput::Text { text },
+            CoreUserInput::Image { image_url } => UserInput::Image { url: image_url },
+            CoreUserInput::LocalImage { path } => UserInput::LocalImage { path },
+            _ => unreachable!("unsupported user input variant"),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum ThreadItem {
-    UserMessage {
-        id: String,
-        content: Vec<UserInput>,
-    },
-    AgentMessage {
-        id: String,
-        text: String,
-    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    UserMessage { id: String, content: Vec<UserInput> },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    AgentMessage { id: String, text: String },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     Reasoning {
         id: String,
-        text: String,
+        #[serde(default)]
+        summary: Vec<String>,
+        #[serde(default)]
+        content: Vec<String>,
     },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     CommandExecution {
         id: String,
+        /// The command to be executed.
         command: String,
-        aggregated_output: String,
-        exit_code: Option<i32>,
+        /// The command's working directory.
+        cwd: PathBuf,
         status: CommandExecutionStatus,
+        /// A best-effort parsing of the command to understand the action(s) it will perform.
+        /// This returns a list of CommandAction objects because a single shell command may
+        /// be composed of many commands piped together.
+        command_actions: Vec<CommandAction>,
+        /// The command's output, aggregated from stdout and stderr.
+        aggregated_output: Option<String>,
+        /// The command's exit code.
+        exit_code: Option<i32>,
+        /// The duration of the command execution in milliseconds.
         duration_ms: Option<i64>,
     },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     FileChange {
         id: String,
         changes: Vec<FileUpdateChange>,
         status: PatchApplyStatus,
     },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     McpToolCall {
         id: String,
         server: String,
@@ -496,22 +711,48 @@ pub enum ThreadItem {
         result: Option<McpToolCallResult>,
         error: Option<McpToolCallError>,
     },
-    WebSearch {
-        id: String,
-        query: String,
-    },
-    TodoList {
-        id: String,
-        items: Vec<TodoItem>,
-    },
-    ImageView {
-        id: String,
-        path: String,
-    },
-    CodeReview {
-        id: String,
-        review: String,
-    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    WebSearch { id: String, query: String },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    TodoList { id: String, items: Vec<TodoItem> },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    ImageView { id: String, path: String },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    CodeReview { id: String, review: String },
+}
+
+impl From<CoreTurnItem> for ThreadItem {
+    fn from(value: CoreTurnItem) -> Self {
+        match value {
+            CoreTurnItem::UserMessage(user) => ThreadItem::UserMessage {
+                id: user.id,
+                content: user.content.into_iter().map(UserInput::from).collect(),
+            },
+            CoreTurnItem::AgentMessage(agent) => {
+                let text = agent
+                    .content
+                    .into_iter()
+                    .map(|entry| match entry {
+                        CoreAgentMessageContent::Text { text } => text,
+                    })
+                    .collect::<String>();
+                ThreadItem::AgentMessage { id: agent.id, text }
+            }
+            CoreTurnItem::Reasoning(reasoning) => ThreadItem::Reasoning {
+                id: reasoning.id,
+                summary: reasoning.summary_text,
+                content: reasoning.raw_content,
+            },
+            CoreTurnItem::WebSearch(search) => ThreadItem::WebSearch {
+                id: search.id,
+                query: search.query,
+            },
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -563,7 +804,7 @@ pub enum McpToolCallStatus {
 #[ts(export_to = "v2/")]
 pub struct McpToolCallResult {
     pub content: Vec<McpContentBlock>,
-    pub structured_content: JsonValue,
+    pub structured_content: Option<JsonValue>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -642,6 +883,32 @@ pub struct AgentMessageDeltaNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ReasoningSummaryTextDeltaNotification {
+    pub item_id: String,
+    pub delta: String,
+    pub summary_index: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ReasoningSummaryPartAddedNotification {
+    pub item_id: String,
+    pub summary_index: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ReasoningTextDeltaNotification {
+    pub item_id: String,
+    pub delta: String,
+    pub content_index: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct CommandExecutionOutputDeltaNotification {
     pub item_id: String,
     pub delta: String,
@@ -653,6 +920,39 @@ pub struct CommandExecutionOutputDeltaNotification {
 pub struct McpToolCallProgressNotification {
     pub item_id: String,
     pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CommandExecutionRequestApprovalParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    /// Optional explanatory reason (e.g. request for network access).
+    pub reason: Option<String>,
+    /// Optional model-provided risk assessment describing the blocked command.
+    pub risk: Option<SandboxCommandAssessment>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CommandExecutionRequestAcceptSettings {
+    /// If true, automatically approve this command for the duration of the session.
+    #[serde(default)]
+    pub for_session: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CommandExecutionRequestApprovalResponse {
+    pub decision: ApprovalDecision,
+    /// Optional approval settings for when the decision is `accept`.
+    /// Ignored if the decision is `decline` or `cancel`.
+    #[serde(default)]
+    pub accept_settings: Option<CommandExecutionRequestAcceptSettings>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -707,4 +1007,102 @@ pub struct AccountLoginCompletedNotification {
     pub login_id: Option<String>,
     pub success: bool,
     pub error: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_protocol::items::AgentMessageContent;
+    use codex_protocol::items::AgentMessageItem;
+    use codex_protocol::items::ReasoningItem;
+    use codex_protocol::items::TurnItem;
+    use codex_protocol::items::UserMessageItem;
+    use codex_protocol::items::WebSearchItem;
+    use codex_protocol::user_input::UserInput as CoreUserInput;
+    use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
+
+    #[test]
+    fn core_turn_item_into_thread_item_converts_supported_variants() {
+        let user_item = TurnItem::UserMessage(UserMessageItem {
+            id: "user-1".to_string(),
+            content: vec![
+                CoreUserInput::Text {
+                    text: "hello".to_string(),
+                },
+                CoreUserInput::Image {
+                    image_url: "https://example.com/image.png".to_string(),
+                },
+                CoreUserInput::LocalImage {
+                    path: PathBuf::from("local/image.png"),
+                },
+            ],
+        });
+
+        assert_eq!(
+            ThreadItem::from(user_item),
+            ThreadItem::UserMessage {
+                id: "user-1".to_string(),
+                content: vec![
+                    UserInput::Text {
+                        text: "hello".to_string(),
+                    },
+                    UserInput::Image {
+                        url: "https://example.com/image.png".to_string(),
+                    },
+                    UserInput::LocalImage {
+                        path: PathBuf::from("local/image.png"),
+                    },
+                ],
+            }
+        );
+
+        let agent_item = TurnItem::AgentMessage(AgentMessageItem {
+            id: "agent-1".to_string(),
+            content: vec![
+                AgentMessageContent::Text {
+                    text: "Hello ".to_string(),
+                },
+                AgentMessageContent::Text {
+                    text: "world".to_string(),
+                },
+            ],
+        });
+
+        assert_eq!(
+            ThreadItem::from(agent_item),
+            ThreadItem::AgentMessage {
+                id: "agent-1".to_string(),
+                text: "Hello world".to_string(),
+            }
+        );
+
+        let reasoning_item = TurnItem::Reasoning(ReasoningItem {
+            id: "reasoning-1".to_string(),
+            summary_text: vec!["line one".to_string(), "line two".to_string()],
+            raw_content: vec![],
+        });
+
+        assert_eq!(
+            ThreadItem::from(reasoning_item),
+            ThreadItem::Reasoning {
+                id: "reasoning-1".to_string(),
+                summary: vec!["line one".to_string(), "line two".to_string()],
+                content: vec![],
+            }
+        );
+
+        let search_item = TurnItem::WebSearch(WebSearchItem {
+            id: "search-1".to_string(),
+            query: "docs".to_string(),
+        });
+
+        assert_eq!(
+            ThreadItem::from(search_item),
+            ThreadItem::WebSearch {
+                id: "search-1".to_string(),
+                query: "docs".to_string(),
+            }
+        );
+    }
 }

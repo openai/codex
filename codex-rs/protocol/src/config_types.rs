@@ -19,10 +19,12 @@ use ts_rs::TS;
     JsonSchema,
     TS,
     EnumIter,
+    Hash,
 )]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum ReasoningEffort {
+    None,
     Minimal,
     Low,
     #[default]
@@ -50,7 +52,18 @@ pub enum ReasoningSummary {
 /// Controls output length/detail on GPT-5 models via the Responses API.
 /// Serialized with lowercase values to match the OpenAI API.
 #[derive(
-    Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS,
+    Hash,
+    Debug,
+    Serialize,
+    Deserialize,
+    Default,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Display,
+    JsonSchema,
+    TS,
 )]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
@@ -84,4 +97,14 @@ pub enum SandboxMode {
 pub enum ForcedLoginMethod {
     Chatgpt,
     Api,
+}
+
+/// Represents the trust level for a project directory.
+/// This determines the approval policy and sandbox mode applied.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum TrustLevel {
+    Trusted,
+    Untrusted,
 }

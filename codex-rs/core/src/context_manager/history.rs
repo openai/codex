@@ -1,12 +1,14 @@
+use crate::codex::TurnContext;
+use crate::context_manager::normalize;
+use crate::truncate::TruncationPolicy;
+use crate::truncate::truncate_function_output_items_with_policy;
+use crate::truncate::truncate_text;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_utils_tokenizer::Tokenizer;
 use std::ops::Deref;
-
-use crate::context_manager::normalize;
-use crate::context_manager::truncate::format_output_for_model_body;
-use crate::context_manager::truncate::globally_truncate_function_output_items;
 
 /// Transcript of conversation history
 #[derive(Debug, Clone, Default)]
@@ -28,6 +30,10 @@ impl ContextManager {
         self.token_info.clone()
     }
 
+    pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
+        self.token_info = info;
+    }
+
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
         match &mut self.token_info {
             Some(info) => info.fill_to_context_window(context_window),
@@ -38,7 +44,7 @@ impl ContextManager {
     }
 
     /// `items` is ordered from oldest to newest.
-    pub(crate) fn record_items<I>(&mut self, items: I)
+    pub(crate) fn record_items<I>(&mut self, items: I, policy: TruncationPolicy)
     where
         I: IntoIterator,
         I::Item: std::ops::Deref<Target = ResponseItem>,
@@ -50,7 +56,7 @@ impl ContextManager {
                 continue;
             }
 
-            let processed = Self::process_item(&item);
+            let processed = self.process_item(item_ref, policy);
             self.items.push(processed);
         }
     }
@@ -66,6 +72,28 @@ impl ContextManager {
         let mut history = self.get_history();
         Self::remove_ghost_snapshots(&mut history);
         history
+    }
+
+    // Estimate the number of tokens in the history. Return None if no tokenizer
+    // is available. This does not consider the reasoning traces.
+    // /!\ The value is a lower bound estimate and does not represent the exact
+    // context length.
+    pub(crate) fn estimate_token_count(&self, turn_context: &TurnContext) -> Option<i64> {
+        let model = turn_context.client.get_model();
+        let tokenizer = Tokenizer::for_model(model.as_str()).ok()?;
+        let model_family = turn_context.client.get_model_family();
+
+        Some(
+            self.items
+                .iter()
+                .map(|item| {
+                    serde_json::to_string(&item)
+                        .map(|item| tokenizer.count(&item))
+                        .unwrap_or_default()
+                })
+                .sum::<i64>()
+                + tokenizer.count(model_family.base_instructions.as_str()),
+        )
     }
 
     pub(crate) fn remove_first_item(&mut self) {
@@ -116,14 +144,14 @@ impl ContextManager {
         items.retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
     }
 
-    fn process_item(item: &ResponseItem) -> ResponseItem {
+    fn process_item(&self, item: &ResponseItem, policy: TruncationPolicy) -> ResponseItem {
         match item {
             ResponseItem::FunctionCallOutput { call_id, output } => {
-                let truncated = format_output_for_model_body(output.content.as_str());
+                let truncated = truncate_text(output.content.as_str(), policy);
                 let truncated_items = output
                     .content_items
                     .as_ref()
-                    .map(|items| globally_truncate_function_output_items(items));
+                    .map(|items| truncate_function_output_items_with_policy(items, policy));
                 ResponseItem::FunctionCallOutput {
                     call_id: call_id.clone(),
                     output: FunctionCallOutputPayload {
@@ -134,7 +162,7 @@ impl ContextManager {
                 }
             }
             ResponseItem::CustomToolCallOutput { call_id, output } => {
-                let truncated = format_output_for_model_body(output);
+                let truncated = truncate_text(output, policy);
                 ResponseItem::CustomToolCallOutput {
                     call_id: call_id.clone(),
                     output: truncated,
@@ -146,6 +174,7 @@ impl ContextManager {
             | ResponseItem::FunctionCall { .. }
             | ResponseItem::WebSearchCall { .. }
             | ResponseItem::CustomToolCall { .. }
+            | ResponseItem::CompactionSummary { .. }
             | ResponseItem::GhostSnapshot { .. }
             | ResponseItem::Other => item.clone(),
         }
@@ -163,7 +192,8 @@ fn is_api_message(message: &ResponseItem) -> bool {
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::LocalShellCall { .. }
         | ResponseItem::Reasoning { .. }
-        | ResponseItem::WebSearchCall { .. } => true,
+        | ResponseItem::WebSearchCall { .. }
+        | ResponseItem::CompactionSummary { .. } => true,
         ResponseItem::GhostSnapshot { .. } => false,
         ResponseItem::Other => false,
     }

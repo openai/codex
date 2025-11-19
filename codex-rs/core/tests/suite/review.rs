@@ -82,6 +82,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
             review_request: ReviewRequest {
                 prompt: "Please review my changes".to_string(),
                 user_facing_hint: "my changes".to_string(),
+                append_to_original_thread: true,
             },
         })
         .await
@@ -178,6 +179,7 @@ async fn review_op_with_plain_text_emits_review_fallback() {
             review_request: ReviewRequest {
                 prompt: "Plain text review".to_string(),
                 user_facing_hint: "plain text review".to_string(),
+                append_to_original_thread: true,
             },
         })
         .await
@@ -236,6 +238,7 @@ async fn review_filters_agent_message_related_events() {
             review_request: ReviewRequest {
                 prompt: "Filter streaming events".to_string(),
                 user_facing_hint: "Filter streaming events".to_string(),
+                append_to_original_thread: true,
             },
         })
         .await
@@ -320,6 +323,7 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
             review_request: ReviewRequest {
                 prompt: "check structured".to_string(),
                 user_facing_hint: "check structured".to_string(),
+                append_to_original_thread: true,
             },
         })
         .await
@@ -364,7 +368,7 @@ async fn review_uses_custom_review_model_from_config() {
     // Choose a review model different from the main model; ensure it is used.
     let codex = new_conversation_for_server(&server, &codex_home, |cfg| {
         cfg.model = "gpt-4.1".to_string();
-        cfg.review_model = "gpt-5".to_string();
+        cfg.review_model = "gpt-5.1".to_string();
     })
     .await;
 
@@ -373,6 +377,7 @@ async fn review_uses_custom_review_model_from_config() {
             review_request: ReviewRequest {
                 prompt: "use custom model".to_string(),
                 user_facing_hint: "use custom model".to_string(),
+                append_to_original_thread: true,
             },
         })
         .await
@@ -394,7 +399,7 @@ async fn review_uses_custom_review_model_from_config() {
     // Assert the request body model equals the configured review model
     let request = &server.received_requests().await.unwrap()[0];
     let body = request.body_json::<serde_json::Value>().unwrap();
-    assert_eq!(body["model"].as_str().unwrap(), "gpt-5");
+    assert_eq!(body["model"].as_str().unwrap(), "gpt-5.1");
 
     server.verify().await;
 }
@@ -490,6 +495,7 @@ async fn review_input_isolated_from_parent_history() {
             review_request: ReviewRequest {
                 prompt: review_prompt.clone(),
                 user_facing_hint: review_prompt.clone(),
+                append_to_original_thread: true,
             },
         })
         .await
@@ -602,6 +608,7 @@ async fn review_history_does_not_leak_into_parent_session() {
             review_request: ReviewRequest {
                 prompt: "Start a review".to_string(),
                 user_facing_hint: "Start a review".to_string(),
+                append_to_original_thread: true,
             },
         })
         .await

@@ -34,6 +34,8 @@ pub struct UnifiedExecRequest {
     pub command: Vec<String>,
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
+    pub with_escalated_permissions: Option<bool>,
+    pub justification: Option<String>,
 }
 
 impl ProvidesSandboxRetryData for UnifiedExecRequest {
@@ -49,6 +51,7 @@ impl ProvidesSandboxRetryData for UnifiedExecRequest {
 pub struct UnifiedExecApprovalKey {
     pub command: Vec<String>,
     pub cwd: PathBuf,
+    pub escalated: bool,
 }
 
 pub struct UnifiedExecRuntime<'a> {
@@ -56,8 +59,20 @@ pub struct UnifiedExecRuntime<'a> {
 }
 
 impl UnifiedExecRequest {
-    pub fn new(command: Vec<String>, cwd: PathBuf, env: HashMap<String, String>) -> Self {
-        Self { command, cwd, env }
+    pub fn new(
+        command: Vec<String>,
+        cwd: PathBuf,
+        env: HashMap<String, String>,
+        with_escalated_permissions: Option<bool>,
+        justification: Option<String>,
+    ) -> Self {
+        Self {
+            command,
+            cwd,
+            env,
+            with_escalated_permissions,
+            justification,
+        }
     }
 }
 
@@ -84,6 +99,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         UnifiedExecApprovalKey {
             command: req.command.clone(),
             cwd: req.cwd.clone(),
+            escalated: req.with_escalated_permissions.unwrap_or(false),
         }
     }
 
@@ -98,7 +114,10 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         let call_id = ctx.call_id.to_string();
         let command = req.command.clone();
         let cwd = req.cwd.clone();
-        let reason = ctx.retry_reason.clone();
+        let reason = ctx
+            .retry_reason
+            .clone()
+            .or_else(|| req.justification.clone());
         let risk = ctx.risk.clone();
         Box::pin(async move {
             with_cached_approval(&session.services, key, || async move {
@@ -116,7 +135,16 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         policy: AskForApproval,
         sandbox_policy: &SandboxPolicy,
     ) -> bool {
-        requires_initial_appoval(policy, sandbox_policy, &req.command, false)
+        requires_initial_appoval(
+            policy,
+            sandbox_policy,
+            &req.command,
+            req.with_escalated_permissions.unwrap_or(false),
+        )
+    }
+
+    fn wants_escalated_first_attempt(&self, req: &UnifiedExecRequest) -> bool {
+        req.with_escalated_permissions.unwrap_or(false)
     }
 }
 
@@ -127,8 +155,15 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecSession> for UnifiedExecRunt
         attempt: &SandboxAttempt<'_>,
         _ctx: &ToolCtx<'_>,
     ) -> Result<UnifiedExecSession, ToolError> {
-        let spec = build_command_spec(&req.command, &req.cwd, &req.env, None, None, None)
-            .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
+        let spec = build_command_spec(
+            &req.command,
+            &req.cwd,
+            &req.env,
+            None,
+            req.with_escalated_permissions,
+            req.justification.clone(),
+        )
+        .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
         let exec_env = attempt
             .env_for(&spec)
             .map_err(|err| ToolError::Codex(err.into()))?;
