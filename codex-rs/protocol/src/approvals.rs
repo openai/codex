@@ -51,6 +51,10 @@ pub struct ExecApprovalRequestEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub risk: Option<SandboxCommandAssessment>,
     pub parsed_cmd: Vec<ParsedCommand>,
+    /// Optional command prefix that can be allowlisted to avoid future prompts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub allow_prefix: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

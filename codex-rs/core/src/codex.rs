@@ -574,6 +574,7 @@ impl Session {
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager,
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            exec_policy_overrides: Mutex::new(Vec::new()),
         };
 
         let sess = Arc::new(Session {
@@ -846,11 +847,35 @@ impl Session {
         .await
     }
 
+    pub(crate) async fn remember_allowed_prefix(&self, prefix: &[String]) {
+        {
+            let mut overrides = self.services.exec_policy_overrides.lock().await;
+            if overrides.iter().any(|existing| existing == prefix) {
+                return;
+            }
+            overrides.push(prefix.to_vec());
+        }
+
+        let codex_home = {
+            let state = self.state.lock().await;
+            state
+                .session_configuration
+                .original_config_do_not_use
+                .codex_home
+                .clone()
+        };
+
+        if let Err(err) = crate::exec_policy::persist_allow_rule(&codex_home, prefix).await {
+            warn!("failed to persist execpolicy allow rule: {err}");
+        }
+    }
+
     /// Emit an exec approval request event and await the user's decision.
     ///
     /// The request is keyed by `sub_id`/`call_id` so matching responses are delivered
     /// to the correct in-flight turn. If the task is aborted, this returns the
     /// default `ReviewDecision` (`Denied`).
+    #[allow(clippy::too_many_arguments)]
     pub async fn request_command_approval(
         &self,
         turn_context: &TurnContext,
@@ -859,6 +884,7 @@ impl Session {
         cwd: PathBuf,
         reason: Option<String>,
         risk: Option<SandboxCommandAssessment>,
+        allow_prefix: Option<Vec<String>>,
     ) -> ReviewDecision {
         let sub_id = turn_context.sub_id.clone();
         // Add the tx_approve callback to the map before sending the request.
@@ -887,6 +913,7 @@ impl Session {
             reason,
             risk,
             parsed_cmd,
+            allow_prefix,
         });
         self.send_event(turn_context, event).await;
         rx_approve.await.unwrap_or_default()
@@ -2636,6 +2663,7 @@ mod tests {
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager: otel_event_manager.clone(),
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            exec_policy_overrides: Mutex::new(Vec::new()),
         };
 
         let turn_context = Session::make_turn_context(
@@ -2714,6 +2742,7 @@ mod tests {
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager: otel_event_manager.clone(),
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            exec_policy_overrides: Mutex::new(Vec::new()),
         };
 
         let turn_context = Arc::new(Session::make_turn_context(

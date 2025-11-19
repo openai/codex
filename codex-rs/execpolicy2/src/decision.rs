@@ -24,4 +24,12 @@ impl Decision {
             other => Err(Error::InvalidDecision(other.to_string())),
         }
     }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Prompt => "prompt",
+            Self::Forbidden => "forbidden",
+        }
+    }
 }

@@ -35,6 +35,7 @@ pub struct UnifiedExecRequest {
     pub with_escalated_permissions: Option<bool>,
     pub justification: Option<String>,
     pub approval_requirement: ApprovalRequirement,
+    pub policy_allow_prefix: Option<Vec<String>>,
 }
 
 impl ProvidesSandboxRetryData for UnifiedExecRequest {
@@ -65,6 +66,7 @@ impl UnifiedExecRequest {
         with_escalated_permissions: Option<bool>,
         justification: Option<String>,
         approval_requirement: ApprovalRequirement,
+        policy_allow_prefix: Option<Vec<String>>,
     ) -> Self {
         Self {
             command,
@@ -73,6 +75,7 @@ impl UnifiedExecRequest {
             with_escalated_permissions,
             justification,
             approval_requirement,
+            policy_allow_prefix,
         }
     }
 }
@@ -120,13 +123,31 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
             .clone()
             .or_else(|| req.justification.clone());
         let risk = ctx.risk.clone();
+        let policy_allow_prefix = req.policy_allow_prefix.clone();
+        let allow_prefix_for_request = policy_allow_prefix.clone();
         Box::pin(async move {
-            with_cached_approval(&session.services, key, || async move {
+            let decision = with_cached_approval(&session.services, key, || async move {
                 session
-                    .request_command_approval(turn, call_id, command, cwd, reason, risk)
+                    .request_command_approval(
+                        turn,
+                        call_id,
+                        command,
+                        cwd,
+                        reason,
+                        risk,
+                        allow_prefix_for_request.clone(),
+                    )
                     .await
             })
-            .await
+            .await;
+
+            if let Some(prefix) = policy_allow_prefix.as_ref()
+                && matches!(decision, ReviewDecision::ApprovedAllowPrefix)
+            {
+                session.remember_allowed_prefix(prefix).await;
+            }
+
+            decision
         })
     }
 

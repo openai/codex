@@ -445,19 +445,29 @@ impl UnifiedExecSessionManager {
     ) -> Result<UnifiedExecSession, UnifiedExecError> {
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);
+        let additional_allow_prefixes = context
+            .session
+            .services
+            .exec_policy_overrides
+            .lock()
+            .await
+            .clone();
+        let approval = create_approval_requirement_for_command(
+            &context.turn.exec_policy,
+            &additional_allow_prefixes,
+            command,
+            context.turn.approval_policy,
+            &context.turn.sandbox_policy,
+            SandboxPermissions::from(with_escalated_permissions.unwrap_or(false)),
+        );
         let req = UnifiedExecToolRequest::new(
             command.to_vec(),
             cwd,
             create_env(&context.turn.shell_environment_policy),
             with_escalated_permissions,
             justification,
-            create_approval_requirement_for_command(
-                &context.turn.exec_policy,
-                command,
-                context.turn.approval_policy,
-                &context.turn.sandbox_policy,
-                SandboxPermissions::from(with_escalated_permissions.unwrap_or(false)),
-            ),
+            approval.requirement,
+            approval.allow_prefix,
         );
         let tool_ctx = ToolCtx {
             session: context.session.as_ref(),

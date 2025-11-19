@@ -96,6 +96,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             reason,
             risk,
             parsed_cmd,
+            allow_prefix,
         }) => match api_version {
             ApiVersion::V1 => {
                 let params = ExecCommandApprovalParams {
@@ -106,6 +107,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     reason,
                     risk,
                     parsed_cmd,
+                    allow_prefix,
                 };
                 let rx = outgoing
                     .send_request(ServerRequestPayload::ExecCommandApproval(params))
@@ -123,6 +125,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     item_id: call_id.clone(),
                     reason,
                     risk: risk.map(V2SandboxCommandAssessment::from),
+                    allow_prefix,
                 };
                 let rx = outgoing
                     .send_request(ServerRequestPayload::CommandExecutionRequestApproval(
@@ -540,13 +543,20 @@ async fn on_command_execution_request_approval_response(
         accept_settings,
     } = response;
 
-    let decision = match (decision, accept_settings) {
-        (ApprovalDecision::Accept, Some(settings)) if settings.for_session => {
-            ReviewDecision::ApprovedForSession
-        }
-        (ApprovalDecision::Accept, _) => ReviewDecision::Approved,
-        (ApprovalDecision::Decline, _) => ReviewDecision::Denied,
-        (ApprovalDecision::Cancel, _) => ReviewDecision::Abort,
+    let allow_prefix_rule = accept_settings
+        .as_ref()
+        .is_some_and(|settings| settings.allow_prefix_rule);
+    let for_session = accept_settings
+        .as_ref()
+        .map(|settings| settings.for_session)
+        .unwrap_or(false);
+
+    let decision = match (decision, allow_prefix_rule, for_session) {
+        (ApprovalDecision::Accept, true, _) => ReviewDecision::ApprovedAllowPrefix,
+        (ApprovalDecision::Accept, false, true) => ReviewDecision::ApprovedForSession,
+        (ApprovalDecision::Accept, false, false) => ReviewDecision::Approved,
+        (ApprovalDecision::Decline, _, _) => ReviewDecision::Denied,
+        (ApprovalDecision::Cancel, _, _) => ReviewDecision::Abort,
     };
     if let Err(err) = conversation
         .submit(Op::ExecApproval {

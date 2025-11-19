@@ -588,6 +588,7 @@ fn exec_approval_emits_proposed_command_and_decision_history() {
         ),
         risk: None,
         parsed_cmd: vec![],
+        allow_prefix: None,
     };
     chat.handle_codex_event(Event {
         id: "sub-short".into(),
@@ -632,6 +633,7 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
         ),
         risk: None,
         parsed_cmd: vec![],
+        allow_prefix: None,
     };
     chat.handle_codex_event(Event {
         id: "sub-multi".into(),
@@ -682,6 +684,7 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
         reason: None,
         risk: None,
         parsed_cmd: vec![],
+        allow_prefix: None,
     };
     chat.handle_codex_event(Event {
         id: "sub-long".into(),
@@ -1831,6 +1834,7 @@ fn approval_modal_exec_snapshot() {
         ),
         risk: None,
         parsed_cmd: vec![],
+        allow_prefix: None,
     };
     chat.handle_codex_event(Event {
         id: "sub-approve".into(),
@@ -1877,6 +1881,7 @@ fn approval_modal_exec_without_reason_snapshot() {
         reason: None,
         risk: None,
         parsed_cmd: vec![],
+        allow_prefix: None,
     };
     chat.handle_codex_event(Event {
         id: "sub-approve-noreason".into(),
@@ -2089,6 +2094,7 @@ fn status_widget_and_approval_modal_snapshot() {
         ),
         risk: None,
         parsed_cmd: vec![],
+        allow_prefix: None,
     };
     chat.handle_codex_event(Event {
         id: "sub-approve-exec".into(),

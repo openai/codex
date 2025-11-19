@@ -22,4 +22,5 @@ pub(crate) struct SessionServices {
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) otel_event_manager: OtelEventManager,
     pub(crate) tool_approvals: Mutex<ApprovalStore>,
+    pub(crate) exec_policy_overrides: Mutex<Vec<Vec<String>>>,
 }
