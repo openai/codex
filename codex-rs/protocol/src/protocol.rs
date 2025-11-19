@@ -1129,6 +1129,8 @@ pub enum RolloutItem {
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct CompactedItem {
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement_history: Option<Vec<ResponseItem>>,
 }
 
 impl From<CompactedItem> for ResponseItem {
@@ -1174,11 +1176,13 @@ pub struct GitInfo {
     pub repository_url: Option<String>,
 }
 
-/// Review request sent to the review session.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+/// Review request sent to the review session.
 pub struct ReviewRequest {
     pub prompt: String,
     pub user_facing_hint: String,
+    #[serde(default)]
+    pub append_to_original_thread: bool,
 }
 
 /// Structured review result produced by a child review session.
@@ -1468,13 +1472,25 @@ pub struct ListCustomPromptsResponseEvent {
     pub custom_prompts: Vec<CustomPrompt>,
 }
 
-#[derive(Debug, Default, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct SessionConfiguredEvent {
     /// Name left as session_id instead of conversation_id for backwards compatibility.
     pub session_id: ConversationId,
 
     /// Tell the client what model is being queried.
     pub model: String,
+
+    pub model_provider_id: String,
+
+    /// When to escalate for approval for execution
+    pub approval_policy: AskForApproval,
+
+    /// How to sandbox commands executed in the system
+    pub sandbox_policy: SandboxPolicy,
+
+    /// Working directory that should be treated as the *root* of the
+    /// session.
+    pub cwd: PathBuf,
 
     /// The effort the model is putting into reasoning about the user's request.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1561,6 +1577,7 @@ mod tests {
     use crate::items::UserMessageItem;
     use crate::items::WebSearchItem;
     use anyhow::Result;
+    use pretty_assertions::assert_eq;
     use serde_json::json;
     use tempfile::NamedTempFile;
 
@@ -1605,6 +1622,10 @@ mod tests {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
                 model: "codex-mini-latest".to_string(),
+                model_provider_id: "openai".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: Some(ReasoningEffortConfig::default()),
                 history_log_id: 0,
                 history_entry_count: 0,
@@ -1619,6 +1640,12 @@ mod tests {
                 "type": "session_configured",
                 "session_id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
                 "model": "codex-mini-latest",
+                "model_provider_id": "openai",
+                "approval_policy": "never",
+                "sandbox_policy": {
+                    "type": "read-only"
+                },
+                "cwd": "/home/user/project",
                 "reasoning_effort": "medium",
                 "history_log_id": 0,
                 "history_entry_count": 0,

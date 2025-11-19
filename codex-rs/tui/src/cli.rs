@@ -28,6 +28,10 @@ pub struct Cli {
     #[clap(skip)]
     pub resume_session_id: Option<String>,
 
+    /// Internal: show all sessions (disables cwd filtering and shows CWD column).
+    #[clap(skip)]
+    pub resume_show_all: bool,
+
     #[clap(skip)]
     pub fork_source: Option<String>,
 

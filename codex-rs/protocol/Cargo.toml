@@ -20,10 +20,10 @@ icu_locale_core = { workspace = true }
 icu_provider = { workspace = true, features = ["sync"] }
 mcp-types = { workspace = true }
 mime_guess = { workspace = true }
+schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_with = { workspace = true, features = ["macros", "base64"] }
-schemars = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 sys-locale = { workspace = true }
@@ -37,6 +37,7 @@ uuid = { workspace = true, features = ["serde", "v7", "v4"] }
 
 [dev-dependencies]
 anyhow = { workspace = true }
+pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 
 [package.metadata.cargo-shear]

@@ -140,6 +140,10 @@ struct ResumeCommand {
     #[arg(long = "last", default_value_t = false, conflicts_with = "session_id")]
     last: bool,
 
+    /// Show all sessions (disables cwd filtering and shows CWD column).
+    #[arg(long = "all", default_value_t = false)]
+    all: bool,
+
     #[clap(flatten)]
     config_overrides: TuiCli,
 }
@@ -476,6 +480,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         Some(Subcommand::Resume(ResumeCommand {
             session_id,
             last,
+            all,
             config_overrides,
         })) => {
             interactive = finalize_resume_interactive(
@@ -483,6 +488,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 root_config_overrides.clone(),
                 session_id,
                 last,
+                all,
                 config_overrides,
             );
             let exit_info = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
@@ -657,6 +663,7 @@ fn finalize_resume_interactive(
     root_config_overrides: CliConfigOverrides,
     session_id: Option<String>,
     last: bool,
+    show_all: bool,
     resume_cli: TuiCli,
 ) -> TuiCli {
     // Start with the parsed interactive CLI so resume shares the same
@@ -665,6 +672,7 @@ fn finalize_resume_interactive(
     interactive.resume_picker = resume_session_id.is_none() && !last;
     interactive.resume_last = last;
     interactive.resume_session_id = resume_session_id;
+    interactive.resume_show_all = show_all;
     interactive.fork_source = None;
 
     // Merge resume-scoped flags and overrides with highest precedence.
@@ -793,13 +801,21 @@ mod tests {
         let Subcommand::Resume(ResumeCommand {
             session_id,
             last,
+            all,
             config_overrides: resume_cli,
         }) = subcommand.expect("resume present")
         else {
             unreachable!()
         };
 
-        finalize_resume_interactive(interactive, root_overrides, session_id, last, resume_cli)
+        finalize_resume_interactive(
+            interactive,
+            root_overrides,
+            session_id,
+            last,
+            all,
+            resume_cli,
+        )
     }
 
     fn fork_from_args(args: &[&str]) -> TuiCli {
@@ -886,6 +902,7 @@ mod tests {
         assert!(interactive.resume_picker);
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
+        assert!(!interactive.resume_show_all);
     }
 
     #[test]
@@ -894,6 +911,7 @@ mod tests {
         assert!(!interactive.resume_picker);
         assert!(interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
+        assert!(!interactive.resume_show_all);
     }
 
     #[test]
@@ -902,6 +920,14 @@ mod tests {
         assert!(!interactive.resume_picker);
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id.as_deref(), Some("1234"));
+        assert!(!interactive.resume_show_all);
+    }
+
+    #[test]
+    fn resume_all_flag_sets_show_all() {
+        let interactive = finalize_from_args(["codex", "resume", "--all"].as_ref());
+        assert!(interactive.resume_picker);
+        assert!(interactive.resume_show_all);
     }
 
     #[test]
