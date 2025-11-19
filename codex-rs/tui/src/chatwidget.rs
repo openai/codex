@@ -2300,11 +2300,10 @@ impl ChatWidget {
         {
             return None;
         }
-        let cwd = match std::env::current_dir() {
-            Ok(cwd) => cwd,
-            Err(_) => return Some((Vec::new(), 0, true)),
-        };
-        codex_windows_sandbox::world_writable_warning_details(self.config.codex_home.as_path(), cwd)
+        codex_windows_sandbox::world_writable_warning_details(
+            self.config.codex_home.as_path(),
+            self.config.cwd.as_path(),
+        )
     }
 
     #[cfg(not(target_os = "windows"))]
