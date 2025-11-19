@@ -178,7 +178,7 @@ impl WidgetRef for &ModelMigrationScreen {
 
 fn arcticfox_migration_copy() -> ModelMigrationCopy {
     ModelMigrationCopy {
-        heading: vec![Span::from("Introducing arcticfox".bold())],
+        heading: vec!["Introducing arcticfox".bold()],
         content: vec![
             Line::from("We've upgraded our family of models supported in Codex to arcticfox."),
             Line::from(
@@ -196,7 +196,7 @@ fn arcticfox_migration_copy() -> ModelMigrationCopy {
 
 fn gpt5_migration_copy() -> ModelMigrationCopy {
     ModelMigrationCopy {
-        heading: vec![Span::from("Introducing our gpt-5.1 models".bold())],
+        heading: vec!["Introducing our gpt-5.1 models".bold()],
         content: vec![
             Line::from(
                 "We've upgraded our family of models supported in Codex to gpt-5.1, gpt-5.1-codex and gpt-5.1-codex-mini.",

@@ -1532,6 +1532,29 @@ fn model_reasoning_selection_popup_snapshot() {
 }
 
 #[test]
+fn reasoning_popup_shows_extra_high_with_space() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.config.model = "arcticfox".to_string();
+
+    let preset = builtin_model_presets(None)
+        .into_iter()
+        .find(|preset| preset.model == "arcticfox")
+        .expect("arcticfox preset");
+    chat.open_reasoning_popup(preset);
+
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup.contains("Extra high"),
+        "expected popup to include 'Extra high'; popup: {popup}"
+    );
+    assert!(
+        !popup.contains("Extrahigh"),
+        "expected popup not to include 'Extrahigh'; popup: {popup}"
+    );
+}
+
+#[test]
 fn single_reasoning_option_skips_selection() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 

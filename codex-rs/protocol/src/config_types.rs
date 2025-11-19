@@ -30,6 +30,7 @@ pub enum ReasoningEffort {
     #[default]
     Medium,
     High,
+    #[strum(serialize = "xhigh")]
     ExtraHigh,
 }
 

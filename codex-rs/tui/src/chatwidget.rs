@@ -2060,10 +2060,7 @@ impl ChatWidget {
         let mut items: Vec<SelectionItem> = Vec::new();
         for choice in choices.iter() {
             let effort = choice.display;
-            let mut effort_label = effort.to_string();
-            if let Some(first) = effort_label.get_mut(0..1) {
-                first.make_ascii_uppercase();
-            }
+            let mut effort_label = Self::reasoning_effort_label(effort).to_string();
             if choice.stored == default_choice {
                 effort_label.push_str(" (default)");
             }
@@ -2136,6 +2133,17 @@ impl ChatWidget {
             items,
             ..Default::default()
         });
+    }
+
+    fn reasoning_effort_label(effort: ReasoningEffortConfig) -> &'static str {
+        match effort {
+            ReasoningEffortConfig::None => "None",
+            ReasoningEffortConfig::Minimal => "Minimal",
+            ReasoningEffortConfig::Low => "Low",
+            ReasoningEffortConfig::Medium => "Medium",
+            ReasoningEffortConfig::High => "High",
+            ReasoningEffortConfig::ExtraHigh => "Extra high",
+        }
     }
 
     fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
