@@ -1,4 +1,6 @@
+use std::fs::OpenOptions;
 use std::io::BufRead;
+use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -43,6 +45,7 @@ use crate::client_common::ResponsesApiRequest;
 use crate::client_common::create_text_param_for_request;
 use crate::config::Config;
 use crate::default_client::CodexHttpClient;
+use crate::default_client::CodexRequestBuilder;
 use crate::default_client::create_client;
 use crate::error::CodexErr;
 use crate::error::ConnectionFailedError;
@@ -353,10 +356,13 @@ impl ModelClient {
             req_builder = req_builder.header("chatgpt-account-id", account_id);
         }
 
+        log_http_request(&req_builder, payload_json);
         let res = self
             .otel_event_manager
             .log_request(attempt, || req_builder.send())
             .await;
+
+        log_http_response(&res);
 
         let mut request_id = None;
         if let Ok(resp) = &res {
@@ -767,7 +773,7 @@ fn parse_header_i64(headers: &HeaderMap, name: &str) -> Option<i64> {
 fn parse_header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name)?.to_str().ok()
 }
-
+// @todo
 async fn process_sse<S>(
     stream: S,
     tx_event: mpsc::Sender<Result<ResponseEvent>>,
@@ -1075,6 +1081,62 @@ fn is_context_window_error(error: &Error) -> bool {
 
 fn is_quota_exceeded_error(error: &Error) -> bool {
     error.code.as_deref() == Some("insufficient_quota")
+}
+
+fn log_http_request(builder: &CodexRequestBuilder, payload_json: &Value) {
+    if let Some(request) = builder.try_build_request() {
+        if let Err(err) = append_http_request(&request, payload_json) {
+            debug!("failed to log HTTP request: {err}");
+        }
+    }
+}
+
+fn append_http_request(request: &reqwest::Request, payload_json: &Value) -> std::io::Result<()> {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("codex_prompt.log")?;
+    writeln!(file, "==== HTTP Request ====")?;
+    writeln!(file, "Method: {}", request.method())?;
+    writeln!(file, "URL: {}", request.url())?;
+    writeln!(file, "Headers:")?;
+    for (name, value) in request.headers() {
+        writeln!(file, "{}: {}", name, value.to_str().unwrap_or("<non-utf8>"))?;
+    }
+    writeln!(file, "Body: {}", payload_json)?;
+    writeln!(file)?;
+    Ok(())
+}
+
+fn log_http_response(res: &std::result::Result<reqwest::Response, reqwest::Error>) {
+    if let Err(err) = append_http_response(res) {
+        debug!("failed to log HTTP response: {err}");
+    }
+}
+
+fn append_http_response(
+    res: &std::result::Result<reqwest::Response, reqwest::Error>,
+) -> std::io::Result<()> {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("codex_prompt.log")?;
+    writeln!(file, "==== HTTP Response ====")?;
+    match res {
+        Ok(resp) => {
+            writeln!(file, "Status: {}", resp.status())?;
+            writeln!(file, "URL: {}", resp.url())?;
+            writeln!(file, "Headers:")?;
+            for (name, value) in resp.headers() {
+                writeln!(file, "{}: {}", name, value.to_str().unwrap_or("<non-utf8>"))?;
+            }
+        }
+        Err(err) => {
+            writeln!(file, "Error: {err}")?;
+        }
+    }
+    writeln!(file)?;
+    Ok(())
 }
 
 #[cfg(test)]

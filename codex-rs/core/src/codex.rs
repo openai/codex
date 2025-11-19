@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -2106,7 +2109,11 @@ async fn try_run_turn(
         summary: turn_context.client.get_reasoning_summary(),
     });
 
+    log_rollout_item_to_file(&rollout_item);
     sess.persist_rollout_items(&[rollout_item]).await;
+
+    log_prompt_to_file(prompt);
+
     let mut stream = turn_context
         .client
         .clone()
@@ -2148,6 +2155,7 @@ async fn try_run_turn(
                 ));
             }
         };
+        log_event_to_file(&event);
 
         let add_completed = &mut |response_item: ProcessedResponseItem| {
             output.push_back(future::ready(Ok(response_item)).boxed());
@@ -2331,6 +2339,33 @@ async fn try_run_turn(
             }
         }
     }
+}
+
+fn log_prompt_to_file(prompt: &Prompt) {
+    log_debug_struct_to_file("Prompt", prompt);
+}
+
+fn log_rollout_item_to_file(rollout_item: &RolloutItem) {
+    log_debug_struct_to_file("RolloutItem", rollout_item);
+}
+
+fn log_event_to_file(event: &ResponseEvent) {
+    log_debug_struct_to_file("Event", event);
+}
+
+fn log_debug_struct_to_file<T: Debug>(label: &str, value: &T) {
+    let path = Path::new("codex_prompt.log");
+    if let Err(err) = append_debug_struct(path, label, value) {
+        // warn!(path = %path.display(), error = %err, "Failed to write prompt log");
+    }
+}
+
+fn append_debug_struct<T: Debug>(path: &Path, label: &str, value: &T) -> std::io::Result<()> {
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    writeln!(file, "==== {label} ====")?;
+    writeln!(file, "{value:#?}")?;
+    writeln!(file)?;
+    Ok(())
 }
 
 async fn handle_non_tool_response_item(item: &ResponseItem) -> Option<TurnItem> {

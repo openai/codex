@@ -142,6 +142,11 @@ impl CodexRequestBuilder {
         }
     }
 
+    pub fn try_build_request(&self) -> Option<reqwest::Request> {
+        let builder = self.builder.try_clone()?;
+        builder.build().ok()
+    }
+
     fn extract_request_ids(response: &Response) -> HashMap<String, String> {
         ["cf-ray", "x-request-id", "x-oai-request-id"]
             .iter()
