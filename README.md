@@ -74,7 +74,7 @@ Codex CLI supports a rich set of configuration options, with preferences stored 
 Codex can enforce your own rules-based execution policy before it runs shell commands.
 
 1. Create a policy directory: `mkdir -p ~/.codex/policy`.
-2. Drop one or more `.codexpolicy` files into that folder. Codex automatically loads every file in there on startup.
+2. Create one or more `.codexpolicy` files into that folder. Codex automatically loads every `.codexpolicy` file in there on startup.
 3. Write `prefix_rule` entries to describe the commands you want to allow, prompt, or block:
 
 ```starlark
