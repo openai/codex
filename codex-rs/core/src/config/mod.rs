@@ -62,11 +62,11 @@ pub mod profile;
 pub mod types;
 
 #[cfg(target_os = "windows")]
-pub const OPENAI_DEFAULT_MODEL: &str = "arcticfox";
+pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5.1-codex-max";
 #[cfg(not(target_os = "windows"))]
-pub const OPENAI_DEFAULT_MODEL: &str = "arcticfox";
-const OPENAI_DEFAULT_REVIEW_MODEL: &str = "arcticfox";
-pub const GPT_5_CODEX_MEDIUM_MODEL: &str = "arcticfox";
+pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5.1-codex-max";
+const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5.1-codex-max";
+pub const GPT_5_CODEX_MEDIUM_MODEL: &str = "gpt-5.1-codex-max";
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
@@ -81,7 +81,7 @@ pub struct Config {
     /// Optional override of model selection.
     pub model: String,
 
-    /// Model used specifically for review sessions. Defaults to "arcticfox".
+    /// Model used specifically for review sessions. Defaults to "gpt-5.1-codex-max".
     pub review_model: String,
 
     pub model_family: ModelFamily,

@@ -5,7 +5,7 @@ use crate::render::renderable::RenderableExt as _;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
-use codex_common::model_presets::HIDE_ARCTICFOX_MIGRATION_PROMPT_CONFIG;
+use codex_common::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_common::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -36,8 +36,8 @@ pub(crate) struct ModelMigrationCopy {
 pub(crate) fn migration_copy_for_config(migration_config_key: &str) -> ModelMigrationCopy {
     match migration_config_key {
         HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG => gpt5_migration_copy(),
-        HIDE_ARCTICFOX_MIGRATION_PROMPT_CONFIG => arcticfox_migration_copy(),
-        _ => arcticfox_migration_copy(),
+        HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG => gpt_5_1_codex_max_migration_copy(),
+        _ => gpt_5_1_codex_max_migration_copy(),
     }
 }
 
@@ -176,17 +176,19 @@ impl WidgetRef for &ModelMigrationScreen {
     }
 }
 
-fn arcticfox_migration_copy() -> ModelMigrationCopy {
+fn gpt_5_1_codex_max_migration_copy() -> ModelMigrationCopy {
     ModelMigrationCopy {
-        heading: vec!["Introducing arcticfox".bold()],
+        heading: vec!["Codex just got an upgrade. Introducing gpt-5.1-codex-max".bold()],
         content: vec![
-            Line::from("We've upgraded our family of models supported in Codex to arcticfox."),
+            Line::from(
+                "Codex is now powered by gpt-5.1-codex-max, our new frontier agentic coding model built for long-running, project-scale work. It's faster, more capable, and more token-efficient than gpt-5.1-codex.",
+            ),
             Line::from(
                 "You can continue using legacy models by specifying them directly with the -m option or in your config.toml.",
             ),
             Line::from(vec![
                 "Learn more at ".into(),
-                "www.openai.com/index/arcticfox".cyan().underlined(),
+                "www.openai.com/index/gpt-5-1-codex-max".cyan().underlined(),
                 ".".into(),
             ]),
             Line::from(vec!["Press enter to continue".dim()]),
@@ -217,7 +219,7 @@ fn gpt5_migration_copy() -> ModelMigrationCopy {
 #[cfg(test)]
 mod tests {
     use super::ModelMigrationScreen;
-    use super::arcticfox_migration_copy;
+    use super::gpt_5_1_codex_max_migration_copy;
     use super::migration_copy_for_config;
     use crate::custom_terminal::Terminal;
     use crate::test_backend::VT100Backend;
@@ -236,8 +238,10 @@ mod tests {
         let mut terminal = Terminal::with_options(backend).expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, width, height));
 
-        let screen =
-            ModelMigrationScreen::new(FrameRequester::test_dummy(), arcticfox_migration_copy());
+        let screen = ModelMigrationScreen::new(
+            FrameRequester::test_dummy(),
+            gpt_5_1_codex_max_migration_copy(),
+        );
 
         {
             let mut frame = terminal.get_frame();
@@ -304,8 +308,10 @@ mod tests {
 
     #[test]
     fn escape_key_accepts_prompt() {
-        let mut screen =
-            ModelMigrationScreen::new(FrameRequester::test_dummy(), arcticfox_migration_copy());
+        let mut screen = ModelMigrationScreen::new(
+            FrameRequester::test_dummy(),
+            gpt_5_1_codex_max_migration_copy(),
+        );
 
         // Simulate pressing Escape
         screen.handle_key(KeyEvent::new(

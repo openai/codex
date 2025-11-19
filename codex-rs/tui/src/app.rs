@@ -19,7 +19,7 @@ use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_protocol::AuthMode;
-use codex_common::model_presets::HIDE_ARCTICFOX_MIGRATION_PROMPT_CONFIG;
+use codex_common::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_common::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_common::model_presets::ModelUpgrade;
 use codex_common::model_presets::all_model_presets;
@@ -57,7 +57,7 @@ use tokio::sync::mpsc::unbounded_channel;
 use crate::history_cell::UpdateAvailableHistoryCell;
 
 const GPT_5_1_MIGRATION_AUTH_MODES: [AuthMode; 2] = [AuthMode::ChatGPT, AuthMode::ApiKey];
-const ARCTICFOX_MIGRATION_AUTH_MODES: [AuthMode; 1] = [AuthMode::ChatGPT];
+const GPT_5_1_CODEX_MIGRATION_AUTH_MODES: [AuthMode; 1] = [AuthMode::ChatGPT];
 
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
@@ -106,7 +106,9 @@ fn should_show_model_migration_prompt(
 
 fn migration_prompt_hidden(config: &Config, migration_config_key: &str) -> Option<bool> {
     match migration_config_key {
-        HIDE_ARCTICFOX_MIGRATION_PROMPT_CONFIG => config.notices.hide_arcticfox_migration_prompt,
+        HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG => {
+            config.notices.hide_gpt_5_1_codex_max_migration_prompt
+        }
         HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG => config.notices.hide_gpt5_1_migration_prompt,
         _ => None,
     }
@@ -946,7 +948,7 @@ impl App {
 fn migration_prompt_allowed_auth_modes(migration_config_key: &str) -> Option<&'static [AuthMode]> {
     match migration_config_key {
         HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG => Some(&GPT_5_1_MIGRATION_AUTH_MODES),
-        HIDE_ARCTICFOX_MIGRATION_PROMPT_CONFIG => Some(&ARCTICFOX_MIGRATION_AUTH_MODES),
+        HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG => Some(&GPT_5_1_CODEX_MIGRATION_AUTH_MODES),
         _ => None,
     }
 }
@@ -1034,7 +1036,7 @@ mod tests {
         ));
         assert!(should_show_model_migration_prompt(
             "gpt-5.1-codex",
-            "arcticfox",
+            "gpt-5.1-codex-max",
             None
         ));
         assert!(!should_show_model_migration_prompt(
@@ -1181,14 +1183,14 @@ mod tests {
     }
 
     #[test]
-    fn arcticfox_migration_limits_to_chatgpt() {
+    fn gpt_5_1_codex_max_migration_limits_to_chatgpt() {
         assert!(migration_prompt_allows_auth_mode(
             Some(AuthMode::ChatGPT),
-            HIDE_ARCTICFOX_MIGRATION_PROMPT_CONFIG,
+            HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG,
         ));
         assert!(!migration_prompt_allows_auth_mode(
             Some(AuthMode::ApiKey),
-            HIDE_ARCTICFOX_MIGRATION_PROMPT_CONFIG,
+            HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG,
         ));
     }
 

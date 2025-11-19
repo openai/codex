@@ -1526,13 +1526,13 @@ fn startup_prompts_for_windows_sandbox_when_agent_requested() {
 fn model_reasoning_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
-    chat.config.model = "arcticfox".to_string();
+    chat.config.model = "gpt-5.1-codex-max".to_string();
     chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::High);
 
     let preset = builtin_model_presets(None)
         .into_iter()
-        .find(|preset| preset.model == "arcticfox")
-        .expect("arcticfox preset");
+        .find(|preset| preset.model == "gpt-5.1-codex-max")
+        .expect("gpt-5.1-codex-max preset");
     chat.open_reasoning_popup(preset);
 
     let popup = render_bottom_popup(&chat, 80);
@@ -1543,13 +1543,13 @@ fn model_reasoning_selection_popup_snapshot() {
 fn model_reasoning_selection_popup_extra_high_warning_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
-    chat.config.model = "arcticfox".to_string();
+    chat.config.model = "gpt-5.1-codex-max".to_string();
     chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::XHigh);
 
     let preset = builtin_model_presets(None)
         .into_iter()
-        .find(|preset| preset.model == "arcticfox")
-        .expect("arcticfox preset");
+        .find(|preset| preset.model == "gpt-5.1-codex-max")
+        .expect("gpt-5.1-codex-max preset");
     chat.open_reasoning_popup(preset);
 
     let popup = render_bottom_popup(&chat, 80);
@@ -1560,12 +1560,12 @@ fn model_reasoning_selection_popup_extra_high_warning_snapshot() {
 fn reasoning_popup_shows_extra_high_with_space() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
-    chat.config.model = "arcticfox".to_string();
+    chat.config.model = "gpt-5.1-codex-max".to_string();
 
     let preset = builtin_model_presets(None)
         .into_iter()
-        .find(|preset| preset.model == "arcticfox")
-        .expect("arcticfox preset");
+        .find(|preset| preset.model == "gpt-5.1-codex-max")
+        .expect("gpt-5.1-codex-max preset");
     chat.open_reasoning_popup(preset);
 
     let popup = render_bottom_popup(&chat, 120);
