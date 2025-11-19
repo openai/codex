@@ -1587,7 +1587,6 @@ PY
 
     let output_text = large_output.output.replace("\r\n", "\n");
     let truncated_pattern = r#"(?s)^(token token \n){5,}.*\[\u{2026}\d+ tokens truncated\u{2026}]\n(token token \n){5,}"#;
-    // is it flaky?
 
     assert_regex_match(truncated_pattern, &output_text);
 
