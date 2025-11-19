@@ -40,7 +40,7 @@ mod windows_impl {
     use super::logging::log_failure;
     use super::logging::log_start;
     use super::logging::log_success;
-    use super::policy::SandboxMode;
+    use super::policy::parse_policy;
     use super::policy::SandboxPolicy;
     use super::token::convert_string_sid_to_sid;
     use super::winutil::format_last_error;
@@ -194,7 +194,7 @@ mod windows_impl {
         mut env_map: HashMap<String, String>,
         timeout_ms: Option<u64>,
     ) -> Result<CaptureResult> {
-        let policy = SandboxPolicy::parse(policy_json_or_preset)?;
+        let policy = parse_policy(policy_json_or_preset)?;
         normalize_null_device_env(&mut env_map);
         ensure_non_interactive_pager(&mut env_map);
         apply_no_network_to_env(&mut env_map)?;
@@ -206,27 +206,32 @@ mod windows_impl {
         let logs_base_dir = Some(codex_home);
         log_start(&command, logs_base_dir);
         let cap_sid_path = cap_sid_file(codex_home);
+        let is_workspace_write = matches!(&policy, SandboxPolicy::WorkspaceWrite { .. });
+
         let (h_token, psid_to_use): (HANDLE, *mut c_void) = unsafe {
-            match &policy.0 {
-                SandboxMode::ReadOnly => {
+            match &policy {
+                SandboxPolicy::ReadOnly => {
                     let caps = load_or_create_cap_sids(codex_home);
                     ensure_dir(&cap_sid_path)?;
                     fs::write(&cap_sid_path, serde_json::to_string(&caps)?)?;
                     let psid = convert_string_sid_to_sid(&caps.readonly).unwrap();
                     super::token::create_readonly_token_with_cap(psid)?
                 }
-                SandboxMode::WorkspaceWrite => {
+                SandboxPolicy::WorkspaceWrite { .. } => {
                     let caps = load_or_create_cap_sids(codex_home);
                     ensure_dir(&cap_sid_path)?;
                     fs::write(&cap_sid_path, serde_json::to_string(&caps)?)?;
                     let psid = convert_string_sid_to_sid(&caps.workspace).unwrap();
                     super::token::create_workspace_write_token_with_cap(psid)?
                 }
+                SandboxPolicy::DangerFullAccess => {
+                    anyhow::bail!("DangerFullAccess is not supported for sandboxing")
+                }
             }
         };
 
         unsafe {
-            if matches!(policy.0, SandboxMode::WorkspaceWrite) {
+            if is_workspace_write {
                 if let Ok(base) = super::token::get_current_token_for_restriction() {
                     if let Ok(bytes) = super::token::get_logon_sid_bytes(base) {
                         let mut tmp = bytes.clone();
@@ -238,7 +243,7 @@ mod windows_impl {
             }
         }
 
-        let persist_aces = matches!(policy.0, SandboxMode::WorkspaceWrite);
+        let persist_aces = is_workspace_write;
         let allow = compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map);
         let mut guards: Vec<(PathBuf, *mut c_void)> = Vec::new();
         unsafe {

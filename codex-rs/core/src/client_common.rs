@@ -431,7 +431,7 @@ mod tests {
                 expects_apply_patch_instructions: false,
             },
             InstructionsTestCase {
-                slug: "gpt-5.1-codex",
+                slug: "arcticfox",
                 expects_apply_patch_instructions: false,
             },
         ];
