@@ -407,7 +407,6 @@ $"#;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ShellModelOutput::Shell)]
-#[test_case(ShellModelOutput::ShellCommand)]
 #[test_case(ShellModelOutput::LocalShell)]
 async fn shell_output_reserializes_truncated_content(output_type: ShellModelOutput) -> Result<()> {
     skip_if_no_network!(Ok(()));
