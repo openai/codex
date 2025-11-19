@@ -73,6 +73,17 @@ pub const GPT_5_CODEX_MEDIUM_MODEL: &str = "gpt-5.1-codex";
 /// the context window.
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
+/// Default percentage of context window remaining that will trigger automatic
+/// conversation compaction when `/compact auto` is enabled.
+pub const DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT: u8 = 20;
+
+pub const AUTO_COMPACT_THRESHOLD_MIN: u8 = 1;
+pub const AUTO_COMPACT_THRESHOLD_MAX: u8 = 99;
+
+fn clamp_auto_compact_threshold(percent: u8) -> u8 {
+    percent.clamp(AUTO_COMPACT_THRESHOLD_MIN, AUTO_COMPACT_THRESHOLD_MAX)
+}
+
 pub(crate) const CONFIG_TOML_FILE: &str = "config.toml";
 
 /// Application configuration loaded from disk and merged with overrides.
@@ -136,6 +147,14 @@ pub struct Config {
 
     /// Compact prompt override.
     pub compact_prompt: Option<String>,
+
+    /// Whether automatic conversation compaction should run when the remaining
+    /// context window percentage falls below the configured threshold.
+    pub auto_compact: bool,
+
+    /// Percentage of the model's effective context window that should trigger
+    /// automatic compaction when `auto_compact` is enabled.
+    pub auto_compact_threshold_percent: u8,
 
     /// Optional external notifier command. When set, Codex will spawn this
     /// program after each completed *turn* (i.e. when the agent finishes
@@ -508,8 +527,477 @@ pub fn set_default_oss_provider(codex_home: &Path, provider: &str) -> std::io::R
     use toml_edit::value;
     doc["oss_provider"] = value(provider);
 
-    // Write the modified document back
-    std::fs::write(&config_path, doc.to_string())?;
+    std::fs::create_dir_all(codex_home)?;
+
+    let tmp_file = NamedTempFile::new_in(codex_home)?;
+    std::fs::write(tmp_file.path(), doc.to_string())?;
+    tmp_file.persist(config_path)?;
+
+    Ok(())
+}
+
+fn ensure_profile_table<'a>(
+    doc: &'a mut DocumentMut,
+    profile_name: &str,
+) -> anyhow::Result<&'a mut toml_edit::Table> {
+    let mut created_profiles_table = false;
+    {
+        let root = doc.as_table_mut();
+        let needs_table = !root.contains_key("profiles")
+            || root
+                .get("profiles")
+                .and_then(|item| item.as_table())
+                .is_none();
+        if needs_table {
+            root.insert("profiles", toml_edit::table());
+            created_profiles_table = true;
+        }
+    }
+
+    let Some(profiles_table) = doc["profiles"].as_table_mut() else {
+        return Err(anyhow::anyhow!(
+            "profiles table missing after initialization"
+        ));
+    };
+
+    if created_profiles_table {
+        profiles_table.set_implicit(true);
+    }
+
+    let needs_profile_table = !profiles_table.contains_key(profile_name)
+        || profiles_table
+            .get(profile_name)
+            .and_then(|item| item.as_table())
+            .is_none();
+    if needs_profile_table {
+        profiles_table.insert(profile_name, toml_edit::table());
+    }
+
+    let Some(profile_table) = profiles_table
+        .get_mut(profile_name)
+        .and_then(|item| item.as_table_mut())
+    else {
+        return Err(anyhow::anyhow!(format!(
+            "profile table missing for {profile_name}"
+        )));
+    };
+
+    profile_table.set_implicit(false);
+    Ok(profile_table)
+}
+
+// TODO(jif) refactor config persistence.
+pub async fn persist_global_prompt(codex_home: &Path, prompt: Option<&str>) -> anyhow::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let serialized = match tokio::fs::read_to_string(&config_path).await {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err.into()),
+    };
+
+    let mut doc = if serialized.is_empty() {
+        DocumentMut::new()
+    } else {
+        serialized.parse::<DocumentMut>()?
+    };
+
+    match prompt.and_then(|p| {
+        let trimmed = p.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }) {
+        Some(value) => {
+            doc["global_prompt"] = toml_edit::value(value);
+        }
+        None => {
+            doc.as_table_mut().remove("global_prompt");
+        }
+    }
+
+    tokio::fs::create_dir_all(codex_home)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to create Codex home directory at {}",
+                codex_home.display()
+            )
+        })?;
+
+    tokio::fs::write(&config_path, doc.to_string())
+        .await
+        .with_context(|| format!("failed to persist config.toml at {}", config_path.display()))?;
+
+    Ok(())
+}
+
+async fn persist_bool_flag(codex_home: &Path, key: &str, enabled: bool) -> anyhow::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let serialized = match tokio::fs::read_to_string(&config_path).await {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err.into()),
+    };
+
+    let mut doc = if serialized.is_empty() {
+        DocumentMut::new()
+    } else {
+        serialized.parse::<DocumentMut>()?
+    };
+
+    if enabled {
+        doc[key] = toml_edit::value(true);
+    } else {
+        doc.as_table_mut().remove(key);
+    }
+
+    tokio::fs::create_dir_all(codex_home)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to create Codex home directory at {}",
+                codex_home.display()
+            )
+        })?;
+
+    tokio::fs::write(&config_path, doc.to_string())
+        .await
+        .with_context(|| format!("failed to persist config.toml at {}", config_path.display()))?;
+
+    Ok(())
+}
+
+pub async fn persist_auto_checkpoint(codex_home: &Path, enabled: bool) -> anyhow::Result<()> {
+    persist_bool_flag(codex_home, "auto_checkpoint", enabled).await
+}
+
+pub async fn persist_auto_commit(codex_home: &Path, enabled: bool) -> anyhow::Result<()> {
+    persist_bool_flag(codex_home, "auto_commit", enabled).await
+}
+
+pub async fn persist_auto_compact_settings(
+    codex_home: &Path,
+    enabled: bool,
+    threshold_percent: u8,
+) -> anyhow::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let serialized = match tokio::fs::read_to_string(&config_path).await {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err.into()),
+    };
+
+    let mut doc = if serialized.is_empty() {
+        DocumentMut::new()
+    } else {
+        serialized.parse::<DocumentMut>()?
+    };
+
+    if enabled {
+        doc["auto_compact"] = toml_edit::value(true);
+    } else {
+        doc.as_table_mut().remove("auto_compact");
+    }
+
+    let clamped = clamp_auto_compact_threshold(threshold_percent);
+    doc["auto_compact_threshold_percent"] = toml_edit::value(clamped as i64);
+
+    tokio::fs::create_dir_all(codex_home)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to create Codex home directory at {}",
+                codex_home.display()
+            )
+        })?;
+
+    tokio::fs::write(&config_path, doc.to_string())
+        .await
+        .with_context(|| format!("failed to persist config.toml at {}", config_path.display()))?;
+
+    Ok(())
+}
+
+pub async fn persist_alarm_script(codex_home: &Path, script: Option<&str>) -> anyhow::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let serialized = match tokio::fs::read_to_string(&config_path).await {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err.into()),
+    };
+
+    let mut doc = if serialized.is_empty() {
+        DocumentMut::new()
+    } else {
+        serialized.parse::<DocumentMut>()?
+    };
+
+    let trimmed_script = script.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    });
+
+    let existing_alarm_script = doc
+        .as_table()
+        .get("alarm_script")
+        .and_then(|item| item.as_str())
+        .map(str::to_string);
+    let existing_notify_command = doc
+        .as_table()
+        .get("notify")
+        .and_then(notify_command_from_item);
+
+    match trimmed_script {
+        Some(value) => {
+            doc["alarm_script"] = toml_edit::value(value.clone());
+            let notify_command = Config::alarm_script_to_notify_command(&value);
+            let mut notify_array = TomlArray::new();
+            for arg in notify_command {
+                notify_array.push(arg);
+            }
+            doc["notify"] = toml_edit::value(notify_array);
+        }
+        None => {
+            doc.as_table_mut().remove("alarm_script");
+            if existing_alarm_script
+                .as_ref()
+                .and_then(|expected| {
+                    existing_notify_command
+                        .as_ref()
+                        .and_then(|cmd| Config::script_from_notify_command(cmd))
+                        .filter(|script| script == expected)
+                })
+                .is_some()
+                || existing_notify_command.as_ref().is_some_and(|cmd| {
+                    cmd.last().map(String::as_str) == Some(ALARM_NOTIFY_SENTINEL_ARG)
+                })
+            {
+                doc.as_table_mut().remove("notify");
+            }
+        }
+    }
+
+    tokio::fs::create_dir_all(codex_home)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to create Codex home directory at {}",
+                codex_home.display()
+            )
+        })?;
+
+    tokio::fs::write(&config_path, doc.to_string())
+        .await
+        .with_context(|| format!("failed to persist config.toml at {}", config_path.display()))?;
+
+    Ok(())
+}
+
+pub async fn persist_prompt_aliases(
+    codex_home: &Path,
+    aliases: &HashMap<String, String>,
+) -> anyhow::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let serialized = match tokio::fs::read_to_string(&config_path).await {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err.into()),
+    };
+
+    let mut doc = if serialized.is_empty() {
+        DocumentMut::new()
+    } else {
+        serialized.parse::<DocumentMut>()?
+    };
+
+    if aliases.is_empty() {
+        if let Some(tui_table) = doc
+            .as_table_mut()
+            .get_mut("tui")
+            .and_then(|item| item.as_table_mut())
+        {
+            tui_table.remove("aliases");
+            if tui_table.is_empty() {
+                doc.as_table_mut().remove("tui");
+            }
+        }
+    } else {
+        if !doc.as_table().contains_key("tui") {
+            let mut table = toml_edit::Table::new();
+            table.set_implicit(false);
+            doc["tui"] = TomlItem::Table(table);
+        }
+        let Some(tui_table) = doc["tui"].as_table_mut() else {
+            anyhow::bail!("failed to access `tui` table after insertion");
+        };
+        tui_table.set_implicit(false);
+
+        let mut alias_table = toml_edit::Table::new();
+        alias_table.set_implicit(false);
+
+        let mut pairs: Vec<(&String, &String)> = aliases.iter().collect();
+        pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+        for (name, prompt) in pairs {
+            alias_table.insert(name.as_str(), toml_edit::value(prompt.clone()));
+        }
+
+        tui_table.insert("aliases", TomlItem::Table(alias_table));
+    }
+
+    tokio::fs::create_dir_all(codex_home)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to create Codex home directory at {}",
+                codex_home.display()
+            )
+        })?;
+
+    tokio::fs::write(&config_path, doc.to_string())
+        .await
+        .with_context(|| format!("failed to persist config.toml at {}", config_path.display()))?;
+
+    Ok(())
+}
+
+pub async fn persist_prompt_presets(
+    codex_home: &Path,
+    presets: &HashMap<String, String>,
+) -> anyhow::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let serialized = match tokio::fs::read_to_string(&config_path).await {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err.into()),
+    };
+
+    let mut doc = if serialized.is_empty() {
+        DocumentMut::new()
+    } else {
+        serialized.parse::<DocumentMut>()?
+    };
+
+    if presets.is_empty() {
+        if let Some(tui_table) = doc
+            .as_table_mut()
+            .get_mut("tui")
+            .and_then(|item| item.as_table_mut())
+        {
+            tui_table.remove("presets");
+            if tui_table.is_empty() {
+                doc.as_table_mut().remove("tui");
+            }
+        }
+    } else {
+        if !doc.as_table().contains_key("tui") {
+            let mut table = toml_edit::Table::new();
+            table.set_implicit(false);
+            doc["tui"] = TomlItem::Table(table);
+        }
+        let Some(tui_table) = doc["tui"].as_table_mut() else {
+            anyhow::bail!("failed to access `tui` table after insertion");
+        };
+        tui_table.set_implicit(false);
+
+        let mut preset_table = toml_edit::Table::new();
+        preset_table.set_implicit(false);
+
+        let mut pairs: Vec<(&String, &String)> = presets.iter().collect();
+        pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+        for (name, prompt) in pairs {
+            preset_table.insert(name.as_str(), toml_edit::value(prompt.clone()));
+        }
+
+        tui_table.insert("presets", TomlItem::Table(preset_table));
+    }
+
+    tokio::fs::create_dir_all(codex_home)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to create Codex home directory at {}",
+                codex_home.display()
+            )
+        })?;
+
+    tokio::fs::write(&config_path, doc.to_string())
+        .await
+        .with_context(|| format!("failed to persist config.toml at {}", config_path.display()))?;
+
+    Ok(())
+}
+
+fn notify_command_from_item(item: &TomlItem) -> Option<Vec<String>> {
+    let array = item.as_array()?;
+    let mut command = Vec::with_capacity(array.len());
+    for value in array.iter() {
+        command.push(value.as_str()?.to_string());
+    }
+    Some(command)
+}
+
+pub async fn persist_model_selection(
+    codex_home: &Path,
+    active_profile: Option<&str>,
+    model: &str,
+    effort: Option<ReasoningEffort>,
+) -> anyhow::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let serialized = match tokio::fs::read_to_string(&config_path).await {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err.into()),
+    };
+
+    let mut doc = if serialized.is_empty() {
+        DocumentMut::new()
+    } else {
+        serialized.parse::<DocumentMut>()?
+    };
+
+    if let Some(profile_name) = active_profile {
+        let profile_table = ensure_profile_table(&mut doc, profile_name)?;
+        profile_table["model"] = toml_edit::value(model);
+        match effort {
+            Some(effort) => {
+                profile_table["model_reasoning_effort"] = toml_edit::value(effort.to_string());
+            }
+            None => {
+                profile_table.remove("model_reasoning_effort");
+            }
+        }
+    } else {
+        let table = doc.as_table_mut();
+        table["model"] = toml_edit::value(model);
+        match effort {
+            Some(effort) => {
+                table["model_reasoning_effort"] = toml_edit::value(effort.to_string());
+            }
+            None => {
+                table.remove("model_reasoning_effort");
+            }
+        }
+    }
+
+    // TODO(jif) refactor the home creation
+    tokio::fs::create_dir_all(codex_home)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to create Codex home directory at {}",
+                codex_home.display()
+            )
+        })?;
+
+    tokio::fs::write(&config_path, doc.to_string())
+        .await
+        .with_context(|| format!("failed to persist config.toml at {}", config_path.display()))?;
     Ok(())
 }
 
@@ -616,6 +1104,12 @@ pub struct ConfigToml {
     /// auto: Use the keyring if available, otherwise use a file.
     #[serde(default)]
     pub cli_auth_credentials_store: Option<AuthCredentialsStoreMode>,
+
+    /// Default state for automatic compaction.
+    pub auto_compact: Option<bool>,
+
+    /// Threshold (as remaining context percentage) for automatic compaction.
+    pub auto_compact_threshold_percent: Option<u8>,
 
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     #[serde(default)]
@@ -1168,6 +1662,27 @@ impl Config {
         )?;
         let compact_prompt = compact_prompt.or(file_compact_prompt);
 
+        let auto_compact = config_profile
+            .auto_compact
+            .or(cfg.auto_compact)
+            .unwrap_or(false);
+
+        let auto_compact_threshold_percent = {
+            let requested = config_profile
+                .auto_compact_threshold_percent
+                .or(cfg.auto_compact_threshold_percent)
+                .unwrap_or(DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT);
+            let clamped = clamp_auto_compact_threshold(requested);
+            if requested != clamped {
+                tracing::warn!(
+                    raw_threshold = requested,
+                    clamped_threshold = clamped,
+                    "auto_compact_threshold_percent out of range; clamping to safe bounds"
+                );
+            }
+            clamped
+        };
+
         // Default review model when not set in config; allow CLI override to take precedence.
         let review_model = override_review_model
             .or(cfg.review_model)
@@ -1188,6 +1703,8 @@ impl Config {
             did_user_set_custom_approval_policy_or_sandbox_mode,
             forced_auto_mode_downgraded_on_windows,
             shell_environment_policy,
+            auto_compact,
+            auto_compact_threshold_percent,
             notify: cfg.notify,
             user_instructions,
             base_instructions,
@@ -2760,6 +3277,285 @@ model = "gpt-5.1-codex"
         Ok(())
     }
 
+    #[tokio::test]
+    async fn persist_global_prompt_sets_value() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        persist_global_prompt(codex_home.path(), Some("Reply in Korean.")).await?;
+
+        let serialized =
+            tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        assert_eq!(parsed.global_prompt.as_deref(), Some("Reply in Korean."));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_global_prompt_clears_value() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+
+        tokio::fs::write(
+            &config_path,
+            r#"
+global_prompt = "Reply in Korean."
+"#,
+        )
+        .await?;
+
+        persist_global_prompt(codex_home.path(), None).await?;
+
+        let serialized = tokio::fs::read_to_string(&config_path).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        assert!(parsed.global_prompt.is_none());
+
+        Ok(())
+    }
+    #[tokio::test]
+    async fn persist_auto_checkpoint_sets_value() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        persist_auto_checkpoint(codex_home.path(), true).await?;
+
+        let serialized =
+            tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        assert_eq!(parsed.auto_checkpoint, Some(true));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_auto_checkpoint_clears_value() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+
+        tokio::fs::write(
+            &config_path,
+            r#"
+auto_checkpoint = true
+"#,
+        )
+        .await?;
+
+        persist_auto_checkpoint(codex_home.path(), false).await?;
+
+        let serialized = tokio::fs::read_to_string(&config_path).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        assert!(parsed.auto_checkpoint.is_none());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_auto_commit_sets_value() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        persist_auto_commit(codex_home.path(), true).await?;
+
+        let serialized =
+            tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        assert_eq!(parsed.auto_commit, Some(true));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_auto_commit_clears_value() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+
+        tokio::fs::write(
+            &config_path,
+            r#"
+auto_commit = true
+"#,
+        )
+        .await?;
+
+        persist_auto_commit(codex_home.path(), false).await?;
+
+        let serialized = tokio::fs::read_to_string(&config_path).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        assert!(parsed.auto_commit.is_none());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_auto_compact_settings_sets_value() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        persist_auto_compact_settings(codex_home.path(), true, 32).await?;
+
+        let serialized =
+            tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        assert_eq!(parsed.auto_compact, Some(true));
+        assert_eq!(parsed.auto_compact_threshold_percent, Some(32));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_auto_compact_settings_clamps_threshold() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        persist_auto_compact_settings(codex_home.path(), false, 150).await?;
+
+        let serialized =
+            tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        assert!(parsed.auto_compact.is_none());
+        assert_eq!(
+            parsed.auto_compact_threshold_percent,
+            Some(AUTO_COMPACT_THRESHOLD_MAX)
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_alarm_script_sets_value() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        persist_alarm_script(codex_home.path(), Some(" echo done ")).await?;
+
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let serialized = tokio::fs::read_to_string(&config_path).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        assert_eq!(parsed.alarm_script.as_deref(), Some("echo done"));
+        assert_eq!(
+            parsed.notify,
+            Some(Config::alarm_script_to_notify_command("echo done"))
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_alarm_script_clears_matching_notify() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+
+        tokio::fs::write(
+            &config_path,
+            r#"
+alarm_script = "echo hi"
+notify = ["sh", "-c", "echo hi", "codex-alarm"]
+"#,
+        )
+        .await?;
+
+        persist_alarm_script(codex_home.path(), None).await?;
+
+        let serialized = tokio::fs::read_to_string(&config_path).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        assert!(parsed.alarm_script.is_none());
+        assert!(parsed.notify.is_none());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_prompt_aliases_sets_values() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let mut aliases = HashMap::new();
+        aliases.insert("deploy".to_string(), "Run deploy".to_string());
+        aliases.insert("review".to_string(), "Run review".to_string());
+
+        persist_prompt_aliases(codex_home.path(), &aliases).await?;
+
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let serialized = tokio::fs::read_to_string(&config_path).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        let tui_aliases = parsed.tui.map(|t| t.aliases).unwrap_or_default();
+
+        assert_eq!(tui_aliases.get("deploy"), Some(&"Run deploy".to_string()));
+        assert_eq!(tui_aliases.get("review"), Some(&"Run review".to_string()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_prompt_aliases_removes_section_when_empty() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let mut aliases = HashMap::new();
+        aliases.insert("deploy".to_string(), "Run deploy".to_string());
+        persist_prompt_aliases(codex_home.path(), &aliases).await?;
+
+        let empty: HashMap<String, String> = HashMap::new();
+        persist_prompt_aliases(codex_home.path(), &empty).await?;
+
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let serialized = tokio::fs::read_to_string(&config_path).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        let tui_aliases = parsed.tui.map(|t| t.aliases).unwrap_or_default();
+        assert!(tui_aliases.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_prompt_presets_sets_values() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let mut presets = HashMap::new();
+        presets.insert(
+            "Reviewer".to_string(),
+            "Please review the code.".to_string(),
+        );
+        presets.insert("Planner".to_string(), "Plan the next steps.".to_string());
+
+        persist_prompt_presets(codex_home.path(), &presets).await?;
+
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let serialized = tokio::fs::read_to_string(&config_path).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        let tui_presets = parsed.tui.map(|t| t.presets).unwrap_or_default();
+
+        assert_eq!(
+            tui_presets.get("Reviewer"),
+            Some(&"Please review the code.".to_string())
+        );
+        assert_eq!(
+            tui_presets.get("Planner"),
+            Some(&"Plan the next steps.".to_string())
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_prompt_presets_removes_section_when_empty() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let mut presets = HashMap::new();
+        presets.insert("Reviewer".to_string(), "Check code".to_string());
+        persist_prompt_presets(codex_home.path(), &presets).await?;
+
+        let empty: HashMap<String, String> = HashMap::new();
+        persist_prompt_presets(codex_home.path(), &empty).await?;
+
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let serialized = tokio::fs::read_to_string(&config_path).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        let tui_presets = parsed.tui.map(|t| t.presets).unwrap_or_default();
+        assert!(tui_presets.is_empty());
+        Ok(())
+    }
+
     struct PrecedenceTestFixture {
         cwd: TempDir,
         codex_home: TempDir,
@@ -2992,6 +3788,8 @@ model_verbosity = "high"
                 base_instructions: None,
                 developer_instructions: None,
                 compact_prompt: None,
+                auto_compact: false,
+                auto_compact_threshold_percent: DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT,
                 forced_chatgpt_workspace_id: None,
                 forced_login_method: None,
                 include_apply_patch_tool: false,
@@ -3064,6 +3862,8 @@ model_verbosity = "high"
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
+            auto_compact: false,
+            auto_compact_threshold_percent: DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
@@ -3151,6 +3951,8 @@ model_verbosity = "high"
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
+            auto_compact: false,
+            auto_compact_threshold_percent: DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
@@ -3224,6 +4026,8 @@ model_verbosity = "high"
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
+            auto_compact: false,
+            auto_compact_threshold_percent: DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,

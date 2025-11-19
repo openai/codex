@@ -126,6 +126,11 @@ pub(crate) enum AppEvent {
     CommitCommand {
         action: CommitAction,
     },
+    /// Handle a `/compact auto` command issued from the composer.
+    SetAutoCompact {
+        enabled: bool,
+        threshold_percent: Option<u8>,
+    },
     /// Enable or disable automatic checkpoints.
     SetCheckpointAutomation {
         enabled: bool,

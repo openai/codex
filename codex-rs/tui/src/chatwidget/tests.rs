@@ -38,6 +38,8 @@ use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TaskStartedEvent;
+use codex_core::protocol::TokenUsage;
+use codex_core::protocol::TokenUsageInfo;
 use codex_core::protocol::UndoCompletedEvent;
 use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
@@ -210,6 +212,55 @@ fn exited_review_mode_emits_results_and_finishes() {
     assert!(!chat.is_review_mode);
 }
 
+#[test]
+fn auto_compact_runs_immediately_when_threshold_hit() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+    chat.set_auto_compact_settings(true, 40);
+
+    let info = token_info_for_percent(19200, 20_000);
+    chat.set_token_info(Some(info));
+
+    match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(_)) => {}
+        other => panic!("expected info message, got {other:?}"),
+    }
+
+    match rx.try_recv() {
+        Ok(AppEvent::CodexOp(Op::Compact)) => {}
+        other => panic!("expected auto compact op, got {other:?}"),
+    }
+}
+
+#[test]
+fn auto_compact_waits_for_running_task_before_triggering() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+    chat.set_auto_compact_settings(true, 40);
+    chat.bottom_pane.set_task_running(true);
+
+    chat.set_token_info(Some(token_info_for_percent(19200, 20_000)));
+
+    match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(_)) => {}
+        other => panic!("expected queued info message, got {other:?}"),
+    }
+    assert!(
+        rx.try_recv().is_err(),
+        "auto-compact should wait for task to finish"
+    );
+
+    chat.on_task_complete(None);
+
+    match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(_)) => {}
+        other => panic!("expected run info message, got {other:?}"),
+    }
+
+    match rx.try_recv() {
+        Ok(AppEvent::CodexOp(Op::Compact)) => {}
+        other => panic!("expected auto compact op after task completes, got {other:?}"),
+    }
+}
+
 #[cfg_attr(
     target_os = "macos",
     ignore = "system configuration APIs are blocked under macOS seatbelt"
@@ -282,6 +333,18 @@ fn make_chatwidget_manual() -> (
         retry_status_header: None,
         conversation_id: None,
         frame_requester: FrameRequester::test_dummy(),
+        todo_items: Vec::new(),
+        todo_auto_enabled: false,
+        auto_commit_enabled: false,
+        auto_compact_enabled: cfg.auto_compact,
+        auto_compact_threshold_percent: cfg.auto_compact_threshold_percent,
+        auto_compact_pending: false,
+        auto_compact_recently_triggered: false,
+        auto_compact_trigger_percent: None,
+        auto_compact_last_percent: None,
+        last_agent_commit_summary: None,
+        aliases: HashMap::new(),
+        presets: HashMap::new(),
         show_welcome_banner: true,
         queued_user_messages: VecDeque::new(),
         suppress_session_configured_redraw: false,
@@ -331,6 +394,195 @@ fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
         s.push('\n');
     }
     s
+}
+
+fn token_info_for_percent(last_total_tokens: u64, context_window: u64) -> TokenUsageInfo {
+    TokenUsageInfo {
+        total_token_usage: TokenUsage::default(),
+        last_token_usage: TokenUsage {
+            total_tokens: last_total_tokens,
+            ..TokenUsage::default()
+        },
+        model_context_window: Some(context_window),
+    }
+}
+
+fn next_persist_aliases(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) -> Option<HashMap<String, String>> {
+    loop {
+        match rx.try_recv() {
+            Ok(AppEvent::PersistAliases { aliases }) => return Some(aliases),
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => return None,
+        }
+    }
+}
+
+fn next_persist_presets(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) -> Option<HashMap<String, String>> {
+    loop {
+        match rx.try_recv() {
+            Ok(AppEvent::PersistPresets { presets }) => return Some(presets),
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => return None,
+        }
+    }
+}
+
+#[test]
+fn store_alias_persists_aliases_to_config() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+
+    chat.store_alias("Deploy".to_string(), "Run deploy".to_string());
+
+    let aliases = next_persist_aliases(&mut rx).expect("persist event");
+    assert_eq!(aliases.get("Deploy"), Some(&"Run deploy".to_string()));
+    assert_eq!(
+        chat.config.prompt_aliases.get("Deploy"),
+        Some(&"Run deploy".to_string())
+    );
+}
+
+#[test]
+fn remove_alias_updates_persisted_aliases() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+
+    chat.store_alias("Deploy".to_string(), "Run deploy".to_string());
+    // Drain initial persist event from creation.
+    let _ = next_persist_aliases(&mut rx);
+
+    chat.remove_alias("Deploy");
+    let aliases = next_persist_aliases(&mut rx).expect("persist event after removal");
+    assert!(aliases.is_empty());
+    assert!(chat.config.prompt_aliases.is_empty());
+}
+
+#[test]
+fn hydrate_aliases_from_config_loads_entries() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+    // Clear out any pending events to avoid interference.
+    while rx.try_recv().is_ok() {}
+
+    chat.config
+        .prompt_aliases
+        .insert("Deploy".to_string(), "Run deploy".to_string());
+    chat.hydrate_aliases_from_config();
+
+    let entry = chat.aliases.get("deploy").expect("alias should load");
+    assert_eq!(entry.name, "Deploy");
+    assert_eq!(entry.prompt, "Run deploy");
+}
+
+#[test]
+fn store_preset_persists_presets_to_config() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+
+    chat.store_preset(
+        "Reviewer".to_string(),
+        "Review the latest changes.".to_string(),
+    );
+
+    let presets = next_persist_presets(&mut rx).expect("persist event");
+    assert_eq!(
+        presets.get("Reviewer"),
+        Some(&"Review the latest changes.".to_string())
+    );
+    assert_eq!(
+        chat.config.prompt_presets.get("Reviewer"),
+        Some(&"Review the latest changes.".to_string())
+    );
+}
+
+#[test]
+fn remove_preset_updates_persisted_presets() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+
+    chat.store_preset(
+        "Reviewer".to_string(),
+        "Review the latest changes.".to_string(),
+    );
+    let _ = next_persist_presets(&mut rx);
+
+    chat.remove_preset("Reviewer");
+    let presets = next_persist_presets(&mut rx).expect("persist event after removal");
+    assert!(presets.is_empty());
+    assert!(chat.config.prompt_presets.is_empty());
+}
+
+#[test]
+fn hydrate_presets_from_config_loads_entries() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+    while rx.try_recv().is_ok() {}
+
+    chat.config.prompt_presets.insert(
+        "Reviewer".to_string(),
+        "Review the latest changes.".to_string(),
+    );
+    chat.hydrate_presets_from_config();
+
+    let entry = chat.presets.get("reviewer").expect("preset should load");
+    assert_eq!(entry.name, "Reviewer");
+    assert_eq!(entry.prompt, "Review the latest changes.");
+}
+
+#[test]
+fn global_prompt_waits_for_first_user_message() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual();
+    chat.pending_global_prompt = Some("Stay focused".to_string());
+
+    chat.submit_text_message("Stay focused".to_string());
+
+    assert!(matches!(op_rx.try_recv(), Err(TryRecvError::Empty)));
+    assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+    assert_eq!(chat.pending_global_prompt.as_deref(), Some("Stay focused"));
+    assert!(!chat.has_sent_user_message);
+
+    chat.submit_text_message("Implement feature".to_string());
+
+    let items = match op_rx
+        .try_recv()
+        .expect("expected user input op after real prompt")
+    {
+        Op::UserInput { items } => items,
+        other => panic!("unexpected op: {other:?}"),
+    };
+    let combined_text = match &items[..] {
+        [InputItem::Text { text }] => text.clone(),
+        other => panic!("unexpected input items: {other:?}"),
+    };
+    assert_eq!(combined_text, "Stay focused\n\nImplement feature");
+
+    match op_rx
+        .try_recv()
+        .expect("expected add-to-history op after real prompt")
+    {
+        Op::AddToHistory { text } => assert_eq!(text, "Stay focused\n\nImplement feature"),
+        other => panic!("unexpected op: {other:?}"),
+    }
+
+    let history_cells = drain_insert_history(&mut rx);
+    assert!(
+        !history_cells.is_empty(),
+        "expected at least one history cell for the submitted prompt"
+    );
+    let rendered = lines_to_single_string(history_cells.last().unwrap());
+    assert!(rendered.contains("Stay focused"));
+    assert!(rendered.contains("Implement feature"));
+    assert!(chat.pending_global_prompt.is_none());
+    assert!(chat.has_sent_user_message);
+}
+
+#[test]
+fn prompts_equivalent_ignores_common_invisible_variants() {
+    use crate::chatwidget::prompts_equivalent;
+
+    assert!(prompts_equivalent(
+        "\u{200b}Stay\u{2060}   focused\u{200d}\u{200b}",
+        "Stay focused"
+    ));
+    assert!(!prompts_equivalent("Stay focused!", "Stay focused"));
 }
 
 #[test]

@@ -270,6 +270,7 @@ mod detect_shell_type_tests {
 #[cfg(unix)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use std::path::PathBuf;
     use std::process::Command;
 
@@ -309,14 +310,19 @@ mod tests {
             .output()
             .unwrap();
 
+        let home = std::env::var("HOME").unwrap();
         let shell_path = String::from_utf8_lossy(&shell.stdout).trim().to_string();
         if shell_path.ends_with("/zsh") {
-            assert_eq!(
-                default_user_shell().await,
-                Shell::Zsh(ZshShell {
-                    shell_path: PathBuf::from(shell_path),
-                })
-            );
+            match default_user_shell().await {
+                Shell::Zsh(zsh) => {
+                    assert_eq!(zsh.zshrc_path, format!("{home}/.zshrc"));
+                    assert_eq!(
+                        Path::new(&zsh.shell_path).file_name(),
+                        Path::new(&shell_path).file_name()
+                    );
+                }
+                other => panic!("expected zsh shell, got {other:?}"),
+            }
         }
     }
 

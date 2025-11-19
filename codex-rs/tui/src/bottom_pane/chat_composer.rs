@@ -42,6 +42,9 @@ use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
 use crate::style::user_message_style;
+use codex_core::config::AUTO_COMPACT_THRESHOLD_MAX;
+use codex_core::config::AUTO_COMPACT_THRESHOLD_MIN;
+use codex_core::config::DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 
@@ -934,8 +937,61 @@ impl ChatComposer {
                         .into_iter()
                         .find(|(n, _)| *n == name)
                 {
-                    self.textarea.set_text("");
-                    return (InputResult::Command(cmd), true);
+                    match cmd {
+                        SlashCommand::Checkpoint => {
+                            let rest_owned = rest.to_string();
+                            let cleared = self.handle_checkpoint_command(&rest_owned);
+                            if cleared {
+                                self.textarea.set_text("");
+                            }
+                            return (InputResult::None, true);
+                        }
+                        SlashCommand::Todo => {
+                            let rest_owned = rest.to_string();
+                            let cleared = self.handle_todo_command(&rest_owned);
+                            if cleared {
+                                self.textarea.set_text("");
+                            }
+                            return (InputResult::None, true);
+                        }
+                        SlashCommand::Alias => {
+                            let rest_owned = rest.to_string();
+                            let cleared = self.handle_alias_command(&rest_owned);
+                            if cleared {
+                                self.textarea.set_text("");
+                            }
+                            return (InputResult::None, true);
+                        }
+                        SlashCommand::Preset => {
+                            let rest_owned = rest.to_string();
+                            let cleared = self.handle_preset_command(&rest_owned);
+                            if cleared {
+                                self.textarea.set_text("");
+                            }
+                            return (InputResult::None, true);
+                        }
+                        SlashCommand::Commit => {
+                            let rest_owned = rest.to_string();
+                            let cleared = self.handle_commit_command(&rest_owned);
+                            if cleared {
+                                self.textarea.set_text("");
+                            }
+                            return (InputResult::None, true);
+                        }
+                        SlashCommand::Compact => {
+                            let rest_owned = rest.to_string();
+                            let cleared = self.handle_compact_command(&rest_owned);
+                            if cleared {
+                                self.textarea.set_text("");
+                            }
+                            return (InputResult::None, true);
+                        }
+                        _ => {}
+                    }
+                    if rest.is_empty() {
+                        self.textarea.set_text("");
+                        return (InputResult::Command(cmd), true);
+                    }
                 }
                 // If we're in a paste-like burst capture, treat Enter as part of the burst
                 // and accumulate it rather than submitting or inserting immediately.
@@ -1052,6 +1108,484 @@ impl ChatComposer {
             }
             input => self.handle_input_basic(input),
         }
+    }
+    fn handle_commit_command(&mut self, rest: &str) -> bool {
+        let trimmed = rest.trim();
+        if trimmed.is_empty() {
+            self.app_event_tx.send(AppEvent::CommitCommand {
+                action: CommitAction::Perform {
+                    message: None,
+                    auto: false,
+                },
+            });
+            return true;
+        }
+
+        let mut parts = trimmed.split_whitespace();
+        let first = parts.next().unwrap_or_default();
+
+        if first.eq_ignore_ascii_case("auto") {
+            match parts.next() {
+                None => {
+                    self.app_event_tx.send(AppEvent::CommitCommand {
+                        action: CommitAction::SetAuto { enabled: true },
+                    });
+                    return true;
+                }
+                Some(token) => {
+                    let normalized = token.to_ascii_lowercase();
+                    if matches!(normalized.as_str(), "on" | "enable" | "enabled" | "start")
+                        && parts.next().is_none()
+                    {
+                        self.app_event_tx.send(AppEvent::CommitCommand {
+                            action: CommitAction::SetAuto { enabled: true },
+                        });
+                        return true;
+                    }
+                    if matches!(normalized.as_str(), "off" | "disable" | "disabled" | "stop")
+                        && parts.next().is_none()
+                    {
+                        self.app_event_tx.send(AppEvent::CommitCommand {
+                            action: CommitAction::SetAuto { enabled: false },
+                        });
+                        return true;
+                    }
+                    // Otherwise treat entire command as a commit message starting with "auto ...".
+                }
+            }
+        }
+
+        self.app_event_tx.send(AppEvent::CommitCommand {
+            action: CommitAction::Perform {
+                message: Some(trimmed.to_string()),
+                auto: false,
+            },
+        });
+        true
+    }
+
+    fn handle_compact_command(&mut self, rest: &str) -> bool {
+        let trimmed = rest.trim();
+        if trimmed.is_empty() {
+            return false;
+        }
+
+        let mut parts = trimmed.split_whitespace();
+        let Some(first) = parts.next() else {
+            return false;
+        };
+        if !first.eq_ignore_ascii_case("auto") {
+            self.emit_compact_error(Self::compact_auto_usage());
+            return false;
+        }
+
+        let args: Vec<&str> = parts.collect();
+        if args.is_empty() {
+            self.app_event_tx.send(AppEvent::SetAutoCompact {
+                enabled: true,
+                threshold_percent: None,
+            });
+            return true;
+        }
+
+        if Self::is_auto_compact_disable(args[0]) {
+            if args.len() > 1 {
+                self.emit_compact_error(
+                    "`/compact auto off` does not take extra arguments.".to_string(),
+                );
+                return false;
+            }
+            self.app_event_tx.send(AppEvent::SetAutoCompact {
+                enabled: false,
+                threshold_percent: None,
+            });
+            return true;
+        }
+
+        if Self::is_auto_compact_enable(args[0]) {
+            if args.len() == 1 {
+                self.app_event_tx.send(AppEvent::SetAutoCompact {
+                    enabled: true,
+                    threshold_percent: None,
+                });
+                return true;
+            }
+            if args.len() == 2 {
+                match Self::parse_auto_compact_threshold(args[1]) {
+                    Ok(percent) => {
+                        self.app_event_tx.send(AppEvent::SetAutoCompact {
+                            enabled: true,
+                            threshold_percent: Some(percent),
+                        });
+                        return true;
+                    }
+                    Err(message) => {
+                        self.emit_compact_error(message);
+                        return false;
+                    }
+                }
+            }
+            self.emit_compact_error(Self::compact_auto_usage());
+            return false;
+        }
+
+        if args.len() == 1 {
+            match Self::parse_auto_compact_threshold(args[0]) {
+                Ok(percent) => {
+                    self.app_event_tx.send(AppEvent::SetAutoCompact {
+                        enabled: true,
+                        threshold_percent: Some(percent),
+                    });
+                    return true;
+                }
+                Err(message) => {
+                    self.emit_compact_error(message);
+                    return false;
+                }
+            }
+        }
+
+        self.emit_compact_error(Self::compact_auto_usage());
+        false
+    }
+
+    fn emit_compact_error(&mut self, message: String) {
+        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+            history_cell::new_error_event(message),
+        )));
+    }
+
+    fn compact_auto_usage() -> String {
+        format!(
+            "Usage: /compact auto [<percent>|on|off] (default {DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT}%)"
+        )
+    }
+
+    fn parse_auto_compact_threshold(token: &str) -> Result<u8, String> {
+        let trimmed = token.trim().trim_matches('%');
+        if trimmed.is_empty() {
+            return Err(Self::compact_auto_usage());
+        }
+        let value = trimmed
+            .parse::<u16>()
+            .map_err(|_| Self::invalid_auto_compact_threshold(token))?;
+        if value < AUTO_COMPACT_THRESHOLD_MIN as u16 || value > AUTO_COMPACT_THRESHOLD_MAX as u16 {
+            return Err(Self::auto_compact_threshold_range_message());
+        }
+        Ok(value as u8)
+    }
+
+    fn invalid_auto_compact_threshold(token: &str) -> String {
+        format!(
+            "Invalid auto-compaction threshold `{token}`. Provide a whole number between {AUTO_COMPACT_THRESHOLD_MIN}% and {AUTO_COMPACT_THRESHOLD_MAX}%.",
+        )
+    }
+
+    fn auto_compact_threshold_range_message() -> String {
+        format!(
+            "Auto-compaction threshold must be between {AUTO_COMPACT_THRESHOLD_MIN}% and {AUTO_COMPACT_THRESHOLD_MAX}%.",
+        )
+    }
+
+    fn is_auto_compact_enable(token: &str) -> bool {
+        token.eq_ignore_ascii_case("on")
+            || token.eq_ignore_ascii_case("enable")
+            || token.eq_ignore_ascii_case("enabled")
+            || token.eq_ignore_ascii_case("start")
+    }
+
+    fn is_auto_compact_disable(token: &str) -> bool {
+        token.eq_ignore_ascii_case("off")
+            || token.eq_ignore_ascii_case("disable")
+            || token.eq_ignore_ascii_case("disabled")
+            || token.eq_ignore_ascii_case("stop")
+    }
+
+    fn handle_checkpoint_command(&mut self, rest: &str) -> bool {
+        let trimmed = rest.trim();
+        if trimmed.is_empty() {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                history_cell::new_info_event(
+                    "Usage: /checkpoint <save|load> [name] or /checkpoint auto [on|off]"
+                        .to_string(),
+                    Some(
+                        "Provide a name when loading; omit it to auto-generate one when saving."
+                            .to_string(),
+                    ),
+                ),
+            )));
+            return false;
+        }
+
+        let mut parts = trimmed.split_whitespace();
+        let action_token = parts.next().unwrap_or_default();
+
+        match action_token.to_ascii_lowercase().as_str() {
+            "save" | "load" => {
+                let action = if action_token.eq_ignore_ascii_case("save") {
+                    CheckpointAction::Save
+                } else {
+                    CheckpointAction::Load
+                };
+                let name = parts.next().map(std::string::ToString::to_string);
+                if parts.next().is_some() {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event(
+                            "Usage: /checkpoint <save|load> [name]".to_string(),
+                        ),
+                    )));
+                    return false;
+                }
+                self.app_event_tx
+                    .send(AppEvent::CheckpointCommand { action, name });
+                true
+            }
+            "auto" => {
+                let enabled = match parts.next().map(str::to_ascii_lowercase) {
+                    None => true,
+                    Some(token) => match token.as_str() {
+                        "on" | "enable" | "enabled" | "start" => true,
+                        "off" | "disable" | "disabled" | "stop" => false,
+                        other => {
+                            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                                history_cell::new_error_event(format!(
+                                    "Invalid auto checkpoint option '{other}'. Use 'on' or 'off'."
+                                )),
+                            )));
+                            return false;
+                        }
+                    },
+                };
+                if parts.next().is_some() {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event(
+                            "Usage: /checkpoint auto [on|off]".to_string(),
+                        ),
+                    )));
+                    return false;
+                }
+                self.app_event_tx
+                    .send(AppEvent::SetCheckpointAutomation { enabled });
+                true
+            }
+            other => {
+                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    history_cell::new_error_event(format!(
+                        "Invalid checkpoint action '{other}'. Use 'save', 'load', or 'auto'."
+                    )),
+                )));
+                false
+            }
+        }
+    }
+
+    fn handle_todo_command(&mut self, rest: &str) -> bool {
+        let trimmed = rest.trim();
+        if trimmed.is_empty() {
+            self.app_event_tx.send(AppEvent::TodoCommand {
+                action: TodoAction::List,
+            });
+            return true;
+        }
+
+        let mut parts = trimmed.split_whitespace();
+        let action_token = parts.next().unwrap_or_default();
+        match action_token.to_ascii_lowercase().as_str() {
+            "add" => {
+                let description = parts.collect::<Vec<_>>().join(" ");
+                if description.trim().is_empty() {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event("Usage: /todo add <description>".to_string()),
+                    )));
+                    return false;
+                }
+                self.app_event_tx.send(AppEvent::TodoCommand {
+                    action: TodoAction::Add {
+                        text: description.trim().to_string(),
+                    },
+                });
+                true
+            }
+            "list" => {
+                if parts.next().is_some() {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event("Usage: /todo list".to_string()),
+                    )));
+                    return false;
+                }
+                self.app_event_tx.send(AppEvent::TodoCommand {
+                    action: TodoAction::List,
+                });
+                true
+            }
+            "complete" | "done" | "check" => {
+                let Some(index_token) = parts.next() else {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event("Usage: /todo complete <number>".to_string()),
+                    )));
+                    return false;
+                };
+                if parts.next().is_some() {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event("Usage: /todo complete <number>".to_string()),
+                    )));
+                    return false;
+                }
+                let index = match index_token.parse::<usize>() {
+                    Ok(v) if v > 0 => v - 1,
+                    _ => {
+                        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                            history_cell::new_error_event(
+                                "Todo number must be a positive integer.".to_string(),
+                            ),
+                        )));
+                        return false;
+                    }
+                };
+                self.app_event_tx.send(AppEvent::TodoCommand {
+                    action: TodoAction::Complete { index },
+                });
+                true
+            }
+            "auto" => {
+                let enabled = match parts.next().map(str::to_ascii_lowercase) {
+                    None => true,
+                    Some(token) => match token.as_str() {
+                        "on" | "enable" | "enabled" | "start" => true,
+                        "off" | "disable" | "disabled" | "stop" => false,
+                        other => {
+                            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                                history_cell::new_error_event(format!(
+                                    "Invalid auto option '{other}'. Use 'on' or 'off'."
+                                )),
+                            )));
+                            return false;
+                        }
+                    },
+                };
+                if parts.next().is_some() {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event("Usage: /todo auto [on|off]".to_string()),
+                    )));
+                    return false;
+                }
+                self.app_event_tx.send(AppEvent::TodoCommand {
+                    action: TodoAction::Auto { enabled },
+                });
+                true
+            }
+            other => {
+                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    history_cell::new_error_event(format!(
+                        "Invalid todo action '{other}'. Use 'add', 'list', 'complete', or 'auto'."
+                    )),
+                )));
+                false
+            }
+        }
+    }
+
+    fn handle_alias_command(&mut self, rest: &str) -> bool {
+        let trimmed = rest.trim();
+        if trimmed.is_empty() {
+            self.app_event_tx.send(AppEvent::AliasCommand {
+                action: AliasAction::List,
+            });
+            return true;
+        }
+
+        let mut parts = trimmed.split_whitespace();
+        let action_token = parts.next().unwrap_or_default();
+        match action_token.to_ascii_lowercase().as_str() {
+            "add" => {
+                let Some(name) = parts.next() else {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event("Usage: /alias add <name>".to_string()),
+                    )));
+                    return false;
+                };
+                if parts.next().is_some() {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event("Usage: /alias add <name>".to_string()),
+                    )));
+                    return false;
+                }
+                let trimmed = name.trim();
+                if !Self::is_valid_alias_name(trimmed) {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event(
+                            "Alias names may only contain letters, numbers, '-' or '_' and cannot be blank.".to_string(),
+                        ),
+                    )));
+                    return false;
+                }
+                self.app_event_tx.send(AppEvent::AliasCommand {
+                    action: AliasAction::Add {
+                        name: trimmed.to_string(),
+                    },
+                });
+                true
+            }
+            "remove" | "rm" | "delete" => {
+                let Some(name) = parts.next() else {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event("Usage: /alias remove <name>".to_string()),
+                    )));
+                    return false;
+                };
+                if parts.next().is_some() {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event("Usage: /alias remove <name>".to_string()),
+                    )));
+                    return false;
+                }
+                let trimmed = name.trim();
+                if !Self::is_valid_alias_name(trimmed) {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event(
+                            "Alias names may only contain letters, numbers, '-' or '_' and cannot be blank.".to_string(),
+                        ),
+                    )));
+                    return false;
+                }
+                self.app_event_tx.send(AppEvent::AliasCommand {
+                    action: AliasAction::Remove {
+                        name: trimmed.to_string(),
+                    },
+                });
+                true
+            }
+            "list" => {
+                if parts.next().is_some() {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event("Usage: /alias list".to_string()),
+                    )));
+                    return false;
+                }
+                self.app_event_tx.send(AppEvent::AliasCommand {
+                    action: AliasAction::List,
+                });
+                true
+            }
+            other => {
+                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    history_cell::new_error_event(format!(
+                        "Invalid alias action '{other}'. Use 'add', 'remove', or 'list'."
+                    )),
+                )));
+                false
+            }
+        }
+    }
+
+    fn is_valid_alias_name(name: &str) -> bool {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return false;
+        }
+        trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
     }
 
     fn handle_paste_burst_flush(&mut self, now: Instant) -> bool {
@@ -2424,6 +2958,217 @@ mod tests {
         let args =
             extract_positional_args_for_prompt_line("/prompts:cmd \"with spaces\" simple", "cmd");
         assert_eq!(args, vec!["with spaces".to_string(), "simple".to_string()]);
+    }
+
+    #[test]
+    fn commit_command_without_args_dispatches_event() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        assert!(composer.handle_commit_command(""));
+
+        match rx.try_recv() {
+            Ok(AppEvent::CommitCommand { action }) => match action {
+                CommitAction::Perform { message, auto } => {
+                    assert!(message.is_none());
+                    assert!(!auto);
+                }
+                other => panic!("unexpected action: {other:?}"),
+            },
+            other => panic!("expected CommitCommand event, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn commit_command_with_message_dispatches_event() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        assert!(composer.handle_commit_command("Fix spacing"));
+
+        match rx.try_recv() {
+            Ok(AppEvent::CommitCommand { action }) => match action {
+                CommitAction::Perform { message, auto } => {
+                    assert_eq!(message, Some("Fix spacing".to_string()));
+                    assert!(!auto);
+                }
+                other => panic!("unexpected action: {other:?}"),
+            },
+            other => panic!("expected CommitCommand event, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn commit_auto_toggles_enable_and_disable() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        assert!(composer.handle_commit_command("auto"));
+        match rx.try_recv() {
+            Ok(AppEvent::CommitCommand { action }) => match action {
+                CommitAction::SetAuto { enabled } => assert!(enabled),
+                other => panic!("unexpected action: {other:?}"),
+            },
+            other => panic!("expected CommitCommand event, got {other:?}"),
+        }
+
+        assert!(composer.handle_commit_command("auto off"));
+        match rx.try_recv() {
+            Ok(AppEvent::CommitCommand { action }) => match action {
+                CommitAction::SetAuto { enabled } => assert!(!enabled),
+                other => panic!("unexpected action: {other:?}"),
+            },
+            other => panic!("expected CommitCommand event, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn commit_auto_with_extra_words_treated_as_message() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        assert!(composer.handle_commit_command("auto fix crash"));
+
+        match rx.try_recv() {
+            Ok(AppEvent::CommitCommand { action }) => match action {
+                CommitAction::Perform { message, auto } => {
+                    assert_eq!(message, Some("auto fix crash".to_string()));
+                    assert!(!auto);
+                }
+                other => panic!("unexpected action: {other:?}"),
+            },
+            other => panic!("expected CommitCommand event, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn compact_auto_enable_dispatches_event() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        assert!(composer.handle_compact_command("auto"));
+        match rx.try_recv() {
+            Ok(AppEvent::SetAutoCompact {
+                enabled,
+                threshold_percent,
+            }) => {
+                assert!(enabled);
+                assert!(threshold_percent.is_none());
+            }
+            other => panic!("expected SetAutoCompact event, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn compact_auto_disable_dispatches_event() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        assert!(composer.handle_compact_command("auto off"));
+        match rx.try_recv() {
+            Ok(AppEvent::SetAutoCompact {
+                enabled,
+                threshold_percent,
+            }) => {
+                assert!(!enabled);
+                assert!(threshold_percent.is_none());
+            }
+            other => panic!("expected SetAutoCompact event, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn compact_auto_sets_threshold_dispatches_event() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        assert!(composer.handle_compact_command("auto 27%"));
+        match rx.try_recv() {
+            Ok(AppEvent::SetAutoCompact {
+                enabled,
+                threshold_percent,
+            }) => {
+                assert!(enabled);
+                assert_eq!(threshold_percent, Some(27));
+            }
+            other => panic!("expected SetAutoCompact event, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn compact_auto_invalid_threshold_emits_error() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        assert!(!composer.handle_compact_command("auto 0"));
+        match rx.try_recv() {
+            Ok(AppEvent::InsertHistoryCell(_)) => {}
+            other => panic!("expected history cell, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

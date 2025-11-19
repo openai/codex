@@ -139,6 +139,11 @@ struct RunningCommand {
     source: ExecCommandSource,
 }
 
+enum AutoCompactTrigger {
+    Immediate,
+    Queued,
+}
+
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
 const NUDGE_MODEL_SLUG: &str = "gpt-5.1-codex-mini";
 const RATE_LIMIT_SWITCH_PROMPT_THRESHOLD: f64 = 90.0;
@@ -286,6 +291,18 @@ pub(crate) struct ChatWidget {
     suppress_session_configured_redraw: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
+    todo_items: Vec<TodoItem>,
+    todo_auto_enabled: bool,
+    auto_commit_enabled: bool,
+    auto_compact_enabled: bool,
+    auto_compact_threshold_percent: u8,
+    auto_compact_pending: bool,
+    auto_compact_recently_triggered: bool,
+    auto_compact_trigger_percent: Option<u8>,
+    auto_compact_last_percent: Option<u8>,
+    last_agent_commit_summary: Option<String>,
+    aliases: HashMap<String, AliasEntry>,
+    presets: HashMap<String, PresetEntry>,
     // Pending notification to show when unfocused on next Draw
     pending_notification: Option<Notification>,
     // Simple review mode flag; used to adjust layout and banners.
@@ -478,14 +495,28 @@ impl ChatWidget {
         self.running_commands.clear();
         self.request_redraw();
 
+        let run_auto_compact_after_turn = self.auto_compact_ready();
+
         // If there is a queued user message, send exactly one now to begin the next turn.
-        self.maybe_send_next_queued_input();
+        if !run_auto_compact_after_turn {
+            self.maybe_send_next_queued_input();
+        }
         // Emit a notification when the turn completes (suppressed if focused).
         self.notify(Notification::AgentTurnComplete {
             response: last_agent_message.unwrap_or_default(),
         });
 
         self.maybe_show_pending_rate_limit_prompt();
+        if self.auto_checkpoint_enabled {
+            self.app_event_tx.send(AppEvent::AutoCheckpointTick);
+        }
+        if self.auto_commit_enabled {
+            self.app_event_tx.send(AppEvent::AutoCommitTick);
+        }
+
+        if run_auto_compact_after_turn {
+            self.start_auto_compact_turn(AutoCompactTrigger::Queued);
+        }
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
@@ -498,7 +529,12 @@ impl ChatWidget {
                     .percent_of_context_window_remaining(window)
             });
             self.bottom_pane.set_context_window_percent(percent);
+            self.update_auto_compact_state(percent);
             self.token_info = Some(info);
+        } else {
+            self.bottom_pane.set_context_window_percent(None);
+            self.update_auto_compact_state(None);
+            self.token_info = None;
         }
     }
 
@@ -568,11 +604,18 @@ impl ChatWidget {
 
     fn on_error(&mut self, message: String) {
         self.finalize_turn();
+        let run_auto_compact_after_error = self.auto_compact_ready();
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
 
         // After an error ends the turn, try sending the next queued input.
-        self.maybe_send_next_queued_input();
+        if !run_auto_compact_after_error {
+            self.maybe_send_next_queued_input();
+        }
+
+        if run_auto_compact_after_error {
+            self.start_auto_compact_turn(AutoCompactTrigger::Queued);
+        }
     }
 
     fn on_warning(&mut self, message: impl Into<String>) {
@@ -654,6 +697,7 @@ impl ChatWidget {
     fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
         // Finalize, log a gentle prompt, and clear running state.
         self.finalize_turn();
+        let run_auto_compact_after_interrupt = self.auto_compact_ready();
 
         if reason != TurnAbortReason::ReviewEnded {
             self.add_to_history(history_cell::new_error_event(
@@ -681,6 +725,10 @@ impl ChatWidget {
             // Clear the queue and update the status indicator list.
             self.queued_user_messages.clear();
             self.refresh_queued_user_messages();
+        }
+
+        if run_auto_compact_after_interrupt {
+            self.start_auto_compact_turn(AutoCompactTrigger::Queued);
         }
 
         self.request_redraw();
@@ -1146,6 +1194,18 @@ impl ChatWidget {
             retry_status_header: None,
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
+            todo_items: Vec::new(),
+            todo_auto_enabled: false,
+            auto_commit_enabled: config.auto_commit,
+            auto_compact_enabled: config.auto_compact,
+            auto_compact_threshold_percent: config.auto_compact_threshold_percent,
+            auto_compact_pending: false,
+            auto_compact_recently_triggered: false,
+            auto_compact_trigger_percent: None,
+            auto_compact_last_percent: None,
+            last_agent_commit_summary: None,
+            aliases: HashMap::new(),
+            presets: HashMap::new(),
             show_welcome_banner: true,
             suppress_session_configured_redraw: false,
             pending_notification: None,
@@ -1219,6 +1279,18 @@ impl ChatWidget {
             retry_status_header: None,
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
+            todo_items: Vec::new(),
+            todo_auto_enabled: false,
+            auto_commit_enabled: config.auto_commit,
+            auto_compact_enabled: config.auto_compact,
+            auto_compact_threshold_percent: config.auto_compact_threshold_percent,
+            auto_compact_pending: false,
+            auto_compact_recently_triggered: false,
+            auto_compact_trigger_percent: None,
+            auto_compact_last_percent: None,
+            last_agent_commit_summary: None,
+            aliases: HashMap::new(),
+            presets: HashMap::new(),
             show_welcome_banner: true,
             suppress_session_configured_redraw: true,
             pending_notification: None,
@@ -2598,6 +2670,743 @@ impl ChatWidget {
 
     pub(crate) fn add_plain_history_lines(&mut self, lines: Vec<Line<'static>>) {
         self.add_boxed_history(Box::new(PlainHistoryCell::new(lines)));
+    }
+
+    pub(crate) fn add_todo_item(&mut self, text: String) {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            self.add_error_message("Todo description cannot be empty.".to_string());
+            return;
+        }
+        let item = TodoItem::new(trimmed.to_string());
+        self.todo_items.push(item);
+        let position = self.todo_items.len();
+        self.add_info_message(
+            format!("Added TODO #{position}: {trimmed}"),
+            Some(
+                "Use `/todo list` to review or `/todo complete <number>` when finished."
+                    .to_string(),
+            ),
+        );
+        self.push_todo_list_history();
+    }
+
+    pub(crate) fn complete_todo(&mut self, index: usize) {
+        if let Some(item) = self.todo_items.get_mut(index) {
+            if item.completed {
+                self.add_info_message(
+                    format!("Todo #{} is already marked complete.", index + 1),
+                    None,
+                );
+                self.push_todo_list_history();
+            } else {
+                item.completed = true;
+                self.add_info_message(format!("Marked TODO #{} as completed.", index + 1), None);
+                self.push_todo_list_history();
+            }
+        } else {
+            self.add_error_message(format!("Todo #{} does not exist.", index + 1));
+        }
+    }
+
+    pub(crate) fn show_todo_list(&mut self, context: Option<&str>) {
+        if let Some(message) = context {
+            self.add_info_message(message.to_string(), None);
+        }
+        self.push_todo_list_history();
+    }
+
+    pub(crate) fn set_todo_auto_enabled(&mut self, enabled: bool) {
+        let previous = self.todo_auto_enabled;
+        self.todo_auto_enabled = enabled;
+        if enabled {
+            let msg = if previous {
+                "Todo auto-injection already enabled."
+            } else {
+                "Todo auto-injection enabled."
+            };
+            let hint = if self.todo_items.is_empty() {
+                Some("Add todos with `/todo add …` to include them in future prompts.".to_string())
+            } else {
+                Some("Todos will automatically be included in future prompts.".to_string())
+            };
+            self.add_info_message(msg.to_string(), hint);
+        } else {
+            let msg = if previous {
+                "Todo auto-injection disabled."
+            } else {
+                "Todo auto-injection already disabled."
+            };
+            self.add_info_message(
+                msg.to_string(),
+                Some("Run `/todo auto` to enable it again.".to_string()),
+            );
+        }
+    }
+
+    pub(crate) fn open_preset_prompt_editor(&mut self, name: String) {
+        let trimmed = name.trim();
+        let Some(key) = Self::normalize_alias_key(trimmed) else {
+            self.add_error_message(
+                "Preset names may only contain letters, numbers, '-' or '_' and cannot be blank."
+                    .to_string(),
+            );
+            return;
+        };
+        let display_name = trimmed.to_string();
+        let initial_text = self.presets.get(&key).map(|entry| entry.prompt.clone());
+
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            format!("Save preset {display_name}"),
+            "Type the prompt to run when this preset is loaded.".to_string(),
+            Some("Press Enter to save; Esc to cancel.".to_string()),
+            initial_text,
+            false,
+            Box::new(move |input: String| {
+                tx.send(AppEvent::PresetCommand {
+                    action: PresetAction::Store {
+                        name: display_name.clone(),
+                        prompt: input,
+                    },
+                });
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn store_preset(&mut self, name: String, prompt: String) {
+        let trimmed_name = name.trim();
+        let Some(key) = Self::normalize_alias_key(trimmed_name) else {
+            self.add_error_message(
+                "Preset names may only contain letters, numbers, '-' or '_' and cannot be blank."
+                    .to_string(),
+            );
+            return;
+        };
+
+        let trimmed_prompt = prompt.trim();
+        if trimmed_prompt.is_empty() {
+            self.add_error_message("Preset prompt cannot be empty.".to_string());
+            return;
+        }
+
+        let entry = PresetEntry {
+            name: trimmed_name.to_string(),
+            prompt: trimmed_prompt.to_string(),
+        };
+        let existed = self.presets.insert(key, entry).is_some();
+        let action_word = if existed { "Updated" } else { "Saved" };
+        self.add_info_message(
+            format!("{action_word} preset {trimmed_name}."),
+            Some(format!("Run it later with `/preset load {trimmed_name}`.")),
+        );
+
+        let snapshot = self.preset_snapshot();
+        self.config.prompt_presets = snapshot.clone();
+        self.app_event_tx
+            .send(AppEvent::PersistPresets { presets: snapshot });
+    }
+
+    pub(crate) fn remove_preset(&mut self, name: &str) {
+        let Some(key) = Self::normalize_alias_key(name) else {
+            self.add_error_message(
+                "Preset names may only contain letters, numbers, '-' or '_' and cannot be blank."
+                    .to_string(),
+            );
+            return;
+        };
+
+        if let Some(entry) = self.presets.remove(&key) {
+            self.add_info_message(
+                format!("Removed preset {}.", entry.name),
+                Some("Add it again with `/preset add <name>` if needed.".to_string()),
+            );
+            let snapshot = self.preset_snapshot();
+            self.config.prompt_presets = snapshot.clone();
+            self.app_event_tx
+                .send(AppEvent::PersistPresets { presets: snapshot });
+        } else {
+            self.add_error_message(format!("Preset {} does not exist.", name.trim()));
+        }
+    }
+
+    pub(crate) fn list_presets(&mut self) {
+        if self.presets.is_empty() {
+            self.add_info_message(
+                "No presets defined yet.".to_string(),
+                Some("Use `/preset add <name>` to create one.".to_string()),
+            );
+            return;
+        }
+
+        let mut names: Vec<String> = self
+            .presets
+            .values()
+            .map(|entry| entry.name.clone())
+            .collect();
+        names.sort();
+        let summary = names.join(", ");
+        self.add_info_message(
+            "Presets:".to_string(),
+            Some(format!("Load with `/preset load <name>`: {summary}")),
+        );
+    }
+
+    pub(crate) fn load_preset(&mut self, name: &str) {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            self.add_error_message("Preset name cannot be empty.".to_string());
+            return;
+        }
+        let Some(key) = Self::normalize_alias_key(trimmed) else {
+            self.add_error_message(
+                "Preset names may only contain letters, numbers, '-' or '_' and cannot be blank."
+                    .to_string(),
+            );
+            return;
+        };
+        let Some(entry) = self.presets.get(&key).cloned() else {
+            self.add_error_message(format!("Preset {trimmed} does not exist."));
+            return;
+        };
+
+        let preview = {
+            let trimmed_prompt = entry.prompt.trim();
+            let first_line = trimmed_prompt.lines().next().unwrap_or("");
+            let mut preview: String = first_line.chars().take(80).collect();
+            if trimmed_prompt.chars().count() > preview.chars().count() {
+                preview.push('…');
+            }
+            preview
+        };
+
+        let keep_name = entry.name.clone();
+        let keep_prompt = entry.prompt.clone();
+        let current_action: SelectionAction = Box::new(move |tx| {
+            tx.send(AppEvent::PresetCommand {
+                action: PresetAction::Execute {
+                    name: keep_name.clone(),
+                    prompt: keep_prompt.clone(),
+                    mode: PresetExecutionMode::CurrentSession,
+                },
+            });
+        });
+
+        let new_name = entry.name.clone();
+        let new_prompt = entry.prompt.clone();
+        let new_session_action: SelectionAction = Box::new(move |tx| {
+            tx.send(AppEvent::PresetCommand {
+                action: PresetAction::Execute {
+                    name: new_name.clone(),
+                    prompt: new_prompt.clone(),
+                    mode: PresetExecutionMode::NewSession,
+                },
+            });
+        });
+
+        let items = vec![
+            SelectionItem {
+                name: "Keep current conversation".to_string(),
+                description: Some(
+                    "Send the preset prompt without resetting the conversation.".to_string(),
+                ),
+                actions: vec![current_action],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Start new session".to_string(),
+                description: Some(
+                    "Begin a new chat and run the preset as the first message.".to_string(),
+                ),
+                actions: vec![new_session_action],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        let subtitle = if preview.is_empty() {
+            None
+        } else {
+            Some(format!("Preview: {preview}"))
+        };
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some(format!("Load preset {}", entry.name)),
+            subtitle,
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn run_preset_in_current(&mut self, name: String, prompt: String) {
+        self.add_info_message(
+            format!("Running preset {name} in current conversation."),
+            Some("Use `/preset load <name>` again to open the session menu.".to_string()),
+        );
+        self.submit_text_message(prompt);
+    }
+
+    pub(crate) fn notify_preset_new_session(&mut self, name: &str) {
+        self.add_info_message(
+            format!("Started new session with preset {name}."),
+            Some("The preset prompt was submitted as the first message.".to_string()),
+        );
+    }
+
+    pub(crate) fn open_alias_prompt_editor(&mut self, name: String) {
+        let trimmed = name.trim();
+        let Some(key) = Self::normalize_alias_key(trimmed) else {
+            self.add_error_message(
+                "Alias names may only contain letters, numbers, '-' or '_' and cannot be blank."
+                    .to_string(),
+            );
+            return;
+        };
+        let display_name = trimmed.to_string();
+        let initial_text = self.aliases.get(&key).map(|entry| entry.prompt.clone());
+
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            format!("Save alias //{display_name}"),
+            "Type the prompt to run when this alias is invoked.".to_string(),
+            Some("Press Enter to save; Esc to cancel.".to_string()),
+            initial_text,
+            false,
+            Box::new(move |input: String| {
+                tx.send(AppEvent::AliasCommand {
+                    action: AliasAction::Store {
+                        name: display_name.clone(),
+                        prompt: input,
+                    },
+                });
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn store_alias(&mut self, name: String, prompt: String) {
+        let trimmed_name = name.trim();
+        let Some(key) = Self::normalize_alias_key(trimmed_name) else {
+            self.add_error_message(
+                "Alias names may only contain letters, numbers, '-' or '_' and cannot be blank."
+                    .to_string(),
+            );
+            return;
+        };
+
+        let trimmed_prompt = prompt.trim();
+        if trimmed_prompt.is_empty() {
+            self.add_error_message("Alias prompt cannot be empty.".to_string());
+            return;
+        }
+
+        let entry = AliasEntry {
+            name: trimmed_name.to_string(),
+            prompt: trimmed_prompt.to_string(),
+        };
+        let existed = self.aliases.insert(key, entry).is_some();
+        let action_word = if existed { "Updated" } else { "Saved" };
+        self.add_info_message(
+            format!("{action_word} alias //{trimmed_name}."),
+            Some("Invoke it later with //alias-name.".to_string()),
+        );
+        self.sync_aliases_to_composer();
+
+        let snapshot = self.alias_snapshot();
+        self.config.prompt_aliases = snapshot.clone();
+        self.app_event_tx
+            .send(AppEvent::PersistAliases { aliases: snapshot });
+    }
+
+    pub(crate) fn remove_alias(&mut self, name: &str) {
+        let Some(key) = Self::normalize_alias_key(name) else {
+            self.add_error_message(
+                "Alias names may only contain letters, numbers, '-' or '_' and cannot be blank."
+                    .to_string(),
+            );
+            return;
+        };
+
+        if let Some(entry) = self.aliases.remove(&key) {
+            self.add_info_message(format!("Removed alias //{}.", entry.name), None);
+            self.sync_aliases_to_composer();
+            let snapshot = self.alias_snapshot();
+            self.config.prompt_aliases = snapshot.clone();
+            self.app_event_tx
+                .send(AppEvent::PersistAliases { aliases: snapshot });
+        } else {
+            self.add_error_message(format!("Alias //{} does not exist.", name.trim()))
+        }
+    }
+
+    pub(crate) fn list_aliases(&mut self) {
+        if self.aliases.is_empty() {
+            self.add_info_message(
+                "No aliases defined yet.".to_string(),
+                Some("Use `/alias add <name>` to create one.".to_string()),
+            );
+            return;
+        }
+
+        let mut names: Vec<String> = self
+            .aliases
+            .values()
+            .map(|entry| entry.name.clone())
+            .collect();
+        names.sort();
+        let summary = names
+            .iter()
+            .map(|name| format!("//{name}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.add_info_message("Aliases:".to_string(), Some(summary));
+    }
+
+    fn hydrate_aliases_from_config(&mut self) {
+        self.aliases.clear();
+        for (display_name, prompt) in &self.config.prompt_aliases {
+            let trimmed_name = display_name.trim();
+            if trimmed_name.is_empty() {
+                continue;
+            }
+            let Some(key) = Self::normalize_alias_key(trimmed_name) else {
+                tracing::warn!(
+                    alias = trimmed_name,
+                    "invalid alias name found in config; skipping"
+                );
+                continue;
+            };
+
+            let trimmed_prompt = prompt.trim();
+            if trimmed_prompt.is_empty() {
+                tracing::warn!(
+                    alias = trimmed_name,
+                    "alias prompt in config was empty; skipping"
+                );
+                continue;
+            }
+
+            self.aliases.insert(
+                key,
+                AliasEntry {
+                    name: trimmed_name.to_string(),
+                    prompt: trimmed_prompt.to_string(),
+                },
+            );
+        }
+        self.sync_aliases_to_composer();
+    }
+
+    fn hydrate_presets_from_config(&mut self) {
+        self.presets.clear();
+        for (display_name, prompt) in &self.config.prompt_presets {
+            let trimmed_name = display_name.trim();
+            if trimmed_name.is_empty() {
+                continue;
+            }
+            let Some(key) = Self::normalize_alias_key(trimmed_name) else {
+                tracing::warn!(
+                    preset = trimmed_name,
+                    "invalid preset name found in config; skipping"
+                );
+                continue;
+            };
+
+            let trimmed_prompt = prompt.trim();
+            if trimmed_prompt.is_empty() {
+                tracing::warn!(
+                    preset = trimmed_name,
+                    "preset prompt in config was empty; skipping"
+                );
+                continue;
+            }
+
+            self.presets.insert(
+                key,
+                PresetEntry {
+                    name: trimmed_name.to_string(),
+                    prompt: trimmed_prompt.to_string(),
+                },
+            );
+        }
+    }
+
+    fn preset_snapshot(&self) -> HashMap<String, String> {
+        self.presets
+            .values()
+            .map(|entry| (entry.name.clone(), entry.prompt.clone()))
+            .collect()
+    }
+
+    fn alias_snapshot(&self) -> HashMap<String, String> {
+        self.aliases
+            .values()
+            .map(|entry| (entry.name.clone(), entry.prompt.clone()))
+            .collect()
+    }
+
+    fn sync_aliases_to_composer(&mut self) {
+        let mut aliases: Vec<String> = self
+            .aliases
+            .values()
+            .map(|entry| entry.name.clone())
+            .collect();
+        aliases.sort();
+        self.bottom_pane.set_aliases(aliases);
+    }
+
+    pub(crate) fn set_auto_checkpoint_enabled(&mut self, enabled: bool) {
+        self.auto_checkpoint_enabled = enabled;
+        self.config.auto_checkpoint = enabled;
+    }
+
+    pub(crate) fn set_auto_commit_enabled(&mut self, enabled: bool) {
+        self.auto_commit_enabled = enabled;
+        self.config.auto_commit = enabled;
+    }
+
+    pub(crate) fn auto_compact_enabled(&self) -> bool {
+        self.auto_compact_enabled
+    }
+
+    pub(crate) fn auto_compact_threshold_percent(&self) -> u8 {
+        self.auto_compact_threshold_percent
+    }
+
+    pub(crate) fn set_auto_compact_settings(&mut self, enabled: bool, threshold_percent: u8) {
+        self.auto_compact_enabled = enabled;
+        self.auto_compact_threshold_percent = threshold_percent;
+        self.config.auto_compact = enabled;
+        self.config.auto_compact_threshold_percent = threshold_percent;
+        if !enabled {
+            self.auto_compact_pending = false;
+            self.auto_compact_recently_triggered = false;
+            self.auto_compact_trigger_percent = None;
+            self.auto_compact_last_percent = None;
+        }
+    }
+
+    pub(crate) fn take_last_agent_commit_summary(&mut self) -> Option<String> {
+        self.last_agent_commit_summary.take()
+    }
+
+    fn push_todo_list_history(&mut self) {
+        let entries = self.todo_entries();
+        self.add_to_history(history_cell::new_todo_list(entries));
+        self.request_redraw();
+    }
+
+    fn todo_entries(&self) -> Vec<TodoEntry> {
+        self.todo_items
+            .iter()
+            .enumerate()
+            .map(|(idx, item)| TodoEntry {
+                index: idx + 1,
+                description: item.text.clone(),
+                completed: item.completed,
+            })
+            .collect()
+    }
+
+    fn update_auto_compact_state(&mut self, percent_remaining: Option<u8>) {
+        if !self.auto_compact_enabled {
+            self.auto_compact_last_percent = percent_remaining;
+            return;
+        }
+
+        match percent_remaining {
+            Some(percent) => {
+                self.auto_compact_last_percent = Some(percent);
+                if percent > self.auto_compact_threshold_percent {
+                    self.auto_compact_pending = false;
+                    self.auto_compact_recently_triggered = false;
+                    self.auto_compact_trigger_percent = None;
+                    return;
+                }
+
+                if self.auto_compact_recently_triggered {
+                    return;
+                }
+
+                if self.bottom_pane.is_task_running() {
+                    self.queue_auto_compact(percent);
+                } else {
+                    self.auto_compact_trigger_percent = Some(percent);
+                    self.start_auto_compact_turn(AutoCompactTrigger::Immediate);
+                }
+            }
+            None => {
+                self.auto_compact_last_percent = None;
+            }
+        }
+    }
+
+    fn queue_auto_compact(&mut self, percent: u8) {
+        if self.auto_compact_pending {
+            return;
+        }
+        self.auto_compact_pending = true;
+        self.auto_compact_recently_triggered = true;
+        self.auto_compact_trigger_percent = Some(percent);
+        self.add_info_message(
+            format!(
+                "Remaining context is down to {percent}% — will run /compact automatically once the current turn completes."
+            ),
+            Some(Self::auto_compact_disable_hint()),
+        );
+    }
+
+    fn start_auto_compact_turn(&mut self, trigger: AutoCompactTrigger) {
+        if !self.auto_compact_enabled || self.bottom_pane.is_task_running() {
+            return;
+        }
+        self.auto_compact_pending = false;
+        self.auto_compact_recently_triggered = true;
+        let percent = self
+            .auto_compact_trigger_percent
+            .take()
+            .or(self.auto_compact_last_percent)
+            .unwrap_or(self.auto_compact_threshold_percent);
+        let message = match trigger {
+            AutoCompactTrigger::Immediate => {
+                format!("Remaining context is down to {percent}% — running /compact automatically.")
+            }
+            AutoCompactTrigger::Queued => format!(
+                "Running /compact automatically to free up context (last reading {percent}%)."
+            ),
+        };
+        self.add_info_message(message, Some(Self::auto_compact_disable_hint()));
+        self.clear_token_usage();
+        self.app_event_tx.send(AppEvent::CodexOp(Op::Compact));
+    }
+
+    fn auto_compact_disable_hint() -> String {
+        "Disable with `/compact auto off`.".to_string()
+    }
+
+    fn auto_compact_ready(&self) -> bool {
+        self.auto_compact_enabled && self.auto_compact_pending
+    }
+
+    fn todo_markdown_block(&self) -> Option<String> {
+        if self.todo_items.is_empty() {
+            return None;
+        }
+        let mut lines = Vec::new();
+        lines.push("Current TODOs:".to_string());
+        for (idx, item) in self.todo_items.iter().enumerate() {
+            let check = if item.completed { "x" } else { " " };
+            lines.push(format!("- [{}] ({}) {}", check, idx + 1, item.text));
+        }
+        lines.push(String::new());
+        lines.push(
+            "When you finish a task, respond with `/todo complete <number>` to mark it done."
+                .to_string(),
+        );
+        Some(lines.join("\n"))
+    }
+
+    fn update_todos_from_plan(&mut self, update: &UpdatePlanArgs) {
+        let mut changed = false;
+        for plan_item in &update.plan {
+            let normalized = normalize_todo_key(&plan_item.step);
+            if normalized.is_empty() {
+                continue;
+            }
+            let should_complete = matches!(plan_item.status, StepStatus::Completed);
+            if let Some(existing) = self
+                .todo_items
+                .iter_mut()
+                .find(|item| item.normalized == normalized)
+            {
+                if existing.completed != should_complete {
+                    existing.completed = should_complete;
+                    changed = true;
+                }
+            } else {
+                let mut item = TodoItem::new(plan_item.step.clone());
+                item.completed = should_complete;
+                self.todo_items.push(item);
+                changed = true;
+            }
+        }
+        if changed {
+            self.push_todo_list_history();
+        }
+    }
+
+    fn normalize_alias_key(name: &str) -> Option<String> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        if trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+        {
+            Some(trimmed.to_ascii_lowercase())
+        } else {
+            None
+        }
+    }
+
+    fn expand_alias_invocation(&mut self, text: &str) -> Option<Result<String, ()>> {
+        if !text.starts_with("//") {
+            return None;
+        }
+
+        let remainder = &text[2..];
+        let trimmed = remainder.trim_start();
+        if trimmed.is_empty() {
+            self.add_error_message("Alias usage must be in the form //alias-name.".to_string());
+            return Some(Err(()));
+        }
+
+        let mut alias_len = trimmed.len();
+        for (idx, ch) in trimmed.char_indices() {
+            if ch.is_whitespace() {
+                alias_len = idx;
+                break;
+            }
+        }
+        let alias_token = &trimmed[..alias_len];
+        let extra = trimmed[alias_len..].trim_start();
+
+        let Some(key) = Self::normalize_alias_key(alias_token) else {
+            self.add_error_message(
+                "Alias names may only contain letters, numbers, '-' or '_' and cannot be blank."
+                    .to_string(),
+            );
+            return Some(Err(()));
+        };
+
+        if let Some(entry) = self.aliases.get(&key) {
+            let mut expanded = entry.prompt.clone();
+            if !extra.is_empty() {
+                if !expanded.is_empty() {
+                    expanded.push_str("\n\n");
+                }
+                expanded.push_str(extra);
+            }
+            Some(Ok(expanded))
+        } else {
+            self.add_error_message(format!("Alias //{alias_token} is not defined."));
+            Some(Err(()))
+        }
+    }
+
+    pub(crate) fn set_alarm_script(&mut self, script: Option<String>) {
+        self.config.alarm_script = script.clone();
+        self.config.notify = script
+            .as_ref()
+            .map(|value| Config::alarm_script_to_notify_command(value));
+    }
+
+    pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
+        self.add_to_history(history_cell::new_info_event(message, hint));
         self.request_redraw();
     }
 
@@ -2875,6 +3684,9 @@ impl ChatWidget {
 
     pub(crate) fn clear_token_usage(&mut self) {
         self.token_info = None;
+        self.auto_compact_last_percent = None;
+        self.auto_compact_trigger_percent = None;
+        self.auto_compact_pending = false;
     }
 
     fn as_renderable(&self) -> RenderableItem<'_> {

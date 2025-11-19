@@ -23,6 +23,8 @@ pub struct ConfigProfile {
     pub chatgpt_base_url: Option<String>,
     pub experimental_instructions_file: Option<PathBuf>,
     pub experimental_compact_prompt_file: Option<PathBuf>,
+    pub auto_compact: Option<bool>,
+    pub auto_compact_threshold_percent: Option<u8>,
     pub include_apply_patch_tool: Option<bool>,
     pub experimental_use_unified_exec_tool: Option<bool>,
     pub experimental_use_rmcp_client: Option<bool>,
