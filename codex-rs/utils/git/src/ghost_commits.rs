@@ -303,12 +303,24 @@ fn restore_to_commit_inner(
     repo_prefix: Option<&Path>,
     commit_id: &str,
 ) -> Result<(), GitToolingError> {
+    let temp_index = Builder::new().prefix("codex-restore-index-").tempdir()?;
+    let index_path = temp_index.path().join("index");
+    let base_env = vec![(
+        OsString::from("GIT_INDEX_FILE"),
+        OsString::from(index_path.as_os_str()),
+    )];
+
+    run_git_for_status(
+        repo_root,
+        vec![OsString::from("read-tree"), OsString::from(commit_id)],
+        Some(base_env.as_slice()),
+    )?;
+
     let mut restore_args = vec![
         OsString::from("restore"),
         OsString::from("--source"),
         OsString::from(commit_id),
         OsString::from("--worktree"),
-        OsString::from("--staged"),
         OsString::from("--"),
     ];
     if let Some(prefix) = repo_prefix {
@@ -317,7 +329,7 @@ fn restore_to_commit_inner(
         restore_args.push(OsString::from("."));
     }
 
-    run_git_for_status(repo_root, restore_args, None)?;
+    run_git_for_status(repo_root, restore_args, Some(base_env.as_slice()))?;
     Ok(())
 }
 
@@ -575,6 +587,38 @@ mod tests {
         assert!(!repo.join("ephemeral.txt").exists());
         let notes_after = std::fs::read_to_string(&preexisting_untracked)?;
         assert_eq!(notes_after, "notes before\n");
+
+        Ok(())
+    }
+
+    #[test]
+    /// Ensures restoring a ghost commit does not stage previously unstaged changes.
+    fn restore_preserves_unstaged_changes_in_index() -> Result<(), GitToolingError> {
+        let temp = tempfile::tempdir()?;
+        let repo = temp.path();
+        init_test_repo(repo);
+
+        let tracked = repo.join("tracked.txt");
+        std::fs::write(&tracked, "before undo\n")?;
+        run_git_in(repo, &["add", "tracked.txt"]);
+        run_git_in(repo, &["commit", "-m", "track file"]);
+
+        std::fs::write(&tracked, "preexisting unstaged change\n")?;
+        let ghost = create_ghost_commit(&CreateGhostCommitOptions::new(repo))?;
+
+        std::fs::write(&tracked, "turn edit\n")?;
+
+        restore_ghost_commit(repo, &ghost)?;
+
+        let tracked_after = std::fs::read_to_string(&tracked)?;
+        assert_eq!(tracked_after, "preexisting unstaged change\n");
+        let status_output = Command::new("git")
+            .args(["status", "--short"])
+            .current_dir(repo)
+            .output()
+            .expect("git status");
+        let status = String::from_utf8(status_output.stdout).expect("utf8 status");
+        assert_eq!(status.trim_end(), " M tracked.txt");
 
         Ok(())
     }
