@@ -140,7 +140,5 @@ pub async fn resolve_rollout_path(codex_home: &Path, identifier: &str) -> Result
             entry.rollout_path.display()
         );
     }
-    find_conversation_path_by_id_str(codex_home, identifier)
-        .await
-        .map_err(Into::into) // todo jif
+    Ok(find_conversation_path_by_id_str(codex_home, identifier).await?)
 }
