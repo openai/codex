@@ -1,9 +1,11 @@
+pub mod cli;
 pub mod decision;
 pub mod error;
 pub mod parser;
 pub mod policy;
 pub mod rule;
 
+pub use cli::ExecPolicyCheckCommand;
 pub use decision::Decision;
 pub use error::Error;
 pub use error::Result;
