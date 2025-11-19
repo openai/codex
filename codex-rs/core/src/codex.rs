@@ -710,7 +710,16 @@ impl Session {
 
                 // If persisting, persist all rollout items as-is (recorder filters)
                 if persist && !rollout_items.is_empty() {
-                    self.persist_rollout_items(&rollout_items).await;
+                    // Drop legacy SessionMeta lines from the source rollout so the forked
+                    // session only contains its own SessionMeta written by the recorder.
+                    let filtered: Vec<_> = rollout_items
+                        .iter()
+                        .cloned()
+                        .filter(|item| !matches!(item, RolloutItem::SessionMeta(_)))
+                        .collect();
+                    if !filtered.is_empty() {
+                        self.persist_rollout_items(&filtered).await;
+                    }
                 }
                 // Flush after seeding history and any persisted rollout copy.
                 if let Err(e) = self.flush_rollout().await {

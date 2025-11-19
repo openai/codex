@@ -335,9 +335,10 @@ impl ChatComposer {
 
     fn command_args_from_line(line: &str, command: SlashCommand) -> String {
         if let Some((name, rest)) = parse_slash_name(line)
-            && name == command.command() {
-                return rest.to_string();
-            }
+            && name == command.command()
+        {
+            return rest.to_string();
+        }
         String::new()
     }
 

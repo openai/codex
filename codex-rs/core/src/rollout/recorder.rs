@@ -359,7 +359,6 @@ fn create_log_file(
     let path = dir.join(filename);
     let file = std::fs::OpenOptions::new()
         .read(true)
-        
         .append(true)
         .create(true)
         .open(&path)?;
