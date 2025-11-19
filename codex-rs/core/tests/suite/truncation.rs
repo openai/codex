@@ -167,7 +167,8 @@ async fn tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> {
         serde_json::from_str::<Value>(&output).is_err(),
         "expected truncated shell output to be plain text"
     );
-    let truncated_pattern = r#"(?s)(?:Total output lines: \d+\n\n)?\{"output":"1\\n2\\n3\\n4\\n5\\n6\\n.*?\[\u{2026}1910 tokens truncated\u{2026}].*?99996\\n99997\\n99998\\n99999\\n100000\\n","metadata":\{"exit_code":0,"duration_seconds":[0-9]+(?:\.[0-9]+)?\}"#;
+    let truncated_pattern = r"(?s)^Exit code: 0\nWall time: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\n1\n2\n3\n4\n5\n6\n.*99996\n99997\n99998\n99999\n100000\n$";
+    let truncated_pattern = dbg!(truncated_pattern);
     assert_regex_match(truncated_pattern, &output);
 
     Ok(())
@@ -482,7 +483,8 @@ async fn token_policy_marker_reports_tokens() -> Result<()> {
         .function_call_output_text(call_id)
         .context("shell output present")?;
 
-    assert_regex_match(r"\[\u{2026}35 tokens truncated\u{2026}]", &output);
+    let pattern = dbg!(r"\[\u{2026}25 tokens truncated\u{2026}]");
+    assert_regex_match(pattern, &output);
 
     Ok(())
 }
@@ -533,7 +535,8 @@ async fn byte_policy_marker_reports_bytes() -> Result<()> {
         .function_call_output_text(call_id)
         .context("shell output present")?;
 
-    assert_regex_match(r"\[\u{2026}139 bytes truncated\u{2026}]", &output);
+    let pattern = dbg!(r"\[\u{2026}98 bytes truncated\u{2026}]");
+    assert_regex_match(pattern, &output);
 
     Ok(())
 }

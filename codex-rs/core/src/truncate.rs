@@ -14,6 +14,18 @@ pub enum TruncationPolicy {
 }
 
 impl TruncationPolicy {
+    /// Scale the underlying budget by `multiplier`, rounding up to avoid under-budgeting.
+    pub fn mul(self, multiplier: f64) -> Self {
+        match self {
+            TruncationPolicy::Bytes(bytes) => {
+                TruncationPolicy::Bytes((bytes as f64 * multiplier).ceil() as usize)
+            }
+            TruncationPolicy::Tokens(tokens) => {
+                TruncationPolicy::Tokens((tokens as f64 * multiplier).ceil() as usize)
+            }
+        }
+    }
+
     pub fn new(config: &Config) -> Self {
         let config_token_limit = config.tool_output_token_limit;
 
@@ -154,11 +166,8 @@ fn truncate_with_token_budget(
     }
 
     let byte_len = s.len();
-    if max_tokens > 0 {
-        let small_threshold = approx_bytes_for_tokens(max_tokens / 4);
-        if small_threshold > 0 && byte_len <= small_threshold {
-            return (s.to_string(), None);
-        }
+    if max_tokens > 0 && byte_len <= approx_bytes_for_tokens(max_tokens) {
+        return (s.to_string(), None);
     }
 
     let truncated = truncate_with_byte_estimate(s, approx_bytes_for_tokens(max_tokens), source);
