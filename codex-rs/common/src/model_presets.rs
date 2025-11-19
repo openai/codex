@@ -122,7 +122,11 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 },
             ],
             is_default: false,
-            upgrade: None,
+            upgrade: Some(ModelUpgrade {
+                id: "gpt-5.1-codex-max",
+                reasoning_effort_mapping: None,
+                migration_config_key: HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG,
+            }),
             show_in_picker: true,
         },
         ModelPreset {
@@ -146,7 +150,11 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 },
             ],
             is_default: false,
-            upgrade: None,
+            upgrade: Some(ModelUpgrade {
+                id: "gpt-5.1-codex-max",
+                reasoning_effort_mapping: None,
+                migration_config_key: HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG,
+            }),
             show_in_picker: true,
         },
         // Deprecated models.

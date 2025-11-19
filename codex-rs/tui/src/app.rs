@@ -172,6 +172,11 @@ async fn handle_model_migration_prompt_if_needed(
                     effort: mapped_effort,
                 });
             }
+            ModelMigrationOutcome::Rejected => {
+                app_event_tx.send(AppEvent::PersistModelMigrationPromptAcknowledged {
+                    migration_config: migration_config_key.to_string(),
+                });
+            }
             ModelMigrationOutcome::Exit => {
                 return Some(AppExitInfo {
                     token_usage: TokenUsage::default(),
@@ -643,19 +648,17 @@ impl App {
                     .await
                 {
                     Ok(()) => {
-                        let effort_label = effort
-                            .map(|eff| format!(" with {eff} reasoning"))
-                            .unwrap_or_else(|| " with default reasoning".to_string());
+                        let reasoning_label = Self::reasoning_label(effort);
                         if let Some(profile) = profile {
                             self.chat_widget.add_info_message(
                                 format!(
-                                    "Model changed to {model}{effort_label} for {profile} profile"
+                                    "Model changed to {model} {reasoning_label} for {profile} profile"
                                 ),
                                 None,
                             );
                         } else {
                             self.chat_widget.add_info_message(
-                                format!("Model changed to {model}{effort_label}"),
+                                format!("Model changed to {model} {reasoning_label}"),
                                 None,
                             );
                         }
@@ -821,6 +824,17 @@ impl App {
             },
         }
         Ok(true)
+    }
+
+    fn reasoning_label(reasoning_effort: Option<ReasoningEffortConfig>) -> &'static str {
+        match reasoning_effort {
+            Some(ReasoningEffortConfig::Minimal) => "minimal",
+            Some(ReasoningEffortConfig::Low) => "low",
+            Some(ReasoningEffortConfig::Medium) => "medium",
+            Some(ReasoningEffortConfig::High) => "high",
+            Some(ReasoningEffortConfig::XHigh) => "xhigh",
+            None | Some(ReasoningEffortConfig::None) => "default",
+        }
     }
 
     pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {
