@@ -856,7 +856,7 @@ async fn shell_command_output_is_not_truncated_under_10k_bytes() -> Result<()> {
     let expected_pattern = r"(?s)^Exit code: 0
 Wall time: [0-9]+(?:\.[0-9]+)? seconds
 Output:
-1{5000}$"; // TODO: this is very wrong!!!
+1{10000}$";
     assert_regex_match(expected_pattern, output);
 
     Ok(())
@@ -909,12 +909,8 @@ async fn shell_command_output_is_not_truncated_over_10k_bytes() -> Result<()> {
 
     let expected_pattern = r"(?s)^Exit code: 0
 Wall time: [0-9]+(?:\.[0-9]+)? seconds
-Total output lines: 1
 Output:
-1*
-\[... removed 1 bytes to fit 10000 byte limit ...\]
-
-$";
+1*…1 chars truncated…1*$";
     assert_regex_match(expected_pattern, output);
 
     Ok(())

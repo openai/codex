@@ -11,6 +11,8 @@ pub mod spec;
 
 use crate::exec::ExecToolCallOutput;
 use crate::truncate::TruncationPolicy;
+use crate::truncate::formatted_truncate_text;
+use crate::truncate::truncate_text;
 pub use router::ToolRouter;
 use serde::Serialize;
 
@@ -61,18 +63,16 @@ pub fn format_exec_output_for_model_structured(
     serde_json::to_string(&payload).expect("serialize ExecOutput")
 }
 
-pub fn format_exec_output_for_model_freeform(exec_output: &ExecToolCallOutput) -> String {
+pub fn format_exec_output_for_model_freeform(
+    exec_output: &ExecToolCallOutput,
+    truncation_policy: TruncationPolicy,
+) -> String {
     // round to 1 decimal place
     let duration_seconds = ((exec_output.duration.as_secs_f32()) * 10.0).round() / 10.0;
 
     let total_lines = exec_output.aggregated_output.text.lines().count();
 
-    let formatted_output = truncate_formatted_exec_output(
-        &exec_output.aggregated_output.text,
-        total_lines,
-        SHELL_OUTPUT_MAX_BYTES,
-        256, // TODO: to be removed
-    );
+    let formatted_output = truncate_text(&exec_output.aggregated_output.text, truncation_policy);
 
     let mut sections = Vec::new();
 
@@ -87,7 +87,6 @@ pub fn format_exec_output_for_model_freeform(exec_output: &ExecToolCallOutput) -
 
     sections.join("\n")
 }
-
 
 pub fn format_exec_output_str(
     exec_output: &ExecToolCallOutput,
