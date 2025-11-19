@@ -27,6 +27,15 @@ use codex_core::config::Config;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::config::types::ReasoningSummaryFormat;
 use codex_core::protocol::FileChange;
+use codex_core::protocol::LeaderWorkerAggregationSummaryEvent;
+use codex_core::protocol::LeaderWorkerAssignmentResultEvent;
+use codex_core::protocol::LeaderWorkerAssignmentStatus;
+use codex_core::protocol::LeaderWorkerInFlightAssignment;
+use codex_core::protocol::LeaderWorkerMode;
+use codex_core::protocol::LeaderWorkerPendingSubtask;
+use codex_core::protocol::LeaderWorkerStatusEvent;
+use codex_core::protocol::LeaderWorkerWorkerState;
+use codex_core::protocol::LeaderWorkerWorkerStatus;
 use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
@@ -484,6 +493,7 @@ impl HistoryCell for CompletedMcpToolCallWithImageOutput {
 }
 
 pub(crate) const SESSION_HEADER_MAX_INNER_WIDTH: usize = 56; // Just an eyeballed value
+const LEADER_WORKER_CARD_MAX_INNER_WIDTH: usize = 76;
 
 pub(crate) fn card_inner_width(width: u16, max_inner_width: usize) -> Option<usize> {
     if width < 4 {
@@ -1315,6 +1325,319 @@ impl HistoryCell for PlanUpdateCell {
 
         lines
     }
+}
+
+pub(crate) fn new_leader_worker_status(
+    event: LeaderWorkerStatusEvent,
+) -> LeaderWorkerStatusHistoryCell {
+    LeaderWorkerStatusHistoryCell { event }
+}
+
+#[derive(Debug)]
+pub(crate) struct LeaderWorkerStatusHistoryCell {
+    event: LeaderWorkerStatusEvent,
+}
+
+impl HistoryCell for LeaderWorkerStatusHistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let Some(inner_width) = card_inner_width(width, LEADER_WORKER_CARD_MAX_INNER_WIDTH) else {
+            return Vec::new();
+        };
+
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        let mode_label = leader_worker_mode_label(&self.event.mode);
+        let worker_count = self.event.workers.len();
+        let pending_count = self
+            .event
+            .pending_subtasks
+            .as_ref()
+            .map(|tasks| tasks.len())
+            .unwrap_or(0);
+        let in_flight_count = self
+            .event
+            .in_flight_assignments
+            .as_ref()
+            .map(|assignments| assignments.len())
+            .unwrap_or(0);
+
+        lines.push(Line::from(vec![
+            padded_emoji("🧩").into(),
+            format!("Leader–worker status ({mode_label})").bold(),
+        ]));
+        lines.push(
+            format!(
+                "{worker_count} workers · {pending_count} pending · {in_flight_count} in flight"
+            )
+            .dim()
+            .into(),
+        );
+        lines.push(Line::from(""));
+
+        lines.push("Workers".bold().into());
+        if self.event.workers.is_empty() {
+            lines.push("  (no workers reported)".dim().into());
+        } else {
+            for worker in &self.event.workers {
+                let spans = leader_worker_worker_spans(worker);
+                lines.extend(bullet_lines(inner_width, spans));
+            }
+        }
+
+        lines.push(Line::from(""));
+        lines.push("Pending subtasks".bold().into());
+        match &self.event.pending_subtasks {
+            Some(tasks) if !tasks.is_empty() => {
+                for task in tasks {
+                    let spans = leader_worker_pending_spans(task);
+                    lines.extend(bullet_lines(inner_width, spans));
+                }
+            }
+            Some(_) => lines.push("  (none)".dim().into()),
+            None => lines.push("  (telemetry unavailable)".dim().italic().into()),
+        }
+
+        lines.push(Line::from(""));
+        lines.push("In-flight assignments".bold().into());
+        match &self.event.in_flight_assignments {
+            Some(assignments) if !assignments.is_empty() => {
+                for assignment in assignments {
+                    let spans = leader_worker_in_flight_spans(assignment);
+                    lines.extend(bullet_lines(inner_width, spans));
+                }
+            }
+            Some(_) => lines.push("  (none)".dim().into()),
+            None => lines.push("  (telemetry unavailable)".dim().italic().into()),
+        }
+
+        with_border_with_inner_width(lines, inner_width)
+    }
+}
+
+pub(crate) fn new_leader_worker_assignment_result(
+    event: LeaderWorkerAssignmentResultEvent,
+) -> LeaderWorkerAssignmentResultCell {
+    LeaderWorkerAssignmentResultCell { event }
+}
+
+#[derive(Debug)]
+pub(crate) struct LeaderWorkerAssignmentResultCell {
+    event: LeaderWorkerAssignmentResultEvent,
+}
+
+impl HistoryCell for LeaderWorkerAssignmentResultCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if width == 0 {
+            return Vec::new();
+        }
+
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        let status_icon = leader_worker_assignment_icon(self.event.status);
+        let status_text = self.event.status.to_string().to_lowercase();
+
+        let mut header_spans: Vec<Span<'static>> = vec![
+            status_icon,
+            " ".into(),
+            format!("Worker {}", self.event.worker_id).bold(),
+            " ".into(),
+            status_text.into(),
+            " subtask ".into(),
+            self.event.subtask_id.clone().dim(),
+        ];
+        if let Some(summary) = &self.event.summary {
+            header_spans.push(" · ".dim());
+            header_spans.push(summary.clone().into());
+        }
+
+        lines.extend(word_wrap_lines(
+            vec![Line::from(header_spans)],
+            RtOptions::new(width as usize)
+                .initial_indent(Line::default())
+                .subsequent_indent(Line::from("  ".into())),
+        ));
+
+        if !self.event.files_changed.is_empty() {
+            let files = render_file_list(&self.event.files_changed);
+            let spans: Vec<Span<'static>> = vec!["Files: ".dim(), files.into()];
+            lines.extend(arrow_lines(width as usize, spans));
+        }
+
+        lines
+    }
+}
+
+pub(crate) fn new_leader_worker_aggregation_summary(
+    event: LeaderWorkerAggregationSummaryEvent,
+) -> LeaderWorkerAggregationSummaryCell {
+    LeaderWorkerAggregationSummaryCell { event }
+}
+
+#[derive(Debug)]
+pub(crate) struct LeaderWorkerAggregationSummaryCell {
+    event: LeaderWorkerAggregationSummaryEvent,
+}
+
+impl HistoryCell for LeaderWorkerAggregationSummaryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if width == 0 {
+            return Vec::new();
+        }
+
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        let success = self.event.success_count;
+        let failure = self.event.failure_count;
+        let header_spans = vec![
+            padded_emoji("📦").into(),
+            " Aggregated worker results: ".bold(),
+            format!("{success} ok".green()).into(),
+            " · ".dim(),
+            format!("{failure} failed".red()).into(),
+        ];
+        lines.extend(word_wrap_lines(
+            vec![Line::from(header_spans)],
+            RtOptions::new(width as usize)
+                .initial_indent(Line::default())
+                .subsequent_indent(Line::from("  ".into())),
+        ));
+
+        if !self.event.files_changed.is_empty() {
+            let files = render_file_list(&self.event.files_changed);
+            let spans: Vec<Span<'static>> = vec!["Files merged: ".dim(), files.into()];
+            lines.extend(arrow_lines(width as usize, spans));
+        }
+
+        lines
+    }
+}
+
+fn leader_worker_mode_label(mode: &LeaderWorkerMode) -> &'static str {
+    match mode {
+        LeaderWorkerMode::Leader => "leader",
+        LeaderWorkerMode::Worker => "worker",
+        LeaderWorkerMode::Standard => "standard",
+    }
+}
+
+fn leader_worker_worker_spans(worker: &LeaderWorkerWorkerStatus) -> Vec<Span<'static>> {
+    let mut spans: Vec<Span<'static>> = vec![
+        worker.worker_id.clone().bold(),
+        " ".into(),
+        leader_worker_state_span(worker.state),
+    ];
+    if let Some(summary) = &worker.summary {
+        spans.push(" · ".dim());
+        spans.push(summary.clone().into());
+    }
+    spans
+}
+
+fn leader_worker_pending_spans(task: &LeaderWorkerPendingSubtask) -> Vec<Span<'static>> {
+    let mut spans: Vec<Span<'static>> = vec![
+        format!("#{}:", task.id).dim(),
+        " ".into(),
+        task.summary.clone().into(),
+    ];
+    if let Some(targets) = render_targets(&task.target_paths) {
+        spans.push(" ".into());
+        spans.push(targets.dim());
+    }
+    spans
+}
+
+fn leader_worker_in_flight_spans(
+    assignment: &LeaderWorkerInFlightAssignment,
+) -> Vec<Span<'static>> {
+    let mut spans: Vec<Span<'static>> = vec![
+        format!("{}", assignment.worker_id).bold(),
+        " → ".dim(),
+        assignment.description.clone().into(),
+    ];
+    if let Some(targets) = render_targets(&assignment.target_paths) {
+        spans.push(" ".into());
+        spans.push(targets.dim());
+    }
+    spans
+}
+
+fn leader_worker_state_span(state: LeaderWorkerWorkerState) -> Span<'static> {
+    match state {
+        LeaderWorkerWorkerState::Starting => "starting".into(),
+        LeaderWorkerWorkerState::Idle => "idle".dim(),
+        LeaderWorkerWorkerState::Running => "running".green(),
+        LeaderWorkerWorkerState::Blocked => "blocked".yellow(),
+        LeaderWorkerWorkerState::Error => "error".red(),
+        LeaderWorkerWorkerState::Offline => "offline".magenta(),
+    }
+}
+
+fn leader_worker_assignment_icon(status: LeaderWorkerAssignmentStatus) -> Span<'static> {
+    match status {
+        LeaderWorkerAssignmentStatus::Success => "✔".green(),
+        LeaderWorkerAssignmentStatus::Failure => "✗".red(),
+        LeaderWorkerAssignmentStatus::Cancelled => "⚑".yellow(),
+    }
+}
+
+fn bullet_lines(inner_width: usize, spans: Vec<Span<'static>>) -> Vec<Line<'static>> {
+    wrap_with_indent(
+        inner_width,
+        Line::from(vec!["  • ".dim()]),
+        Line::from("    ".to_string()),
+        spans,
+    )
+}
+
+fn arrow_lines(width: usize, spans: Vec<Span<'static>>) -> Vec<Line<'static>> {
+    wrap_with_indent(
+        width,
+        Line::from(vec!["    ↳ ".dim()]),
+        Line::from("      ".to_string()),
+        spans,
+    )
+}
+
+fn wrap_with_indent(
+    width: usize,
+    initial_indent: Line<'static>,
+    subsequent_indent: Line<'static>,
+    spans: Vec<Span<'static>>,
+) -> Vec<Line<'static>> {
+    if width == 0 {
+        return Vec::new();
+    }
+
+    word_wrap_lines(
+        vec![Line::from(spans)],
+        RtOptions::new(width)
+            .initial_indent(initial_indent)
+            .subsequent_indent(subsequent_indent),
+    )
+}
+
+fn render_targets(paths: &[String]) -> Option<String> {
+    if paths.is_empty() {
+        return None;
+    }
+
+    const MAX_PATHS: usize = 3;
+    let shown = paths.iter().take(MAX_PATHS).cloned().collect::<Vec<_>>();
+    let mut rendered = shown.join(", ");
+    if paths.len() > MAX_PATHS {
+        rendered.push_str(&format!(" … +{} more", paths.len() - MAX_PATHS));
+    }
+    Some(format!("targets: {rendered}"))
+}
+
+fn render_file_list(files: &[String]) -> String {
+    if files.is_empty() {
+        return String::new();
+    }
+    const MAX_FILES: usize = 4;
+    let shown = files.iter().take(MAX_FILES).cloned().collect::<Vec<_>>();
+    let mut rendered = shown.join(", ");
+    if files.len() > MAX_FILES {
+        rendered.push_str(&format!(" … +{} more", files.len() - MAX_FILES));
+    }
+    rendered
 }
 
 /// Create a new `PendingPatch` cell that lists the file‑level summary of

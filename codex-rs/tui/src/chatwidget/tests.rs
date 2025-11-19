@@ -26,6 +26,15 @@ use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::FileChange;
+use codex_core::protocol::LeaderWorkerAggregationSummaryEvent;
+use codex_core::protocol::LeaderWorkerAssignmentResultEvent;
+use codex_core::protocol::LeaderWorkerAssignmentStatus;
+use codex_core::protocol::LeaderWorkerInFlightAssignment;
+use codex_core::protocol::LeaderWorkerMode;
+use codex_core::protocol::LeaderWorkerPendingSubtask;
+use codex_core::protocol::LeaderWorkerStatusEvent;
+use codex_core::protocol::LeaderWorkerWorkerState;
+use codex_core::protocol::LeaderWorkerWorkerStatus;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
@@ -111,6 +120,7 @@ fn resumed_initial_messages_render_history() {
             }),
         ]),
         rollout_path: rollout_file.path().to_path_buf(),
+        leader_worker: None,
     };
 
     chat.handle_codex_event(Event {
@@ -213,6 +223,128 @@ fn exited_review_mode_emits_results_and_finishes() {
     let banner = lines_to_single_string(cells.last().expect("finished banner"));
     assert_eq!(banner, "\n<< Code review finished >>\n");
     assert!(!chat.is_review_mode);
+}
+
+#[test]
+fn leader_worker_status_event_renders_dashboard() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+
+    let status = LeaderWorkerStatusEvent {
+        mode: LeaderWorkerMode::Leader,
+        workers: vec![
+            LeaderWorkerWorkerStatus {
+                worker_id: "worker-a".to_string(),
+                state: LeaderWorkerWorkerState::Running,
+                summary: Some("Running integration tests".to_string()),
+            },
+            LeaderWorkerWorkerStatus {
+                worker_id: "worker-b".to_string(),
+                state: LeaderWorkerWorkerState::Idle,
+                summary: None,
+            },
+        ],
+        pending_subtasks: Some(vec![LeaderWorkerPendingSubtask {
+            id: "subtask-1".to_string(),
+            summary: "Implement aggregation".to_string(),
+            target_paths: vec!["src/lib.rs".to_string()],
+        }]),
+        in_flight_assignments: Some(vec![LeaderWorkerInFlightAssignment {
+            worker_id: "worker-a".to_string(),
+            subtask_id: "subtask-2".to_string(),
+            description: "Update tests".to_string(),
+            target_paths: vec!["tests/mod.rs".to_string()],
+        }]),
+    };
+
+    chat.handle_codex_event(Event {
+        id: "lw-status".into(),
+        msg: EventMsg::LeaderWorkerStatus(status),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let text = lines_to_single_string(cells.last().expect("status cell"));
+    assert!(
+        text.contains("Leader–worker status (leader)"),
+        "expected status header in {text:?}"
+    );
+    assert!(text.contains("worker-a"), "expected worker id in {text:?}");
+    assert!(
+        text.contains("Pending subtasks"),
+        "expected pending section in {text:?}"
+    );
+    assert!(
+        text.contains("In-flight assignments"),
+        "expected in-flight section in {text:?}"
+    );
+}
+
+#[test]
+fn leader_worker_assignment_result_event_renders_summary() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+
+    let result = LeaderWorkerAssignmentResultEvent {
+        worker_id: "worker-a".to_string(),
+        subtask_id: "subtask-9".to_string(),
+        status: LeaderWorkerAssignmentStatus::Success,
+        summary: Some("Patched auth module".to_string()),
+        files_changed: vec!["src/auth.rs".to_string(), "src/main.rs".to_string()],
+    };
+
+    chat.handle_codex_event(Event {
+        id: "lw-assignment".into(),
+        msg: EventMsg::LeaderWorkerAssignmentResult(result),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let text = lines_to_single_string(cells.last().expect("assignment cell"));
+    assert!(
+        text.contains("Worker worker-a"),
+        "expected worker summary in {text:?}"
+    );
+    assert!(
+        text.contains("subtask-9"),
+        "expected subtask identifier in {text:?}"
+    );
+    assert!(
+        text.contains("Files: src/auth.rs"),
+        "expected changed files line in {text:?}"
+    );
+}
+
+#[test]
+fn leader_worker_aggregation_summary_event_renders_counts() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+
+    let summary = LeaderWorkerAggregationSummaryEvent {
+        success_count: 3,
+        failure_count: 1,
+        files_changed: vec![
+            "src/lib.rs".to_string(),
+            "src/ui/mod.rs".to_string(),
+            "README.md".to_string(),
+        ],
+    };
+
+    chat.handle_codex_event(Event {
+        id: "lw-summary".into(),
+        msg: EventMsg::LeaderWorkerAggregationSummary(summary),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let text = lines_to_single_string(cells.last().expect("summary cell"));
+    assert!(
+        text.contains("Aggregated worker results"),
+        "expected summary header in {text:?}"
+    );
+    assert!(text.contains("3 ok"), "expected success count in {text:?}");
+    assert!(
+        text.contains("1 failed"),
+        "expected failure count in {text:?}"
+    );
+    assert!(
+        text.contains("Files merged"),
+        "expected file list rendered in {text:?}"
+    );
 }
 
 #[cfg_attr(

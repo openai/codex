@@ -28,6 +28,9 @@ use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::ExitedReviewModeEvent;
+use codex_core::protocol::LeaderWorkerAggregationSummaryEvent;
+use codex_core::protocol::LeaderWorkerAssignmentResultEvent;
+use codex_core::protocol::LeaderWorkerStatusEvent;
 use codex_core::protocol::ListCustomPromptsResponseEvent;
 use codex_core::protocol::McpListToolsResponseEvent;
 use codex_core::protocol::McpStartupCompleteEvent;
@@ -688,6 +691,18 @@ impl ChatWidget {
 
     fn on_plan_update(&mut self, update: UpdatePlanArgs) {
         self.add_to_history(history_cell::new_plan_update(update));
+    }
+
+    fn on_leader_worker_status(&mut self, event: LeaderWorkerStatusEvent) {
+        self.add_to_history(history_cell::new_leader_worker_status(event));
+    }
+
+    fn on_leader_worker_assignment_result(&mut self, event: LeaderWorkerAssignmentResultEvent) {
+        self.add_to_history(history_cell::new_leader_worker_assignment_result(event));
+    }
+
+    fn on_leader_worker_aggregation_summary(&mut self, event: LeaderWorkerAggregationSummaryEvent) {
+        self.add_to_history(history_cell::new_leader_worker_aggregation_summary(event));
     }
 
     fn on_exec_approval_request(&mut self, id: String, ev: ExecApprovalRequestEvent) {
@@ -1642,6 +1657,13 @@ impl ChatWidget {
                 }
             },
             EventMsg::PlanUpdate(update) => self.on_plan_update(update),
+            EventMsg::LeaderWorkerStatus(event) => self.on_leader_worker_status(event),
+            EventMsg::LeaderWorkerAssignmentResult(event) => {
+                self.on_leader_worker_assignment_result(event)
+            }
+            EventMsg::LeaderWorkerAggregationSummary(event) => {
+                self.on_leader_worker_aggregation_summary(event)
+            }
             EventMsg::ExecApprovalRequest(ev) => {
                 // For replayed events, synthesize an empty id (these should not occur).
                 self.on_exec_approval_request(id.unwrap_or_default(), ev)
