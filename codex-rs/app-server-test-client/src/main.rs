@@ -17,15 +17,20 @@ use clap::Parser;
 use clap::Subcommand;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
+use codex_app_server_protocol::ApprovalDecision;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::CommandExecutionRequestAcceptSettings;
+use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
+use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::InitializeResponse;
 use codex_app_server_protocol::InputItem;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
+use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginChatGptCompleteNotification;
 use codex_app_server_protocol::LoginChatGptResponse;
@@ -36,6 +41,7 @@ use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserMessageResponse;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -44,6 +50,7 @@ use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_protocol::ConversationId;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use uuid::Uuid;
@@ -603,8 +610,8 @@ impl CodexClient {
                 JSONRPCMessage::Notification(notification) => {
                     self.pending_notifications.push_back(notification);
                 }
-                JSONRPCMessage::Request(_) => {
-                    bail!("unexpected request from codex app-server");
+                JSONRPCMessage::Request(request) => {
+                    self.handle_server_request(request)?;
                 }
             }
         }
@@ -624,8 +631,8 @@ impl CodexClient {
                     // No outstanding requests, so ignore stray responses/errors for now.
                     continue;
                 }
-                JSONRPCMessage::Request(_) => {
-                    bail!("unexpected request from codex app-server");
+                JSONRPCMessage::Request(request) => {
+                    self.handle_server_request(request)?;
                 }
             }
         }
@@ -660,6 +667,81 @@ impl CodexClient {
 
     fn request_id(&self) -> RequestId {
         RequestId::String(Uuid::new_v4().to_string())
+    }
+
+    fn handle_server_request(&mut self, request: JSONRPCRequest) -> Result<()> {
+        let server_request = ServerRequest::try_from(request)
+            .context("failed to deserialize ServerRequest from JSONRPCRequest")?;
+
+        match server_request {
+            ServerRequest::CommandExecutionRequestApproval { request_id, params } => {
+                self.handle_command_execution_request_approval(request_id, params)?;
+            }
+            other => {
+                bail!("received unsupported server request: {other:?}");
+            }
+        }
+
+        Ok(())
+    }
+
+    fn handle_command_execution_request_approval(
+        &mut self,
+        request_id: RequestId,
+        params: CommandExecutionRequestApprovalParams,
+    ) -> Result<()> {
+        let CommandExecutionRequestApprovalParams {
+            thread_id,
+            turn_id,
+            item_id,
+            reason,
+            risk,
+        } = params;
+
+        println!(
+            "\n< commandExecution approval requested for thread {thread_id}, turn {turn_id}, item {item_id}"
+        );
+        if let Some(reason) = reason.as_deref() {
+            println!("< reason: {reason}");
+        }
+        if let Some(risk) = risk.as_ref() {
+            println!("< risk assessment: {risk:?}");
+        }
+
+        let response = CommandExecutionRequestApprovalResponse {
+            decision: ApprovalDecision::Accept,
+            accept_settings: Some(CommandExecutionRequestAcceptSettings { for_session: false }),
+        };
+        self.send_server_request_response(request_id, &response)?;
+        println!("< approved commandExecution request for item {item_id}");
+        Ok(())
+    }
+
+    fn send_server_request_response<T>(&mut self, request_id: RequestId, response: &T) -> Result<()>
+    where
+        T: Serialize,
+    {
+        let message = JSONRPCMessage::Response(JSONRPCResponse {
+            id: request_id,
+            result: serde_json::to_value(response)?,
+        });
+        self.write_jsonrpc_message(message)
+    }
+
+    fn write_jsonrpc_message(&mut self, message: JSONRPCMessage) -> Result<()> {
+        let payload = serde_json::to_string(&message)?;
+        let pretty = serde_json::to_string_pretty(&message)?;
+        print_multiline_with_prefix("> ", &pretty);
+
+        if let Some(stdin) = self.stdin.as_mut() {
+            writeln!(stdin, "{payload}")?;
+            stdin
+                .flush()
+                .context("failed to flush response to codex app-server")?;
+            return Ok(());
+        }
+
+        bail!("codex app-server stdin closed")
     }
 }
 

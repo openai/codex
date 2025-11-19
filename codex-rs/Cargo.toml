@@ -16,6 +16,7 @@ members = [
     "common",
     "core",
     "exec",
+    "exec-server",
     "execpolicy",
     "execpolicy2",
     "keyring-store",
@@ -176,6 +177,7 @@ sha1 = "0.10.6"
 sha2 = "0.10"
 shlex = "1.3.0"
 similar = "2.7.0"
+socket2 = "0.6.0"
 starlark = "0.13.0"
 strum = "0.27.2"
 strum_macros = "0.27.2"

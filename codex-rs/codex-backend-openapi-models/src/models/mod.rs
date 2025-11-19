@@ -32,3 +32,6 @@ pub use self::rate_limit_status_details::RateLimitStatusDetails;
 
 pub mod rate_limit_window_snapshot;
 pub use self::rate_limit_window_snapshot::RateLimitWindowSnapshot;
+
+pub mod credit_status_details;
+pub use self::credit_status_details::CreditStatusDetails;
