@@ -403,6 +403,11 @@ pub fn apply_blocking(
     profile: Option<&str>,
     edits: &[ConfigEdit],
 ) -> anyhow::Result<()> {
+    eprintln!(
+        "apply_blocking codex_home={} (profile={:?})",
+        codex_home.display(),
+        profile
+    );
     if edits.is_empty() {
         return Ok(());
     }
