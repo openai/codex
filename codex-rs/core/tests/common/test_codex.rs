@@ -11,6 +11,7 @@ use codex_core::ModelProviderInfo;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
 use codex_core::features::Feature;
+use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -28,8 +29,27 @@ use crate::wait_for_event;
 
 type ConfigMutator = dyn FnOnce(&mut Config) + Send;
 
+/// A collection of different ways the model can output an apply_patch call
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ApplyPatchModelOutput {
+    Freeform,
+    Function,
+    Shell,
+    ShellViaHeredoc,
+}
+
+/// A collection of different ways the model can output an apply_patch call
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ShellModelOutput {
+    Shell,
+    ShellCommand,
+    LocalShell,
+    // UnifiedExec has its own set of tests
+}
+
 pub struct TestCodexBuilder {
     config_mutators: Vec<Box<ConfigMutator>>,
+    auth: CodexAuth,
 }
 
 impl TestCodexBuilder {
@@ -39,6 +59,19 @@ impl TestCodexBuilder {
     {
         self.config_mutators.push(Box::new(mutator));
         self
+    }
+
+    pub fn with_auth(mut self, auth: CodexAuth) -> Self {
+        self.auth = auth;
+        self
+    }
+
+    pub fn with_model(self, model: &str) -> Self {
+        let new_model = model.to_string();
+        self.with_config(move |config| {
+            config.model = new_model.clone();
+            config.model_family = find_family_for_model(&new_model).expect("model family");
+        })
     }
 
     pub async fn build(&mut self, server: &wiremock::MockServer) -> anyhow::Result<TestCodex> {
@@ -62,23 +95,28 @@ impl TestCodexBuilder {
         resume_from: Option<PathBuf>,
     ) -> anyhow::Result<TestCodex> {
         let (config, cwd) = self.prepare_config(server, &home).await?;
-        let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+
+        let auth = self.auth.clone();
+        let conversation_manager = ConversationManager::with_auth(auth.clone());
 
         let new_conversation = match resume_from {
             Some(path) => {
-                let auth_manager = codex_core::AuthManager::from_auth_for_testing(
-                    CodexAuth::from_api_key("dummy"),
-                );
+                let auth_manager = codex_core::AuthManager::from_auth_for_testing(auth);
                 conversation_manager
-                    .resume_conversation_from_rollout(config, path, auth_manager)
+                    .resume_conversation_from_rollout(config.clone(), path, auth_manager)
                     .await?
             }
-            None => conversation_manager.new_conversation(config).await?,
+            None => {
+                conversation_manager
+                    .new_conversation(config.clone())
+                    .await?
+            }
         };
 
         Ok(TestCodex {
             home,
             cwd,
+            config,
             codex: new_conversation.conversation,
             session_configured: new_conversation.session_configured,
         })
@@ -122,6 +160,7 @@ pub struct TestCodex {
     pub cwd: Arc<TempDir>,
     pub codex: Arc<CodexConversation>,
     pub session_configured: SessionConfiguredEvent,
+    pub config: Config,
 }
 
 impl TestCodex {
@@ -134,13 +173,27 @@ impl TestCodex {
     }
 
     pub async fn submit_turn(&self, prompt: &str) -> Result<()> {
-        self.submit_turn_with_policy(prompt, SandboxPolicy::DangerFullAccess)
-            .await
+        self.submit_turn_with_policies(
+            prompt,
+            AskForApproval::Never,
+            SandboxPolicy::DangerFullAccess,
+        )
+        .await
     }
 
     pub async fn submit_turn_with_policy(
         &self,
         prompt: &str,
+        sandbox_policy: SandboxPolicy,
+    ) -> Result<()> {
+        self.submit_turn_with_policies(prompt, AskForApproval::Never, sandbox_policy)
+            .await
+    }
+
+    pub async fn submit_turn_with_policies(
+        &self,
+        prompt: &str,
+        approval_policy: AskForApproval,
         sandbox_policy: SandboxPolicy,
     ) -> Result<()> {
         let session_model = self.session_configured.model.clone();
@@ -151,7 +204,7 @@ impl TestCodex {
                 }],
                 final_output_json_schema: None,
                 cwd: self.cwd.path().to_path_buf(),
-                approval_policy: AskForApproval::Never,
+                approval_policy,
                 sandbox_policy,
                 model: session_model,
                 effort: None,
@@ -249,6 +302,19 @@ impl TestCodexHarness {
             .expect("output string")
             .to_string()
     }
+
+    pub async fn apply_patch_output(
+        &self,
+        call_id: &str,
+        output_type: ApplyPatchModelOutput,
+    ) -> String {
+        match output_type {
+            ApplyPatchModelOutput::Freeform => self.custom_tool_call_output(call_id).await,
+            ApplyPatchModelOutput::Function
+            | ApplyPatchModelOutput::Shell
+            | ApplyPatchModelOutput::ShellViaHeredoc => self.function_call_stdout(call_id).await,
+        }
+    }
 }
 
 fn custom_tool_call_output<'a>(bodies: &'a [Value], call_id: &str) -> &'a Value {
@@ -284,5 +350,6 @@ fn function_call_output<'a>(bodies: &'a [Value], call_id: &str) -> &'a Value {
 pub fn test_codex() -> TestCodexBuilder {
     TestCodexBuilder {
         config_mutators: vec![],
+        auth: CodexAuth::from_api_key("dummy"),
     }
 }

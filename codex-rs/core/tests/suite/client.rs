@@ -21,6 +21,8 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
+use codex_protocol::config_types::ReasoningEffort;
+use codex_protocol::config_types::Verbosity;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::WebSearchAction;
@@ -32,7 +34,6 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
-use core_test_support::wait_for_event_with_timeout;
 use futures::StreamExt;
 use serde_json::json;
 use std::io::Write;
@@ -237,9 +238,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
 
     // Mock server that will receive the resumed request
     let server = MockServer::start().await;
-    let resp_mock =
-        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
-            .await;
+    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
 
     // Configure Codex to resume from our file
     let model_provider = ModelProviderInfo {
@@ -380,9 +379,7 @@ async fn includes_base_instructions_override_in_request() {
     skip_if_no_network!();
     // Mock server
     let server = MockServer::start().await;
-    let resp_mock =
-        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
-            .await;
+    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
@@ -570,9 +567,7 @@ async fn includes_user_instructions_message_in_request() {
     skip_if_no_network!();
     let server = MockServer::start().await;
 
-    let resp_mock =
-        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
-            .await;
+    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
@@ -626,13 +621,230 @@ async fn includes_user_instructions_message_in_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn includes_configured_effort_in_request() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
+    let TestCodex { codex, .. } = test_codex()
+        .with_model("gpt-5.1-codex")
+        .with_config(|config| {
+            config.model_reasoning_effort = Some(ReasoningEffort::Medium);
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert_eq!(
+        request_body
+            .get("reasoning")
+            .and_then(|t| t.get("effort"))
+            .and_then(|v| v.as_str()),
+        Some("medium")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn includes_no_effort_in_request() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
+    let TestCodex { codex, .. } = test_codex()
+        .with_model("gpt-5.1-codex")
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert_eq!(
+        request_body
+            .get("reasoning")
+            .and_then(|t| t.get("effort"))
+            .and_then(|v| v.as_str()),
+        None
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn includes_default_reasoning_effort_in_request_when_defined_by_model_family()
+-> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
+    let TestCodex { codex, .. } = test_codex().with_model("gpt-5.1").build(&server).await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert_eq!(
+        request_body
+            .get("reasoning")
+            .and_then(|t| t.get("effort"))
+            .and_then(|v| v.as_str()),
+        Some("medium")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn includes_default_verbosity_in_request() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
+    let TestCodex { codex, .. } = test_codex().with_model("gpt-5.1").build(&server).await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert_eq!(
+        request_body
+            .get("text")
+            .and_then(|t| t.get("verbosity"))
+            .and_then(|v| v.as_str()),
+        Some("low")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn configured_verbosity_not_sent_for_models_without_support() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
+    let TestCodex { codex, .. } = test_codex()
+        .with_model("gpt-5.1-codex")
+        .with_config(|config| {
+            config.model_verbosity = Some(Verbosity::High);
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert!(
+        request_body
+            .get("text")
+            .and_then(|t| t.get("verbosity"))
+            .is_none()
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn configured_verbosity_is_sent() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
+    let TestCodex { codex, .. } = test_codex()
+        .with_model("gpt-5.1")
+        .with_config(|config| {
+            config.model_verbosity = Some(Verbosity::High);
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert_eq!(
+        request_body
+            .get("text")
+            .and_then(|t| t.get("verbosity"))
+            .and_then(|v| v.as_str()),
+        Some("high")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn includes_developer_instructions_message_in_request() {
     skip_if_no_network!();
     let server = MockServer::start().await;
 
-    let resp_mock =
-        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
-            .await;
+    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
@@ -943,7 +1155,7 @@ async fn token_count_includes_rate_limits_snapshot() {
                     "reasoning_output_tokens": 0,
                     "total_tokens": 123
                 },
-                // Default model is gpt-5-codex in tests → 95% usable context window
+                // Default model is gpt-5.1-codex in tests → 95% usable context window
                 "model_context_window": 258400
             },
             "rate_limits": {
@@ -1092,8 +1304,9 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
-            config.model = "gpt-5".to_string();
-            config.model_family = find_family_for_model("gpt-5").expect("known gpt-5 model family");
+            config.model = "gpt-5.1".to_string();
+            config.model_family =
+                find_family_for_model("gpt-5.1").expect("known gpt-5.1 model family");
             config.model_context_window = Some(272_000);
         })
         .build(&server)
@@ -1117,26 +1330,20 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
         })
         .await?;
 
-    use std::time::Duration;
-
-    let token_event = wait_for_event_with_timeout(
-        &codex,
-        |event| {
-            matches!(
-                event,
-                EventMsg::TokenCount(payload)
-                    if payload.info.as_ref().is_some_and(|info| {
-                        info.model_context_window == Some(info.total_token_usage.total_tokens)
-                            && info.total_token_usage.total_tokens > 0
-                    })
-            )
-        },
-        Duration::from_secs(5),
-    )
+    let token_event = wait_for_event(&codex, |event| {
+        matches!(
+            event,
+            EventMsg::TokenCount(payload)
+                if payload.info.as_ref().is_some_and(|info| {
+                    info.model_context_window == Some(info.total_token_usage.total_tokens)
+                        && info.total_token_usage.total_tokens > 0
+                })
+        )
+    })
     .await;
 
     let EventMsg::TokenCount(token_payload) = token_event else {
-        unreachable!("wait_for_event_with_timeout returned unexpected event");
+        unreachable!("wait_for_event returned unexpected event");
     };
 
     let info = token_payload

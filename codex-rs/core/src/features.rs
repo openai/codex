@@ -27,10 +27,13 @@ pub enum Stage {
 /// Unique features toggled via configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Feature {
+    /// Create a ghost commit at each turn.
+    GhostCommit,
     /// Use the single unified PTY-backed exec tool.
     UnifiedExec,
-    /// Use the streamable exec-command/write-stdin tool pair.
-    StreamableShell,
+    /// Use the shell command tool that takes `command` as a single string of
+    /// shell instead of an array of args passed to `execvp(3)`.
+    ShellCommandTool,
     /// Enable experimental RMCP features such as OAuth login.
     RmcpClient,
     /// Include the freeform apply_patch tool.
@@ -41,10 +44,14 @@ pub enum Feature {
     WebSearchRequest,
     /// Enable the model-based risk assessments for sandboxed commands.
     SandboxCommandAssessment,
-    /// Create a ghost commit at each turn.
-    GhostCommit,
     /// Enable Windows sandbox (restricted token) on Windows.
     WindowsSandbox,
+    /// Remote compaction enabled (only for ChatGPT auth)
+    RemoteCompaction,
+    /// Enable the default shell tool.
+    ShellTool,
+    /// Allow model to call multiple tools in parallel (only for models supporting it).
+    ParallelToolCalls,
 }
 
 impl Feature {
@@ -118,8 +125,9 @@ impl Features {
         self.enabled.contains(&f)
     }
 
-    pub fn enable(&mut self, f: Feature) {
+    pub fn enable(&mut self, f: Feature) -> &mut Self {
         self.enabled.insert(f);
+        self
     }
 
     pub fn disable(&mut self, f: Feature) -> &mut Self {
@@ -178,7 +186,6 @@ impl Features {
         let base_legacy = LegacyFeatureToggles {
             experimental_sandbox_command_assessment: cfg.experimental_sandbox_command_assessment,
             experimental_use_freeform_apply_patch: cfg.experimental_use_freeform_apply_patch,
-            experimental_use_exec_command_tool: cfg.experimental_use_exec_command_tool,
             experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
             experimental_use_rmcp_client: cfg.experimental_use_rmcp_client,
             tools_web_search: cfg.tools.as_ref().and_then(|t| t.web_search),
@@ -197,7 +204,7 @@ impl Features {
                 .experimental_sandbox_command_assessment,
             experimental_use_freeform_apply_patch: config_profile
                 .experimental_use_freeform_apply_patch,
-            experimental_use_exec_command_tool: config_profile.experimental_use_exec_command_tool,
+
             experimental_use_unified_exec_tool: config_profile.experimental_use_unified_exec_tool,
             experimental_use_rmcp_client: config_profile.experimental_use_rmcp_client,
             tools_web_search: config_profile.tools_web_search,
@@ -246,6 +253,14 @@ pub struct FeatureSpec {
 }
 
 pub const FEATURES: &[FeatureSpec] = &[
+    // Stable features.
+    FeatureSpec {
+        id: Feature::GhostCommit,
+        key: "undo",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    // Unstable features.
     FeatureSpec {
         id: Feature::UnifiedExec,
         key: "unified_exec",
@@ -253,8 +268,8 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::StreamableShell,
-        key: "streamable_shell",
+        id: Feature::ShellCommandTool,
+        key: "shell_command_tool",
         stage: Stage::Experimental,
         default_enabled: false,
     },
@@ -289,15 +304,27 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::GhostCommit,
-        key: "ghost_commit",
-        stage: Stage::Experimental,
-        default_enabled: false,
-    },
-    FeatureSpec {
         id: Feature::WindowsSandbox,
         key: "enable_experimental_windows_sandbox",
         stage: Stage::Experimental,
         default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RemoteCompaction,
+        key: "remote_compaction",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ParallelToolCalls,
+        key: "parallel",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ShellTool,
+        key: "shell_tool",
+        stage: Stage::Stable,
+        default_enabled: true,
     },
 ];

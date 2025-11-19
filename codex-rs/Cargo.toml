@@ -5,6 +5,7 @@ members = [
     "async-utils",
     "app-server",
     "app-server-protocol",
+    "app-server-test-client",
     "apply-patch",
     "arg0",
     "feedback",
@@ -15,17 +16,19 @@ members = [
     "common",
     "core",
     "exec",
+    "exec-server",
     "execpolicy",
+    "execpolicy2",
     "keyring-store",
     "file-search",
     "linux-sandbox",
+    "lmstudio",
     "login",
     "mcp-server",
     "mcp-types",
     "ollama",
     "process-hardening",
     "protocol",
-    "protocol-ts",
     "rmcp-client",
     "responses-api-proxy",
     "stdio-to-uds",
@@ -69,13 +72,13 @@ codex-file-search = { path = "file-search" }
 codex-git = { path = "utils/git" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
+codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
 codex-mcp-server = { path = "mcp-server" }
 codex-ollama = { path = "ollama" }
 codex-otel = { path = "otel" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
-codex-protocol-ts = { path = "protocol-ts" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
@@ -87,7 +90,7 @@ codex-utils-pty = { path = "utils/pty" }
 codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-string = { path = "utils/string" }
 codex-utils-tokenizer = { path = "utils/tokenizer" }
-codex-windows-sandbox = { path = "windows-sandbox" }
+codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
 mcp-types = { path = "mcp-types" }
 mcp_test_support = { path = "mcp-server/tests/common" }
@@ -96,8 +99,8 @@ mcp_test_support = { path = "mcp-server/tests/common" }
 allocative = "0.3.3"
 ansi-to-tui = "7.0.0"
 anyhow = "1"
-arboard = "3"
-askama = "0.12"
+arboard = { version = "3", features = ["wayland-data-control"] }
+askama = "0.14"
 assert_cmd = "2"
 assert_matches = "1.5.0"
 async-channel = "2.3.1"
@@ -124,14 +127,14 @@ eventsource-stream = "0.2.3"
 futures = { version = "0.3", default-features = false }
 http = "1.3.1"
 icu_decimal = "2.1"
-icu_provider = { version = "2.1", features = ["sync"] }
 icu_locale_core = "2.1"
+icu_provider = { version = "2.1", features = ["sync"] }
 ignore = "0.4.23"
 image = { version = "^0.25.8", default-features = false }
 indexmap = "2.12.0"
 insta = "1.43.2"
 itertools = "0.14.0"
-keyring = "3.6"
+keyring = { version = "3.6", default-features = false }
 landlock = "0.4.1"
 lazy_static = "1"
 libc = "0.2.175"
@@ -142,6 +145,7 @@ mime_guess = "2.0.5"
 multimap = "0.10.0"
 notify = "8.2.0"
 nucleo-matcher = "0.3.1"
+once_cell = "1"
 openssl-sys = "*"
 opentelemetry = "0.30.0"
 opentelemetry-appender-tracing = "0.30.0"
@@ -150,7 +154,6 @@ opentelemetry-semantic-conventions = "0.30.0"
 opentelemetry_sdk = "0.30.0"
 os_info = "3.12.0"
 owo-colors = "4.2.0"
-paste = "1.0.15"
 path-absolutize = "3.1.1"
 pathdiff = "0.2"
 portable-pty = "0.9.0"
@@ -162,7 +165,7 @@ ratatui = "0.29.0"
 ratatui-macros = "0.6.0"
 regex-lite = "0.1.7"
 reqwest = "0.12"
-rmcp = { version = "0.8.3", default-features = false }
+rmcp = { version = "0.8.5", default-features = false }
 schemars = "0.8.22"
 seccompiler = "0.5.0"
 sentry = "0.34.0"
@@ -174,6 +177,7 @@ sha1 = "0.10.6"
 sha2 = "0.10"
 shlex = "1.3.0"
 similar = "2.7.0"
+socket2 = "0.6.0"
 starlark = "0.13.0"
 strum = "0.27.2"
 strum_macros = "0.27.2"
@@ -183,6 +187,7 @@ tempfile = "3.23.0"
 test-log = "0.2.18"
 textwrap = "0.16.2"
 thiserror = "2.0.17"
+tiktoken-rs = "0.9"
 time = "0.3"
 tiny_http = "0.12"
 tokio = "1"
@@ -213,7 +218,7 @@ which = "6"
 wildmatch = "2.5.0"
 
 wiremock = "0.6"
-zeroize = "1.8.1"
+zeroize = "1.8.2"
 
 [workspace.lints]
 rust = {}
@@ -256,7 +261,12 @@ unwrap_used = "deny"
 # cargo-shear cannot see the platform-specific openssl-sys usage, so we
 # silence the false positive here instead of deleting a real dependency.
 [workspace.metadata.cargo-shear]
-ignored = ["icu_provider", "openssl-sys", "codex-utils-readiness", "codex-utils-tokenizer"]
+ignored = [
+    "icu_provider",
+    "openssl-sys",
+    "codex-utils-readiness",
+    "codex-utils-tokenizer",
+]
 
 [profile.release]
 lto = "fat"
@@ -275,8 +285,8 @@ opt-level = 0
 [patch.crates-io]
 # Uncomment to debug local changes.
 # ratatui = { path = "../../ratatui" }
-ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.29.0-patch" }
 crossterm = { git = "https://github.com/nornagon/crossterm", branch = "nornagon/color-query" }
+ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.29.0-patch" }
 
 # Uncomment to debug local changes.
 # rmcp = { path = "../../rust-sdk/crates/rmcp" }

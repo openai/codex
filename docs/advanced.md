@@ -12,7 +12,7 @@ Because Codex is written in Rust, it honors the `RUST_LOG` environment variable 
 
 The TUI defaults to `RUST_LOG=codex_core=info,codex_tui=info,codex_rmcp_client=info` and log messages are written to `~/.codex/log/codex-tui.log`, so you can leave the following running in a separate terminal to monitor log messages as they are written:
 
-```
+```bash
 tail -F ~/.codex/log/codex-tui.log
 ```
 
@@ -67,7 +67,7 @@ Use the MCP inspector and `codex mcp-server` to build a simple tic-tac-toe game 
 
 **approval-policy:** never
 
-**prompt:** Implement a simple tic-tac-toe game with HTML, Javascript, and CSS. Write the game in a single file called index.html.
+**prompt:** Implement a simple tic-tac-toe game with HTML, JavaScript, and CSS. Write the game in a single file called index.html.
 
 **sandbox:** workspace-write
 

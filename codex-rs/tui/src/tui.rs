@@ -1,22 +1,18 @@
+use std::fmt;
 use std::io::IsTerminal;
 use std::io::Result;
 use std::io::Stdout;
 use std::io::stdout;
+use std::panic;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-#[cfg(unix)]
-use std::sync::atomic::AtomicU8;
-#[cfg(unix)]
-use std::sync::atomic::AtomicU16;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
 use crossterm::Command;
 use crossterm::SynchronizedUpdate;
-#[cfg(unix)]
-use crossterm::cursor::MoveTo;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::DisableFocusChange;
 use crossterm::event::EnableBracketedPaste;
@@ -36,11 +32,18 @@ use ratatui::crossterm::terminal::disable_raw_mode;
 use ratatui::crossterm::terminal::enable_raw_mode;
 use ratatui::layout::Offset;
 use ratatui::text::Line;
+use tokio::select;
+use tokio_stream::Stream;
 
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
-use tokio::select;
-use tokio_stream::Stream;
+#[cfg(unix)]
+use crate::tui::job_control::SUSPEND_KEY;
+#[cfg(unix)]
+use crate::tui::job_control::SuspendContext;
+
+#[cfg(unix)]
+mod job_control;
 
 /// A type alias for the terminal type used in this application
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
@@ -72,12 +75,12 @@ pub fn set_modes() -> Result<()> {
 struct EnableAlternateScroll;
 
 impl Command for EnableAlternateScroll {
-    fn write_ansi(&self, f: &mut impl std::fmt::Write) -> std::fmt::Result {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
         write!(f, "\x1b[?1007h")
     }
 
     #[cfg(windows)]
-    fn execute_winapi(&self) -> std::io::Result<()> {
+    fn execute_winapi(&self) -> Result<()> {
         Err(std::io::Error::other(
             "tried to execute EnableAlternateScroll using WinAPI; use ANSI instead",
         ))
@@ -93,12 +96,12 @@ impl Command for EnableAlternateScroll {
 struct DisableAlternateScroll;
 
 impl Command for DisableAlternateScroll {
-    fn write_ansi(&self, f: &mut impl std::fmt::Write) -> std::fmt::Result {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
         write!(f, "\x1b[?1007l")
     }
 
     #[cfg(windows)]
-    fn execute_winapi(&self) -> std::io::Result<()> {
+    fn execute_winapi(&self) -> Result<()> {
         Err(std::io::Error::other(
             "tried to execute DisableAlternateScroll using WinAPI; use ANSI instead",
         ))
@@ -137,8 +140,8 @@ pub fn init() -> Result<Terminal> {
 }
 
 fn set_panic_hook() {
-    let hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |panic_info| {
+    let hook = panic::take_hook();
+    panic::set_hook(Box::new(move |panic_info| {
         let _ = restore(); // ignore any errors as we are already failing
         hook(panic_info);
     }));
@@ -158,38 +161,12 @@ pub struct Tui {
     pending_history_lines: Vec<Line<'static>>,
     alt_saved_viewport: Option<ratatui::layout::Rect>,
     #[cfg(unix)]
-    resume_pending: Arc<AtomicU8>, // Stores a ResumeAction
-    #[cfg(unix)]
-    suspend_cursor_y: Arc<AtomicU16>, // Bottom line of inline viewport
+    suspend_context: SuspendContext,
     // True when overlay alt-screen UI is active
     alt_screen_active: Arc<AtomicBool>,
     // True when terminal/tab is focused; updated internally from crossterm events
     terminal_focused: Arc<AtomicBool>,
     enhanced_keys_supported: bool,
-}
-
-#[cfg(unix)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[repr(u8)]
-enum ResumeAction {
-    None = 0,
-    RealignInline = 1,
-    RestoreAlt = 2,
-}
-
-#[cfg(unix)]
-enum PreparedResumeAction {
-    RestoreAltScreen,
-    RealignViewport(ratatui::layout::Rect),
-}
-
-#[cfg(unix)]
-fn take_resume_action(pending: &AtomicU8) -> ResumeAction {
-    match pending.swap(ResumeAction::None as u8, Ordering::Relaxed) {
-        1 => ResumeAction::RealignInline,
-        2 => ResumeAction::RestoreAlt,
-        _ => ResumeAction::None,
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -217,60 +194,11 @@ impl FrameRequester {
 }
 
 impl Tui {
-    /// Emit a desktop notification now if the terminal is unfocused.
-    /// Returns true if a notification was posted.
-    pub fn notify(&mut self, message: impl AsRef<str>) -> bool {
-        if !self.terminal_focused.load(Ordering::Relaxed) {
-            let _ = execute!(stdout(), PostNotification(message.as_ref().to_string()));
-            true
-        } else {
-            false
-        }
-    }
     pub fn new(terminal: Terminal) -> Self {
         let (frame_schedule_tx, frame_schedule_rx) = tokio::sync::mpsc::unbounded_channel();
         let (draw_tx, _) = tokio::sync::broadcast::channel(1);
 
-        // Spawn background scheduler to coalesce frame requests and emit draws at deadlines.
-        let draw_tx_clone = draw_tx.clone();
-        tokio::spawn(async move {
-            use tokio::select;
-            use tokio::time::Instant as TokioInstant;
-            use tokio::time::sleep_until;
-
-            let mut rx = frame_schedule_rx;
-            let mut next_deadline: Option<Instant> = None;
-
-            loop {
-                let target = next_deadline
-                    .unwrap_or_else(|| Instant::now() + Duration::from_secs(60 * 60 * 24 * 365));
-                let sleep_fut = sleep_until(TokioInstant::from_std(target));
-                tokio::pin!(sleep_fut);
-
-                select! {
-                    recv = rx.recv() => {
-                        match recv {
-                            Some(at) => {
-                                if next_deadline.is_none_or(|cur| at < cur) {
-                                    next_deadline = Some(at);
-                                }
-                                // Do not send a draw immediately here. By continuing the loop,
-                                // we recompute the sleep target so the draw fires once via the
-                                // sleep branch, coalescing multiple requests into a single draw.
-                                continue;
-                            }
-                            None => break,
-                        }
-                    }
-                    _ = &mut sleep_fut => {
-                        if next_deadline.is_some() {
-                            next_deadline = None;
-                            let _ = draw_tx_clone.send(());
-                        }
-                    }
-                }
-            }
-        });
+        spawn_frame_scheduler(frame_schedule_rx, draw_tx.clone());
 
         // Detect keyboard enhancement support before any EventStream is created so the
         // crossterm poller can acquire its lock without contention.
@@ -286,9 +214,7 @@ impl Tui {
             pending_history_lines: vec![],
             alt_saved_viewport: None,
             #[cfg(unix)]
-            resume_pending: Arc::new(AtomicU8::new(0)),
-            #[cfg(unix)]
-            suspend_cursor_y: Arc::new(AtomicU16::new(0)),
+            suspend_context: SuspendContext::new(),
             alt_screen_active: Arc::new(AtomicBool::new(false)),
             terminal_focused: Arc::new(AtomicBool::new(true)),
             enhanced_keys_supported,
@@ -305,49 +231,40 @@ impl Tui {
         self.enhanced_keys_supported
     }
 
+    /// Emit a desktop notification now if the terminal is unfocused.
+    /// Returns true if a notification was posted.
+    pub fn notify(&mut self, message: impl AsRef<str>) -> bool {
+        if !self.terminal_focused.load(Ordering::Relaxed) {
+            let _ = execute!(stdout(), PostNotification(message.as_ref().to_string()));
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn event_stream(&self) -> Pin<Box<dyn Stream<Item = TuiEvent> + Send + 'static>> {
         use tokio_stream::StreamExt;
+
         let mut crossterm_events = crossterm::event::EventStream::new();
         let mut draw_rx = self.draw_tx.subscribe();
+
+        // State for tracking how we should resume from ^Z suspend.
         #[cfg(unix)]
-        let resume_pending = self.resume_pending.clone();
+        let suspend_context = self.suspend_context.clone();
         #[cfg(unix)]
         let alt_screen_active = self.alt_screen_active.clone();
-        #[cfg(unix)]
-        let suspend_cursor_y = self.suspend_cursor_y.clone();
+
         let terminal_focused = self.terminal_focused.clone();
         let event_stream = async_stream::stream! {
             loop {
                 select! {
                     Some(Ok(event)) = crossterm_events.next() => {
                         match event {
-                            crossterm::event::Event::Key(key_event) => {
+                            Event::Key(key_event) => {
                                 #[cfg(unix)]
-                                if matches!(
-                                    key_event,
-                                    crossterm::event::KeyEvent {
-                                        code: crossterm::event::KeyCode::Char('z'),
-                                        modifiers: crossterm::event::KeyModifiers::CONTROL,
-                                        kind: crossterm::event::KeyEventKind::Press,
-                                        ..
-                                    }
-                                )
-                                {
-                                    if alt_screen_active.load(Ordering::Relaxed) {
-                                        // Disable alternate scroll when suspending from alt-screen
-                                        let _ = execute!(stdout(), DisableAlternateScroll);
-                                        let _ = execute!(stdout(), LeaveAlternateScreen);
-                                        resume_pending.store(ResumeAction::RestoreAlt as u8, Ordering::Relaxed);
-                                    } else {
-                                        resume_pending.store(ResumeAction::RealignInline as u8, Ordering::Relaxed);
-                                    }
-                                    #[cfg(unix)]
-                                    {
-                                        let y = suspend_cursor_y.load(Ordering::Relaxed);
-                                        let _ = execute!(stdout(), MoveTo(0, y));
-                                    }
-                                    let _ = execute!(stdout(), crossterm::cursor::Show);
-                                    let _ = Tui::suspend();
+                                if SUSPEND_KEY.is_press(key_event) {
+                                    let _ = suspend_context.suspend(&alt_screen_active);
+                                    // We continue here after resume.
                                     yield TuiEvent::Draw;
                                     continue;
                                 }
@@ -388,64 +305,6 @@ impl Tui {
             }
         };
         Box::pin(event_stream)
-    }
-    #[cfg(unix)]
-    fn suspend() -> Result<()> {
-        restore()?;
-        unsafe { libc::kill(0, libc::SIGTSTP) };
-        set_modes()?;
-        Ok(())
-    }
-
-    #[cfg(unix)]
-    fn prepare_resume_action(
-        &mut self,
-        action: ResumeAction,
-    ) -> Result<Option<PreparedResumeAction>> {
-        match action {
-            ResumeAction::RealignInline => {
-                let cursor_pos = self
-                    .terminal
-                    .get_cursor_position()
-                    .unwrap_or(self.terminal.last_known_cursor_pos);
-                Ok(Some(PreparedResumeAction::RealignViewport(
-                    ratatui::layout::Rect::new(0, cursor_pos.y, 0, 0),
-                )))
-            }
-            ResumeAction::RestoreAlt => {
-                if let Ok(ratatui::layout::Position { y, .. }) = self.terminal.get_cursor_position()
-                    && let Some(saved) = self.alt_saved_viewport.as_mut()
-                {
-                    saved.y = y;
-                }
-                Ok(Some(PreparedResumeAction::RestoreAltScreen))
-            }
-            ResumeAction::None => Ok(None),
-        }
-    }
-
-    #[cfg(unix)]
-    fn apply_prepared_resume_action(&mut self, prepared: PreparedResumeAction) -> Result<()> {
-        match prepared {
-            PreparedResumeAction::RealignViewport(area) => {
-                self.terminal.set_viewport_area(area);
-            }
-            PreparedResumeAction::RestoreAltScreen => {
-                execute!(self.terminal.backend_mut(), EnterAlternateScreen)?;
-                // Enable "alternate scroll" so terminals may translate wheel to arrows
-                execute!(self.terminal.backend_mut(), EnableAlternateScroll)?;
-                if let Ok(size) = self.terminal.size() {
-                    self.terminal.set_viewport_area(ratatui::layout::Rect::new(
-                        0,
-                        0,
-                        size.width,
-                        size.height,
-                    ));
-                    self.terminal.clear()?;
-                }
-            }
-        }
-        Ok(())
     }
 
     /// Enter alternate screen and expand the viewport to full terminal size, saving the current
@@ -490,12 +349,16 @@ impl Tui {
         height: u16,
         draw_fn: impl FnOnce(&mut custom_terminal::Frame),
     ) -> Result<()> {
+        // If we are resuming from ^Z, we need to prepare the resume action now so we can apply it
+        // in the synchronized update.
+        #[cfg(unix)]
+        let mut prepared_resume = self
+            .suspend_context
+            .prepare_resume_action(&mut self.terminal, &mut self.alt_saved_viewport);
+
         // Precompute any viewport updates that need a cursor-position query before entering
         // the synchronized update, to avoid racing with the event reader.
         let mut pending_viewport_area: Option<ratatui::layout::Rect> = None;
-        #[cfg(unix)]
-        let mut prepared_resume =
-            self.prepare_resume_action(take_resume_action(&self.resume_pending))?;
         {
             let terminal = &mut self.terminal;
             let screen_size = terminal.size()?;
@@ -504,6 +367,9 @@ impl Tui {
                 && let Ok(cursor_pos) = terminal.get_cursor_position()
             {
                 let last_known_cursor_pos = terminal.last_known_cursor_pos;
+                // If we resized AND the cursor moved, we adjust the viewport area to keep the
+                // cursor in the same position. This is a heuristic that seems to work well
+                // at least in iTerm2.
                 if cursor_pos.y != last_known_cursor_pos.y {
                     let cursor_delta = cursor_pos.y as i32 - last_known_cursor_pos.y as i32;
                     let new_viewport_area = terminal.viewport_area.offset(Offset {
@@ -515,13 +381,10 @@ impl Tui {
             }
         }
 
-        // Use synchronized update via backend instead of stdout()
-        std::io::stdout().sync_update(|_| {
+        stdout().sync_update(|_| {
             #[cfg(unix)]
-            {
-                if let Some(prepared) = prepared_resume.take() {
-                    self.apply_prepared_resume_action(prepared)?;
-                }
+            if let Some(prepared) = prepared_resume.take() {
+                prepared.apply(&mut self.terminal)?;
             }
             let terminal = &mut self.terminal;
             if let Some(new_area) = pending_viewport_area.take() {
@@ -534,6 +397,7 @@ impl Tui {
             let mut area = terminal.viewport_area;
             area.height = height.min(size.height);
             area.width = size.width;
+            // If the viewport has expanded, scroll everything else up to make room.
             if area.bottom() > size.height {
                 terminal
                     .backend_mut()
@@ -541,9 +405,11 @@ impl Tui {
                 area.y = size.height - area.height;
             }
             if area != terminal.viewport_area {
+                // TODO(nornagon): probably this could be collapsed with the clear + set_viewport_area above.
                 terminal.clear()?;
                 terminal.set_viewport_area(area);
             }
+
             if !self.pending_history_lines.is_empty() {
                 crate::insert_history::insert_history_lines(
                     terminal,
@@ -551,6 +417,7 @@ impl Tui {
                 )?;
                 self.pending_history_lines.clear();
             }
+
             // Update the y position for suspending so Ctrl-Z can place the cursor correctly.
             #[cfg(unix)]
             {
@@ -561,9 +428,9 @@ impl Tui {
                 } else {
                     area.bottom().saturating_sub(1)
                 };
-                self.suspend_cursor_y
-                    .store(inline_area_bottom, Ordering::Relaxed);
+                self.suspend_context.set_cursor_y(inline_area_bottom);
             }
+
             terminal.draw(|frame| {
                 draw_fn(frame);
             })
@@ -571,17 +438,62 @@ impl Tui {
     }
 }
 
+/// Spawn background scheduler to coalesce frame requests and emit draws at deadlines.
+fn spawn_frame_scheduler(
+    frame_schedule_rx: tokio::sync::mpsc::UnboundedReceiver<Instant>,
+    draw_tx: tokio::sync::broadcast::Sender<()>,
+) {
+    tokio::spawn(async move {
+        use tokio::select;
+        use tokio::time::Instant as TokioInstant;
+        use tokio::time::sleep_until;
+
+        let mut rx = frame_schedule_rx;
+        let mut next_deadline: Option<Instant> = None;
+
+        loop {
+            let target = next_deadline
+                .unwrap_or_else(|| Instant::now() + Duration::from_secs(60 * 60 * 24 * 365));
+            let sleep_fut = sleep_until(TokioInstant::from_std(target));
+            tokio::pin!(sleep_fut);
+
+            select! {
+                recv = rx.recv() => {
+                    match recv {
+                        Some(at) => {
+                            if next_deadline.is_none_or(|cur| at < cur) {
+                                next_deadline = Some(at);
+                            }
+                            // Do not send a draw immediately here. By continuing the loop,
+                            // we recompute the sleep target so the draw fires once via the
+                            // sleep branch, coalescing multiple requests into a single draw.
+                            continue;
+                        }
+                        None => break,
+                    }
+                }
+                _ = &mut sleep_fut => {
+                    if next_deadline.is_some() {
+                        next_deadline = None;
+                        let _ = draw_tx.send(());
+                    }
+                }
+            }
+        }
+    });
+}
+
 /// Command that emits an OSC 9 desktop notification with a message.
 #[derive(Debug, Clone)]
 pub struct PostNotification(pub String);
 
 impl Command for PostNotification {
-    fn write_ansi(&self, f: &mut impl std::fmt::Write) -> std::fmt::Result {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
         write!(f, "\x1b]9;{}\x07", self.0)
     }
 
     #[cfg(windows)]
-    fn execute_winapi(&self) -> std::io::Result<()> {
+    fn execute_winapi(&self) -> Result<()> {
         Err(std::io::Error::other(
             "tried to execute PostNotification using WinAPI; use ANSI instead",
         ))
