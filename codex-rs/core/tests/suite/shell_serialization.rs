@@ -842,7 +842,7 @@ async fn shell_command_output_is_not_truncated_under_10k_bytes() -> Result<()> {
 
     test.submit_turn_with_policy(
         "run the shell_command script in the user's shell",
-        SandboxPolicy::ReadOnly,
+        SandboxPolicy::DangerFullAccess,
     )
     .await?;
 
@@ -896,7 +896,7 @@ async fn shell_command_output_is_not_truncated_over_10k_bytes() -> Result<()> {
 
     test.submit_turn_with_policy(
         "run the shell_command script in the user's shell",
-        SandboxPolicy::ReadOnly,
+        SandboxPolicy::DangerFullAccess,
     )
     .await?;
 
