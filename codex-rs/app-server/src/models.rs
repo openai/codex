@@ -4,15 +4,17 @@ use codex_app_server_protocol::ReasoningEffortOption;
 use codex_common::model_presets::ModelPreset;
 use codex_common::model_presets::ReasoningEffortPreset;
 use codex_common::model_presets::builtin_model_presets;
+use codex_common::model_presets::default_model_id_for_auth;
 
 pub fn supported_models(auth_mode: Option<AuthMode>) -> Vec<Model> {
+    let default_model_id = default_model_id_for_auth(auth_mode);
     builtin_model_presets(auth_mode)
         .into_iter()
-        .map(model_from_preset)
+        .map(|preset| model_from_preset(preset, default_model_id))
         .collect()
 }
 
-fn model_from_preset(preset: ModelPreset) -> Model {
+fn model_from_preset(preset: ModelPreset, default_model_id: &str) -> Model {
     Model {
         id: preset.id.to_string(),
         model: preset.model.to_string(),
@@ -22,7 +24,7 @@ fn model_from_preset(preset: ModelPreset) -> Model {
             preset.supported_reasoning_efforts,
         ),
         default_reasoning_effort: preset.default_reasoning_effort,
-        is_default: preset.is_default,
+        is_default: preset.id == default_model_id,
     }
 }
 
