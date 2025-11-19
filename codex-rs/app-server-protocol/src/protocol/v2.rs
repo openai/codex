@@ -990,7 +990,6 @@ pub struct FileChangeRequestApprovalParams {
     pub thread_id: String,
     pub turn_id: String,
     pub item_id: String,
-    pub changes: Vec<FileUpdateChange>,
     /// Optional explanatory reason (e.g. request for extra write access).
     pub reason: Option<String>,
     /// When set, the agent is asking the user to allow writes under this root

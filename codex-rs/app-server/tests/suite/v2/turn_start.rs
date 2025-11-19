@@ -571,16 +571,14 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
     assert_eq!(params.turn_id, turn.id);
     let expected_readme_path = workspace.join("README.md");
     let expected_readme_path = expected_readme_path.to_string_lossy().into_owned();
-    let approval_changes = params.changes.clone();
     pretty_assertions::assert_eq!(
-        approval_changes,
+        started_changes,
         vec![codex_app_server_protocol::FileUpdateChange {
             path: expected_readme_path.clone(),
             kind: PatchChangeKind::Add,
             diff: "new line\n".to_string(),
         }]
     );
-    pretty_assertions::assert_eq!(started_changes, approval_changes);
 
     mcp.send_response(
         request_id,

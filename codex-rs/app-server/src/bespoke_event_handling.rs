@@ -120,12 +120,10 @@ pub(crate) async fn apply_bespoke_event_handling(
                         .await;
                 }
 
-                let converted_changes = convert_patch_changes(&changes);
                 let params = FileChangeRequestApprovalParams {
                     thread_id: conversation_id.to_string(),
                     turn_id: turn_id.clone(),
                     item_id,
-                    changes: converted_changes,
                     reason,
                     grant_root,
                 };

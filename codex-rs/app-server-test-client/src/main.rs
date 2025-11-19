@@ -731,7 +731,6 @@ impl CodexClient {
             thread_id,
             turn_id,
             item_id,
-            changes,
             reason,
             grant_root,
         } = params;
@@ -744,17 +743,6 @@ impl CodexClient {
         }
         if let Some(grant_root) = grant_root.as_deref() {
             println!("< grant root: {}", grant_root.display());
-        }
-        if changes.is_empty() {
-            println!("< no file changes were provided");
-        } else {
-            println!("< requested file changes:");
-            for change in &changes {
-                println!("  - {} [{:?}]", change.path, change.kind);
-                if !change.diff.is_empty() {
-                    println!("    diff:\n{}", change.diff);
-                }
-            }
         }
 
         let response = FileChangeRequestApprovalResponse {
