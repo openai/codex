@@ -87,3 +87,12 @@ CHANGELOG.ignore.md
 # nix related
 .direnv
 .envrc
+# Binary / artifact archives
+codex-*.tar.gz
+codex-*.zst
+codex-responses-api-proxy-*.tar.gz
+codex-responses-api-proxy-*.zst
+
+# Removed mirrored docs/binaries
+rtzr_docs/
+codex-rs/rtzr-docs/
