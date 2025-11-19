@@ -76,17 +76,9 @@ impl TruncationPolicy {
 
 pub(crate) fn truncate_text(content: &str, policy: TruncationPolicy) -> String {
     match policy {
-        TruncationPolicy::Bytes(bytes) => truncate_with_byte_estimate(
-            content,
-            bytes,
-            TruncationSource::Policy(TruncationPolicy::Bytes(bytes)),
-        ),
-        TruncationPolicy::Tokens(tokens) => {
-            let (truncated, _) = truncate_with_token_budget(
-                content,
-                tokens,
-                TruncationSource::Policy(TruncationPolicy::Tokens(tokens)),
-            );
+        TruncationPolicy::Bytes(_) => truncate_with_byte_estimate(content, policy),
+        TruncationPolicy::Tokens(_) => {
+            let (truncated, _) = truncate_with_token_budget(content, policy);
             truncated
         }
     }
@@ -156,21 +148,18 @@ pub(crate) fn truncate_function_output_items_with_policy(
 /// preserving the beginning and the end. Returns the possibly truncated string
 /// and `Some(original_token_count)` if truncation occurred; otherwise returns
 /// the original string and `None`.
-fn truncate_with_token_budget(
-    s: &str,
-    max_tokens: usize,
-    source: TruncationSource,
-) -> (String, Option<u64>) {
+fn truncate_with_token_budget(s: &str, policy: TruncationPolicy) -> (String, Option<u64>) {
     if s.is_empty() {
         return (String::new(), None);
     }
+    let max_tokens = policy.token_budget();
 
     let byte_len = s.len();
     if max_tokens > 0 && byte_len <= approx_bytes_for_tokens(max_tokens) {
         return (s.to_string(), None);
     }
 
-    let truncated = truncate_with_byte_estimate(s, approx_bytes_for_tokens(max_tokens), source);
+    let truncated = truncate_with_byte_estimate(s, policy);
     let approx_total_usize = approx_token_count(s);
     let approx_total = u64::try_from(approx_total_usize).unwrap_or(u64::MAX);
     if truncated == s {
@@ -183,14 +172,15 @@ fn truncate_with_token_budget(
 /// Truncate a string using a byte budget derived from the token budget, without
 /// performing any real tokenization. This keeps the logic purely byte-based and
 /// uses a bytes placeholder in the truncated output.
-fn truncate_with_byte_estimate(s: &str, max_bytes: usize, source: TruncationSource) -> String {
+fn truncate_with_byte_estimate(s: &str, policy: TruncationPolicy) -> String {
     if s.is_empty() {
         return String::new();
     }
+    let max_bytes = policy.byte_budget();
 
     if max_bytes == 0 {
         // No budget to show content; just report that everything was truncated.
-        let marker = format_truncation_marker(source, removed_units_for_source(source, s.len()));
+        let marker = format_truncation_marker(policy, removed_units_for_source(policy, s.len()));
         return marker;
     }
 
@@ -199,61 +189,38 @@ fn truncate_with_byte_estimate(s: &str, max_bytes: usize, source: TruncationSour
     }
 
     let total_bytes = s.len();
-    let mut marker = format_truncation_marker(
-        source,
-        removed_units_for_source(source, total_bytes.saturating_sub(max_bytes)),
+    let marker = format_truncation_marker(
+        policy,
+        removed_units_for_source(policy, total_bytes.saturating_sub(max_bytes)),
     );
 
-    loop {
-        if marker.len() >= max_bytes {
-            let truncated_marker = truncate_on_boundary(&marker, max_bytes);
-            return truncated_marker.to_string();
-        }
-
-        let keep_budget = max_bytes - marker.len();
-        let (left_budget, right_budget) = split_budget(keep_budget);
-        let prefix_end = pick_prefix_end(s, left_budget);
-        let mut suffix_start = pick_suffix_start(s, right_budget);
-        if suffix_start < prefix_end {
-            suffix_start = prefix_end;
-        }
-
-        let kept_bytes = prefix_end.saturating_add(total_bytes.saturating_sub(suffix_start));
-        let actual_removed_bytes = total_bytes.saturating_sub(kept_bytes);
-        let accurate_marker = format_truncation_marker(
-            source,
-            removed_units_for_source(source, actual_removed_bytes),
-        );
-
-        if accurate_marker != marker {
-            marker = accurate_marker;
-            continue;
-        }
-
-        let mut out = assemble_truncated_output(&s[..prefix_end], &s[suffix_start..], &marker);
-
-        if out.len() > max_bytes {
-            let boundary = truncate_on_boundary(&out, max_bytes);
-            out.truncate(boundary.len());
-        }
-
-        return out;
+    if marker.len() >= max_bytes {
+        let truncated_marker = truncate_on_boundary(&marker, max_bytes);
+        return truncated_marker.to_string();
     }
+
+    let keep_budget = max_bytes - marker.len();
+    let (left_budget, right_budget) = split_budget(keep_budget);
+    let prefix_end = pick_prefix_end(s, left_budget);
+    let mut suffix_start = pick_suffix_start(s, right_budget);
+    if suffix_start < prefix_end {
+        suffix_start = prefix_end;
+    }
+
+    let mut out = assemble_truncated_output(&s[..prefix_end], &s[suffix_start..], &marker);
+
+    if out.len() > max_bytes {
+        let boundary = truncate_on_boundary(&out, max_bytes);
+        out.truncate(boundary.len());
+    }
+
+    out
 }
 
-#[derive(Clone, Copy)]
-pub enum TruncationSource {
-    Policy(TruncationPolicy),
-}
-
-fn format_truncation_marker(source: TruncationSource, removed_count: u64) -> String {
-    match source {
-        TruncationSource::Policy(TruncationPolicy::Tokens(_)) => {
-            format!("[…{removed_count} tokens truncated…]")
-        }
-        TruncationSource::Policy(TruncationPolicy::Bytes(_)) => {
-            format!("[…{removed_count} bytes truncated…]")
-        }
+fn format_truncation_marker(policy: TruncationPolicy, removed_count: u64) -> String {
+    match policy {
+        TruncationPolicy::Tokens(_) => format!("[…{removed_count} tokens truncated…]"),
+        TruncationPolicy::Bytes(_) => format!("[…{removed_count} bytes truncated…]"),
     }
 }
 
@@ -262,14 +229,10 @@ fn split_budget(budget: usize) -> (usize, usize) {
     (left, budget - left)
 }
 
-fn removed_units_for_source(source: TruncationSource, removed_bytes: usize) -> u64 {
-    match source {
-        TruncationSource::Policy(TruncationPolicy::Tokens(_)) => {
-            approx_tokens_from_byte_count(removed_bytes)
-        }
-        TruncationSource::Policy(TruncationPolicy::Bytes(_)) => {
-            u64::try_from(removed_bytes).unwrap_or(u64::MAX)
-        }
+fn removed_units_for_source(policy: TruncationPolicy, removed_bytes: usize) -> u64 {
+    match policy {
+        TruncationPolicy::Tokens(_) => approx_tokens_from_byte_count(removed_bytes),
+        TruncationPolicy::Bytes(_) => u64::try_from(removed_bytes).unwrap_or(u64::MAX),
     }
 }
 
@@ -336,7 +299,6 @@ fn pick_suffix_start(s: &str, right_budget: usize) -> usize {
 mod tests {
 
     use super::TruncationPolicy;
-    use super::TruncationSource;
     use super::approx_token_count;
     use super::truncate_function_output_items_with_policy;
     use super::truncate_text;
@@ -357,8 +319,7 @@ mod tests {
     fn truncate_middle_returns_original_when_under_limit() {
         let s = "short output";
         let limit = 100;
-        let source = TruncationSource::Policy(TruncationPolicy::Tokens(limit));
-        let (out, original) = truncate_with_token_budget(s, limit, source);
+        let (out, original) = truncate_with_token_budget(s, TruncationPolicy::Tokens(limit));
         assert_eq!(out, s);
         assert_eq!(original, None);
     }
@@ -366,8 +327,7 @@ mod tests {
     #[test]
     fn truncate_middle_reports_truncation_at_zero_limit() {
         let s = "abcdef";
-        let source = TruncationSource::Policy(TruncationPolicy::Tokens(0));
-        let (out, original) = truncate_with_token_budget(s, 0, source);
+        let (out, original) = truncate_with_token_budget(s, TruncationPolicy::Tokens(0));
         assert_eq!(out, "[…2 tokens truncated…]");
         assert_eq!(original, Some(approx_token_count(s) as u64));
     }
@@ -376,8 +336,7 @@ mod tests {
     fn truncate_middle_enforces_token_budget() {
         let s = "alpha beta gamma delta epsilon zeta eta theta iota kappa";
         let max_tokens = 12;
-        let source = TruncationSource::Policy(TruncationPolicy::Tokens(max_tokens));
-        let (out, original) = truncate_with_token_budget(s, max_tokens, source);
+        let (out, original) = truncate_with_token_budget(s, TruncationPolicy::Tokens(max_tokens));
         assert!(out.contains("tokens truncated"));
         assert_eq!(original, Some(approx_token_count(s) as u64));
         assert!(out.len() < s.len(), "truncated output should be shorter");
@@ -387,8 +346,7 @@ mod tests {
     fn truncate_middle_handles_utf8_content() {
         let s = "😀😀😀😀😀😀😀😀😀😀\nsecond line with text\n";
         let max_tokens = 8;
-        let source = TruncationSource::Policy(TruncationPolicy::Tokens(max_tokens));
-        let (out, tokens) = truncate_with_token_budget(s, max_tokens, source);
+        let (out, tokens) = truncate_with_token_budget(s, TruncationPolicy::Tokens(max_tokens));
 
         assert!(out.contains("tokens truncated"));
         assert!(!out.contains('\u{fffd}'));
