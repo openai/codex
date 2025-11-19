@@ -760,7 +760,26 @@ mod tests {
     use std::env;
     use tempfile::TempDir;
 
-    const TEST_CERT: &str = "-----BEGIN CERTIFICATE-----\nMIIBszCCAVugAwIBAgIJAOkpN96CB2muMAoGCCqGSM49BAMCMBMxETAPBgNVBAMMCHRlc3QtY2EwHhcNMjQwMTAxMDAwMDAwWhcNMzQwMTAxMDAwMDAwWjATMREwDwYDVQQDDAh0ZXN0LWNhMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEz7R6pujISiF0G4aE6YvB3IJ5M5qeKMFyA7HyBPZfGiug0KcTEzjsFvdcGaOeL50DJBSSTXobHxPPCf+N6aNTMFEwHQYDVR0OBBYEFD3zh0+BTtPlqvGjufH6G+jD/adJMB8GA1UdIwQYMBaAFD3zh0+BTtPlqvGjufH6G+jD/adJMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSAAwRQIhAKVzsuYOPxfN3E3xaQa58aeGeq/QAdzTZziEtGlUZEMiAiBFmGaGLjm+rXhN3kLBXjg5eQqr8RP4eAbOeXtfLOcAkw==\n-----END CERTIFICATE-----\n";
+    const TEST_CERT: &str = "-----BEGIN CERTIFICATE-----
+MIIDBTCCAe2gAwIBAgIURA/8mcaBUM3VeC/959yHcE5qhg0wDQYJKoZIhvcNAQEL
+BQAwEjEQMA4GA1UEAwwHdGVzdC1jYTAeFw0yNTExMTkwMTI5NDJaFw0yNjExMTkw
+MTI5NDJaMBIxEDAOBgNVBAMMB3Rlc3QtY2EwggEiMA0GCSqGSIb3DQEBAQUAA4IB
+DwAwggEKAoIBAQCQlu3GsymtWBmmFeIYzObIWzV1/BcSYr34Q7etqNxz/FcPwVw0
+XKJ6K4+TH3kOcjnUyWazCdwKINDsniN3i9rzTnDhFxuU/kHfV2pYOAGd5zOqQZYG
+fathKAxZTGLcBFqG4EmfgwZURSugi5xPsT56UJAdOmoltkcyhy3xeRL1dK2xdi++
+CmZcI3fTD/e3ZwzubPXPUOSXRae2yt1C53p70uiA+6R9UlIIoFxpHh4cD2go8z6v
+qKwnkKWycGJD2LFXdYRYOHRP1px4OCsnLAteUjgUsGTu0K4uJEsJYyLdmhg0Dpjz
+148Cwh5UuRbkWUGvZ2BNCHZB8ttQO2g0RzP/AgMBAAGjUzBRMB0GA1UdDgQWBBTV
+08esey9TtVpv5K3saN8rUoc3KzAfBgNVHSMEGDAWgBTV08esey9TtVpv5K3saN8r
+Uoc3KzAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQBcxHdHiiyY
+soWsCd/PuQLFOb4iAD5Gkftb55lxyL/WBtDqbWMGqtWSKFbjlSyVCqcrRduCTOne
+WgT5h4vyHzpBwRTuL0E3E72Y/vVc2kZ8djaB/gBO/IsEs3jDgVIOZk5SmVPTzBxI
+PBc3Rp6TmMCmLzRrrVg5BpCIH/0YVcgH71abUGpiJJp+cVvet5Yh+1+HlFZriWit
+h1OZe3bUuYvLxLnYrRpn4kDvsCXZOPJmIhEtQvoxWTllj6Xp5cVZ5JZdVyx6g9+7
+pw5sOGsOCrQ4RV6U22e7T/ClsN9TYfM+JzQeIbAD0LL7mASVxXGE/LJ7EVdyGbrL
+CnUUO0SOj4m4
+-----END CERTIFICATE-----
+";
 
     fn write_test_cert(temp_dir: &TempDir, file_name: &str) -> PathBuf {
         let path = temp_dir.path().join(file_name);
@@ -770,8 +789,8 @@ mod tests {
 
     fn restore_env(key: &str, value: Option<String>) {
         match value {
-            Some(val) => env::set_var(key, val),
-            None => env::remove_var(key),
+            Some(val) => unsafe { env::set_var(key, val) },
+            None => unsafe { env::remove_var(key) },
         }
     }
 
@@ -789,15 +808,17 @@ mod tests {
         let cert_path = write_test_cert(&temp_dir, "ca.pem");
         let (codex_env_before, ssl_env_before) = capture_env();
 
-        env::set_var(CODEX_CA_CERT_ENV, &cert_path);
-        env::remove_var(SSL_CERT_FILE_ENV);
+        unsafe {
+            env::set_var(CODEX_CA_CERT_ENV, &cert_path);
+            env::remove_var(SSL_CERT_FILE_ENV);
+        }
 
         let client = build_login_http_client();
 
         restore_env(CODEX_CA_CERT_ENV, codex_env_before);
         restore_env(SSL_CERT_FILE_ENV, ssl_env_before);
 
-        assert!(client.is_ok());
+        assert!(client.is_ok(), "Failed to build client: {:?}", client.err());
     }
 
     #[serial(login_cert_env)]
@@ -807,15 +828,17 @@ mod tests {
         let cert_path = write_test_cert(&temp_dir, "ssl-cert.pem");
         let (codex_env_before, ssl_env_before) = capture_env();
 
-        env::remove_var(CODEX_CA_CERT_ENV);
-        env::set_var(SSL_CERT_FILE_ENV, &cert_path);
+        unsafe {
+            env::remove_var(CODEX_CA_CERT_ENV);
+            env::set_var(SSL_CERT_FILE_ENV, &cert_path);
+        }
 
         let client = build_login_http_client();
 
         restore_env(CODEX_CA_CERT_ENV, codex_env_before);
         restore_env(SSL_CERT_FILE_ENV, ssl_env_before);
 
-        assert!(client.is_ok());
+        assert!(client.is_ok(), "Failed to build client: {:?}", client.err());
     }
 
     #[serial(login_cert_env)]
@@ -826,8 +849,10 @@ mod tests {
         fs::write(&cert_path, "not-a-certificate").expect("write invalid cert");
         let (codex_env_before, ssl_env_before) = capture_env();
 
-        env::set_var(CODEX_CA_CERT_ENV, &cert_path);
-        env::remove_var(SSL_CERT_FILE_ENV);
+        unsafe {
+            env::set_var(CODEX_CA_CERT_ENV, &cert_path);
+            env::remove_var(SSL_CERT_FILE_ENV);
+        }
 
         let client = build_login_http_client();
 
