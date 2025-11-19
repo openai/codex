@@ -126,113 +126,42 @@ escargot = "0.5"
 eventsource-stream = "0.2.3"
 futures = { version = "0.3", default-features = false }
 http = "1.3.1"
-insta = { version = "1", features = ["json"] }
-insta-cmd = "0.6.0"
-insta-cmd-snapbox = "0.6.0"
-insta-cmd-v0 = { version = "0.3.0", package = "insta-cmd" }
-insta_v0 = { version = "1", package = "insta" }
-insta_v1 = { version = "1", package = "insta" }
-insta_v2 = { version = "1", package = "insta" }
-insta_v3 = { version = "1", package = "insta" }
-insta_v4 = { version = "1", package = "insta" }
-insta_v5 = { version = "1", package = "insta" }
-insta_v6 = { version = "1", package = "insta" }
-insta_v7 = { version = "1", package = "insta" }
-insta_v8 = { version = "1", package = "insta" }
-insta_v9 = { version = "1", package = "insta" }
-insta_v10 = { version = "1", package = "insta" }
-insta_v11 = { version = "1", package = "insta" }
-insta_v12 = { version = "1", package = "insta" }
-insta_v13 = { version = "1", package = "insta" }
-insta_v14 = { version = "1", package = "insta" }
-insta_v15 = { version = "1", package = "insta" }
-insta_v16 = { version = "1", package = "insta" }
-insta_v17 = { version = "1", package = "insta" }
-insta_v18 = { version = "1", package = "insta" }
-insta_v19 = { version = "1", package = "insta" }
-insta_v20 = { version = "1", package = "insta" }
-insta_v21 = { version = "1", package = "insta" }
-insta_v22 = { version = "1", package = "insta" }
-insta_v23 = { version = "1", package = "insta" }
-insta_v24 = { version = "1", package = "insta" }
-insta_v25 = { version = "1", package = "insta" }
-insta_v26 = { version = "1", package = "insta" }
-insta_v27 = { version = "1", package = "insta" }
-insta_v28 = { version = "1", package = "insta" }
-insta_v29 = { version = "1", package = "insta" }
-insta_v30 = { version = "1", package = "insta" }
-insta_v31 = { version = "1", package = "insta" }
-insta_v32 = { version = "1", package = "insta" }
-insta_v33 = { version = "1", package = "insta" }
-insta_v34 = { version = "1", package = "insta" }
-insta_v35 = { version = "1", package = "insta" }
-insta_v36 = { version = "1", package = "insta" }
-insta_v37 = { version = "1", package = "insta" }
-insta_v38 = { version = "1", package = "insta" }
-insta_v39 = { version = "1", package = "insta" }
-insta_v40 = { version = "1", package = "insta" }
-insta_v41 = { version = "1", package = "insta" }
-insta_v42 = { version = "1", package = "insta" }
-insta_v43 = { version = "1", package = "insta" }
-insta_v44 = { version = "1", package = "insta" }
-insta_v45 = { version = "1", package = "insta" }
-insta_v46 = { version = "1", package = "insta" }
-insta_v47 = { version = "1", package = "insta" }
-insta_v48 = { version = "1", package = "insta" }
-insta_v49 = { version = "1", package = "insta" }
-insta_v50 = { version = "1", package = "insta" }
-insta_v51 = { version = "1", package = "insta" }
-insta_v52 = { version = "1", package = "insta" }
-insta_v53 = { version = "1", package = "insta" }
-insta_v54 = { version = "1", package = "insta" }
-insta_v55 = { version = "1", package = "insta" }
-insta_v56 = { version = "1", package = "insta" }
-insta_v57 = { version = "1", package = "insta" }
-insta_v58 = { version = "1", package = "insta" }
-insta_v59 = { version = "1", package = "insta" }
-insta_v60 = { version = "1", package = "insta" }
-insta_v61 = { version = "1", package = "insta" }
-insta_v62 = { version = "1", package = "insta" }
-insta_v63 = { version = "1", package = "insta" }
-insta_v64 = { version = "1", package = "insta" }
-insta_v65 = { version = "1", package = "insta" }
-insta_v66 = { version = "1", package = "insta" }
-insta_v67 = { version = "1", package = "insta" }
-insta_v68 = { version = "1", package = "insta" }
-insta_v69 = { version = "1", package = "insta" }
-insta_v70 = { version = "1", package = "insta" }
-insta_v71 = { version = "1", package = "insta" }
-insta_v72 = { version = "1", package = "insta" }
-insta_v73 = { version = "1", package = "insta" }
-insta_v74 = { version = "1", package = "insta" }
-insta_v75 = { version = "1", package = "insta" }
-insta_v76 = { version = "1", package = "insta" }
-insta_v77 = { version = "1", package = "insta" }
-insta_v78 = { version = "1", package = "insta" }
-insta_v79 = { version = "1", package = "insta" }
-insta_v80 = { version = "1", package = "insta" }
-insta_v81 = { version = "1", package = "insta" }
-insta_v82 = { version = "1", package = "insta" }
-insta_v83 = { version = "1", package = "insta" }
-insta_v84 = { version = "1", package = "insta" }
-insta_v85 = { version = "1", package = "insta" }
-insta_v86 = { version = "1", package = "insta" }
-insta_v87 = { version = "1", package = "insta" }
-insta_v88 = { version = "1", package = "insta" }
-insta_v89 = { version = "1", package = "insta" }
-insta_v90 = { version = "1", package = "insta" }
-insta_v91 = { version = "1", package = "insta" }
-insta_v92 = { version = "1", package = "insta" }
-insta_v93 = { version = "1", package = "insta" }
-insta_v94 = { version = "1", package = "insta" }
-insta_v95 = { version = "1", package = "insta" }
-insta_v96 = { version = "1", package = "insta" }
-insta_v97 = { version = "1", package = "insta" }
-insta_v98 = { version = "1", package = "insta" }
-insta_v99 = { version = "1", package = "insta" }
-insta_v100 = { version = "1", package = "insta" }
-
-ratatui = { version = "0.29.0", default-features = false }
+icu_decimal = "2.1"
+icu_locale_core = "2.1"
+icu_provider = { version = "2.1", features = ["sync"] }
+ignore = "0.4.23"
+image = { version = "^0.25.8", default-features = false }
+indexmap = "2.12.0"
+insta = "1.43.2"
+itertools = "0.14.0"
+keyring = { version = "3.6", default-features = false }
+landlock = "0.4.1"
+lazy_static = "1"
+libc = "0.2.175"
+log = "0.4"
+lru = "0.12.5"
+maplit = "1.0.2"
+mime_guess = "2.0.5"
+multimap = "0.10.0"
+notify = "8.2.0"
+nucleo-matcher = "0.3.1"
+once_cell = "1"
+openssl-sys = "*"
+opentelemetry = "0.30.0"
+opentelemetry-appender-tracing = "0.30.0"
+opentelemetry-otlp = "0.30.0"
+opentelemetry-semantic-conventions = "0.30.0"
+opentelemetry_sdk = "0.30.0"
+os_info = "3.12.0"
+owo-colors = "4.2.0"
+path-absolutize = "3.1.1"
+pathdiff = "0.2"
+portable-pty = "0.9.0"
+predicates = "3"
+pretty_assertions = "1.4.1"
+pulldown-cmark = "0.10"
+rand = "0.9"
+ratatui = "0.29.0"
 ratatui-macros = "0.6.0"
 regex-lite = "0.1.7"
 reqwest = { version = "0.12", default-features = false }
@@ -314,7 +243,7 @@ needless_borrow = "deny"
 needless_borrowed_reference = "deny"
 needless_collect = "deny"
 needless_late_init = "deny"
-needless_option_as_deref = "deny"
+needless_option-as_deref = "deny"
 needless_question_mark = "deny"
 needless_update = "deny"
 redundant_clone = "deny"
