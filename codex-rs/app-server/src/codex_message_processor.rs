@@ -111,6 +111,7 @@ use codex_core::config_loader::load_config_as_toml;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
+use codex_core::features::Feature;
 use codex_core::find_conversation_path_by_id_str;
 use codex_core::get_platform_sandbox;
 use codex_core::git_info::git_diff_to_remote;
@@ -1249,7 +1250,17 @@ impl CodexMessageProcessor {
             ..Default::default()
         };
 
-        let config = match derive_config_from_params(overrides, cli_overrides).await {
+        // Persist windows sandbox feature.
+        // TODO: persist default config in general.
+        let mut cli_overrides = cli_overrides.unwrap_or_default();
+        if cfg!(target_os = "windows") && self.config.features.enabled(Feature::WindowsSandbox) {
+            cli_overrides.insert(
+                "features.enable_experimental_windows_sandbox".to_string(),
+                serde_json::json!(true),
+            );
+        }
+
+        let config = match derive_config_from_params(overrides, Some(cli_overrides)).await {
             Ok(config) => config,
             Err(err) => {
                 let error = JSONRPCErrorError {
