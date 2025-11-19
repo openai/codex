@@ -72,7 +72,7 @@ pub(crate) fn get_model_info(model_family: &ModelFamily) -> Option<ModelInfo> {
 
         _ if slug.starts_with("gpt-5-codex")
             || slug.starts_with("gpt-5.1-codex")
-            || slug.starts_with("arcticfox") =>
+            || slug.starts_with("gpt-5.1-codex-max") =>
         {
             Some(ModelInfo::new(CONTEXT_WINDOW_272K, MAX_OUTPUT_TOKENS_128K))
         }

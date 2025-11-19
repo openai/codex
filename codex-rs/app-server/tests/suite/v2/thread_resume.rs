@@ -31,7 +31,7 @@ async fn thread_resume_returns_original_thread() -> Result<()> {
     // Start a thread.
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            model: Some("arcticfox".to_string()),
+            model: Some("gpt-5.1-codex-max".to_string()),
             ..Default::default()
         })
         .await?;
@@ -132,7 +132,7 @@ async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
 
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            model: Some("arcticfox".to_string()),
+            model: Some("gpt-5.1-codex-max".to_string()),
             ..Default::default()
         })
         .await?;
@@ -177,7 +177,7 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
     // Start a thread.
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            model: Some("arcticfox".to_string()),
+            model: Some("gpt-5.1-codex-max".to_string()),
             ..Default::default()
         })
         .await?;
