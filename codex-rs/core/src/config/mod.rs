@@ -1320,6 +1320,16 @@ impl Config {
             Ok(Some(s))
         }
     }
+
+    pub fn set_windows_sandbox_globally(&mut self, value: bool) {
+        crate::safety::set_windows_sandbox_enabled(value);
+        if value {
+            self.features.enable(Feature::WindowsSandbox);
+        } else {
+            self.features.disable(Feature::WindowsSandbox);
+        }
+        self.forced_auto_mode_downgraded_on_windows = !value;
+    }
 }
 
 fn default_model() -> String {

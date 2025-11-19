@@ -91,9 +91,17 @@ pub(crate) enum AppEvent {
         failed_scan: bool,
     },
 
-    /// Show Windows Subsystem for Linux setup instructions for auto mode.
+    /// Prompt to enable the Windows sandbox feature before using Auto mode.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-    ShowWindowsAutoModeInstructions,
+    OpenWindowsSandboxEnablePrompt {
+        preset: ApprovalPreset,
+    },
+
+    /// Enable the Windows sandbox feature and switch to Auto mode.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    EnableWindowsSandboxForAuto {
+        preset: ApprovalPreset,
+    },
 
     /// Update the current approval policy in the running app and widget.
     UpdateAskForApprovalPolicy(AskForApproval),
