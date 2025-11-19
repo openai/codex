@@ -1,81 +1,75 @@
 [package]
+edition = "2024"
 name = "codex-tui"
-version.workspace = true
-edition.workspace = true
+version = { workspace = true }
+
+[[bin]]
+name = "codex-tui"
+path = "src/main.rs"
 
 [lib]
 name = "codex_tui"
 path = "src/lib.rs"
 
 [features]
-# Turning on the otel feature should cause codex to send OTEL data by
-# default, so test it in the CI run (off when running locally).
-otel = []
+# Enable vt100-based tests (emulator) when running with `--features vt100-tests`.
+vt100-tests = []
+# Gate verbose debug logging inside the TUI implementation.
+debug-logs = []
+
+[lints]
+workspace = true
 
 [dependencies]
-ansi-to-tui = { workspace = true }
-bitflags = { workspace = true }
-bytes = { workspace = true }
-chrono = { workspace = true }
-clap = { workspace = true, features = ["derive", "env"] }
-color-eyre = { workspace = true }
-crossterm = { workspace = true, features = ["event-stream", "serde"] }
-ctor = { workspace = true }
-# (Obvious)}
-# Some struct and enum definitions in this crate leaf are intentionally
-# unnamed, so that the same names can be used elsewhere in this crate.
-# The choice of where to define these types is somewhat arbitrary, but
-# we prefer it this way rather than having too many separate modules.
-# See https://rust-lang.github.io/rust-clippy/master/index.html#type_complexity
-# for more context.
-serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true, features = ["preserve_order"] }
-shlex = { workspace = true }
-strum = { workspace = true }
-strum_macros = { workspace = true }
-supports-color = { workspace = true }
-textwrap = { workspace = true }
-tokio = { workspace = true, features = [
-    "io-std",
-    "macros",
-    "process",
-    "rt-multi-thread",
-    "signal",
-] }
-tokio-stream = { workspace = true }
-tracing = { workspace = true, features = ["log"] }
-tracing-appender = { workspace = true }
-tracing-subscriber = { workspace = true, features = ["env-filter"] }
-url = { workspace = true }
-
+anyhow = { workspace = true }
+async-stream = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+clap = { workspace = true, features = ["derive"] }
 codex-ansi-escape = { workspace = true }
-codex-async-utils = { workspace = true }
+codex-app-server-protocol = { workspace = true }
+codex-arg0 = { workspace = true }
 codex-backend-client = { workspace = true }
-codex-apply-patch = { workspace = true }
+codex-common = { workspace = true, features = [
+    "cli",
+    "elapsed",
+    "sandbox_summary",
+] }
 codex-core = { workspace = true }
-codex-exec = { workspace = true }
+codex-feedback = { workspace = true }
 codex-file-search = { workspace = true }
-codex-keyring-store = { workspace = true }
-codex-otel = { workspace = true, optional = true }
+codex-login = { workspace = true }
 codex-protocol = { workspace = true }
-codex-utils-cache = { workspace = true }
-codex-utils-git = { workspace = true }
-codex-utils-image = { workspace = true }
-codex-utils-tokenizer = { workspace = true }
-
-ratatui = { workspace = true, default-features = false, features = [
-    "crossterm",
-    "all-widgets",
+color-eyre = { workspace = true }
+crossterm = { workspace = true, features = ["bracketed-paste", "event-stream"] }
+derive_more = { workspace = true, features = ["is_variant"] }
+diffy = { workspace = true }
+dirs = { workspace = true }
+dunce = { workspace = true }
+image = { workspace = true, features = ["jpeg", "png"] }
+itertools = { workspace = true }
+lazy_static = { workspace = true }
+mcp-types = { workspace = true }
+opentelemetry-appender-tracing = { workspace = true }
+pathdiff = { workspace = true }
+pulldown-cmark = { workspace = true }
+rand = { workspace = true }
+ratatui = { workspace = true, features = [
+    "scrolling-regions",
+    "unstable-backend-writer",
     "unstable-rendered-line-info",
     "unstable-widget-ref",
 ] }
 ratatui-macros = { workspace = true }
 regex-lite = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["preserve_order"] }
 shlex = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 supports-color = { workspace = true }
+tempfile = { workspace = true }
 textwrap = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
@@ -85,118 +79,32 @@ tokio = { workspace = true, features = [
     "signal",
 ] }
 tokio-stream = { workspace = true }
+toml = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+tree-sitter-bash = { workspace = true }
+tree-sitter-highlight = { workspace = true }
+unicode-segmentation = { workspace = true }
+unicode-width = { workspace = true }
 url = { workspace = true }
 
-[lints]
-workspace = true
+codex-windows-sandbox = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+# Clipboard support via `arboard` is not available on Android/Termux.
+# Only include it for non-Android targets so the crate builds on Android.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+arboard = { workspace = true }
+
 
 [dev-dependencies]
-app_test_support = { workspace = true }
-assert_cmd = { workspace = true }
-insta = { workspace = true, features = ["colors", "glob"] }
-insta-cmd = { workspace = true, features = ["glob"] }
-insta-cmd-v0 = { workspace = true }
-insta_v0 = { workspace = true }
-insta_v1 = { workspace = true }
-insta_v2 = { workspace = true }
-insta_v3 = { workspace = true }
-insta_v4 = { workspace = true }
-insta_v5 = { workspace = true }
-insta_v6 = { workspace = true }
-insta_v7 = { workspace = true }
-insta_v8 = { workspace = true }
-insta_v9 = { workspace = true }
-insta_v10 = { workspace = true }
-insta_v11 = { workspace = true }
-insta_v12 = { workspace = true }
-insta_v13 = { workspace = true }
-insta_v14 = { workspace = true }
-insta_v15 = { workspace = true }
-insta_v16 = { workspace = true }
-insta_v17 = { workspace = true }
-insta_v18 = { workspace = true }
-insta_v19 = { workspace = true }
-insta_v20 = { workspace = true }
-insta_v21 = { workspace = true }
-insta_v22 = { workspace = true }
-insta_v23 = { workspace = true }
-insta_v24 = { workspace = true }
-insta_v25 = { workspace = true }
-insta_v26 = { workspace = true }
-insta_v27 = { workspace = true }
-insta_v28 = { workspace = true }
-insta_v29 = { workspace = true }
-insta_v30 = { workspace = true }
-insta_v31 = { workspace = true }
-insta_v32 = { workspace = true }
-insta_v33 = { workspace = true }
-insta_v34 = { workspace = true }
-insta_v35 = { workspace = true }
-insta_v36 = { workspace = true }
-insta_v37 = { workspace = true }
-insta_v38 = { workspace = true }
-insta_v39 = { workspace = true }
-insta_v40 = { workspace = true }
-insta_v41 = { workspace = true }
-insta_v42 = { workspace = true }
-insta_v43 = { workspace = true }
-insta_v44 = { workspace = true }
-insta_v45 = { workspace = true }
-insta_v46 = { workspace = true }
-insta_v47 = { workspace = true }
-insta_v48 = { workspace = true }
-insta_v49 = { workspace = true }
-insta_v50 = { workspace = true }
-insta_v51 = { workspace = true }
-insta_v52 = { workspace = true }
-insta_v53 = { workspace = true }
-insta_v54 = { workspace = true }
-insta_v55 = { workspace = true }
-insta_v56 = { workspace = true }
-insta_v57 = { workspace = true }
-insta_v58 = { workspace = true }
-insta_v59 = { workspace = true }
-insta_v60 = { workspace = true }
-insta_v61 = { workspace = true }
-insta_v62 = { workspace = true }
-insta_v63 = { workspace = true }
-insta_v64 = { workspace = true }
-insta_v65 = { workspace = true }
-insta_v66 = { workspace = true }
-insta_v67 = { workspace = true }
-insta_v68 = { workspace = true }
-insta_v69 = { workspace = true }
-insta_v70 = { workspace = true }
-insta_v71 = { workspace = true }
-insta_v72 = { workspace = true }
-insta_v73 = { workspace = true }
-insta_v74 = { workspace = true }
-insta_v75 = { workspace = true }
-insta_v76 = { workspace = true }
-insta_v77 = { workspace = true }
-insta_v78 = { workspace = true }
-insta_v79 = { workspace = true }
-insta_v80 = { workspace = true }
-insta_v81 = { workspace = true }
-insta_v82 = { workspace = true }
-insta_v83 = { workspace = true }
-insta_v84 = { workspace = true }
-insta_v85 = { workspace = true }
-insta_v86 = { workspace = true }
-insta_v87 = { workspace = true }
-insta_v88 = { workspace = true }
-insta_v89 = { workspace = true }
-insta_v90 = { workspace = true }
-insta_v91 = { workspace = true }
-insta_v92 = { workspace = true }
-insta_v93 = { workspace = true }
-insta_v94 = { workspace = true }
-insta_v95 = { workspace = true }
-insta_v96 = { workspace = true }
-insta_v97 = { workspace = true }
-insta_v98 = { workspace = true }
-insta_v99 = { workspace = true }
-insta_v100 = { workspace = true }
+assert_matches = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+insta = { workspace = true }
+pretty_assertions = { workspace = true }
+rand = { workspace = true }
+serial_test = { workspace = true }
+vt100 = { workspace = true }
