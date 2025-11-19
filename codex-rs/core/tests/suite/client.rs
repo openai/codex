@@ -1240,7 +1240,8 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
             "used_percent": 87.5,
             "window_minutes": 60,
             "resets_at": null
-        }
+        },
+        "credits": null
     });
 
     let submission_id = codex

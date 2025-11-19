@@ -262,8 +262,8 @@ fn status_snapshot_shows_positive_credits() {
     assert!(
         rendered
             .iter()
-            .any(|line| line.contains("Credits:") && line.contains("12.5 credits")),
-        "expected Credits line with 12.5 credits, got {rendered:?}"
+            .any(|line| line.contains("Credits:") && line.contains("13 credits")),
+        "expected Credits line with rounded credits, got {rendered:?}"
     );
 }
 
@@ -423,6 +423,63 @@ fn status_snapshot_shows_missing_limits_message() {
         &None,
         None,
         now,
+    );
+    let mut rendered_lines = render_lines(&composite.display_lines(80));
+    if cfg!(windows) {
+        for line in &mut rendered_lines {
+            *line = line.replace('\\', "/");
+        }
+    }
+    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    assert_snapshot!(sanitized);
+}
+
+#[test]
+fn status_snapshot_includes_credits_and_limits() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home);
+    config.model = "gpt-5.1-codex".to_string();
+    config.cwd = PathBuf::from("/workspace/tests");
+
+    let auth_manager = test_auth_manager(&config);
+    let usage = TokenUsage {
+        input_tokens: 1_500,
+        cached_input_tokens: 100,
+        output_tokens: 600,
+        reasoning_output_tokens: 0,
+        total_tokens: 2_200,
+    };
+
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 7, 8, 9, 10, 11)
+        .single()
+        .expect("timestamp");
+    let snapshot = RateLimitSnapshot {
+        primary: Some(RateLimitWindow {
+            used_percent: 45.0,
+            window_minutes: Some(300),
+            resets_at: Some(reset_at_from(&captured_at, 900)),
+        }),
+        secondary: Some(RateLimitWindow {
+            used_percent: 30.0,
+            window_minutes: Some(10_080),
+            resets_at: Some(reset_at_from(&captured_at, 2_700)),
+        }),
+        credits: Some(CreditsSnapshot {
+            unlimited: false,
+            balance: Some("37.5".to_string()),
+        }),
+    };
+    let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
+
+    let composite = new_status_output(
+        &config,
+        &auth_manager,
+        &usage,
+        Some(&usage),
+        &None,
+        Some(&rate_display),
+        captured_at,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
     if cfg!(windows) {
