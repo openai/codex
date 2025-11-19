@@ -3,7 +3,6 @@
 
 use anyhow::Context;
 use anyhow::Result;
-use assert_cmd::assert;
 use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::features::Feature;
