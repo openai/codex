@@ -30,8 +30,7 @@ pub enum ReasoningEffort {
     #[default]
     Medium,
     High,
-    #[strum(serialize = "xhigh")]
-    ExtraHigh,
+    XHigh,
 }
 
 /// A summary of the reasoning performed by the model. This can be useful for

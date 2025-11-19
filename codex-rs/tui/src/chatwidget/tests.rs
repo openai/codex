@@ -1536,7 +1536,7 @@ fn model_reasoning_selection_popup_extra_high_warning_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
     chat.config.model = "arcticfox".to_string();
-    chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::ExtraHigh);
+    chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::XHigh);
 
     let preset = builtin_model_presets(None)
         .into_iter()

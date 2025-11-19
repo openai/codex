@@ -2015,9 +2015,9 @@ impl ChatWidget {
 
         let warn_effort = if supported
             .iter()
-            .any(|option| option.effort == ReasoningEffortConfig::ExtraHigh)
+            .any(|option| option.effort == ReasoningEffortConfig::XHigh)
         {
-            Some(ReasoningEffortConfig::ExtraHigh)
+            Some(ReasoningEffortConfig::XHigh)
         } else if supported
             .iter()
             .any(|option| option.effort == ReasoningEffortConfig::High)
@@ -2164,7 +2164,7 @@ impl ChatWidget {
             ReasoningEffortConfig::Low => "Low",
             ReasoningEffortConfig::Medium => "Medium",
             ReasoningEffortConfig::High => "High",
-            ReasoningEffortConfig::ExtraHigh => "Extra high",
+            ReasoningEffortConfig::XHigh => "Extra high",
         }
     }
 
