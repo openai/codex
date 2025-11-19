@@ -83,6 +83,7 @@ fn session_configured_produces_thread_started_event() {
             history_entry_count: 0,
             initial_messages: None,
             rollout_path,
+            leader_worker: None,
         }),
     );
     let out = ep.collect_thread_events(&ev);

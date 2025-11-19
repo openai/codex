@@ -336,6 +336,7 @@ pub struct UserSavedConfig {
     pub tools: Option<Tools>,
     pub profile: Option<String>,
     pub profiles: HashMap<String, Profile>,
+    pub leader_worker: Option<LeaderWorkerSavedConfig>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Serialize, JsonSchema, TS)]
@@ -355,6 +356,14 @@ pub struct Profile {
 pub struct Tools {
     pub web_search: Option<bool>,
     pub view_image: Option<bool>,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Serialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct LeaderWorkerSavedConfig {
+    pub enabled: Option<bool>,
+    pub default_worker_count: Option<u8>,
+    pub max_workers: Option<u8>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Serialize, JsonSchema, TS)]

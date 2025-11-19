@@ -34,6 +34,8 @@ pub struct ConfigProfile {
     #[serde(default)]
     pub features: Option<crate::features::FeaturesToml>,
     pub oss_provider: Option<String>,
+    #[serde(default)]
+    pub leader_worker: Option<crate::config::LeaderWorkerSettingsToml>,
 }
 
 impl From<ConfigProfile> for codex_app_server_protocol::Profile {

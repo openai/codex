@@ -160,6 +160,9 @@ pub struct Config {
     /// and turn completions when not focused.
     pub tui_notifications: Notifications,
 
+    /// Settings for the leader–worker workflow feature flag.
+    pub leader_worker: LeaderWorkerSettings,
+
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
     /// resolved against this path.
@@ -661,6 +664,10 @@ pub struct ConfigToml {
     /// UI/output. Defaults to `false`.
     pub hide_agent_reasoning: Option<bool>,
 
+    /// Settings for the leader–worker workflow.
+    #[serde(default)]
+    pub leader_worker: Option<LeaderWorkerSettingsToml>,
+
     /// When set to `true`, `AgentReasoningRawContentEvent` events will be shown in the UI/output.
     /// Defaults to `false`.
     pub show_raw_agent_reasoning: Option<bool>,
@@ -722,6 +729,14 @@ impl From<ConfigToml> for UserSavedConfig {
             .map(|(k, v)| (k, v.into()))
             .collect();
 
+        let leader_worker = config_toml.leader_worker.clone().map(|entry| {
+            codex_app_server_protocol::LeaderWorkerSavedConfig {
+                enabled: entry.enabled,
+                default_worker_count: entry.default_worker_count,
+                max_workers: entry.max_workers,
+            }
+        });
+
         Self {
             approval_policy: config_toml.approval_policy,
             sandbox_mode: config_toml.sandbox_mode,
@@ -735,6 +750,7 @@ impl From<ConfigToml> for UserSavedConfig {
             tools: config_toml.tools.map(From::from),
             profile: config_toml.profile,
             profiles,
+            leader_worker,
         }
     }
 }
@@ -770,6 +786,81 @@ impl From<ToolsToml> for Tools {
             web_search: tools_toml.web_search,
             view_image: tools_toml.view_image,
         }
+    }
+}
+
+/// Partial configuration for the leader–worker workflow as defined in config.toml or a profile.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct LeaderWorkerSettingsToml {
+    pub enabled: Option<bool>,
+    pub default_worker_count: Option<u8>,
+    pub max_workers: Option<u8>,
+}
+
+impl LeaderWorkerSettingsToml {
+    fn apply_to(&self, target: &mut LeaderWorkerSettings) {
+        if let Some(enabled) = self.enabled {
+            target.enabled = enabled;
+        }
+        if let Some(max_workers) = self.max_workers {
+            target.max_workers = LeaderWorkerSettings::sanitize_max_workers(max_workers);
+            if target.default_worker_count > target.max_workers {
+                target.default_worker_count = target.max_workers;
+            }
+        }
+        if let Some(default_worker_count) = self.default_worker_count {
+            target.default_worker_count = LeaderWorkerSettings::sanitize_worker_count(
+                default_worker_count,
+                target.max_workers,
+            );
+        }
+    }
+}
+
+/// Effective leader–worker configuration resolved from CLI/config/profile inputs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeaderWorkerSettings {
+    pub enabled: bool,
+    pub default_worker_count: u8,
+    pub max_workers: u8,
+}
+
+impl Default for LeaderWorkerSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            default_worker_count: 2,
+            max_workers: LeaderWorkerSettings::HARDCODED_MAX_WORKERS,
+        }
+    }
+}
+
+impl LeaderWorkerSettings {
+    const MIN_WORKERS: u8 = 1;
+    const HARDCODED_MAX_WORKERS: u8 = 10;
+
+    fn sanitize_max_workers(value: u8) -> u8 {
+        value
+            .max(Self::MIN_WORKERS)
+            .min(Self::HARDCODED_MAX_WORKERS)
+    }
+
+    fn sanitize_worker_count(value: u8, max_workers: u8) -> u8 {
+        value.max(Self::MIN_WORKERS).min(max_workers)
+    }
+
+    pub fn resolve(
+        config_entry: Option<&LeaderWorkerSettingsToml>,
+        profile_entry: Option<&LeaderWorkerSettingsToml>,
+    ) -> Self {
+        let mut settings = LeaderWorkerSettings::default();
+        if let Some(toml) = config_entry {
+            toml.apply_to(&mut settings);
+        }
+        if let Some(profile) = profile_entry {
+            profile.apply_to(&mut settings);
+        }
+        settings
     }
 }
 
@@ -1266,6 +1357,10 @@ impl Config {
                     exporter,
                 }
             },
+            leader_worker: LeaderWorkerSettings::resolve(
+                cfg.leader_worker.as_ref(),
+                config_profile.leader_worker.as_ref(),
+            ),
         };
         Ok(config)
     }
@@ -3003,6 +3098,7 @@ model_verbosity = "high"
                 notices: Default::default(),
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
+                leader_worker: LeaderWorkerSettings::default(),
                 otel: OtelConfig::default(),
             },
             o3_profile_config
@@ -3075,6 +3171,7 @@ model_verbosity = "high"
             notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            leader_worker: LeaderWorkerSettings::default(),
             otel: OtelConfig::default(),
         };
 
@@ -3162,6 +3259,7 @@ model_verbosity = "high"
             notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            leader_worker: LeaderWorkerSettings::default(),
             otel: OtelConfig::default(),
         };
 
@@ -3235,6 +3333,7 @@ model_verbosity = "high"
             notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            leader_worker: LeaderWorkerSettings::default(),
             otel: OtelConfig::default(),
         };
 

@@ -26,6 +26,7 @@ use owo_colors::OwoColorize;
 use std::path::PathBuf;
 use supports_color::Stream;
 
+mod leader;
 mod mcp_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
@@ -103,6 +104,13 @@ enum Subcommand {
     /// [EXPERIMENTAL] Browse tasks from Codex Cloud and apply changes locally.
     #[clap(name = "cloud", alias = "cloud-tasks")]
     Cloud(CloudTasksCli),
+
+    /// [preview] Spawn worker processes for the leader–worker workflow.
+    Leader(leader::LeaderCommand),
+
+    /// Internal entrypoint used by `codex leader` to bootstrap workers.
+    #[clap(hide = true)]
+    Worker(leader::WorkerCommand),
 
     /// Internal: run the responses API proxy.
     #[clap(hide = true)]
@@ -449,6 +457,20 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 codex_app_server_protocol::generate_json(&gen_cli.out_dir)?;
             }
         },
+        Some(Subcommand::Leader(mut leader_cli)) => {
+            prepend_config_flags(
+                &mut leader_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
+            leader::run_leader_command(leader_cli).await?;
+        }
+        Some(Subcommand::Worker(mut worker_cli)) => {
+            prepend_config_flags(
+                &mut worker_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
+            leader::run_worker_command(worker_cli).await?;
+        }
         Some(Subcommand::Resume(ResumeCommand {
             session_id,
             last,

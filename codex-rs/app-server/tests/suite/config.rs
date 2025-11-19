@@ -108,6 +108,7 @@ async fn get_config_toml_parses_all_fields() -> Result<()> {
                     chatgpt_base_url: Some("https://api.chatgpt.com".into()),
                 },
             )]),
+            leader_worker: None,
         },
     };
 
@@ -144,6 +145,7 @@ async fn get_config_toml_empty() -> Result<()> {
             tools: None,
             profile: None,
             profiles: HashMap::new(),
+            leader_worker: None,
         },
     };
 
