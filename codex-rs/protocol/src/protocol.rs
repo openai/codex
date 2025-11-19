@@ -195,6 +195,22 @@ pub enum Op {
         /// The raw command string after '!'
         command: String,
     },
+
+    /// Assign a leader–worker subtask to a specific worker.
+    LeaderWorkerAssign {
+        /// Worker receiving the subtask.
+        worker_id: String,
+        /// Identifier of the planned subtask to assign.
+        subtask_id: String,
+    },
+    /// Pause a worker so it does not receive new assignments.
+    LeaderWorkerPause { worker_id: String },
+    /// Resume a worker previously paused.
+    LeaderWorkerResume { worker_id: String },
+    /// Remove a worker from the pool.
+    LeaderWorkerRemove { worker_id: String },
+    /// Add a new worker placeholder to the pool.
+    LeaderWorkerAddWorker { worker_id: String },
 }
 
 /// Determines the conditions under which the user is consulted to approve
@@ -1598,6 +1614,7 @@ pub enum LeaderWorkerWorkerState {
     Blocked,
     Error,
     Offline,
+    Paused,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS, Display)]

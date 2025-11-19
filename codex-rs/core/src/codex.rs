@@ -579,6 +579,21 @@ impl Session {
 
         let mut leader_worker_manager =
             LeaderWorkerManager::new(config.leader_worker.clone(), conversation_id);
+        if leader_worker_manager.mode() == LeaderWorkerMode::Leader {
+            for idx in 0..config.leader_worker.default_worker_count {
+                let worker_id = format!("worker-{}", idx + 1);
+                if leader_worker_manager
+                    .register_worker(worker_id.clone())
+                    .is_ok()
+                {
+                    let _ = leader_worker_manager.update_worker_state(
+                        &worker_id,
+                        LeaderWorkerWorkerState::Idle,
+                        Some("Awaiting assignment".to_string()),
+                    );
+                }
+            }
+        }
         let leader_worker_descriptor = leader_worker_manager.descriptor();
         let sess = Arc::new(Session {
             conversation_id,
@@ -1407,6 +1422,63 @@ impl Session {
         result
     }
 
+    pub async fn leader_worker_pause_worker(
+        &self,
+        worker_id: &str,
+    ) -> Result<(), LeaderWorkerError> {
+        let mut manager = self.leader_worker.lock().await;
+        let result = manager.pause_worker(worker_id);
+        let should_emit = result.is_ok();
+        drop(manager);
+        if should_emit {
+            self.emit_leader_worker_status().await;
+        }
+        result
+    }
+
+    pub async fn leader_worker_resume_worker(
+        &self,
+        worker_id: &str,
+    ) -> Result<(), LeaderWorkerError> {
+        let mut manager = self.leader_worker.lock().await;
+        let result = manager.resume_worker(worker_id);
+        let should_emit = result.is_ok();
+        drop(manager);
+        if should_emit {
+            self.emit_leader_worker_status().await;
+        }
+        result
+    }
+
+    pub async fn leader_worker_remove_worker(
+        &self,
+        worker_id: &str,
+    ) -> Result<(), LeaderWorkerError> {
+        let mut manager = self.leader_worker.lock().await;
+        let result = manager.remove_worker(worker_id);
+        let should_emit = result.is_ok();
+        drop(manager);
+        if should_emit {
+            self.emit_leader_worker_status().await;
+        }
+        result
+    }
+
+    pub async fn leader_worker_add_worker(
+        &self,
+        worker_id: impl Into<String>,
+    ) -> Result<(), LeaderWorkerError> {
+        let worker_id = worker_id.into();
+        let mut manager = self.leader_worker.lock().await;
+        let result = manager.add_worker(worker_id);
+        let should_emit = result.is_ok();
+        drop(manager);
+        if should_emit {
+            self.emit_leader_worker_status().await;
+        }
+        result
+    }
+
     pub async fn leader_worker_complete_assignment(
         &self,
         worker_id: &str,
@@ -1570,6 +1642,67 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     &mut previous_context,
                 )
                 .await;
+            }
+            Op::LeaderWorkerAssign {
+                worker_id,
+                subtask_id,
+            } => {
+                if let Err(err) = sess
+                    .leader_worker_begin_assignment(&worker_id, &subtask_id)
+                    .await
+                {
+                    let event = Event {
+                        id: sub.id.clone(),
+                        msg: EventMsg::Error(ErrorEvent {
+                            message: format!("Failed to assign {subtask_id} to {worker_id}: {err}"),
+                        }),
+                    };
+                    sess.send_event_raw(event).await;
+                }
+            }
+            Op::LeaderWorkerPause { worker_id } => {
+                if let Err(err) = sess.leader_worker_pause_worker(&worker_id).await {
+                    let event = Event {
+                        id: sub.id.clone(),
+                        msg: EventMsg::Error(ErrorEvent {
+                            message: format!("Failed to pause {worker_id}: {err}"),
+                        }),
+                    };
+                    sess.send_event_raw(event).await;
+                }
+            }
+            Op::LeaderWorkerResume { worker_id } => {
+                if let Err(err) = sess.leader_worker_resume_worker(&worker_id).await {
+                    let event = Event {
+                        id: sub.id.clone(),
+                        msg: EventMsg::Error(ErrorEvent {
+                            message: format!("Failed to resume {worker_id}: {err}"),
+                        }),
+                    };
+                    sess.send_event_raw(event).await;
+                }
+            }
+            Op::LeaderWorkerRemove { worker_id } => {
+                if let Err(err) = sess.leader_worker_remove_worker(&worker_id).await {
+                    let event = Event {
+                        id: sub.id.clone(),
+                        msg: EventMsg::Error(ErrorEvent {
+                            message: format!("Failed to remove {worker_id}: {err}"),
+                        }),
+                    };
+                    sess.send_event_raw(event).await;
+                }
+            }
+            Op::LeaderWorkerAddWorker { worker_id } => {
+                if let Err(err) = sess.leader_worker_add_worker(worker_id.clone()).await {
+                    let event = Event {
+                        id: sub.id.clone(),
+                        msg: EventMsg::Error(ErrorEvent {
+                            message: format!("Failed to add {worker_id}: {err}"),
+                        }),
+                    };
+                    sess.send_event_raw(event).await;
+                }
             }
             Op::Shutdown => {
                 if handlers::shutdown(&sess, sub.id.clone()).await {

@@ -1,4 +1,6 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -31,6 +33,7 @@ use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::LeaderWorkerAggregationSummaryEvent;
 use codex_core::protocol::LeaderWorkerAssignmentResultEvent;
 use codex_core::protocol::LeaderWorkerStatusEvent;
+use codex_core::protocol::LeaderWorkerWorkerState;
 use codex_core::protocol::ListCustomPromptsResponseEvent;
 use codex_core::protocol::McpListToolsResponseEvent;
 use codex_core::protocol::McpStartupCompleteEvent;
@@ -95,6 +98,7 @@ use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
+use crate::history_cell::LeaderWorkerConflict;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PlainHistoryCell;
 use crate::markdown::append_markdown;
@@ -301,6 +305,9 @@ pub(crate) struct ChatWidget {
     feedback: codex_feedback::CodexFeedback,
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
+    // Latest leader-worker status snapshot for assignment UI.
+    leader_worker_status: Option<LeaderWorkerStatusEvent>,
+    leader_worker_conflict_fingerprint: Option<Vec<String>>,
 }
 
 struct UserMessage {
@@ -694,7 +701,9 @@ impl ChatWidget {
     }
 
     fn on_leader_worker_status(&mut self, event: LeaderWorkerStatusEvent) {
-        self.add_to_history(history_cell::new_leader_worker_status(event));
+        self.leader_worker_status = Some(event.clone());
+        self.add_to_history(history_cell::new_leader_worker_status(event.clone()));
+        self.maybe_emit_leader_worker_conflicts(&event);
     }
 
     fn on_leader_worker_assignment_result(&mut self, event: LeaderWorkerAssignmentResultEvent) {
@@ -1169,6 +1178,8 @@ impl ChatWidget {
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
+            leader_worker_status: None,
+            leader_worker_conflict_fingerprint: None,
         };
 
         widget.prefetch_rate_limits();
@@ -1242,6 +1253,8 @@ impl ChatWidget {
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
+            leader_worker_status: None,
+            leader_worker_conflict_fingerprint: None,
         };
 
         widget.prefetch_rate_limits();
@@ -1421,6 +1434,9 @@ impl ChatWidget {
             }
             SlashCommand::Status => {
                 self.add_status_output();
+            }
+            SlashCommand::Workers => {
+                self.open_leader_worker_assignment_popup();
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
@@ -2030,6 +2046,187 @@ impl ChatWidget {
             items,
             ..Default::default()
         });
+    }
+
+    fn open_leader_worker_assignment_popup(&mut self) {
+        let Some(status) = self.leader_worker_status.as_ref() else {
+            self.add_info_message(
+                "Leader–worker telemetry has not started yet. Submit a request first.".to_string(),
+                None,
+            );
+            return;
+        };
+        let pending = status.pending_subtasks.as_deref().unwrap_or(&[]);
+        if pending.is_empty() {
+            self.add_info_message("No pending subtasks to assign.".to_string(), None);
+            return;
+        }
+        let idle_workers: Vec<_> = status
+            .workers
+            .iter()
+            .filter(|worker| {
+                matches!(
+                    worker.state,
+                    LeaderWorkerWorkerState::Idle | LeaderWorkerWorkerState::Starting
+                )
+            })
+            .collect();
+        if idle_workers.is_empty() {
+            self.add_info_message(
+                "No idle workers available for assignment.".to_string(),
+                None,
+            );
+            return;
+        }
+
+        let mut items: Vec<SelectionItem> = Vec::new();
+        for subtask in pending {
+            for worker in &idle_workers {
+                let worker_id = worker.worker_id.clone();
+                let subtask_id = subtask.id.clone();
+                let summary = subtask.summary.clone();
+                let targets = if subtask.target_paths.is_empty() {
+                    None
+                } else {
+                    Some(format!("targets: {}", subtask.target_paths.join(", ")))
+                };
+                let description = match &targets {
+                    Some(target_desc) => format!("{subtask_id} → {summary} ({target_desc})"),
+                    None => format!("{subtask_id} → {summary}"),
+                };
+                let search_blob = Some(format!(
+                    "{} {} {} {}",
+                    worker_id,
+                    subtask_id,
+                    summary,
+                    subtask.target_paths.join(" ")
+                ));
+                let action_worker = worker_id.clone();
+                let action_subtask = subtask_id.clone();
+                items.push(SelectionItem {
+                    name: format!("Assign “{summary}” to {worker_id}"),
+                    description: Some(description),
+                    search_value: search_blob,
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::CodexOp(Op::LeaderWorkerAssign {
+                            worker_id: action_worker.clone(),
+                            subtask_id: action_subtask.clone(),
+                        }));
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                });
+            }
+        }
+
+        if items.is_empty() {
+            self.add_info_message(
+                "No assignable worker/subtask combinations available.".to_string(),
+                None,
+            );
+            return;
+        }
+
+        let busy_workers: HashSet<String> = status
+            .in_flight_assignments
+            .as_ref()
+            .map(|assignments| {
+                assignments
+                    .iter()
+                    .map(|assignment| assignment.worker_id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for worker in &status.workers {
+            let worker_id = worker.worker_id.clone();
+            let state_desc = format!("State: {}", worker.state);
+            if matches!(worker.state, LeaderWorkerWorkerState::Paused) {
+                let action_worker = worker_id.clone();
+                items.push(SelectionItem {
+                    name: format!("Resume {}", worker.worker_id),
+                    description: Some(state_desc.clone()),
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::CodexOp(Op::LeaderWorkerResume {
+                            worker_id: action_worker.clone(),
+                        }));
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                });
+            } else if !busy_workers.contains(&worker_id) {
+                let action_worker = worker_id.clone();
+                items.push(SelectionItem {
+                    name: format!("Pause {}", worker.worker_id),
+                    description: Some(state_desc.clone()),
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::CodexOp(Op::LeaderWorkerPause {
+                            worker_id: action_worker.clone(),
+                        }));
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                });
+            }
+            if !busy_workers.contains(&worker_id) {
+                let action_worker = worker_id.clone();
+                items.push(SelectionItem {
+                    name: format!("Remove {}", worker.worker_id),
+                    description: Some("Worker will no longer receive tasks.".to_string()),
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::CodexOp(Op::LeaderWorkerRemove {
+                            worker_id: action_worker.clone(),
+                        }));
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                });
+            }
+        }
+
+        if status.mode == LeaderWorkerMode::Leader {
+            let next_id = next_worker_identifier(status);
+            let action_id = next_id.clone();
+            items.push(SelectionItem {
+                name: format!("Add worker ({next_id})"),
+                description: Some("Register a placeholder worker slot.".to_string()),
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::CodexOp(Op::LeaderWorkerAddWorker {
+                        worker_id: action_id.clone(),
+                    }));
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        }
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Assign subtasks to workers".to_string()),
+            subtitle: Some("Select a worker pairing to dispatch work.".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            is_searchable: true,
+            search_placeholder: Some("Filter by worker or summary".to_string()),
+            ..Default::default()
+        });
+    }
+
+    fn maybe_emit_leader_worker_conflicts(&mut self, status: &LeaderWorkerStatusEvent) {
+        let conflicts = detect_leader_worker_conflicts(status);
+        if conflicts.is_empty() {
+            self.leader_worker_conflict_fingerprint = None;
+            return;
+        }
+        let fingerprint = conflict_fingerprint(&conflicts);
+        if self
+            .leader_worker_conflict_fingerprint
+            .as_ref()
+            .filter(|current| **current == fingerprint)
+            .is_some()
+        {
+            return;
+        }
+        self.leader_worker_conflict_fingerprint = Some(fingerprint);
+        self.add_to_history(history_cell::new_leader_worker_conflict(conflicts));
     }
 
     /// Open a popup to choose the reasoning effort (stage 2) for the given model.
@@ -3063,6 +3260,58 @@ fn extract_first_bold(s: &str) -> Option<String> {
         i += 1;
     }
     None
+}
+
+fn detect_leader_worker_conflicts(status: &LeaderWorkerStatusEvent) -> Vec<LeaderWorkerConflict> {
+    let mut map: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+    if let Some(assignments) = &status.in_flight_assignments {
+        for assignment in assignments {
+            for path in &assignment.target_paths {
+                map.entry(path.clone())
+                    .or_default()
+                    .push((assignment.worker_id.clone(), assignment.subtask_id.clone()));
+            }
+        }
+    }
+
+    map.into_iter()
+        .filter_map(|(path, mut participants)| {
+            if participants.len() <= 1 {
+                return None;
+            }
+            participants.sort();
+            Some(LeaderWorkerConflict { path, participants })
+        })
+        .collect()
+}
+
+fn conflict_fingerprint(conflicts: &[LeaderWorkerConflict]) -> Vec<String> {
+    let mut fingerprints: Vec<String> = conflicts
+        .iter()
+        .map(|conflict| {
+            let mut participants = conflict
+                .participants
+                .iter()
+                .map(|(worker, subtask)| format!("{worker}:{subtask}"))
+                .collect::<Vec<_>>();
+            participants.sort();
+            format!("{}={}", conflict.path, participants.join("|"))
+        })
+        .collect();
+    fingerprints.sort();
+    fingerprints
+}
+
+fn next_worker_identifier(status: &LeaderWorkerStatusEvent) -> String {
+    let mut max_id = 0u32;
+    for worker in &status.workers {
+        if let Some(stripped) = worker.worker_id.strip_prefix("worker-") {
+            if let Ok(num) = stripped.parse::<u32>() {
+                max_id = max_id.max(num);
+            }
+        }
+    }
+    format!("worker-{}", max_id + 1)
 }
 
 async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Option<RateLimitSnapshot> {

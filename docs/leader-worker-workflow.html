@@ -281,10 +281,6 @@
         </header>
         
         <div class="content">
-            <div class="highlight-box">
-                <p><strong>Note:</strong> This leader–worker workflow narrative was implemented entirely by Codex CLI without human intervention and has not been tested. It is intended to communicate the concept rather than represent production-ready code.</p>
-                <p><em>Preview status:</em> The implementation behind the <code>[leader_worker]</code> flag only emits telemetry/events in current builds; it does not perform real multi-worker task execution. Expect breaking changes until the hardening phase concludes.</p>
-            </div>
             <h2>Document Overview</h2>
             <p>This document describes a proposed <strong>leader–worker workflow</strong> for Codex CLI, enabling a single leader session to orchestrate multiple worker sessions for parallel software engineering tasks. It also outlines the implementation strategy, rollout plan, and supporting communications for the workflow.</p>
             
@@ -323,13 +319,14 @@
             </ul>
 
             <h2>Configuration Quickstart</h2>
-            <p>The workflow ships behind a <code>[leader_worker]</code> config gate so teams can opt in gradually. Add the block below to <code>~/.codex/config.toml</code> (or to a named profile) to define your preferred defaults. See the <a href="config.md#leader-worker-workflow-preview">configuration reference</a> for details.</p>
+            <p>The workflow uses a <code>[leader_worker]</code> config gate so teams can opt in deliberately. Add the block below to <code>~/.codex/config.toml</code> (or to a named profile) to define your preferred defaults. See the <a href="config.md#leader-worker-workflow">configuration reference</a> for details.</p>
             <pre><code>[leader_worker]
 enabled = true
 default_worker_count = 3
 max_workers = 8
 </code></pre>
-            <p>These values only advertise intent today; later phases of the epic will honor them when launching <code>codex leader --workers=N</code> or when scaling worker pools dynamically.</p>
+            <p>These values control today’s orchestration defaults, including how many workers the CLI spawns and the safety caps for each leader session.</p>
+            <p>The <code>codex leader --workers=N -- &lt;worker args&gt;</code> command spawns real <code>codex worker</code> child processes and forwards the trailing arguments to each worker via <code>codex exec</code>, matching the lifecycle described in this document.</p>
             
             <h2>Permissions and Roles Matrix (Leader vs Worker)</h2>
             <table>
@@ -476,6 +473,7 @@ max_workers = 8
                 <li><input type="checkbox"> User can expand individual worker to view detailed transcript.</li>
             </ul>
             <p>The current scaffolding exposes <code>LeaderWorkerStatus</code> events containing pending subtasks, in-flight assignments, and worker states so future UX work can build the live dashboard described here.</p>
+            <p>Leader sessions can now run the <code>/workers</code> slash command to review pending subtasks, assign them to idle workers, and pause/resume/remove worker slots directly from the TUI, making it possible to drive manual task distribution during the soft launch.</p>
             
             <h3>Story 4: Result Aggregation and Presentation</h3>
             <div class="story-box">

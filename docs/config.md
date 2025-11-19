@@ -900,6 +900,23 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 
 > [!NOTE] > `tui.notifications` is built‑in and limited to the TUI session. For programmatic or cross‑environment notifications—or to integrate with OS‑specific notifiers—use the top‑level `notify` option to run an external program that receives event JSON. The two settings are independent and can be used together.
 
+## Leader–worker workflow
+
+Define a `[leader_worker]` table to tune how Codex orchestrates worker pools. The gate lets teams opt in deliberately—set your preferred defaults once and reuse them across profiles or ad hoc overrides. The `codex leader` CLI command refuses to run unless `enabled = true`, which keeps the feature in soft-launch mode until you opt in.
+
+```toml
+[leader_worker]
+enabled = true                # opt-in to the orchestration UI and commands (required for `codex leader`)
+default_worker_count = 3      # how many workers `codex leader` spawns by default
+max_workers = 8               # hard cap per leader, clamped between 1 and 10
+```
+
+- `enabled` determines whether Codex exposes leader/worker affordances by default.
+- `default_worker_count` sets the baseline worker pool size for `codex leader`; values outside `1..=10` are automatically clamped.
+- `max_workers` guards against runaway scaling and is similarly clamped between 1 and 10.
+
+You can override these per profile (`[profiles.production.leader_worker]`) or ad hoc via `codex -c leader_worker.enabled=true`. See [docs/leader-worker-workflow.html](leader-worker-workflow.html) for the full epic.
+
 ## Authentication and authorization
 
 ### Forcing a login method
@@ -980,6 +997,9 @@ Valid values:
 | `file_opener`                                    | `vscode` \| `vscode-insiders` \| `windsurf` \| `cursor` \| `none` | URI scheme for clickable citations (default: `vscode`).                                                                    |
 | `tui`                                            | table                                                             | TUI‑specific options.                                                                                                      |
 | `tui.notifications`                              | boolean \| array<string>                                          | Enable desktop notifications in the tui (default: true).                                                                   |
+| `leader_worker.enabled`                          | boolean                                                           | Gate for the leader–worker workflow (default: false).                                                                      |
+| `leader_worker.default_worker_count`             | number                                                            | Default worker count when launching a leader (clamped to 1–10, default: 2).                                                |
+| `leader_worker.max_workers`                      | number                                                            | Maximum workers a leader may manage (clamped to 1–10, default: 10).                                                        |
 | `hide_agent_reasoning`                           | boolean                                                           | Hide model reasoning events.                                                                                               |
 | `show_raw_agent_reasoning`                       | boolean                                                           | Show raw reasoning (when available).                                                                                       |
 | `model_reasoning_effort`                         | `minimal` \| `low` \| `medium` \| `high`                          | Responses API reasoning effort.                                                                                            |

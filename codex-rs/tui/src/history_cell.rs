@@ -1566,6 +1566,7 @@ fn leader_worker_state_span(state: LeaderWorkerWorkerState) -> Span<'static> {
         LeaderWorkerWorkerState::Blocked => "blocked".yellow(),
         LeaderWorkerWorkerState::Error => "error".red(),
         LeaderWorkerWorkerState::Offline => "offline".magenta(),
+        LeaderWorkerWorkerState::Paused => "paused".cyan(),
     }
 }
 
@@ -1575,6 +1576,60 @@ fn leader_worker_assignment_icon(status: LeaderWorkerAssignmentStatus) -> Span<'
         LeaderWorkerAssignmentStatus::Failure => "✗".red(),
         LeaderWorkerAssignmentStatus::Cancelled => "⚑".yellow(),
     }
+}
+
+#[derive(Debug)]
+pub(crate) struct LeaderWorkerConflictHistoryCell {
+    conflicts: Vec<LeaderWorkerConflict>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LeaderWorkerConflict {
+    pub path: String,
+    pub participants: Vec<(String, String)>,
+}
+
+impl HistoryCell for LeaderWorkerConflictHistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if width == 0 || self.conflicts.is_empty() {
+            return Vec::new();
+        }
+        let mut lines: Vec<Line<'static>> = vec![
+            vec![
+                padded_emoji("⚠").yellow().bold(),
+                " Worker conflict detected".bold(),
+            ]
+            .into(),
+        ];
+        lines.push(
+            "Multiple workers target the same files. Reassign to avoid merge conflicts."
+                .dim()
+                .into(),
+        );
+        for conflict in &self.conflicts {
+            let participants = conflict
+                .participants
+                .iter()
+                .map(|(worker, subtask)| format!("{worker} ({subtask})"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let text = format!("{} → {participants}", conflict.path);
+            let wrapped = word_wrap_lines(
+                vec![text.into()],
+                RtOptions::new(width as usize)
+                    .initial_indent("  • ".dim().into())
+                    .subsequent_indent("    ".into()),
+            );
+            lines.extend(wrapped);
+        }
+        lines
+    }
+}
+
+pub(crate) fn new_leader_worker_conflict(
+    conflicts: Vec<LeaderWorkerConflict>,
+) -> LeaderWorkerConflictHistoryCell {
+    LeaderWorkerConflictHistoryCell { conflicts }
 }
 
 fn bullet_lines(inner_width: usize, spans: Vec<Span<'static>>) -> Vec<Line<'static>> {

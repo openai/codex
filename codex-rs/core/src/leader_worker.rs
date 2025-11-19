@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use codex_protocol::ConversationId;
-use tracing::warn;
 
 use crate::config::LeaderWorkerSettings;
 use crate::protocol::LeaderWorkerAggregationSummaryEvent;
@@ -32,6 +31,10 @@ pub enum LeaderWorkerError {
     SubtaskNotFound,
     #[error("assignment not found")]
     AssignmentNotFound,
+    #[error("worker is busy with an assignment")]
+    WorkerBusy,
+    #[error("worker is not paused")]
+    NotPaused,
 }
 
 #[derive(Debug, Clone)]
@@ -78,11 +81,6 @@ impl LeaderWorkerManager {
         } else {
             LeaderWorkerMode::Standard
         };
-        if settings.enabled {
-            warn!(
-                "leader-worker workflow enabled in preview mode; feature is not production ready"
-            );
-        }
         Self {
             settings,
             mode,
@@ -132,6 +130,12 @@ impl LeaderWorkerManager {
         Ok(())
     }
 
+    fn worker_in_flight(&self, worker_id: &str) -> bool {
+        self.in_flight
+            .iter()
+            .any(|assignment| assignment.worker_id == worker_id)
+    }
+
     pub fn update_worker_state(
         &mut self,
         worker_id: &str,
@@ -153,6 +157,9 @@ impl LeaderWorkerManager {
     pub fn remove_worker(&mut self, worker_id: &str) -> Result<(), LeaderWorkerError> {
         if !self.settings.enabled {
             return Err(LeaderWorkerError::Disabled);
+        }
+        if self.worker_in_flight(worker_id) {
+            return Err(LeaderWorkerError::WorkerBusy);
         }
         self.workers
             .remove(worker_id)
@@ -256,14 +263,6 @@ impl LeaderWorkerManager {
         &self.pending_subtasks
     }
 
-    pub fn clear_assignments(&mut self) {
-        self.in_flight.clear();
-        self.completed.clear();
-        for record in self.workers.values_mut() {
-            record.active_paths.clear();
-        }
-    }
-
     pub fn is_plan_complete(&self) -> bool {
         self.pending_subtasks.is_empty() && self.in_flight.is_empty()
     }
@@ -272,6 +271,12 @@ impl LeaderWorkerManager {
         self.in_flight.clear();
         for record in self.workers.values_mut() {
             record.active_paths.clear();
+            if record.state == LeaderWorkerWorkerState::Running
+                || record.state == LeaderWorkerWorkerState::Starting
+            {
+                record.state = LeaderWorkerWorkerState::Idle;
+                record.summary = None;
+            }
         }
     }
 
@@ -283,8 +288,12 @@ impl LeaderWorkerManager {
         if !self.settings.enabled {
             return Err(LeaderWorkerError::Disabled);
         }
-        if !self.workers.contains_key(worker_id) {
-            return Err(LeaderWorkerError::WorkerNotFound);
+        let record = self
+            .workers
+            .get(worker_id)
+            .ok_or(LeaderWorkerError::WorkerNotFound)?;
+        if record.state == LeaderWorkerWorkerState::Paused {
+            return Err(LeaderWorkerError::WorkerBusy);
         }
         let idx = self
             .pending_subtasks
@@ -299,6 +308,8 @@ impl LeaderWorkerManager {
             target_paths: subtask.target_paths.clone(),
         });
         if let Some(record) = self.workers.get_mut(worker_id) {
+            record.state = LeaderWorkerWorkerState::Running;
+            record.summary = Some(subtask.summary.clone());
             record
                 .active_paths
                 .extend(subtask.target_paths.iter().cloned());
@@ -326,7 +337,52 @@ impl LeaderWorkerManager {
         }
         if let Some(record) = self.workers.get_mut(worker_id) {
             record.active_paths.clear();
+            record.state = LeaderWorkerWorkerState::Idle;
+            record.summary = None;
         }
+        Ok(())
+    }
+
+    pub fn pause_worker(&mut self, worker_id: &str) -> Result<(), LeaderWorkerError> {
+        if !self.settings.enabled {
+            return Err(LeaderWorkerError::Disabled);
+        }
+        if self.worker_in_flight(worker_id) {
+            return Err(LeaderWorkerError::WorkerBusy);
+        }
+        let record = self
+            .workers
+            .get_mut(worker_id)
+            .ok_or(LeaderWorkerError::WorkerNotFound)?;
+        record.state = LeaderWorkerWorkerState::Paused;
+        record.summary = Some("Paused by user".to_string());
+        Ok(())
+    }
+
+    pub fn resume_worker(&mut self, worker_id: &str) -> Result<(), LeaderWorkerError> {
+        if !self.settings.enabled {
+            return Err(LeaderWorkerError::Disabled);
+        }
+        let record = self
+            .workers
+            .get_mut(worker_id)
+            .ok_or(LeaderWorkerError::WorkerNotFound)?;
+        if record.state != LeaderWorkerWorkerState::Paused {
+            return Err(LeaderWorkerError::NotPaused);
+        }
+        record.state = LeaderWorkerWorkerState::Idle;
+        record.summary = Some("Awaiting assignment".to_string());
+        Ok(())
+    }
+
+    pub fn add_worker(&mut self, worker_id: impl Into<String>) -> Result<(), LeaderWorkerError> {
+        let worker_id = worker_id.into();
+        self.register_worker(worker_id.clone())?;
+        self.update_worker_state(
+            &worker_id,
+            LeaderWorkerWorkerState::Idle,
+            Some("Awaiting assignment".to_string()),
+        )?;
         Ok(())
     }
 
