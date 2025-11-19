@@ -807,6 +807,7 @@ pub struct RateLimitWindow {
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct CreditsSnapshot {
+    pub has_credits: bool,
     pub unlimited: bool,
     pub balance: Option<String>,
 }

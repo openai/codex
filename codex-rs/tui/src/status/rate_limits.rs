@@ -70,6 +70,7 @@ pub(crate) struct RateLimitSnapshotDisplay {
 
 #[derive(Debug, Clone)]
 pub(crate) struct CreditsSnapshotDisplay {
+    pub has_credits: bool,
     pub unlimited: bool,
     pub balance: Option<String>,
 }
@@ -95,6 +96,7 @@ pub(crate) fn rate_limit_snapshot_display(
 impl From<&CoreCreditsSnapshot> for CreditsSnapshotDisplay {
     fn from(value: &CoreCreditsSnapshot) -> Self {
         Self {
+            has_credits: value.has_credits,
             unlimited: value.unlimited,
             balance: value.balance.clone(),
         }
@@ -139,29 +141,10 @@ pub(crate) fn compose_rate_limit_data(
                 });
             }
 
-            if let Some(credits) = snapshot.credits.as_ref() {
-                match credits {
-                    CreditsSnapshotDisplay {
-                        unlimited: true, ..
-                    } => rows.push(StatusRateLimitRow {
-                        label: "Credits".to_string(),
-                        value: StatusRateLimitValue::Text("Unlimited".to_string()),
-                    }),
-                    CreditsSnapshotDisplay {
-                        unlimited: false,
-                        balance: Some(balance),
-                    } => {
-                        if let Some(display_balance) = format_credit_balance(balance) {
-                            rows.push(StatusRateLimitRow {
-                                label: "Credits".to_string(),
-                                value: StatusRateLimitValue::Text(format!(
-                                    "{display_balance} credits"
-                                )),
-                            });
-                        }
-                    }
-                    _ => {}
-                }
+            if let Some(credits) = snapshot.credits.as_ref()
+                && let Some(row) = credit_status_row(credits)
+            {
+                rows.push(row);
             }
 
             let is_stale = now.signed_duration_since(snapshot.captured_at)
@@ -195,28 +178,44 @@ pub(crate) fn format_status_limit_summary(percent_remaining: f64) -> String {
     format!("{percent_remaining:.0}% left")
 }
 
+/// Builds a single `StatusRateLimitRow` for credits when the snapshot indicates
+/// that the account has credit tracking enabled. When credits are unlimited we
+/// show that fact explicitly; otherwise we render the rounded balance in
+/// credits. Accounts with credits = 0 skip this section entirely.
+fn credit_status_row(credits: &CreditsSnapshotDisplay) -> Option<StatusRateLimitRow> {
+    if !credits.has_credits {
+        return None;
+    }
+    if credits.unlimited {
+        return Some(StatusRateLimitRow {
+            label: "Credits".to_string(),
+            value: StatusRateLimitValue::Text("Unlimited".to_string()),
+        });
+    }
+    let balance = credits.balance.as_ref()?;
+    let display_balance = format_credit_balance(balance)?;
+    Some(StatusRateLimitRow {
+        label: "Credits".to_string(),
+        value: StatusRateLimitValue::Text(format!("{display_balance} credits")),
+    })
+}
+
 fn format_credit_balance(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return None;
     }
 
-    if let Ok(int_value) = trimmed.parse::<i64>() {
-        if int_value > 0 {
-            return Some(int_value.to_string());
-        }
-        return None;
+    if let Ok(int_value) = trimmed.parse::<i64>() && int_value > 0 {
+        return Some(int_value.to_string());
     }
 
-    if let Ok(value) = trimmed.parse::<f64>() {
-        if value <= 0.0 {
-            return None;
-        }
+    if let Ok(value) = trimmed.parse::<f64>()  && value > 0.0 {
         let rounded = value.round() as i64;
         return Some(rounded.to_string());
     }
 
-    Some(trimmed.to_string())
+    None
 }
 
 fn capitalize_first(label: &str) -> String {

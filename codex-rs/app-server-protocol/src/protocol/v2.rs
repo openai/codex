@@ -1005,6 +1005,7 @@ impl From<CoreRateLimitWindow> for RateLimitWindow {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct CreditsSnapshot {
+    pub has_credits: bool,
     pub unlimited: bool,
     pub balance: Option<String>,
 }
@@ -1012,6 +1013,7 @@ pub struct CreditsSnapshot {
 impl From<CoreCreditsSnapshot> for CreditsSnapshot {
     fn from(value: CoreCreditsSnapshot) -> Self {
         Self {
+            has_credits: value.has_credits,
             unlimited: value.unlimited,
             balance: value.balance,
         }

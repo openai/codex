@@ -319,6 +319,7 @@ impl Client {
         };
 
         Some(CreditsSnapshot {
+            has_credits: details.has_credits,
             unlimited: details.unlimited,
             balance: details.balance.and_then(|inner| inner),
         })

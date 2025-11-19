@@ -207,6 +207,7 @@ fn status_snapshot_shows_unlimited_credits() {
         primary: None,
         secondary: None,
         credits: Some(CreditsSnapshot {
+            has_credits: true,
             unlimited: true,
             balance: None,
         }),
@@ -244,6 +245,7 @@ fn status_snapshot_shows_positive_credits() {
         primary: None,
         secondary: None,
         credits: Some(CreditsSnapshot {
+            has_credits: true,
             unlimited: false,
             balance: Some("12.5".to_string()),
         }),
@@ -281,6 +283,7 @@ fn status_snapshot_hides_zero_credits() {
         primary: None,
         secondary: None,
         credits: Some(CreditsSnapshot {
+            has_credits: true,
             unlimited: false,
             balance: Some("0".to_string()),
         }),
@@ -299,6 +302,42 @@ fn status_snapshot_hides_zero_credits() {
     assert!(
         rendered.iter().all(|line| !line.contains("Credits:")),
         "expected no Credits line, got {rendered:?}"
+    );
+}
+
+#[test]
+fn status_snapshot_hides_when_has_no_credits_flag() {
+    let temp_home = TempDir::new().expect("temp home");
+    let config = test_config(&temp_home);
+    let auth_manager = test_auth_manager(&config);
+    let usage = TokenUsage::default();
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 5, 6, 7, 8, 9)
+        .single()
+        .expect("timestamp");
+    let snapshot = RateLimitSnapshot {
+        primary: None,
+        secondary: None,
+        credits: Some(CreditsSnapshot {
+            has_credits: false,
+            unlimited: true,
+            balance: None,
+        }),
+    };
+    let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
+    let composite = new_status_output(
+        &config,
+        &auth_manager,
+        &usage,
+        Some(&usage),
+        &None,
+        Some(&rate_display),
+        captured_at,
+    );
+    let rendered = render_lines(&composite.display_lines(120));
+    assert!(
+        rendered.iter().all(|line| !line.contains("Credits:")),
+        "expected no Credits line when has_credits is false, got {rendered:?}"
     );
 }
 
@@ -466,6 +505,7 @@ fn status_snapshot_includes_credits_and_limits() {
             resets_at: Some(reset_at_from(&captured_at, 2_700)),
         }),
         credits: Some(CreditsSnapshot {
+            has_credits: true,
             unlimited: false,
             balance: Some("37.5".to_string()),
         }),

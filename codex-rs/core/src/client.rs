@@ -766,7 +766,11 @@ fn parse_credits_snapshot(headers: &HeaderMap) -> Option<CreditsSnapshot> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(std::string::ToString::to_string);
-    Some(CreditsSnapshot { unlimited, balance })
+    Some(CreditsSnapshot {
+        has_credits: true,
+        unlimited,
+        balance,
+    })
 }
 
 fn parse_header_f64(headers: &HeaderMap, name: &str) -> Option<f64> {
