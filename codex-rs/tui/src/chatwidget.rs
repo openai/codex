@@ -1323,7 +1323,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn dispatch_command(&mut self, cmd: SlashCommand, args: String) {
+    fn dispatch_command(&mut self, cmd: SlashCommand, args: Option<String>) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
@@ -1463,8 +1463,14 @@ impl ChatWidget {
         }
     }
 
-    fn handle_save_command(&mut self, args: String) {
-        let name = args.trim();
+    fn handle_save_command(&mut self, args: Option<String>) {
+        let Some(name_raw) = args else {
+            self.add_to_history(history_cell::new_error_event(
+                "Usage: /save <name>".to_string(),
+            ));
+            return;
+        };
+        let name = name_raw.trim();
         if name.is_empty() {
             self.add_to_history(history_cell::new_error_event(
                 "Usage: /save <name>".to_string(),

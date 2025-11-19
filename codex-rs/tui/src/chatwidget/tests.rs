@@ -954,7 +954,7 @@ fn slash_init_skips_when_project_doc_exists() {
     std::fs::write(&existing_path, "existing instructions").unwrap();
     chat.config.cwd = tempdir.path().to_path_buf();
 
-    chat.dispatch_command(SlashCommand::Init, String::new());
+    chat.dispatch_command(SlashCommand::Init, None);
 
     match op_rx.try_recv() {
         Err(TryRecvError::Empty) => {}
@@ -982,7 +982,7 @@ fn slash_init_skips_when_project_doc_exists() {
 fn slash_quit_requests_exit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
-    chat.dispatch_command(SlashCommand::Quit, String::new());
+    chat.dispatch_command(SlashCommand::Quit, None);
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::ExitRequest));
 }
@@ -991,7 +991,7 @@ fn slash_quit_requests_exit() {
 fn slash_exit_requests_exit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
-    chat.dispatch_command(SlashCommand::Exit, String::new());
+    chat.dispatch_command(SlashCommand::Exit, None);
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::ExitRequest));
 }
@@ -1000,7 +1000,7 @@ fn slash_exit_requests_exit() {
 fn slash_undo_sends_op() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
-    chat.dispatch_command(SlashCommand::Undo, String::new());
+    chat.dispatch_command(SlashCommand::Undo, None);
 
     match rx.try_recv() {
         Ok(AppEvent::CodexOp(Op::Undo)) => {}
@@ -1014,7 +1014,7 @@ fn slash_rollout_displays_current_path() {
     let rollout_path = PathBuf::from("/tmp/codex-test-rollout.jsonl");
     chat.current_rollout_path = Some(rollout_path.clone());
 
-    chat.dispatch_command(SlashCommand::Rollout, String::new());
+    chat.dispatch_command(SlashCommand::Rollout, None);
 
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1, "expected info message for rollout path");
@@ -1029,7 +1029,7 @@ fn slash_rollout_displays_current_path() {
 fn slash_rollout_handles_missing_path() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
-    chat.dispatch_command(SlashCommand::Rollout, String::new());
+    chat.dispatch_command(SlashCommand::Rollout, None);
 
     let cells = drain_insert_history(&mut rx);
     assert_eq!(
@@ -1624,7 +1624,7 @@ fn feedback_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
     // Open the feedback category selection popup via slash command.
-    chat.dispatch_command(SlashCommand::Feedback, String::new());
+    chat.dispatch_command(SlashCommand::Feedback, None);
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("feedback_selection_popup", popup);
@@ -1702,7 +1702,7 @@ fn disabled_slash_command_while_task_running_snapshot() {
     chat.bottom_pane.set_task_running(true);
 
     // Dispatch a command that is unavailable while a task runs (e.g., /model)
-    chat.dispatch_command(SlashCommand::Model, String::new());
+    chat.dispatch_command(SlashCommand::Model, None);
 
     // Drain history and snapshot the rendered error line(s)
     let cells = drain_insert_history(&mut rx);

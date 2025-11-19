@@ -69,7 +69,10 @@ const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
 #[derive(Debug, PartialEq)]
 pub enum InputResult {
     Submitted(String),
-    Command { command: SlashCommand, args: String },
+    Command {
+        command: SlashCommand,
+        args: Option<String>,
+    },
     None,
 }
 
@@ -333,13 +336,17 @@ impl ChatComposer {
         PasteBurst::recommended_flush_delay()
     }
 
-    fn command_args_from_line(line: &str, command: SlashCommand) -> String {
+    fn command_args_from_line(line: &str, command: SlashCommand) -> Option<String> {
         if let Some((name, rest)) = parse_slash_name(line)
             && name == command.command()
         {
-            return rest.to_string();
+            let trimmed = rest.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            return Some(trimmed.to_string());
         }
-        String::new()
+        None
     }
 
     /// Integrate results from an asynchronous file search.
@@ -2410,7 +2417,7 @@ mod tests {
         match result {
             InputResult::Command { command: cmd, args } => {
                 assert_eq!(cmd.command(), "init");
-                assert!(args.is_empty());
+                assert!(args.is_none());
             }
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
@@ -2486,7 +2493,7 @@ mod tests {
         match result {
             InputResult::Command { command: cmd, args } => {
                 assert_eq!(cmd.command(), "diff");
-                assert!(args.is_empty());
+                assert!(args.is_none());
             }
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch after Tab completion, got literal submit: {text}")
@@ -2520,7 +2527,7 @@ mod tests {
         match result {
             InputResult::Command { command: cmd, args } => {
                 assert_eq!(cmd, SlashCommand::Save);
-                assert_eq!(args, "feature-one");
+                assert_eq!(args.as_deref(), Some("feature-one"));
             }
             InputResult::Submitted(text) => {
                 panic!(
@@ -2556,7 +2563,7 @@ mod tests {
         match result {
             InputResult::Command { command: cmd, args } => {
                 assert_eq!(cmd.command(), "mention");
-                assert!(args.is_empty());
+                assert!(args.is_none());
             }
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
