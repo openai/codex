@@ -71,6 +71,7 @@ In containerized Linux environments (for example Docker), sandboxing may not wor
 #### Windows
 
 Windows sandbox support remains experimental. How it works:
+
 - Launches commands inside a restricted token derived from an AppContainer profile.
 - Grants only specifically requested filesystem capabilities by attaching capability SIDs to that profile.
 - Disables outbound network access by overriding proxy-related environment variables and inserting stub executables for common network tools.
