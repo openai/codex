@@ -714,8 +714,8 @@ impl Session {
                     // session only contains its own SessionMeta written by the recorder.
                     let filtered: Vec<_> = rollout_items
                         .iter()
+                        .filter(|&item| !matches!(item, RolloutItem::SessionMeta(_)))
                         .cloned()
-                        .filter(|item| !matches!(item, RolloutItem::SessionMeta(_)))
                         .collect();
                     if !filtered.is_empty() {
                         self.persist_rollout_items(&filtered).await;

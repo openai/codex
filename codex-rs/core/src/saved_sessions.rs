@@ -1,3 +1,4 @@
+use crate::error::Result;
 use crate::rollout::list::read_head_for_summary;
 use codex_protocol::ConversationId;
 use codex_protocol::protocol::SessionMetaLine;
@@ -37,16 +38,19 @@ fn saved_sessions_path(codex_home: &Path) -> PathBuf {
     codex_home.join("saved_sessions.json")
 }
 
-async fn load_saved_sessions_file(path: &Path) -> std::io::Result<SavedSessionsFile> {
+async fn load_saved_sessions_file(path: &Path) -> Result<SavedSessionsFile> {
     match tokio::fs::read_to_string(path).await {
-        Ok(text) => serde_json::from_str(&text)
-            .map_err(|e| IoError::other(format!("failed to parse saved sessions: {e}"))),
+        Ok(text) => {
+            let parsed = serde_json::from_str(&text)
+                .map_err(|e| IoError::other(format!("failed to parse saved sessions: {e}")))?;
+            Ok(parsed)
+        }
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(SavedSessionsFile::default()),
-        Err(err) => Err(err),
+        Err(err) => Err(err.into()),
     }
 }
 
-async fn write_saved_sessions_file(path: &Path, file: &SavedSessionsFile) -> std::io::Result<()> {
+async fn write_saved_sessions_file(path: &Path, file: &SavedSessionsFile) -> Result<()> {
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
@@ -54,7 +58,8 @@ async fn write_saved_sessions_file(path: &Path, file: &SavedSessionsFile) -> std
         .map_err(|e| IoError::other(format!("failed to serialize saved sessions: {e}")))?;
     let tmp_path = path.with_extension("json.tmp");
     tokio::fs::write(&tmp_path, json).await?;
-    tokio::fs::rename(tmp_path, path).await
+    tokio::fs::rename(tmp_path, path).await?;
+    Ok(())
 }
 
 /// Create a new entry from the rollout's SessionMeta line.
@@ -62,7 +67,7 @@ pub async fn build_saved_session_entry(
     name: String,
     rollout_path: PathBuf,
     model: String,
-) -> std::io::Result<SavedSessionEntry> {
+) -> Result<SavedSessionEntry> {
     let head = read_head_for_summary(&rollout_path).await?;
     let first = head.first().ok_or_else(|| {
         IoError::other(format!(
@@ -94,10 +99,7 @@ pub async fn build_saved_session_entry(
 }
 
 /// Insert or replace a saved session entry in `saved_sessions.json`.
-pub async fn upsert_saved_session(
-    codex_home: &Path,
-    entry: SavedSessionEntry,
-) -> std::io::Result<()> {
+pub async fn upsert_saved_session(codex_home: &Path, entry: SavedSessionEntry) -> Result<()> {
     let path = saved_sessions_path(codex_home);
     let mut file = load_saved_sessions_file(&path).await?;
     file.entries.insert(entry.name.clone(), entry);
@@ -108,14 +110,14 @@ pub async fn upsert_saved_session(
 pub async fn resolve_saved_session(
     codex_home: &Path,
     name: &str,
-) -> std::io::Result<Option<SavedSessionEntry>> {
+) -> Result<Option<SavedSessionEntry>> {
     let path = saved_sessions_path(codex_home);
     let file = load_saved_sessions_file(&path).await?;
     Ok(file.entries.get(name).cloned())
 }
 
 /// Return all saved sessions ordered by newest `saved_at` first.
-pub async fn list_saved_sessions(codex_home: &Path) -> std::io::Result<Vec<SavedSessionEntry>> {
+pub async fn list_saved_sessions(codex_home: &Path) -> Result<Vec<SavedSessionEntry>> {
     let path = saved_sessions_path(codex_home);
     let file = load_saved_sessions_file(&path).await?;
     let mut entries: Vec<SavedSessionEntry> = file.entries.values().cloned().collect();

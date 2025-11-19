@@ -41,11 +41,11 @@ impl CodexConversation {
         self.rollout_path.clone()
     }
 
-    pub async fn flush_rollout(&self) -> std::io::Result<()> {
-        self.session.flush_rollout().await
+    pub async fn flush_rollout(&self) -> CodexResult<()> {
+        Ok(self.session.flush_rollout().await?)
     }
 
-    pub async fn set_session_name(&self, name: Option<String>) -> std::io::Result<()> {
-        self.session.set_session_name(name).await
+    pub async fn set_session_name(&self, name: Option<String>) -> CodexResult<()> {
+        Ok(self.session.set_session_name(name).await?)
     }
 }

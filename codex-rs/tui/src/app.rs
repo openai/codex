@@ -7,6 +7,8 @@ use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::file_search::FileSearchManager;
 use crate::history_cell::HistoryCell;
+#[cfg(not(debug_assertions))]
+use crate::history_cell::UpdateAvailableHistoryCell;
 use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_config;
 use crate::model_migration::run_model_migration_prompt;
@@ -25,9 +27,11 @@ use codex_common::model_presets::ModelUpgrade;
 use codex_common::model_presets::all_model_presets;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
+use codex_core::SavedSessionEntry;
 use codex_core::build_saved_session_entry;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
+use codex_core::error::CodexErr;
 #[cfg(target_os = "windows")]
 use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
@@ -54,9 +58,6 @@ use std::thread;
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
-
-#[cfg(not(debug_assertions))]
-use crate::history_cell::UpdateAvailableHistoryCell;
 
 const GPT_5_1_MIGRATION_AUTH_MODES: [AuthMode; 2] = [AuthMode::ChatGPT, AuthMode::ApiKey];
 const ARCTICFOX_MIGRATION_AUTH_MODES: [AuthMode; 1] = [AuthMode::ChatGPT];
@@ -440,93 +441,68 @@ impl App {
     }
 
     async fn save_session(&mut self, requested_name: String) {
-        let name = requested_name.trim().to_string();
+        let name = requested_name.clone().trim();
         if name.is_empty() {
             self.chat_widget
-                .add_error_message("Usage: /save <name>".to_string());
-            return;
+                .add_error_message("Usage: /save <name>".to_string())
         }
-        let Some(conversation_id) = self.chat_widget.conversation_id() else {
-            self.chat_widget.add_error_message(
-                "Session is not ready yet; try /save again in a moment.".to_string(),
-            );
-            return;
-        };
-        let Some(rollout_path) = self.chat_widget.rollout_path() else {
-            self.chat_widget.add_error_message(
-                "Rollout path is not available yet; try /save again shortly.".to_string(),
-            );
-            return;
-        };
-        let conversation = match self.server.get_conversation(conversation_id).await {
-            Ok(conv) => conv,
-            Err(err) => {
-                tracing::error!(
-                    conversation_id = %conversation_id,
-                    error = %err,
-                    "failed to look up conversation for /save"
+        match self.try_save_session(requested_name).await {
+            Ok(entry) => {
+                let name = &entry.name;
+                self.chat_widget.add_info_message(
+                    format!(
+                        "Saved session '{name}' (conversation {}).", entry.conversation_id
+                    ),
+                    Some(format!(
+                        "Resume with `codex resume {name}` or fork with `codex fork {name}`.",
+                    )),
                 );
-                self.chat_widget
-                    .add_error_message(format!("Failed to save session '{name}': {err}"));
-                return;
             }
-        };
-        if let Err(err) = conversation.flush_rollout().await {
-            tracing::error!(
-                conversation_id = %conversation_id,
-                error = %err,
-                "failed to flush rollout before /save"
-            );
-            self.chat_widget
-                .add_error_message(format!("Failed to save session '{name}': {err}"));
-            return;
+            Err(error) => self
+                .chat_widget
+                .add_error_message(format!("Failed to save session '{name}': {error}")),
         }
-        if let Err(err) = conversation.set_session_name(Some(name.clone())).await {
-            tracing::error!(
-                conversation_id = %conversation_id,
-                error = %err,
-                "failed to update session name before /save"
-            );
-            self.chat_widget
-                .add_error_message(format!("Failed to save session '{name}': {err}"));
-            return;
+    }
+
+    async fn try_save_session(
+        &mut self,
+        requested_name: String,
+    ) -> Result<SavedSessionEntry, CodexErr> {
+        // Normalize and validate the user-provided name early so downstream async work
+        // only runs for actionable requests.
+        let name = requested_name.trim();
+        if name.is_empty() {
+            return Err("Usage: /save <name>".into());
         }
+
+        // Capture identifiers from the active chat widget; these are cheap and fast.
+        let conversation_id = self
+            .chat_widget
+            .conversation_id()
+            .ok_or_else(|| "Session is not ready yet; try /save again in a moment.".to_string())?;
+        let rollout_path = self.chat_widget.rollout_path().ok_or_else(|| {
+            "Rollout path is not available yet; try /save again shortly.".to_string()
+        })?;
+
+        // Resolve the conversation handle; all subsequent operations use this shared reference.
+        let conversation = self.server.get_conversation(conversation_id).await?;
+
+        // Ensure the rollout is fully flushed before snapshotting metadata.
+        conversation.flush_rollout().await?;
+
+        // Persist the human-friendly name into the SessionMeta line.
+        conversation
+            .set_session_name(Some(name.to_string()))
+            .await?;
+
+        // Build and persist the saved-session entry on disk.
         let model = self.chat_widget.config_ref().model.clone();
-        let entry = match build_saved_session_entry(name.clone(), rollout_path.clone(), model).await
-        {
-            Ok(entry) => entry,
-            Err(err) => {
-                tracing::error!(
-                    rollout = %rollout_path.display(),
-                    error = %err,
-                    "failed to build saved session entry"
-                );
-                self.chat_widget
-                    .add_error_message(format!("Failed to save session '{name}': {err}"));
-                return;
-            }
-        };
-        if let Err(err) = upsert_saved_session(&self.config.codex_home, entry.clone()).await {
-            tracing::error!(
-                rollout = %rollout_path.display(),
-                error = %err,
-                "failed to persist saved session entry"
-            );
-            self.chat_widget
-                .add_error_message(format!("Failed to save session '{name}': {err}"));
-            return;
-        }
-        let hint = format!(
-            "Resume with `codex resume {}` or fork with `codex fork {}`.",
-            entry.name, entry.name
-        );
-        self.chat_widget.add_info_message(
-            format!(
-                "Saved session '{}' (conversation {}).",
-                entry.name, entry.conversation_id
-            ),
-            Some(hint),
-        );
+        let entry =
+            build_saved_session_entry(name.to_string(), rollout_path.clone(), model).await?;
+
+        upsert_saved_session(&self.config.codex_home, entry.clone()).await?;
+
+        Ok(entry)
     }
 
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
