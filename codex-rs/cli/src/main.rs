@@ -328,8 +328,8 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn run_execpolicy_check(cli: ExecPolicyCheckCommand) -> anyhow::Result<()> {
-    let json = cli.run()?;
+fn run_execpolicycheck(cmd: ExecPolicyCheckCommand) -> anyhow::Result<()> {
+    let json = cmd.run()?;
     println!("{json}");
     Ok(())
 }
@@ -570,9 +570,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             tokio::task::spawn_blocking(move || codex_stdio_to_uds::run(socket_path.as_path()))
                 .await??;
         }
-        Some(Subcommand::ExecPolicyCheck(execpolicy_cli)) => {
-            run_execpolicy_check(execpolicy_cli)?;
-        }
+        Some(Subcommand::ExecPolicyCheck(cmd)) => run_execpolicycheck(cmd)?,
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
             FeaturesSubcommand::List => {
                 // Respect root-level `-c` overrides plus top-level flags like `--profile`.
