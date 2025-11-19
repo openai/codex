@@ -106,6 +106,7 @@ impl OnboardingScreen {
                 auth_manager,
                 forced_chatgpt_workspace_id,
                 forced_login_method,
+                animations_enabled: config.animations,
             }))
         }
         let is_git_repo = get_git_repo_root(&cwd).is_some();
