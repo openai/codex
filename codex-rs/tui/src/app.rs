@@ -8,6 +8,7 @@ use crate::exec_command::strip_bash_lc_and_escape;
 use crate::file_search::FileSearchManager;
 use crate::history_cell::HistoryCell;
 use crate::model_migration::ModelMigrationOutcome;
+use crate::model_migration::migration_copy_for_config;
 use crate::model_migration::run_model_migration_prompt;
 use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
@@ -17,6 +18,7 @@ use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
+use codex_app_server_protocol::AuthMode;
 use codex_common::model_presets::HIDE_ARCTICFOX_MIGRATION_PROMPT_CONFIG;
 use codex_common::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_common::model_presets::ModelUpgrade;
@@ -111,7 +113,12 @@ async fn handle_model_migration_prompt_if_needed(
     tui: &mut tui::Tui,
     config: &mut Config,
     app_event_tx: &AppEventSender,
+    auth_mode: Option<AuthMode>,
 ) -> Option<AppExitInfo> {
+    if matches!(auth_mode, Some(AuthMode::ApiKey)) {
+        return None;
+    }
+
     let upgrade = all_model_presets()
         .iter()
         .find(|preset| preset.model == config.model)
@@ -129,7 +136,8 @@ async fn handle_model_migration_prompt_if_needed(
             return None;
         }
 
-        match run_model_migration_prompt(tui).await {
+        let prompt_copy = migration_copy_for_config(migration_config_key);
+        match run_model_migration_prompt(tui, prompt_copy).await {
             ModelMigrationOutcome::Accepted => {
                 app_event_tx.send(AppEvent::PersistModelMigrationPromptAcknowledged {
                     migration_config: migration_config_key.to_string(),
@@ -222,8 +230,10 @@ impl App {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
 
+        let auth_mode = auth_manager.auth().map(|auth| auth.mode);
         let exit_info =
-            handle_model_migration_prompt_if_needed(tui, &mut config, &app_event_tx).await;
+            handle_model_migration_prompt_if_needed(tui, &mut config, &app_event_tx, auth_mode)
+                .await;
         if let Some(exit_info) = exit_info {
             return Ok(exit_info);
         }
