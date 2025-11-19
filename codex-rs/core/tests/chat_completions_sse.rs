@@ -406,19 +406,24 @@ async fn assistant_text_precedes_tool_call() {
     );
 
     let events = run_stream(sse).await;
-    assert_eq!(events.len(), 4, "unexpected events: {events:?}");
+    assert_eq!(events.len(), 5, "unexpected events: {events:?}");
 
     match &events[0] {
+        ResponseEvent::OutputItemAdded(ResponseItem::Message { .. }) => {}
+        other => panic!("expected assistant item added, got {other:?}"),
+    }
+
+    match &events[1] {
         ResponseEvent::OutputTextDelta(text) => assert_eq!(text, "preamble"),
         other => panic!("expected text delta, got {other:?}"),
     }
 
-    match &events[1] {
+    match &events[2] {
         ResponseEvent::OutputItemDone(item) => assert_message(item, "preamble"),
         other => panic!("expected assistant message, got {other:?}"),
     }
 
-    match &events[2] {
+    match &events[3] {
         ResponseEvent::OutputItemDone(ResponseItem::FunctionCall {
             name,
             arguments,
@@ -432,7 +437,7 @@ async fn assistant_text_precedes_tool_call() {
         other => panic!("expected function call, got {other:?}"),
     }
 
-    assert!(matches!(events[3], ResponseEvent::Completed { .. }));
+    assert_matches!(events[4], ResponseEvent::Completed { .. });
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -451,29 +456,39 @@ async fn reasoning_and_text_precede_tool_call() {
     );
 
     let events = run_stream(sse).await;
-    assert_eq!(events.len(), 6, "unexpected events: {events:?}");
+    assert_eq!(events.len(), 8, "unexpected events: {events:?}");
 
     match &events[0] {
+        ResponseEvent::OutputItemAdded(ResponseItem::Reasoning { .. }) => {}
+        other => panic!("expected reasoning item added, got {other:?}"),
+    }
+
+    match &events[1] {
         ResponseEvent::ReasoningContentDelta(text) => assert_eq!(text, "think"),
         other => panic!("expected reasoning delta, got {other:?}"),
     }
 
-    match &events[1] {
+    match &events[2] {
+        ResponseEvent::OutputItemAdded(ResponseItem::Message { .. }) => {}
+        other => panic!("expected assistant item added, got {other:?}"),
+    }
+
+    match &events[3] {
         ResponseEvent::OutputTextDelta(text) => assert_eq!(text, "preamble"),
         other => panic!("expected text delta, got {other:?}"),
     }
 
-    match &events[2] {
+    match &events[4] {
         ResponseEvent::OutputItemDone(item) => assert_reasoning(item, "think"),
         other => panic!("expected reasoning item, got {other:?}"),
     }
 
-    match &events[3] {
+    match &events[5] {
         ResponseEvent::OutputItemDone(item) => assert_message(item, "preamble"),
         other => panic!("expected assistant message, got {other:?}"),
     }
 
-    match &events[4] {
+    match &events[6] {
         ResponseEvent::OutputItemDone(ResponseItem::FunctionCall {
             name,
             arguments,
@@ -487,7 +502,7 @@ async fn reasoning_and_text_precede_tool_call() {
         other => panic!("expected function call, got {other:?}"),
     }
 
-    assert!(matches!(events[5], ResponseEvent::Completed { .. }));
+    assert_matches!(events[7], ResponseEvent::Completed { .. });
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -594,19 +609,29 @@ async fn aggregated_reasoning_and_text_precede_tool_call() {
     );
 
     let events = run_stream_aggregated_only(sse).await;
-    assert_eq!(events.len(), 4, "unexpected events: {events:?}");
+    assert_eq!(events.len(), 6, "unexpected events: {events:?}");
 
     match &events[0] {
+        ResponseEvent::OutputItemAdded(ResponseItem::Reasoning { .. }) => {}
+        other => panic!("expected reasoning item added, got {other:?}"),
+    }
+
+    match &events[1] {
+        ResponseEvent::OutputItemAdded(ResponseItem::Message { .. }) => {}
+        other => panic!("expected assistant item added, got {other:?}"),
+    }
+
+    match &events[2] {
         ResponseEvent::OutputItemDone(item) => assert_reasoning(item, "think"),
         other => panic!("expected reasoning item, got {other:?}"),
     }
 
-    match &events[1] {
+    match &events[3] {
         ResponseEvent::OutputItemDone(item) => assert_message(item, "preamble"),
         other => panic!("expected assistant message, got {other:?}"),
     }
 
-    match &events[2] {
+    match &events[4] {
         ResponseEvent::OutputItemDone(ResponseItem::FunctionCall {
             name,
             arguments,
@@ -620,7 +645,7 @@ async fn aggregated_reasoning_and_text_precede_tool_call() {
         other => panic!("expected function call, got {other:?}"),
     }
 
-    assert!(matches!(events[3], ResponseEvent::Completed { .. }));
+    assert!(matches!(events[5], ResponseEvent::Completed { .. }));
 }
 
 #[tokio::test]
