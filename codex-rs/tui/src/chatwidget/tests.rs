@@ -1532,6 +1532,23 @@ fn model_reasoning_selection_popup_snapshot() {
 }
 
 #[test]
+fn model_reasoning_selection_popup_extra_high_warning_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.config.model = "arcticfox".to_string();
+    chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::ExtraHigh);
+
+    let preset = builtin_model_presets(None)
+        .into_iter()
+        .find(|preset| preset.model == "arcticfox")
+        .expect("arcticfox preset");
+    chat.open_reasoning_popup(preset);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("model_reasoning_selection_popup_extra_high_warning", popup);
+}
+
+#[test]
 fn reasoning_popup_shows_extra_high_with_space() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
