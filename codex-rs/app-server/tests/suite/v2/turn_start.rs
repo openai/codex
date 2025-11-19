@@ -14,9 +14,11 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
+use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::protocol_config_types::ReasoningEffort;
 use codex_core::protocol_config_types::ReasoningSummary;
@@ -118,13 +120,17 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     )
     .await??;
 
-    // And we should ultimately get a task_complete without having to add a
-    // legacy conversation listener explicitly (auto-attached by thread/start).
-    let _task_complete: JSONRPCNotification = timeout(
+    let completed_notif: JSONRPCNotification = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+        mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+    let completed: TurnCompletedNotification = serde_json::from_value(
+        completed_notif
+            .params
+            .expect("turn/completed params must be present"),
+    )?;
+    assert_eq!(completed.turn.status, TurnStatus::Completed);
 
     Ok(())
 }
@@ -274,6 +280,11 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
         mcp.read_stream_until_notification_message("codex/event/task_complete"),
     )
     .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
 
     // Second turn with approval_policy=never should not elicit approval
     let second_turn_id = mcp
@@ -300,6 +311,11 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("codex/event/task_complete"),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
 

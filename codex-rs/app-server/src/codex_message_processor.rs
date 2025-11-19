@@ -154,6 +154,14 @@ use uuid::Uuid;
 type PendingInterruptQueue = Vec<(RequestId, ApiVersion)>;
 pub(crate) type PendingInterrupts = Arc<Mutex<HashMap<ConversationId, PendingInterruptQueue>>>;
 
+/// Per-conversation accumulation of the latest states e.g. error message while a turn runs.
+#[derive(Default, Clone)]
+pub(crate) struct TurnSummary {
+    pub(crate) last_error_message: Option<String>,
+}
+
+pub(crate) type TurnSummaryStore = Arc<Mutex<HashMap<ConversationId, TurnSummary>>>;
+
 // Duration before a ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 struct ActiveLogin {
@@ -178,6 +186,7 @@ pub(crate) struct CodexMessageProcessor {
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
     pending_interrupts: PendingInterrupts,
+    turn_summary_store: TurnSummaryStore,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     feedback: CodexFeedback,
 }
@@ -230,6 +239,7 @@ impl CodexMessageProcessor {
             conversation_listeners: HashMap::new(),
             active_login: Arc::new(Mutex::new(None)),
             pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
+            turn_summary_store: Arc::new(Mutex::new(HashMap::new())),
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
             feedback,
         }
@@ -2363,9 +2373,6 @@ impl CodexMessageProcessor {
             }
         };
 
-        // Keep a copy of v2 inputs for the notification payload.
-        let v2_inputs_for_notif = params.input.clone();
-
         // Map v2 input items to core input items.
         let mapped_items: Vec<CoreInputItem> = params
             .input
@@ -2405,12 +2412,8 @@ impl CodexMessageProcessor {
             Ok(turn_id) => {
                 let turn = Turn {
                     id: turn_id.clone(),
-                    items: vec![ThreadItem::UserMessage {
-                        id: turn_id,
-                        content: v2_inputs_for_notif,
-                    }],
+                    items: vec![],
                     status: TurnStatus::InProgress,
-                    error: None,
                 };
 
                 let response = TurnStartResponse { turn: turn.clone() };
@@ -2471,7 +2474,6 @@ impl CodexMessageProcessor {
                     id: turn_id.clone(),
                     items,
                     status: TurnStatus::InProgress,
-                    error: None,
                 };
                 let response = TurnStartResponse { turn: turn.clone() };
                 self.outgoing.send_response(request_id, response).await;
@@ -2591,6 +2593,7 @@ impl CodexMessageProcessor {
 
         let outgoing_for_task = self.outgoing.clone();
         let pending_interrupts = self.pending_interrupts.clone();
+        let turn_summary_store = self.turn_summary_store.clone();
         let api_version_for_task = api_version;
         tokio::spawn(async move {
             loop {
@@ -2647,6 +2650,7 @@ impl CodexMessageProcessor {
                             conversation.clone(),
                             outgoing_for_task.clone(),
                             pending_interrupts.clone(),
+                            turn_summary_store.clone(),
                             api_version_for_task,
                         )
                         .await;

@@ -46,6 +46,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_protocol::ConversationId;
 use codex_protocol::protocol::Event;
@@ -509,10 +510,9 @@ impl CodexClient {
                 ServerNotification::TurnCompleted(payload) => {
                     if payload.turn.id == turn_id {
                         println!("\n< turn/completed notification: {:?}", payload.turn.status);
-                        if let Some(error) = payload.turn.error {
+                        if let TurnStatus::Failed { error } = &payload.turn.status {
                             println!("[turn error] {}", error.message);
                         }
-                        println!("< usage: {:?}", payload.usage);
                         break;
                     }
                 }
