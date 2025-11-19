@@ -343,7 +343,6 @@ mod tests {
     use super::truncate_with_token_budget;
     use codex_protocol::models::FunctionCallOutputContentItem;
     use pretty_assertions::assert_eq;
-    use regex_lite::Regex;
 
     const MODEL_FORMAT_MAX_TOKENS_FOR_TESTS: usize = 2_500;
 
@@ -351,39 +350,6 @@ mod tests {
         truncate_text(
             content,
             TruncationPolicy::Tokens(MODEL_FORMAT_MAX_TOKENS_FOR_TESTS),
-        )
-    }
-
-    fn assert_truncated_message_matches(message: &str, line: &str, expected_removed: usize) {
-        let pattern = truncated_message_pattern(line);
-        let regex = Regex::new(&pattern).unwrap_or_else(|err| {
-            panic!("failed to compile regex {pattern}: {err}");
-        });
-        let captures = regex
-            .captures(message)
-            .unwrap_or_else(|| panic!("message failed to match pattern {pattern}: {message}"));
-        let body = captures
-            .name("body")
-            .expect("missing body capture")
-            .as_str();
-        assert!(
-            body.len() <= MODEL_FORMAT_MAX_TOKENS_FOR_TESTS,
-            "body exceeds byte limit: {} bytes",
-            body.len()
-        );
-        let removed: usize = captures
-            .name("removed")
-            .expect("missing removed capture")
-            .as_str()
-            .parse()
-            .unwrap_or_else(|err| panic!("invalid removed tokens: {err}"));
-        assert_eq!(removed, expected_removed, "mismatched removed tokens");
-    }
-
-    fn truncated_message_pattern(line: &str) -> String {
-        let escaped_line = regex_lite::escape(line);
-        format!(
-            r"(?s)^(?P<body>{escaped_line}.*?)(?:\r?\n)?\[…(?P<removed>\d+) tokens truncated…](?:\r?\n.*)?$"
         )
     }
 
@@ -433,21 +399,25 @@ mod tests {
     #[test]
     fn format_exec_output_truncates_large_error() {
         let line = "very long execution error line that should trigger truncation\n";
-        let large_error = line.repeat(2_500); // way beyond both byte and line limits
+        let large_error = line.repeat(120); // keep test output small but still over budget
 
-        let truncated = truncate_model_output(&large_error);
-        assert_truncated_message_matches(&truncated, line, 36_270);
-        assert_ne!(truncated, large_error);
+        let truncated = truncate_text(&large_error, TruncationPolicy::Tokens(60));
+        dbg!(&truncated);
+        // Assert the exact truncated output to avoid regex/indirection.
+        let expected = "very long execution error line that should trigger truncation\n[…1829 tokens truncated…]\nvery long execution error line that should trigger truncation\n";
+        assert_eq!(truncated, expected);
     }
 
     #[test]
     fn format_exec_output_marks_byte_truncation_without_omitted_lines() {
-        let max_bytes = MODEL_FORMAT_MAX_TOKENS_FOR_TESTS;
-        let long_line = "a".repeat(max_bytes + 50);
-        let truncated = truncate_model_output(&long_line);
+        // Force byte-based truncation on a long single line.
+        let long_line = "a".repeat(300);
+        let truncated = truncate_text(&long_line, TruncationPolicy::Bytes(80));
+        dbg!(&truncated);
 
-        assert_ne!(truncated, long_line);
-        assert_truncated_message_matches(&truncated, "a", 7_520);
+        let expected =
+            "aaaaaaaaaaaaaaaaaaaaaaaaaa[…247 bytes truncated…]\naaaaaaaaaaaaaaaaaaaaaaaaaa";
+        assert_eq!(truncated, expected);
         assert!(
             !truncated.contains("omitted"),
             "line omission marker should not appear when no lines were dropped: {truncated}"
@@ -469,8 +439,10 @@ mod tests {
             .map(|idx| format!("line-{idx}-{filler}\n"))
             .collect();
 
-        let truncated = truncate_model_output(&content);
-        assert_truncated_message_matches(&truncated, "line-0-", 34_747);
+        let truncated = truncate_text(&content, TruncationPolicy::Tokens(80));
+        dbg!(&truncated);
+        let expected = "line-0-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline-1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n[…37168 tokens truncated…]\nline-1999-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n";
+        assert_eq!(truncated, expected);
         assert!(
             truncated.contains("line-0-"),
             "expected head line to remain: {truncated}"
@@ -491,8 +463,10 @@ mod tests {
             .map(|idx| format!("line-{idx}-{long_line}\n"))
             .collect();
 
-        let truncated = truncate_model_output(&content);
-        assert_truncated_message_matches(&truncated, "line-0-", 17_536);
+        let truncated = truncate_text(&content, TruncationPolicy::Tokens(60));
+        dbg!(&truncated);
+        let expected = "line-0-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[…19897 tokens truncated…]\n";
+        assert_eq!(truncated, expected);
     }
 
     #[test]

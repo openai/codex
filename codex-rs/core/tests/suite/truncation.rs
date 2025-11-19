@@ -330,7 +330,9 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
         "MCP output should not include line-based truncation header: {output}"
     );
 
-    let truncated_pattern = r#"(?s)^\{"echo":\s*"ECHOING: long-message-with-newlines-.*tokens truncated.*long-message-with-newlines-.*$"#;
+    let truncated_pattern = dbg!(
+        r#"(?s)^\{"echo":\s*"ECHOING: long-message-with-newlines-.*tokens truncated.*long-message-with-newlines-.*$"#
+    );
     assert_regex_match(truncated_pattern, &output);
 
     Ok(())
@@ -680,7 +682,15 @@ async fn mcp_tool_call_output_not_truncated_with_custom_limit() -> Result<()> {
 
     let parsed: Value = serde_json::from_str(&output)?;
     let expected_echo = format!("ECHOING: {large_msg}");
-    assert_eq!(parsed["echo"], expected_echo);
+    let echo_str = parsed["echo"]
+        .as_str()
+        .context("echo field should be a string in rmcp echo output")?;
+    assert_eq!(
+        echo_str.len(),
+        expected_echo.len(),
+        "echo length should match"
+    );
+    assert_eq!(echo_str, expected_echo);
     assert!(
         !output.contains("truncated"),
         "output should not include truncation markers when limit is raised: {output}"
