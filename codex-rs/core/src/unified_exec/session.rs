@@ -2,6 +2,8 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
@@ -67,7 +69,7 @@ impl OutputBufferState {
 }
 
 pub(crate) type OutputBuffer = Arc<Mutex<OutputBufferState>>;
-pub(crate) type OutputHandles = (OutputBuffer, Arc<Notify>, Arc<Notify>);
+pub(crate) type OutputHandles = (OutputBuffer, Arc<Notify>, Arc<Notify>, Arc<AtomicBool>);
 
 #[derive(Debug)]
 pub(crate) struct UnifiedExecSession {
@@ -75,6 +77,7 @@ pub(crate) struct UnifiedExecSession {
     output_buffer: OutputBuffer,
     output_notify: Arc<Notify>,
     exit_notify: Arc<Notify>,
+    exit_signaled: Arc<AtomicBool>,
     output_task: JoinHandle<()>,
     sandbox_type: SandboxType,
 }
@@ -84,14 +87,16 @@ impl UnifiedExecSession {
         session: ExecCommandSession,
         initial_output_rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
         sandbox_type: SandboxType,
-        exit_notify: Arc<Notify>,
     ) -> Self {
         let output_buffer = Arc::new(Mutex::new(OutputBufferState::default()));
         let output_notify = Arc::new(Notify::new());
+        let exit_notify = Arc::new(Notify::new());
+        let exit_signaled = Arc::new(AtomicBool::new(false));
         let mut receiver = initial_output_rx;
         let buffer_clone = Arc::clone(&output_buffer);
         let notify_clone = Arc::clone(&output_notify);
         let exit_notify_clone = Arc::clone(&exit_notify);
+        let exit_signaled_clone = Arc::clone(&exit_signaled);
         let output_task = tokio::spawn(async move {
             loop {
                 match receiver.recv().await {
@@ -103,6 +108,7 @@ impl UnifiedExecSession {
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        exit_signaled_clone.store(true, Ordering::SeqCst);
                         exit_notify_clone.notify_waiters();
                         break;
                     }
@@ -115,6 +121,7 @@ impl UnifiedExecSession {
             output_buffer,
             output_notify,
             exit_notify,
+            exit_signaled,
             output_task,
             sandbox_type,
         }
@@ -129,6 +136,7 @@ impl UnifiedExecSession {
             Arc::clone(&self.output_buffer),
             Arc::clone(&self.output_notify),
             Arc::clone(&self.exit_notify),
+            Arc::clone(&self.exit_signaled),
         )
     }
 
@@ -199,8 +207,7 @@ impl UnifiedExecSession {
             output_rx,
             mut exit_rx,
         } = spawned;
-        let exit_notify = Arc::new(Notify::new());
-        let managed = Self::new(session, output_rx, sandbox_type, Arc::clone(&exit_notify));
+        let managed = Self::new(session, output_rx, sandbox_type);
 
         let exit_ready = match exit_rx.try_recv() {
             Ok(_) | Err(TryRecvError::Closed) => true,
@@ -208,7 +215,7 @@ impl UnifiedExecSession {
         };
 
         if exit_ready {
-            exit_notify.notify_waiters();
+            managed.signal_exit();
             managed.check_for_sandbox_denial().await?;
             return Ok(managed);
         }
@@ -217,20 +224,30 @@ impl UnifiedExecSession {
             .await
             .is_ok()
         {
-            exit_notify.notify_waiters();
+            managed.signal_exit();
             managed.check_for_sandbox_denial().await?;
             return Ok(managed);
         }
 
         tokio::spawn({
-            let notify = Arc::clone(&exit_notify);
+            let exit_notify = Arc::clone(&managed.exit_notify);
+            let exit_signaled = Arc::clone(&managed.exit_signaled);
             async move {
                 let _ = exit_rx.await;
-                notify.notify_waiters();
+                exit_signaled.store(true, Ordering::SeqCst);
+                exit_notify.notify_waiters();
             }
         });
 
         Ok(managed)
+    }
+}
+
+impl UnifiedExecSession {
+    fn signal_exit(&self) {
+        if !self.exit_signaled.swap(true, Ordering::SeqCst) {
+            self.exit_notify.notify_waiters();
+        }
     }
 }
 
