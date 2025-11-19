@@ -69,6 +69,35 @@ Codex can access MCP servers. To configure them, refer to the [config docs](./do
 
 Codex CLI supports a rich set of configuration options, with preferences stored in `~/.codex/config.toml`. For full configuration options, see [Configuration](./docs/config.md).
 
+### Execpolicy quickstart
+
+Codex can enforce your own rules-based execution policy before it runs shell commands.
+
+1. Create a policy directory: `mkdir -p ~/.codex/policy`.
+2. Drop one or more `.codexpolicy` files into that folder. Codex automatically loads every file in there on startup.
+3. Write `prefix_rule` entries to describe the commands you want to allow, prompt, or block:
+
+```starlark
+prefix_rule(
+    pattern = ["git", ["push", "fetch"]],
+    decision = "prompt",  # allow | prompt | forbidden
+    match = [["git", "push", "origin", "main"]],  # examples that must match
+    not_match = [["git", "status"]],              # examples that must not match
+)
+```
+
+- `pattern` is a list of shell tokens, evaluated from left to right; wrap tokens in a nested list to express alternatives (e.g., match both `push` and `fetch`).
+- `decision` sets the severity; Codex picks the strictest decision when multiple rules match.
+- `match` and `not_match` act as (optional) unit tests. Codex validates them when it loads your policy, so you get feedback if an example has unexpected behavior.
+
+Use the [`execpolicy2` CLI](./codex-rs/execpolicy2/README.md) to preview decisions before you save a rule:
+
+```shell
+cargo run -p codex-execpolicy2 -- check --policy ~/.codex/policy/default.codexpolicy git push origin main
+```
+
+Pass multiple `--policy` flags to test how several files combine. See the [`codex-rs/execpolicy2` README](./codex-rs/execpolicy2/README.md) for a more detailed walkthrough of the available syntax.
+
 ---
 
 ### Docs & FAQ
