@@ -5,6 +5,7 @@ use chrono::DateTime;
 use chrono::Duration as ChronoDuration;
 use chrono::Local;
 use chrono::Utc;
+use codex_core::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::RateLimitWindow;
 
@@ -15,8 +16,16 @@ const STATUS_LIMIT_BAR_EMPTY: &str = "░";
 #[derive(Debug, Clone)]
 pub(crate) struct StatusRateLimitRow {
     pub label: String,
-    pub percent_used: f64,
-    pub resets_at: Option<String>,
+    pub value: StatusRateLimitValue,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum StatusRateLimitValue {
+    Window {
+        percent_used: f64,
+        resets_at: Option<String>,
+    },
+    Text(String),
 }
 
 #[derive(Debug, Clone)]
@@ -56,6 +65,13 @@ pub(crate) struct RateLimitSnapshotDisplay {
     pub captured_at: DateTime<Local>,
     pub primary: Option<RateLimitWindowDisplay>,
     pub secondary: Option<RateLimitWindowDisplay>,
+    pub credits: Option<CreditsSnapshotDisplay>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CreditsSnapshotDisplay {
+    pub unlimited: bool,
+    pub balance: Option<String>,
 }
 
 pub(crate) fn rate_limit_snapshot_display(
@@ -72,6 +88,16 @@ pub(crate) fn rate_limit_snapshot_display(
             .secondary
             .as_ref()
             .map(|window| RateLimitWindowDisplay::from_window(window, captured_at)),
+        credits: snapshot.credits.as_ref().map(CreditsSnapshotDisplay::from),
+    }
+}
+
+impl From<&CoreCreditsSnapshot> for CreditsSnapshotDisplay {
+    fn from(value: &CoreCreditsSnapshot) -> Self {
+        Self {
+            unlimited: value.unlimited,
+            balance: value.balance.clone(),
+        }
     }
 }
 
@@ -81,7 +107,7 @@ pub(crate) fn compose_rate_limit_data(
 ) -> StatusRateLimitData {
     match snapshot {
         Some(snapshot) => {
-            let mut rows = Vec::with_capacity(2);
+            let mut rows = Vec::with_capacity(3);
 
             if let Some(primary) = snapshot.primary.as_ref() {
                 let label: String = primary
@@ -91,8 +117,10 @@ pub(crate) fn compose_rate_limit_data(
                 let label = capitalize_first(&label);
                 rows.push(StatusRateLimitRow {
                     label: format!("{label} limit"),
-                    percent_used: primary.used_percent,
-                    resets_at: primary.resets_at.clone(),
+                    value: StatusRateLimitValue::Window {
+                        percent_used: primary.used_percent,
+                        resets_at: primary.resets_at.clone(),
+                    },
                 });
             }
 
@@ -104,9 +132,36 @@ pub(crate) fn compose_rate_limit_data(
                 let label = capitalize_first(&label);
                 rows.push(StatusRateLimitRow {
                     label: format!("{label} limit"),
-                    percent_used: secondary.used_percent,
-                    resets_at: secondary.resets_at.clone(),
+                    value: StatusRateLimitValue::Window {
+                        percent_used: secondary.used_percent,
+                        resets_at: secondary.resets_at.clone(),
+                    },
                 });
+            }
+
+            if let Some(credits) = snapshot.credits.as_ref() {
+                match credits {
+                    CreditsSnapshotDisplay {
+                        unlimited: true, ..
+                    } => rows.push(StatusRateLimitRow {
+                        label: "Credits".to_string(),
+                        value: StatusRateLimitValue::Text("Unlimited".to_string()),
+                    }),
+                    CreditsSnapshotDisplay {
+                        unlimited: false,
+                        balance: Some(balance),
+                    } => {
+                        if let Some(display_balance) = format_credit_balance(balance) {
+                            rows.push(StatusRateLimitRow {
+                                label: "Credits".to_string(),
+                                value: StatusRateLimitValue::Text(format!(
+                                    "{display_balance} credits"
+                                )),
+                            });
+                        }
+                    }
+                    _ => {}
+                }
             }
 
             let is_stale = now.signed_duration_since(snapshot.captured_at)
@@ -138,6 +193,21 @@ pub(crate) fn render_status_limit_progress_bar(percent_remaining: f64) -> String
 
 pub(crate) fn format_status_limit_summary(percent_remaining: f64) -> String {
     format!("{percent_remaining:.0}% left")
+}
+
+fn format_credit_balance(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Ok(value) = trimmed.parse::<f64>() {
+        if value <= 0.0 {
+            return None;
+        }
+    }
+
+    Some(trimmed.to_string())
 }
 
 fn capitalize_first(label: &str) -> String {

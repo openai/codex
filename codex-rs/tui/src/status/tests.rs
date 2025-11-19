@@ -8,6 +8,7 @@ use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
+use codex_core::protocol::CreditsSnapshot;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::RateLimitWindow;
 use codex_core::protocol::SandboxPolicy;
@@ -118,6 +119,7 @@ fn status_snapshot_includes_reasoning_details() {
             window_minutes: Some(10080),
             resets_at: Some(reset_at_from(&captured_at, 1_200)),
         }),
+        credits: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
@@ -168,6 +170,7 @@ fn status_snapshot_includes_monthly_limit() {
             resets_at: Some(reset_at_from(&captured_at, 86_400)),
         }),
         secondary: None,
+        credits: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
@@ -188,6 +191,115 @@ fn status_snapshot_includes_monthly_limit() {
     }
     let sanitized = sanitize_directory(rendered_lines).join("\n");
     assert_snapshot!(sanitized);
+}
+
+#[test]
+fn status_snapshot_shows_unlimited_credits() {
+    let temp_home = TempDir::new().expect("temp home");
+    let config = test_config(&temp_home);
+    let auth_manager = test_auth_manager(&config);
+    let usage = TokenUsage::default();
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 2, 3, 4, 5, 6)
+        .single()
+        .expect("timestamp");
+    let snapshot = RateLimitSnapshot {
+        primary: None,
+        secondary: None,
+        credits: Some(CreditsSnapshot {
+            unlimited: true,
+            balance: None,
+        }),
+    };
+    let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
+    let composite = new_status_output(
+        &config,
+        &auth_manager,
+        &usage,
+        Some(&usage),
+        &None,
+        Some(&rate_display),
+        captured_at,
+    );
+    let rendered = render_lines(&composite.display_lines(120));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Credits:") && line.contains("Unlimited")),
+        "expected Credits: Unlimited line, got {rendered:?}"
+    );
+}
+
+#[test]
+fn status_snapshot_shows_positive_credits() {
+    let temp_home = TempDir::new().expect("temp home");
+    let config = test_config(&temp_home);
+    let auth_manager = test_auth_manager(&config);
+    let usage = TokenUsage::default();
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
+        .single()
+        .expect("timestamp");
+    let snapshot = RateLimitSnapshot {
+        primary: None,
+        secondary: None,
+        credits: Some(CreditsSnapshot {
+            unlimited: false,
+            balance: Some("12.5".to_string()),
+        }),
+    };
+    let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
+    let composite = new_status_output(
+        &config,
+        &auth_manager,
+        &usage,
+        Some(&usage),
+        &None,
+        Some(&rate_display),
+        captured_at,
+    );
+    let rendered = render_lines(&composite.display_lines(120));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Credits:") && line.contains("12.5 credits")),
+        "expected Credits line with 12.5 credits, got {rendered:?}"
+    );
+}
+
+#[test]
+fn status_snapshot_hides_zero_credits() {
+    let temp_home = TempDir::new().expect("temp home");
+    let config = test_config(&temp_home);
+    let auth_manager = test_auth_manager(&config);
+    let usage = TokenUsage::default();
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 4, 5, 6, 7, 8)
+        .single()
+        .expect("timestamp");
+    let snapshot = RateLimitSnapshot {
+        primary: None,
+        secondary: None,
+        credits: Some(CreditsSnapshot {
+            unlimited: false,
+            balance: Some("0".to_string()),
+        }),
+    };
+    let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
+    let composite = new_status_output(
+        &config,
+        &auth_manager,
+        &usage,
+        Some(&usage),
+        &None,
+        Some(&rate_display),
+        captured_at,
+    );
+    let rendered = render_lines(&composite.display_lines(120));
+    assert!(
+        rendered.iter().all(|line| !line.contains("Credits:")),
+        "expected no Credits line, got {rendered:?}"
+    );
 }
 
 #[test]
@@ -258,6 +370,7 @@ fn status_snapshot_truncates_in_narrow_terminal() {
             resets_at: Some(reset_at_from(&captured_at, 600)),
         }),
         secondary: None,
+        credits: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
@@ -340,6 +453,7 @@ fn status_snapshot_shows_empty_limits_message() {
     let snapshot = RateLimitSnapshot {
         primary: None,
         secondary: None,
+        credits: None,
     };
     let captured_at = chrono::Local
         .with_ymd_and_hms(2024, 6, 7, 8, 9, 10)
@@ -397,6 +511,7 @@ fn status_snapshot_shows_stale_limits_message() {
             window_minutes: Some(10_080),
             resets_at: Some(reset_at_from(&captured_at, 1_800)),
         }),
+        credits: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
     let now = captured_at + ChronoDuration::minutes(20);

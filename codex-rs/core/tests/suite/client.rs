@@ -1121,7 +1121,8 @@ async fn token_count_includes_rate_limits_snapshot() {
                     "used_percent": 40.0,
                     "window_minutes": 60,
                     "resets_at": 1704074400
-                }
+                },
+                "credits": null
             }
         })
     );
@@ -1168,7 +1169,8 @@ async fn token_count_includes_rate_limits_snapshot() {
                     "used_percent": 40.0,
                     "window_minutes": 60,
                     "resets_at": 1704074400
-                }
+                },
+                "credits": null
             }
         })
     );
