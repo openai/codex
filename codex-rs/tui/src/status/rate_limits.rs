@@ -201,10 +201,10 @@ fn format_credit_balance(raw: &str) -> Option<String> {
         return None;
     }
 
-    if let Ok(value) = trimmed.parse::<f64>() {
-        if value <= 0.0 {
-            return None;
-        }
+    if let Ok(value) = trimmed.parse::<f64>()
+        && value <= 0.0
+    {
+        return None;
     }
 
     Some(trimmed.to_string())
