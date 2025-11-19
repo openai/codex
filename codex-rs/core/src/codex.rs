@@ -1985,7 +1985,7 @@ async fn run_turn(
         if let Some(family) =
             find_family_for_model(&sess.state.lock().await.session_configuration.model)
         {
-            let mut new_instructions = family.base_instructions;
+            let mut new_instructions = base_instructions.unwrap_or(family.base_instructions);
             new_instructions.push_str(INSTRUCTIONS);
             base_instructions = Some(new_instructions);
         }
