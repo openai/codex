@@ -1982,7 +1982,9 @@ async fn run_turn(
     let mut base_instructions = turn_context.base_instructions.clone();
     if parallel_tool_calls {
         static INSTRUCTIONS: &str = include_str!("../templates/parallel/instructions.md");
-        if let Some(family) = find_family_for_model(&sess.state.lock().await.session_configuration.model) {
+        if let Some(family) =
+            find_family_for_model(&sess.state.lock().await.session_configuration.model)
+        {
             let mut new_instructions = family.base_instructions;
             new_instructions.push_str(INSTRUCTIONS);
             base_instructions = Some(new_instructions);
