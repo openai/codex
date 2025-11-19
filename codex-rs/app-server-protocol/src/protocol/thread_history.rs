@@ -1,12 +1,10 @@
 use crate::protocol::v2::ThreadItem;
 use crate::protocol::v2::Turn;
-use crate::protocol::v2::TurnError;
 use crate::protocol::v2::TurnStatus;
 use crate::protocol::v2::UserInput;
 use codex_protocol::protocol::AgentReasoningEvent;
 use codex_protocol::protocol::AgentReasoningRawContentEvent;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 
@@ -18,7 +16,7 @@ use codex_protocol::protocol::UserMessageEvent;
 pub fn build_turns_from_event_msgs(events: &[EventMsg]) -> Vec<Turn> {
     let mut builder = ThreadHistoryBuilder::new();
     for event in events {
-        let _ = builder.handle_event(event);
+        builder.handle_event(event);
     }
     builder.finish()
 }
@@ -47,7 +45,7 @@ impl ThreadHistoryBuilder {
 
     /// This function should handle all EventMsg variants that can be persisted in a rollout file.
     /// See `should_persist_event_msg` in `codex-rs/core/rollout/policy.rs`.
-    fn handle_event(&mut self, event: &EventMsg) -> bool {
+    fn handle_event(&mut self, event: &EventMsg) {
         match event {
             EventMsg::UserMessage(payload) => self.handle_user_message(payload),
             EventMsg::AgentMessage(payload) => self.handle_agent_message(payload.message.clone()),
@@ -55,46 +53,44 @@ impl ThreadHistoryBuilder {
             EventMsg::AgentReasoningRawContent(payload) => {
                 self.handle_agent_reasoning_raw_content(payload)
             }
-            EventMsg::TokenCount(_) => true,
-            EventMsg::EnteredReviewMode(_) => true,
-            EventMsg::ExitedReviewMode(_) => true,
-            EventMsg::UndoCompleted(_) => true,
+            EventMsg::TokenCount(_) => {}
+            EventMsg::EnteredReviewMode(_) => {}
+            EventMsg::ExitedReviewMode(_) => {}
+            EventMsg::UndoCompleted(_) => {}
             EventMsg::TurnAborted(payload) => self.handle_turn_aborted(payload),
-            _ => false,
+            _ => {}
         }
     }
 
-    fn handle_user_message(&mut self, payload: &UserMessageEvent) -> bool {
+    fn handle_user_message(&mut self, payload: &UserMessageEvent) {
         self.finish_current_turn();
         let mut turn = self.new_turn();
         let id = self.next_item_id();
         let content = self.build_user_inputs(payload);
         turn.items.push(ThreadItem::UserMessage { id, content });
         self.current_turn = Some(turn);
-        true
     }
 
-    fn handle_agent_message(&mut self, text: String) -> bool {
+    fn handle_agent_message(&mut self, text: String) {
         if text.is_empty() {
-            return true;
+            return;
         }
 
         let id = self.next_item_id();
         self.ensure_turn()
             .items
             .push(ThreadItem::AgentMessage { id, text });
-        true
     }
 
-    fn handle_agent_reasoning(&mut self, payload: &AgentReasoningEvent) -> bool {
+    fn handle_agent_reasoning(&mut self, payload: &AgentReasoningEvent) {
         if payload.text.is_empty() {
-            return true;
+            return;
         }
 
         // If the last item is a reasoning item, add the new text to the summary.
         if let Some(ThreadItem::Reasoning { summary, .. }) = self.ensure_turn().items.last_mut() {
             summary.push(payload.text.clone());
-            return true;
+            return;
         }
 
         // Otherwise, create a new reasoning item.
@@ -104,21 +100,17 @@ impl ThreadHistoryBuilder {
             summary: vec![payload.text.clone()],
             content: Vec::new(),
         });
-        true
     }
 
-    fn handle_agent_reasoning_raw_content(
-        &mut self,
-        payload: &AgentReasoningRawContentEvent,
-    ) -> bool {
+    fn handle_agent_reasoning_raw_content(&mut self, payload: &AgentReasoningRawContentEvent) {
         if payload.text.is_empty() {
-            return true;
+            return;
         }
 
         // If the last item is a reasoning item, add the new text to the content.
         if let Some(ThreadItem::Reasoning { content, .. }) = self.ensure_turn().items.last_mut() {
             content.push(payload.text.clone());
-            return true;
+            return;
         }
 
         // Otherwise, create a new reasoning item.
@@ -128,15 +120,13 @@ impl ThreadHistoryBuilder {
             summary: Vec::new(),
             content: vec![payload.text.clone()],
         });
-        true
     }
 
-    fn handle_turn_aborted(&mut self, payload: &TurnAbortedEvent) -> bool {
+    fn handle_turn_aborted(&mut self, _payload: &TurnAbortedEvent) {
         let Some(turn) = self.current_turn.as_mut() else {
-            return true;
+            return;
         };
         turn.status = TurnStatus::Interrupted;
-        true
     }
 
     fn finish_current_turn(&mut self) {
@@ -213,76 +203,16 @@ impl From<PendingTurn> for Turn {
     }
 }
 
-fn describe_abort_reason(reason: &TurnAbortReason) -> &'static str {
-    match reason {
-        TurnAbortReason::Interrupted => "interrupted",
-        TurnAbortReason::Replaced => "replaced by another turn",
-        TurnAbortReason::ReviewEnded => "review ended",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use codex_protocol::protocol::AgentMessageEvent;
     use codex_protocol::protocol::AgentReasoningEvent;
     use codex_protocol::protocol::AgentReasoningRawContentEvent;
-    use codex_protocol::protocol::TokenCountEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::TurnAbortedEvent;
-    use codex_protocol::protocol::UndoCompletedEvent;
     use codex_protocol::protocol::UserMessageEvent;
     use pretty_assertions::assert_eq;
-
-    fn persisted_events() -> Vec<EventMsg> {
-        vec![
-            EventMsg::UserMessage(UserMessageEvent {
-                message: "user".into(),
-                images: Some(vec!["https://example.com/image.png".into()]),
-            }),
-            EventMsg::AgentMessage(AgentMessageEvent {
-                message: "agent".into(),
-            }),
-            EventMsg::AgentReasoning(AgentReasoningEvent {
-                text: "reasoning".into(),
-            }),
-            EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent {
-                text: "raw reasoning".into(),
-            }),
-            EventMsg::TokenCount(TokenCountEvent {
-                info: None,
-                rate_limits: None,
-            }),
-            // TODO: handle review events
-            // EventMsg::EnteredReviewMode(ReviewRequest {
-            //     prompt: "prompt".into(),
-            //     user_facing_hint: "hint".into(),
-            //     append_to_original_thread: false,
-            // }),
-            // EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
-            //     review_output: None,
-            // }),
-            EventMsg::UndoCompleted(UndoCompletedEvent {
-                success: true,
-                message: Some("undo".into()),
-            }),
-            EventMsg::TurnAborted(TurnAbortedEvent {
-                reason: TurnAbortReason::Interrupted,
-            }),
-        ]
-    }
-
-    #[test]
-    fn handles_all_persisted_events() {
-        let mut builder = ThreadHistoryBuilder::new();
-
-        for event in persisted_events() {
-            assert!(
-                builder.handle_event(&event),
-                "expected thread history to handle {event:?}"
-            );
-        }
-    }
 
     #[test]
     fn builds_multiple_turns_with_reasoning_items() {
@@ -315,7 +245,6 @@ mod tests {
         let first = &turns[0];
         assert_eq!(first.id, "turn-1");
         assert_eq!(first.status, TurnStatus::Completed);
-        assert!(first.error.is_none());
         assert_eq!(first.items.len(), 3);
         assert_eq!(
             first.items[0],
@@ -439,12 +368,6 @@ mod tests {
 
         let first_turn = &turns[0];
         assert_eq!(first_turn.status, TurnStatus::Interrupted);
-        assert_eq!(
-            first_turn.error,
-            Some(TurnError {
-                message: "Turn aborted: replaced by another turn".into(),
-            })
-        );
         assert_eq!(first_turn.items.len(), 2);
         assert_eq!(
             first_turn.items[0],
@@ -465,7 +388,6 @@ mod tests {
 
         let second_turn = &turns[1];
         assert_eq!(second_turn.status, TurnStatus::Completed);
-        assert!(second_turn.error.is_none());
         assert_eq!(second_turn.items.len(), 2);
         assert_eq!(
             second_turn.items[0],
