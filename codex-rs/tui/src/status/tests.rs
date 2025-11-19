@@ -633,6 +633,65 @@ fn status_snapshot_shows_stale_limits_message() {
 }
 
 #[test]
+fn status_snapshot_cached_limits_hide_credits_without_flag() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home);
+    config.model = "gpt-5.1-codex".to_string();
+    config.cwd = PathBuf::from("/workspace/tests");
+
+    let auth_manager = test_auth_manager(&config);
+    let usage = TokenUsage {
+        input_tokens: 900,
+        cached_input_tokens: 200,
+        output_tokens: 350,
+        reasoning_output_tokens: 0,
+        total_tokens: 1_450,
+    };
+
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 9, 10, 11, 12, 13)
+        .single()
+        .expect("timestamp");
+    let snapshot = RateLimitSnapshot {
+        primary: Some(RateLimitWindow {
+            used_percent: 60.0,
+            window_minutes: Some(300),
+            resets_at: Some(reset_at_from(&captured_at, 1_200)),
+        }),
+        secondary: Some(RateLimitWindow {
+            used_percent: 35.0,
+            window_minutes: Some(10_080),
+            resets_at: Some(reset_at_from(&captured_at, 2_400)),
+        }),
+        credits: Some(CreditsSnapshot {
+            has_credits: false,
+            unlimited: false,
+            balance: Some("80".to_string()),
+        }),
+    };
+    let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
+    let now = captured_at + ChronoDuration::minutes(20);
+
+    let composite = new_status_output(
+        &config,
+        &auth_manager,
+        &usage,
+        Some(&usage),
+        &None,
+        Some(&rate_display),
+        now,
+    );
+    let mut rendered_lines = render_lines(&composite.display_lines(80));
+    if cfg!(windows) {
+        for line in &mut rendered_lines {
+            *line = line.replace('\\', "/");
+        }
+    }
+    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    assert_snapshot!(sanitized);
+}
+
+#[test]
 fn status_context_window_uses_last_usage() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home);
