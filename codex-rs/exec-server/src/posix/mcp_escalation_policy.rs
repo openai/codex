@@ -43,12 +43,17 @@ impl McpEscalationPolicy {
 
     async fn prompt(
         &self,
-        _file: &Path,
+        file: &Path,
         argv: &[String],
         workdir: &Path,
         context: RequestContext<RoleServer>,
     ) -> Result<CreateElicitationResult, McpError> {
-        let command = shlex::try_join(argv.iter().map(String::as_str)).unwrap_or_default();
+        let args = shlex::try_join(argv.iter().skip(1).map(String::as_str)).unwrap_or_default();
+        let command = if args.is_empty() {
+            file.display().to_string()
+        } else {
+            format!("{} {}", file.display(), args)
+        };
         context
             .peer
             .create_elicitation(CreateElicitationRequestParam {
