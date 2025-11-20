@@ -40,7 +40,7 @@ async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
     let params = ExecParams {
         command: cmd.iter().copied().map(str::to_owned).collect(),
         cwd,
-        timeout_ms: Some(timeout_ms),
+        expiration: timeout_ms.into(),
         env: create_env_from_core_vars(),
         with_escalated_permissions: None,
         justification: None,
@@ -143,7 +143,7 @@ async fn assert_network_blocked(cmd: &[&str]) {
         cwd,
         // Give the tool a generous 2-second timeout so even slow DNS timeouts
         // do not stall the suite.
-        timeout_ms: Some(NETWORK_TIMEOUT_MS),
+        expiration: NETWORK_TIMEOUT_MS.into(),
         env: create_env_from_core_vars(),
         with_escalated_permissions: None,
         justification: None,
