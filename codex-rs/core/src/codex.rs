@@ -74,6 +74,7 @@ use crate::error::Result as CodexResult;
 #[cfg(test)]
 use crate::exec::StreamOutput;
 use crate::exec_policy::ExecPolicyUpdateError;
+use crate::exec_policy::ExecPolicyUpdateError;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::openai_model_info::get_model_info;
@@ -294,6 +295,7 @@ pub(crate) struct TurnContext {
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
+    pub(crate) exec_policy: Arc<RwLock<ExecPolicy>>,
     pub(crate) exec_policy: Arc<RwLock<ExecPolicy>>,
     pub(crate) truncation_policy: TruncationPolicy,
 }
@@ -2829,7 +2831,7 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
-            exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
+            exec_policy: Arc::new(ExecPolicy::empty()),
             session_source: SessionSource::Exec,
         };
 
@@ -2910,7 +2912,7 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
-            exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
+            exec_policy: Arc::new(ExecPolicy::empty()),
             session_source: SessionSource::Exec,
         };
 
