@@ -507,18 +507,65 @@ fn login_ca_certificate_path() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+fn split_pem_bundle(pem_data: &[u8]) -> io::Result<Vec<Vec<u8>>> {
+    let pem_str = std::str::from_utf8(pem_data).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("PEM file is not valid UTF-8: {error}"),
+        )
+    })?;
+
+    const BEGIN_MARKER: &str = "-----BEGIN CERTIFICATE-----";
+    const END_MARKER: &str = "-----END CERTIFICATE-----";
+
+    let mut certificates = Vec::new();
+    let mut current_pos = 0;
+
+    while let Some(begin_idx) = pem_str[current_pos..].find(BEGIN_MARKER) {
+        let begin_abs = current_pos + begin_idx;
+        if let Some(end_idx) = pem_str[begin_abs..].find(END_MARKER) {
+            let end_abs = begin_abs + end_idx + END_MARKER.len();
+            let cert_pem = pem_str.as_bytes()[begin_abs..end_abs].to_vec();
+            certificates.push(cert_pem);
+            current_pos = end_abs;
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "found BEGIN CERTIFICATE without matching END CERTIFICATE",
+            ));
+        }
+    }
+
+    if certificates.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "no certificates found in PEM file",
+        ));
+    }
+
+    Ok(certificates)
+}
+
 pub(crate) fn build_login_http_client() -> io::Result<reqwest::Client> {
     let mut builder = reqwest::Client::builder();
 
     if let Some(path) = login_ca_certificate_path() {
-        let pem = fs::read(&path)?;
-        let certificate = reqwest::Certificate::from_pem(&pem).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("failed to parse certificate {}: {error}", path.display()),
-            )
-        })?;
-        builder = builder.add_root_certificate(certificate);
+        let pem_data = fs::read(&path)?;
+        let certificates = split_pem_bundle(&pem_data)?;
+
+        for (idx, cert_pem) in certificates.iter().enumerate() {
+            let certificate = reqwest::Certificate::from_pem(cert_pem).map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "failed to parse certificate #{} from {}: {error}",
+                        idx + 1,
+                        path.display()
+                    ),
+                )
+            })?;
+            builder = builder.add_root_certificate(certificate);
+        }
     }
 
     builder.build().map_err(io::Error::other)
@@ -760,7 +807,7 @@ mod tests {
     use std::env;
     use tempfile::TempDir;
 
-    const TEST_CERT: &str = "-----BEGIN CERTIFICATE-----
+    const TEST_CERT_1: &str = "-----BEGIN CERTIFICATE-----
 MIIDBTCCAe2gAwIBAgIURA/8mcaBUM3VeC/959yHcE5qhg0wDQYJKoZIhvcNAQEL
 BQAwEjEQMA4GA1UEAwwHdGVzdC1jYTAeFw0yNTExMTkwMTI5NDJaFw0yNjExMTkw
 MTI5NDJaMBIxEDAOBgNVBAMMB3Rlc3QtY2EwggEiMA0GCSqGSIb3DQEBAQUAA4IB
@@ -781,9 +828,37 @@ CnUUO0SOj4m4
 -----END CERTIFICATE-----
 ";
 
+    const TEST_CERT_2: &str = "-----BEGIN CERTIFICATE-----
+MIIDGTCCAgGgAwIBAgIUWxlcvHzwITWAHWHbKMFUTgeDmjwwDQYJKoZIhvcNAQEL
+BQAwHDEaMBgGA1UEAwwRdGVzdC1pbnRlcm1lZGlhdGUwHhcNMjUxMTE5MTU1MDIz
+WhcNMjYxMTE5MTU1MDIzWjAcMRowGAYDVQQDDBF0ZXN0LWludGVybWVkaWF0ZTCC
+ASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBANq7xbeYpC2GaXANqD1nLk0t
+j9j2sOk6e7DqTapxnIUijS7z4DF0Vo1xHM07wK1m+wsB/t9CubNYRvtn6hrIzx7K
+jjlmvxo4/YluwO1EDMQWZAXkaY2O28ESKVx7QLfBPYAc4bf/5B4Nmt6KX5sQyyyH
+2qTfzVBUCAl3sI+Ydd3mx7NOye1yNNkCNqyK3Hj45F1JuH8NZxcb4OlKssZhMlD+
+EQx4G46AzKE9Ho8AqlQvg/tiWrMHRluw7zolMJ/AXzedAXedNIrX4fCOmZwcTkA1
+a8eLPP8oM9VFrr67a7on6p4zPqugUEQ4fawp7A5KqSjUAVCt1FXmn2V8N8V6W/sC
+AwEAAaNTMFEwHQYDVR0OBBYEFBEwRwW0gm3IjhLw1U3eOAvR0r6SMB8GA1UdIwQY
+MBaAFBEwRwW0gm3IjhLw1U3eOAvR0r6SMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZI
+hvcNAQELBQADggEBAB2fjAlpevK42Odv8XUEgV6VWlEP9HAmkRvugW9hjhzx1Iz9
+Vh/l9VcxL7PcqdpyGH+BIRvQIMokcYF5TXzf/KV1T2y56U8AWaSd2/xSjYNWwkgE
+TLE5V+H/YDKzvTe58UrOaxa5N3URscQL9f+ZKworODmfMlkJ1mlREK130ZMlBexB
+p9w5wo1M1fjx76Rqzq9MkpwBSbIO2zx/8+qy4BAH23MPGW+9OOnnq2DiIX3qUu1v
+hnjYOxYpCB28MZEJmqsjFJQQ9RF+Te4U2/oknVcf8lZIMJ2ZBOwt2zg8RqCtM52/
+IbATwYj77wg3CFLFKcDYs3tdUqpiniabKcf6zAs=
+-----END CERTIFICATE-----
+";
+
     fn write_test_cert(temp_dir: &TempDir, file_name: &str) -> PathBuf {
         let path = temp_dir.path().join(file_name);
-        fs::write(&path, TEST_CERT).expect("write cert fixture");
+        fs::write(&path, TEST_CERT_1).expect("write cert fixture");
+        path
+    }
+
+    fn write_test_cert_bundle(temp_dir: &TempDir, file_name: &str) -> PathBuf {
+        let path = temp_dir.path().join(file_name);
+        let bundle = format!("{TEST_CERT_1}\n{TEST_CERT_2}");
+        fs::write(&path, bundle).expect("write cert bundle fixture");
         path
     }
 
@@ -860,5 +935,71 @@ CnUUO0SOj4m4
         restore_env(SSL_CERT_FILE_ENV, ssl_env_before);
 
         assert!(client.is_err());
+    }
+
+    #[serial(login_cert_env)]
+    #[test]
+    fn build_client_handles_multi_certificate_bundle() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let cert_path = write_test_cert_bundle(&temp_dir, "bundle.pem");
+        let (codex_env_before, ssl_env_before) = capture_env();
+
+        unsafe {
+            env::set_var(CODEX_CA_CERT_ENV, &cert_path);
+            env::remove_var(SSL_CERT_FILE_ENV);
+        }
+
+        let client = build_login_http_client();
+
+        restore_env(CODEX_CA_CERT_ENV, codex_env_before);
+        restore_env(SSL_CERT_FILE_ENV, ssl_env_before);
+
+        assert!(client.is_ok(), "Failed to build client with bundle: {:?}", client.err());
+    }
+
+    #[serial(login_cert_env)]
+    #[test]
+    fn build_client_rejects_empty_pem_file() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let cert_path = temp_dir.path().join("empty.pem");
+        fs::write(&cert_path, "").expect("write empty file");
+        let (codex_env_before, ssl_env_before) = capture_env();
+
+        unsafe {
+            env::set_var(CODEX_CA_CERT_ENV, &cert_path);
+            env::remove_var(SSL_CERT_FILE_ENV);
+        }
+
+        let client = build_login_http_client();
+
+        restore_env(CODEX_CA_CERT_ENV, codex_env_before);
+        restore_env(SSL_CERT_FILE_ENV, ssl_env_before);
+
+        assert!(client.is_err());
+        let err = client.unwrap_err();
+        assert!(err.to_string().contains("no certificates found"));
+    }
+
+    #[serial(login_cert_env)]
+    #[test]
+    fn build_client_rejects_malformed_pem() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let cert_path = temp_dir.path().join("malformed.pem");
+        fs::write(&cert_path, "-----BEGIN CERTIFICATE-----\nMIIBroken").expect("write malformed");
+        let (codex_env_before, ssl_env_before) = capture_env();
+
+        unsafe {
+            env::set_var(CODEX_CA_CERT_ENV, &cert_path);
+            env::remove_var(SSL_CERT_FILE_ENV);
+        }
+
+        let client = build_login_http_client();
+
+        restore_env(CODEX_CA_CERT_ENV, codex_env_before);
+        restore_env(SSL_CERT_FILE_ENV, ssl_env_before);
+
+        assert!(client.is_err());
+        let err = client.unwrap_err();
+        assert!(err.to_string().contains("BEGIN CERTIFICATE without matching END"));
     }
 }
