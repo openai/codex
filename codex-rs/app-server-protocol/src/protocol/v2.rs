@@ -11,6 +11,7 @@ use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
+use codex_protocol::protocol::CodexErrorCode;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
@@ -20,6 +21,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
+use thiserror::Error;
 use ts_rs::TS;
 
 // Macro to declare a camelCased API v2 enum mirroring a core enum which
@@ -544,12 +546,20 @@ pub struct Turn {
     pub status: TurnStatus,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, Error)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 #[error("{message}")]
 pub struct TurnError {
     pub message: String,
+    pub codex_error_code: Option<CodexErrorCode>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ErrorNotification {
+    pub error: TurnError,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
