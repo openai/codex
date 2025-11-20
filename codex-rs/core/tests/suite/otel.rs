@@ -843,6 +843,7 @@ async fn handle_container_exec_user_approved_records_tool_decision() {
         .submit(Op::ExecApproval {
             id: "0".into(),
             decision: ReviewDecision::Approved,
+            allow_prefix: None,
         })
         .await
         .unwrap();
@@ -901,6 +902,7 @@ async fn handle_container_exec_user_approved_for_session_records_tool_decision()
         .submit(Op::ExecApproval {
             id: "0".into(),
             decision: ReviewDecision::ApprovedForSession,
+            allow_prefix: None,
         })
         .await
         .unwrap();
@@ -959,6 +961,7 @@ async fn handle_sandbox_error_user_approves_retry_records_tool_decision() {
         .submit(Op::ExecApproval {
             id: "0".into(),
             decision: ReviewDecision::Approved,
+            allow_prefix: None,
         })
         .await
         .unwrap();
@@ -1017,6 +1020,7 @@ async fn handle_container_exec_user_denies_records_tool_decision() {
         .submit(Op::ExecApproval {
             id: "0".into(),
             decision: ReviewDecision::Denied,
+            allow_prefix: None,
         })
         .await
         .unwrap();
@@ -1075,6 +1079,7 @@ async fn handle_sandbox_error_user_approves_for_session_records_tool_decision() 
         .submit(Op::ExecApproval {
             id: "0".into(),
             decision: ReviewDecision::ApprovedForSession,
+            allow_prefix: None,
         })
         .await
         .unwrap();
@@ -1134,6 +1139,7 @@ async fn handle_sandbox_error_user_denies_records_tool_decision() {
         .submit(Op::ExecApproval {
             id: "0".into(),
             decision: ReviewDecision::Denied,
+            allow_prefix: None,
         })
         .await
         .unwrap();
