@@ -18,13 +18,13 @@ pub struct Shell {
 }
 
 impl Shell {
-    pub fn name(&self) -> String {
+    pub fn name(&self) -> &'static str {
         match self.shell_type {
-            ShellType::Zsh => "zsh".to_string(),
-            ShellType::Bash => "bash".to_string(),
-            ShellType::PowerShell => "powershell".to_string(),
-            ShellType::Sh => "sh".to_string(),
-            ShellType::Cmd => "cmd".to_string(),
+            ShellType::Zsh => "zsh",
+            ShellType::Bash => "bash",
+            ShellType::PowerShell => "powershell",
+            ShellType::Sh => "sh",
+            ShellType::Cmd => "cmd",
         }
     }
 
@@ -231,10 +231,14 @@ pub fn detect_shell_type(shell_path: &PathBuf) -> Option<ShellType> {
 }
 
 pub fn default_user_shell() -> Shell {
+    default_user_shell_from_path(get_user_shell_path())
+}
+
+fn default_user_shell_from_path(user_shell_path: Option<PathBuf>) -> Shell {
     if cfg!(windows) {
         get_shell(ShellType::PowerShell, None).unwrap_or(ultimate_fallback_shell())
     } else {
-        let user_default_shell = get_user_shell_path()
+        let user_default_shell = user_shell_path
             .and_then(|shell| detect_shell_type(&shell))
             .and_then(|shell_type| get_shell(shell_type, None));
 
@@ -331,6 +335,16 @@ mod tests {
     #[cfg(target_os = "macos")]
     fn detects_zsh() {
         let zsh_shell = get_shell(ShellType::Zsh, None).unwrap();
+
+        let shell_path = zsh_shell.shell_path;
+
+        assert_eq!(shell_path, PathBuf::from("/bin/zsh"));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn fish_fallback_to_zsh() {
+        let zsh_shell = default_user_shell_from_path(Some(PathBuf::from("/bin/fish")));
 
         let shell_path = zsh_shell.shell_path;
 
