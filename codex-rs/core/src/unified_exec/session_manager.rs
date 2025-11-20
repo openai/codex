@@ -11,10 +11,12 @@ use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::StreamOutput;
 use crate::exec_env::create_env;
+use crate::exec_policy::create_approval_requirement_for_command;
 use crate::protocol::BackgroundEventEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandSource;
 use crate::sandboxing::ExecEnv;
+use crate::sandboxing::SandboxPermissions;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventFailure;
@@ -23,6 +25,9 @@ use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
 use crate::tools::sandboxing::ToolCtx;
+use crate::truncate::TruncationPolicy;
+use crate::truncate::approx_token_count;
+use crate::truncate::formatted_truncate_text;
 
 use super::ExecCommandRequest;
 use super::SessionEntry;
@@ -36,7 +41,6 @@ use super::generate_chunk_id;
 use super::resolve_max_tokens;
 use super::session::OutputBuffer;
 use super::session::UnifiedExecSession;
-use crate::truncate::truncate_output_to_tokens;
 
 impl UnifiedExecSessionManager {
     pub(crate) async fn exec_command(
@@ -70,7 +74,7 @@ impl UnifiedExecSessionManager {
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let text = String::from_utf8_lossy(&collected).to_string();
-        let (output, original_token_count) = truncate_output_to_tokens(&text, max_tokens);
+        let output = formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
         let chunk_id = generate_chunk_id();
         let has_exited = session.has_exited();
         let stored_id = self
@@ -85,6 +89,8 @@ impl UnifiedExecSessionManager {
         // Only include a session_id in the response if the process is still alive.
         let session_id = if has_exited { None } else { Some(stored_id) };
 
+        let original_token_count = approx_token_count(&text);
+
         let response = UnifiedExecResponse {
             event_call_id: context.call_id.clone(),
             chunk_id,
@@ -92,7 +98,7 @@ impl UnifiedExecSessionManager {
             output,
             session_id,
             exit_code: exit_code.flatten(),
-            original_token_count,
+            original_token_count: Some(original_token_count),
             session_command: Some(request.command.clone()),
         };
 
@@ -175,7 +181,8 @@ impl UnifiedExecSessionManager {
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let text = String::from_utf8_lossy(&collected).to_string();
-        let (output, original_token_count) = truncate_output_to_tokens(&text, max_tokens);
+        let output = formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
+        let original_token_count = approx_token_count(&text);
         let chunk_id = generate_chunk_id();
 
         let status = self.refresh_session_state(session_id).await;
@@ -199,7 +206,7 @@ impl UnifiedExecSessionManager {
             output,
             session_id,
             exit_code,
-            original_token_count,
+            original_token_count: Some(original_token_count),
             session_command: Some(session_command.clone()),
         };
 
@@ -444,6 +451,13 @@ impl UnifiedExecSessionManager {
             create_env(&context.turn.shell_environment_policy),
             with_escalated_permissions,
             justification,
+            create_approval_requirement_for_command(
+                &context.turn.exec_policy,
+                command,
+                context.turn.approval_policy,
+                &context.turn.sandbox_policy,
+                SandboxPermissions::from(with_escalated_permissions.unwrap_or(false)),
+            ),
         );
         let tool_ctx = ToolCtx {
             session: context.session.as_ref(),

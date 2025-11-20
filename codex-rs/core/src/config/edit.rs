@@ -550,6 +550,15 @@ impl ConfigEditsBuilder {
         self
     }
 
+    /// Enable or disable a feature flag by key under the `[features]` table.
+    pub fn set_feature_enabled(mut self, key: &str, enabled: bool) -> Self {
+        self.edits.push(ConfigEdit::SetPath {
+            segments: vec!["features".to_string(), key.to_string()],
+            value: value(enabled),
+        });
+        self
+    }
+
     /// Apply edits on a blocking thread.
     pub fn apply_blocking(self) -> anyhow::Result<()> {
         apply_blocking(&self.codex_home, self.profile.as_deref(), &self.edits)
@@ -832,6 +841,36 @@ existing = "value"
         let expected = r#"[notice]
 existing = "value"
 hide_gpt5_1_migration_prompt = true
+"#;
+        assert_eq!(contents, expected);
+    }
+
+    #[test]
+    fn blocking_set_hide_gpt_5_1_codex_max_migration_prompt_preserves_table() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path();
+        std::fs::write(
+            codex_home.join(CONFIG_TOML_FILE),
+            r#"[notice]
+existing = "value"
+"#,
+        )
+        .expect("seed");
+        apply_blocking(
+            codex_home,
+            None,
+            &[ConfigEdit::SetNoticeHideModelMigrationPrompt(
+                "hide_gpt-5.1-codex-max_migration_prompt".to_string(),
+                true,
+            )],
+        )
+        .expect("persist");
+
+        let contents =
+            std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        let expected = r#"[notice]
+existing = "value"
+"hide_gpt-5.1-codex-max_migration_prompt" = true
 "#;
         assert_eq!(contents, expected);
     }

@@ -254,7 +254,7 @@ impl ChatComposer {
                 true
             }
             Err(err) => {
-                tracing::info!("ERR: {err}");
+                tracing::trace!("ERR: {err}");
                 false
             }
         }

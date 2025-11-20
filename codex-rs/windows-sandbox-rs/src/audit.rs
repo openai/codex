@@ -1,41 +1,45 @@
 use crate::token::world_sid;
 use crate::winutil::to_wide;
 use anyhow::Result;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::c_void;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
-use windows_sys::Win32::Foundation::LocalFree;
+use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
 use windows_sys::Win32::Foundation::HLOCAL;
+use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+use windows_sys::Win32::Foundation::LocalFree;
+use windows_sys::Win32::Security::ACCESS_ALLOWED_ACE;
+use windows_sys::Win32::Security::ACE_HEADER;
+use windows_sys::Win32::Security::ACL;
+use windows_sys::Win32::Security::ACL_SIZE_INFORMATION;
+use windows_sys::Win32::Security::AclSizeInformation;
 use windows_sys::Win32::Security::Authorization::GetNamedSecurityInfoW;
 use windows_sys::Win32::Security::Authorization::GetSecurityInfo;
-use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
-use windows_sys::Win32::Foundation::CloseHandle;
+use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
+use windows_sys::Win32::Security::EqualSid;
+use windows_sys::Win32::Security::GetAce;
+use windows_sys::Win32::Security::GetAclInformation;
+use windows_sys::Win32::Security::MapGenericMask;
+use windows_sys::Win32::Security::GENERIC_MAPPING;
 use windows_sys::Win32::Storage::FileSystem::CreateFileW;
+use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+use windows_sys::Win32::Storage::FileSystem::FILE_APPEND_DATA;
 use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
+use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
+use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
+use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
-use windows_sys::Win32::Storage::FileSystem::OPEN_EXISTING;
-use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
-use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_DATA;
-use windows_sys::Win32::Storage::FileSystem::FILE_APPEND_DATA;
-use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_EA;
 use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_ATTRIBUTES;
-const GENERIC_ALL_MASK: u32 = 0x1000_0000;
-const GENERIC_WRITE_MASK: u32 = 0x4000_0000;
-use windows_sys::Win32::Security::ACL;
-use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
-use windows_sys::Win32::Security::ACL_SIZE_INFORMATION;
-use windows_sys::Win32::Security::AclSizeInformation;
-use windows_sys::Win32::Security::GetAclInformation;
-use windows_sys::Win32::Security::GetAce;
-use windows_sys::Win32::Security::ACCESS_ALLOWED_ACE;
-use windows_sys::Win32::Security::ACE_HEADER;
-use windows_sys::Win32::Security::EqualSid;
+use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_DATA;
+use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_EA;
+use windows_sys::Win32::Storage::FileSystem::OPEN_EXISTING;
 
 // Preflight scan limits
 const MAX_ITEMS_PER_DIR: i32 = 1000;
@@ -161,7 +165,9 @@ unsafe fn path_has_world_write_allow(path: &Path) -> Result<bool> {
     let psid_world = world.as_mut_ptr() as *mut c_void;
     // Very fast mask-based check for world-writable grants (includes GENERIC_*).
     if !dacl_quick_world_write_mask_allows(p_dacl, psid_world) {
-        if !p_sd.is_null() { LocalFree(p_sd as HLOCAL); }
+        if !p_sd.is_null() {
+            LocalFree(p_sd as HLOCAL);
+        }
         return Ok(false);
     }
     // Quick detector flagged a write grant for Everyone: treat as writable.
@@ -201,7 +207,9 @@ pub fn audit_everyone_writable(
             let has = unsafe { path_has_world_write_allow(&p)? };
             if has {
                 let key = normalize_path_key(&p);
-                if seen.insert(key) { flagged.push(p); }
+                if seen.insert(key) {
+                    flagged.push(p);
+                }
             }
         }
     }
@@ -217,7 +225,9 @@ pub fn audit_everyone_writable(
         let has_root = unsafe { path_has_world_write_allow(&root)? };
         if has_root {
             let key = normalize_path_key(&root);
-            if seen.insert(key) { flagged.push(root.clone()); }
+            if seen.insert(key) {
+                flagged.push(root.clone());
+            }
         }
         // one level down best-effort
         if let Ok(read) = std::fs::read_dir(&root) {
@@ -239,13 +249,17 @@ pub fn audit_everyone_writable(
                 // Skip noisy/irrelevant Windows system subdirectories
                 let pl = p.to_string_lossy().to_ascii_lowercase();
                 let norm = pl.replace('\\', "/");
-                if SKIP_DIR_SUFFIXES.iter().any(|s| norm.ends_with(s)) { continue; }
+                if SKIP_DIR_SUFFIXES.iter().any(|s| norm.ends_with(s)) {
+                    continue;
+                }
                 if ft.is_dir() {
                     checked += 1;
                     let has_child = unsafe { path_has_world_write_allow(&p)? };
                     if has_child {
                         let key = normalize_path_key(&p);
-                        if seen.insert(key) { flagged.push(p); }
+                        if seen.insert(key) {
+                            flagged.push(p);
+                        }
                     }
                 }
             }
@@ -257,26 +271,43 @@ pub fn audit_everyone_writable(
         for p in &flagged {
             list.push_str(&format!("\n - {}", p.display()));
         }
-        crate::logging::log_note(
-            &format!(
-                "AUDIT: world-writable scan FAILED; checked={checked}; duration_ms={elapsed_ms}; flagged:{}",
-                list
-            ),
-            logs_base_dir,
-        );
+
         return Ok(flagged);
     }
     // Log success once if nothing flagged
     crate::logging::log_note(
-        &format!(
-            "AUDIT: world-writable scan OK; checked={checked}; duration_ms={elapsed_ms}"
-        ),
+        &format!("AUDIT: world-writable scan OK; checked={checked}; duration_ms={elapsed_ms}"),
         logs_base_dir,
     );
     Ok(Vec::new())
 }
+
+fn normalize_windows_path_for_display(p: impl AsRef<Path>) -> String {
+    let canon = dunce::canonicalize(p.as_ref()).unwrap_or_else(|_| p.as_ref().to_path_buf());
+    canon.display().to_string().replace('/', "\\")
+}
+
+pub fn world_writable_warning_details(
+    codex_home: impl AsRef<Path>,
+    cwd: impl AsRef<Path>,
+) -> Option<(Vec<String>, usize, bool)> {
+    let env_map: HashMap<String, String> = std::env::vars().collect();
+    match audit_everyone_writable(cwd.as_ref(), &env_map, Some(codex_home.as_ref())) {
+        Ok(paths) if paths.is_empty() => None,
+        Ok(paths) => {
+            let as_strings: Vec<String> = paths
+                .iter()
+                .map(normalize_windows_path_for_display)
+                .collect();
+            let sample_paths: Vec<String> = as_strings.iter().take(3).cloned().collect();
+            let extra_count = as_strings.len().saturating_sub(sample_paths.len());
+            Some((sample_paths, extra_count, false))
+        }
+        Err(_) => Some((Vec::new(), 0, true)),
+    }
+}
 // Fast mask-based check: does the DACL contain any ACCESS_ALLOWED ACE for
-// Everyone that includes generic or specific write bits? Skips inherit-only
+// Everyone that grants write after generic bits are expanded? Skips inherit-only
 // ACEs (do not apply to the current object).
 unsafe fn dacl_quick_world_write_mask_allows(p_dacl: *mut ACL, psid_world: *mut c_void) -> bool {
     if p_dacl.is_null() {
@@ -293,35 +324,38 @@ unsafe fn dacl_quick_world_write_mask_allows(p_dacl: *mut ACL, psid_world: *mut 
     if ok == 0 {
         return false;
     }
+    let mapping = GENERIC_MAPPING {
+        GenericRead: FILE_GENERIC_READ,
+        GenericWrite: FILE_GENERIC_WRITE,
+        GenericExecute: FILE_GENERIC_EXECUTE,
+        GenericAll: FILE_ALL_ACCESS,
+    };
     for i in 0..(info.AceCount as usize) {
         let mut p_ace: *mut c_void = std::ptr::null_mut();
         if GetAce(p_dacl as *const ACL, i as u32, &mut p_ace) == 0 {
             continue;
         }
         let hdr = &*(p_ace as *const ACE_HEADER);
-        if hdr.AceType != 0 { // ACCESS_ALLOWED_ACE_TYPE
+        if hdr.AceType != 0 {
+            // ACCESS_ALLOWED_ACE_TYPE
             continue;
         }
         if (hdr.AceFlags & INHERIT_ONLY_ACE) != 0 {
             continue;
         }
         let base = p_ace as usize;
-        let sid_ptr = (base
-            + std::mem::size_of::<ACE_HEADER>()
-            + std::mem::size_of::<u32>()) as *mut c_void; // skip header + mask
-        if EqualSid(sid_ptr, psid_world) != 0 {
-            let ace = &*(p_ace as *const ACCESS_ALLOWED_ACE);
-            let mask = ace.Mask;
-            let writey = FILE_GENERIC_WRITE
-                | FILE_WRITE_DATA
-                | FILE_APPEND_DATA
-                | FILE_WRITE_EA
-                | FILE_WRITE_ATTRIBUTES
-                | GENERIC_WRITE_MASK
-                | GENERIC_ALL_MASK;
-            if (mask & writey) != 0 {
-                return true;
-            }
+        let sid_ptr =
+            (base + std::mem::size_of::<ACE_HEADER>() + std::mem::size_of::<u32>()) as *mut c_void; // skip header + mask
+        if EqualSid(sid_ptr, psid_world) == 0 {
+            continue;
+        }
+        let ace = &*(p_ace as *const ACCESS_ALLOWED_ACE);
+        let mut mask = ace.Mask;
+        // Expand generic bits to concrete file rights before checking for write.
+        MapGenericMask(&mut mask, &mapping);
+        let write_mask = FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES;
+        if (mask & write_mask) != 0 {
+            return true;
         }
     }
     false
