@@ -14,6 +14,7 @@ use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
 use tokio::io::BufReader;
 use tokio::process::Child;
+use tokio_util::sync::CancellationToken;
 
 use crate::error::CodexErr;
 use crate::error::Result;
@@ -47,21 +48,68 @@ const AGGREGATE_BUFFER_INITIAL_CAPACITY: usize = 8 * 1024; // 8 KiB
 /// Aggregation still collects full output; only the live event stream is capped.
 pub(crate) const MAX_EXEC_OUTPUT_DELTAS_PER_CALL: usize = 10_000;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ExecParams {
     pub command: Vec<String>,
     pub cwd: PathBuf,
-    pub timeout_ms: Option<u64>,
+    pub expiration: ExecExpiration,
     pub env: HashMap<String, String>,
     pub with_escalated_permissions: Option<bool>,
     pub justification: Option<String>,
     pub arg0: Option<String>,
 }
 
-impl ExecParams {
-    pub fn timeout_duration(&self) -> Duration {
-        Duration::from_millis(self.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS))
+#[derive(Debug)]
+pub enum ExecExpiration {
+    Timeout(Duration),
+    DefaultTimeout,
+    Cancellation(CancellationToken),
+}
+
+impl From<Option<u64>> for ExecExpiration {
+    fn from(timeout_ms: Option<u64>) -> Self {
+        timeout_ms.map_or(ExecExpiration::DefaultTimeout, |timeout_ms| {
+            ExecExpiration::Timeout(Duration::from_millis(timeout_ms))
+        })
     }
+}
+
+impl From<u64> for ExecExpiration {
+    fn from(timeout_ms: u64) -> Self {
+        ExecExpiration::Timeout(Duration::from_millis(timeout_ms))
+    }
+}
+
+impl ExecExpiration {
+    fn timeout_duration(&self) -> Option<Duration> {
+        match self {
+            ExecExpiration::Timeout(duration) => Some(*duration),
+            ExecExpiration::DefaultTimeout => Some(Duration::from_millis(DEFAULT_TIMEOUT_MS)),
+            ExecExpiration::Cancellation(_) => None,
+        }
+    }
+
+    pub(crate) fn timeout_ms(&self) -> Option<u64> {
+        self.timeout_duration()
+            .map(|duration| duration.as_millis() as u64)
+    }
+
+    fn into_state(self) -> ExecExpirationState {
+        let timeout = self.timeout_duration();
+        let cancellation = match self {
+            ExecExpiration::Cancellation(cancellation) => Some(cancellation),
+            _ => None,
+        };
+        ExecExpirationState {
+            timeout,
+            cancellation,
+        }
+    }
+}
+
+struct ExecExpirationState {
+    timeout: Option<Duration>,
+    cancellation: Option<CancellationToken>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -96,7 +144,7 @@ pub async fn process_exec_tool_call(
     let ExecParams {
         command,
         cwd,
-        timeout_ms,
+        expiration,
         env,
         with_escalated_permissions,
         justification,
@@ -115,7 +163,7 @@ pub async fn process_exec_tool_call(
         args: args.to_vec(),
         cwd,
         env,
-        timeout_ms,
+        expiration,
         with_escalated_permissions,
         justification,
     };
@@ -123,7 +171,7 @@ pub async fn process_exec_tool_call(
     let manager = SandboxManager::new();
     let exec_env = manager
         .transform(
-            &spec,
+            spec,
             sandbox_policy,
             sandbox_type,
             sandbox_cwd,
@@ -132,7 +180,7 @@ pub async fn process_exec_tool_call(
         .map_err(CodexErr::from)?;
 
     // Route through the sandboxing module for a single, unified execution path.
-    crate::sandboxing::execute_env(&exec_env, sandbox_policy, stdout_stream).await
+    crate::sandboxing::execute_env(exec_env, sandbox_policy, stdout_stream).await
 }
 
 pub(crate) async fn execute_exec_env(
@@ -144,7 +192,7 @@ pub(crate) async fn execute_exec_env(
         command,
         cwd,
         env,
-        timeout_ms,
+        expiration,
         sandbox,
         with_escalated_permissions,
         justification,
@@ -154,7 +202,7 @@ pub(crate) async fn execute_exec_env(
     let params = ExecParams {
         command,
         cwd,
-        timeout_ms,
+        expiration,
         env,
         with_escalated_permissions,
         justification,
@@ -179,9 +227,12 @@ async fn exec_windows_sandbox(
         command,
         cwd,
         env,
-        timeout_ms,
+        expiration,
         ..
     } = params;
+    let timeout_ms = expiration
+        .timeout_duration()
+        .map(|duration| duration.as_millis() as u64);
 
     let policy_str = serde_json::to_string(sandbox_policy).map_err(|err| {
         CodexErr::Io(io::Error::other(format!(
@@ -449,14 +500,16 @@ async fn exec(
     {
         return exec_windows_sandbox(params, sandbox_policy).await;
     }
-    let timeout = params.timeout_duration();
     let ExecParams {
         command,
         cwd,
         env,
         arg0,
+        expiration,
         ..
     } = params;
+    let expiration = expiration.into_state();
+    let timeout = expiration.timeout;
 
     let (program, args) = command.split_first().ok_or_else(|| {
         CodexErr::Io(io::Error::new(
@@ -465,7 +518,7 @@ async fn exec(
         ))
     })?;
     let arg0_ref = arg0.as_deref();
-    let child = spawn_child_async(
+    let spawn_future = spawn_child_async(
         PathBuf::from(program),
         args.into(),
         arg0_ref,
@@ -473,16 +526,28 @@ async fn exec(
         sandbox_policy,
         StdioPolicy::RedirectForShellTool,
         env,
-    )
-    .await?;
-    consume_truncated_output(child, timeout, stdout_stream).await
+    );
+    let child = {
+        let cancel_wait = cancel_future(expiration.cancellation.as_ref());
+        tokio::pin!(cancel_wait);
+        tokio::select! {
+            result = spawn_future => {
+                result?
+            }
+            _ = &mut cancel_wait => {
+                return Ok(synthetic_timeout_output());
+            }
+        }
+    };
+    consume_truncated_output(child, timeout, expiration.cancellation, stdout_stream).await
 }
 
 /// Consumes the output of a child process, truncating it so it is suitable for
 /// use as the output of a `shell` tool call. Also enforces specified timeout.
 async fn consume_truncated_output(
     mut child: Child,
-    timeout: Duration,
+    timeout: Option<Duration>,
+    cancellation: Option<CancellationToken>,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<RawExecToolCallOutput> {
     // Both stdout and stderr were configured with `Stdio::piped()`
@@ -515,27 +580,50 @@ async fn consume_truncated_output(
         Some(agg_tx.clone()),
     ));
 
-    let (exit_status, timed_out) = tokio::select! {
-        result = tokio::time::timeout(timeout, child.wait()) => {
-            match result {
-                Ok(status_result) => {
-                    let exit_status = status_result?;
-                    (exit_status, false)
-                }
-                Err(_) => {
-                    // timeout
-                    kill_child_process_group(&mut child)?;
-                    child.start_kill()?;
-                    // Debatable whether `child.wait().await` should be called here.
-                    (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE), true)
+    let cancel_wait = cancel_future(cancellation.as_ref());
+    tokio::pin!(cancel_wait);
+    let (exit_status, timed_out) = match timeout {
+        Some(timeout) => tokio::select! {
+            result = tokio::time::timeout(timeout, child.wait()) => {
+                match result {
+                    Ok(status_result) => {
+                        let exit_status = status_result?;
+                        (exit_status, false)
+                    }
+                    Err(_) => {
+                        kill_child_process_group(&mut child)?;
+                        child.start_kill()?;
+                        (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE), true)
+                    }
                 }
             }
-        }
-        _ = tokio::signal::ctrl_c() => {
-            kill_child_process_group(&mut child)?;
-            child.start_kill()?;
-            (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + SIGKILL_CODE), false)
-        }
+            _ = tokio::signal::ctrl_c() => {
+                kill_child_process_group(&mut child)?;
+                child.start_kill()?;
+                (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + SIGKILL_CODE), false)
+            }
+            _ = &mut cancel_wait => {
+                kill_child_process_group(&mut child)?;
+                child.start_kill()?;
+                (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE), true)
+            }
+        },
+        None => tokio::select! {
+            status_result = child.wait() => {
+                let exit_status = status_result?;
+                (exit_status, false)
+            }
+            _ = tokio::signal::ctrl_c() => {
+                kill_child_process_group(&mut child)?;
+                child.start_kill()?;
+                (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + SIGKILL_CODE), false)
+            }
+            _ = &mut cancel_wait => {
+                kill_child_process_group(&mut child)?;
+                child.start_kill()?;
+                (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE), true)
+            }
+        },
     };
 
     // Wait for the stdout/stderr collection tasks but guard against them
@@ -603,6 +691,32 @@ async fn consume_truncated_output(
         aggregated_output,
         timed_out,
     })
+}
+
+fn synthetic_timeout_output() -> RawExecToolCallOutput {
+    RawExecToolCallOutput {
+        exit_status: synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE),
+        stdout: StreamOutput {
+            text: Vec::new(),
+            truncated_after_lines: None,
+        },
+        stderr: StreamOutput {
+            text: Vec::new(),
+            truncated_after_lines: None,
+        },
+        aggregated_output: StreamOutput {
+            text: Vec::new(),
+            truncated_after_lines: None,
+        },
+        timed_out: true,
+    }
+}
+
+async fn cancel_future(cancel: Option<&CancellationToken>) {
+    match cancel {
+        Some(cancel) => cancel.cancelled().await,
+        None => std::future::pending::<()>().await,
+    }
 }
 
 async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
@@ -790,7 +904,7 @@ mod tests {
         let params = ExecParams {
             command,
             cwd: std::env::current_dir()?,
-            timeout_ms: Some(500),
+            expiration: 500.into(),
             env,
             with_escalated_permissions: None,
             justification: None,
@@ -823,5 +937,63 @@ mod tests {
 
         assert!(killed, "grandchild process with pid {pid} is still alive");
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn process_exec_tool_call_respects_cancellation_token() -> Result<()> {
+        let command = long_running_command();
+        let cwd = std::env::current_dir()?;
+        let env: HashMap<String, String> = std::env::vars().collect();
+        let cancel_token = CancellationToken::new();
+        let cancel_tx = cancel_token.clone();
+        let params = ExecParams {
+            command,
+            cwd: cwd.clone(),
+            expiration: ExecExpiration::Cancellation(cancel_token),
+            env,
+            with_escalated_permissions: None,
+            justification: None,
+            arg0: None,
+        };
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(1_000)).await;
+            cancel_tx.cancel();
+        });
+        let result = process_exec_tool_call(
+            params,
+            SandboxType::None,
+            &SandboxPolicy::DangerFullAccess,
+            cwd.as_path(),
+            &None,
+            None,
+        )
+        .await;
+        let output = match result {
+            Err(CodexErr::Sandbox(SandboxErr::Timeout { output })) => output,
+            other => panic!("expected timeout error, got {other:?}"),
+        };
+        assert!(output.timed_out);
+        assert_eq!(output.exit_code, EXEC_TIMEOUT_EXIT_CODE);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn long_running_command() -> Vec<String> {
+        vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "sleep 30".to_string(),
+        ]
+    }
+
+    #[cfg(windows)]
+    fn long_running_command() -> Vec<String> {
+        vec![
+            "powershell.exe".to_string(),
+            "-NonInteractive".to_string(),
+            "-NoLogo".to_string(),
+            "-Command".to_string(),
+            "Start-Sleep -Seconds 30".to_string(),
+        ]
     }
 }

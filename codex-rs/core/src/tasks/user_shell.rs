@@ -10,6 +10,7 @@ use tracing::error;
 use uuid::Uuid;
 
 use crate::codex::TurnContext;
+use crate::exec::ExecExpiration;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
@@ -95,7 +96,9 @@ impl SessionTask for UserShellCommandTask {
             command: command.clone(),
             cwd: cwd.clone(),
             env: create_env(&turn_context.shell_environment_policy),
-            timeout_ms: Some(USER_SHELL_TIMEOUT_MS),
+            // TODO(zhao-oai): Now that we have ExecExpiration::Cancellation, we
+            // should use that instead of an "arbitrarily large" timeout here.
+            expiration: USER_SHELL_TIMEOUT_MS.into(),
             sandbox: SandboxType::None,
             with_escalated_permissions: None,
             justification: None,
