@@ -453,6 +453,7 @@ mod windows_impl {
 mod stub {
     use anyhow::bail;
     use anyhow::Result;
+    use codex_protocol::protocol::SandboxPolicy;
     use std::collections::HashMap;
     use std::path::Path;
 
@@ -468,7 +469,7 @@ mod stub {
         _codex_home: &Path,
         _cwd: &Path,
         _env_map: &HashMap<String, String>,
-        _sandbox_policy: &crate::policy::SandboxPolicy,
+        _sandbox_policy: &SandboxPolicy,
         _logs_base_dir: Option<&Path>,
     ) -> Result<Vec<std::path::PathBuf>> {
         bail!("Windows sandbox is only available on Windows")
