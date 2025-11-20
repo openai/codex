@@ -285,7 +285,13 @@ async fn handle_exec_approval(
     )
     .await;
 
-    let _ = codex.submit(Op::ExecApproval { id, decision }).await;
+    let _ = codex
+        .submit(Op::ExecApproval {
+            id,
+            decision,
+            allow_prefix: None,
+        })
+        .await;
 }
 
 /// Handle an ApplyPatchApprovalRequest by consulting the parent session and replying.

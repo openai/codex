@@ -146,6 +146,9 @@ pub enum Op {
         id: String,
         /// The user's decision in response to the request.
         decision: ReviewDecision,
+        /// When set, persist this prefix to the execpolicy allow list.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        allow_prefix: Option<Vec<String>>,
     },
 
     /// Approve a code patch
