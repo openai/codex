@@ -39,6 +39,7 @@ pub struct ConfigProfile {
     pub progress: Option<ProgressToml>,
     #[serde(default)]
     pub auto_continue: Option<AutoContinueToml>,
+    pub oss_provider: Option<String>,
 }
 
 impl From<ConfigProfile> for codex_app_server_protocol::Profile {

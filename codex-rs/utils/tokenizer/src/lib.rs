@@ -122,6 +122,11 @@ impl Tokenizer {
     }
 }
 
+impl fmt::Debug for Tokenizer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Tokenizer {{ inner: <CoreBPE> }}")
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,7 +163,7 @@ mod tests {
     #[test]
     fn model_mapping_builds_tokenizer() -> Result<(), TokenizerError> {
         // Choose a long-standing model alias that maps to cl100k_base.
-        let tok = Tokenizer::for_model("gpt-5")?;
+        let tok = Tokenizer::for_model("gpt-5.1")?;
         let ids = tok.encode("ok", false);
         let back = tok.decode(&ids)?;
         assert_eq!(back, "ok");

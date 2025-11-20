@@ -61,10 +61,7 @@ impl Shell {
                 ]
             }
             Shell::PowerShell(ps) => {
-                let mut args = vec![
-                    ps.shell_path.to_string_lossy().to_string(),
-                    "-NoLogo".to_string(),
-                ];
+                let mut args = vec![ps.shell_path.to_string_lossy().to_string()];
                 if !use_login_shell {
                     args.push("-NoProfile".to_string());
                 }
@@ -192,7 +189,6 @@ pub fn detect_shell_type(shell_path: &PathBuf) -> Option<ShellType> {
         Some("powershell") => Some(ShellType::PowerShell),
         _ => {
             let shell_name = shell_path.file_stem();
-
             if let Some(shell_name) = shell_name
                 && shell_name != shell_path
             {
@@ -208,10 +204,21 @@ pub async fn default_user_shell() -> Shell {
     if cfg!(windows) {
         get_shell(ShellType::PowerShell, None).unwrap_or(Shell::Unknown)
     } else {
-        get_user_shell_path()
+        let user_default_shell = get_user_shell_path()
             .and_then(|shell| detect_shell_type(&shell))
-            .and_then(|shell_type| get_shell(shell_type, None))
-            .unwrap_or(Shell::Unknown)
+            .and_then(|shell_type| get_shell(shell_type, None));
+
+        let shell_with_fallback = if cfg!(target_os = "macos") {
+            user_default_shell
+                .or_else(|| get_shell(ShellType::Zsh, None))
+                .or_else(|| get_shell(ShellType::Bash, None))
+        } else {
+            user_default_shell
+                .or_else(|| get_shell(ShellType::Bash, None))
+                .or_else(|| get_shell(ShellType::Zsh, None))
+        };
+
+        shell_with_fallback.unwrap_or(Shell::Unknown)
     }
 }
 
@@ -249,6 +256,14 @@ mod detect_shell_type_tests {
         );
         assert_eq!(
             detect_shell_type(&PathBuf::from("powershell.exe")),
+            Some(ShellType::PowerShell)
+        );
+        assert_eq!(
+            detect_shell_type(&PathBuf::from(if cfg!(windows) {
+                "C:\\windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+            } else {
+                "/usr/local/bin/pwsh"
+            })),
             Some(ShellType::PowerShell)
         );
         assert_eq!(

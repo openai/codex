@@ -2,6 +2,16 @@
 
 `codex app-server` is the interface Codex uses to power rich interfaces such as the [Codex VS Code extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt). The message schema is currently unstable, but those who wish to build experimental UIs on top of Codex may find it valuable.
 
+## Table of Contents
+- [Protocol](#protocol)
+- [Message Schema](#message-schema)
+- [Lifecycle Overview](#lifecycle-overview)
+- [Initialization](#initialization)
+- [Core primitives](#core-primitives)
+- [Thread & turn endpoints](#thread--turn-endpoints)
+- [Auth endpoints](#auth-endpoints)
+- [Events (work-in-progress)](#v2-streaming-events-work-in-progress)
+
 ## Protocol
 
 Similar to [MCP](https://modelcontextprotocol.io/), `codex app-server` supports bidirectional communication, streaming JSONL over stdio. The protocol is JSON-RPC 2.0, though the `"jsonrpc":"2.0"` header is omitted.
@@ -14,6 +24,14 @@ Currently, you can dump a TypeScript version of the schema using `codex app-serv
 codex app-server generate-ts --out DIR
 codex app-server generate-json-schema --out DIR
 ```
+
+## Lifecycle Overview
+
+- Initialize once: Immediately after launching the codex app-server process, send an `initialize` request with your client metadata, then emit an `initialized` notification. Any other request before this handshake gets rejected.
+- Start (or resume) a thread: Call `thread/start` to open a fresh conversation. The response returns the thread object and you’ll also get a `thread/started` notification. If you’re continuing an existing conversation, call `thread/resume` with its ID instead.
+- Begin a turn: To send user input, call `turn/start` with the target `threadId` and the user's input. Optional fields let you override model, cwd, sandbox policy, etc. This immediately returns the new turn object and triggers a `turn/started` notification.
+- Stream events: After `turn/start`, keep reading JSON-RPC notifications on stdout. You’ll see `item/started`, `item/completed`, deltas like `item/agentMessage/delta`, tool progress, etc. These represent streaming model output plus any side effects (commands, tool calls, reasoning notes).
+- Finish the turn: When the model is done (or the turn is interrupted via making the `turn/interrupt` call), the server sends `turn/completed` with the final turn state and token usage.
 
 ## Initialization
 
@@ -47,6 +65,7 @@ The JSON-RPC API exposes dedicated methods for managing Codex conversations. Thr
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success.
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
+- `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits a `item/completed` notification with a `codeReview` item when results are ready.
 
 ### 1) Start or resume a thread
 
@@ -56,7 +75,7 @@ Start a fresh thread when you need a new Codex conversation.
 { "method": "thread/start", "id": 10, "params": {
     // Optionally set config settings. If not specified, will use the user's
     // current config settings.
-    "model": "gpt-5-codex",
+    "model": "gpt-5.1-codex",
     "cwd": "/Users/me/project",
     "approvalPolicy": "never",
     "sandbox": "workspaceWrite",
@@ -137,7 +156,7 @@ You can optionally specify config overrides on the new turn. If specified, these
         "writableRoots": ["/Users/me/project"],
         "networkAccess": true
     },
-    "model": "gpt-5-codex",
+    "model": "gpt-5.1-codex",
     "effort": "medium",
     "summary": "concise"
 } }
@@ -162,6 +181,58 @@ You can cancel a running Turn with `turn/interrupt`.
 ```
 
 The server requests cancellations for running subprocesses, then emits a `turn/completed` event with `status: "interrupted"`. Rely on the `turn/completed` to know when Codex-side cleanup is done.
+
+### 6) Request a code review
+
+Use `review/start` to run Codex’s reviewer on the currently checked-out project. The request takes the thread id plus a `target` describing what should be reviewed:
+
+- `{"type":"uncommittedChanges"}` — staged, unstaged, and untracked files.
+- `{"type":"baseBranch","branch":"main"}` — diff against the provided branch’s upstream (see prompt for the exact `git merge-base`/`git diff` instructions Codex will run).
+- `{"type":"commit","sha":"abc1234","title":"Optional subject"}` — review a specific commit.
+- `{"type":"custom","instructions":"Free-form reviewer instructions"}` — fallback prompt equivalent to the legacy manual review request.
+- `appendToOriginalThread` (bool, default `false`) — when `true`, Codex also records a final assistant-style message with the review summary in the original thread. When `false`, only the `codeReview` item is emitted for the review run and no extra message is added to the original thread.
+
+Example request/response:
+
+```json
+{ "method": "review/start", "id": 40, "params": {
+    "threadId": "thr_123",
+    "appendToOriginalThread": true,
+    "target": { "type": "commit", "sha": "1234567deadbeef", "title": "Polish tui colors" }
+} }
+{ "id": 40, "result": { "turn": {
+    "id": "turn_900",
+    "status": "inProgress",
+    "items": [
+        { "type": "userMessage", "id": "turn_900", "content": [ { "type": "text", "text": "Review commit 1234567: Polish tui colors" } ] }
+    ],
+    "error": null
+} } }
+```
+
+Codex streams the usual `turn/started` notification followed by an `item/started`
+with the same `codeReview` item id so clients can show progress:
+
+```json
+{ "method": "item/started", "params": { "item": {
+    "type": "codeReview",
+    "id": "turn_900",
+    "review": "current changes"
+} } }
+```
+
+When the reviewer finishes, the server emits `item/completed` containing the same
+`codeReview` item with the final review text:
+
+```json
+{ "method": "item/completed", "params": { "item": {
+    "type": "codeReview",
+    "id": "turn_900",
+    "review": "Looks solid overall...\n\n- Prefer Stylize helpers — app.rs:10-20\n  ..."
+} } }
+```
+
+The `review` string is plain text that already bundles the overall explanation plus a bullet list for each structured finding (matching `ThreadItem::CodeReview` in the generated schema). Use this notification to render the reviewer output in your client.
 
 ## Auth endpoints
 
@@ -258,3 +329,33 @@ Field notes:
 - `codex app-server generate-ts --out <dir>` emits v2 types under `v2/`.
 - `codex app-server generate-json-schema --out <dir>` outputs `codex_app_server_protocol.schemas.json`.
 - See [“Authentication and authorization” in the config docs](../../docs/config.md#authentication-and-authorization) for configuration knobs.
+
+
+## Events (work-in-progress)
+
+Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `turn/*`, and `item/*` notifications.
+
+### Turn events
+
+The app-server streams JSON-RPC notifications while a turn is running. Each turn starts with `turn/started` (initial `turn`) and ends with `turn/completed` (final `turn` plus token `usage`), and clients subscribe to the events they care about, rendering each item incrementally as updates arrive. The per-item lifecycle is always: `item/started` → zero or more item-specific deltas → `item/completed`.
+
+#### Thread items
+
+`ThreadItem` is the tagged union carried in turn responses and `item/*` notifications. Currently we support events for the following items:
+- `userMessage` — `{id, content}` where `content` is a list of user inputs (`text`, `image`, or `localImage`).
+- `agentMessage` — `{id, text}` containing the accumulated agent reply.
+- `reasoning` — `{id, summary, content}` where `summary` holds streamed reasoning summaries (applicable for most OpenAI models) and `content` holds raw reasoning blocks (applicable for e.g. open source models).
+- `mcpToolCall` — `{id, server, tool, status, arguments, result?, error?}` describing MCP calls; `status` is `inProgress`, `completed`, or `failed`.
+- `webSearch` — `{id, query}` for a web search request issued by the agent.
+
+All items emit two shared lifecycle events:
+- `item/started` — emits the full `item` when a new unit of work begins so the UI can render it immediately; the `item.id` in this payload matches the `itemId` used by deltas.
+- `item/completed` — sends the final `item` once that work finishes (e.g., after a tool call or message completes); treat this as the authoritative state.
+
+There are additional item-specific events:
+#### agentMessage
+- `item/agentMessage/delta` — appends streamed text for the agent message; concatenate `delta` values for the same `itemId` in order to reconstruct the full reply.
+#### reasoning
+- `item/reasoning/summaryTextDelta` — streams readable reasoning summaries; `summaryIndex` increments when a new summary section opens.
+- `item/reasoning/summaryPartAdded` — marks the boundary between reasoning summary sections for an `itemId`; subsequent `summaryTextDelta` entries share the same `summaryIndex`.
+- `item/reasoning/textDelta` — streams raw reasoning text (only applicable for e.g. open source models); use `contentIndex` to group deltas that belong together before showing them in the UI.

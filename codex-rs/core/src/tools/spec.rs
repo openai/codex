@@ -20,6 +20,11 @@ pub enum ConfigShellToolType {
     Default,
     Local,
     UnifiedExec,
+    /// Do not include a shell tool by default. Useful when using Codex
+    /// with tools provided exclusively provided by MCP servers. Often used
+    /// with `--config base_instructions=CUSTOM_INSTRUCTIONS`
+    /// to customize agent behavior.
+    Disabled,
     /// Takes a command as a single string to be run in the user's default shell.
     ShellCommand,
 }
@@ -48,7 +53,9 @@ impl ToolsConfig {
         let include_web_search_request = features.enabled(Feature::WebSearchRequest);
         let include_view_image_tool = features.enabled(Feature::ViewImageTool);
 
-        let shell_type = if features.enabled(Feature::UnifiedExec) {
+        let shell_type = if !features.enabled(Feature::ShellTool) {
+            ConfigShellToolType::Disabled
+        } else if features.enabled(Feature::UnifiedExec) {
             ConfigShellToolType::UnifiedExec
         } else if features.enabled(Feature::ShellCommandTool) {
             ConfigShellToolType::ShellCommand
@@ -294,9 +301,26 @@ fn create_shell_tool() -> ToolSpec {
         },
     );
 
+    let description  = if cfg!(windows) {
+        r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
+        
+Examples of valid command strings:
+
+- ls -a (show hidden): ["powershell.exe", "-Command", "Get-ChildItem -Force"]
+- recursive find by name: ["powershell.exe", "-Command", "Get-ChildItem -Recurse -Filter *.py"]
+- recursive grep: ["powershell.exe", "-Command", "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"]
+- ps aux | grep python: ["powershell.exe", "-Command", "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"]
+- setting an env var: ["powershell.exe", "-Command", "$env:FOO='bar'; echo $env:FOO"]
+- running an inline Python script: ["powershell.exe", "-Command", "@'\\nprint('Hello, world!')\\n'@ | python -"]"#
+    } else {
+        r#"Runs a shell command and returns its output.
+- The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with ["bash", "-lc"].
+- Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary."#
+    }.to_string();
+
     ToolSpec::Function(ResponsesApiTool {
         name: "shell".to_string(),
-        description: "Runs a shell command and returns its output.".to_string(),
+        description,
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -341,9 +365,25 @@ fn create_shell_command_tool() -> ToolSpec {
         },
     );
 
+    let description = if cfg!(windows) {
+        r#"Runs a Powershell command (Windows) and returns its output.
+        
+Examples of valid command strings:
+
+- ls -a (show hidden): "Get-ChildItem -Force"
+- recursive find by name: "Get-ChildItem -Recurse -Filter *.py"
+- recursive grep: "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"
+- ps aux | grep python: "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"
+- setting an env var: "$env:FOO='bar'; echo $env:FOO"
+- running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -"#
+    } else {
+        r#"Runs a shell command and returns its output.
+- Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary."#
+    }.to_string();
+
     ToolSpec::Function(ResponsesApiTool {
         name: "shell_command".to_string(),
-        description: "Runs a shell command string and returns its output.".to_string(),
+        description,
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -973,16 +1013,21 @@ pub(crate) fn build_specs(
             builder.register_handler("exec_command", unified_exec_handler.clone());
             builder.register_handler("write_stdin", unified_exec_handler);
         }
+        ConfigShellToolType::Disabled => {
+            // Do nothing.
+        }
         ConfigShellToolType::ShellCommand => {
             builder.push_spec(create_shell_command_tool());
         }
     }
 
-    // Always register shell aliases so older prompts remain compatible.
-    builder.register_handler("shell", shell_handler.clone());
-    builder.register_handler("container.exec", shell_handler.clone());
-    builder.register_handler("local_shell", shell_handler);
-    builder.register_handler("shell_command", shell_command_handler);
+    if config.shell_type != ConfigShellToolType::Disabled {
+        // Always register shell aliases so older prompts remain compatible.
+        builder.register_handler("shell", shell_handler.clone());
+        builder.register_handler("container.exec", shell_handler.clone());
+        builder.register_handler("local_shell", shell_handler);
+        builder.register_handler("shell_command", shell_command_handler);
+    }
 
     builder.push_spec_with_parallel_support(create_list_mcp_resources_tool(), true);
     builder.push_spec_with_parallel_support(create_list_mcp_resource_templates_tool(), true);
@@ -1118,6 +1163,7 @@ mod tests {
             ConfigShellToolType::Default => Some("shell"),
             ConfigShellToolType::Local => Some("local_shell"),
             ConfigShellToolType::UnifiedExec => None,
+            ConfigShellToolType::Disabled => None,
             ConfigShellToolType::ShellCommand => Some("shell_command"),
         }
     }
@@ -1246,7 +1292,7 @@ mod tests {
             "gpt-5-codex",
             &Features::with_defaults(),
             &[
-                "shell",
+                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1263,7 +1309,7 @@ mod tests {
             "gpt-5.1-codex",
             &Features::with_defaults(),
             &[
-                "shell",
+                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1338,7 +1384,7 @@ mod tests {
             "gpt-5.1-codex-mini",
             &Features::with_defaults(),
             &[
-                "shell",
+                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1350,12 +1396,28 @@ mod tests {
     }
 
     #[test]
+    fn test_gpt_5_defaults() {
+        assert_model_tools(
+            "gpt-5",
+            &Features::with_defaults(),
+            &[
+                "shell",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "view_image",
+            ],
+        );
+    }
+
+    #[test]
     fn test_gpt_5_1_defaults() {
         assert_model_tools(
             "gpt-5.1",
             &Features::with_defaults(),
             &[
-                "shell",
+                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1873,8 +1935,23 @@ mod tests {
         };
         assert_eq!(name, "shell");
 
-        let expected = "Runs a shell command and returns its output.";
-        assert_eq!(description, expected);
+        let expected = if cfg!(windows) {
+            r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
+        
+Examples of valid command strings:
+
+- ls -a (show hidden): ["powershell.exe", "-Command", "Get-ChildItem -Force"]
+- recursive find by name: ["powershell.exe", "-Command", "Get-ChildItem -Recurse -Filter *.py"]
+- recursive grep: ["powershell.exe", "-Command", "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"]
+- ps aux | grep python: ["powershell.exe", "-Command", "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"]
+- setting an env var: ["powershell.exe", "-Command", "$env:FOO='bar'; echo $env:FOO"]
+- running an inline Python script: ["powershell.exe", "-Command", "@'\\nprint('Hello, world!')\\n'@ | python -"]"#
+        } else {
+            r#"Runs a shell command and returns its output.
+- The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with ["bash", "-lc"].
+- Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary."#
+        }.to_string();
+        assert_eq!(description, &expected);
     }
 
     #[test]
@@ -1888,8 +1965,22 @@ mod tests {
         };
         assert_eq!(name, "shell_command");
 
-        let expected = "Runs a shell command string and returns its output.";
-        assert_eq!(description, expected);
+        let expected = if cfg!(windows) {
+            r#"Runs a Powershell command (Windows) and returns its output.
+        
+Examples of valid command strings:
+
+- ls -a (show hidden): "Get-ChildItem -Force"
+- recursive find by name: "Get-ChildItem -Recurse -Filter *.py"
+- recursive grep: "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"
+- ps aux | grep python: "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"
+- setting an env var: "$env:FOO='bar'; echo $env:FOO"
+- running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -"#.to_string()
+        } else {
+            r#"Runs a shell command and returns its output.
+- Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary."#.to_string()
+        };
+        assert_eq!(description, &expected);
     }
 
     #[test]

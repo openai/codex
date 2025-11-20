@@ -28,6 +28,7 @@ use super::helpers::format_tokens_compact;
 use super::rate_limits::RateLimitSnapshotDisplay;
 use super::rate_limits::StatusRateLimitData;
 use super::rate_limits::StatusRateLimitRow;
+use super::rate_limits::StatusRateLimitValue;
 use super::rate_limits::compose_rate_limit_data;
 use super::rate_limits::format_status_limit_summary;
 use super::rate_limits::render_status_limit_progress_bar;
@@ -215,29 +216,44 @@ impl StatusHistoryCell {
         let mut lines = Vec::with_capacity(rows.len().saturating_mul(2));
 
         for row in rows {
-            let percent_remaining = (100.0 - row.percent_used).clamp(0.0, 100.0);
-            let value_spans = vec![
-                Span::from(render_status_limit_progress_bar(percent_remaining)),
-                Span::from(" "),
-                Span::from(format_status_limit_summary(percent_remaining)),
-            ];
-            let base_spans = formatter.full_spans(row.label.as_str(), value_spans);
-            let base_line = Line::from(base_spans.clone());
+            match &row.value {
+                StatusRateLimitValue::Window {
+                    percent_used,
+                    resets_at,
+                } => {
+                    let percent_remaining = (100.0 - percent_used).clamp(0.0, 100.0);
+                    let value_spans = vec![
+                        Span::from(render_status_limit_progress_bar(percent_remaining)),
+                        Span::from(" "),
+                        Span::from(format_status_limit_summary(percent_remaining)),
+                    ];
+                    let base_spans = formatter.full_spans(row.label.as_str(), value_spans);
+                    let base_line = Line::from(base_spans.clone());
 
-            if let Some(resets_at) = row.resets_at.as_ref() {
-                let resets_span = Span::from(format!("(resets {resets_at})")).dim();
-                let mut inline_spans = base_spans.clone();
-                inline_spans.push(Span::from(" ").dim());
-                inline_spans.push(resets_span.clone());
+                    if let Some(resets_at) = resets_at.as_ref() {
+                        let resets_span = Span::from(format!("(resets {resets_at})")).dim();
+                        let mut inline_spans = base_spans.clone();
+                        inline_spans.push(Span::from(" ").dim());
+                        inline_spans.push(resets_span.clone());
 
-                if line_display_width(&Line::from(inline_spans.clone())) <= available_inner_width {
-                    lines.push(Line::from(inline_spans));
-                } else {
-                    lines.push(base_line);
-                    lines.push(formatter.continuation(vec![resets_span]));
+                        if line_display_width(&Line::from(inline_spans.clone()))
+                            <= available_inner_width
+                        {
+                            lines.push(Line::from(inline_spans));
+                        } else {
+                            lines.push(base_line);
+                            lines.push(formatter.continuation(vec![resets_span]));
+                        }
+                    } else {
+                        lines.push(base_line);
+                    }
                 }
-            } else {
-                lines.push(base_line);
+                StatusRateLimitValue::Text(text) => {
+                    let label = row.label.clone();
+                    let spans =
+                        formatter.full_spans(label.as_str(), vec![Span::from(text.clone())]);
+                    lines.push(Line::from(spans));
+                }
             }
         }
 

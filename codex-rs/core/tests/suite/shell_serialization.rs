@@ -1,14 +1,13 @@
 #![cfg(not(target_os = "windows"))]
+#![allow(clippy::expect_used)]
 
 use anyhow::Result;
 use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::SandboxPolicy;
 use core_test_support::assert_regex_match;
-use core_test_support::responses::ev_apply_patch_function_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_custom_tool_call;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_local_shell_call;
 use core_test_support::responses::ev_response_created;
@@ -16,12 +15,18 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::ApplyPatchModelOutput;
+use core_test_support::test_codex::ShellModelOutput;
 use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
 use std::fs;
+use test_case::test_case;
+
+use crate::suite::apply_patch_cli::apply_patch_harness;
+use crate::suite::apply_patch_cli::mount_apply_patch;
 
 const FIXTURE_JSON: &str = r#"{
     "description": "This is an example JSON file.",
@@ -35,34 +40,87 @@ const FIXTURE_JSON: &str = r#"{
 }
 "#;
 
+fn shell_responses(
+    call_id: &str,
+    command: Vec<&str>,
+    output_type: ShellModelOutput,
+) -> Result<Vec<String>> {
+    match output_type {
+        ShellModelOutput::ShellCommand => {
+            let command = shlex::try_join(command)?;
+            let parameters = json!({
+                "command": command,
+                "timeout_ms": 2_000,
+            });
+            Ok(vec![
+                sse(vec![
+                    ev_response_created("resp-1"),
+                    ev_function_call(
+                        call_id,
+                        "shell_command",
+                        &serde_json::to_string(&parameters)?,
+                    ),
+                    ev_completed("resp-1"),
+                ]),
+                sse(vec![
+                    ev_assistant_message("msg-1", "done"),
+                    ev_completed("resp-2"),
+                ]),
+            ])
+        }
+        ShellModelOutput::Shell => {
+            let parameters = json!({
+                "command": command,
+                "timeout_ms": 2_000,
+            });
+            Ok(vec![
+                sse(vec![
+                    ev_response_created("resp-1"),
+                    ev_function_call(call_id, "shell", &serde_json::to_string(&parameters)?),
+                    ev_completed("resp-1"),
+                ]),
+                sse(vec![
+                    ev_assistant_message("msg-1", "done"),
+                    ev_completed("resp-2"),
+                ]),
+            ])
+        }
+        ShellModelOutput::LocalShell => Ok(vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_local_shell_call(call_id, "completed", command),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ]),
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_output_stays_json_without_freeform_apply_patch() -> Result<()> {
+#[test_case(ShellModelOutput::Shell)]
+#[test_case(ShellModelOutput::LocalShell)]
+async fn shell_output_stays_json_without_freeform_apply_patch(
+    output_type: ShellModelOutput,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(|config| {
+    let mut builder = test_codex().with_config(move |config| {
         config.features.disable(Feature::ApplyPatchFreeform);
         config.model = "gpt-5".to_string();
         config.model_family = find_family_for_model("gpt-5").expect("gpt-5 is a model family");
+        if matches!(output_type, ShellModelOutput::ShellCommand) {
+            config.features.enable(Feature::ShellCommandTool);
+        }
+        let _ = output_type;
     });
     let test = builder.build(&server).await?;
 
     let call_id = "shell-json";
-    let args = json!({
-        "command": ["/bin/echo", "shell json"],
-        "timeout_ms": 1_000,
-    });
-    let responses = vec![
-        sse(vec![
-            ev_response_created("resp-1"),
-            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
-            ev_completed("resp-1"),
-        ]),
-        sse(vec![
-            ev_assistant_message("msg-1", "done"),
-            ev_completed("resp-2"),
-        ]),
-    ];
+    let responses = shell_responses(call_id, vec!["/bin/echo", "shell json"], output_type)?;
     let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
@@ -80,7 +138,6 @@ async fn shell_output_stays_json_without_freeform_apply_patch() -> Result<()> {
 
     let mut parsed: Value = serde_json::from_str(output)?;
     if let Some(metadata) = parsed.get_mut("metadata").and_then(Value::as_object_mut) {
-        // duration_seconds is non-deterministic; remove it for deep equality
         let _ = metadata.remove("duration_seconds");
     }
 
@@ -102,31 +159,26 @@ async fn shell_output_stays_json_without_freeform_apply_patch() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_output_is_structured_with_freeform_apply_patch() -> Result<()> {
+#[test_case(ShellModelOutput::Shell)]
+#[test_case(ShellModelOutput::ShellCommand)]
+#[test_case(ShellModelOutput::LocalShell)]
+async fn shell_output_is_structured_with_freeform_apply_patch(
+    output_type: ShellModelOutput,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(|config| {
+    let mut builder = test_codex().with_config(move |config| {
         config.features.enable(Feature::ApplyPatchFreeform);
+        if matches!(output_type, ShellModelOutput::ShellCommand) {
+            config.features.enable(Feature::ShellCommandTool);
+        }
+        let _ = output_type;
     });
     let test = builder.build(&server).await?;
 
     let call_id = "shell-structured";
-    let args = json!({
-        "command": ["/bin/echo", "freeform shell"],
-        "timeout_ms": 1_000,
-    });
-    let responses = vec![
-        sse(vec![
-            ev_response_created("resp-1"),
-            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
-            ev_completed("resp-1"),
-        ]),
-        sse(vec![
-            ev_assistant_message("msg-1", "done"),
-            ev_completed("resp-2"),
-        ]),
-    ];
+    let responses = shell_responses(call_id, vec!["/bin/echo", "freeform shell"], output_type)?;
     let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
@@ -159,14 +211,22 @@ freeform shell
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_output_preserves_fixture_json_without_serialization() -> Result<()> {
+#[test_case(ShellModelOutput::Shell)]
+#[test_case(ShellModelOutput::LocalShell)]
+async fn shell_output_preserves_fixture_json_without_serialization(
+    output_type: ShellModelOutput,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(|config| {
+    let mut builder = test_codex().with_config(move |config| {
         config.features.disable(Feature::ApplyPatchFreeform);
         config.model = "gpt-5".to_string();
         config.model_family = find_family_for_model("gpt-5").expect("gpt-5 is a model family");
+        if matches!(output_type, ShellModelOutput::ShellCommand) {
+            config.features.enable(Feature::ShellCommandTool);
+        }
+        let _ = output_type;
     });
     let test = builder.build(&server).await?;
 
@@ -175,21 +235,11 @@ async fn shell_output_preserves_fixture_json_without_serialization() -> Result<(
     let fixture_path_str = fixture_path.to_string_lossy().to_string();
 
     let call_id = "shell-json-fixture";
-    let args = json!({
-        "command": ["/usr/bin/sed", "-n", "p", fixture_path_str],
-        "timeout_ms": 1_000,
-    });
-    let responses = vec![
-        sse(vec![
-            ev_response_created("resp-1"),
-            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
-            ev_completed("resp-1"),
-        ]),
-        sse(vec![
-            ev_assistant_message("msg-1", "done"),
-            ev_completed("resp-2"),
-        ]),
-    ];
+    let responses = shell_responses(
+        call_id,
+        vec!["/usr/bin/sed", "-n", "p", fixture_path_str.as_str()],
+        output_type,
+    )?;
     let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
@@ -232,12 +282,21 @@ async fn shell_output_preserves_fixture_json_without_serialization() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_output_structures_fixture_with_serialization() -> Result<()> {
+#[test_case(ShellModelOutput::Shell)]
+#[test_case(ShellModelOutput::ShellCommand)]
+#[test_case(ShellModelOutput::LocalShell)]
+async fn shell_output_structures_fixture_with_serialization(
+    output_type: ShellModelOutput,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(|config| {
+    let mut builder = test_codex().with_config(move |config| {
         config.features.enable(Feature::ApplyPatchFreeform);
+        if matches!(output_type, ShellModelOutput::ShellCommand) {
+            config.features.enable(Feature::ShellCommandTool);
+        }
+        let _ = output_type;
     });
     let test = builder.build(&server).await?;
 
@@ -246,21 +305,11 @@ async fn shell_output_structures_fixture_with_serialization() -> Result<()> {
     let fixture_path_str = fixture_path.to_string_lossy().to_string();
 
     let call_id = "shell-structured-fixture";
-    let args = json!({
-        "command": ["/usr/bin/sed", "-n", "p", fixture_path_str],
-        "timeout_ms": 1_000,
-    });
-    let responses = vec![
-        sse(vec![
-            ev_response_created("resp-1"),
-            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
-            ev_completed("resp-1"),
-        ]),
-        sse(vec![
-            ev_assistant_message("msg-1", "done"),
-            ev_completed("resp-2"),
-        ]),
-    ];
+    let responses = shell_responses(
+        call_id,
+        vec!["/usr/bin/sed", "-n", "p", fixture_path_str.as_str()],
+        output_type,
+    )?;
     let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
@@ -298,40 +347,26 @@ async fn shell_output_structures_fixture_with_serialization() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_output_for_freeform_tool_records_duration() -> Result<()> {
+#[test_case(ShellModelOutput::Shell)]
+#[test_case(ShellModelOutput::ShellCommand)]
+#[test_case(ShellModelOutput::LocalShell)]
+async fn shell_output_for_freeform_tool_records_duration(
+    output_type: ShellModelOutput,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(|config| {
+    let mut builder = test_codex().with_config(move |config| {
         config.include_apply_patch_tool = true;
+        if matches!(output_type, ShellModelOutput::ShellCommand) {
+            config.features.enable(Feature::ShellCommandTool);
+        }
+        let _ = output_type;
     });
     let test = builder.build(&server).await?;
 
-    #[cfg(target_os = "linux")]
-    let sleep_cmd = vec!["/bin/bash", "-c", "sleep 1"];
-
-    #[cfg(target_os = "macos")]
-    let sleep_cmd = vec!["/bin/bash", "-c", "sleep 1"];
-
-    #[cfg(windows)]
-    let sleep_cmd = "timeout 1";
-
     let call_id = "shell-structured";
-    let args = json!({
-        "command": sleep_cmd,
-        "timeout_ms": 2_000,
-    });
-    let responses = vec![
-        sse(vec![
-            json!({"type": "response.created", "response": {"id": "resp-1"}}),
-            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
-            ev_completed("resp-1"),
-        ]),
-        sse(vec![
-            ev_assistant_message("msg-1", "done"),
-            ev_completed("resp-2"),
-        ]),
-    ];
+    let responses = shell_responses(call_id, vec!["/bin/bash", "-c", "sleep 1"], output_type)?;
     let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
@@ -371,33 +406,26 @@ $"#;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_output_reserializes_truncated_content() -> Result<()> {
+#[test_case(ShellModelOutput::Shell)]
+#[test_case(ShellModelOutput::LocalShell)]
+async fn shell_output_reserializes_truncated_content(output_type: ShellModelOutput) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(|config| {
-        config.model = "gpt-5-codex".to_string();
+    let mut builder = test_codex().with_config(move |config| {
+        config.model = "gpt-5.1-codex".to_string();
         config.model_family =
-            find_family_for_model("gpt-5-codex").expect("gpt-5 is a model family");
+            find_family_for_model("gpt-5.1-codex").expect("gpt-5.1-codex is a model family");
+        config.tool_output_token_limit = Some(200);
+        if matches!(output_type, ShellModelOutput::ShellCommand) {
+            config.features.enable(Feature::ShellCommandTool);
+        }
+        let _ = output_type;
     });
     let test = builder.build(&server).await?;
 
     let call_id = "shell-truncated";
-    let args = json!({
-        "command": ["/bin/sh", "-c", "seq 1 400"],
-        "timeout_ms": 5_000,
-    });
-    let responses = vec![
-        sse(vec![
-            ev_response_created("resp-1"),
-            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
-            ev_completed("resp-1"),
-        ]),
-        sse(vec![
-            ev_assistant_message("msg-1", "done"),
-            ev_completed("resp-2"),
-        ]),
-    ];
+    let responses = shell_responses(call_id, vec!["/bin/sh", "-c", "seq 1 400"], output_type)?;
     let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
@@ -429,10 +457,7 @@ Output:
 4
 5
 6
-.*
-\[\.{3} omitted \d+ of 400 lines \.{3}\]
-
-.*
+.*…46 tokens truncated….*
 396
 397
 398
@@ -445,14 +470,16 @@ $"#;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn apply_patch_custom_tool_output_is_structured() -> Result<()> {
+#[test_case(ApplyPatchModelOutput::Freeform)]
+#[test_case(ApplyPatchModelOutput::Function)]
+#[test_case(ApplyPatchModelOutput::Shell)]
+#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
+async fn apply_patch_custom_tool_output_is_structured(
+    output_type: ApplyPatchModelOutput,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(|config| {
-        config.include_apply_patch_tool = true;
-    });
-    let test = builder.build(&server).await?;
+    let harness = apply_patch_harness().await?;
 
     let call_id = "apply-patch-structured";
     let file_name = "structured.txt";
@@ -463,33 +490,17 @@ async fn apply_patch_custom_tool_output_is_structured() -> Result<()> {
 *** End Patch
 "#
     );
-    let responses = vec![
-        sse(vec![
-            json!({"type": "response.created", "response": {"id": "resp-1"}}),
-            ev_custom_tool_call(call_id, "apply_patch", &patch),
-            ev_completed("resp-1"),
-        ]),
-        sse(vec![
-            ev_assistant_message("msg-1", "done"),
-            ev_completed("resp-2"),
-        ]),
-    ];
-    let mock = mount_sse_sequence(&server, responses).await;
+    mount_apply_patch(&harness, call_id, &patch, "done", output_type).await;
 
-    test.submit_turn_with_policy(
-        "apply the patch via custom tool",
-        SandboxPolicy::DangerFullAccess,
-    )
-    .await?;
+    harness
+        .test()
+        .submit_turn_with_policy(
+            "apply the patch via custom tool",
+            SandboxPolicy::DangerFullAccess,
+        )
+        .await?;
 
-    let req = mock
-        .last_request()
-        .expect("apply_patch output request recorded");
-    let output_item = req.custom_tool_call_output(call_id);
-    let output = output_item
-        .get("output")
-        .and_then(Value::as_str)
-        .expect("apply_patch output string");
+    let output = harness.apply_patch_output(call_id, output_type).await;
 
     let expected_pattern = format!(
         r"(?s)^Exit code: 0
@@ -499,53 +510,39 @@ Success. Updated the following files:
 A {file_name}
 ?$"
     );
-    assert_regex_match(&expected_pattern, output);
+    assert_regex_match(&expected_pattern, output.as_str());
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn apply_patch_custom_tool_call_creates_file() -> Result<()> {
+#[test_case(ApplyPatchModelOutput::Freeform)]
+#[test_case(ApplyPatchModelOutput::Function)]
+#[test_case(ApplyPatchModelOutput::Shell)]
+#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
+async fn apply_patch_custom_tool_call_creates_file(
+    output_type: ApplyPatchModelOutput,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(|config| {
-        config.include_apply_patch_tool = true;
-    });
-    let test = builder.build(&server).await?;
+    let harness = apply_patch_harness().await?;
 
     let call_id = "apply-patch-add-file";
     let file_name = "custom_tool_apply_patch.txt";
     let patch = format!(
         "*** Begin Patch\n*** Add File: {file_name}\n+custom tool content\n*** End Patch\n"
     );
-    let responses = vec![
-        sse(vec![
-            json!({"type": "response.created", "response": {"id": "resp-1"}}),
-            ev_custom_tool_call(call_id, "apply_patch", &patch),
-            ev_completed("resp-1"),
-        ]),
-        sse(vec![
-            ev_assistant_message("msg-1", "apply_patch done"),
-            ev_completed("resp-2"),
-        ]),
-    ];
-    let mock = mount_sse_sequence(&server, responses).await;
+    mount_apply_patch(&harness, call_id, &patch, "apply_patch done", output_type).await;
 
-    test.submit_turn_with_policy(
-        "apply the patch via custom tool to create a file",
-        SandboxPolicy::DangerFullAccess,
-    )
-    .await?;
+    harness
+        .test()
+        .submit_turn_with_policy(
+            "apply the patch via custom tool to create a file",
+            SandboxPolicy::DangerFullAccess,
+        )
+        .await?;
 
-    let req = mock
-        .last_request()
-        .expect("apply_patch output request recorded");
-    let output_item = req.custom_tool_call_output(call_id);
-    let output = output_item
-        .get("output")
-        .and_then(Value::as_str)
-        .expect("apply_patch output string");
+    let output = harness.apply_patch_output(call_id, output_type).await;
 
     let expected_pattern = format!(
         r"(?s)^Exit code: 0
@@ -555,9 +552,9 @@ Success. Updated the following files:
 A {file_name}
 ?$"
     );
-    assert_regex_match(&expected_pattern, output);
+    assert_regex_match(&expected_pattern, output.as_str());
 
-    let new_file_path = test.cwd.path().join(file_name);
+    let new_file_path = harness.path(file_name);
     let created_contents = fs::read_to_string(&new_file_path)?;
     assert_eq!(
         created_contents, "custom tool content\n",
@@ -568,49 +565,42 @@ A {file_name}
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn apply_patch_custom_tool_call_updates_existing_file() -> Result<()> {
+#[test_case(ApplyPatchModelOutput::Freeform)]
+#[test_case(ApplyPatchModelOutput::Function)]
+#[test_case(ApplyPatchModelOutput::Shell)]
+#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
+async fn apply_patch_custom_tool_call_updates_existing_file(
+    output_type: ApplyPatchModelOutput,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(|config| {
-        config.include_apply_patch_tool = true;
-    });
-    let test = builder.build(&server).await?;
+    let harness = apply_patch_harness().await?;
 
     let call_id = "apply-patch-update-file";
     let file_name = "custom_tool_apply_patch_existing.txt";
-    let file_path = test.cwd.path().join(file_name);
+    let file_path = harness.path(file_name);
     fs::write(&file_path, "before\n")?;
     let patch = format!(
         "*** Begin Patch\n*** Update File: {file_name}\n@@\n-before\n+after\n*** End Patch\n"
     );
-    let responses = vec![
-        sse(vec![
-            json!({"type": "response.created", "response": {"id": "resp-1"}}),
-            ev_custom_tool_call(call_id, "apply_patch", &patch),
-            ev_completed("resp-1"),
-        ]),
-        sse(vec![
-            ev_assistant_message("msg-1", "apply_patch update done"),
-            ev_completed("resp-2"),
-        ]),
-    ];
-    let mock = mount_sse_sequence(&server, responses).await;
-
-    test.submit_turn_with_policy(
-        "apply the patch via custom tool to update a file",
-        SandboxPolicy::DangerFullAccess,
+    mount_apply_patch(
+        &harness,
+        call_id,
+        &patch,
+        "apply_patch update done",
+        output_type,
     )
-    .await?;
+    .await;
 
-    let req = mock
-        .last_request()
-        .expect("apply_patch output request recorded");
-    let output_item = req.custom_tool_call_output(call_id);
-    let output = output_item
-        .get("output")
-        .and_then(Value::as_str)
-        .expect("apply_patch output string");
+    harness
+        .test()
+        .submit_turn_with_policy(
+            "apply the patch via custom tool to update a file",
+            SandboxPolicy::DangerFullAccess,
+        )
+        .await?;
+
+    let output = harness.apply_patch_output(call_id, output_type).await;
 
     let expected_pattern = format!(
         r"(?s)^Exit code: 0
@@ -620,7 +610,7 @@ Success. Updated the following files:
 M {file_name}
 ?$"
     );
-    assert_regex_match(&expected_pattern, output);
+    assert_regex_match(&expected_pattern, output.as_str());
 
     let updated_contents = fs::read_to_string(file_path)?;
     assert_eq!(updated_contents, "after\n", "expected updated file content");
@@ -629,99 +619,83 @@ M {file_name}
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn apply_patch_custom_tool_call_reports_failure_output() -> Result<()> {
+#[test_case(ApplyPatchModelOutput::Freeform)]
+#[test_case(ApplyPatchModelOutput::Function)]
+#[test_case(ApplyPatchModelOutput::Shell)]
+#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
+async fn apply_patch_custom_tool_call_reports_failure_output(
+    output_type: ApplyPatchModelOutput,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(|config| {
-        config.include_apply_patch_tool = true;
-    });
-    let test = builder.build(&server).await?;
+    let harness = apply_patch_harness().await?;
 
     let call_id = "apply-patch-failure";
     let missing_file = "missing_custom_tool_apply_patch.txt";
     let patch = format!(
         "*** Begin Patch\n*** Update File: {missing_file}\n@@\n-before\n+after\n*** End Patch\n"
     );
-    let responses = vec![
-        sse(vec![
-            json!({"type": "response.created", "response": {"id": "resp-1"}}),
-            ev_custom_tool_call(call_id, "apply_patch", &patch),
-            ev_completed("resp-1"),
-        ]),
-        sse(vec![
-            ev_assistant_message("msg-1", "apply_patch failure done"),
-            ev_completed("resp-2"),
-        ]),
-    ];
-    let mock = mount_sse_sequence(&server, responses).await;
-
-    test.submit_turn_with_policy(
-        "attempt a failing apply_patch via custom tool",
-        SandboxPolicy::DangerFullAccess,
+    mount_apply_patch(
+        &harness,
+        call_id,
+        &patch,
+        "apply_patch failure done",
+        output_type,
     )
-    .await?;
+    .await;
 
-    let req = mock
-        .last_request()
-        .expect("apply_patch output request recorded");
-    let output_item = req.custom_tool_call_output(call_id);
-    let output = output_item
-        .get("output")
-        .and_then(Value::as_str)
-        .expect("apply_patch output string");
+    harness
+        .test()
+        .submit_turn_with_policy(
+            "attempt a failing apply_patch via custom tool",
+            SandboxPolicy::DangerFullAccess,
+        )
+        .await?;
+
+    let output = harness.apply_patch_output(call_id, output_type).await;
 
     let expected_output = format!(
         "apply_patch verification failed: Failed to read file to update {}/{missing_file}: No such file or directory (os error 2)",
-        test.cwd.path().to_string_lossy()
+        harness.cwd().to_string_lossy()
     );
-    assert_eq!(output, expected_output);
+    assert_eq!(output, expected_output.as_str());
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn apply_patch_function_call_output_is_structured() -> Result<()> {
+#[test_case(ApplyPatchModelOutput::Freeform)]
+#[test_case(ApplyPatchModelOutput::Function)]
+#[test_case(ApplyPatchModelOutput::Shell)]
+#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
+async fn apply_patch_function_call_output_is_structured(
+    output_type: ApplyPatchModelOutput,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(|config| {
-        config.include_apply_patch_tool = true;
-    });
-    let test = builder.build(&server).await?;
+    let harness = apply_patch_harness().await?;
 
     let call_id = "apply-patch-function";
     let file_name = "function_apply_patch.txt";
     let patch =
         format!("*** Begin Patch\n*** Add File: {file_name}\n+via function call\n*** End Patch\n");
-    let responses = vec![
-        sse(vec![
-            json!({"type": "response.created", "response": {"id": "resp-1"}}),
-            ev_apply_patch_function_call(call_id, &patch),
-            ev_completed("resp-1"),
-        ]),
-        sse(vec![
-            ev_assistant_message("msg-1", "apply_patch function done"),
-            ev_completed("resp-2"),
-        ]),
-    ];
-    let mock = mount_sse_sequence(&server, responses).await;
-
-    test.submit_turn_with_policy(
-        "apply the patch via function-call apply_patch",
-        SandboxPolicy::DangerFullAccess,
+    mount_apply_patch(
+        &harness,
+        call_id,
+        &patch,
+        "apply_patch function done",
+        output_type,
     )
-    .await?;
+    .await;
+    harness
+        .test()
+        .submit_turn_with_policy(
+            "apply the patch via function-call apply_patch",
+            SandboxPolicy::DangerFullAccess,
+        )
+        .await?;
 
-    let req = mock
-        .last_request()
-        .expect("apply_patch function output request recorded");
-    let output_item = req.function_call_output(call_id);
-    let output = output_item
-        .get("output")
-        .and_then(Value::as_str)
-        .expect("apply_patch output string");
-
+    let output = harness.apply_patch_output(call_id, output_type).await;
     let expected_pattern = format!(
         r"(?s)^Exit code: 0
 Wall time: [0-9]+(?:\.[0-9]+)? seconds
@@ -730,40 +704,32 @@ Success. Updated the following files:
 A {file_name}
 ?$"
     );
-    assert_regex_match(&expected_pattern, output);
+    assert_regex_match(&expected_pattern, output.as_str());
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_output_is_structured_for_nonzero_exit() -> Result<()> {
+#[test_case(ShellModelOutput::Shell)]
+#[test_case(ShellModelOutput::ShellCommand)]
+#[test_case(ShellModelOutput::LocalShell)]
+async fn shell_output_is_structured_for_nonzero_exit(output_type: ShellModelOutput) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(|config| {
-        config.model = "gpt-5-codex".to_string();
+    let mut builder = test_codex().with_config(move |config| {
+        config.model = "gpt-5.1-codex".to_string();
         config.model_family =
-            find_family_for_model("gpt-5-codex").expect("gpt-5-codex is a model family");
+            find_family_for_model("gpt-5.1-codex").expect("gpt-5.1-codex is a model family");
         config.include_apply_patch_tool = true;
+        if matches!(output_type, ShellModelOutput::ShellCommand) {
+            config.features.enable(Feature::ShellCommandTool);
+        }
     });
     let test = builder.build(&server).await?;
 
     let call_id = "shell-nonzero-exit";
-    let args = json!({
-        "command": ["/bin/sh", "-c", "exit 42"],
-        "timeout_ms": 1_000,
-    });
-    let responses = vec![
-        sse(vec![
-            json!({"type": "response.created", "response": {"id": "resp-1"}}),
-            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
-            ev_completed("resp-1"),
-        ]),
-        sse(vec![
-            ev_assistant_message("msg-1", "shell failure handled"),
-            ev_completed("resp-2"),
-        ]),
-    ];
+    let responses = shell_responses(call_id, vec!["/bin/sh", "-c", "exit 42"], output_type)?;
     let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
@@ -789,14 +755,175 @@ Output:
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_command_output_is_freeform() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(move |config| {
+        config.features.enable(Feature::ShellCommandTool);
+    });
+    let test = builder.build(&server).await?;
+
+    let call_id = "shell-command";
+    let args = json!({
+        "command": "echo shell command",
+        "timeout_ms": 1_000,
+    });
+    let responses = vec![
+        sse(vec![
+            json!({"type": "response.created", "response": {"id": "resp-1"}}),
+            ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "shell_command done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    let mock = mount_sse_sequence(&server, responses).await;
+
+    test.submit_turn_with_policy(
+        "run the shell_command script in the user's shell",
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let req = mock
+        .last_request()
+        .expect("shell_command output request recorded");
+    let output_item = req.function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("shell_command output string");
+
+    let expected_pattern = r"(?s)^Exit code: 0
+Wall time: [0-9]+(?:\.[0-9]+)? seconds
+Output:
+shell command
+?$";
+    assert_regex_match(expected_pattern, output);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_command_output_is_not_truncated_under_10k_bytes() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex()
+        .with_model("gpt-5.1")
+        .with_config(move |config| {
+            config.features.enable(Feature::ShellCommandTool);
+        });
+    let test = builder.build(&server).await?;
+
+    let call_id = "shell-command";
+    let args = json!({
+        "command": "perl -e 'print \"1\" x 10000'",
+        "timeout_ms": 1000,
+    });
+    let responses = vec![
+        sse(vec![
+            json!({"type": "response.created", "response": {"id": "resp-1"}}),
+            ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "shell_command done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    let mock = mount_sse_sequence(&server, responses).await;
+
+    test.submit_turn_with_policy(
+        "run the shell_command script in the user's shell",
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let req = mock
+        .last_request()
+        .expect("shell_command output request recorded");
+    let output_item = req.function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("shell_command output string");
+
+    let expected_pattern = r"(?s)^Exit code: 0
+Wall time: [0-9]+(?:\.[0-9]+)? seconds
+Output:
+1{10000}$";
+    assert_regex_match(expected_pattern, output);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_command_output_is_not_truncated_over_10k_bytes() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex()
+        .with_model("gpt-5.1")
+        .with_config(move |config| {
+            config.features.enable(Feature::ShellCommandTool);
+        });
+    let test = builder.build(&server).await?;
+
+    let call_id = "shell-command";
+    let args = json!({
+        "command": "perl -e 'print \"1\" x 10001'",
+        "timeout_ms": 1000,
+    });
+    let responses = vec![
+        sse(vec![
+            json!({"type": "response.created", "response": {"id": "resp-1"}}),
+            ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "shell_command done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    let mock = mount_sse_sequence(&server, responses).await;
+
+    test.submit_turn_with_policy(
+        "run the shell_command script in the user's shell",
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let req = mock
+        .last_request()
+        .expect("shell_command output request recorded");
+    let output_item = req.function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("shell_command output string");
+
+    let expected_pattern = r"(?s)^Exit code: 0
+Wall time: [0-9]+(?:\.[0-9]+)? seconds
+Output:
+1*…1 chars truncated…1*$";
+    assert_regex_match(expected_pattern, output);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn local_shell_call_output_is_structured() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
-        config.model = "gpt-5-codex".to_string();
+        config.model = "gpt-5.1-codex".to_string();
         config.model_family =
-            find_family_for_model("gpt-5-codex").expect("gpt-5-codex is a model family");
+            find_family_for_model("gpt-5.1-codex").expect("gpt-5.1-codex is a model family");
         config.include_apply_patch_tool = true;
     });
     let test = builder.build(&server).await?;

@@ -138,11 +138,7 @@ async fn run_command_under_sandbox(
         {
             use codex_windows_sandbox::run_windows_sandbox_capture;
 
-            let policy_str = match &config.sandbox_policy {
-                codex_core::protocol::SandboxPolicy::DangerFullAccess => "workspace-write",
-                codex_core::protocol::SandboxPolicy::ReadOnly => "read-only",
-                codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. } => "workspace-write",
-            };
+            let policy_str = serde_json::to_string(&config.sandbox_policy)?;
 
             let sandbox_cwd = sandbox_policy_cwd.clone();
             let cwd_clone = cwd.clone();
@@ -153,13 +149,13 @@ async fn run_command_under_sandbox(
             // Preflight audit is invoked elsewhere at the appropriate times.
             let res = tokio::task::spawn_blocking(move || {
                 run_windows_sandbox_capture(
-                    policy_str,
+                    policy_str.as_str(),
                     &sandbox_cwd,
+                    base_dir.as_path(),
                     command_vec,
                     &cwd_clone,
                     env_map,
                     None,
-                    Some(base_dir.as_path()),
                 )
             })
             .await;

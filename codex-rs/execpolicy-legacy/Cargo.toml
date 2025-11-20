@@ -1,0 +1,34 @@
+[package]
+edition = "2024"
+name = "codex-execpolicy-legacy"
+description = "Legacy exec policy engine for validating proposed exec calls."
+version = { workspace = true }
+
+[[bin]]
+name = "codex-execpolicy-legacy"
+path = "src/main.rs"
+
+[lib]
+name = "codex_execpolicy_legacy"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+allocative = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+derive_more = { workspace = true, features = ["display"] }
+env_logger = { workspace = true }
+log = { workspace = true }
+multimap = { workspace = true }
+path-absolutize = { workspace = true }
+regex-lite = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_with = { workspace = true, features = ["macros"] }
+starlark = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

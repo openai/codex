@@ -26,9 +26,11 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use core_test_support::wait_for_event_with_timeout;
 use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
+use tokio::time::Duration;
 
 fn extract_output_text(item: &Value) -> Option<&str> {
     item.get("output").and_then(|value| match value {
@@ -159,7 +161,7 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
 
     let server = start_mock_server().await;
 
-    let mut builder = test_codex().with_config(|config| {
+    let mut builder = test_codex().with_model("gpt-5").with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
         config.features.enable(Feature::UnifiedExec);
     });
@@ -236,7 +238,7 @@ async fn unified_exec_respects_workdir_override() -> Result<()> {
 
     let server = start_mock_server().await;
 
-    let mut builder = test_codex().with_config(|config| {
+    let mut builder = test_codex().with_model("gpt-5").with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
         config.features.enable(Feature::UnifiedExec);
     });
@@ -288,27 +290,21 @@ async fn unified_exec_respects_workdir_override() -> Result<()> {
         })
         .await?;
 
+    let begin_event = wait_for_event_match(&codex, |msg| match msg {
+        EventMsg::ExecCommandBegin(event) if event.call_id == call_id => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+
+    assert_eq!(
+        begin_event.cwd, workdir,
+        "exec_command cwd should reflect the requested workdir override"
+    );
+
     wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let bodies = requests
-        .iter()
-        .map(|req| req.body_json::<Value>().expect("request json"))
-        .collect::<Vec<_>>();
-
-    let outputs = collect_tool_outputs(&bodies)?;
-    let output = outputs
-        .get(call_id)
-        .expect("missing exec_command workdir output");
-    let output_text = output.output.trim();
-    let output_canonical = std::fs::canonicalize(output_text)?;
-    let expected_canonical = std::fs::canonicalize(&workdir)?;
-    assert_eq!(
-        output_canonical, expected_canonical,
-        "pwd should reflect the requested workdir override"
-    );
 
     Ok(())
 }
@@ -820,7 +816,7 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
 
     let call_id = "uexec-metadata";
     let args = serde_json::json!({
-        "cmd": "printf 'abcdefghijklmnopqrstuvwxyz'",
+        "cmd": "printf 'token one token two token three token four token five token six token seven'",
         "yield_time_ms": 500,
         "max_output_tokens": 6,
     });
@@ -1301,7 +1297,7 @@ async fn unified_exec_streams_after_lagged_output() -> Result<()> {
 import sys
 import time
 
-chunk = b'x' * (1 << 20)
+chunk = b'long content here to trigger truncation' * (1 << 10)
 for _ in range(4):
     sys.stdout.buffer.write(chunk)
     sys.stdout.flush()
@@ -1371,8 +1367,13 @@ PY
             summary: ReasoningSummary::Auto,
         })
         .await?;
-
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    // This is a worst case scenario for the truncate logic.
+    wait_for_event_with_timeout(
+        &codex,
+        |event| matches!(event, EventMsg::TaskComplete(_)),
+        Duration::from_secs(10),
+    )
+    .await;
 
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(!requests.is_empty(), "expected at least one POST request");
@@ -1529,14 +1530,15 @@ async fn unified_exec_formats_large_output_summary() -> Result<()> {
     } = builder.build(&server).await?;
 
     let script = r#"python3 - <<'PY'
-for i in range(300):
-    print(f"line-{i}")
+for i in range(10000):
+    print("token token ")
 PY
 "#;
 
     let call_id = "uexec-large-output";
     let args = serde_json::json!({
         "cmd": script,
+        "max_output_tokens": 100,
         "yield_time_ms": 500,
     });
 
@@ -1583,15 +1585,14 @@ PY
     let outputs = collect_tool_outputs(&bodies)?;
     let large_output = outputs.get(call_id).expect("missing large output summary");
 
-    assert_regex_match(
-        concat!(
-            r"(?s)",
-            r"line-0.*?",
-            r"\[\.{3} omitted \d+ of \d+ lines \.{3}\].*?",
-            r"line-299",
-        ),
-        &large_output.output,
-    );
+    let output_text = large_output.output.replace("\r\n", "\n");
+    let truncated_pattern = r"(?s)^Total output lines: \d+\n\n(token token \n){5,}.*…\d+ tokens truncated….*(token token \n){5,}$";
+    assert_regex_match(truncated_pattern, &output_text);
+
+    let original_tokens = large_output
+        .original_token_count
+        .expect("missing original_token_count for large output summary");
+    assert!(original_tokens > 0);
 
     Ok(())
 }

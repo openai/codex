@@ -1,25 +1,33 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
+use app_test_support::create_apply_patch_sse_response;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_chat_completions_server;
 use app_test_support::create_mock_chat_completions_server_unchecked;
 use app_test_support::create_shell_sse_response;
 use app_test_support::to_response;
+use codex_app_server_protocol::ApprovalDecision;
+use codex_app_server_protocol::CommandExecutionStatus;
+use codex_app_server_protocol::FileChangeRequestApprovalResponse;
+use codex_app_server_protocol::ItemCompletedNotification;
+use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::PatchApplyStatus;
+use codex_app_server_protocol::PatchChangeKind;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
+use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::protocol_config_types::ReasoningEffort;
 use codex_core::protocol_config_types::ReasoningSummary;
-use codex_protocol::parse_command::ParsedCommand;
-use codex_protocol::protocol::Event;
-use codex_protocol::protocol::EventMsg;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use std::path::Path;
@@ -57,7 +65,7 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
         mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
     )
     .await??;
-    let ThreadStartResponse { thread } = to_response::<ThreadStartResponse>(thread_resp)?;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
 
     // Start a turn with only input and thread_id set (no overrides).
     let turn_req = mcp
@@ -118,13 +126,17 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     )
     .await??;
 
-    // And we should ultimately get a task_complete without having to add a
-    // legacy conversation listener explicitly (auto-attached by thread/start).
-    let _task_complete: JSONRPCNotification = timeout(
+    let completed_notif: JSONRPCNotification = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+        mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+    let completed: TurnCompletedNotification = serde_json::from_value(
+        completed_notif
+            .params
+            .expect("turn/completed params must be present"),
+    )?;
+    assert_eq!(completed.turn.status, TurnStatus::Completed);
 
     Ok(())
 }
@@ -157,7 +169,7 @@ async fn turn_start_accepts_local_image_input() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
     )
     .await??;
-    let ThreadStartResponse { thread } = to_response::<ThreadStartResponse>(thread_resp)?;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
 
     let image_path = codex_home.path().join("image.png");
     // No need to actually write the file; we just exercise the input path.
@@ -233,9 +245,9 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
     )
     .await??;
-    let ThreadStartResponse { thread } = to_response::<ThreadStartResponse>(start_resp)?;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
 
-    // turn/start — expect ExecCommandApproval request from server
+    // turn/start — expect CommandExecutionRequestApproval request from server
     let first_turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
@@ -258,16 +270,10 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
         mcp.read_stream_until_request_message(),
     )
     .await??;
-    let ServerRequest::ExecCommandApproval { request_id, params } = server_req else {
-        panic!("expected ExecCommandApproval request");
+    let ServerRequest::CommandExecutionRequestApproval { request_id, params } = server_req else {
+        panic!("expected CommandExecutionRequestApproval request");
     };
-    assert_eq!(params.call_id, "call1");
-    assert_eq!(
-        params.parsed_cmd,
-        vec![ParsedCommand::Unknown {
-            cmd: "python3 -c 'print(42)'".to_string()
-        }]
-    );
+    assert_eq!(params.item_id, "call1");
 
     // Approve and wait for task completion
     mcp.send_response(
@@ -278,6 +284,11 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("codex/event/task_complete"),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
 
@@ -302,10 +313,15 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     )
     .await??;
 
-    // Ensure we do NOT receive an ExecCommandApproval request before task completes
+    // Ensure we do NOT receive a CommandExecutionRequestApproval request before task completes
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("codex/event/task_complete"),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
 
@@ -314,8 +330,6 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
 
 #[tokio::test]
 async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
-    // When returning Result from a test, pass an Ok(()) to the skip macro
-    // so the early return type matches. The no-arg form returns unit.
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
@@ -370,7 +384,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
     )
     .await??;
-    let ThreadStartResponse { thread } = to_response::<ThreadStartResponse>(start_resp)?;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
 
     // first turn with workspace-write sandbox and first_cwd
     let first_turn = mcp
@@ -424,35 +438,335 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     )
     .await??;
 
-    let exec_begin_notification = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/exec_command_begin"),
-    )
+    let command_exec_item = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let item_started_notification = mcp
+                .read_stream_until_notification_message("item/started")
+                .await?;
+            let params = item_started_notification
+                .params
+                .clone()
+                .expect("item/started params");
+            let item_started: ItemStartedNotification =
+                serde_json::from_value(params).expect("deserialize item/started notification");
+            if matches!(item_started.item, ThreadItem::CommandExecution { .. }) {
+                return Ok::<ThreadItem, anyhow::Error>(item_started.item);
+            }
+        }
+    })
     .await??;
-    let params = exec_begin_notification
-        .params
-        .clone()
-        .expect("exec_command_begin params");
-    let event: Event = serde_json::from_value(params).expect("deserialize exec begin event");
-    let exec_begin = match event.msg {
-        EventMsg::ExecCommandBegin(exec_begin) => exec_begin,
-        other => panic!("expected ExecCommandBegin event, got {other:?}"),
+    let ThreadItem::CommandExecution {
+        cwd,
+        command,
+        status,
+        ..
+    } = command_exec_item
+    else {
+        unreachable!("loop ensures we break on command execution items");
     };
-    assert_eq!(exec_begin.cwd, second_cwd);
-    assert_eq!(
-        exec_begin.command,
-        vec![
-            "bash".to_string(),
-            "-lc".to_string(),
-            "echo second turn".to_string()
-        ]
-    );
+    assert_eq!(cwd, second_cwd);
+    assert_eq!(command, "bash -lc 'echo second turn'");
+    assert_eq!(status, CommandExecutionStatus::InProgress);
 
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("codex/event/task_complete"),
     )
     .await??;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_file_change_approval_v2() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+    let workspace = tmp.path().join("workspace");
+    std::fs::create_dir(&workspace)?;
+
+    let patch = r#"*** Begin Patch
+*** Add File: README.md
++new line
+*** End Patch
+"#;
+    let responses = vec![
+        create_apply_patch_sse_response(patch, "patch-call")?,
+        create_final_assistant_message_sse_response("patch applied")?,
+    ];
+    let server = create_mock_chat_completions_server(responses).await;
+    create_config_toml(&codex_home, &server.uri(), "untrusted")?;
+
+    let mut mcp = McpProcess::new(&codex_home).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            cwd: Some(workspace.to_string_lossy().into_owned()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "apply patch".into(),
+            }],
+            cwd: Some(workspace.clone()),
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+
+    let started_file_change = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let started_notif = mcp
+                .read_stream_until_notification_message("item/started")
+                .await?;
+            let started: ItemStartedNotification =
+                serde_json::from_value(started_notif.params.clone().expect("item/started params"))?;
+            if let ThreadItem::FileChange { .. } = started.item {
+                return Ok::<ThreadItem, anyhow::Error>(started.item);
+            }
+        }
+    })
+    .await??;
+    let ThreadItem::FileChange {
+        ref id,
+        status,
+        ref changes,
+    } = started_file_change
+    else {
+        unreachable!("loop ensures we break on file change items");
+    };
+    assert_eq!(id, "patch-call");
+    assert_eq!(status, PatchApplyStatus::InProgress);
+    let started_changes = changes.clone();
+
+    let server_req = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_request_message(),
+    )
+    .await??;
+    let ServerRequest::FileChangeRequestApproval { request_id, params } = server_req else {
+        panic!("expected FileChangeRequestApproval request")
+    };
+    assert_eq!(params.item_id, "patch-call");
+    assert_eq!(params.thread_id, thread.id);
+    assert_eq!(params.turn_id, turn.id);
+    let expected_readme_path = workspace.join("README.md");
+    let expected_readme_path = expected_readme_path.to_string_lossy().into_owned();
+    pretty_assertions::assert_eq!(
+        started_changes,
+        vec![codex_app_server_protocol::FileUpdateChange {
+            path: expected_readme_path.clone(),
+            kind: PatchChangeKind::Add,
+            diff: "new line\n".to_string(),
+        }]
+    );
+
+    mcp.send_response(
+        request_id,
+        serde_json::to_value(FileChangeRequestApprovalResponse {
+            decision: ApprovalDecision::Accept,
+        })?,
+    )
+    .await?;
+
+    let completed_file_change = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let completed_notif = mcp
+                .read_stream_until_notification_message("item/completed")
+                .await?;
+            let completed: ItemCompletedNotification = serde_json::from_value(
+                completed_notif
+                    .params
+                    .clone()
+                    .expect("item/completed params"),
+            )?;
+            if let ThreadItem::FileChange { .. } = completed.item {
+                return Ok::<ThreadItem, anyhow::Error>(completed.item);
+            }
+        }
+    })
+    .await??;
+    let ThreadItem::FileChange { ref id, status, .. } = completed_file_change else {
+        unreachable!("loop ensures we break on file change items");
+    };
+    assert_eq!(id, "patch-call");
+    assert_eq!(status, PatchApplyStatus::Completed);
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+    )
+    .await??;
+
+    let readme_contents = std::fs::read_to_string(expected_readme_path)?;
+    assert_eq!(readme_contents, "new line\n");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+    let workspace = tmp.path().join("workspace");
+    std::fs::create_dir(&workspace)?;
+
+    let patch = r#"*** Begin Patch
+*** Add File: README.md
++new line
+*** End Patch
+"#;
+    let responses = vec![
+        create_apply_patch_sse_response(patch, "patch-call")?,
+        create_final_assistant_message_sse_response("patch declined")?,
+    ];
+    let server = create_mock_chat_completions_server(responses).await;
+    create_config_toml(&codex_home, &server.uri(), "untrusted")?;
+
+    let mut mcp = McpProcess::new(&codex_home).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            cwd: Some(workspace.to_string_lossy().into_owned()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "apply patch".into(),
+            }],
+            cwd: Some(workspace.clone()),
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+
+    let started_file_change = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let started_notif = mcp
+                .read_stream_until_notification_message("item/started")
+                .await?;
+            let started: ItemStartedNotification =
+                serde_json::from_value(started_notif.params.clone().expect("item/started params"))?;
+            if let ThreadItem::FileChange { .. } = started.item {
+                return Ok::<ThreadItem, anyhow::Error>(started.item);
+            }
+        }
+    })
+    .await??;
+    let ThreadItem::FileChange {
+        ref id,
+        status,
+        ref changes,
+    } = started_file_change
+    else {
+        unreachable!("loop ensures we break on file change items");
+    };
+    assert_eq!(id, "patch-call");
+    assert_eq!(status, PatchApplyStatus::InProgress);
+    let started_changes = changes.clone();
+
+    let server_req = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_request_message(),
+    )
+    .await??;
+    let ServerRequest::FileChangeRequestApproval { request_id, params } = server_req else {
+        panic!("expected FileChangeRequestApproval request")
+    };
+    assert_eq!(params.item_id, "patch-call");
+    assert_eq!(params.thread_id, thread.id);
+    assert_eq!(params.turn_id, turn.id);
+    let expected_readme_path = workspace.join("README.md");
+    let expected_readme_path_str = expected_readme_path.to_string_lossy().into_owned();
+    pretty_assertions::assert_eq!(
+        started_changes,
+        vec![codex_app_server_protocol::FileUpdateChange {
+            path: expected_readme_path_str.clone(),
+            kind: PatchChangeKind::Add,
+            diff: "new line\n".to_string(),
+        }]
+    );
+
+    mcp.send_response(
+        request_id,
+        serde_json::to_value(FileChangeRequestApprovalResponse {
+            decision: ApprovalDecision::Decline,
+        })?,
+    )
+    .await?;
+
+    let completed_file_change = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let completed_notif = mcp
+                .read_stream_until_notification_message("item/completed")
+                .await?;
+            let completed: ItemCompletedNotification = serde_json::from_value(
+                completed_notif
+                    .params
+                    .clone()
+                    .expect("item/completed params"),
+            )?;
+            if let ThreadItem::FileChange { .. } = completed.item {
+                return Ok::<ThreadItem, anyhow::Error>(completed.item);
+            }
+        }
+    })
+    .await??;
+    let ThreadItem::FileChange { ref id, status, .. } = completed_file_change else {
+        unreachable!("loop ensures we break on file change items");
+    };
+    assert_eq!(id, "patch-call");
+    assert_eq!(status, PatchApplyStatus::Declined);
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+    )
+    .await??;
+
+    assert!(
+        !expected_readme_path.exists(),
+        "declined patch should not be applied"
+    );
 
     Ok(())
 }

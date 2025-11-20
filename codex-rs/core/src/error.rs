@@ -2,7 +2,8 @@ use crate::codex::ProcessedResponseItem;
 use crate::exec::ExecToolCallOutput;
 use crate::token_data::KnownPlan;
 use crate::token_data::PlanType;
-use crate::truncate::truncate_middle;
+use crate::truncate::TruncationPolicy;
+use crate::truncate::truncate_text;
 use chrono::DateTime;
 use chrono::Datelike;
 use chrono::Local;
@@ -461,7 +462,10 @@ pub fn get_error_message_ui(e: &CodexErr) -> String {
         _ => e.to_string(),
     };
 
-    truncate_middle(&message, ERROR_MESSAGE_UI_MAX_BYTES).0
+    truncate_text(
+        &message,
+        TruncationPolicy::Bytes(ERROR_MESSAGE_UI_MAX_BYTES),
+    )
 }
 
 #[cfg(test)]
@@ -495,6 +499,7 @@ mod tests {
                 window_minutes: Some(120),
                 resets_at: Some(secondary_reset_at),
             }),
+            credits: None,
         }
     }
 

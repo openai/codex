@@ -70,6 +70,36 @@ Codex can access MCP servers. To configure them, refer to the [config docs](./do
 Codex CLI supports a rich set of configuration options, with preferences stored in `~/.codex/config.toml`. For full configuration options, see [Configuration](./docs/config.md).
 
 Prefer a quieter terminal? Run `codex --no-progress "…"` to silence interim reasoning, or `codex --progress-interval 300 "…"` to show at most one update every five minutes. When you want Codex to keep iterating hands-free, add `--auto-continue` (with optional `--auto-continue-max-turns`, `--auto-continue-max-duration`, or `--auto-continue-prompt`). If auto-continue pauses because a turn finished or you interrupted the run, the next prompt you type automatically re-arms it for the new work. In the TUI, you can also toggle it explicitly with `/auto-continue-on` and `/auto-continue-off`.
+### Execpolicy Quickstart
+
+Codex can enforce your own rules-based execution policy before it runs shell commands.
+
+1. Create a policy directory: `mkdir -p ~/.codex/policy`.
+2. Create one or more `.codexpolicy` files in that folder. Codex automatically loads every `.codexpolicy` file in there on startup.
+3. Write `prefix_rule` entries to describe the commands you want to allow, prompt, or block:
+
+```starlark
+prefix_rule(
+    pattern = ["git", ["push", "fetch"]],
+    decision = "prompt",  # allow | prompt | forbidden
+    match = [["git", "push", "origin", "main"]],  # examples that must match
+    not_match = [["git", "status"]],              # examples that must not match
+)
+```
+
+- `pattern` is a list of shell tokens, evaluated from left to right; wrap tokens in a nested list to express alternatives (e.g., match both `push` and `fetch`).
+- `decision` sets the severity; Codex picks the strictest decision when multiple rules match (forbidden > prompt > allow).
+- `match` and `not_match` act as (optional) unit tests. Codex validates them when it loads your policy, so you get feedback if an example has unexpected behavior.
+
+In this example rule, if Codex wants to run commands with the prefix `git push` or `git fetch`, it will first ask for user approval.
+
+Use [`execpolicy2` CLI](./codex-rs/execpolicy2/README.md) to preview decisions for policy files:
+
+```shell
+cargo run -p codex-execpolicy2 -- check --policy ~/.codex/policy/default.codexpolicy git push origin main
+```
+
+Pass multiple `--policy` flags to test how several files combine. See the [`codex-rs/execpolicy2` README](./codex-rs/execpolicy2/README.md) for a more detailed walkthrough of the available syntax.
 
 ---
 

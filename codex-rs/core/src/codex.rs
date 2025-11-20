@@ -10,14 +10,16 @@ use std::time::Instant;
 use crate::AuthManager;
 use crate::client_common::REVIEW_PROMPT;
 use crate::compact;
+use crate::compact::run_inline_auto_compact_task;
+use crate::compact::should_use_remote_compact_task;
+use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
-use crate::mcp::auth::McpAuthStatusEntry;
-use crate::mcp_connection_manager::DEFAULT_STARTUP_TIMEOUT;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::response_processing::process_items;
 use crate::terminal;
+use crate::truncate::TruncationPolicy;
 use crate::user_notification::UserNotifier;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
@@ -48,6 +50,7 @@ use mcp_types::ReadResourceResult;
 use serde_json;
 use serde_json::Value;
 use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -59,9 +62,9 @@ use crate::ModelProviderInfo;
 use crate::client::ModelClient;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
+use crate::compact::collect_user_messages;
 use crate::config::AutoContinueConfig;
 use crate::config::Config;
-use crate::config::types::McpServerTransportConfig;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::context_manager::ContextManager;
 use crate::environment_context::EnvironmentContext;
@@ -69,10 +72,6 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 #[cfg(test)]
 use crate::exec::StreamOutput;
-// Removed: legacy executor wiring replaced by ToolOrchestrator flows.
-// legacy normalize_exec_result no longer used after orchestrator migration
-use crate::compact::build_compacted_history;
-use crate::compact::collect_user_messages;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::model_family::find_family_for_model;
@@ -128,6 +127,7 @@ use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
 use codex_async_utils::OrCancelExt;
+use codex_execpolicy::Policy as ExecPolicy;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -173,6 +173,10 @@ impl Codex {
 
         let user_instructions = get_user_instructions(&config).await;
 
+        let exec_policy = crate::exec_policy::exec_policy_for(&config.features, &config.codex_home)
+            .await
+            .map_err(|err| CodexErr::Fatal(format!("failed to load execpolicy: {err}")))?;
+
         let config = Arc::new(config);
 
         let session_configuration = SessionConfiguration {
@@ -190,6 +194,7 @@ impl Codex {
             auto_continue: config.auto_continue.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: config.features.clone(),
+            exec_policy,
             session_source,
         };
 
@@ -296,6 +301,8 @@ pub(crate) struct TurnContext {
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
+    pub(crate) exec_policy: Arc<ExecPolicy>,
+    pub(crate) truncation_policy: TruncationPolicy,
 }
 
 impl TurnContext {
@@ -312,7 +319,6 @@ impl TurnContext {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Clone)]
 pub(crate) struct SessionConfiguration {
     /// Provider identifier ("openai", "openrouter", ...).
@@ -355,6 +361,8 @@ pub(crate) struct SessionConfiguration {
 
     /// Set of feature flags for this session
     features: Features,
+    /// Execpolicy policy, applied only when enabled by feature flag.
+    exec_policy: Arc<ExecPolicy>,
 
     // TODO(pakrym): Remove config from here
     original_config_do_not_use: Arc<Config>,
@@ -442,7 +450,7 @@ impl Session {
         );
 
         let client = ModelClient::new(
-            Arc::new(per_turn_config),
+            Arc::new(per_turn_config.clone()),
             auth_manager,
             otel_event_manager,
             provider,
@@ -472,6 +480,8 @@ impl Session {
             final_output_json_schema: None,
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
+            exec_policy: session_configuration.exec_policy.clone(),
+            truncation_policy: TruncationPolicy::new(&per_turn_config),
         }
     }
 
@@ -513,21 +523,13 @@ impl Session {
             ),
         };
 
-        // Error messages to dispatch after SessionConfigured is sent.
-        let mut post_session_configured_events = Vec::<Event>::new();
-
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
         // - initialize RolloutRecorder with new or resumed session info
-        // - spin up MCP connection manager
         // - perform default shell discovery
         // - load history metadata
         let rollout_fut = RolloutRecorder::new(&config, rollout_params);
 
-        let mcp_fut = McpConnectionManager::new(
-            config.mcp_servers.clone(),
-            config.mcp_oauth_credentials_store_mode,
-        );
         let default_shell_fut = shell::default_user_shell();
         let history_meta_fut = crate::message_history::history_metadata(&config);
         let auth_statuses_fut = compute_auth_statuses(
@@ -536,15 +538,8 @@ impl Session {
         );
 
         // Join all independent futures.
-        let (
-            rollout_recorder,
-            mcp_res,
-            default_shell,
-            (history_log_id, history_entry_count),
-            auth_statuses,
-        ) = tokio::join!(
+        let (rollout_recorder, default_shell, (history_log_id, history_entry_count), auth_statuses) = tokio::join!(
             rollout_fut,
-            mcp_fut,
             default_shell_fut,
             history_meta_fut,
             auth_statuses_fut
@@ -556,34 +551,7 @@ impl Session {
         })?;
         let rollout_path = rollout_recorder.rollout_path.clone();
 
-        // Handle MCP manager result and record any startup failures.
-        let (mcp_connection_manager, failed_clients) = match mcp_res {
-            Ok((mgr, failures)) => (mgr, failures),
-            Err(e) => {
-                let message = format!("Failed to create MCP connection manager: {e:#}");
-                error!("{message}");
-                post_session_configured_events.push(Event {
-                    id: INITIAL_SUBMIT_ID.to_owned(),
-                    msg: EventMsg::Error(ErrorEvent { message }),
-                });
-                (McpConnectionManager::default(), Default::default())
-            }
-        };
-
-        // Surface individual client start-up failures to the user.
-        if !failed_clients.is_empty() {
-            for (server_name, err) in failed_clients {
-                let auth_entry = auth_statuses.get(&server_name);
-                let display_message = mcp_init_error_display(&server_name, auth_entry, &err);
-                warn!("MCP client for `{server_name}` failed to start: {err:#}");
-                post_session_configured_events.push(Event {
-                    id: INITIAL_SUBMIT_ID.to_owned(),
-                    msg: EventMsg::Error(ErrorEvent {
-                        message: display_message,
-                    }),
-                });
-            }
-        }
+        let mut post_session_configured_events = Vec::<Event>::new();
 
         for (alias, feature) in session_configuration.features.legacy_feature_usages() {
             let canonical = feature.key();
@@ -632,7 +600,8 @@ impl Session {
         warm_model_cache(&session_configuration.model);
 
         let services = SessionServices {
-            mcp_connection_manager,
+            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
+            mcp_startup_cancellation_token: CancellationToken::new(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::new(config.notify.clone()),
             rollout: Mutex::new(Some(rollout_recorder)),
@@ -665,6 +634,10 @@ impl Session {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
                 model: session_configuration.model.clone(),
+                model_provider_id: config.model_provider_id.clone(),
+                approval_policy: session_configuration.approval_policy,
+                sandbox_policy: session_configuration.sandbox_policy.clone(),
+                cwd: session_configuration.cwd.clone(),
                 reasoning_effort: session_configuration.model_reasoning_effort,
                 history_log_id,
                 history_entry_count,
@@ -676,6 +649,18 @@ impl Session {
         for event in events {
             sess.send_event_raw(event).await;
         }
+        sess.services
+            .mcp_connection_manager
+            .write()
+            .await
+            .initialize(
+                config.mcp_servers.clone(),
+                config.mcp_oauth_credentials_store_mode,
+                auth_statuses.clone(),
+                tx_event.clone(),
+                sess.services.mcp_startup_cancellation_token.clone(),
+            )
+            .await;
 
         // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
         sess.record_initial_history(initial_history).await;
@@ -773,7 +758,8 @@ impl Session {
                 let reconstructed_history =
                     self.reconstruct_history_from_rollout(&turn_context, &rollout_items);
                 if !reconstructed_history.is_empty() {
-                    self.record_into_history(&reconstructed_history).await;
+                    self.record_into_history(&reconstructed_history, &turn_context)
+                        .await;
                 }
 
                 // If persisting, persist all rollout items as-is (recorder filters)
@@ -1006,6 +992,7 @@ impl Session {
         let parsed_cmd = parse_command(&command);
         let event = EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
             call_id,
+            turn_id: turn_context.sub_id.clone(),
             command,
             cwd,
             reason,
@@ -1044,6 +1031,7 @@ impl Session {
 
         let event = EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id,
+            turn_id: turn_context.sub_id.clone(),
             changes,
             reason,
             grant_root,
@@ -1080,7 +1068,7 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) {
-        self.record_into_history(items).await;
+        self.record_into_history(items, turn_context).await;
         self.persist_rollout_response_items(items).await;
         self.send_raw_response_items(turn_context, items).await;
     }
@@ -1094,17 +1082,25 @@ impl Session {
         for item in rollout_items {
             match item {
                 RolloutItem::ResponseItem(response_item) => {
-                    history.record_items(std::iter::once(response_item));
+                    history.record_items(
+                        std::iter::once(response_item),
+                        turn_context.truncation_policy,
+                    );
                 }
                 RolloutItem::Compacted(compacted) => {
                     let snapshot = history.get_history();
-                    let user_messages = collect_user_messages(&snapshot);
-                    let rebuilt = build_compacted_history(
-                        self.build_initial_context(turn_context),
-                        &user_messages,
-                        &compacted.message,
-                    );
-                    history.replace(rebuilt);
+                    // TODO(jif) clean
+                    if let Some(replacement) = &compacted.replacement_history {
+                        history.replace(replacement.clone());
+                    } else {
+                        let user_messages = collect_user_messages(&snapshot);
+                        let rebuilt = compact::build_compacted_history(
+                            self.build_initial_context(turn_context),
+                            &user_messages,
+                            &compacted.message,
+                        );
+                        history.replace(rebuilt);
+                    }
                 }
                 _ => {}
             }
@@ -1113,9 +1109,13 @@ impl Session {
     }
 
     /// Append ResponseItems to the in-memory conversation history only.
-    pub(crate) async fn record_into_history(&self, items: &[ResponseItem]) {
+    pub(crate) async fn record_into_history(
+        &self,
+        items: &[ResponseItem],
+        turn_context: &TurnContext,
+    ) {
         let mut state = self.state.lock().await;
-        state.record_items(items.iter());
+        state.record_items(items.iter(), turn_context.truncation_policy);
     }
 
     pub(crate) async fn replace_history(&self, items: Vec<ResponseItem>) {
@@ -1130,6 +1130,15 @@ impl Session {
             .map(RolloutItem::ResponseItem)
             .collect();
         self.persist_rollout_items(&rollout_items).await;
+    }
+
+    pub async fn enabled(&self, feature: Feature) -> bool {
+        self.state
+            .lock()
+            .await
+            .session_configuration
+            .features
+            .enabled(feature)
     }
 
     async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {
@@ -1207,11 +1216,14 @@ impl Session {
         self.send_token_count_event(turn_context).await;
     }
 
-    pub(crate) async fn override_last_token_usage_estimate(
-        &self,
-        turn_context: &TurnContext,
-        estimated_total_tokens: i64,
-    ) {
+    pub(crate) async fn recompute_token_usage(&self, turn_context: &TurnContext) {
+        let Some(estimated_total_tokens) = self
+            .clone_history()
+            .await
+            .estimate_token_count(turn_context)
+        else {
+            return;
+        };
         {
             let mut state = self.state.lock().await;
             let mut info = state.token_info().unwrap_or(TokenUsageInfo {
@@ -1446,14 +1458,7 @@ impl Session {
         turn_context: Arc<TurnContext>,
         cancellation_token: CancellationToken,
     ) {
-        if !self
-            .state
-            .lock()
-            .await
-            .session_configuration
-            .features
-            .enabled(Feature::GhostCommit)
-        {
+        if !self.enabled(Feature::GhostCommit).await {
             return;
         }
         let token = match turn_context.tool_call_gate.subscribe().await {
@@ -1507,6 +1512,8 @@ impl Session {
     ) -> anyhow::Result<ListResourcesResult> {
         self.services
             .mcp_connection_manager
+            .read()
+            .await
             .list_resources(server, params)
             .await
     }
@@ -1518,6 +1525,8 @@ impl Session {
     ) -> anyhow::Result<ListResourceTemplatesResult> {
         self.services
             .mcp_connection_manager
+            .read()
+            .await
             .list_resource_templates(server, params)
             .await
     }
@@ -1529,6 +1538,8 @@ impl Session {
     ) -> anyhow::Result<ReadResourceResult> {
         self.services
             .mcp_connection_manager
+            .read()
+            .await
             .read_resource(server, params)
             .await
     }
@@ -1541,19 +1552,29 @@ impl Session {
     ) -> anyhow::Result<CallToolResult> {
         self.services
             .mcp_connection_manager
+            .read()
+            .await
             .call_tool(server, tool, arguments)
             .await
     }
 
-    pub(crate) fn parse_mcp_tool_name(&self, tool_name: &str) -> Option<(String, String)> {
+    pub(crate) async fn parse_mcp_tool_name(&self, tool_name: &str) -> Option<(String, String)> {
         self.services
             .mcp_connection_manager
+            .read()
+            .await
             .parse_tool_name(tool_name)
+            .await
     }
 
     pub async fn interrupt_task(self: &Arc<Self>) {
         info!("interrupt received: abort current task, if any");
-        self.abort_all_tasks(TurnAbortReason::Interrupted).await;
+        let has_active_turn = { self.active_turn.lock().await.is_some() };
+        if has_active_turn {
+            self.abort_all_tasks(TurnAbortReason::Interrupted).await;
+        } else {
+            self.cancel_mcp_startup().await;
+        }
     }
 
     pub(crate) fn notifier(&self) -> &UserNotifier {
@@ -1567,10 +1588,17 @@ impl Session {
     fn show_raw_agent_reasoning(&self) -> bool {
         self.services.show_raw_agent_reasoning
     }
+
+    async fn cancel_mcp_startup(&self) {
+        self.services.mcp_startup_cancellation_token.cancel();
+    }
 }
 
 async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {
-    let mut previous_context: Option<Arc<TurnContext>> = None;
+    // Seed with context in case there is an OverrideTurnContext first.
+    let mut previous_context: Option<Arc<TurnContext>> =
+        Some(sess.new_turn(SessionSettingsUpdate::default()).await);
+
     // To break out of this loop, send Op::Shutdown.
     while let Ok(sub) = rx_sub.recv().await {
         debug!(?sub, "Submission");
@@ -1677,6 +1705,7 @@ mod handlers {
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
     use codex_protocol::protocol::TurnAbortReason;
+
     use codex_protocol::user_input::UserInput;
     use std::sync::Arc;
     use tracing::info;
@@ -1844,17 +1873,15 @@ mod handlers {
     }
 
     pub async fn list_mcp_tools(sess: &Session, config: &Arc<Config>, sub_id: String) {
-        // This is a cheap lookup from the connection manager's cache.
-        let tools = sess.services.mcp_connection_manager.list_all_tools();
-        let (auth_status_entries, resources, resource_templates) = tokio::join!(
+        let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
+        let (tools, auth_status_entries, resources, resource_templates) = tokio::join!(
+            mcp_connection_manager.list_all_tools(),
             compute_auth_statuses(
                 config.mcp_servers.iter(),
                 config.mcp_oauth_credentials_store_mode,
             ),
-            sess.services.mcp_connection_manager.list_all_resources(),
-            sess.services
-                .mcp_connection_manager
-                .list_all_resource_templates()
+            mcp_connection_manager.list_all_resources(),
+            mcp_connection_manager.list_all_resource_templates(),
         );
         let auth_statuses = auth_status_entries
             .iter()
@@ -1863,7 +1890,10 @@ mod handlers {
         let event = Event {
             id: sub_id,
             msg: EventMsg::McpListToolsResponse(crate::protocol::McpListToolsResponseEvent {
-                tools,
+                tools: tools
+                    .into_iter()
+                    .map(|(name, tool)| (name, tool.tool))
+                    .collect(),
                 resources,
                 resource_templates,
                 auth_statuses,
@@ -1901,16 +1931,15 @@ mod handlers {
         let turn_context = sess
             .new_turn_with_sub_id(sub_id, SessionSettingsUpdate::default())
             .await;
-        // Attempt to inject input into current task
-        if let Err(items) = sess
-            .inject_input(vec![UserInput::Text {
+
+        sess.spawn_task(
+            Arc::clone(&turn_context),
+            vec![UserInput::Text {
                 text: turn_context.compact_prompt().to_string(),
-            }])
-            .await
-        {
-            sess.spawn_task(Arc::clone(&turn_context), items, CompactTask)
-                .await;
-        }
+            }],
+            CompactTask,
+        )
+        .await;
     }
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
@@ -2036,6 +2065,8 @@ async fn spawn_review_thread(
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
+        exec_policy: parent_turn_context.exec_policy.clone(),
+        truncation_policy: TruncationPolicy::new(&per_turn_config),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -2043,7 +2074,12 @@ async fn spawn_review_thread(
         text: review_prompt,
     }];
     let tc = Arc::new(review_turn_context);
-    sess.spawn_task(tc.clone(), input, ReviewTask).await;
+    sess.spawn_task(
+        tc.clone(),
+        input,
+        ReviewTask::new(review_request.append_to_original_thread),
+    )
+    .await;
 
     // Announce entering review mode so UIs can switch modes.
     sess.send_event(&tc, EventMsg::EnteredReviewMode(review_request))
@@ -2144,7 +2180,12 @@ pub(crate) async fn run_task(
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached {
-                    compact::run_inline_auto_compact_task(sess.clone(), turn_context.clone()).await;
+                    if should_use_remote_compact_task(&sess).await {
+                        run_inline_remote_auto_compact_task(sess.clone(), turn_context.clone())
+                            .await;
+                    } else {
+                        run_inline_auto_compact_task(sess.clone(), turn_context.clone()).await;
+                    }
                     continue;
                 }
 
@@ -2193,22 +2234,54 @@ async fn run_turn(
     input: Vec<ResponseItem>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<TurnRunResult> {
-    let mcp_tools = sess.services.mcp_connection_manager.list_all_tools();
+    let mcp_tools = sess
+        .services
+        .mcp_connection_manager
+        .read()
+        .await
+        .list_all_tools()
+        .or_cancel(&cancellation_token)
+        .await?;
     let router = Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
-        Some(mcp_tools),
+        Some(
+            mcp_tools
+                .into_iter()
+                .map(|(name, tool)| (name, tool.tool))
+                .collect(),
+        ),
     ));
 
     let model_supports_parallel = turn_context
         .client
         .get_model_family()
         .supports_parallel_tool_calls;
-    let parallel_tool_calls = model_supports_parallel;
+
+    // TODO(jif) revert once testing phase is done.
+    let parallel_tool_calls = model_supports_parallel
+        && sess
+            .state
+            .lock()
+            .await
+            .session_configuration
+            .features
+            .enabled(Feature::ParallelToolCalls);
+    let mut base_instructions = turn_context.base_instructions.clone();
+    if parallel_tool_calls {
+        static INSTRUCTIONS: &str = include_str!("../templates/parallel/instructions.md");
+        if let Some(family) =
+            find_family_for_model(&sess.state.lock().await.session_configuration.model)
+        {
+            let mut new_instructions = base_instructions.unwrap_or(family.base_instructions);
+            new_instructions.push_str(INSTRUCTIONS);
+            base_instructions = Some(new_instructions);
+        }
+    }
     let prompt = Prompt {
         input,
         tools: router.specs(),
         parallel_tool_calls,
-        base_instructions_override: turn_context.base_instructions.clone(),
+        base_instructions_override: base_instructions,
         output_schema: turn_context.final_output_json_schema.clone(),
     };
 
@@ -2365,7 +2438,7 @@ async fn try_run_turn(
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
                 let previously_active_item = active_item.take();
-                match ToolRouter::build_tool_call(sess.as_ref(), item.clone()) {
+                match ToolRouter::build_tool_call(sess.as_ref(), item.clone()).await {
                     Ok(Some(call)) => {
                         let payload_preview = call.payload.log_payload().into_owned();
                         tracing::info!("ToolCall: {} {}", call.tool_name, payload_preview);
@@ -2576,59 +2649,6 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
     })
 }
 
-fn mcp_init_error_display(
-    server_name: &str,
-    entry: Option<&McpAuthStatusEntry>,
-    err: &anyhow::Error,
-) -> String {
-    if let Some(McpServerTransportConfig::StreamableHttp {
-        url,
-        bearer_token_env_var,
-        http_headers,
-        ..
-    }) = &entry.map(|entry| &entry.config.transport)
-        && url == "https://api.githubcopilot.com/mcp/"
-        && bearer_token_env_var.is_none()
-        && http_headers.as_ref().map(HashMap::is_empty).unwrap_or(true)
-    {
-        // GitHub only supports OAUth for first party MCP clients.
-        // That means that the user has to specify a personal access token either via bearer_token_env_var or http_headers.
-        // https://github.com/github/github-mcp-server/issues/921#issuecomment-3221026448
-        format!(
-            "GitHub MCP does not support OAuth. Log in by adding a personal access token (https://github.com/settings/personal-access-tokens) to your environment and config.toml:\n[mcp_servers.{server_name}]\nbearer_token_env_var = CODEX_GITHUB_PERSONAL_ACCESS_TOKEN"
-        )
-    } else if is_mcp_client_auth_required_error(err) {
-        format!(
-            "The {server_name} MCP server is not logged in. Run `codex mcp login {server_name}`."
-        )
-    } else if is_mcp_client_startup_timeout_error(err) {
-        let startup_timeout_secs = match entry {
-            Some(entry) => match entry.config.startup_timeout_sec {
-                Some(timeout) => timeout,
-                None => DEFAULT_STARTUP_TIMEOUT,
-            },
-            None => DEFAULT_STARTUP_TIMEOUT,
-        }
-        .as_secs();
-        format!(
-            "MCP client for `{server_name}` timed out after {startup_timeout_secs} seconds. Add or adjust `startup_timeout_sec` in your config.toml:\n[mcp_servers.{server_name}]\nstartup_timeout_sec = XX"
-        )
-    } else {
-        format!("MCP client for `{server_name}` failed to start: {err:#}")
-    }
-}
-
-fn is_mcp_client_auth_required_error(error: &anyhow::Error) -> bool {
-    // StreamableHttpError::AuthRequired from the MCP SDK.
-    error.to_string().contains("Auth required")
-}
-
-fn is_mcp_client_startup_timeout_error(error: &anyhow::Error) -> bool {
-    let error_message = error.to_string();
-    error_message.contains("request timed out")
-        || error_message.contains("timed out handshaking with MCP server")
-}
-
 use crate::features::Features;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
@@ -2640,10 +2660,7 @@ mod tests {
     use crate::config::ConfigToml;
     use crate::config::MIN_PROGRESS_INTERVAL_SECONDS;
     use crate::config::ProgressToml;
-    use crate::config::types::McpServerConfig;
-    use crate::config::types::McpServerTransportConfig;
     use crate::exec::ExecToolCallOutput;
-    use crate::mcp::auth::McpAuthStatusEntry;
     use crate::tools::format_exec_output_str;
 
     use crate::protocol::AgentReasoningEvent;
@@ -2666,7 +2683,6 @@ mod tests {
     use codex_app_server_protocol::AuthMode;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
-    use codex_protocol::protocol::McpAuthStatus;
     use std::time::Duration;
     use tokio::time::sleep;
     use tokio::time::timeout;
@@ -2758,8 +2774,9 @@ mod tests {
             duration: StdDuration::from_secs(1),
             timed_out: true,
         };
+        let (_, turn_context, _) = make_session_and_context();
 
-        let out = format_exec_output_str(&exec);
+        let out = format_exec_output_str(&exec, turn_context.truncation_policy);
 
         assert_eq!(
             out,
@@ -2878,13 +2895,15 @@ mod tests {
             auto_continue: config.auto_continue.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
+            exec_policy: Arc::new(ExecPolicy::empty()),
             session_source: SessionSource::Exec,
         };
 
         let state = SessionState::new(session_configuration.clone());
 
         let services = SessionServices {
-            mcp_connection_manager: McpConnectionManager::default(),
+            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
+            mcp_startup_cancellation_token: CancellationToken::new(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::new(None),
             rollout: Mutex::new(None),
@@ -2973,13 +2992,15 @@ mod tests {
             auto_continue: config.auto_continue.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
+            exec_policy: Arc::new(ExecPolicy::empty()),
             session_source: SessionSource::Exec,
         };
 
         let state = SessionState::new(session_configuration.clone());
 
         let services = SessionServices {
-            mcp_connection_manager: McpConnectionManager::default(),
+            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
+            mcp_startup_cancellation_token: CancellationToken::new(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::new(None),
             rollout: Mutex::new(None),
@@ -3195,7 +3216,8 @@ mod tests {
         let input = vec![UserInput::Text {
             text: "start review".to_string(),
         }];
-        sess.spawn_task(Arc::clone(&tc), input, ReviewTask).await;
+        sess.spawn_task(Arc::clone(&tc), input, ReviewTask::new(true))
+            .await;
 
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
@@ -3252,10 +3274,24 @@ mod tests {
 
     #[tokio::test]
     async fn fatal_tool_error_stops_turn_and_reports_error() {
-        let (session, turn_context, _rx, _rx_submission) = make_session_and_context_with_rx();
+        let (session, turn_context, _rx_event, _rx_submission) = make_session_and_context_with_rx();
+        let tools = {
+            session
+                .services
+                .mcp_connection_manager
+                .read()
+                .await
+                .list_all_tools()
+                .await
+        };
         let router = ToolRouter::from_config(
             &turn_context.tools_config,
-            Some(session.services.mcp_connection_manager.list_all_tools()),
+            Some(
+                tools
+                    .into_iter()
+                    .map(|(name, tool)| (name, tool.tool))
+                    .collect(),
+            ),
         );
         let item = ResponseItem::CustomToolCall {
             id: None,
@@ -3266,6 +3302,7 @@ mod tests {
         };
 
         let call = ToolRouter::build_tool_call(session.as_ref(), item.clone())
+            .await
             .expect("build tool call")
             .expect("tool call present");
         let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
@@ -3298,7 +3335,7 @@ mod tests {
         for item in &initial_context {
             rollout_items.push(RolloutItem::ResponseItem(item.clone()));
         }
-        live_history.record_items(initial_context.iter());
+        live_history.record_items(initial_context.iter(), turn_context.truncation_policy);
 
         let user1 = ResponseItem::Message {
             id: None,
@@ -3307,7 +3344,7 @@ mod tests {
                 text: "first user".to_string(),
             }],
         };
-        live_history.record_items(std::iter::once(&user1));
+        live_history.record_items(std::iter::once(&user1), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(user1.clone()));
 
         let assistant1 = ResponseItem::Message {
@@ -3317,13 +3354,13 @@ mod tests {
                 text: "assistant reply one".to_string(),
             }],
         };
-        live_history.record_items(std::iter::once(&assistant1));
+        live_history.record_items(std::iter::once(&assistant1), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(assistant1.clone()));
 
         let summary1 = "summary one";
         let snapshot1 = live_history.get_history();
         let user_messages1 = collect_user_messages(&snapshot1);
-        let rebuilt1 = build_compacted_history(
+        let rebuilt1 = compact::build_compacted_history(
             session.build_initial_context(turn_context),
             &user_messages1,
             summary1,
@@ -3331,6 +3368,7 @@ mod tests {
         live_history.replace(rebuilt1);
         rollout_items.push(RolloutItem::Compacted(CompactedItem {
             message: summary1.to_string(),
+            replacement_history: None,
         }));
 
         let user2 = ResponseItem::Message {
@@ -3340,7 +3378,7 @@ mod tests {
                 text: "second user".to_string(),
             }],
         };
-        live_history.record_items(std::iter::once(&user2));
+        live_history.record_items(std::iter::once(&user2), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(user2.clone()));
 
         let assistant2 = ResponseItem::Message {
@@ -3350,13 +3388,13 @@ mod tests {
                 text: "assistant reply two".to_string(),
             }],
         };
-        live_history.record_items(std::iter::once(&assistant2));
+        live_history.record_items(std::iter::once(&assistant2), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(assistant2.clone()));
 
         let summary2 = "summary two";
         let snapshot2 = live_history.get_history();
         let user_messages2 = collect_user_messages(&snapshot2);
-        let rebuilt2 = build_compacted_history(
+        let rebuilt2 = compact::build_compacted_history(
             session.build_initial_context(turn_context),
             &user_messages2,
             summary2,
@@ -3364,6 +3402,7 @@ mod tests {
         live_history.replace(rebuilt2);
         rollout_items.push(RolloutItem::Compacted(CompactedItem {
             message: summary2.to_string(),
+            replacement_history: None,
         }));
 
         let user3 = ResponseItem::Message {
@@ -3373,7 +3412,7 @@ mod tests {
                 text: "third user".to_string(),
             }],
         };
-        live_history.record_items(std::iter::once(&user3));
+        live_history.record_items(std::iter::once(&user3), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(user3.clone()));
 
         let assistant3 = ResponseItem::Message {
@@ -3383,7 +3422,7 @@ mod tests {
                 text: "assistant reply three".to_string(),
             }],
         };
-        live_history.record_items(std::iter::once(&assistant3));
+        live_history.record_items(std::iter::once(&assistant3), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(assistant3.clone()));
 
         (rollout_items, live_history.get_history())
@@ -3515,7 +3554,6 @@ mod tests {
         pretty_assertions::assert_eq!(exec_output.metadata, ResponseExecMetadata { exit_code: 0 });
         assert!(exec_output.output.contains("hi"));
     }
-
     #[tokio::test]
     async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request() {
         use crate::protocol::AskForApproval;
@@ -3556,91 +3594,6 @@ mod tests {
         );
 
         pretty_assertions::assert_eq!(output, expected);
-    }
-
-    #[test]
-    fn mcp_init_error_display_prompts_for_github_pat() {
-        let server_name = "github";
-        let entry = McpAuthStatusEntry {
-            config: McpServerConfig {
-                transport: McpServerTransportConfig::StreamableHttp {
-                    url: "https://api.githubcopilot.com/mcp/".to_string(),
-                    bearer_token_env_var: None,
-                    http_headers: None,
-                    env_http_headers: None,
-                },
-                enabled: true,
-                startup_timeout_sec: None,
-                tool_timeout_sec: None,
-                enabled_tools: None,
-                disabled_tools: None,
-            },
-            auth_status: McpAuthStatus::Unsupported,
-        };
-        let err = anyhow::anyhow!("OAuth is unsupported");
-
-        let display = mcp_init_error_display(server_name, Some(&entry), &err);
-
-        let expected = format!(
-            "GitHub MCP does not support OAuth. Log in by adding a personal access token (https://github.com/settings/personal-access-tokens) to your environment and config.toml:\n[mcp_servers.{server_name}]\nbearer_token_env_var = CODEX_GITHUB_PERSONAL_ACCESS_TOKEN"
-        );
-
-        assert_eq!(expected, display);
-    }
-
-    #[test]
-    fn mcp_init_error_display_prompts_for_login_when_auth_required() {
-        let server_name = "example";
-        let err = anyhow::anyhow!("Auth required for server");
-
-        let display = mcp_init_error_display(server_name, None, &err);
-
-        let expected = format!(
-            "The {server_name} MCP server is not logged in. Run `codex mcp login {server_name}`."
-        );
-
-        assert_eq!(expected, display);
-    }
-
-    #[test]
-    fn mcp_init_error_display_reports_generic_errors() {
-        let server_name = "custom";
-        let entry = McpAuthStatusEntry {
-            config: McpServerConfig {
-                transport: McpServerTransportConfig::StreamableHttp {
-                    url: "https://example.com".to_string(),
-                    bearer_token_env_var: Some("TOKEN".to_string()),
-                    http_headers: None,
-                    env_http_headers: None,
-                },
-                enabled: true,
-                startup_timeout_sec: None,
-                tool_timeout_sec: None,
-                enabled_tools: None,
-                disabled_tools: None,
-            },
-            auth_status: McpAuthStatus::Unsupported,
-        };
-        let err = anyhow::anyhow!("boom");
-
-        let display = mcp_init_error_display(server_name, Some(&entry), &err);
-
-        let expected = format!("MCP client for `{server_name}` failed to start: {err:#}");
-
-        assert_eq!(expected, display);
-    }
-
-    #[test]
-    fn mcp_init_error_display_includes_startup_timeout_hint() {
-        let server_name = "slow";
-        let err = anyhow::anyhow!("request timed out");
-
-        let display = mcp_init_error_display(server_name, None, &err);
-
-        assert_eq!(
-            "MCP client for `slow` timed out after 10 seconds. Add or adjust `startup_timeout_sec` in your config.toml:\n[mcp_servers.slow]\nstartup_timeout_sec = XX",
-            display
-        );
     }
 
     #[tokio::test(flavor = "current_thread")]

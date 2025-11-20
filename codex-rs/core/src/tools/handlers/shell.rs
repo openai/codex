@@ -9,9 +9,11 @@ use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::codex::TurnContext;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
+use crate::exec_policy::create_approval_requirement_for_command;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
+use crate::sandboxing::SandboxPermissions;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -130,7 +132,7 @@ impl ToolHandler for ShellHandler {
                     turn,
                     tracker,
                     call_id,
-                    true,
+                    false,
                 )
                 .await
             }
@@ -178,7 +180,7 @@ impl ToolHandler for ShellCommandHandler {
             turn,
             tracker,
             call_id,
-            false,
+            true,
         )
         .await
     }
@@ -192,7 +194,7 @@ impl ShellHandler {
         turn: Arc<TurnContext>,
         tracker: crate::tools::context::SharedTurnDiffTracker,
         call_id: String,
-        is_user_shell_command: bool,
+        freeform: bool,
     ) -> Result<ToolOutput, FunctionCallError> {
         // Approval policy guard for explicit escalation in non-OnRequest modes.
         if exec_params.with_escalated_permissions.unwrap_or(false)
@@ -285,14 +287,13 @@ impl ShellHandler {
             }
         }
 
-        // Regular shell execution path.
-        let source = if is_user_shell_command {
-            ExecCommandSource::UserShell
-        } else {
-            ExecCommandSource::Agent
-        };
-        let emitter =
-            ToolEmitter::shell(exec_params.command.clone(), exec_params.cwd.clone(), source);
+        let source = ExecCommandSource::Agent;
+        let emitter = ToolEmitter::shell(
+            exec_params.command.clone(),
+            exec_params.cwd.clone(),
+            source,
+            freeform,
+        );
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
         emitter.begin(event_ctx).await;
 
@@ -303,6 +304,13 @@ impl ShellHandler {
             env: exec_params.env.clone(),
             with_escalated_permissions: exec_params.with_escalated_permissions,
             justification: exec_params.justification.clone(),
+            approval_requirement: create_approval_requirement_for_command(
+                &turn.exec_policy,
+                &exec_params.command,
+                turn.approval_policy,
+                &turn.sandbox_policy,
+                SandboxPermissions::from(exec_params.with_escalated_permissions.unwrap_or(false)),
+            ),
         };
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = ShellRuntime::new();

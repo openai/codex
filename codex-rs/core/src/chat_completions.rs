@@ -81,6 +81,7 @@ pub(crate) async fn stream_chat_completions(
             ResponseItem::CustomToolCallOutput { .. } => {}
             ResponseItem::WebSearchCall { .. } => {}
             ResponseItem::GhostSnapshot { .. } => {}
+            ResponseItem::CompactionSummary { .. } => {}
         }
     }
 
@@ -320,7 +321,8 @@ pub(crate) async fn stream_chat_completions(
             }
             ResponseItem::Reasoning { .. }
             | ResponseItem::WebSearchCall { .. }
-            | ResponseItem::Other => {
+            | ResponseItem::Other
+            | ResponseItem::CompactionSummary { .. } => {
                 // Omit these items from the conversation history.
                 continue;
             }
@@ -673,7 +675,9 @@ async fn process_chat_sse<S>(
             }
 
             // Emit end-of-turn when finish_reason signals completion.
-            if let Some(finish_reason) = choice.get("finish_reason").and_then(|v| v.as_str()) {
+            if let Some(finish_reason) = choice.get("finish_reason").and_then(|v| v.as_str())
+                && !finish_reason.is_empty()
+            {
                 match finish_reason {
                     "tool_calls" if fn_call_state.active => {
                         // First, flush the terminal raw reasoning so UIs can finalize

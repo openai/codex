@@ -182,23 +182,26 @@ async fn exec_windows_sandbox(
         ..
     } = params;
 
-    let policy_str = match sandbox_policy {
-        SandboxPolicy::DangerFullAccess => "workspace-write",
-        SandboxPolicy::ReadOnly => "read-only",
-        SandboxPolicy::WorkspaceWrite { .. } => "workspace-write",
-    };
-
+    let policy_str = serde_json::to_string(sandbox_policy).map_err(|err| {
+        CodexErr::Io(io::Error::other(format!(
+            "failed to serialize Windows sandbox policy: {err}"
+        )))
+    })?;
     let sandbox_cwd = cwd.clone();
-    let logs_base_dir = find_codex_home().ok();
+    let codex_home = find_codex_home().map_err(|err| {
+        CodexErr::Io(io::Error::other(format!(
+            "windows sandbox: failed to resolve codex_home: {err}"
+        )))
+    })?;
     let spawn_res = tokio::task::spawn_blocking(move || {
         run_windows_sandbox_capture(
-            policy_str,
+            policy_str.as_str(),
             &sandbox_cwd,
+            codex_home.as_ref(),
             command,
             &cwd,
             env,
             timeout_ms,
-            logs_base_dir.as_deref(),
         )
     })
     .await;
@@ -440,7 +443,9 @@ async fn exec(
     stdout_stream: Option<StdoutStream>,
 ) -> Result<RawExecToolCallOutput> {
     #[cfg(target_os = "windows")]
-    if sandbox == SandboxType::WindowsRestrictedToken {
+    if sandbox == SandboxType::WindowsRestrictedToken
+        && !matches!(sandbox_policy, SandboxPolicy::DangerFullAccess)
+    {
         return exec_windows_sandbox(params, sandbox_policy).await;
     }
     let timeout = params.timeout_duration();
