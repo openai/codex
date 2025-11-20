@@ -114,6 +114,11 @@ impl BottomPane {
         self.status.as_ref()
     }
 
+    #[cfg(test)]
+    pub(crate) fn context_window_percent(&self) -> Option<i64> {
+        self.context_window_percent
+    }
+
     fn active_view(&self) -> Option<&dyn BottomPaneView> {
         self.view_stack.last().map(std::convert::AsRef::as_ref)
     }

@@ -25,6 +25,7 @@ mod environment_context;
 pub mod error;
 pub mod exec;
 pub mod exec_env;
+mod exec_policy;
 pub mod features;
 mod flags;
 pub mod git_info;
