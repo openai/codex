@@ -110,8 +110,11 @@ mod tests {
         let tmp = tempdir().expect("create temp dir");
         let policy_path = tmp.path().join("policy").join("default.codexpolicy");
 
-        append_allow_prefix_rule(&policy_path, &[String::from("echo"), String::from("Hello, world!")])
-            .expect("append rule");
+        append_allow_prefix_rule(
+            &policy_path,
+            &[String::from("echo"), String::from("Hello, world!")],
+        )
+        .expect("append rule");
 
         let contents =
             std::fs::read_to_string(&policy_path).expect("default.codexpolicy should exist");
@@ -132,7 +135,11 @@ mod tests {
         )
         .expect("write seed rule");
 
-        append_allow_prefix_rule(&policy_path, &[String::from("echo"), String::from("Hello, world!")]).expect("append rule");
+        append_allow_prefix_rule(
+            &policy_path,
+            &[String::from("echo"), String::from("Hello, world!")],
+        )
+        .expect("append rule");
 
         let contents = std::fs::read_to_string(&policy_path).expect("read policy");
         assert_eq!(
