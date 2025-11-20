@@ -656,7 +656,9 @@ fn map_patch_change_kind(change: &CoreFileChange) -> V2PatchChangeKind {
     match change {
         CoreFileChange::Add { .. } => V2PatchChangeKind::Add,
         CoreFileChange::Delete { .. } => V2PatchChangeKind::Delete,
-        CoreFileChange::Update { .. } => V2PatchChangeKind::Update,
+        CoreFileChange::Update { move_path, .. } => V2PatchChangeKind::Update {
+            move_path: move_path.clone(),
+        },
     }
 }
 
