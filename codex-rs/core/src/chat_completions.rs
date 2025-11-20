@@ -495,27 +495,27 @@ async fn append_reasoning_text(
 fn parse_openai_usage(usage: &serde_json::Value) -> Option<TokenUsage> {
     let prompt_tokens = usage
         .get("prompt_tokens")
-        .and_then(|v| v.as_i64())
+        .and_then(serde_json::Value::as_i64)
         .unwrap_or(0);
     let completion_tokens = usage
         .get("completion_tokens")
-        .and_then(|v| v.as_i64())
+        .and_then(serde_json::Value::as_i64)
         .unwrap_or(0);
     let total_tokens = usage
         .get("total_tokens")
-        .and_then(|v| v.as_i64())
+        .and_then(serde_json::Value::as_i64)
         .unwrap_or(0);
 
     let cached_input_tokens = usage
         .get("prompt_tokens_details")
         .and_then(|d| d.get("cached_tokens"))
-        .and_then(|v| v.as_i64())
+        .and_then(serde_json::Value::as_i64)
         .unwrap_or(0);
 
     let reasoning_output_tokens = usage
         .get("completion_tokens_details")
         .and_then(|d| d.get("reasoning_tokens"))
-        .and_then(|v| v.as_i64())
+        .and_then(serde_json::Value::as_i64)
         .unwrap_or(0);
 
     Some(TokenUsage {
@@ -622,10 +622,10 @@ async fn process_chat_sse<S>(
         };
         trace!("chat_completions received SSE chunk: {chunk:?}");
 
-        if let Some(id) = chunk.get("id").and_then(|s| s.as_str()) {
-            if response_id.is_empty() {
-                response_id = id.to_string();
-            }
+        if let Some(id) = chunk.get("id").and_then(|s| s.as_str())
+            && response_id.is_empty()
+        {
+            response_id = id.to_string();
         }
 
         if let Some(usage) = chunk.get("usage") {
