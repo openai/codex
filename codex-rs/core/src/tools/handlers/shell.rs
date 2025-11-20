@@ -9,7 +9,7 @@ use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::codex::TurnContext;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
-use crate::exec_policy::command_approval_requirement_for_command;
+use crate::exec_policy::create_approval_requirement_for_command;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
@@ -305,7 +305,7 @@ impl ShellHandler {
             env: exec_params.env.clone(),
             with_escalated_permissions: exec_params.with_escalated_permissions,
             justification: exec_params.justification.clone(),
-            approval_requirement: command_approval_requirement_for_command(
+            approval_requirement: create_approval_requirement_for_command(
                 exec_policy.as_ref(),
                 &exec_params.command,
                 turn.approval_policy,

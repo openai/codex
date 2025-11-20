@@ -164,7 +164,7 @@ fn allow_prefix_if_applicable(
     }
 }
 
-pub(crate) fn command_approval_requirement_for_command(
+pub(crate) fn create_approval_requirement_for_command(
     policy: &Policy,
     command: &[String],
     approval_policy: AskForApproval,
@@ -211,23 +211,6 @@ fn evaluate_with_policy(
         }
         Evaluation::NoMatch => None,
     }
-}
-
-#[cfg(test)]
-pub(crate) fn create_approval_requirement_for_command(
-    policy: &Policy,
-    command: &[String],
-    approval_policy: AskForApproval,
-    sandbox_policy: &SandboxPolicy,
-    sandbox_permissions: SandboxPermissions,
-) -> ApprovalRequirement {
-    command_approval_requirement_for_command(
-        policy,
-        command,
-        approval_policy,
-        sandbox_policy,
-        sandbox_permissions,
-    )
 }
 
 async fn collect_policy_files(dir: &Path) -> Result<Vec<PathBuf>, ExecPolicyError> {
@@ -466,7 +449,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         let command = vec!["python".to_string()];
 
         let empty_policy = Policy::empty();
-        let requirement = command_approval_requirement_for_command(
+        let requirement = create_approval_requirement_for_command(
             &empty_policy,
             &command,
             AskForApproval::UnlessTrusted,
@@ -493,7 +476,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         let policy = parser.build();
         let command = vec!["rm".to_string()];
 
-        let requirement = command_approval_requirement_for_command(
+        let requirement = create_approval_requirement_for_command(
             &policy,
             &command,
             AskForApproval::OnRequest,
@@ -517,7 +500,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             "-lc".to_string(),
             "python && echo ok".to_string(),
         ];
-        let requirement = command_approval_requirement_for_command(
+        let requirement = create_approval_requirement_for_command(
             &Policy::empty(),
             &command,
             AskForApproval::UnlessTrusted,
