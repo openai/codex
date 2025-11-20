@@ -1,13 +1,11 @@
 use crate::codex::TurnContext;
 use crate::context_manager::normalize;
 use crate::truncate;
-use crate::truncate::format_output_for_model_body;
-use crate::truncate::globally_truncate_function_output_items;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::FunctionCallOutputContentItem;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::truncate_function_output_items_with_policy;
 use crate::truncate::truncate_text;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
