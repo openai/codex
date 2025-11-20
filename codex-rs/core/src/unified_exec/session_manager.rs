@@ -11,7 +11,7 @@ use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::StreamOutput;
 use crate::exec_env::create_env;
-use crate::exec_policy::create_approval_requirement_for_command;
+use crate::exec_policy::command_approval_outcome_for_command;
 use crate::protocol::BackgroundEventEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandSource;
@@ -445,19 +445,22 @@ impl UnifiedExecSessionManager {
     ) -> Result<UnifiedExecSession, UnifiedExecError> {
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);
+        let exec_policy = context.session.current_exec_policy().await;
+        let approval_outcome = command_approval_outcome_for_command(
+            exec_policy.as_ref(),
+            command,
+            context.turn.approval_policy,
+            &context.turn.sandbox_policy,
+            SandboxPermissions::from(with_escalated_permissions.unwrap_or(false)),
+        );
         let req = UnifiedExecToolRequest::new(
             command.to_vec(),
             cwd,
             create_env(&context.turn.shell_environment_policy),
             with_escalated_permissions,
             justification,
-            create_approval_requirement_for_command(
-                &context.turn.exec_policy,
-                command,
-                context.turn.approval_policy,
-                &context.turn.sandbox_policy,
-                SandboxPermissions::from(with_escalated_permissions.unwrap_or(false)),
-            ),
+            approval_outcome.requirement,
+            approval_outcome.allow_prefix,
         );
         let tool_ctx = ToolCtx {
             session: context.session.as_ref(),

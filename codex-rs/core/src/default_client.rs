@@ -288,7 +288,7 @@ mod tests {
     #[test]
     fn test_get_codex_user_agent() {
         let user_agent = get_codex_user_agent();
-        assert!(user_agent.starts_with("codex_cli_rs/"));
+        assert!(user_agent.starts_with(&format!("{}/", originator().value)));
     }
 
     #[tokio::test]
@@ -365,9 +365,13 @@ mod tests {
     #[cfg(target_os = "macos")]
     fn test_macos() {
         use regex_lite::Regex;
+        let originator = originator().value.clone();
         let user_agent = get_codex_user_agent();
         let re = Regex::new(
-            r"^codex_cli_rs/\d+\.\d+\.\d+ \(Mac OS \d+\.\d+\.\d+; (x86_64|arm64)\) (\S+)$",
+            format!(
+                r"^{originator}/\d+\.\d+\.\d+ \(Mac OS \d+\.\d+\.\d+; (x86_64|arm64)\) (\S+)$"
+            )
+            .as_str(),
         )
         .unwrap();
         assert!(re.is_match(&user_agent));

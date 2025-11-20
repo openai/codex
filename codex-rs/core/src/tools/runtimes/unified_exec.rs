@@ -35,6 +35,7 @@ pub struct UnifiedExecRequest {
     pub with_escalated_permissions: Option<bool>,
     pub justification: Option<String>,
     pub approval_requirement: ApprovalRequirement,
+    pub approval_allow_prefix: Option<Vec<String>>,
 }
 
 impl ProvidesSandboxRetryData for UnifiedExecRequest {
@@ -65,6 +66,7 @@ impl UnifiedExecRequest {
         with_escalated_permissions: Option<bool>,
         justification: Option<String>,
         approval_requirement: ApprovalRequirement,
+        approval_allow_prefix: Option<Vec<String>>,
     ) -> Self {
         Self {
             command,
@@ -73,6 +75,7 @@ impl UnifiedExecRequest {
             with_escalated_permissions,
             justification,
             approval_requirement,
+            approval_allow_prefix,
         }
     }
 }
@@ -120,10 +123,19 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
             .clone()
             .or_else(|| req.justification.clone());
         let risk = ctx.risk.clone();
+        let allow_prefix = req.approval_allow_prefix.clone();
         Box::pin(async move {
             with_cached_approval(&session.services, key, || async move {
                 session
-                    .request_command_approval(turn, call_id, command, cwd, reason, risk)
+                    .request_command_approval(
+                        turn,
+                        call_id,
+                        command,
+                        cwd,
+                        reason,
+                        risk,
+                        allow_prefix,
+                    )
                     .await
             })
             .await

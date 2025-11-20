@@ -1,0 +1,136 @@
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::Path;
+use std::path::PathBuf;
+
+use serde_json;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum AmendError {
+    #[error("prefix rule requires at least one token")]
+    EmptyPrefix,
+    #[error("policy path has no parent: {path}")]
+    MissingParent { path: PathBuf },
+    #[error("failed to create policy directory {dir}: {source}")]
+    CreatePolicyDir {
+        dir: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("failed to format prefix token {token}: {source}")]
+    SerializeToken {
+        token: String,
+        source: serde_json::Error,
+    },
+    #[error("failed to open policy file {path}: {source}")]
+    OpenPolicyFile {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("failed to write to policy file {path}: {source}")]
+    WritePolicyFile {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("failed to read metadata for policy file {path}: {source}")]
+    PolicyMetadata {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+}
+
+pub fn append_allow_prefix_rule(policy_path: &Path, prefix: &[String]) -> Result<(), AmendError> {
+    if prefix.is_empty() {
+        return Err(AmendError::EmptyPrefix);
+    }
+
+    let dir = policy_path
+        .parent()
+        .ok_or_else(|| AmendError::MissingParent {
+            path: policy_path.to_path_buf(),
+        })?;
+    std::fs::create_dir_all(dir).map_err(|source| AmendError::CreatePolicyDir {
+        dir: dir.to_path_buf(),
+        source,
+    })?;
+
+    let tokens: Vec<String> = prefix
+        .iter()
+        .map(|token| {
+            serde_json::to_string(token).map_err(|source| AmendError::SerializeToken {
+                token: token.clone(),
+                source,
+            })
+        })
+        .collect::<Result<_, _>>()?;
+    let pattern = tokens.join(", ");
+    let rule = format!("prefix_rule(pattern=[{pattern}], decision=\"allow\")\n");
+
+    let needs_newline = policy_path
+        .metadata()
+        .map(|metadata| metadata.len() > 0)
+        .unwrap_or(false);
+
+    let final_rule = if needs_newline {
+        format!("\n{rule}")
+    } else {
+        rule
+    };
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(policy_path)
+        .map_err(|source| AmendError::OpenPolicyFile {
+            path: policy_path.to_path_buf(),
+            source,
+        })?;
+    file.write_all(final_rule.as_bytes())
+        .map_err(|source| AmendError::WritePolicyFile {
+            path: policy_path.to_path_buf(),
+            source,
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use tempfile::tempdir;
+
+    #[test]
+    fn appends_rule_and_creates_directories() {
+        let tmp = tempdir().expect("create temp dir");
+        let policy_path = tmp.path().join("policy").join("default.codexpolicy");
+
+        append_allow_prefix_rule(&policy_path, &[String::from("bash"), String::from("-lc")])
+            .expect("append rule");
+
+        let contents =
+            std::fs::read_to_string(&policy_path).expect("default.codexpolicy should exist");
+        assert_eq!(
+            contents,
+            "prefix_rule(pattern=[\"bash\", \"-lc\"], decision=\"allow\")\n"
+        );
+    }
+
+    #[test]
+    fn separates_rules_with_newlines_when_appending() {
+        let tmp = tempdir().expect("create temp dir");
+        let policy_path = tmp.path().join("policy").join("default.codexpolicy");
+        std::fs::create_dir_all(policy_path.parent().unwrap()).expect("create policy dir");
+        std::fs::write(
+            &policy_path,
+            "prefix_rule(pattern=[\"ls\"], decision=\"allow\")\n",
+        )
+        .expect("write seed rule");
+
+        append_allow_prefix_rule(&policy_path, &[String::from("git")]).expect("append rule");
+
+        let contents = std::fs::read_to_string(&policy_path).expect("read policy");
+        assert_eq!(
+            contents,
+            "prefix_rule(pattern=[\"ls\"], decision=\"allow\")\n\nprefix_rule(pattern=[\"git\"], decision=\"allow\")\n"
+        );
+    }
+}

@@ -41,6 +41,7 @@ pub(crate) enum ApprovalRequest {
         command: Vec<String>,
         reason: Option<String>,
         risk: Option<SandboxCommandAssessment>,
+        allow_prefix: Option<Vec<String>>,
     },
     ApplyPatch {
         id: String,
@@ -97,8 +98,8 @@ impl ApprovalOverlay {
         header: Box<dyn Renderable>,
     ) -> (Vec<ApprovalOption>, SelectionViewParams) {
         let (options, title) = match &variant {
-            ApprovalVariant::Exec { .. } => (
-                exec_options(),
+            ApprovalVariant::Exec { allow_prefix, .. } => (
+                exec_options(allow_prefix.clone()),
                 "Would you like to run the following command?".to_string(),
             ),
             ApprovalVariant::ApplyPatch { .. } => (
@@ -150,8 +151,8 @@ impl ApprovalOverlay {
         };
         if let Some(variant) = self.current_variant.as_ref() {
             match (&variant, option.decision) {
-                (ApprovalVariant::Exec { id, command }, decision) => {
-                    self.handle_exec_decision(id, command, decision);
+                (ApprovalVariant::Exec { id, command, .. }, decision) => {
+                    self.handle_exec_decision(id, command, decision, option.allow_prefix.clone());
                 }
                 (ApprovalVariant::ApplyPatch { id, .. }, decision) => {
                     self.handle_patch_decision(id, decision);
@@ -163,12 +164,19 @@ impl ApprovalOverlay {
         self.advance_queue();
     }
 
-    fn handle_exec_decision(&self, id: &str, command: &[String], decision: ReviewDecision) {
+    fn handle_exec_decision(
+        &self,
+        id: &str,
+        command: &[String],
+        decision: ReviewDecision,
+        allow_prefix: Option<Vec<String>>,
+    ) {
         let cell = history_cell::new_approval_decision_cell(command.to_vec(), decision);
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
         self.app_event_tx.send(AppEvent::CodexOp(Op::ExecApproval {
             id: id.to_string(),
             decision,
+            allow_prefix,
         }));
     }
 
@@ -238,8 +246,8 @@ impl BottomPaneView for ApprovalOverlay {
             && let Some(variant) = self.current_variant.as_ref()
         {
             match &variant {
-                ApprovalVariant::Exec { id, command } => {
-                    self.handle_exec_decision(id, command, ReviewDecision::Abort);
+                ApprovalVariant::Exec { id, command, .. } => {
+                    self.handle_exec_decision(id, command, ReviewDecision::Abort, None);
                 }
                 ApprovalVariant::ApplyPatch { id, .. } => {
                     self.handle_patch_decision(id, ReviewDecision::Abort);
@@ -291,6 +299,7 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 command,
                 reason,
                 risk,
+                allow_prefix,
             } => {
                 let reason = reason.filter(|item| !item.is_empty());
                 let has_reason = reason.is_some();
@@ -310,7 +319,11 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 }
                 header.extend(full_cmd_lines);
                 Self {
-                    variant: ApprovalVariant::Exec { id, command },
+                    variant: ApprovalVariant::Exec {
+                        id,
+                        command,
+                        allow_prefix,
+                    },
                     header: Box::new(Paragraph::new(header).wrap(Wrap { trim: false })),
                 }
             }
@@ -364,8 +377,14 @@ fn render_risk_lines(risk: &SandboxCommandAssessment) -> Vec<Line<'static>> {
 
 #[derive(Clone)]
 enum ApprovalVariant {
-    Exec { id: String, command: Vec<String> },
-    ApplyPatch { id: String },
+    Exec {
+        id: String,
+        command: Vec<String>,
+        allow_prefix: Option<Vec<String>>,
+    },
+    ApplyPatch {
+        id: String,
+    },
 }
 
 #[derive(Clone)]
@@ -374,6 +393,7 @@ struct ApprovalOption {
     decision: ReviewDecision,
     display_shortcut: Option<KeyBinding>,
     additional_shortcuts: Vec<KeyBinding>,
+    allow_prefix: Option<Vec<String>>,
 }
 
 impl ApprovalOption {
@@ -384,27 +404,43 @@ impl ApprovalOption {
     }
 }
 
-fn exec_options() -> Vec<ApprovalOption> {
-    vec![
-        ApprovalOption {
-            label: "Yes, proceed".to_string(),
-            decision: ReviewDecision::Approved,
-            display_shortcut: None,
-            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
-        },
-        ApprovalOption {
-            label: "Yes, and don't ask again for this command".to_string(),
-            decision: ReviewDecision::ApprovedForSession,
-            display_shortcut: None,
-            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
-        },
-        ApprovalOption {
-            label: "No, and tell Codex what to do differently".to_string(),
-            decision: ReviewDecision::Abort,
-            display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
-            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
-        },
-    ]
+fn exec_options(allow_prefix: Option<Vec<String>>) -> Vec<ApprovalOption> {
+    let mut options = Vec::new();
+    options.push(ApprovalOption {
+        label: "Yes, proceed".to_string(),
+        decision: ReviewDecision::Approved,
+        display_shortcut: None,
+        additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
+        allow_prefix: None,
+    });
+
+    let (label, allow_prefix) = match allow_prefix {
+        Some(prefix) => (
+            "Yes, and don't ask again for commands with this prefix".to_string(),
+            Some(prefix),
+        ),
+        None => (
+            "Yes, and don't ask again for this command".to_string(),
+            None,
+        ),
+    };
+    options.push(ApprovalOption {
+        label,
+        decision: ReviewDecision::ApprovedForSession,
+        display_shortcut: None,
+        additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
+        allow_prefix,
+    });
+
+    options.push(ApprovalOption {
+        label: "No, and tell Codex what to do differently".to_string(),
+        decision: ReviewDecision::Abort,
+        display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
+        additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
+        allow_prefix: None,
+    });
+
+    options
 }
 
 fn patch_options() -> Vec<ApprovalOption> {
@@ -414,12 +450,14 @@ fn patch_options() -> Vec<ApprovalOption> {
             decision: ReviewDecision::Approved,
             display_shortcut: None,
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
+            allow_prefix: None,
         },
         ApprovalOption {
             label: "No, and tell Codex what to do differently".to_string(),
             decision: ReviewDecision::Abort,
             display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
+            allow_prefix: None,
         },
     ]
 }
@@ -437,6 +475,7 @@ mod tests {
             command: vec!["echo".to_string(), "hi".to_string()],
             reason: Some("reason".to_string()),
             risk: None,
+            allow_prefix: None,
         }
     }
 
@@ -470,6 +509,41 @@ mod tests {
     }
 
     #[test]
+    fn exec_prefix_option_emits_allow_prefix() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view = ApprovalOverlay::new(
+            ApprovalRequest::Exec {
+                id: "test".to_string(),
+                command: vec!["echo".to_string()],
+                reason: None,
+                risk: None,
+                allow_prefix: Some(vec!["echo".to_string()]),
+            },
+            tx,
+        );
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        let mut saw_op = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let AppEvent::CodexOp(Op::ExecApproval {
+                allow_prefix,
+                decision,
+                ..
+            }) = ev
+            {
+                assert_eq!(decision, ReviewDecision::ApprovedForSession);
+                assert_eq!(allow_prefix, Some(vec!["echo".to_string()]));
+                saw_op = true;
+                break;
+            }
+        }
+        assert!(
+            saw_op,
+            "expected approval decision to emit an op with allow prefix"
+        );
+    }
+
+    #[test]
     fn header_includes_command_snippet() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
@@ -479,6 +553,7 @@ mod tests {
             command,
             reason: None,
             risk: None,
+            allow_prefix: None,
         };
 
         let view = ApprovalOverlay::new(exec_request, tx);
