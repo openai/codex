@@ -10,7 +10,6 @@ use codex_execpolicy::rule::PatternToken;
 use codex_execpolicy::rule::PrefixPattern;
 use codex_execpolicy::rule::PrefixRule;
 use pretty_assertions::assert_eq;
-use serde_json::json;
 
 fn tokens(cmd: &[&str]) -> Vec<String> {
     cmd.iter().map(std::string::ToString::to_string).collect()
