@@ -11,10 +11,12 @@ use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::StreamOutput;
 use crate::exec_env::create_env;
+use crate::exec_policy::create_approval_requirement_for_command;
 use crate::protocol::BackgroundEventEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandSource;
 use crate::sandboxing::ExecEnv;
+use crate::sandboxing::SandboxPermissions;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventFailure;
@@ -449,6 +451,13 @@ impl UnifiedExecSessionManager {
             create_env(&context.turn.shell_environment_policy),
             with_escalated_permissions,
             justification,
+            create_approval_requirement_for_command(
+                &context.turn.exec_policy,
+                command,
+                context.turn.approval_policy,
+                &context.turn.sandbox_policy,
+                SandboxPermissions::from(with_escalated_permissions.unwrap_or(false)),
+            ),
         );
         let tool_ctx = ToolCtx {
             session: context.session.as_ref(),
