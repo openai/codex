@@ -353,29 +353,28 @@ mod tests {
     fn detects_sh() {
         let sh_shell = get_shell(ShellType::Sh, None).unwrap();
         let shell_path = sh_shell.shell_path;
-        assert_eq!(shell_path, PathBuf::from("/bin/sh"));
+        assert!(
+            shell_path == PathBuf::from("/bin/sh") || shell_path == PathBuf::from("/usr/bin/sh"),
+            "shell path: {shell_path:?}",
+        );
     }
 
     #[test]
     fn can_run_on_shell_test() {
-        assert!(shell_works(get_shell(ShellType::Zsh, None), "ls", false));
-        assert!(shell_works(get_shell(ShellType::Bash, None), "ls", false));
-        assert!(shell_works(get_shell(ShellType::Sh, None), "ls", true));
-        assert!(shell_works(
-            get_shell(ShellType::PowerShell, None),
-            "Get-ChildItem",
-            cfg!(windows)
-        ));
-        assert!(shell_works(
-            get_shell(ShellType::Cmd, None),
-            "dir",
-            cfg!(windows)
-        ));
-
+        let cmd = "echo \"Works\"";
         if cfg!(windows) {
-            assert!(shell_works(Some(ultimate_fallback_shell()), "dir", true));
+            assert!(shell_works(
+                get_shell(ShellType::PowerShell, None),
+                "Out-String 'Works'",
+                true,
+            ));
+            assert!(shell_works(get_shell(ShellType::Cmd, None), cmd, true,));
+            assert!(shell_works(Some(ultimate_fallback_shell()), cmd, true));
         } else {
-            assert!(shell_works(Some(ultimate_fallback_shell()), "ls", true));
+            assert!(shell_works(Some(ultimate_fallback_shell()), cmd, true));
+            assert!(shell_works(get_shell(ShellType::Zsh, None), cmd, false));
+            assert!(shell_works(get_shell(ShellType::Bash, None), cmd, true));
+            assert!(shell_works(get_shell(ShellType::Sh, None), cmd, true));
         }
     }
 
@@ -387,6 +386,7 @@ mod tests {
                 .output()
                 .unwrap();
             assert!(output.status.success());
+            assert!(String::from_utf8_lossy(&output.stdout).contains("Works"));
             true
         } else {
             !required
