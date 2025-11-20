@@ -107,7 +107,15 @@ impl Approvable<ShellRequest> for ShellRuntime {
         Box::pin(async move {
             with_cached_approval(&session.services, key, move || async move {
                 session
-                    .request_command_approval(turn, call_id, command, cwd, reason, risk)
+                    .request_command_approval(
+                        turn,
+                        call_id,
+                        command,
+                        cwd,
+                        reason,
+                        risk,
+                        req.approval_requirement.allow_prefix().cloned(),
+                    )
                     .await
             })
             .await

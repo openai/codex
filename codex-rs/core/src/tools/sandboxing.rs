@@ -96,9 +96,24 @@ pub(crate) enum ApprovalRequirement {
         bypass_sandbox: bool,
     },
     /// Approval required for this tool call
-    NeedsApproval { reason: Option<String> },
+    NeedsApproval {
+        reason: Option<String>,
+        allow_prefix: Option<Vec<String>>,
+    },
     /// Execution forbidden for this tool call
     Forbidden { reason: String },
+}
+
+impl ApprovalRequirement {
+    pub fn allow_prefix(&self) -> Option<&Vec<String>> {
+        match self {
+            Self::NeedsApproval {
+                allow_prefix: Some(prefix),
+                ..
+            } => Some(prefix),
+            _ => None,
+        }
+    }
 }
 
 /// - Never, OnFailure: do not ask
@@ -115,7 +130,10 @@ pub(crate) fn default_approval_requirement(
     };
 
     if needs_approval {
-        ApprovalRequirement::NeedsApproval { reason: None }
+        ApprovalRequirement::NeedsApproval {
+            reason: None,
+            allow_prefix: None,
+        }
     } else {
         ApprovalRequirement::Skip {
             bypass_sandbox: false,

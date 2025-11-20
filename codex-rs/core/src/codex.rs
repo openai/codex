@@ -71,6 +71,7 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 #[cfg(test)]
 use crate::exec::StreamOutput;
+use crate::exec_policy::ExecPolicyUpdateError;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::model_family::find_family_for_model;
@@ -861,11 +862,43 @@ impl Session {
         .await
     }
 
+    pub(crate) async fn persist_command_allow_prefix(
+        &self,
+        prefix: &[String],
+    ) -> Result<(), ExecPolicyUpdateError> {
+        let (features, codex_home) = {
+            let state = self.state.lock().await;
+            (
+                state.session_configuration.features.clone(),
+                state
+                    .session_configuration
+                    .original_config_do_not_use
+                    .codex_home
+                    .clone(),
+            )
+        };
+
+        let policy =
+            crate::exec_policy::append_allow_prefix_rule_and_reload(&features, &codex_home, prefix)
+                .await?;
+
+        let mut state = self.state.lock().await;
+        state.session_configuration.exec_policy = policy;
+
+        Ok(())
+    }
+
+    pub(crate) async fn current_exec_policy(&self) -> Arc<ExecPolicy> {
+        let state = self.state.lock().await;
+        state.session_configuration.exec_policy.clone()
+    }
+
     /// Emit an exec approval request event and await the user's decision.
     ///
     /// The request is keyed by `sub_id`/`call_id` so matching responses are delivered
     /// to the correct in-flight turn. If the task is aborted, this returns the
     /// default `ReviewDecision` (`Denied`).
+    #[allow(clippy::too_many_arguments)]
     pub async fn request_command_approval(
         &self,
         turn_context: &TurnContext,
@@ -874,6 +907,7 @@ impl Session {
         cwd: PathBuf,
         reason: Option<String>,
         risk: Option<SandboxCommandAssessment>,
+        allow_prefix: Option<Vec<String>>,
     ) -> ReviewDecision {
         let sub_id = turn_context.sub_id.clone();
         // Add the tx_approve callback to the map before sending the request.
@@ -901,6 +935,7 @@ impl Session {
             cwd,
             reason,
             risk,
+            allow_prefix,
             parsed_cmd,
         });
         self.send_event(turn_context, event).await;
@@ -1429,8 +1464,12 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op, &mut previous_context)
                     .await;
             }
-            Op::ExecApproval { id, decision } => {
-                handlers::exec_approval(&sess, id, decision).await;
+            Op::ExecApproval {
+                id,
+                decision,
+                allow_prefix,
+            } => {
+                handlers::exec_approval(&sess, id, decision, allow_prefix).await;
             }
             Op::PatchApproval { id, decision } => {
                 handlers::patch_approval(&sess, id, decision).await;
@@ -1508,6 +1547,7 @@ mod handlers {
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
     use codex_protocol::protocol::TurnAbortReason;
+    use codex_protocol::protocol::WarningEvent;
 
     use codex_protocol::user_input::UserInput;
     use codex_rmcp_client::ElicitationAction;
@@ -1622,7 +1662,28 @@ mod handlers {
         }
     }
 
-    pub async fn exec_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) {
+    pub async fn exec_approval(
+        sess: &Arc<Session>,
+        id: String,
+        decision: ReviewDecision,
+        allow_prefix: Option<Vec<String>>,
+    ) {
+        if let Some(prefix) = allow_prefix
+            && matches!(
+                decision,
+                ReviewDecision::Approved | ReviewDecision::ApprovedForSession
+            )
+            && let Err(err) = sess.persist_command_allow_prefix(&prefix).await
+        {
+            let message = format!("Failed to update execpolicy allow list: {err}");
+            tracing::warn!("{message}");
+            let warning = EventMsg::Warning(WarningEvent { message });
+            sess.send_event_raw(Event {
+                id: id.clone(),
+                msg: warning,
+            })
+            .await;
+        }
         match decision {
             ReviewDecision::Abort => {
                 sess.interrupt_task().await;

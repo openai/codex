@@ -64,7 +64,7 @@ impl ToolOrchestrator {
             ApprovalRequirement::Forbidden { reason } => {
                 return Err(ToolError::Rejected(reason));
             }
-            ApprovalRequirement::NeedsApproval { reason } => {
+            ApprovalRequirement::NeedsApproval { reason, .. } => {
                 let mut risk = None;
 
                 if let Some(metadata) = req.sandbox_retry_data() {

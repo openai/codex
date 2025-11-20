@@ -275,6 +275,7 @@ async fn handle_exec_approval(
         event.cwd,
         event.reason,
         event.risk,
+        event.allow_prefix,
     );
     let decision = await_approval_with_cancel(
         approval_fut,
@@ -284,7 +285,13 @@ async fn handle_exec_approval(
     )
     .await;
 
-    let _ = codex.submit(Op::ExecApproval { id, decision }).await;
+    let _ = codex
+        .submit(Op::ExecApproval {
+            id,
+            decision,
+            allow_prefix: None,
+        })
+        .await;
 }
 
 /// Handle an ApplyPatchApprovalRequest by consulting the parent session and replying.
