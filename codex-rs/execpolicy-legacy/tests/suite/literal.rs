@@ -1,13 +1,13 @@
-use codex_execpolicy::ArgType;
-use codex_execpolicy::Error;
-use codex_execpolicy::ExecCall;
-use codex_execpolicy::MatchedArg;
-use codex_execpolicy::MatchedExec;
-use codex_execpolicy::PolicyParser;
-use codex_execpolicy::Result;
-use codex_execpolicy::ValidExec;
+use codex_execpolicy_legacy::ArgType;
+use codex_execpolicy_legacy::Error;
+use codex_execpolicy_legacy::ExecCall;
+use codex_execpolicy_legacy::MatchedArg;
+use codex_execpolicy_legacy::MatchedExec;
+use codex_execpolicy_legacy::PolicyParser;
+use codex_execpolicy_legacy::Result;
+use codex_execpolicy_legacy::ValidExec;
 
-extern crate codex_execpolicy;
+extern crate codex_execpolicy_legacy;
 
 #[test]
 fn test_invalid_subcommand() -> Result<()> {
