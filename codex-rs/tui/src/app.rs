@@ -52,7 +52,6 @@ use std::thread;
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
-use tracing::error;
 
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
@@ -108,7 +107,6 @@ fn should_show_model_migration_prompt(
 fn migration_prompt_hidden(config: &Config, migration_config_key: &str) -> Option<bool> {
     match migration_config_key {
         HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG => {
-            error!("migration_prompt_hidden: {:?}", config.notices);
             config.notices.hide_gpt_5_1_codex_max_migration_prompt
         }
         HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG => config.notices.hide_gpt5_1_migration_prompt,
