@@ -384,14 +384,13 @@ async fn manual_compact_uses_custom_prompt() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn manual_compact_emits_estimated_token_usage_event() {
+async fn manual_compact_emits_api_token_usage_event_only() {
     skip_if_no_network!();
 
     let server = start_mock_server().await;
 
-    // Compact run where the API reports zero tokens in usage. Our local
-    // estimator should still compute a non-zero context size for the compacted
-    // history.
+    // Compact run where the API reports zero tokens in usage. Without a local
+    // estimator we still forward the API usage but do not emit an estimate.
     let sse_compact = sse(vec![
         ev_assistant_message("m1", SUMMARY_TEXT),
         ev_completed_with_tokens("r1", 0),
@@ -426,26 +425,32 @@ async fn manual_compact_emits_estimated_token_usage_event() {
     })
     .await;
 
-    // Second TokenCount: from the local post-compaction estimate.
-    let last = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::TokenCount(tc) => tc
-            .info
-            .as_ref()
-            .map(|info| info.last_token_usage.total_tokens),
-        _ => None,
-    })
-    .await;
-
-    // Ensure the compact task itself completes.
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    // Collect any additional TokenCount events before the task completes.
+    let mut additional_token_counts = Vec::new();
+    loop {
+        let event = wait_for_event(&codex, |_| true).await;
+        match event {
+            EventMsg::TaskComplete(_) => break,
+            EventMsg::TokenCount(tc) => {
+                if let Some(total_tokens) = tc
+                    .info
+                    .as_ref()
+                    .map(|info| info.last_token_usage.total_tokens)
+                {
+                    additional_token_counts.push(total_tokens);
+                }
+            }
+            _ => {}
+        }
+    }
 
     assert_eq!(
         first, 0,
         "expected first TokenCount from compact API usage to be zero"
     );
     assert!(
-        last > 0,
-        "second TokenCount should reflect a non-zero estimated context size after compaction"
+        additional_token_counts.is_empty(),
+        "no local token estimate should be emitted without tokenizer support"
     );
 }
 

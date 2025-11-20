@@ -41,7 +41,6 @@ members = [
     "utils/pty",
     "utils/readiness",
     "utils/string",
-    "utils/tokenizer",
 ]
 resolver = "2"
 
@@ -90,7 +89,6 @@ codex-utils-json-to-toml = { path = "utils/json-to-toml" }
 codex-utils-pty = { path = "utils/pty" }
 codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-string = { path = "utils/string" }
-codex-utils-tokenizer = { path = "utils/tokenizer" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
 mcp-types = { path = "mcp-types" }
@@ -188,7 +186,6 @@ tempfile = "3.23.0"
 test-log = "0.2.18"
 textwrap = "0.16.2"
 thiserror = "2.0.17"
-tiktoken-rs = "0.9"
 time = "0.3"
 tiny_http = "0.12"
 tokio = "1"
@@ -266,7 +263,6 @@ ignored = [
     "icu_provider",
     "openssl-sys",
     "codex-utils-readiness",
-    "codex-utils-tokenizer",
 ]
 
 [profile.release]
