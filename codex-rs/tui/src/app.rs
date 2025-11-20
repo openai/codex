@@ -225,6 +225,7 @@ pub(crate) struct App {
 }
 
 impl App {
+    #[allow(clippy::too_many_arguments)]
     pub async fn run(
         tui: &mut tui::Tui,
         auth_manager: Arc<AuthManager>,
