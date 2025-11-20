@@ -467,6 +467,7 @@ mod stub {
 
     pub fn world_writable_warning_details(
         _codex_home: impl AsRef<Path>,
+        _cwd: impl AsRef<Path>,
     ) -> Option<(Vec<String>, usize, bool)> {
         None
     }

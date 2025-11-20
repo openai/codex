@@ -34,6 +34,8 @@ pub(super) enum EscalateAction {
     Run,
     /// The command should be escalated to the server for execution.
     Escalate,
+    /// The command should not be executed.
+    Deny { reason: Option<String> },
 }
 
 /// The client sends this to the server to forward its open FDs.

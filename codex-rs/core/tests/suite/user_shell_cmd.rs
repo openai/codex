@@ -257,7 +257,8 @@ async fn user_shell_command_output_is_truncated_in_history() -> anyhow::Result<(
 
     let head = (1..=69).map(|i| format!("{i}\n")).collect::<String>();
     let tail = (352..=400).map(|i| format!("{i}\n")).collect::<String>();
-    let truncated_body = format!("Total output lines: 400\n\n{head}…273 tokens truncated…{tail}");
+    let truncated_body =
+        format!("Total output lines: 400\n\n{head}70…273 tokens truncated…351\n{tail}");
     let escaped_command = escape(&command);
     let escaped_truncated_body = escape(&truncated_body);
     let expected_pattern = format!(

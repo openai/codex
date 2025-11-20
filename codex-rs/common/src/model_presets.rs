@@ -5,7 +5,8 @@ use codex_core::protocol_config_types::ReasoningEffort;
 use once_cell::sync::Lazy;
 
 pub const HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG: &str = "hide_gpt5_1_migration_prompt";
-pub const HIDE_ARCTICFOX_MIGRATION_PROMPT_CONFIG: &str = "hide_arcticfox_migration_prompt";
+pub const HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG: &str =
+    "hide_gpt-5.1-codex-max_migration_prompt";
 
 /// A reasoning effort option that can be surfaced for a model.
 #[derive(Debug, Clone, Copy)]
@@ -49,9 +50,9 @@ pub struct ModelPreset {
 static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
     vec![
         ModelPreset {
-            id: "arcticfox",
-            model: "arcticfox",
-            display_name: "arcticfox",
+            id: "gpt-5.1-codex-max",
+            model: "gpt-5.1-codex-max",
+            display_name: "gpt-5.1-codex-max",
             description: "Latest Codex-optimized flagship for deep and fast reasoning.",
             default_reasoning_effort: ReasoningEffort::Medium,
             supported_reasoning_efforts: &[
@@ -98,9 +99,9 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             ],
             is_default: false,
             upgrade: Some(ModelUpgrade {
-                id: "arcticfox",
+                id: "gpt-5.1-codex-max",
                 reasoning_effort_mapping: None,
-                migration_config_key: HIDE_ARCTICFOX_MIGRATION_PROMPT_CONFIG,
+                migration_config_key: HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG,
             }),
             show_in_picker: true,
         },
@@ -121,7 +122,11 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 },
             ],
             is_default: false,
-            upgrade: None,
+            upgrade: Some(ModelUpgrade {
+                id: "gpt-5.1-codex-max",
+                reasoning_effort_mapping: None,
+                migration_config_key: HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG,
+            }),
             show_in_picker: true,
         },
         ModelPreset {
@@ -145,7 +150,11 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 },
             ],
             is_default: false,
-            upgrade: None,
+            upgrade: Some(ModelUpgrade {
+                id: "gpt-5.1-codex-max",
+                reasoning_effort_mapping: None,
+                migration_config_key: HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG,
+            }),
             show_in_picker: true,
         },
         // Deprecated models.
@@ -171,9 +180,9 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             ],
             is_default: false,
             upgrade: Some(ModelUpgrade {
-                id: "arcticfox",
+                id: "gpt-5.1-codex-max",
                 reasoning_effort_mapping: None,
-                migration_config_key: HIDE_ARCTICFOX_MIGRATION_PROMPT_CONFIG,
+                migration_config_key: HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG,
             }),
             show_in_picker: false,
         },
@@ -227,12 +236,9 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             ],
             is_default: false,
             upgrade: Some(ModelUpgrade {
-                id: "gpt-5.1",
-                reasoning_effort_mapping: Some(HashMap::from([(
-                    ReasoningEffort::Minimal,
-                    ReasoningEffort::Low,
-                )])),
-                migration_config_key: HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG,
+                id: "gpt-5.1-codex-max",
+                reasoning_effort_mapping: None,
+                migration_config_key: HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG,
             }),
             show_in_picker: false,
         },
@@ -243,7 +249,7 @@ pub fn builtin_model_presets(auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
     PRESETS
         .iter()
         .filter(|preset| match auth_mode {
-            Some(AuthMode::ApiKey) => preset.show_in_picker && preset.id != "arcticfox",
+            Some(AuthMode::ApiKey) => preset.show_in_picker && preset.id != "gpt-5.1-codex-max",
             _ => preset.show_in_picker,
         })
         .cloned()
@@ -266,8 +272,12 @@ mod tests {
     }
 
     #[test]
-    fn arcticfox_hidden_for_api_key_auth() {
+    fn gpt_5_1_codex_max_hidden_for_api_key_auth() {
         let presets = builtin_model_presets(Some(AuthMode::ApiKey));
-        assert!(presets.iter().all(|preset| preset.id != "arcticfox"));
+        assert!(
+            presets
+                .iter()
+                .all(|preset| preset.id != "gpt-5.1-codex-max")
+        );
     }
 }

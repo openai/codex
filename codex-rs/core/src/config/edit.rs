@@ -846,7 +846,7 @@ hide_gpt5_1_migration_prompt = true
     }
 
     #[test]
-    fn blocking_set_hide_arcticfox_migration_prompt_preserves_table() {
+    fn blocking_set_hide_gpt_5_1_codex_max_migration_prompt_preserves_table() {
         let tmp = tempdir().expect("tmpdir");
         let codex_home = tmp.path();
         std::fs::write(
@@ -860,7 +860,7 @@ existing = "value"
             codex_home,
             None,
             &[ConfigEdit::SetNoticeHideModelMigrationPrompt(
-                "hide_arcticfox_migration_prompt".to_string(),
+                "hide_gpt-5.1-codex-max_migration_prompt".to_string(),
                 true,
             )],
         )
@@ -870,7 +870,7 @@ existing = "value"
             std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
         let expected = r#"[notice]
 existing = "value"
-hide_arcticfox_migration_prompt = true
+"hide_gpt-5.1-codex-max_migration_prompt" = true
 "#;
         assert_eq!(contents, expected);
     }

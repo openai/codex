@@ -229,6 +229,7 @@ mod tests {
                         resets_at: Some(123),
                     }),
                     secondary: None,
+                    credits: None,
                 },
             });
 
@@ -243,7 +244,8 @@ mod tests {
                             "windowDurationMins": 15,
                             "resetsAt": 123
                         },
-                        "secondary": null
+                        "secondary": null,
+                        "credits": null
                     }
                 },
             }),
