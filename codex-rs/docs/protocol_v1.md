@@ -72,7 +72,7 @@ For complete documentation of the `Op` and `EventMsg` variants, refer to [protoc
   - `EventMsg::AgentMessage` – Messages from the `Model`
   - `EventMsg::ExecApprovalRequest` – Request approval from user to execute a command
   - `EventMsg::TaskComplete` – A task completed successfully
-  - `EventMsg::Error` – A task stopped with an error (includes an optional `http_status_code` when available)
+  - `EventMsg::Error` – A task stopped with an error
   - `EventMsg::Warning` – A non-fatal warning that the client should surface to the user
   - `EventMsg::TurnComplete` – Contains a `response_id` bookmark for last `response_id` executed by the task. This can be used to continue the task at a later point in time, perhaps with additional user input.
 
