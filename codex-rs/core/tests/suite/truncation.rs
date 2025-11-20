@@ -244,10 +244,18 @@ async fn tool_call_output_exceeds_limit_truncated_chars_limit() -> Result<()> {
         "expected truncated shell output to be plain text"
     );
 
-    assert_eq!(output.len(), 9976); // ~10k characters
-    let truncated_pattern = r#"(?s)^Exit code: 0\nWall time: 0 seconds\nTotal output lines: 100000\nOutput:\n.*?…\d+ chars truncated….*$"#;
+    let truncated_pattern = r#"(?s)^Exit code: 0\nWall time: [0-9]+(?:\.[0-9]+)? seconds\nTotal output lines: 100000\nOutput:\n.*?…\d+ chars truncated….*$"#;
 
     assert_regex_match(truncated_pattern, &output);
+
+    // Normalize wall time to eliminate runtime variance and keep a strict length check.
+    let wall_time_line = output
+        .lines()
+        .find(|line| line.starts_with("Wall time: "))
+        .expect("wall time line present");
+    let normalized_output = output.replacen(wall_time_line, "Wall time: 0 seconds", 1);
+
+    assert_eq!(normalized_output.len(), 9_976); // ~10k characters after truncation
 
     Ok(())
 }
