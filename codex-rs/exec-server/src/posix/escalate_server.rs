@@ -79,7 +79,7 @@ impl EscalateServer {
                     command,
                 ],
                 cwd: PathBuf::from(&workdir),
-                timeout_ms,
+                expiration: timeout_ms.into(),
                 env,
                 with_escalated_permissions: None,
                 justification: None,
