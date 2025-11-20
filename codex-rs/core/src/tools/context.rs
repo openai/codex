@@ -1,3 +1,4 @@
+// 该文件定义工具调用上下文、负载与输出结构，并提供日志预览等辅助函数。
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::tools::TELEMETRY_PREVIEW_MAX_BYTES;
@@ -63,8 +64,10 @@ impl ToolPayload {
 pub enum ToolOutput {
     Function {
         // Plain text representation of the tool output.
+        // 工具输出的纯文本表示
         content: String,
         // Some tool calls such as MCP calls may return structured content that can get parsed into an array of polymorphic content items.
+        // 某些工具调用（如 MCP 调用）可能返回可解析成多态内容项数组的结构化内容
         content_items: Option<Vec<FunctionCallOutputContentItem>>,
         success: Option<bool>,
     },

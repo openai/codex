@@ -139,6 +139,8 @@ use codex_utils_tokenizer::warm_model_cache;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
+/// Codex 系统的高级接口。
+/// 以提交请求与接收事件的队列对形式运作。
 pub struct Codex {
     pub(crate) next_id: AtomicU64,
     pub(crate) tx_sub: Sender<Submission>,
@@ -148,6 +150,7 @@ pub struct Codex {
 /// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`],
 /// the submission id for the initial `ConfigureSession` request and the
 /// unique session id.
+/// [`Codex::spawn`] 返回的封装，包含生成的 [`Codex`]、初始 `ConfigureSession` 请求的提交 ID 以及唯一的会话 ID。
 pub struct CodexSpawnOk {
     pub codex: Codex,
     pub conversation_id: ConversationId,
@@ -158,6 +161,7 @@ pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 64;
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
+    /// 启动一个新的 [`Codex`] 并初始化会话。
     pub async fn spawn(
         config: Config,
         auth_manager: Arc<AuthManager>,
@@ -189,6 +193,7 @@ impl Codex {
         };
 
         // Generate a unique ID for the lifetime of this Codex session.
+        // 为该 Codex 会话生命周期生成唯一 ID
         let session_source_clone = session_configuration.session_source.clone();
         let session = Session::new(
             session_configuration,
@@ -206,6 +211,7 @@ impl Codex {
         let conversation_id = session.conversation_id;
 
         // This task will run until Op::Shutdown is received.
+        // 该任务将持续运行直到收到 Op::Shutdown
         tokio::spawn(submission_loop(session, config, rx_sub));
         let codex = Codex {
             next_id: AtomicU64::new(0),
@@ -220,6 +226,7 @@ impl Codex {
     }
 
     /// Submit the `op` wrapped in a `Submission` with a unique ID.
+    /// 提交封装了唯一 ID 的 `Submission`，其中包含给定的 `op`。
     pub async fn submit(&self, op: Op) -> CodexResult<String> {
         let id = self
             .next_id
@@ -232,6 +239,7 @@ impl Codex {
 
     /// Use sparingly: prefer `submit()` so Codex is responsible for generating
     /// unique IDs for each submission.
+    /// 谨慎使用：优先调用 `submit()`，让 Codex 负责为每次提交生成唯一 ID。
     pub async fn submit_with_id(&self, sub: Submission) -> CodexResult<()> {
         self.tx_sub
             .send(sub)
@@ -253,6 +261,9 @@ impl Codex {
 /// Context for an initialized model agent
 ///
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
+/// 已初始化模型代理的上下文
+///
+/// 会话同一时间最多只有 1 个任务在运行，且可被用户输入打断。
 pub(crate) struct Session {
     conversation_id: ConversationId,
     tx_event: Sender<Event>,
@@ -263,6 +274,7 @@ pub(crate) struct Session {
 }
 
 /// The context needed for a single turn of the conversation.
+/// 单次对话回合所需的上下文。
 #[derive(Debug)]
 pub(crate) struct TurnContext {
     pub(crate) sub_id: String,
@@ -270,6 +282,7 @@ pub(crate) struct TurnContext {
     /// The session's current working directory. All relative paths provided by
     /// the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
+    /// 会话当前工作目录。模型提供的相对路径及沙箱策略均相对于此路径解析，而非 `std::env::current_dir()`。
     pub(crate) cwd: PathBuf,
     pub(crate) developer_instructions: Option<String>,
     pub(crate) base_instructions: Option<String>,
@@ -302,29 +315,37 @@ impl TurnContext {
 #[derive(Clone)]
 pub(crate) struct SessionConfiguration {
     /// Provider identifier ("openai", "openrouter", ...).
+    /// 提供方标识（例如 "openai"、"openrouter" 等）
     provider: ModelProviderInfo,
 
     /// If not specified, server will use its default model.
+    /// 若未指定，服务器将使用默认模型。
     model: String,
 
     model_reasoning_effort: Option<ReasoningEffortConfig>,
     model_reasoning_summary: ReasoningSummaryConfig,
 
     /// Developer instructions that supplement the base instructions.
+    /// 补充基础指令的开发者指令。
     developer_instructions: Option<String>,
 
     /// Model instructions that are appended to the base instructions.
+    /// 附加在基础指令之后的模型指令。
     user_instructions: Option<String>,
 
     /// Base instructions override.
+    /// 基础指令的覆盖内容。
     base_instructions: Option<String>,
 
     /// Compact prompt override.
+    /// 压缩提示的覆盖内容。
     compact_prompt: Option<String>,
 
     /// When to escalate for approval for execution
+    /// 何时升级以请求执行审批
     approval_policy: AskForApproval,
     /// How to sandbox commands executed in the system
+    /// 系统中命令的沙箱策略
     sandbox_policy: SandboxPolicy,
 
     /// Working directory that should be treated as the *root* of the
@@ -334,14 +355,19 @@ pub(crate) struct SessionConfiguration {
     /// expected to expand this to an absolute path before sending the
     /// `ConfigureSession` operation so that the business-logic layer can
     /// operate deterministically.
+    /// 作为会话“根”的工作目录。模型提供的相对路径与执行沙箱都相对于该目录解析，
+    /// 而非进程级当前工作目录。CLI 前端应在发送 `ConfigureSession` 前将其展开为绝对路径，以便业务逻辑层可确定运行。
     cwd: PathBuf,
 
     /// Set of feature flags for this session
+    /// 会话启用的特性标志集合
     features: Features,
 
     // TODO(pakrym): Remove config from here
+    // TODO(pakrym): 从这里移除 config
     original_config_do_not_use: Arc<Config>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
+    /// 会话来源（cli、vscode、exec、mcp 等）
     session_source: SessionSource,
 }
 
@@ -484,6 +510,11 @@ impl Session {
         // - initialize RolloutRecorder with new or resumed session info
         // - perform default shell discovery
         // - load history metadata
+        // 并行启动相互独立的异步初始化任务以降低启动时延。
+        //
+        // - 使用新建或恢复的会话信息初始化 RolloutRecorder
+        // - 执行默认 shell 发现
+        // - 加载历史元数据
         let rollout_fut = RolloutRecorder::new(&config, rollout_params);
 
         let default_shell_fut = shell::default_user_shell();
@@ -494,6 +525,7 @@ impl Session {
         );
 
         // Join all independent futures.
+        // 等待所有独立的 future 完成
         let (rollout_recorder, default_shell, (history_log_id, history_entry_count), auth_statuses) = tokio::join!(
             rollout_fut,
             default_shell_fut,
@@ -550,9 +582,11 @@ impl Session {
         );
 
         // Create the mutable state for the Session.
+        // 创建会话的可变状态
         let state = SessionState::new(session_configuration.clone());
 
         // Warm the tokenizer cache for the session model without blocking startup.
+        // 在不阻塞启动的情况下预热会话模型的分词器缓存
         warm_model_cache(&session_configuration.model);
 
         let services = SessionServices {
@@ -579,6 +613,8 @@ impl Session {
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
+        // 先发送 SessionConfiguredEvent，再报告其他错误。
+        // 若为恢复，会在负载中包含转换后的初始消息，以便 UI 立即渲染。
         let initial_messages = initial_history.get_event_msgs();
 
         let events = std::iter::once(Event {
@@ -615,6 +651,7 @@ impl Session {
             .await;
 
         // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
+        // record_initial_history 可能会发事件，只在 SessionConfiguredEvent 发出后再记录
         sess.record_initial_history(initial_history).await;
 
         Ok(sess)
@@ -625,6 +662,7 @@ impl Session {
     }
 
     /// Ensure all rollout writes are durably flushed.
+    /// 确保所有 rollout 写入被可靠刷盘
     pub(crate) async fn flush_rollout(&self) {
         let recorder = {
             let guard = self.services.rollout.lock().await;
@@ -649,9 +687,11 @@ impl Session {
         match conversation_history {
             InitialHistory::New => {
                 // Build and record initial items (user instructions + environment context)
+                // 构建并记录初始项（用户指令 + 环境上下文）
                 let items = self.build_initial_context(&turn_context);
                 self.record_conversation_items(&turn_context, &items).await;
                 // Ensure initial items are visible to immediate readers (e.g., tests, forks).
+                // 确保初始项对即时读者可见（如测试、分叉）
                 self.flush_rollout().await;
             }
             InitialHistory::Resumed(_) | InitialHistory::Forked(_) => {
@@ -659,6 +699,7 @@ impl Session {
                 let persist = matches!(conversation_history, InitialHistory::Forked(_));
 
                 // If resuming, warn when the last recorded model differs from the current one.
+                // 如果在恢复时发现上次记录的模型与当前模型不同则发出警告
                 if let InitialHistory::Resumed(_) = conversation_history
                     && let Some(prev) = rollout_items.iter().rev().find_map(|it| {
                         if let RolloutItem::TurnContext(ctx) = it {
@@ -687,6 +728,7 @@ impl Session {
                 }
 
                 // Always add response items to conversation history
+                // 将响应项始终添加到会话历史
                 let reconstructed_history =
                     self.reconstruct_history_from_rollout(&turn_context, &rollout_items);
                 if !reconstructed_history.is_empty() {
@@ -695,10 +737,12 @@ impl Session {
                 }
 
                 // If persisting, persist all rollout items as-is (recorder filters)
+                // 若需要持久化，则原样保存所有 rollout 项（记录器会过滤）
                 if persist && !rollout_items.is_empty() {
                     self.persist_rollout_items(&rollout_items).await;
                 }
                 // Flush after seeding history and any persisted rollout copy.
+                // 在填充历史和持久化副本后进行刷写
                 self.flush_rollout().await;
             }
         }
@@ -760,6 +804,7 @@ impl Session {
     }
 
     /// Persist the event to rollout and send it to clients.
+    /// 将事件持久化到 rollout 并发送给客户端。
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
         let legacy_source = msg.clone();
         let event = Event {
@@ -780,6 +825,7 @@ impl Session {
 
     pub(crate) async fn send_event_raw(&self, event: Event) {
         // Persist the event into rollout (recorder filters as needed)
+        // 将事件写入 rollout（记录器按需过滤）
         let rollout_items = vec![RolloutItem::EventMsg(event.msg.clone())];
         self.persist_rollout_items(&rollout_items).await;
         if let Err(e) = self.tx_event.send(event).await {
@@ -843,6 +889,10 @@ impl Session {
     /// The request is keyed by `sub_id`/`call_id` so matching responses are delivered
     /// to the correct in-flight turn. If the task is aborted, this returns the
     /// default `ReviewDecision` (`Denied`).
+    /// 发出执行审批请求事件并等待用户决定。
+    ///
+    /// 请求以 `sub_id`/`call_id` 为键，匹配的响应会送达正确的进行中回合。
+    /// 若任务被中止，则返回默认的 `ReviewDecision`（`Denied`）。
     pub async fn request_command_approval(
         &self,
         turn_context: &TurnContext,
@@ -854,6 +904,7 @@ impl Session {
     ) -> ReviewDecision {
         let sub_id = turn_context.sub_id.clone();
         // Add the tx_approve callback to the map before sending the request.
+        // 在发送请求前将 tx_approve 回调放入映射
         let (tx_approve, rx_approve) = oneshot::channel();
         let event_id = sub_id.clone();
         let prev_entry = {
@@ -894,6 +945,7 @@ impl Session {
     ) -> oneshot::Receiver<ReviewDecision> {
         let sub_id = turn_context.sub_id.clone();
         // Add the tx_approve callback to the map before sending the request.
+        // 在发送请求前将 tx_approve 回调放入映射
         let (tx_approve, rx_approve) = oneshot::channel();
         let event_id = sub_id.clone();
         let prev_entry = {
@@ -943,6 +995,7 @@ impl Session {
 
     /// Records input items: always append to conversation history and
     /// persist these response items to rollout.
+    /// 记录输入项：始终追加到会话历史，并将这些响应项持久化到 rollout。
     pub(crate) async fn record_conversation_items(
         &self,
         turn_context: &TurnContext,
@@ -970,6 +1023,7 @@ impl Session {
                 RolloutItem::Compacted(compacted) => {
                     let snapshot = history.get_history();
                     // TODO(jif) clean
+                    // TODO(jif) 清理
                     if let Some(replacement) = &compacted.replacement_history {
                         history.replace(replacement.clone());
                     } else {
@@ -989,6 +1043,7 @@ impl Session {
     }
 
     /// Append ResponseItems to the in-memory conversation history only.
+    /// 仅将 ResponseItems 追加到内存中的会话历史
     pub(crate) async fn record_into_history(
         &self,
         items: &[ResponseItem],
@@ -1155,6 +1210,7 @@ impl Session {
 
     /// Record a user input item to conversation history and also persist a
     /// corresponding UserMessage EventMsg to rollout.
+    /// 将用户输入项记录到会话历史，同时将对应的 UserMessage EventMsg 持久化到 rollout
     async fn record_input_and_rollout_usermsg(
         &self,
         turn_context: &TurnContext,
@@ -1162,10 +1218,12 @@ impl Session {
     ) {
         let response_item: ResponseItem = response_input.clone().into();
         // Add to conversation history and persist response item to rollout
+        // 将响应项加入会话历史并持久化到 rollout
         self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
             .await;
 
         // Derive user message events and persist only UserMessage to rollout
+        // 衍生用户消息事件，仅持久化 UserMessage 到 rollout
         let turn_item = parse_turn_item(&response_item);
 
         if let Some(item @ TurnItem::UserMessage(_)) = turn_item {
@@ -1339,10 +1397,12 @@ impl Session {
 
 async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {
     // Seed with context in case there is an OverrideTurnContext first.
+    // 预先生成上下文，以防最先收到 OverrideTurnContext
     let mut previous_context: Option<Arc<TurnContext>> =
         Some(sess.new_turn(SessionSettingsUpdate::default()).await);
 
     // To break out of this loop, send Op::Shutdown.
+    // 若要跳出该循环，发送 Op::Shutdown
     while let Ok(sub) = rx_sub.recv().await {
         debug!(?sub, "Submission");
         match sub.op.clone() {
@@ -1671,6 +1731,7 @@ mod handlers {
 
         // Gracefully flush and shutdown rollout recorder on session end so tests
         // that inspect the rollout file do not race with the background writer.
+        // 在会话结束时优雅地刷写并关闭 rollout 记录器，避免检查 rollout 文件的测试与后台写入竞争
         let recorder_opt = {
             let mut guard = sess.services.rollout.lock().await;
             guard.take()
@@ -1717,6 +1778,7 @@ mod handlers {
 }
 
 /// Spawn a review thread using the given prompt.
+/// 使用给定提示启动评审线程。
 async fn spawn_review_thread(
     sess: Arc<Session>,
     config: Arc<Config>,
@@ -1728,6 +1790,7 @@ async fn spawn_review_thread(
     let review_model_family = find_family_for_model(&model)
         .unwrap_or_else(|| parent_turn_context.client.get_model_family());
     // For reviews, disable web_search and view_image regardless of global settings.
+    // 评审模式下无论全局设置如何都禁用 web_search 和 view_image
     let mut review_features = config.features.clone();
     review_features
         .disable(crate::features::Feature::WebSearchRequest)
@@ -1792,6 +1855,7 @@ async fn spawn_review_thread(
     };
 
     // Seed the child task with the review prompt as the initial user message.
+    // 将评审提示作为初始用户消息注入子任务
     let input: Vec<UserInput> = vec![UserInput::Text {
         text: review_prompt,
     }];
@@ -1804,6 +1868,7 @@ async fn spawn_review_thread(
     .await;
 
     // Announce entering review mode so UIs can switch modes.
+    // 宣告进入评审模式，以便 UI 切换模式
     sess.send_event(&tc, EventMsg::EnteredReviewMode(review_request))
         .await;
 }
@@ -1821,6 +1886,15 @@ async fn spawn_review_thread(
 ///   back to the model in the next turn.
 /// - If the model sends only an assistant message, we record it in the
 ///   conversation history and consider the task complete.
+/// 处理用户消息的循环：每个回合模型会返回以下之一：
+///
+/// - 请求的函数调用
+/// - 助手消息
+///
+/// 虽然模型可能在单个回合返回多个项，但实际通常每回合只有一项：
+///
+/// - 如果模型请求函数调用，执行并在下回合将输出返回给模型。
+/// - 如果模型仅发送助手消息，则记录到会话历史并视为任务完成。
 ///
 pub(crate) async fn run_task(
     sess: Arc<Session>,
@@ -1845,12 +1919,14 @@ pub(crate) async fn run_task(
     let mut last_agent_message: Option<String> = None;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
+    // 尽管在 codex.rs 看来 TurnDiffTracker 生命周期覆盖包含多个回合的任务，但对用户而言它对应单个回合
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
 
     loop {
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
+        // 注意 pending_input 可能是用户在模型运行时通过 UI 提交的消息；UI 可能支持，但模型不一定支持
         let pending_input = sess
             .get_pending_input()
             .await
@@ -1859,6 +1935,7 @@ pub(crate) async fn run_task(
             .collect::<Vec<ResponseItem>>();
 
         // Construct the input that we will send to the model.
+        // 构造将发送给模型的输入
         let turn_input: Vec<ResponseItem> = {
             sess.record_conversation_items(&turn_context, &pending_input)
                 .await;
@@ -1901,6 +1978,7 @@ pub(crate) async fn run_task(
                     process_items(processed_items, &sess, &turn_context).await;
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
+                // 只要压缩能让数据远低于 token 限制，就无需担心进入无限循环
                 if token_limit_reached {
                     if should_use_remote_compact_task(&sess).await {
                         run_inline_remote_auto_compact_task(sess.clone(), turn_context.clone())
@@ -1932,6 +2010,7 @@ pub(crate) async fn run_task(
             }) => {
                 let _ = process_items(processed_items, &sess, &turn_context).await;
                 // Aborted turn is reported via a different event.
+                // 中止的回合通过其他事件上报
                 break;
             }
             Err(e) => {
@@ -1941,6 +2020,7 @@ pub(crate) async fn run_task(
                 });
                 sess.send_event(&turn_context, event).await;
                 // let the user continue the conversation
+                // 让用户继续对话
                 break;
             }
         }
@@ -1980,6 +2060,7 @@ async fn run_turn(
         .supports_parallel_tool_calls;
 
     // TODO(jif) revert once testing phase is done.
+    // TODO(jif) 测试阶段结束后还原
     let parallel_tool_calls = model_supports_parallel
         && sess
             .state
@@ -2046,6 +2127,7 @@ async fn run_turn(
             Err(e @ CodexErr::RefreshTokenFailed(_)) => return Err(e),
             Err(e) => {
                 // Use the configured provider-specific stream retry budget.
+                // 使用配置的提供方特定流重试预算
                 let max_retries = turn_context.client.get_provider().stream_max_retries();
                 if retries < max_retries {
                     retries += 1;
@@ -2060,6 +2142,7 @@ async fn run_turn(
                     // Surface retry information to any UI/front‑end so the
                     // user understands what is happening instead of staring
                     // at a seemingly frozen screen.
+                    // 将重试信息展示给任何 UI/前端，让用户了解进度，而非看着似乎冻结的界面
                     sess.notify_stream_error(
                         &turn_context,
                         format!("Reconnecting... {retries}/{max_retries}"),
@@ -2079,6 +2162,8 @@ async fn run_turn(
 /// events map to a `ResponseItem`. A `ResponseItem` may need to be
 /// "handled" such that it produces a `ResponseInputItem` that needs to be
 /// sent back to the model on the next turn.
+/// 模型被提示后会返回一串事件，其中部分对应 `ResponseItem`。
+/// `ResponseItem` 可能需要被“处理”从而生成需要在下个回合发回模型的 `ResponseInputItem`。
 #[derive(Debug)]
 pub struct ProcessedResponseItem {
     pub item: ResponseItem,
@@ -2136,6 +2221,8 @@ async fn try_run_turn(
         // Poll the next item from the model stream. We must inspect *both* Ok and Err
         // cases so that transient stream failures (e.g., dropped SSE connection before
         // `response.completed`) bubble up and trigger the caller's retry logic.
+        // 从模型流轮询下一个项。必须同时检查 Ok 与 Err，以便短暂的流失败
+        // （例如在 `response.completed` 前 SSE 断开）能冒泡并触发调用方重试逻辑。
         let event = match stream.next().or_cancel(&cancellation_token).await {
             Ok(event) => event,
             Err(codex_async_utils::CancelErr::Cancelled) => {
@@ -2248,6 +2335,7 @@ async fn try_run_turn(
             ResponseEvent::RateLimits(snapshot) => {
                 // Update internal state with latest rate limits, but defer sending until
                 // token usage is available to avoid duplicate TokenCount events.
+                // 使用最新的速率限制更新内部状态，但在获得 token 用量前暂缓发送，避免重复的 TokenCount 事件
                 sess.update_rate_limits(&turn_context, snapshot).await;
             }
             ResponseEvent::Completed {
@@ -2276,6 +2364,7 @@ async fn try_run_turn(
             ResponseEvent::OutputTextDelta(delta) => {
                 // In review child threads, suppress assistant text deltas; the
                 // UI will show a selection popup from the final ReviewOutput.
+                // 在评审子线程中抑制助手文本增量；UI 会基于最终 ReviewOutput 弹出选择框
                 if let Some(active) = active_item.as_ref() {
                     let event = AgentMessageContentDeltaEvent {
                         thread_id: sess.conversation_id.to_string(),
@@ -2357,6 +2446,8 @@ fn log_debug_struct_to_file<T: Debug>(label: &str, value: &T) {
     let path = Path::new("codex_prompt.log");
     if let Err(err) = append_debug_struct(path, label, value) {
         // warn!(path = %path.display(), error = %err, "Failed to write prompt log");
+        // warn!(path = %path.display(), error = %err, "Failed to write prompt log");
+        // 写入提示日志失败的警告（当前禁用）
     }
 }
 
@@ -2490,6 +2581,7 @@ mod tests {
     fn prefers_structured_content_when_present() {
         let ctr = CallToolResult {
             // Content present but should be ignored because structured_content is set.
+            // 存在 content 但应忽略，因为已设置 structured_content
             content: vec![text_block("ignored")],
             is_error: None,
             structured_content: Some(json!({
@@ -3227,3 +3319,4 @@ mod tests {
         pretty_assertions::assert_eq!(output, expected);
     }
 }
+// 该文件实现 Codex 会话的核心业务逻辑，包括任务管理、事件分发与审批处理。

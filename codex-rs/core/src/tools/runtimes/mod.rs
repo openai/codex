@@ -1,8 +1,14 @@
+// 该文件组织各工具的运行时实现，并提供构建命令规范的辅助方法。
 /*
 Module: runtimes
 
 Concrete ToolRuntime implementations for specific tools. Each runtime stays
 small and focused and reuses the orchestrator for approvals + sandbox + retry.
+*/
+/*
+模块：runtimes
+
+针对特定工具的具体 ToolRuntime 实现。每个运行时保持精简、聚焦，并复用 orchestrator 来处理审批、沙箱与重试。
 */
 use crate::sandboxing::CommandSpec;
 use crate::tools::sandboxing::ToolError;

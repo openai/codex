@@ -1,4 +1,6 @@
+// 该文件负责管理会话回滚文件的持久化与发现逻辑。
 //! Rollout module: persistence and discovery of session rollout files.
+//! 回滚模块：处理会话回滚文件的持久化与发现。
 
 use codex_protocol::protocol::SessionSource;
 

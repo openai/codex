@@ -1,3 +1,4 @@
+// 该文件实现用户 shell 命令任务的执行与事件上报。
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -64,6 +65,9 @@ impl SessionTask for UserShellCommandTask {
         // Execute the user's script under their default shell when known; this
         // allows commands that use shell features (pipes, &&, redirects, etc.).
         // We do not source rc files or otherwise reformat the script.
+        // 在已知情况下使用用户的默认 shell 执行脚本
+        // 这样可支持使用 shell 特性的命令（管道、&&、重定向等）
+        // 我们不会加载 rc 文件或重新格式化脚本
         let use_login_shell = true;
         let command = session
             .user_shell()

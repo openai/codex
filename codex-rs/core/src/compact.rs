@@ -1,3 +1,4 @@
+// 该文件实现会话历史的压缩流程，包括远程与本地压缩任务逻辑。
 use std::sync::Arc;
 
 use crate::Prompt;
@@ -119,6 +120,7 @@ async fn run_compact_task_inner(
             Err(e @ CodexErr::ContextWindowExceeded) => {
                 if turn_input.len() > 1 {
                     // Trim from the beginning to preserve cache (prefix-based) and keep recent messages intact.
+                    // 从开头开始裁剪以保留基于前缀的缓存，同时保持最近的消息完整
                     error!(
                         "Context window exceeded while compacting; removing oldest history item. Error: {e}"
                     );
@@ -423,6 +425,7 @@ mod tests {
     fn build_token_limited_compacted_history_truncates_overlong_user_messages() {
         // Use a small truncation limit so the test remains fast while still validating
         // that oversized user content is truncated.
+        // 使用较小的截断上限，确保测试保持快速同时验证超长用户内容会被截断
         let max_tokens = 16;
         let big = "word ".repeat(200);
         let history = super::build_compacted_history_with_limit(

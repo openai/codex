@@ -1,3 +1,4 @@
+// 该文件实现远程会话历史压缩任务，包括内联触发与事件通知。
 use std::sync::Arc;
 
 use crate::Prompt;
@@ -55,6 +56,7 @@ async fn run_remote_compact_task_inner_impl(
         .compact_conversation_history(&prompt)
         .await?;
     // Required to keep `/undo` available after compaction
+    // 为了在压缩后保持 `/undo` 功能可用
     let ghost_snapshots: Vec<ResponseItem> = history
         .get_history()
         .iter()

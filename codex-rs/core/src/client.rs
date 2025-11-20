@@ -78,6 +78,7 @@ struct Error {
     message: Option<String>,
 
     // Optional fields available on "usage_limit_reached" and "usage_not_included" errors
+    // “usage_limit_reached”和“usage_not_included”错误中可选的字段
     plan_type: Option<PlanType>,
     resets_at: Option<i64>,
 }
@@ -161,6 +162,7 @@ impl ModelClient {
             WireApi::Responses => self.stream_responses(prompt).await,
             WireApi::Chat => {
                 // Create the raw streaming connection first.
+                // 首先创建原始的流式连接
                 let response_stream = stream_chat_completions(
                     prompt,
                     &self.config.model_family,
@@ -174,6 +176,8 @@ impl ModelClient {
                 // Wrap it with the aggregation adapter so callers see *only*
                 // the final assistant message per turn (matching the
                 // behaviour of the Responses API).
+                // 使用聚合适配器包装，使调用方在每个回合只看到最终的助手消息
+                // 行为与 Responses API 保持一致
                 let mut aggregated = if self.config.show_raw_agent_reasoning {
                     crate::chat_completions::AggregatedChatStream::streaming_mode(response_stream)
                 } else {
@@ -182,12 +186,14 @@ impl ModelClient {
 
                 // Bridge the aggregated stream back into a standard
                 // `ResponseStream` by forwarding events through a channel.
+                // 通过 channel 转发事件，将聚合流桥接回标准的 `ResponseStream`
                 let (tx, rx) = mpsc::channel::<Result<ResponseEvent>>(16);
 
                 tokio::spawn(async move {
                     use futures::StreamExt;
                     while let Some(ev) = aggregated.next().await {
                         // Exit early if receiver hung up.
+                        // 如果接收端断开则提前退出
                         if tx.send(ev).await.is_err() {
                             break;
                         }
@@ -200,9 +206,11 @@ impl ModelClient {
     }
 
     /// Implementation for the OpenAI *Responses* experimental API.
+    /// OpenAI *Responses* 实验性 API 的实现
     async fn stream_responses(&self, prompt: &Prompt) -> Result<ResponseStream> {
         if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
             // short circuit for tests
+            // 为测试提供快速路径
             warn!(path, "Streaming from fixture");
             return stream_from_fixture(
                 path,
@@ -251,6 +259,7 @@ impl ModelClient {
         };
 
         // Only include `text.verbosity` for GPT-5 family models
+        // 仅对 GPT-5 系列模型包含 `text.verbosity`
         let text = create_text_param_for_request(verbosity, &prompt.output_schema);
 
         // In general, we want to explicitly send `store: false` when using the Responses API,
@@ -260,6 +269,13 @@ impl ModelClient {
         // - If store = false and id is not sent an error is thrown that ID is required
         //
         // For Azure, we send `store: true` and preserve reasoning item IDs.
+        // 通常使用 Responses API 时希望显式发送 `store: false`
+        // 但在实践中 Azure Responses API 会拒绝 `store: false`：
+        //
+        // - 若 store = false 且发送了 id，会报错找不到该 ID
+        // - 若 store = false 且未发送 id，会报错需要提供 ID
+        //
+        // 对 Azure，我们发送 `store: true` 并保留 reasoning 条目的 ID
         let azure_workaround = self.provider.is_azure_responses_endpoint();
 
         let payload = ResponsesApiRequest {
@@ -308,6 +324,7 @@ impl ModelClient {
     }
 
     /// Single attempt to start a streaming Responses API call.
+    /// 发起一次流式 Responses API 调用的单次尝试
     async fn attempt_stream_responses(
         &self,
         attempt: u64,
@@ -315,6 +332,7 @@ impl ModelClient {
         auth_manager: &Option<Arc<AuthManager>>,
     ) -> std::result::Result<ResponseStream, StreamAttemptError> {
         // Always fetch the latest auth in case a prior attempt refreshed the token.
+        // 始终获取最新的认证，因为先前的尝试可能刷新了 token
         let auth = auth_manager.as_ref().and_then(|m| m.auth());
 
         trace!(
@@ -330,6 +348,7 @@ impl ModelClient {
             .map_err(StreamAttemptError::Fatal)?;
 
         // Include subagent header only for subagent sessions.
+        // 仅在子代理会话中包含 subagent 请求头
         if let SessionSource::SubAgent(sub) = &self.session_source {
             let subagent = if let crate::protocol::SubAgentSource::Other(label) = sub {
                 label.clone()
@@ -344,6 +363,7 @@ impl ModelClient {
 
         req_builder = req_builder
             // Send session_id for compatibility.
+            // 为兼容性发送 session_id
             .header("conversation_id", self.conversation_id.to_string())
             .header("session_id", self.conversation_id.to_string())
             .header(reqwest::header::ACCEPT, "text/event-stream")
@@ -386,6 +406,7 @@ impl ModelClient {
                 }
 
                 // spawn task to process SSE
+                // 启动任务处理 SSE
                 let stream = resp.bytes_stream().map_err(move |e| {
                     CodexErr::ResponseStreamFailed(ResponseStreamFailed {
                         source: e,
@@ -405,6 +426,7 @@ impl ModelClient {
                 let status = res.status();
 
                 // Pull out Retry‑After header if present.
+                // 如果存在 Retry-After 请求头则提取
                 let retry_after_secs = res
                     .headers()
                     .get(reqwest::header::RETRY_AFTER)
@@ -436,11 +458,17 @@ impl ModelClient {
                 // exact error message (e.g. "Unknown parameter: 'input[0].metadata'"). The body is
                 // small and this branch only runs on error paths so the extra allocation is
                 // negligible.
+                // OpenAI Responses 端点即便在 4xx/5xx 也返回结构化 JSON。
+                // 如果我们仅返回 HTTP 状态码，调用方会看到模糊的
+                // “unexpected status 400 Bad Request”，调试极为困难。
+                // 因此读取并包含响应文本，让上层和用户能看到确切错误信息（例如 "Unknown parameter: 'input[0].metadata'"）。
+                // 响应体很小且仅在错误路径执行，额外的分配可以忽略。
                 if !(status == StatusCode::TOO_MANY_REQUESTS
                     || status == StatusCode::UNAUTHORIZED
                     || status.is_server_error())
                 {
                     // Surface the error body to callers. Use `unwrap_or_default` per Clippy.
+                    // 将错误正文暴露给调用方。根据 Clippy 建议使用 `unwrap_or_default`
                     let body = res.text().await.unwrap_or_default();
                     return Err(StreamAttemptError::Fatal(CodexErr::UnexpectedStatus(
                         UnexpectedResponseError {
@@ -459,6 +487,8 @@ impl ModelClient {
                             // Prefer the plan_type provided in the error message if present
                             // because it's more up to date than the one encoded in the auth
                             // token.
+                            // 若错误消息中提供 plan_type 优先使用
+                            // 因为它比认证 token 中编码的值更新
                             let plan_type = error
                                 .plan_type
                                 .or_else(|| auth.as_ref().and_then(CodexAuth::get_plan_type));
@@ -504,21 +534,25 @@ impl ModelClient {
     }
 
     /// Returns the currently configured model slug.
+    /// 返回当前配置的模型标识
     pub fn get_model(&self) -> String {
         self.config.model.clone()
     }
 
     /// Returns the currently configured model family.
+    /// 返回当前配置的模型家族
     pub fn get_model_family(&self) -> ModelFamily {
         self.config.model_family.clone()
     }
 
     /// Returns the current reasoning effort setting.
+    /// 返回当前的思考力度设置
     pub fn get_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
         self.effort
     }
 
     /// Returns the current reasoning summary setting.
+    /// 返回当前的思考摘要设置
     pub fn get_reasoning_summary(&self) -> ReasoningSummaryConfig {
         self.summary
     }
@@ -604,8 +638,10 @@ enum StreamAttemptError {
 
 impl StreamAttemptError {
     /// attempt is 0-based.
+    /// attempt 从 0 开始计数
     fn delay(&self, attempt: u64) -> Duration {
         // backoff() uses 1-based attempts.
+        // backoff() 使用 1 为起点的计数
         let backoff_attempt = attempt + 1;
         match self {
             Self::RetryableHttpError { retry_after, .. } => {
@@ -614,6 +650,7 @@ impl StreamAttemptError {
             Self::RetryableTransportError { .. } => backoff(backoff_attempt),
             Self::Fatal(_) => {
                 // Should not be called on Fatal errors.
+                // 不应在 Fatal 错误上调用
                 Duration::from_secs(0)
             }
         }
@@ -774,6 +811,7 @@ fn parse_header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name)?.to_str().ok()
 }
 // @todo
+// 待办事项
 async fn process_sse<S>(
     stream: S,
     tx_event: mpsc::Sender<Result<ResponseEvent>>,
@@ -786,6 +824,8 @@ async fn process_sse<S>(
 
     // If the stream stays completely silent for an extended period treat it as disconnected.
     // The response id returned from the "complete" message.
+    // 如果流在长时间内完全静默，则视为已断开
+    // 从“complete”消息返回的响应 ID
     let mut response_completed: Option<ResponseCompleted> = None;
     let mut response_error: Option<CodexErr> = None;
 
@@ -881,8 +921,17 @@ async fn process_sse<S>(
             //      "previous_response_not_found" errors because the duplicated
             //      IDs did not match the incremental turn chain.
             //
+            // 单个输出项完成。立即转发，便于代理其余部分实时流式输出助手文本/函数，
+            // 而无需等待最终的 `response.completed` 信封。
+            //
+            // 重要：我们曾忽略这些事件，仅转发 `response.completed` 内嵌的重复 `output` 数组。
+            // 这导致两个具体问题：
+            //   1. 无实时流式——用户只能在整个回合结束后看到输出，打破“输入中”体验，让长回合看起来卡住。
+            //   2. `function_call_output` 重复项——既转发单个又转发完成数组，导致后台困惑并触发 400
+            //      “previous_response_not_found” 错误，因为重复的 ID 不匹配增量回合链。
             // The fix is to forward the incremental events *as they come* and
             // drop the duplicated list inside `response.completed`.
+            // 解决办法是按到达顺序转发增量事件，并丢弃 `response.completed` 中的重复列表
             "response.output_item.done" => {
                 let Some(item_val) = event.item else { continue };
                 let Ok(item) = serde_json::from_value::<ResponseItem>(item_val) else {
@@ -962,6 +1011,7 @@ async fn process_sse<S>(
                 }
             }
             // Final response completed – includes array of output items & id
+            // 最终响应完成——包含输出项数组及其 id
             "response.completed" => {
                 if let Some(resp_val) = event.response {
                     match serde_json::from_value::<ResponseCompleted>(resp_val) {
@@ -981,6 +1031,7 @@ async fn process_sse<S>(
             | "response.function_call_arguments.delta"
             | "response.custom_tool_call_input.delta"
             | "response.custom_tool_call_input.done" // also emitted as response.output_item.done
+            // 也会作为 response.output_item.done 发出
             | "response.in_progress"
             | "response.output_text.done" => {}
             "response.output_item.added" => {
@@ -998,6 +1049,7 @@ async fn process_sse<S>(
             "response.reasoning_summary_part.added" => {
                 if let Some(summary_index) = event.summary_index {
                     // Boundary between reasoning summary sections (e.g., titles).
+                    // 推理摘要各部分（如标题）的边界
                     let event = ResponseEvent::ReasoningSummaryPartAdded { summary_index };
                     if tx_event.send(Ok(event)).await.is_err() {
                         return;
@@ -1011,6 +1063,7 @@ async fn process_sse<S>(
 }
 
 /// used in tests to stream from a text SSE file
+/// 测试中用于从文本 SSE 文件流式读取
 async fn stream_from_fixture(
     path: impl AsRef<Path>,
     provider: ModelProviderInfo,
@@ -1021,6 +1074,7 @@ async fn stream_from_fixture(
     let lines = std::io::BufReader::new(f).lines();
 
     // insert \n\n after each line for proper SSE parsing
+    // 在每行后插入 \n\n 以便正确解析 SSE
     let mut content = String::new();
     for line in lines {
         content.push_str(&line?);
@@ -1042,7 +1096,9 @@ fn rate_limit_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
 
     // Match both OpenAI-style messages like "Please try again in 1.898s"
+    // 既匹配 OpenAI 风格的提示 “Please try again in 1.898s”
     // and Azure OpenAI-style messages like "Try again in 35 seconds".
+    // 也匹配 Azure OpenAI 风格的提示 “Try again in 35 seconds”
     #[expect(clippy::unwrap_used)]
     RE.get_or_init(|| Regex::new(r"(?i)try again in\s*(\d+(?:\.\d+)?)\s*(s|ms|seconds?)").unwrap())
 }
@@ -1054,6 +1110,7 @@ fn try_parse_retry_after(err: &Error) -> Option<Duration> {
 
     // parse retry hints like "try again in 1.898s" or
     // "Try again in 35 seconds" using regex
+    // 使用正则解析类似 “try again in 1.898s” 或 “Try again in 35 seconds” 的重试提示
     let re = rate_limit_regex();
     if let Some(message) = &err.message
         && let Some(captures) = re.captures(message)
@@ -1151,9 +1208,13 @@ mod tests {
     // ────────────────────────────
     // Helpers
     // ────────────────────────────
+    // ────────────────────────────
+    // 助手函数
+    // ────────────────────────────
 
     /// Runs the SSE parser on pre-chunked byte slices and returns every event
     /// (including any final `Err` from a stream-closure check).
+    /// 在预分块的字节切片上运行 SSE 解析器并返回每个事件（包括流关闭检查的最终 `Err`）
     async fn collect_events(
         chunks: &[&[u8]],
         provider: ModelProviderInfo,
@@ -1183,6 +1244,7 @@ mod tests {
 
     /// Builds an in-memory SSE stream from JSON fixtures and returns only the
     /// successfully parsed events (panics on internal channel errors).
+    /// 从 JSON 夹具构建内存中的 SSE 流，并仅返回成功解析的事件（内部通道错误会 panic）
     async fn run_sse(
         events: Vec<serde_json::Value>,
         provider: ModelProviderInfo,
@@ -1232,6 +1294,9 @@ mod tests {
 
     // ────────────────────────────
     // Tests from `implement-test-for-responses-api-sse-parser`
+    // ────────────────────────────
+    // ────────────────────────────
+    // 来自 `implement-test-for-responses-api-sse-parser` 的测试
     // ────────────────────────────
 
     #[tokio::test]
@@ -1509,9 +1574,13 @@ mod tests {
     // ────────────────────────────
     // Table-driven test from `main`
     // ────────────────────────────
+    // ────────────────────────────
+    // 来自 `main` 的表驱动测试
+    // ────────────────────────────
 
     /// Verifies that the adapter produces the right `ResponseEvent` for a
     /// variety of incoming `type` values.
+    /// 验证适配器针对不同的传入 `type` 值能生成正确的 `ResponseEvent`
     #[tokio::test]
     async fn table_driven_event_kinds() {
         struct TestCase {
@@ -1677,3 +1746,4 @@ mod tests {
         assert_eq!(plan_json, "\"vip\"");
     }
 }
+// 该文件实现模型客户端，处理请求发送、流式响应与错误处理等核心逻辑。

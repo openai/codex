@@ -1,3 +1,4 @@
+// 该文件负责将协议响应项解析为内部的会话回合结构。
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::ReasoningItem;

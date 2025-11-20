@@ -1,3 +1,4 @@
+// 该文件实现统一执行会话的管理逻辑，包括启动命令与会话输出收集。
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -85,6 +86,7 @@ impl UnifiedExecSessionManager {
             .get(&stored_id)
             .map(|entry| entry.session.exit_code());
         // Only include a session_id in the response if the process is still alive.
+        // 仅当进程仍在运行时才在响应中包含 session_id
         let session_id = if has_exited { None } else { Some(stored_id) };
 
         let original_token_count = approx_token_count(&text);
@@ -105,6 +107,7 @@ impl UnifiedExecSessionManager {
         }
 
         // If the command completed during this call, emit an ExecCommandEnd via the emitter.
+        // 如果命令已在本次调用中完成，则通过 emitter 发送 ExecCommandEnd 事件
         if response.session_id.is_none() {
             let exit = response.exit_code.unwrap_or(-1);
             Self::emit_exec_end_from_context(

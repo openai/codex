@@ -1,3 +1,4 @@
+// 该文件提供工具事件上下文、阶段与发射器，用于发出执行和补丁相关事件。
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::error::CodexErr;
@@ -82,6 +83,7 @@ pub(crate) async fn emit_exec_command_begin(
         .await;
 }
 // Concrete, allocation-free emitter: avoid trait objects and boxed futures.
+// 具体且零分配的事件发射器：避免使用 trait 对象和装箱的 future
 pub(crate) enum ToolEmitter {
     Shell {
         command: Vec<String>,
@@ -288,6 +290,7 @@ impl ToolEmitter {
             Err(ToolError::Rejected(msg)) => {
                 // Normalize common rejection messages for exec tools so tests and
                 // users see a clear, consistent phrase.
+                // 规范执行类工具的常见拒绝信息，使测试与用户看到清晰一致的提示
                 let normalized = if msg == "rejected by user" {
                     "exec command rejected by user".to_string()
                 } else {
