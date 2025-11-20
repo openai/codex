@@ -11,7 +11,7 @@ use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
-use codex_protocol::protocol::CodexErrorCode as CoreCodexErrorCode;
+use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
@@ -53,7 +53,7 @@ macro_rules! v2_enum_from_core {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub enum CodexErrorCode {
+pub enum CodexErrorInfo {
     ContextWindowExceeded,
     UsageLimitExceeded,
     HttpConnectionFailed {
@@ -70,7 +70,7 @@ pub enum CodexErrorCode {
     InternalServerError,
     Unauthorized,
     BadRequest,
-    Sandbox,
+    SandboxError,
     /// The response SSE stream disconnected in the middle of a turn before completion.
     ResponseStreamDisconnected {
         #[serde(rename = "httpStatusCode")]
@@ -86,28 +86,28 @@ pub enum CodexErrorCode {
     Other,
 }
 
-impl From<CoreCodexErrorCode> for CodexErrorCode {
-    fn from(value: CoreCodexErrorCode) -> Self {
+impl From<CoreCodexErrorInfo> for CodexErrorInfo {
+    fn from(value: CoreCodexErrorInfo) -> Self {
         match value {
-            CoreCodexErrorCode::ContextWindowExceeded => CodexErrorCode::ContextWindowExceeded,
-            CoreCodexErrorCode::UsageLimitExceeded => CodexErrorCode::UsageLimitExceeded,
-            CoreCodexErrorCode::HttpConnectionFailed { http_status_code } => {
-                CodexErrorCode::HttpConnectionFailed { http_status_code }
+            CoreCodexErrorInfo::ContextWindowExceeded => CodexErrorInfo::ContextWindowExceeded,
+            CoreCodexErrorInfo::UsageLimitExceeded => CodexErrorInfo::UsageLimitExceeded,
+            CoreCodexErrorInfo::HttpConnectionFailed { http_status_code } => {
+                CodexErrorInfo::HttpConnectionFailed { http_status_code }
             }
-            CoreCodexErrorCode::ResponseStreamConnectionFailed { http_status_code } => {
-                CodexErrorCode::ResponseStreamConnectionFailed { http_status_code }
+            CoreCodexErrorInfo::ResponseStreamConnectionFailed { http_status_code } => {
+                CodexErrorInfo::ResponseStreamConnectionFailed { http_status_code }
             }
-            CoreCodexErrorCode::InternalServerError => CodexErrorCode::InternalServerError,
-            CoreCodexErrorCode::Unauthorized => CodexErrorCode::Unauthorized,
-            CoreCodexErrorCode::BadRequest => CodexErrorCode::BadRequest,
-            CoreCodexErrorCode::Sandbox => CodexErrorCode::Sandbox,
-            CoreCodexErrorCode::ResponseStreamDisconnected { http_status_code } => {
-                CodexErrorCode::ResponseStreamDisconnected { http_status_code }
+            CoreCodexErrorInfo::InternalServerError => CodexErrorInfo::InternalServerError,
+            CoreCodexErrorInfo::Unauthorized => CodexErrorInfo::Unauthorized,
+            CoreCodexErrorInfo::BadRequest => CodexErrorInfo::BadRequest,
+            CoreCodexErrorInfo::SandboxError => CodexErrorInfo::SandboxError,
+            CoreCodexErrorInfo::ResponseStreamDisconnected { http_status_code } => {
+                CodexErrorInfo::ResponseStreamDisconnected { http_status_code }
             }
-            CoreCodexErrorCode::ResponseTooManyFailedAttempts { http_status_code } => {
-                CodexErrorCode::ResponseTooManyFailedAttempts { http_status_code }
+            CoreCodexErrorInfo::ResponseTooManyFailedAttempts { http_status_code } => {
+                CodexErrorInfo::ResponseTooManyFailedAttempts { http_status_code }
             }
-            CoreCodexErrorCode::Other => CodexErrorCode::Other,
+            CoreCodexErrorInfo::Other => CodexErrorInfo::Other,
         }
     }
 }
@@ -615,7 +615,7 @@ pub struct Turn {
 #[error("{message}")]
 pub struct TurnError {
     pub message: String,
-    pub codex_error_code: Option<CodexErrorCode>,
+    pub codex_error_code: Option<CodexErrorInfo>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1254,7 +1254,7 @@ mod tests {
 
     #[test]
     fn codex_error_code_serializes_http_status_code_in_camel_case() {
-        let value = CodexErrorCode::ResponseTooManyFailedAttempts {
+        let value = CodexErrorInfo::ResponseTooManyFailedAttempts {
             http_status_code: Some(401),
         };
 

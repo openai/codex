@@ -128,7 +128,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::CodexErrorCode;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
@@ -1199,7 +1199,7 @@ impl Session {
         message: impl Into<String>,
         codex_error: CodexErr,
     ) {
-        let codex_error_code = CodexErrorCode::ResponseStreamDisconnected {
+        let codex_error_code = CodexErrorInfo::ResponseStreamDisconnected {
             http_status_code: codex_error.http_status_code_value(),
         };
         let event = EventMsg::StreamError(StreamErrorEvent {
@@ -1450,7 +1450,7 @@ mod handlers {
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandTask;
     use codex_protocol::custom_prompts::CustomPrompt;
-    use codex_protocol::protocol::CodexErrorCode;
+    use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
@@ -1697,7 +1697,7 @@ mod handlers {
                 id: sub_id.clone(),
                 msg: EventMsg::Error(ErrorEvent {
                     message: "Failed to shutdown rollout recorder".to_string(),
-                    codex_error_code: Some(CodexErrorCode::Other),
+                    codex_error_code: Some(CodexErrorInfo::Other),
                 }),
             };
             sess.send_event_raw(event).await;

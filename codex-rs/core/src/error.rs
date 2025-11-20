@@ -10,7 +10,7 @@ use chrono::Local;
 use chrono::Utc;
 use codex_async_utils::CancelErr;
 use codex_protocol::ConversationId;
-use codex_protocol::protocol::CodexErrorCode;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
 use reqwest::StatusCode;
@@ -434,30 +434,30 @@ impl CodexErr {
     }
 
     /// Translate core error to client-facing protocol error.
-    pub fn to_codex_protocol_error(&self) -> CodexErrorCode {
+    pub fn to_codex_protocol_error(&self) -> CodexErrorInfo {
         match self {
-            CodexErr::ContextWindowExceeded => CodexErrorCode::ContextWindowExceeded,
+            CodexErr::ContextWindowExceeded => CodexErrorInfo::ContextWindowExceeded,
             CodexErr::UsageLimitReached(_)
             | CodexErr::QuotaExceeded
-            | CodexErr::UsageNotIncluded => CodexErrorCode::UsageLimitExceeded,
-            CodexErr::RetryLimit(_) => CodexErrorCode::ResponseTooManyFailedAttempts {
+            | CodexErr::UsageNotIncluded => CodexErrorInfo::UsageLimitExceeded,
+            CodexErr::RetryLimit(_) => CodexErrorInfo::ResponseTooManyFailedAttempts {
                 http_status_code: self.http_status_code_value(),
             },
-            CodexErr::ConnectionFailed(_) => CodexErrorCode::HttpConnectionFailed {
+            CodexErr::ConnectionFailed(_) => CodexErrorInfo::HttpConnectionFailed {
                 http_status_code: self.http_status_code_value(),
             },
-            CodexErr::ResponseStreamFailed(_) => CodexErrorCode::ResponseStreamConnectionFailed {
+            CodexErr::ResponseStreamFailed(_) => CodexErrorInfo::ResponseStreamConnectionFailed {
                 http_status_code: self.http_status_code_value(),
             },
-            CodexErr::RefreshTokenFailed(_) => CodexErrorCode::Unauthorized,
+            CodexErr::RefreshTokenFailed(_) => CodexErrorInfo::Unauthorized,
             CodexErr::SessionConfiguredNotFirstEvent
             | CodexErr::InternalServerError
-            | CodexErr::InternalAgentDied => CodexErrorCode::InternalServerError,
+            | CodexErr::InternalAgentDied => CodexErrorInfo::InternalServerError,
             CodexErr::UnsupportedOperation(_) | CodexErr::ConversationNotFound(_) => {
-                CodexErrorCode::BadRequest
+                CodexErrorInfo::BadRequest
             }
-            CodexErr::Sandbox(_) => CodexErrorCode::Sandbox,
-            _ => CodexErrorCode::Other,
+            CodexErr::Sandbox(_) => CodexErrorInfo::SandboxError,
+            _ => CodexErrorInfo::Other,
         }
     }
 
@@ -651,7 +651,7 @@ mod tests {
         );
         assert_eq!(
             event.codex_error_code,
-            Some(CodexErrorCode::ResponseStreamConnectionFailed {
+            Some(CodexErrorInfo::ResponseStreamConnectionFailed {
                 http_status_code: Some(429)
             })
         );

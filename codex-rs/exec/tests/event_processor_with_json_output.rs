@@ -47,7 +47,7 @@ use codex_exec::exec_events::WebSearchItem;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
-use codex_protocol::protocol::CodexErrorCode;
+use codex_protocol::protocol::CodexErrorInfo;
 use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
 use mcp_types::TextContent;
@@ -540,7 +540,7 @@ fn error_event_produces_error() {
         "e1",
         EventMsg::Error(codex_core::protocol::ErrorEvent {
             message: "boom".to_string(),
-            codex_error_code: Some(CodexErrorCode::Other),
+            codex_error_code: Some(CodexErrorInfo::Other),
         }),
     ));
     assert_eq!(
@@ -580,7 +580,7 @@ fn stream_error_event_produces_error() {
         "e1",
         EventMsg::StreamError(codex_core::protocol::StreamErrorEvent {
             message: "retrying".to_string(),
-            codex_error_code: Some(CodexErrorCode::Other),
+            codex_error_code: Some(CodexErrorInfo::Other),
         }),
     ));
     assert_eq!(
@@ -599,7 +599,7 @@ fn error_followed_by_task_complete_produces_turn_failed() {
         "e1",
         EventMsg::Error(ErrorEvent {
             message: "boom".to_string(),
-            codex_error_code: Some(CodexErrorCode::Other),
+            codex_error_code: Some(CodexErrorInfo::Other),
         }),
     );
     assert_eq!(
