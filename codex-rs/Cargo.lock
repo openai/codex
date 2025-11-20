@@ -1202,6 +1202,7 @@ dependencies = [
  "socket2 0.6.0",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]
