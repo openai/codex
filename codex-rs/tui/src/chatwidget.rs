@@ -2118,6 +2118,13 @@ impl ChatWidget {
         } else {
             default_choice
         };
+        let initial_selected_idx = choices
+            .iter()
+            .position(|choice| choice.stored == highlight_choice)
+            .or_else(|| {
+                highlight_choice
+                    .and_then(|effort| choices.iter().position(|choice| choice.display == effort))
+            });
         let mut items: Vec<SelectionItem> = Vec::new();
         for choice in choices.iter() {
             let effort = choice.display;
@@ -2194,6 +2201,7 @@ impl ChatWidget {
             header: Box::new(header),
             footer_hint: Some(standard_popup_hint_line()),
             items,
+            initial_selected_idx,
             ..Default::default()
         });
     }
