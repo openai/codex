@@ -3,11 +3,30 @@ use ansi_to_tui::IntoText;
 use ratatui::text::Line;
 use ratatui::text::Text;
 
+// Expand tabs in a best-effort way for transcript rendering.
+// Tabs can interact poorly with left-gutter prefixes in our TUI and CLI
+// transcript views (e.g., `nl` separates line numbers from content with a tab).
+// Replacing tabs with spaces avoids odd visual artifacts without changing
+// semantics for our use cases.
+fn expand_tabs(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.contains('\t') {
+        // Keep it simple: replace each tab with 4 spaces.
+        // We do not try to align to tab stops since most usages (like `nl`)
+        // look acceptable with a fixed substitution and this avoids stateful math
+        // across spans.
+        std::borrow::Cow::Owned(s.replace('\t', "    "))
+    } else {
+        std::borrow::Cow::Borrowed(s)
+    }
+}
+
 /// This function should be used when the contents of `s` are expected to match
 /// a single line. If multiple lines are found, a warning is logged and only the
 /// first line is returned.
 pub fn ansi_escape_line(s: &str) -> Line<'static> {
-    let text = ansi_escape(s);
+    // Normalize tabs to spaces to avoid odd gutter collisions in transcript mode.
+    let s = expand_tabs(s);
+    let text = ansi_escape(&s);
     match text.lines.as_slice() {
         [] => "".into(),
         [only] => only.clone(),

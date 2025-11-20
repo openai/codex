@@ -59,12 +59,19 @@ impl ChatComposerHistory {
             return;
         }
 
+        self.history_cursor = None;
+        self.last_history_text = None;
+
         // Avoid inserting a duplicate if identical to the previous entry.
         if self.local_history.last().is_some_and(|prev| prev == text) {
             return;
         }
 
         self.local_history.push(text.to_string());
+    }
+
+    /// Reset navigation tracking so the next Up key resumes from the latest entry.
+    pub fn reset_navigation(&mut self) {
         self.history_cursor = None;
         self.last_history_text = None;
     }
@@ -269,5 +276,25 @@ mod tests {
             Some("older".into()),
             history.on_entry_response(1, 1, Some("older".into()))
         );
+    }
+
+    #[test]
+    fn reset_navigation_resets_cursor() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+
+        let mut history = ChatComposerHistory::new();
+        history.set_metadata(1, 3);
+        history.fetched_history.insert(1, "command2".into());
+        history.fetched_history.insert(2, "command3".into());
+
+        assert_eq!(Some("command3".into()), history.navigate_up(&tx));
+        assert_eq!(Some("command2".into()), history.navigate_up(&tx));
+
+        history.reset_navigation();
+        assert!(history.history_cursor.is_none());
+        assert!(history.last_history_text.is_none());
+
+        assert_eq!(Some("command3".into()), history.navigate_up(&tx));
     }
 }

@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: popup
+---
+  Select Model and Effort
+  Switch the model for this and future Codex CLI sessions
+
+› 1. gpt-5-codex (current)  Optimized for coding tasks with many tools.
+  2. gpt-5                  Broad world knowledge with strong general
+                            reasoning.
+
+  Press enter to select reasoning effort, or esc to dismiss.

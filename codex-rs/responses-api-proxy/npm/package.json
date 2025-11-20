@@ -1,0 +1,21 @@
+{
+  "name": "@openai/codex-responses-api-proxy",
+  "version": "0.0.0-dev",
+  "license": "Apache-2.0",
+  "bin": {
+    "codex-responses-api-proxy": "bin/codex-responses-api-proxy.js"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=16"
+  },
+  "files": [
+    "bin",
+    "vendor"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openai/codex.git",
+    "directory": "codex-rs/responses-api-proxy/npm"
+  }
+}

@@ -1,0 +1,115 @@
+name: Issue Labeler
+
+on:
+  issues:
+    types:
+      - opened
+      - labeled
+
+jobs:
+  gather-labels:
+    name: Generate label suggestions
+    if: ${{ github.event.action == 'opened' || (github.event.action == 'labeled' && github.event.label.name == 'codex-label') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      codex_output: ${{ steps.codex.outputs.final-message }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: codex
+        uses: openai/codex-action@main
+        with:
+          openai-api-key: ${{ secrets.CODEX_OPENAI_API_KEY }}
+          allow-users: "*"
+          prompt: |
+            You are an assistant that reviews GitHub issues for the repository.
+
+            Your job is to choose the most appropriate existing labels for the issue described later in this prompt.
+            Follow these rules:
+            - Only pick labels out of the list below.
+            - Prefer a small set of precise labels over many broad ones.
+
+            Labels to apply:
+            1. bug — Reproducible defects in Codex products (CLI, VS Code extension, web, auth).
+            2. enhancement — Feature requests or usability improvements that ask for new capabilities, better ergonomics, or quality-of-life tweaks.
+            3. extension — VS Code (or other IDE) extension-specific issues.
+            4. windows-os — Bugs or friction specific to Windows environments (always when PowerShell is mentioned, path handling, copy/paste, OS-specific auth or tooling failures).
+            5. mcp — Topics involving Model Context Protocol servers/clients.
+            6. codex-web — Issues targeting the Codex web UI/Cloud experience.
+            8. azure — Problems or requests tied to Azure OpenAI deployments.
+            9. documentation — Updates or corrections needed in docs/README/config references (broken links, missing examples, outdated keys, clarification requests).
+            10. model-behavior — Undesirable LLM behavior: forgetting goals, refusing work, hallucinating environment details, quota misreports, or other reasoning/performance anomalies.
+
+            Issue number: ${{ github.event.issue.number }}
+
+            Issue title:
+            ${{ github.event.issue.title }}
+
+            Issue body:
+            ${{ github.event.issue.body }}
+
+            Repository full name:
+            ${{ github.repository }}
+
+          output-schema: |
+            {
+              "type": "object",
+              "properties": {
+                "labels": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": ["labels"],
+              "additionalProperties": false
+            }
+
+  apply-labels:
+    name: Apply labels from Codex output
+    needs: gather-labels
+    if: ${{ needs.gather-labels.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      CODEX_OUTPUT: ${{ needs.gather-labels.outputs.codex_output }}
+    steps:
+      - name: Apply labels
+        run: |
+          json=${CODEX_OUTPUT//$'\r'/}
+          if [ -z "$json" ]; then
+            echo "Codex produced no output. Skipping label application."
+            exit 0
+          fi
+
+          if ! printf '%s' "$json" | jq -e 'type == "object" and (.labels | type == "array")' >/dev/null 2>&1; then
+            echo "Codex output did not include a labels array. Raw output: $json"
+            exit 0
+          fi
+
+          labels=$(printf '%s' "$json" | jq -r '.labels[] | tostring')
+          if [ -z "$labels" ]; then
+            echo "Codex returned an empty array. Nothing to do."
+            exit 0
+          fi
+
+          cmd=(gh issue edit "$ISSUE_NUMBER")
+          while IFS= read -r label; do
+            cmd+=(--add-label "$label")
+          done <<< "$labels"
+
+          "${cmd[@]}" || true
+
+      - name: Remove codex-label trigger
+        if: ${{ always() && github.event.action == 'labeled' && github.event.label.name == 'codex-label' }}
+        run: |
+          gh issue edit "$ISSUE_NUMBER" --remove-label codex-label || true
+          echo "Attempted to remove label: codex-label"

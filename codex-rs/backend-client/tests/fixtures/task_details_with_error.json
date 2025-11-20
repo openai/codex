@@ -1,0 +1,22 @@
+{
+  "task": {
+    "id": "task_456",
+    "title": "Investigate failure",
+    "archived": false,
+    "external_pull_requests": []
+  },
+  "current_assistant_turn": {
+    "output_items": [
+      {
+        "type": "pr",
+        "output_diff": {
+          "diff": "diff --git a/lib.rs b/lib.rs\n+pub fn hello() {}\n"
+        }
+      }
+    ],
+    "error": {
+      "code": "APPLY_FAILED",
+      "message": "Patch could not be applied"
+    }
+  }
+}

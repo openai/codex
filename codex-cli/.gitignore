@@ -1,7 +1,1 @@
-# Added by ./scripts/install_native_deps.sh
-/bin/codex-aarch64-apple-darwin
-/bin/codex-aarch64-unknown-linux-musl
-/bin/codex-linux-sandbox-arm64
-/bin/codex-linux-sandbox-x64
-/bin/codex-x86_64-apple-darwin
-/bin/codex-x86_64-unknown-linux-musl
+/vendor/

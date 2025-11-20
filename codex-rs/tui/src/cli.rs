@@ -1,4 +1,5 @@
 use clap::Parser;
+use clap::ValueHint;
 use codex_common::ApprovalModeCliArg;
 use codex_common::CliConfigOverrides;
 use std::path::PathBuf;
@@ -7,7 +8,7 @@ use std::path::PathBuf;
 #[command(version)]
 pub struct Cli {
     /// Optional user prompt to start the session.
-    #[arg(value_name = "PROMPT")]
+    #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]
     pub prompt: Option<String>,
 
     /// Optional image(s) to attach to the initial prompt.
@@ -71,6 +72,10 @@ pub struct Cli {
     /// Enable web search (off by default). When enabled, the native Responses `web_search` tool is available to the model (no per‑call approval).
     #[arg(long = "search", default_value_t = false)]
     pub web_search: bool,
+
+    /// Additional directories that should be writable alongside the primary workspace.
+    #[arg(long = "add-dir", value_name = "DIR", value_hint = ValueHint::DirPath)]
+    pub add_dir: Vec<PathBuf>,
 
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,

@@ -5,6 +5,7 @@ help:
     just -l
 
 # `codex`
+alias c := codex
 codex *args:
     cargo run --bin codex -- "$@"
 
@@ -26,6 +27,9 @@ fmt:
 
 fix *args:
     cargo clippy --fix --all-features --tests --allow-dirty "$@"
+
+clippy:
+    cargo clippy --all-features --tests "$@"
 
 install:
     rustup show active-toolchain
