@@ -69,7 +69,10 @@ where
 
     let decision = fetch().await;
 
-    if matches!(decision, ReviewDecision::ApprovedForSession) {
+    if matches!(
+        decision,
+        ReviewDecision::ApprovedForSession | ReviewDecision::ApprovedAllowPrefix
+    ) {
         let mut store = services.tool_approvals.lock().await;
         store.put(key, ReviewDecision::ApprovedForSession);
     }

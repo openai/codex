@@ -696,6 +696,7 @@ impl CodexClient {
             item_id,
             reason,
             risk,
+            allow_prefix,
         } = params;
 
         println!(
@@ -707,10 +708,16 @@ impl CodexClient {
         if let Some(risk) = risk.as_ref() {
             println!("< risk assessment: {risk:?}");
         }
+        if let Some(prefix) = allow_prefix.as_ref() {
+            println!("< allow prefix: {prefix:?}");
+        }
 
         let response = CommandExecutionRequestApprovalResponse {
             decision: ApprovalDecision::Accept,
-            accept_settings: Some(CommandExecutionRequestAcceptSettings { for_session: false }),
+            accept_settings: Some(CommandExecutionRequestAcceptSettings {
+                for_session: false,
+                allow_prefix_rule: allow_prefix.is_some(),
+            }),
         };
         self.send_server_request_response(request_id, &response)?;
         println!("< approved commandExecution request for item {item_id}");

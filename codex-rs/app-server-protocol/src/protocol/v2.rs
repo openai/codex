@@ -960,6 +960,8 @@ pub struct CommandExecutionRequestApprovalParams {
     pub reason: Option<String>,
     /// Optional model-provided risk assessment describing the blocked command.
     pub risk: Option<SandboxCommandAssessment>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub allow_prefix: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -969,6 +971,9 @@ pub struct CommandExecutionRequestAcceptSettings {
     /// If true, automatically approve this command for the duration of the session.
     #[serde(default)]
     pub for_session: bool,
+    /// If true, persist an allow rule for the provided prefix.
+    #[serde(default)]
+    pub allow_prefix_rule: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

@@ -614,6 +614,7 @@ mod tests {
             parsed_cmd: vec![ParsedCommand::Unknown {
                 cmd: "echo hello".to_string(),
             }],
+            allow_prefix: None,
         };
         let request = ServerRequest::ExecCommandApproval {
             request_id: RequestId::Integer(7),

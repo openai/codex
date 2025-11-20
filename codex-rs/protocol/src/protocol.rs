@@ -1533,6 +1533,11 @@ pub enum ReviewDecision {
     /// remainder of the session.
     ApprovedForSession,
 
+    /// User has approved this command and wants Codex to allow future commands
+    /// sharing the same prefix without prompting again. Codex will persist an
+    /// allow rule in the default execpolicy file.
+    ApprovedAllowPrefix,
+
     /// User has denied this command and the agent should not execute it, but
     /// it should continue the session and try something else.
     #[default]

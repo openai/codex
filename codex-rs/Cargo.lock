@@ -1238,6 +1238,7 @@ dependencies = [
  "serde_json",
  "shlex",
  "starlark",
+ "tempfile",
  "thiserror 2.0.17",
 ]
 

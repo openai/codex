@@ -32,6 +32,7 @@ pub struct ShellRequest {
     pub with_escalated_permissions: Option<bool>,
     pub justification: Option<String>,
     pub approval_requirement: ApprovalRequirement,
+    pub policy_allow_prefix: Option<Vec<String>>,
 }
 
 impl ProvidesSandboxRetryData for ShellRequest {
@@ -100,16 +101,34 @@ impl Approvable<ShellRequest> for ShellRuntime {
             .clone()
             .or_else(|| req.justification.clone());
         let risk = ctx.risk.clone();
+        let policy_allow_prefix = req.policy_allow_prefix.clone();
+        let allow_prefix_for_request = policy_allow_prefix.clone();
         let session = ctx.session;
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
         Box::pin(async move {
-            with_cached_approval(&session.services, key, move || async move {
+            let decision = with_cached_approval(&session.services, key, move || async move {
                 session
-                    .request_command_approval(turn, call_id, command, cwd, reason, risk)
+                    .request_command_approval(
+                        turn,
+                        call_id,
+                        command,
+                        cwd,
+                        reason,
+                        risk,
+                        allow_prefix_for_request.clone(),
+                    )
                     .await
             })
-            .await
+            .await;
+
+            if let Some(prefix) = policy_allow_prefix.as_ref()
+                && matches!(decision, ReviewDecision::ApprovedAllowPrefix)
+            {
+                session.remember_allowed_prefix(prefix).await;
+            }
+
+            decision
         })
     }
 
