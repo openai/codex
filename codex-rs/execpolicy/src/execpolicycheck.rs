@@ -13,7 +13,7 @@ use crate::PolicyParser;
 #[derive(Debug, Parser, Clone)]
 pub struct ExecPolicyCheckCommand {
     /// Paths to execpolicy files to evaluate (repeatable).
-    #[arg(short, long = "policy", value_name = "PATH", required = true)]
+    #[arg(short = 'p", long = "policy", value_name = "PATH", required = true)]
     pub policies: Vec<PathBuf>,
 
     /// Pretty-print the JSON output.
