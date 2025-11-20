@@ -485,6 +485,8 @@ impl UnifiedExecSessionManager {
         cancellation_token: &CancellationToken,
         deadline: Instant,
     ) -> Vec<u8> {
+        const POST_EXIT_OUTPUT_GRACE: Duration = Duration::from_millis(25);
+
         let mut collected: Vec<u8> = Vec::with_capacity(4096);
         let mut exit_signal_received = cancellation_token.is_cancelled();
         loop {
@@ -500,16 +502,20 @@ impl UnifiedExecSessionManager {
 
             if drained_chunks.is_empty() {
                 exit_signal_received |= cancellation_token.is_cancelled();
-                if exit_signal_received {
-                    break;
-                }
-
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining == Duration::ZERO {
                     break;
                 }
 
                 let notified = wait_for_output.unwrap_or_else(|| output_notify.notified());
+                if exit_signal_received {
+                    let grace = remaining.min(POST_EXIT_OUTPUT_GRACE);
+                    if tokio::time::timeout(grace, notified).await.is_err() {
+                        break;
+                    }
+                    continue;
+                }
+
                 tokio::pin!(notified);
                 let exit_notified = cancellation_token.cancelled();
                 tokio::pin!(exit_notified);
