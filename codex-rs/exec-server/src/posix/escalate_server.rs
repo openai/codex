@@ -13,6 +13,7 @@ use codex_core::exec::process_exec_tool_call;
 use codex_core::get_platform_sandbox;
 use codex_core::protocol::SandboxPolicy;
 use tokio::process::Command;
+use tokio::sync::oneshot;
 
 use crate::posix::escalate_protocol::BASH_EXEC_WRAPPER_ENV_VAR;
 use crate::posix::escalate_protocol::ESCALATE_SOCKET_ENV_VAR;
@@ -49,6 +50,7 @@ impl EscalateServer {
         env: HashMap<String, String>,
         workdir: PathBuf,
         timeout_ms: Option<u64>,
+        cancel_rx: Option<oneshot::Receiver<()>>,
     ) -> anyhow::Result<ExecResult> {
         let (escalate_server, escalate_client) = AsyncDatagramSocket::pair()?;
         let client_socket = escalate_client.into_inner();
@@ -90,7 +92,7 @@ impl EscalateServer {
             &sandbox_cwd,
             &None,
             None,
-            None,
+            cancel_rx,
         )
         .await?;
         escalate_task.abort();
