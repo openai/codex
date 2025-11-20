@@ -3,6 +3,7 @@ use crate::CodexAuth;
 use crate::codex::Codex;
 use crate::codex::CodexSpawnOk;
 use crate::codex::INITIAL_SUBMIT_ID;
+use crate::codex::Session;
 use crate::codex_conversation::CodexConversation;
 use crate::config::Config;
 use crate::error::CodexErr;
@@ -11,6 +12,7 @@ use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::SessionConfiguredEvent;
 use crate::rollout::RolloutRecorder;
+use crate::saved_sessions::resolve_rollout_path;
 use codex_protocol::ConversationId;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
@@ -18,6 +20,7 @@ use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -56,6 +59,7 @@ impl ConversationManager {
         )
     }
 
+    /// Start a brand new conversation with default initial history.
     pub async fn new_conversation(&self, config: Config) -> CodexResult<NewConversation> {
         self.spawn_conversation(config, self.auth_manager.clone())
             .await
@@ -69,6 +73,7 @@ impl ConversationManager {
         let CodexSpawnOk {
             codex,
             conversation_id,
+            session,
         } = Codex::spawn(
             config,
             auth_manager,
@@ -76,13 +81,14 @@ impl ConversationManager {
             self.session_source.clone(),
         )
         .await?;
-        self.finalize_spawn(codex, conversation_id).await
+        self.finalize_spawn(codex, conversation_id, session).await
     }
 
     async fn finalize_spawn(
         &self,
         codex: Codex,
         conversation_id: ConversationId,
+        session: Arc<Session>,
     ) -> CodexResult<NewConversation> {
         // The first event must be `SessionInitialized`. Validate and forward it
         // to the caller so that they can display it in the conversation
@@ -101,6 +107,7 @@ impl ConversationManager {
         let conversation = Arc::new(CodexConversation::new(
             codex,
             session_configured.rollout_path.clone(),
+            session,
         ));
         self.conversations
             .write()
@@ -125,6 +132,7 @@ impl ConversationManager {
             .ok_or_else(|| CodexErr::ConversationNotFound(conversation_id))
     }
 
+    /// Resume a conversation from an on-disk rollout file.
     pub async fn resume_conversation_from_rollout(
         &self,
         config: Config,
@@ -136,6 +144,23 @@ impl ConversationManager {
             .await
     }
 
+    /// Resume a conversation by saved-session name or rollout id string.
+    pub async fn resume_conversation_from_identifier(
+        &self,
+        config: Config,
+        identifier: &str,
+        auth_manager: Arc<AuthManager>,
+    ) -> CodexResult<NewConversation> {
+        let Some(path) = resolve_rollout_path(&config.codex_home, identifier).await? else {
+            return Err(CodexErr::Fatal(format!(
+                "No saved session or rollout found for '{identifier}'"
+            )));
+        };
+        self.resume_conversation_from_rollout(config, path, auth_manager)
+            .await
+    }
+
+    /// Resume a conversation from provided rollout history items.
     pub async fn resume_conversation_with_history(
         &self,
         config: Config,
@@ -145,6 +170,7 @@ impl ConversationManager {
         let CodexSpawnOk {
             codex,
             conversation_id,
+            session,
         } = Codex::spawn(
             config,
             auth_manager,
@@ -152,7 +178,54 @@ impl ConversationManager {
             self.session_source.clone(),
         )
         .await?;
-        self.finalize_spawn(codex, conversation_id).await
+        self.finalize_spawn(codex, conversation_id, session).await
+    }
+
+    /// Fork a new conversation from the given rollout path.
+    pub async fn fork_from_rollout(
+        &self,
+        config: Config,
+        path: PathBuf,
+        auth_manager: Arc<AuthManager>,
+    ) -> CodexResult<NewConversation> {
+        let initial_history = RolloutRecorder::get_rollout_history(&path).await?;
+        let forked = match initial_history {
+            InitialHistory::Resumed(resumed) => InitialHistory::Forked(resumed.history),
+            InitialHistory::Forked(items) => InitialHistory::Forked(items),
+            InitialHistory::New => InitialHistory::New,
+        };
+        self.resume_conversation_with_history(config, forked, auth_manager)
+            .await
+    }
+
+    /// Fork a new conversation from a saved-session name or rollout id string.
+    pub async fn fork_from_identifier(
+        &self,
+        config: Config,
+        identifier: &str,
+        auth_manager: Arc<AuthManager>,
+    ) -> CodexResult<NewConversation> {
+        let Some(path) = resolve_rollout_path(&config.codex_home, identifier).await? else {
+            return Err(CodexErr::Fatal(format!(
+                "No saved session or rollout found for '{identifier}'"
+            )));
+        };
+        self.fork_from_rollout(config, path, auth_manager).await
+    }
+
+    /// Persist a human-friendly session name and record it in saved_sessions.json.
+    pub async fn save_session(
+        &self,
+        conversation_id: ConversationId,
+        codex_home: &Path,
+        name: &str,
+    ) -> CodexResult<crate::SavedSessionEntry> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(CodexErr::Fatal("Usage: /save <name>".to_string()));
+        }
+        let conversation = self.get_conversation(conversation_id).await?;
+        conversation.save_session(codex_home, trimmed).await
     }
 
     /// Removes the conversation from the manager's internal map, though the
@@ -185,9 +258,10 @@ impl ConversationManager {
         let CodexSpawnOk {
             codex,
             conversation_id,
+            session,
         } = Codex::spawn(config, auth_manager, history, self.session_source.clone()).await?;
 
-        self.finalize_spawn(codex, conversation_id).await
+        self.finalize_spawn(codex, conversation_id, session).await
     }
 }
 

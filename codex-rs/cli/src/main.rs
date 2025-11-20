@@ -100,6 +100,9 @@ enum Subcommand {
     /// Resume a previous interactive session (picker by default; use --last to continue the most recent).
     Resume(ResumeCommand),
 
+    /// Fork an existing session into a new conversation.
+    Fork(ForkCommand),
+
     /// [EXPERIMENTAL] Browse tasks from Codex Cloud and apply changes locally.
     #[clap(name = "cloud", alias = "cloud-tasks")]
     Cloud(CloudTasksCli),
@@ -137,6 +140,16 @@ struct ResumeCommand {
     /// Show all sessions (disables cwd filtering and shows CWD column).
     #[arg(long = "all", default_value_t = false)]
     all: bool,
+
+    #[clap(flatten)]
+    config_overrides: TuiCli,
+}
+
+#[derive(Debug, Parser)]
+struct ForkCommand {
+    /// Resume from a saved session name or rollout id, but start a new conversation.
+    #[arg(value_name = "ID|NAME")]
+    target: String,
 
     #[clap(flatten)]
     config_overrides: TuiCli,
@@ -466,6 +479,19 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             let exit_info = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
             handle_app_exit(exit_info)?;
         }
+        Some(Subcommand::Fork(ForkCommand {
+            target,
+            config_overrides,
+        })) => {
+            interactive = finalize_fork_interactive(
+                interactive,
+                root_config_overrides.clone(),
+                target,
+                config_overrides,
+            );
+            let exit_info = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
+            handle_app_exit(exit_info)?;
+        }
         Some(Subcommand::Login(mut login_cli)) => {
             prepend_config_flags(
                 &mut login_cli.config_overrides,
@@ -627,6 +653,7 @@ fn finalize_resume_interactive(
     interactive.resume_last = last;
     interactive.resume_session_id = resume_session_id;
     interactive.resume_show_all = show_all;
+    interactive.fork_source = None;
 
     // Merge resume-scoped flags and overrides with highest precedence.
     merge_resume_cli_flags(&mut interactive, resume_cli);
@@ -634,6 +661,21 @@ fn finalize_resume_interactive(
     // Propagate any root-level config overrides (e.g. `-c key=value`).
     prepend_config_flags(&mut interactive.config_overrides, root_config_overrides);
 
+    interactive
+}
+
+fn finalize_fork_interactive(
+    mut interactive: TuiCli,
+    root_config_overrides: CliConfigOverrides,
+    target: String,
+    fork_cli: TuiCli,
+) -> TuiCli {
+    interactive.resume_picker = false;
+    interactive.resume_last = false;
+    interactive.resume_session_id = None;
+    interactive.fork_source = Some(target);
+    merge_resume_cli_flags(&mut interactive, fork_cli);
+    prepend_config_flags(&mut interactive.config_overrides, root_config_overrides);
     interactive
 }
 
@@ -727,6 +769,26 @@ mod tests {
         )
     }
 
+    fn fork_from_args(args: &[&str]) -> TuiCli {
+        let cli = MultitoolCli::try_parse_from(args).expect("parse");
+        let MultitoolCli {
+            interactive,
+            config_overrides: root_overrides,
+            subcommand,
+            feature_toggles: _,
+        } = cli;
+
+        let Subcommand::Fork(ForkCommand {
+            target,
+            config_overrides,
+        }) = subcommand.expect("fork present")
+        else {
+            unreachable!()
+        };
+
+        finalize_fork_interactive(interactive, root_overrides, target, config_overrides)
+    }
+
     fn sample_exit_info(conversation: Option<&str>) -> AppExitInfo {
         let token_usage = TokenUsage {
             output_tokens: 2,
@@ -817,6 +879,15 @@ mod tests {
         let interactive = finalize_from_args(["codex", "resume", "--all"].as_ref());
         assert!(interactive.resume_picker);
         assert!(interactive.resume_show_all);
+    }
+
+    #[test]
+    fn fork_sets_target_and_disables_resume_controls() {
+        let interactive = fork_from_args(["codex", "fork", "saved"].as_ref());
+        assert_eq!(interactive.fork_source.as_deref(), Some("saved"));
+        assert!(!interactive.resume_picker);
+        assert!(!interactive.resume_last);
+        assert!(interactive.resume_session_id.is_none());
     }
 
     #[test]
