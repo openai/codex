@@ -213,7 +213,7 @@ impl ChatComposer {
         let Some(text) = self.history.on_entry_response(log_id, offset, entry) else {
             return false;
         };
-        self.set_text_content(text);
+        self.set_text_content_with_cursor(text, Some(0));
         true
     }
 
@@ -276,12 +276,34 @@ impl ChatComposer {
 
     /// Replace the entire composer content with `text` and reset cursor.
     pub(crate) fn set_text_content(&mut self, text: String) {
+        self.set_text_content_with_cursor(text, None);
+    }
+
+    /// Replace the composer content with `text` and position the cursor.
+    pub(crate) fn set_text_content_with_cursor(&mut self, text: String, cursor: Option<usize>) {
         // Clear any existing content, placeholders, and attachments first.
         self.textarea.set_text("");
         self.pending_pastes.clear();
         self.attached_images.clear();
         self.textarea.set_text(&text);
-        self.textarea.set_cursor(0);
+        let cursor_pos = cursor.unwrap_or_else(|| self.textarea.text().len());
+        self.textarea.set_cursor(cursor_pos);
+        self.sync_command_popup();
+        self.sync_file_search_popup();
+    }
+
+    pub(crate) fn set_text_content_with_cursor_preserving_attachments(
+        &mut self,
+        text: String,
+        cursor: Option<usize>,
+    ) {
+        self.textarea.set_text("");
+        self.pending_pastes.clear();
+        self.textarea.set_text(&text);
+        let cursor_pos = cursor.unwrap_or_else(|| self.textarea.text().len());
+        self.textarea.set_cursor(cursor_pos);
+        let text_after = self.textarea.text().to_string();
+        self.prune_attachments_to_match_text(&text_after);
         self.sync_command_popup();
         self.sync_file_search_popup();
     }
@@ -883,6 +905,21 @@ impl ChatComposer {
                 self.app_event_tx.send(AppEvent::ExitRequest);
                 (InputResult::None, true)
             }
+            KeyEvent {
+                code: KeyCode::Char(ch),
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
+            } if modifiers.contains(KeyModifiers::CONTROL) && ch.eq_ignore_ascii_case(&'g') => {
+                if !self.has_focus {
+                    return (InputResult::None, false);
+                }
+                if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
+                    self.handle_paste(pasted);
+                }
+                self.app_event_tx.send(AppEvent::EditComposerInEditor);
+                (InputResult::None, true)
+            }
             // -------------------------------------------------------------
             // History navigation (Up / Down) – only when the composer is not
             // empty or when the cursor is at the correct position, to avoid
@@ -909,7 +946,7 @@ impl ChatComposer {
                         _ => unreachable!(),
                     };
                     if let Some(text) = replace_text {
-                        self.set_text_content(text);
+                        self.set_text_content_with_cursor(text, Some(0));
                         return (InputResult::None, true);
                     }
                 }
@@ -1166,7 +1203,7 @@ impl ChatComposer {
 
         // Normal input handling
         self.textarea.input(input);
-        let text_after = self.textarea.text();
+        let text_after = self.textarea.text().to_string();
 
         // Update paste-burst heuristic for plain Char (no Ctrl/Alt) events.
         let crossterm::event::KeyEvent {
@@ -1192,30 +1229,36 @@ impl ChatComposer {
         self.pending_pastes
             .retain(|(placeholder, _)| text_after.contains(placeholder));
 
-        // Keep attached images in proportion to how many matching placeholders exist in the text.
-        // This handles duplicate placeholders that share the same visible label.
-        if !self.attached_images.is_empty() {
-            let mut needed: HashMap<String, usize> = HashMap::new();
-            for img in &self.attached_images {
-                needed
-                    .entry(img.placeholder.clone())
-                    .or_insert_with(|| text_after.matches(&img.placeholder).count());
-            }
-
-            let mut used: HashMap<String, usize> = HashMap::new();
-            let mut kept: Vec<AttachedImage> = Vec::with_capacity(self.attached_images.len());
-            for img in self.attached_images.drain(..) {
-                let total_needed = *needed.get(&img.placeholder).unwrap_or(&0);
-                let used_count = used.entry(img.placeholder.clone()).or_insert(0);
-                if *used_count < total_needed {
-                    kept.push(img);
-                    *used_count += 1;
-                }
-            }
-            self.attached_images = kept;
-        }
+        self.prune_attachments_to_match_text(&text_after);
 
         (InputResult::None, true)
+    }
+
+    /// Keep attached images in proportion to how many matching placeholders exist in the text.
+    /// This handles duplicate placeholders that share the same visible label.
+    fn prune_attachments_to_match_text(&mut self, text_after: &str) {
+        if self.attached_images.is_empty() {
+            return;
+        }
+
+        let mut needed: HashMap<String, usize> = HashMap::new();
+        for img in &self.attached_images {
+            needed
+                .entry(img.placeholder.clone())
+                .or_insert_with(|| text_after.matches(&img.placeholder).count());
+        }
+
+        let mut used: HashMap<String, usize> = HashMap::new();
+        let mut kept: Vec<AttachedImage> = Vec::with_capacity(self.attached_images.len());
+        for img in self.attached_images.drain(..) {
+            let total_needed = *needed.get(&img.placeholder).unwrap_or(&0);
+            let used_count = used.entry(img.placeholder.clone()).or_insert(0);
+            if *used_count < total_needed {
+                kept.push(img);
+                *used_count += 1;
+            }
+        }
+        self.attached_images = kept;
     }
 
     /// Attempts to remove an image or paste placeholder if the cursor is at the end of one.
@@ -1884,6 +1927,40 @@ mod tests {
     }
 
     #[test]
+    fn set_text_content_moves_cursor_to_end() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_text_content("draft\ntext".to_string());
+
+        assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
+    }
+
+    #[test]
+    fn set_text_content_with_cursor_override() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_text_content_with_cursor("draft text".to_string(), Some(0));
+
+        assert_eq!(composer.textarea.cursor(), 0);
+    }
+
+    #[test]
     fn question_mark_only_toggles_on_first_char() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
@@ -1947,6 +2024,69 @@ mod tests {
 
         assert_eq!(composer.footer_mode, FooterMode::ShortcutOverlay);
         assert_eq!(composer.footer_mode(), FooterMode::ShortcutOverlay);
+    }
+
+    #[test]
+    fn ctrl_g_sends_editor_event_and_flushes_burst() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let now = std::time::Instant::now();
+        composer
+            .paste_burst
+            .begin_with_retro_grabbed("paste".to_string(), now);
+        composer.paste_burst.append_char_to_buffer('1', now);
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+
+        assert_eq!(result, InputResult::None);
+        assert!(needs_redraw);
+        assert_eq!(composer.current_text(), "paste1");
+
+        match rx.try_recv() {
+            Ok(AppEvent::EditComposerInEditor) => {}
+            other => panic!("unexpected app event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ctrl_g_ignored_without_focus() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_has_focus(false);
+        composer.insert_str("hi");
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+
+        assert_eq!(result, InputResult::None);
+        assert!(!needs_redraw);
+        assert_eq!(composer.current_text(), "hi");
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]
@@ -2768,6 +2908,49 @@ mod tests {
         assert_eq!(imgs.len(), 1);
         assert_eq!(imgs[0], path);
         assert!(composer.attached_images.is_empty());
+    }
+
+    #[test]
+    fn set_text_content_with_cursor_preserving_attachments_keeps_matching_placeholders() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.attach_image(PathBuf::from("/tmp/image-preserved-1.png"), 10, 5, "PNG");
+        let placeholder1 = composer.attached_images[0].placeholder.clone();
+        composer.handle_paste(" ".into());
+        composer.attach_image(PathBuf::from("/tmp/image-preserved-2.png"), 8, 4, "PNG");
+        let placeholder2 = composer.attached_images[1].placeholder.clone();
+
+        let text_with_both = format!("{placeholder1} edited {placeholder2}");
+        composer.set_text_content_with_cursor_preserving_attachments(
+            text_with_both.clone(),
+            Some(text_with_both.len()),
+        );
+        assert_eq!(
+            vec![placeholder1.clone(), placeholder2],
+            composer
+                .attached_images
+                .iter()
+                .map(|img| img.placeholder.clone())
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(composer.textarea.text(), text_with_both);
+
+        let trimmed_text = format!("{placeholder1} trimmed");
+        composer.set_text_content_with_cursor_preserving_attachments(
+            trimmed_text.clone(),
+            Some(trimmed_text.len()),
+        );
+        assert_eq!(composer.attached_images.len(), 1);
+        assert_eq!(composer.attached_images[0].placeholder, placeholder1);
+        assert_eq!(composer.textarea.text(), trimmed_text);
     }
 
     #[test]

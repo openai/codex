@@ -44,14 +44,18 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use shlex::Shlex;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
+use tempfile::Builder;
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
+use tokio::task::spawn_blocking;
 
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
@@ -423,6 +427,142 @@ impl App {
         Ok(true)
     }
 
+    async fn edit_composer_in_editor(&mut self, tui: &mut tui::Tui) {
+        let command = match Self::editor_command_from_env() {
+            Ok(command) => command,
+            Err(msg) => {
+                self.chat_widget.add_error_message(msg);
+                return;
+            }
+        };
+
+        let draft = self.chat_widget.composer_text();
+        let tmp = match Builder::new()
+            .prefix("codex-composer-")
+            .suffix(".txt")
+            .tempfile()
+        {
+            Ok(tmp) => tmp,
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to create temp file: {err}"));
+                return;
+            }
+        };
+        if let Err(err) = std::fs::write(tmp.path(), draft) {
+            self.chat_widget
+                .add_error_message(format!("Failed to write draft for editor: {err}"));
+            return;
+        }
+
+        let path = tmp.path().to_path_buf();
+        let path_for_editor = path.clone();
+        let was_alt_screen = tui.is_alt_screen_active();
+        if was_alt_screen {
+            let _ = tui.leave_alt_screen();
+        }
+
+        let restore_result = crate::tui::restore();
+        let status_result = if restore_result.is_ok() {
+            Some(
+                spawn_blocking(move || {
+                    let mut iter = command.into_iter();
+                    let Some(program) = iter.next() else {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "editor command is empty",
+                        ));
+                    };
+                    Command::new(program)
+                        .args(iter)
+                        .arg(&path_for_editor)
+                        .status()
+                })
+                .await,
+            )
+        } else {
+            None
+        };
+
+        let remode_result = crate::tui::set_modes();
+        if was_alt_screen {
+            let _ = tui.enter_alt_screen();
+        }
+        tui.frame_requester().schedule_frame();
+
+        if let Err(err) = remode_result {
+            self.chat_widget.add_error_message(format!(
+                "Failed to re-enable the terminal after launching $EDITOR: {err}",
+            ));
+        }
+        if let Err(err) = restore_result {
+            self.chat_widget.add_error_message(format!(
+                "Failed to restore the terminal before launching $EDITOR: {err}",
+            ));
+            return;
+        }
+
+        let status_result = match status_result {
+            Some(Ok(res)) => res,
+            Some(Err(join_err)) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to wait for $EDITOR to exit: {join_err}",));
+                return;
+            }
+            None => return,
+        };
+
+        let status = match status_result {
+            Ok(status) => status,
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to run $EDITOR: {err}"));
+                return;
+            }
+        };
+
+        if !status.success() {
+            let msg = status
+                .code()
+                .map(|code| format!("Editor exited with status {code}"))
+                .unwrap_or_else(|| "Editor terminated by signal".to_string());
+            self.chat_widget.add_error_message(msg);
+            return;
+        }
+
+        match std::fs::read_to_string(&path) {
+            Ok(edited) => {
+                let normalized = Self::normalize_edited_prompt(edited);
+                let cursor = normalized.len();
+                self.chat_widget
+                    .set_composer_text_with_cursor_preserving_attachments(normalized, cursor);
+            }
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to read edited draft: {err}"));
+            }
+        }
+    }
+
+    fn editor_command_from_env() -> Result<Vec<String>, String> {
+        let raw = std::env::var("VISUAL")
+            .or_else(|_| std::env::var("EDITOR"))
+            .map_err(|_| "Set $EDITOR or $VISUAL to edit the composer".to_string())?;
+        let parts: Vec<String> = Shlex::new(&raw).collect();
+        if parts.is_empty() {
+            Err("Set $EDITOR or $VISUAL to edit the composer".to_string())
+        } else {
+            Ok(parts)
+        }
+    }
+
+    fn normalize_edited_prompt(mut text: String) -> String {
+        while text.ends_with('\n') || text.ends_with('\r') {
+            text.pop();
+        }
+        text
+    }
+
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
         match event {
             AppEvent::NewSession => {
@@ -532,6 +672,9 @@ impl App {
             }
             AppEvent::FileSearchResult { query, matches } => {
                 self.chat_widget.apply_file_search_result(query, matches);
+            }
+            AppEvent::EditComposerInEditor => {
+                self.edit_composer_in_editor(tui).await;
             }
             AppEvent::RateLimitSnapshotFetched(snapshot) => {
                 self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
@@ -999,6 +1142,7 @@ mod tests {
     use codex_core::protocol::SandboxPolicy;
     use codex_core::protocol::SessionConfiguredEvent;
     use codex_protocol::ConversationId;
+    use pretty_assertions::assert_eq;
     use ratatui::prelude::Line;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -1182,6 +1326,22 @@ mod tests {
             summary.resume_command,
             Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
         );
+    }
+
+    #[test]
+    fn normalize_edited_prompt_trims_trailing_newlines() {
+        let trimmed = App::normalize_edited_prompt("draft from editor\n".to_string());
+        assert_eq!(trimmed, "draft from editor");
+
+        let trimmed_multi =
+            App::normalize_edited_prompt("multi\nline with spacing\n\n".to_string());
+        assert_eq!(trimmed_multi, "multi\nline with spacing");
+
+        let trimmed_crlf = App::normalize_edited_prompt("windows\r\n".to_string());
+        assert_eq!(trimmed_crlf, "windows");
+
+        let untouched = App::normalize_edited_prompt("no trailing newline".to_string());
+        assert_eq!(untouched, "no trailing newline");
     }
 
     #[test]

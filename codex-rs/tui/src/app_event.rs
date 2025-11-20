@@ -42,6 +42,9 @@ pub(crate) enum AppEvent {
         matches: Vec<FileMatch>,
     },
 
+    /// Open the current composer draft in an external editor.
+    EditComposerInEditor,
+
     /// Result of refreshing rate limits
     RateLimitSnapshotFetched(RateLimitSnapshot),
 

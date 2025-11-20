@@ -2676,9 +2676,22 @@ impl ChatWidget {
         self.bottom_pane.insert_str(text);
     }
 
+    pub(crate) fn composer_text(&self) -> String {
+        self.bottom_pane.composer_text()
+    }
+
     /// Replace the composer content with the provided text and reset cursor.
     pub(crate) fn set_composer_text(&mut self, text: String) {
         self.bottom_pane.set_composer_text(text);
+    }
+
+    pub(crate) fn set_composer_text_with_cursor_preserving_attachments(
+        &mut self,
+        text: String,
+        cursor: usize,
+    ) {
+        self.bottom_pane
+            .set_composer_text_with_cursor_preserving_attachments(text, cursor);
     }
 
     pub(crate) fn show_esc_backtrack_hint(&mut self) {
