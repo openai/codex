@@ -556,10 +556,12 @@ impl UnifiedExecSessionManager {
         context: &UnifiedExecContext,
     ) -> Result<UnifiedExecSession, UnifiedExecError> {
         let env = apply_unified_exec_env(create_env(&context.turn.shell_environment_policy));
+        let features = context.session.features();
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);
         let approval_requirement = create_approval_requirement_for_command(
             &context.turn.exec_policy,
+            &features,
             command,
             context.turn.approval_policy,
             &context.turn.sandbox_policy,

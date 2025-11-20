@@ -51,6 +51,10 @@ pub struct ExecApprovalRequestEvent {
     /// Optional model-provided risk assessment describing the blocked command.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub risk: Option<SandboxCommandAssessment>,
+    /// Prefix rule that can be added to the user's execpolicy to allow future runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "Array<string>")]
+    pub allow_prefix: Option<Vec<String>>,
     pub parsed_cmd: Vec<ParsedCommand>,
 }
 

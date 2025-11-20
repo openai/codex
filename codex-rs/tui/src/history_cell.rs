@@ -409,6 +409,19 @@ pub fn new_approval_decision_cell(
                 ],
             )
         }
+        ApprovedAllowPrefix { .. } => {
+            let snippet = Span::from(exec_snippet(&command)).dim();
+            (
+                "✔ ".green(),
+                vec![
+                    "You ".into(),
+                    "approved".bold(),
+                    " codex to run ".into(),
+                    snippet,
+                    " and added its prefix to your allow list".bold(),
+                ],
+            )
+        }
         ApprovedForSession => {
             let snippet = Span::from(exec_snippet(&command)).dim();
             (

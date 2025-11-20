@@ -281,6 +281,7 @@ async fn handle_exec_approval(
         event.cwd,
         event.reason,
         event.risk,
+        event.allow_prefix,
     );
     let decision = await_approval_with_cancel(
         approval_fut,

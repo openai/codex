@@ -1,6 +1,5 @@
 ---
 source: tui/src/chatwidget/tests.rs
-assertion_line: 1548
 expression: terminal.backend()
 ---
 "                                                                                "
@@ -13,7 +12,8 @@ expression: terminal.backend()
 "  $ echo 'hello world'                                                          "
 "                                                                                "
 "› 1. Yes, proceed (y)                                                           "
-"  2. Yes, and don't ask again for this command (a)                              "
-"  3. No, and tell Codex what to do differently (esc)                            "
+"  2. Yes, and don't ask again this session (a)                                  "
+"  3. Yes, and don't ask again for commands with this prefix (p)                 "
+"  4. No, and tell Codex what to do differently (esc)                            "
 "                                                                                "
 "  Press enter to confirm or esc to cancel                                       "

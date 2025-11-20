@@ -603,7 +603,7 @@ metadata above):
 - `codex.tool_decision`
   - `tool_name`
   - `call_id`
-  - `decision` (`approved`, `approved_for_session`, `denied`, or `abort`)
+  - `decision` (`approved`, `approved_allow_prefix`, `approved_for_session`, `denied`, or `abort`)
   - `source` (`config` or `user`)
 - `codex.tool_result`
   - `tool_name`
