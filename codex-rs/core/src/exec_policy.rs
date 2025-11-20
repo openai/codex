@@ -141,27 +141,19 @@ fn requirement_from_decision(
     }
 }
 
-/// Attach an allow-prefix option when a single plain command needs approval without
+/// Return an allow-prefix option when a single plain command needs approval without
 /// any matching policy rule. We only surface the prefix opt-in when execpolicy did
 /// not already drive the decision (NoMatch) and when the command is a single
 /// unrolled command (multi-part scripts shouldn’t be whitelisted via prefix).
 fn allow_prefix_if_applicable(
     commands: &[Vec<String>],
     evaluation: &Evaluation,
-    requirement: ApprovalRequirement,
-) -> ApprovalRequirement {
-    match requirement {
-        ApprovalRequirement::NeedsApproval {
-            reason,
-            allow_prefix: None,
-        } if matches!(evaluation, Evaluation::NoMatch) && commands.len() == 1 => {
-            ApprovalRequirement::NeedsApproval {
-                reason,
-                allow_prefix: Some(commands[0].clone()),
-            }
-        }
-        other => other,
+) -> Option<Vec<String>> {
+    if matches!(evaluation, Evaluation::NoMatch) && commands.len() == 1 {
+        return Some(commands[0].clone());
     }
+
+    None
 }
 
 pub(crate) fn create_approval_requirement_for_command(
@@ -173,8 +165,9 @@ pub(crate) fn create_approval_requirement_for_command(
 ) -> ApprovalRequirement {
     let commands = parse_shell_lc_plain_commands(command).unwrap_or_else(|| vec![command.to_vec()]);
     let evaluation = policy.check_multiple(commands.iter());
+    let allow_prefix = allow_prefix_if_applicable(&commands, &evaluation);
 
-    let requirement = match evaluation {
+    match evaluation {
         Evaluation::Match { decision, .. } => requirement_from_decision(decision, approval_policy),
         Evaluation::NoMatch => {
             if requires_initial_appoval(
@@ -185,31 +178,12 @@ pub(crate) fn create_approval_requirement_for_command(
             ) {
                 ApprovalRequirement::NeedsApproval {
                     reason: None,
-                    allow_prefix: None,
+                    allow_prefix,
                 }
             } else {
                 ApprovalRequirement::Skip
             }
         }
-    };
-
-    allow_prefix_if_applicable(&commands, &evaluation, requirement)
-}
-
-#[cfg(test)]
-fn evaluate_with_policy(
-    policy: &Policy,
-    command: &[String],
-    approval_policy: AskForApproval,
-) -> Option<ApprovalRequirement> {
-    let commands = parse_shell_lc_plain_commands(command).unwrap_or_else(|| vec![command.to_vec()]);
-    let evaluation = policy.check_multiple(commands.iter());
-
-    match evaluation {
-        Evaluation::Match { decision, .. } => {
-            Some(requirement_from_decision(decision, approval_policy))
-        }
-        Evaluation::NoMatch => None,
     }
 }
 
@@ -357,9 +331,13 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             "rm -rf /tmp".to_string(),
         ];
 
-        let requirement =
-            evaluate_with_policy(&policy, &forbidden_script, AskForApproval::OnRequest)
-                .expect("expected match for forbidden command");
+        let requirement = create_approval_requirement_for_command(
+            &policy,
+            &forbidden_script,
+            AskForApproval::OnRequest,
+            &SandboxPolicy::DangerFullAccess,
+            SandboxPermissions::UseDefault,
+        );
 
         assert_eq!(
             requirement,
