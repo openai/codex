@@ -120,6 +120,7 @@ use crate::user_instructions::DeveloperInstructions;
 use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
+use crate::webhook::WebhookDispatcher;
 use codex_async_utils::OrCancelExt;
 use codex_execpolicy2::Policy as ExecPolicy;
 use codex_otel::otel_event_manager::OtelEventManager;
@@ -567,6 +568,10 @@ impl Session {
             mcp_startup_cancellation_token: CancellationToken::new(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::new(config.notify.clone()),
+            webhook: config
+                .webhook
+                .as_ref()
+                .map(|cfg| WebhookDispatcher::new(cfg.clone())),
             rollout: Mutex::new(Some(rollout_recorder)),
             user_shell: default_shell,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
@@ -1325,6 +1330,10 @@ impl Session {
         } else {
             self.cancel_mcp_startup().await;
         }
+    }
+
+    pub(crate) fn conversation_id(&self) -> ConversationId {
+        self.conversation_id
     }
 
     pub(crate) fn notifier(&self) -> &UserNotifier {
@@ -2627,6 +2636,7 @@ mod tests {
             mcp_startup_cancellation_token: CancellationToken::new(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::new(None),
+            webhook: None,
             rollout: Mutex::new(None),
             user_shell: shell::Shell::Unknown,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
@@ -2705,6 +2715,7 @@ mod tests {
             mcp_startup_cancellation_token: CancellationToken::new(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::new(None),
+            webhook: None,
             rollout: Mutex::new(None),
             user_shell: shell::Shell::Unknown,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,

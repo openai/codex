@@ -13,6 +13,7 @@ use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
 use crate::config::types::Tui;
 use crate::config::types::UriBasedFileOpener;
+use crate::config::types::WebhookConfig;
 use crate::config_loader::LoadedConfigLayers;
 use crate::config_loader::load_config_as_toml;
 use crate::config_loader::load_config_layers_with_overrides;
@@ -155,6 +156,10 @@ pub struct Config {
     ///
     /// If unset the feature is disabled.
     pub notify: Option<Vec<String>>,
+
+    /// Optional HTTP webhook destination. When set, Codex will POST lifecycle
+    /// notifications (e.g. task completion/abort) as JSON payloads.
+    pub webhook: Option<WebhookConfig>,
 
     /// TUI notifications preference. When set, the TUI will send OSC 9 notifications on approvals
     /// and turn completions when not focused.
@@ -588,6 +593,10 @@ pub struct ConfigToml {
     /// Optional external command to spawn for end-user notifications.
     #[serde(default)]
     pub notify: Option<Vec<String>>,
+
+    /// Optional HTTP webhook destination for lifecycle notifications.
+    #[serde(default)]
+    pub webhook: Option<WebhookConfig>,
 
     /// System instructions.
     pub instructions: Option<String>,
@@ -1186,6 +1195,7 @@ impl Config {
             forced_auto_mode_downgraded_on_windows,
             shell_environment_policy,
             notify: cfg.notify,
+            webhook: cfg.webhook,
             user_instructions,
             base_instructions,
             developer_instructions,
@@ -2968,6 +2978,7 @@ model_verbosity = "high"
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 user_instructions: None,
                 notify: None,
+                webhook: None,
                 cwd: fixture.cwd(),
                 cli_auth_credentials_store_mode: Default::default(),
                 mcp_servers: HashMap::new(),
@@ -3040,6 +3051,7 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
+            webhook: None,
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: HashMap::new(),
@@ -3127,6 +3139,7 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
+            webhook: None,
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: HashMap::new(),
@@ -3200,6 +3213,7 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
+            webhook: None,
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: HashMap::new(),

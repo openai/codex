@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tokio_util::task::AbortOnDropHandle;
 
 use codex_protocol::models::ResponseInputItem;
 use tokio::sync::oneshot;
@@ -37,13 +37,13 @@ pub(crate) enum TaskKind {
     Compact,
 }
 
-#[derive(Clone)]
 pub(crate) struct RunningTask {
     pub(crate) done: Arc<Notify>,
     pub(crate) kind: TaskKind,
     pub(crate) task: Arc<dyn SessionTask>,
     pub(crate) cancellation_token: CancellationToken,
-    pub(crate) handle: Arc<AbortOnDropHandle<()>>,
+    // Keep the handle non-aborting so completion cleanup (e.g. webhooks) can finish after we remove the task from ActiveTurn.
+    pub(crate) handle: JoinHandle<()>,
     pub(crate) turn_context: Arc<TurnContext>,
 }
 

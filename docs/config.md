@@ -765,6 +765,33 @@ notify = ["python3", "/Users/mbolin/.codex/notify.py"]
 > [!NOTE]
 > Use `notify` for automation and integrations: Codex invokes your external program with a single JSON argument for each event, independent of the TUI. If you only want lightweight desktop notifications while using the TUI, prefer `tui.notifications`, which uses terminal escape codes and requires no external program. You can enable both; `tui.notifications` covers in‑TUI alerts (e.g., approval prompts), while `notify` is best for system‑level hooks or custom notifiers. Currently, `notify` emits only `agent-turn-complete`, whereas `tui.notifications` supports `agent-turn-complete` and `approval-requested` with optional filtering.
 
+### webhook
+
+向外部 HTTP 端点投递生命周期事件。配置 `webhook` 表后，Codex 会在任务完成或中止时 POST 一条 JSON 记录：
+
+```toml
+[webhook]
+url = "https://hooks.example.com/codex"
+format = "dingtalk" # 可选：钉钉文本格式
+timeout = 5.0 # seconds, optional
+headers = { Authorization = "Bearer ${WEBHOOK_TOKEN}" }
+```
+
+负载示例：
+
+```json
+{
+  "event": "task-completed",
+  "thread_id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
+  "turn_id": "turn-123",
+  "task_kind": "regular",
+  "cwd": "/Users/alice/project",
+  "last_agent_message": "All done!"
+}
+```
+
+中止时事件为 `"task-aborted"`，并包含 `reason`（如 `"Interrupted"` 或 `"Replaced"`）。`task_kind` 为 `regular`/`review`/`compact`。配置的 `headers` 会作为 HTTP 请求头发送，`timeout` 控制请求超时时间（默认沿用 reqwest 默认值）。
+
 ### hide_agent_reasoning
 
 Codex intermittently emits "reasoning" events that show the model's internal "thinking" before it produces a final answer. Some users may find these events distracting, especially in CI logs or minimal terminal output.
@@ -950,6 +977,7 @@ Valid values:
 | `sandbox_workspace_write.exclude_tmpdir_env_var` | boolean                                                           | Exclude `$TMPDIR` from writable roots (default: false).                                                                    |
 | `sandbox_workspace_write.exclude_slash_tmp`      | boolean                                                           | Exclude `/tmp` from writable roots (default: false).                                                                       |
 | `notify`                                         | array<string>                                                     | External program for notifications.                                                                                        |
+| `webhook`                                        | table                                                             | HTTP webhook for lifecycle events (`task-completed`/`task-aborted`); supports `url`, optional `headers`, `timeout`, and `format` (`dingtalk`).    |
 | `instructions`                                   | string                                                            | Currently ignored; use `experimental_instructions_file` or `AGENTS.md`.                                                    |
 | `features.<feature-flag>`                        | boolean                                                           | See [feature flags](#feature-flags) for details                                                                            |
 | `mcp_servers.<id>.command`                       | string                                                            | MCP server launcher command (stdio servers only).                                                                          |

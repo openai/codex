@@ -89,6 +89,7 @@ mod tasks;
 mod user_notification;
 mod user_shell_command;
 pub mod util;
+mod webhook;
 
 pub use apply_patch::CODEX_APPLY_PATCH_ARG1;
 pub use command_safety::is_safe_command;

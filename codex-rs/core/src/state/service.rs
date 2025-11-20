@@ -6,6 +6,7 @@ use crate::mcp_connection_manager::McpConnectionManager;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecSessionManager;
 use crate::user_notification::UserNotifier;
+use crate::webhook::WebhookDispatcher;
 use codex_otel::otel_event_manager::OtelEventManager;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
@@ -16,6 +17,7 @@ pub(crate) struct SessionServices {
     pub(crate) mcp_startup_cancellation_token: CancellationToken,
     pub(crate) unified_exec_manager: UnifiedExecSessionManager,
     pub(crate) notifier: UserNotifier,
+    pub(crate) webhook: Option<std::sync::Arc<WebhookDispatcher>>,
     pub(crate) rollout: Mutex<Option<RolloutRecorder>>,
     pub(crate) user_shell: crate::shell::Shell,
     pub(crate) show_raw_agent_reasoning: bool,

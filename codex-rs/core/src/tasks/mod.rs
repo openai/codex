@@ -12,7 +12,6 @@ use async_trait::async_trait;
 use tokio::select;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
-use tokio_util::task::AbortOnDropHandle;
 use tracing::trace;
 use tracing::warn;
 
@@ -26,6 +25,7 @@ use crate::protocol::TurnAbortedEvent;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
+use crate::webhook::WebhookPayload;
 use codex_protocol::user_input::UserInput;
 
 pub(crate) use compact::CompactTask;
@@ -132,7 +132,7 @@ impl Session {
                 if !task_cancellation_token.is_cancelled() {
                     // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
                     let sess = session_ctx.clone_session();
-                    sess.on_task_finished(ctx_for_finish, last_agent_message)
+                    sess.on_task_finished(ctx_for_finish, last_agent_message, task_kind)
                         .await;
                 }
                 done_clone.notify_waiters();
@@ -141,7 +141,7 @@ impl Session {
 
         let running_task = RunningTask {
             done,
-            handle: Arc::new(AbortOnDropHandle::new(handle)),
+            handle,
             kind: task_kind,
             task,
             cancellation_token,
@@ -160,6 +160,7 @@ impl Session {
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
         last_agent_message: Option<String>,
+        task_kind: TaskKind,
     ) {
         let mut active = self.active_turn.lock().await;
         if let Some(at) = active.as_mut()
@@ -168,8 +169,22 @@ impl Session {
             *active = None;
         }
         drop(active);
-        let event = EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message });
+        let last_agent_message_for_event = last_agent_message.clone();
+        let event = EventMsg::TaskComplete(TaskCompleteEvent {
+            last_agent_message: last_agent_message_for_event,
+        });
         self.send_event(turn_context.as_ref(), event).await;
+
+        if let Some(dispatcher) = &self.services.webhook {
+            let payload = WebhookPayload::TaskCompleted {
+                thread_id: self.conversation_id(),
+                turn_id: turn_context.sub_id.clone(),
+                task_kind: task_kind.into(),
+                cwd: turn_context.cwd.display().to_string(),
+                last_agent_message,
+            };
+            dispatcher.send(&payload).await;
+        }
     }
 
     async fn register_new_active_task(&self, task: RunningTask) {
@@ -216,8 +231,21 @@ impl Session {
             .abort(session_ctx, Arc::clone(&task.turn_context))
             .await;
 
-        let event = EventMsg::TurnAborted(TurnAbortedEvent { reason });
+        let event = EventMsg::TurnAborted(TurnAbortedEvent {
+            reason: reason.clone(),
+        });
         self.send_event(task.turn_context.as_ref(), event).await;
+
+        if let Some(dispatcher) = &self.services.webhook {
+            let payload = WebhookPayload::TaskAborted {
+                thread_id: self.conversation_id(),
+                turn_id: task.turn_context.sub_id.clone(),
+                task_kind: task.kind.into(),
+                cwd: task.turn_context.cwd.display().to_string(),
+                reason,
+            };
+            dispatcher.send(&payload).await;
+        }
     }
 }
 

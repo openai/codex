@@ -156,6 +156,13 @@ windows_wsl_setup_acknowledged = false
 # Example: notify = ["notify-send", "Codex"]
 # notify = [ ]
 
+# HTTP webhook for lifecycle events (task-completed/task-aborted)
+# [webhook]
+# url = "https://hooks.example.com/codex"
+# format = "dingtalk"
+# headers = { Authorization = "Bearer ${WEBHOOK_TOKEN}" }
+# timeout = 5.0
+
 # In-product notices (mostly set automatically by Codex).
 [notice]
 # hide_full_access_warning = true

@@ -15,6 +15,28 @@ use serde::de::Error as SerdeError;
 
 pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct WebhookConfig {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub headers: HashMap<String, String>,
+    /// Optional payload format. When set to "dingtalk", the webhook will send DingTalk-compatible text messages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<WebhookFormat>,
+    #[serde(
+        default,
+        with = "option_duration_secs",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub timeout: Option<Duration>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum WebhookFormat {
+    Dingtalk,
+}
+
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
     #[serde(flatten)]
