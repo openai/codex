@@ -6,7 +6,7 @@ use http::header::HeaderMap;
 use std::collections::HashMap;
 use std::time::Duration;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WireApi {
     Responses,
     Chat,
@@ -81,4 +81,29 @@ impl Provider {
             timeout: None,
         }
     }
+
+    pub fn is_azure_responses_endpoint(&self) -> bool {
+        if self.wire != WireApi::Responses {
+            return false;
+        }
+
+        if self.name.eq_ignore_ascii_case("azure") {
+            return true;
+        }
+
+        self.base_url.to_ascii_lowercase().contains("openai.azure.")
+            || matches_azure_responses_base_url(&self.base_url)
+    }
+}
+
+fn matches_azure_responses_base_url(base_url: &str) -> bool {
+    const AZURE_MARKERS: [&str; 5] = [
+        "cognitiveservices.azure.",
+        "aoai.azure.",
+        "azure-api.",
+        "azurefd.",
+        "windows.net/openai",
+    ];
+    let base = base_url.to_ascii_lowercase();
+    AZURE_MARKERS.iter().any(|marker| base.contains(marker))
 }

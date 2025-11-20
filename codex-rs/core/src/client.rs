@@ -4,10 +4,15 @@ use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::create_transport;
 use crate::api_bridge::map_api_error;
 use crate::api_bridge::to_api_provider;
+use codex_api::ChatClient as ApiChatClient;
 use codex_api::CompactClient as ApiCompactClient;
 use codex_api::ResponsesClient as ApiResponsesClient;
+use codex_api::ResponsesRequestBuilder;
 use codex_api::SseTelemetry;
+use codex_api::common::Reasoning;
+use codex_api::create_text_param_for_request;
 use codex_api::error::ApiError;
+use codex_api::requests::ChatRequestBuilder as ApiChatRequestBuilder;
 use codex_app_server_protocol::AuthMode;
 use codex_client::RequestTelemetry;
 use codex_client::TransportError;
@@ -33,13 +38,9 @@ use tracing::warn;
 use crate::AuthManager;
 use crate::auth::RefreshTokenError;
 use crate::chat_completions::AggregateStreamExt;
-use crate::chat_completions::stream_chat_completions;
 use crate::client_common::Prompt;
-use crate::client_common::Reasoning;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
-use crate::client_common::ResponsesApiRequest;
-use crate::client_common::create_text_param_for_request;
 use crate::config::Config;
 use crate::default_client::CodexHttpClient;
 use crate::default_client::create_client;
@@ -50,6 +51,7 @@ use crate::model_family::ModelFamily;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::openai_model_info::get_model_info;
+use crate::tools::spec::create_tools_json_for_chat_completions_api;
 use crate::tools::spec::create_tools_json_for_responses_api;
 
 #[derive(Debug, Serialize)]
@@ -125,22 +127,13 @@ impl ModelClient {
         match self.provider.wire_api {
             WireApi::Responses => self.stream_responses(prompt).await,
             WireApi::Chat => {
-                // Create the raw streaming connection first.
-                let response_stream = stream_chat_completions(
-                    prompt,
-                    &self.config.model_family,
-                    &self.client,
-                    &self.provider,
-                    &self.otel_event_manager,
-                    &self.session_source,
-                )
-                .await?;
+                let response_stream = self.stream_chat(prompt).await?;
 
                 // Wrap it with the aggregation adapter so callers see *only*
                 // the final assistant message per turn (matching the
                 // behaviour of the Responses API).
                 let mut aggregated = if self.config.show_raw_agent_reasoning {
-                    crate::chat_completions::AggregatedChatStream::streaming_mode(response_stream)
+                    response_stream.streaming_mode()
                 } else {
                     response_stream.aggregate()
                 };
@@ -165,6 +158,92 @@ impl ModelClient {
     }
 
     /// Implementation for the OpenAI *Responses* experimental API.
+    async fn stream_chat(&self, prompt: &Prompt) -> Result<ResponseStream> {
+        if prompt.output_schema.is_some() {
+            return Err(CodexErr::UnsupportedOperation(
+                "output_schema is not supported for Chat Completions API".to_string(),
+            ));
+        }
+
+        let auth_manager = self.auth_manager.clone();
+        let instructions = prompt
+            .get_full_instructions(&self.config.model_family)
+            .into_owned();
+        let input_with_instructions = prompt.get_formatted_input();
+        let tools_json = create_tools_json_for_chat_completions_api(&prompt.tools)?;
+        let conversation_id = self.conversation_id.to_string();
+        let session_source = self.session_source.clone();
+
+        let mut refreshed = false;
+        loop {
+            let auth = auth_manager.as_ref().and_then(|m| m.auth());
+            let api_provider = to_api_provider(&self.provider, auth.as_ref().map(|a| a.mode))?;
+            let api_auth = auth_provider_from_auth(auth.clone(), &self.provider).await?;
+            let transport = create_transport();
+            let telemetry = Arc::new(ApiTelemetry::new(self.otel_event_manager.clone()));
+            let request_telemetry: Arc<dyn RequestTelemetry> = telemetry.clone();
+            let sse_telemetry: Arc<dyn SseTelemetry> = telemetry;
+
+            let request = ApiChatRequestBuilder::new(
+                &self.config.model,
+                &instructions,
+                &input_with_instructions,
+                &tools_json,
+            )
+            .conversation_id(Some(conversation_id.clone()))
+            .session_source(Some(session_source.clone()))
+            .build(&api_provider)
+            .map_err(map_api_error)?;
+
+            let client = ApiChatClient::new(transport, api_provider, api_auth)
+                .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
+
+            let stream_result = client.stream_request(request).await;
+
+            match stream_result {
+                Ok(stream) => {
+                    return Ok(map_response_stream(stream, self.otel_event_manager.clone()));
+                }
+                Err(ApiError::Transport(TransportError::Http { status, .. }))
+                    if status == StatusCode::UNAUTHORIZED =>
+                {
+                    if refreshed {
+                        return Err(map_api_error(ApiError::Transport(TransportError::Http {
+                            status,
+                            headers: None,
+                            body: None,
+                        })));
+                    }
+
+                    if let Some(manager) = auth_manager.as_ref()
+                        && let Some(auth) = auth.as_ref()
+                        && auth.mode == AuthMode::ChatGPT
+                    {
+                        match manager.refresh_token().await {
+                            Ok(_) => {
+                                refreshed = true;
+                                continue;
+                            }
+                            Err(RefreshTokenError::Permanent(failed)) => {
+                                return Err(CodexErr::RefreshTokenFailed(failed));
+                            }
+                            Err(RefreshTokenError::Transient(other)) => {
+                                return Err(CodexErr::Io(other));
+                            }
+                        }
+                    } else {
+                        return Err(map_api_error(ApiError::Transport(TransportError::Http {
+                            status,
+                            headers: None,
+                            body: None,
+                        })));
+                    }
+                }
+                Err(err) => return Err(map_api_error(err)),
+            }
+        }
+    }
+
     async fn stream_responses(&self, prompt: &Prompt) -> Result<ResponseStream> {
         if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
             warn!(path, "Streaming from fixture");
@@ -174,7 +253,9 @@ impl ModelClient {
         }
 
         let auth_manager = self.auth_manager.clone();
-        let full_instructions = prompt.get_full_instructions(&self.config.model_family);
+        let instructions = prompt
+            .get_full_instructions(&self.config.model_family)
+            .into_owned();
         let tools_json: Vec<Value> = create_tools_json_for_responses_api(&prompt.tools)?;
 
         let reasoning = if self.config.model_family.supports_reasoning_summaries {
@@ -210,57 +291,9 @@ impl ModelClient {
             None
         };
 
-        // Only include `text.verbosity` for GPT-5 family models
         let text = create_text_param_for_request(verbosity, &prompt.output_schema);
-
-        // In general, we want to explicitly send `store: false` when using the Responses API,
-        // but in practice, the Azure Responses API rejects `store: false`:
-        //
-        // - If store = false and id is sent an error is thrown that ID is not found
-        // - If store = false and id is not sent an error is thrown that ID is required
-        //
-        // For Azure, we send `store: true` and preserve reasoning item IDs.
-        let azure_workaround = self.provider.is_azure_responses_endpoint();
-
-        let payload = ResponsesApiRequest {
-            model: &self.config.model,
-            instructions: &full_instructions,
-            input: &input_with_instructions,
-            tools: &tools_json,
-            tool_choice: "auto",
-            parallel_tool_calls: prompt.parallel_tool_calls,
-            reasoning,
-            store: azure_workaround,
-            stream: true,
-            include,
-            prompt_cache_key: Some(self.conversation_id.to_string()),
-            text,
-        };
-
-        let mut payload_json = serde_json::to_value(&payload)?;
-        if azure_workaround {
-            attach_item_ids(&mut payload_json, &input_with_instructions);
-        }
-
-        let mut extra_headers = ApiHeaderMap::new();
-        if let Ok(value) = HeaderValue::from_str(&self.conversation_id.to_string()) {
-            extra_headers.insert("conversation_id", value.clone());
-            extra_headers.insert("session_id", value);
-        }
-
-        if let SessionSource::SubAgent(sub) = &self.session_source {
-            let subagent = if let crate::protocol::SubAgentSource::Other(label) = sub {
-                label.clone()
-            } else {
-                serde_json::to_value(sub)
-                    .ok()
-                    .and_then(|v| v.as_str().map(std::string::ToString::to_string))
-                    .unwrap_or_else(|| "other".to_string())
-            };
-            if let Ok(value) = HeaderValue::from_str(&subagent) {
-                extra_headers.insert("x-openai-subagent", value);
-            }
-        }
+        let conversation_id = self.conversation_id.to_string();
+        let session_source = self.session_source.clone();
 
         let mut refreshed = false;
         loop {
@@ -271,12 +304,26 @@ impl ModelClient {
             let telemetry = Arc::new(ApiTelemetry::new(self.otel_event_manager.clone()));
             let request_telemetry: Arc<dyn RequestTelemetry> = telemetry.clone();
             let sse_telemetry: Arc<dyn SseTelemetry> = telemetry;
+            let request = ResponsesRequestBuilder::new(
+                &self.config.model,
+                &instructions,
+                &input_with_instructions,
+            )
+            .tools(&tools_json)
+            .parallel_tool_calls(prompt.parallel_tool_calls)
+            .reasoning(reasoning.clone())
+            .include(include.clone())
+            .prompt_cache_key(Some(conversation_id.clone()))
+            .text(text.clone())
+            .conversation(Some(conversation_id.clone()))
+            .session_source(Some(session_source.clone()))
+            .build(&api_provider)
+            .map_err(map_api_error)?;
+
             let client = ApiResponsesClient::new(transport, api_provider, api_auth)
                 .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
 
-            let stream_result = client
-                .stream(payload_json.clone(), extra_headers.clone())
-                .await;
+            let stream_result = client.stream_request(request).await;
 
             match stream_result {
                 Ok(stream) => {
@@ -496,32 +543,5 @@ impl SseTelemetry for ApiTelemetry {
         duration: Duration,
     ) {
         self.otel_event_manager.log_sse_event(result, duration);
-    }
-}
-
-fn attach_item_ids(payload_json: &mut Value, original_items: &[ResponseItem]) {
-    let Some(input_value) = payload_json.get_mut("input") else {
-        return;
-    };
-    let serde_json::Value::Array(items) = input_value else {
-        return;
-    };
-
-    for (value, item) in items.iter_mut().zip(original_items.iter()) {
-        if let ResponseItem::Reasoning { id, .. }
-        | ResponseItem::Message { id: Some(id), .. }
-        | ResponseItem::WebSearchCall { id: Some(id), .. }
-        | ResponseItem::FunctionCall { id: Some(id), .. }
-        | ResponseItem::LocalShellCall { id: Some(id), .. }
-        | ResponseItem::CustomToolCall { id: Some(id), .. } = item
-        {
-            if id.is_empty() {
-                continue;
-            }
-
-            if let Some(obj) = value.as_object_mut() {
-                obj.insert("id".to_string(), Value::String(id.clone()));
-            }
-        }
     }
 }

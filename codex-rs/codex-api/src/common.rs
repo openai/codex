@@ -106,7 +106,7 @@ pub enum ResponseEvent {
     RateLimits(RateLimitSnapshot),
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct Reasoning {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<ReasoningEffortConfig>,

@@ -1,10 +1,11 @@
+use crate::ChatRequest;
 use crate::auth::AuthProvider;
 use crate::auth::add_auth_headers;
 use crate::common::ResponseStream;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::provider::WireApi;
-use crate::sse::spawn_response_stream;
+use crate::sse::chat::spawn_chat_stream;
 use crate::telemetry::SseTelemetry;
 use crate::telemetry::run_with_request_telemetry;
 use codex_client::HttpTransport;
@@ -43,6 +44,10 @@ impl<T: HttpTransport, A: AuthProvider> ChatClient<T, A> {
         self
     }
 
+    pub async fn stream_request(&self, request: ChatRequest) -> Result<ResponseStream, ApiError> {
+        self.stream(request.body, request.headers).await
+    }
+
     fn path(&self) -> &'static str {
         match self.provider.wire {
             WireApi::Chat => "chat/completions",
@@ -73,7 +78,7 @@ impl<T: HttpTransport, A: AuthProvider> ChatClient<T, A> {
         )
         .await?;
 
-        Ok(spawn_response_stream(
+        Ok(spawn_chat_stream(
             stream_response,
             self.provider.stream_idle_timeout,
             self.sse_telemetry.clone(),

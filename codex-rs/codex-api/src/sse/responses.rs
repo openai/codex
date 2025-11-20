@@ -45,7 +45,7 @@ pub fn stream_from_fixture(
     Ok(ResponseStream { rx_event })
 }
 
-pub(crate) fn spawn_response_stream(
+pub fn spawn_response_stream(
     stream_response: StreamResponse,
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,

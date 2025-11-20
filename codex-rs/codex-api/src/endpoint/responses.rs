@@ -4,6 +4,7 @@ use crate::common::ResponseStream;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::provider::WireApi;
+use crate::requests::ResponsesRequest;
 use crate::sse::spawn_response_stream;
 use crate::telemetry::SseTelemetry;
 use crate::telemetry::run_with_request_telemetry;
@@ -41,6 +42,13 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         self.request_telemetry = request;
         self.sse_telemetry = sse;
         self
+    }
+
+    pub async fn stream_request(
+        &self,
+        request: ResponsesRequest,
+    ) -> Result<ResponseStream, ApiError> {
+        self.stream(request.body, request.headers).await
     }
 
     fn path(&self) -> &'static str {
