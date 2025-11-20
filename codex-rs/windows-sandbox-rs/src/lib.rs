@@ -440,7 +440,6 @@ mod windows_impl {
     mod tests {
         use super::should_apply_network_block;
         use crate::policy::SandboxPolicy;
-        use std::path::PathBuf;
 
         fn workspace_policy(network_access: bool) -> SandboxPolicy {
             SandboxPolicy::WorkspaceWrite {
