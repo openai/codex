@@ -1622,8 +1622,8 @@ async fn unified_exec_formats_large_output_summary() -> Result<()> {
     } = builder.build(&server).await?;
 
     let script = r#"python3 - <<'PY'
-for i in range(10000):
-    print("token token ")
+import sys
+sys.stdout.write("token token \n" * 5000)
 PY
 "#;
 
