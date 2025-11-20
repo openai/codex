@@ -56,6 +56,7 @@ use crate::model_family::ModelFamily;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::openai_model_info::get_model_info;
+use crate::protocol::CreditsSnapshot;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::RateLimitWindow;
 use crate::protocol::TokenUsage;
@@ -726,7 +727,13 @@ fn parse_rate_limit_snapshot(headers: &HeaderMap) -> Option<RateLimitSnapshot> {
         "x-codex-secondary-reset-at",
     );
 
-    Some(RateLimitSnapshot { primary, secondary })
+    let credits = parse_credits_snapshot(headers);
+
+    Some(RateLimitSnapshot {
+        primary,
+        secondary,
+        credits,
+    })
 }
 
 fn parse_rate_limit_window(
@@ -753,6 +760,20 @@ fn parse_rate_limit_window(
     })
 }
 
+fn parse_credits_snapshot(headers: &HeaderMap) -> Option<CreditsSnapshot> {
+    let has_credits = parse_header_bool(headers, "x-codex-credits-has-credits")?;
+    let unlimited = parse_header_bool(headers, "x-codex-credits-unlimited")?;
+    let balance = parse_header_str(headers, "x-codex-credits-balance")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(std::string::ToString::to_string);
+    Some(CreditsSnapshot {
+        has_credits,
+        unlimited,
+        balance,
+    })
+}
+
 fn parse_header_f64(headers: &HeaderMap, name: &str) -> Option<f64> {
     parse_header_str(headers, name)?
         .parse::<f64>()
@@ -762,6 +783,17 @@ fn parse_header_f64(headers: &HeaderMap, name: &str) -> Option<f64> {
 
 fn parse_header_i64(headers: &HeaderMap, name: &str) -> Option<i64> {
     parse_header_str(headers, name)?.parse::<i64>().ok()
+}
+
+fn parse_header_bool(headers: &HeaderMap, name: &str) -> Option<bool> {
+    let raw = parse_header_str(headers, name)?;
+    if raw.eq_ignore_ascii_case("true") || raw == "1" {
+        Some(true)
+    } else if raw.eq_ignore_ascii_case("false") || raw == "0" {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 fn parse_header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {

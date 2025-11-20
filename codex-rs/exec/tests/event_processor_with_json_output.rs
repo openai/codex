@@ -539,6 +539,7 @@ fn error_event_produces_error() {
         "e1",
         EventMsg::Error(codex_core::protocol::ErrorEvent {
             message: "boom".to_string(),
+            http_status_code: Some(500),
         }),
     ));
     assert_eq!(
@@ -578,6 +579,7 @@ fn stream_error_event_produces_error() {
         "e1",
         EventMsg::StreamError(codex_core::protocol::StreamErrorEvent {
             message: "retrying".to_string(),
+            http_status_code: Some(500),
         }),
     ));
     assert_eq!(
@@ -596,6 +598,7 @@ fn error_followed_by_task_complete_produces_turn_failed() {
         "e1",
         EventMsg::Error(ErrorEvent {
             message: "boom".to_string(),
+            http_status_code: Some(500),
         }),
     );
     assert_eq!(

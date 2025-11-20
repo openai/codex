@@ -11,11 +11,13 @@ use crate::error::get_error_message_ui;
 use crate::exec::ExecToolCallOutput;
 use crate::sandboxing::SandboxManager;
 use crate::tools::sandboxing::ApprovalCtx;
+use crate::tools::sandboxing::ApprovalRequirement;
 use crate::tools::sandboxing::ProvidesSandboxRetryData;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
+use crate::tools::sandboxing::default_approval_requirement;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 
@@ -49,40 +51,52 @@ impl ToolOrchestrator {
         let otel_cfg = codex_otel::otel_event_manager::ToolDecisionSource::Config;
 
         // 1) Approval
-        let needs_initial_approval =
-            tool.wants_initial_approval(req, approval_policy, &turn_ctx.sandbox_policy);
         let mut already_approved = false;
 
-        if needs_initial_approval {
-            let mut risk = None;
-
-            if let Some(metadata) = req.sandbox_retry_data() {
-                risk = tool_ctx
-                    .session
-                    .assess_sandbox_command(turn_ctx, &tool_ctx.call_id, &metadata.command, None)
-                    .await;
+        let requirement = tool.approval_requirement(req).unwrap_or_else(|| {
+            default_approval_requirement(approval_policy, &turn_ctx.sandbox_policy)
+        });
+        match requirement {
+            ApprovalRequirement::Skip => {
+                otel.tool_decision(otel_tn, otel_ci, ReviewDecision::Approved, otel_cfg);
             }
+            ApprovalRequirement::Forbidden { reason } => {
+                return Err(ToolError::Rejected(reason));
+            }
+            ApprovalRequirement::NeedsApproval { reason } => {
+                let mut risk = None;
 
-            let approval_ctx = ApprovalCtx {
-                session: tool_ctx.session,
-                turn: turn_ctx,
-                call_id: &tool_ctx.call_id,
-                retry_reason: None,
-                risk,
-            };
-            let decision = tool.start_approval_async(req, approval_ctx).await;
-
-            otel.tool_decision(otel_tn, otel_ci, decision, otel_user.clone());
-
-            match decision {
-                ReviewDecision::Denied | ReviewDecision::Abort => {
-                    return Err(ToolError::Rejected("rejected by user".to_string()));
+                if let Some(metadata) = req.sandbox_retry_data() {
+                    risk = tool_ctx
+                        .session
+                        .assess_sandbox_command(
+                            turn_ctx,
+                            &tool_ctx.call_id,
+                            &metadata.command,
+                            None,
+                        )
+                        .await;
                 }
-                ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {}
+
+                let approval_ctx = ApprovalCtx {
+                    session: tool_ctx.session,
+                    turn: turn_ctx,
+                    call_id: &tool_ctx.call_id,
+                    retry_reason: reason,
+                    risk,
+                };
+                let decision = tool.start_approval_async(req, approval_ctx).await;
+
+                otel.tool_decision(otel_tn, otel_ci, decision, otel_user.clone());
+
+                match decision {
+                    ReviewDecision::Denied | ReviewDecision::Abort => {
+                        return Err(ToolError::Rejected("rejected by user".to_string()));
+                    }
+                    ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {}
+                }
+                already_approved = true;
             }
-            already_approved = true;
-        } else {
-            otel.tool_decision(otel_tn, otel_ci, ReviewDecision::Approved, otel_cfg);
         }
 
         // 2) First attempt under the selected sandbox.

@@ -1086,6 +1086,7 @@ dependencies = [
  "codex-apply-patch",
  "codex-arg0",
  "codex-async-utils",
+ "codex-execpolicy2",
  "codex-file-search",
  "codex-git",
  "codex-keyring-store",
@@ -1188,6 +1189,7 @@ name = "codex-exec-server"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "clap",
  "codex-core",
  "libc",
@@ -1196,6 +1198,7 @@ dependencies = [
  "rmcp",
  "serde",
  "serde_json",
+ "shlex",
  "socket2 0.6.0",
  "tempfile",
  "tokio",

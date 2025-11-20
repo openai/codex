@@ -234,9 +234,20 @@ pub fn default_user_shell() -> Shell {
     if cfg!(windows) {
         get_shell(ShellType::PowerShell, None).unwrap_or(ultimate_fallback_shell())
     } else {
-        get_user_shell_path()
+        let user_default_shell = get_user_shell_path()
             .and_then(|shell| detect_shell_type(&shell))
-            .and_then(|shell_type| get_shell(shell_type, None))
+            .and_then(|shell_type| get_shell(shell_type, None));
+
+        let shell_with_fallback = if cfg!(target_os = "macos") {
+            user_default_shell
+                .or_else(|| get_shell(ShellType::Zsh, None))
+                .or_else(|| get_shell(ShellType::Bash, None))
+        } else {
+            user_default_shell
+                .or_else(|| get_shell(ShellType::Bash, None))
+                .or_else(|| get_shell(ShellType::Zsh, None))
+        };
+
             .unwrap_or(ultimate_fallback_shell())
     }
 }

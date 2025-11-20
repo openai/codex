@@ -18,9 +18,10 @@ use rmcp::tool_handler;
 use rmcp::tool_router;
 use rmcp::transport::stdio;
 
-use crate::posix::escalate_server;
 use crate::posix::escalate_server::EscalateServer;
-use crate::posix::escalate_server::ExecPolicy;
+use crate::posix::escalate_server::{self};
+use crate::posix::mcp_escalation_policy::ExecPolicy;
+use crate::posix::mcp_escalation_policy::McpEscalationPolicy;
 
 /// Path to our patched bash.
 const CODEX_BASH_PATH_ENV_VAR: &str = "CODEX_BASH_PATH";
@@ -64,15 +65,17 @@ impl From<escalate_server::ExecResult> for ExecResult {
 pub struct ExecTool {
     tool_router: ToolRouter<ExecTool>,
     bash_path: PathBuf,
+    execve_wrapper: PathBuf,
     policy: ExecPolicy,
 }
 
 #[tool_router]
 impl ExecTool {
-    pub fn new(bash_path: PathBuf, policy: ExecPolicy) -> Self {
+    pub fn new(bash_path: PathBuf, execve_wrapper: PathBuf, policy: ExecPolicy) -> Self {
         Self {
             tool_router: Self::tool_router(),
             bash_path,
+            execve_wrapper,
             policy,
         }
     }
@@ -81,10 +84,14 @@ impl ExecTool {
     #[tool]
     async fn shell(
         &self,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
         Parameters(params): Parameters<ExecParams>,
     ) -> Result<CallToolResult, McpError> {
-        let escalate_server = EscalateServer::new(self.bash_path.clone(), self.policy);
+        let escalate_server = EscalateServer::new(
+            self.bash_path.clone(),
+            self.execve_wrapper.clone(),
+            McpEscalationPolicy::new(self.policy, context),
+        );
         let result = escalate_server
             .exec(
                 params.command,
@@ -98,27 +105,6 @@ impl ExecTool {
         Ok(CallToolResult::success(vec![Content::json(
             ExecResult::from(result),
         )?]))
-    }
-
-    #[allow(dead_code)]
-    async fn prompt(
-        &self,
-        command: String,
-        workdir: String,
-        context: RequestContext<RoleServer>,
-    ) -> Result<CreateElicitationResult, McpError> {
-        context
-            .peer
-            .create_elicitation(CreateElicitationRequestParam {
-                message: format!("Allow Codex to run `{command:?}` in `{workdir:?}`?"),
-                #[allow(clippy::expect_used)]
-                requested_schema: ElicitationSchema::builder()
-                    .property("dummy", PrimitiveSchema::String(StringSchema::new()))
-                    .build()
-                    .expect("failed to build elicitation schema"),
-            })
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))
     }
 }
 
@@ -147,8 +133,9 @@ impl ServerHandler for ExecTool {
 
 pub(crate) async fn serve(
     bash_path: PathBuf,
+    execve_wrapper: PathBuf,
     policy: ExecPolicy,
 ) -> Result<RunningService<RoleServer, ExecTool>, rmcp::service::ServerInitializeError> {
-    let tool = ExecTool::new(bash_path, policy);
+    let tool = ExecTool::new(bash_path, execve_wrapper, policy);
     tool.serve(stdio()).await
 }
