@@ -32,6 +32,7 @@ use serde::Serialize;
 use serde_json::Value;
 use serde_with::serde_as;
 use strum_macros::Display;
+use thiserror::Error;
 use ts_rs::TS;
 
 pub use crate::approvals::ApplyPatchApprovalRequestEvent;
@@ -562,6 +563,27 @@ pub enum EventMsg {
     ReasoningRawContentDelta(ReasoningRawContentDeltaEvent),
 }
 
+/// Codex errors that we expose to clients.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum CodexErrorCode {
+    ContextWindowExceeded,
+    UsageLimitExceeded,
+    // Exceeded the retry limit for http requests for retryable HTTP errors.
+    HttpRetryLimitExceeded { http_status_code: Option<u16> },
+    HttpConnectionFailed { http_status_code: Option<u16> },
+    // The SSE stream for the response failed.
+    ResponseSseStreamFailed { http_status_code: Option<u16> },
+    InternalServerError,
+    Unauthorized,
+    BadRequest,
+    Sandbox,
+    // Error emitted by response stream, Usually during retries of a retryable HTTP error.
+    ResponseStreamError { http_status_code: Option<u16> },
+    Other,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct RawResponseItemEvent {
     pub item: ResponseItem,
@@ -686,6 +708,7 @@ pub struct ExitedReviewModeEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ErrorEvent {
     pub message: String,
+    pub codex_error_code: Option<CodexErrorCode>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1363,6 +1386,7 @@ pub struct UndoCompletedEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct StreamErrorEvent {
     pub message: String,
+    pub codex_error_code: Option<CodexErrorCode>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

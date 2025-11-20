@@ -1433,6 +1433,7 @@ dependencies = [
  "strum_macros 0.27.2",
  "sys-locale",
  "tempfile",
+ "thiserror 2.0.17",
  "tracing",
  "ts-rs",
  "uuid",

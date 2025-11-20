@@ -66,6 +66,7 @@ use crate::context_manager::ContextManager;
 use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
+use crate::error::http_status_code_value;
 #[cfg(test)]
 use crate::exec::StreamOutput;
 use crate::mcp::auth::compute_auth_statuses;
@@ -78,6 +79,7 @@ use crate::protocol::AgentReasoningSectionBreakEvent;
 use crate::protocol::ApplyPatchApprovalRequestEvent;
 use crate::protocol::AskForApproval;
 use crate::protocol::BackgroundEventEvent;
+use crate::protocol::CodexErrorCode;
 use crate::protocol::DeprecationNoticeEvent;
 use crate::protocol::ErrorEvent;
 use crate::protocol::Event;
@@ -134,6 +136,7 @@ use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
 use codex_utils_tokenizer::warm_model_cache;
+use reqwest::StatusCode;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -1196,9 +1199,14 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         message: impl Into<String>,
+        http_status_code: Option<StatusCode>,
     ) {
+        let codex_error_code = CodexErrorCode::ResponseStreamError {
+            http_status_code: http_status_code_value(http_status_code),
+        };
         let event = EventMsg::StreamError(StreamErrorEvent {
             message: message.into(),
+            codex_error_code: Some(codex_error_code),
         });
         self.send_event(turn_context, event).await;
     }

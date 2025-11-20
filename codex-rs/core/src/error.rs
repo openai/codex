@@ -10,6 +10,8 @@ use chrono::Local;
 use chrono::Utc;
 use codex_async_utils::CancelErr;
 use codex_protocol::ConversationId;
+use codex_protocol::protocol::CodexErrorCode;
+use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
 use reqwest::StatusCode;
 use serde_json;
@@ -430,6 +432,50 @@ impl CodexErr {
     pub fn downcast_ref<T: std::any::Any>(&self) -> Option<&T> {
         (self as &dyn std::any::Any).downcast_ref::<T>()
     }
+
+    /// Translate core error to client-facing protocol error.
+    pub fn to_codex_protocol_error(&self) -> CodexErrorCode {
+        match self {
+            CodexErr::ContextWindowExceeded => CodexErrorCode::ContextWindowExceeded,
+            CodexErr::UsageLimitReached(_)
+            | CodexErr::QuotaExceeded
+            | CodexErr::UsageNotIncluded => CodexErrorCode::UsageLimitExceeded,
+            CodexErr::RetryLimit(err) => CodexErrorCode::HttpRetryLimitExceeded {
+                http_status_code: http_status_code_value(Some(err.status)),
+            },
+            CodexErr::ConnectionFailed(err) => CodexErrorCode::HttpConnectionFailed {
+                http_status_code: http_status_code_value(err.source.status()),
+            },
+            CodexErr::ResponseStreamFailed(err) => CodexErrorCode::ResponseSseStreamFailed {
+                http_status_code: http_status_code_value(err.source.status()),
+            },
+            CodexErr::RefreshTokenFailed(_) => CodexErrorCode::Unauthorized,
+            CodexErr::SessionConfiguredNotFirstEvent
+            | CodexErr::InternalServerError
+            | CodexErr::InternalAgentDied => CodexErrorCode::InternalServerError,
+            CodexErr::UnsupportedOperation(_) | CodexErr::ConversationNotFound(_) => {
+                CodexErrorCode::BadRequest
+            }
+            CodexErr::Sandbox(_) => CodexErrorCode::Sandbox,
+            _ => CodexErrorCode::Other,
+        }
+    }
+
+    pub fn to_error_event(&self, message_prefix: Option<String>) -> ErrorEvent {
+        let error_message = self.to_string();
+        let message: String = match message_prefix {
+            Some(prefix) => format!("{prefix}: {error_message}"),
+            None => error_message,
+        };
+        ErrorEvent {
+            message,
+            codex_error_code: self.to_codex_protocol_error(),
+        }
+    }
+}
+
+pub fn http_status_code_value(http_status_code: Option<StatusCode>) -> Option<u16> {
+    http_status_code.as_ref().map(StatusCode::as_u16)
 }
 
 pub fn get_error_message_ui(e: &CodexErr) -> String {
