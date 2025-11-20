@@ -1791,6 +1791,28 @@ fn exec_history_extends_previous_when_consecutive() {
 }
 
 #[test]
+fn user_shell_command_renders_output_not_exploring() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    let begin_ls = begin_exec_with_source(
+        &mut chat,
+        "user-shell-ls",
+        "ls",
+        ExecCommandSource::UserShell,
+    );
+    end_exec(&mut chat, begin_ls, "file1\nfile2\n", "", 0);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected a single history cell for the user command"
+    );
+    let blob = lines_to_single_string(cells.first().unwrap());
+    assert_snapshot!("user_shell_ls_output", blob);
+}
+
+#[test]
 fn disabled_slash_command_while_task_running_snapshot() {
     // Build a chat widget and simulate an active task
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
