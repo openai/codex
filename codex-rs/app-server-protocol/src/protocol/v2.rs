@@ -960,7 +960,6 @@ pub struct CommandExecutionRequestApprovalParams {
     pub reason: Option<String>,
     /// Optional model-provided risk assessment describing the blocked command.
     pub risk: Option<SandboxCommandAssessment>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub allow_prefix: Option<Vec<String>>,
 }
 

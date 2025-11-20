@@ -278,7 +278,11 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
             parsed_cmd: vec![ParsedCommand::Unknown {
                 cmd: "python3 -c 'print(42)'".to_string()
             }],
-            allow_prefix: None,
+            allow_prefix: Some(vec![
+                "python3".to_string(),
+                "-c".to_string(),
+                "print(42)".to_string(),
+            ]),
         },
         params
     );

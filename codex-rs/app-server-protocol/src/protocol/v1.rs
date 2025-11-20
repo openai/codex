@@ -228,7 +228,6 @@ pub struct ExecCommandApprovalParams {
     pub reason: Option<String>,
     pub risk: Option<SandboxCommandAssessment>,
     pub parsed_cmd: Vec<ParsedCommand>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub allow_prefix: Option<Vec<String>>,
 }
 

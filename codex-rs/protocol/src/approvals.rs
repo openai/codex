@@ -53,7 +53,6 @@ pub struct ExecApprovalRequestEvent {
     pub parsed_cmd: Vec<ParsedCommand>,
     /// Optional command prefix that can be allowlisted to avoid future prompts.
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(default)]
     pub allow_prefix: Option<Vec<String>>,
 }
 
