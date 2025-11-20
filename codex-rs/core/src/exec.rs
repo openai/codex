@@ -14,6 +14,7 @@ use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
 use tokio::io::BufReader;
 use tokio::process::Child;
+use tokio::sync::oneshot;
 
 use crate::error::CodexErr;
 use crate::error::Result;
@@ -91,6 +92,7 @@ pub async fn process_exec_tool_call(
     sandbox_cwd: &Path,
     codex_linux_sandbox_exe: &Option<PathBuf>,
     stdout_stream: Option<StdoutStream>,
+    cancel_rx: Option<oneshot::Receiver<()>>,
 ) -> Result<ExecToolCallOutput> {
     let ExecParams {
         command,
@@ -131,13 +133,14 @@ pub async fn process_exec_tool_call(
         .map_err(CodexErr::from)?;
 
     // Route through the sandboxing module for a single, unified execution path.
-    crate::sandboxing::execute_env(&exec_env, sandbox_policy, stdout_stream).await
+    crate::sandboxing::execute_env(&exec_env, sandbox_policy, stdout_stream, cancel_rx).await
 }
 
 pub(crate) async fn execute_exec_env(
     env: ExecEnv,
     sandbox_policy: &SandboxPolicy,
     stdout_stream: Option<StdoutStream>,
+    cancel_rx: Option<oneshot::Receiver<()>>,
 ) -> Result<ExecToolCallOutput> {
     let ExecEnv {
         command,
@@ -161,7 +164,7 @@ pub(crate) async fn execute_exec_env(
     };
 
     let start = Instant::now();
-    let raw_output_result = exec(params, sandbox, sandbox_policy, stdout_stream).await;
+    let raw_output_result = exec(params, sandbox, sandbox_policy, stdout_stream, cancel_rx).await;
     let duration = start.elapsed();
     finalize_exec_result(raw_output_result, sandbox, duration)
 }
@@ -170,7 +173,9 @@ pub(crate) async fn execute_exec_env(
 async fn exec_windows_sandbox(
     params: ExecParams,
     sandbox_policy: &SandboxPolicy,
+    cancel_rx: Option<oneshot::Receiver<()>>,
 ) -> Result<RawExecToolCallOutput> {
+    let _ = cancel_rx;
     use crate::config::find_codex_home;
     use codex_windows_sandbox::run_windows_sandbox_capture;
 
@@ -441,14 +446,16 @@ async fn exec(
     sandbox: SandboxType,
     sandbox_policy: &SandboxPolicy,
     stdout_stream: Option<StdoutStream>,
+    cancel_rx: Option<oneshot::Receiver<()>>,
 ) -> Result<RawExecToolCallOutput> {
     #[cfg(target_os = "windows")]
     if sandbox == SandboxType::WindowsRestrictedToken
         && !matches!(sandbox_policy, SandboxPolicy::DangerFullAccess)
     {
-        return exec_windows_sandbox(params, sandbox_policy).await;
+        return exec_windows_sandbox(params, sandbox_policy, cancel_rx).await;
     }
     let timeout = params.timeout_duration();
+    let mut cancel_rx = cancel_rx;
     let ExecParams {
         command,
         cwd,
@@ -464,7 +471,7 @@ async fn exec(
         ))
     })?;
     let arg0_ref = arg0.as_deref();
-    let child = spawn_child_async(
+    let spawn_future = spawn_child_async(
         PathBuf::from(program),
         args.into(),
         arg0_ref,
@@ -472,9 +479,20 @@ async fn exec(
         sandbox_policy,
         StdioPolicy::RedirectForShellTool,
         env,
-    )
-    .await?;
-    consume_truncated_output(child, timeout, stdout_stream).await
+    );
+    let child = {
+        let cancel_wait = cancel_future(cancel_rx.as_mut());
+        tokio::pin!(cancel_wait);
+        tokio::select! {
+            result = spawn_future => {
+                result?
+            }
+            _ = &mut cancel_wait => {
+                return Ok(synthetic_timeout_output());
+            }
+        }
+    };
+    consume_truncated_output(child, timeout, cancel_rx, stdout_stream).await
 }
 
 /// Consumes the output of a child process, truncating it so it is suitable for
@@ -482,6 +500,7 @@ async fn exec(
 async fn consume_truncated_output(
     mut child: Child,
     timeout: Duration,
+    cancel_rx: Option<oneshot::Receiver<()>>,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<RawExecToolCallOutput> {
     // Both stdout and stderr were configured with `Stdio::piped()`
@@ -514,6 +533,9 @@ async fn consume_truncated_output(
         Some(agg_tx.clone()),
     ));
 
+    let mut cancel_rx = cancel_rx;
+    let cancel_wait = cancel_future(cancel_rx.as_mut());
+    tokio::pin!(cancel_wait);
     let (exit_status, timed_out) = tokio::select! {
         result = tokio::time::timeout(timeout, child.wait()) => {
             match result {
@@ -522,10 +544,8 @@ async fn consume_truncated_output(
                     (exit_status, false)
                 }
                 Err(_) => {
-                    // timeout
                     kill_child_process_group(&mut child)?;
                     child.start_kill()?;
-                    // Debatable whether `child.wait().await` should be called here.
                     (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE), true)
                 }
             }
@@ -534,6 +554,11 @@ async fn consume_truncated_output(
             kill_child_process_group(&mut child)?;
             child.start_kill()?;
             (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + SIGKILL_CODE), false)
+        }
+        _ = &mut cancel_wait => {
+            kill_child_process_group(&mut child)?;
+            child.start_kill()?;
+            (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE), true)
         }
     };
 
@@ -602,6 +627,34 @@ async fn consume_truncated_output(
         aggregated_output,
         timed_out,
     })
+}
+
+fn synthetic_timeout_output() -> RawExecToolCallOutput {
+    RawExecToolCallOutput {
+        exit_status: synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE),
+        stdout: StreamOutput {
+            text: Vec::new(),
+            truncated_after_lines: None,
+        },
+        stderr: StreamOutput {
+            text: Vec::new(),
+            truncated_after_lines: None,
+        },
+        aggregated_output: StreamOutput {
+            text: Vec::new(),
+            truncated_after_lines: None,
+        },
+        timed_out: true,
+    }
+}
+
+async fn cancel_future(
+    cancel: Option<&mut oneshot::Receiver<()>>,
+) -> std::result::Result<(), oneshot::error::RecvError> {
+    match cancel {
+        Some(cancel) => cancel.await,
+        None => std::future::pending::<std::result::Result<(), oneshot::error::RecvError>>().await,
+    }
 }
 
 async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
@@ -796,7 +849,14 @@ mod tests {
             arg0: None,
         };
 
-        let output = exec(params, SandboxType::None, &SandboxPolicy::ReadOnly, None).await?;
+        let output = exec(
+            params,
+            SandboxType::None,
+            &SandboxPolicy::ReadOnly,
+            None,
+            None,
+        )
+        .await?;
         assert!(output.timed_out);
 
         let stdout = output.stdout.from_utf8_lossy().text;
@@ -822,5 +882,63 @@ mod tests {
 
         assert!(killed, "grandchild process with pid {pid} is still alive");
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn process_exec_tool_call_respects_cancellation_token() -> Result<()> {
+        let command = long_running_command();
+        let cwd = std::env::current_dir()?;
+        let env: HashMap<String, String> = std::env::vars().collect();
+        let params = ExecParams {
+            command,
+            cwd: cwd.clone(),
+            timeout_ms: Some(30_000),
+            env,
+            with_escalated_permissions: None,
+            justification: None,
+            arg0: None,
+        };
+        let (cancel_tx, cancel_rx) = oneshot::channel();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(1_000)).await;
+            let _ = cancel_tx.send(());
+        });
+        let result = process_exec_tool_call(
+            params,
+            SandboxType::None,
+            &SandboxPolicy::DangerFullAccess,
+            cwd.as_path(),
+            &None,
+            None,
+            Some(cancel_rx),
+        )
+        .await;
+        let output = match result {
+            Err(CodexErr::Sandbox(SandboxErr::Timeout { output })) => output,
+            other => panic!("expected timeout error, got {other:?}"),
+        };
+        assert!(output.timed_out);
+        assert_eq!(output.exit_code, EXEC_TIMEOUT_EXIT_CODE);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn long_running_command() -> Vec<String> {
+        vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "sleep 30".to_string(),
+        ]
+    }
+
+    #[cfg(windows)]
+    fn long_running_command() -> Vec<String> {
+        vec![
+            "powershell.exe".to_string(),
+            "-NonInteractive".to_string(),
+            "-NoLogo".to_string(),
+            "-Command".to_string(),
+            "Start-Sleep -Seconds 30".to_string(),
+        ]
     }
 }

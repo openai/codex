@@ -1201,6 +1201,7 @@ impl CodexMessageProcessor {
                 sandbox_cwd.as_path(),
                 &codex_linux_sandbox_exe,
                 None,
+                None,
             )
             .await
             {
