@@ -1,14 +1,14 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use codex_execpolicy2::Decision;
-use codex_execpolicy2::Evaluation;
-use codex_execpolicy2::PolicyParser;
-use codex_execpolicy2::RuleMatch;
-use codex_execpolicy2::RuleRef;
-use codex_execpolicy2::rule::PatternToken;
-use codex_execpolicy2::rule::PrefixPattern;
-use codex_execpolicy2::rule::PrefixRule;
+use codex_execpolicy::Decision;
+use codex_execpolicy::Evaluation;
+use codex_execpolicy::PolicyParser;
+use codex_execpolicy::RuleMatch;
+use codex_execpolicy::RuleRef;
+use codex_execpolicy::rule::PatternToken;
+use codex_execpolicy::rule::PrefixPattern;
+use codex_execpolicy::rule::PrefixRule;
 use pretty_assertions::assert_eq;
 
 fn tokens(cmd: &[&str]) -> Vec<String> {

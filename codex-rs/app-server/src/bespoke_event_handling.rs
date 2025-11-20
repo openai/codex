@@ -15,12 +15,17 @@ use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
+use codex_app_server_protocol::FileChangeRequestApprovalParams;
+use codex_app_server_protocol::FileChangeRequestApprovalResponse;
+use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::InterruptConversationResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::McpToolCallError;
 use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus;
+use codex_app_server_protocol::PatchApplyStatus;
+use codex_app_server_protocol::PatchChangeKind as V2PatchChangeKind;
 use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
 use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
 use codex_app_server_protocol::ReasoningTextDeltaNotification;
@@ -40,6 +45,7 @@ use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandEndEvent;
+use codex_core::protocol::FileChange as CoreFileChange;
 use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
@@ -47,7 +53,9 @@ use codex_core::protocol::ReviewDecision;
 use codex_core::review_format::format_review_findings_block;
 use codex_protocol::ConversationId;
 use codex_protocol::protocol::ReviewOutputEvent;
+use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use tracing::error;
@@ -70,24 +78,74 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id,
+            turn_id,
             changes,
             reason,
             grant_root,
-        }) => {
-            let params = ApplyPatchApprovalParams {
-                conversation_id,
-                call_id,
-                file_changes: changes,
-                reason,
-                grant_root,
-            };
-            let rx = outgoing
-                .send_request(ServerRequestPayload::ApplyPatchApproval(params))
-                .await;
-            tokio::spawn(async move {
-                on_patch_approval_response(event_id, rx, conversation).await;
-            });
-        }
+        }) => match api_version {
+            ApiVersion::V1 => {
+                let params = ApplyPatchApprovalParams {
+                    conversation_id,
+                    call_id,
+                    file_changes: changes.clone(),
+                    reason,
+                    grant_root,
+                };
+                let rx = outgoing
+                    .send_request(ServerRequestPayload::ApplyPatchApproval(params))
+                    .await;
+                tokio::spawn(async move {
+                    on_patch_approval_response(event_id, rx, conversation).await;
+                });
+            }
+            ApiVersion::V2 => {
+                // Until we migrate the core to be aware of a first class FileChangeItem
+                // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
+                let item_id = call_id.clone();
+                let patch_changes = convert_patch_changes(&changes);
+
+                let first_start = {
+                    let mut map = turn_summary_store.lock().await;
+                    let summary = map.entry(conversation_id).or_default();
+                    summary.file_change_started.insert(item_id.clone())
+                };
+                if first_start {
+                    let item = ThreadItem::FileChange {
+                        id: item_id.clone(),
+                        changes: patch_changes.clone(),
+                        status: PatchApplyStatus::InProgress,
+                    };
+                    let notification = ItemStartedNotification { item };
+                    outgoing
+                        .send_server_notification(ServerNotification::ItemStarted(notification))
+                        .await;
+                }
+
+                let params = FileChangeRequestApprovalParams {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: turn_id.clone(),
+                    item_id: item_id.clone(),
+                    reason,
+                    grant_root,
+                };
+                let rx = outgoing
+                    .send_request(ServerRequestPayload::FileChangeRequestApproval(params))
+                    .await;
+                tokio::spawn(async move {
+                    on_file_change_request_approval_response(
+                        event_id,
+                        conversation_id,
+                        item_id,
+                        patch_changes,
+                        rx,
+                        conversation,
+                        outgoing,
+                        turn_summary_store,
+                    )
+                    .await;
+                });
+            }
+        },
         EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
             call_id,
             turn_id,
@@ -244,6 +302,49 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .send_server_notification(ServerNotification::ItemCompleted(notification))
                 .await;
         }
+        EventMsg::PatchApplyBegin(patch_begin_event) => {
+            // Until we migrate the core to be aware of a first class FileChangeItem
+            // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
+            let item_id = patch_begin_event.call_id.clone();
+
+            let first_start = {
+                let mut map = turn_summary_store.lock().await;
+                let summary = map.entry(conversation_id).or_default();
+                summary.file_change_started.insert(item_id.clone())
+            };
+            if first_start {
+                let item = ThreadItem::FileChange {
+                    id: item_id.clone(),
+                    changes: convert_patch_changes(&patch_begin_event.changes),
+                    status: PatchApplyStatus::InProgress,
+                };
+                let notification = ItemStartedNotification { item };
+                outgoing
+                    .send_server_notification(ServerNotification::ItemStarted(notification))
+                    .await;
+            }
+        }
+        EventMsg::PatchApplyEnd(patch_end_event) => {
+            // Until we migrate the core to be aware of a first class FileChangeItem
+            // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
+            let item_id = patch_end_event.call_id.clone();
+
+            let status = if patch_end_event.success {
+                PatchApplyStatus::Completed
+            } else {
+                PatchApplyStatus::Failed
+            };
+            let changes = convert_patch_changes(&patch_end_event.changes);
+            complete_file_change_item(
+                conversation_id,
+                item_id,
+                changes,
+                status,
+                outgoing.as_ref(),
+                &turn_summary_store,
+            )
+            .await;
+        }
         EventMsg::ExecCommandBegin(exec_command_begin_event) => {
             let item = ThreadItem::CommandExecution {
                 id: exec_command_begin_event.call_id.clone(),
@@ -362,6 +463,32 @@ async fn emit_turn_completed_with_status(
     };
     outgoing
         .send_server_notification(ServerNotification::TurnCompleted(notification))
+        .await;
+}
+
+async fn complete_file_change_item(
+    conversation_id: ConversationId,
+    item_id: String,
+    changes: Vec<FileUpdateChange>,
+    status: PatchApplyStatus,
+    outgoing: &OutgoingMessageSender,
+    turn_summary_store: &TurnSummaryStore,
+) {
+    {
+        let mut map = turn_summary_store.lock().await;
+        if let Some(summary) = map.get_mut(&conversation_id) {
+            summary.file_change_started.remove(&item_id);
+        }
+    }
+
+    let item = ThreadItem::FileChange {
+        id: item_id,
+        changes,
+        status,
+    };
+    let notification = ItemCompletedNotification { item };
+    outgoing
+        .send_server_notification(ServerNotification::ItemCompleted(notification))
         .await;
 }
 
@@ -509,6 +636,110 @@ fn render_review_output_text(output: &ReviewOutputEvent) -> String {
         REVIEW_FALLBACK_MESSAGE.to_string()
     } else {
         sections.join("\n\n")
+    }
+}
+
+fn convert_patch_changes(changes: &HashMap<PathBuf, CoreFileChange>) -> Vec<FileUpdateChange> {
+    let mut converted: Vec<FileUpdateChange> = changes
+        .iter()
+        .map(|(path, change)| FileUpdateChange {
+            path: path.to_string_lossy().into_owned(),
+            kind: map_patch_change_kind(change),
+            diff: format_file_change_diff(change),
+        })
+        .collect();
+    converted.sort_by(|a, b| a.path.cmp(&b.path));
+    converted
+}
+
+fn map_patch_change_kind(change: &CoreFileChange) -> V2PatchChangeKind {
+    match change {
+        CoreFileChange::Add { .. } => V2PatchChangeKind::Add,
+        CoreFileChange::Delete { .. } => V2PatchChangeKind::Delete,
+        CoreFileChange::Update { move_path, .. } => V2PatchChangeKind::Update {
+            move_path: move_path.clone(),
+        },
+    }
+}
+
+fn format_file_change_diff(change: &CoreFileChange) -> String {
+    match change {
+        CoreFileChange::Add { content } => content.clone(),
+        CoreFileChange::Delete { content } => content.clone(),
+        CoreFileChange::Update {
+            unified_diff,
+            move_path,
+        } => {
+            if let Some(path) = move_path {
+                format!("{unified_diff}\n\nMoved to: {}", path.display())
+            } else {
+                unified_diff.clone()
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn on_file_change_request_approval_response(
+    event_id: String,
+    conversation_id: ConversationId,
+    item_id: String,
+    changes: Vec<FileUpdateChange>,
+    receiver: oneshot::Receiver<JsonValue>,
+    codex: Arc<CodexConversation>,
+    outgoing: Arc<OutgoingMessageSender>,
+    turn_summary_store: TurnSummaryStore,
+) {
+    let response = receiver.await;
+    let (decision, completion_status) = match response {
+        Ok(value) => {
+            let response = serde_json::from_value::<FileChangeRequestApprovalResponse>(value)
+                .unwrap_or_else(|err| {
+                    error!("failed to deserialize FileChangeRequestApprovalResponse: {err}");
+                    FileChangeRequestApprovalResponse {
+                        decision: ApprovalDecision::Decline,
+                    }
+                });
+
+            let (decision, completion_status) = match response.decision {
+                ApprovalDecision::Accept => (ReviewDecision::Approved, None),
+                ApprovalDecision::Decline => {
+                    (ReviewDecision::Denied, Some(PatchApplyStatus::Declined))
+                }
+                ApprovalDecision::Cancel => {
+                    (ReviewDecision::Abort, Some(PatchApplyStatus::Declined))
+                }
+            };
+            // Allow EventMsg::PatchApplyEnd to emit ItemCompleted for accepted patches.
+            // Only short-circuit on declines/cancels/failures.
+            (decision, completion_status)
+        }
+        Err(err) => {
+            error!("request failed: {err:?}");
+            (ReviewDecision::Denied, Some(PatchApplyStatus::Failed))
+        }
+    };
+
+    if let Some(status) = completion_status {
+        complete_file_change_item(
+            conversation_id,
+            item_id,
+            changes,
+            status,
+            outgoing.as_ref(),
+            &turn_summary_store,
+        )
+        .await;
+    }
+
+    if let Err(err) = codex
+        .submit(Op::PatchApproval {
+            id: event_id,
+            decision,
+        })
+        .await
+    {
+        error!("failed to submit PatchApproval: {err}");
     }
 }
 

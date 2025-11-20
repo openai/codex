@@ -686,8 +686,6 @@ pub struct ExitedReviewModeEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ErrorEvent {
     pub message: String,
-    #[serde(default)]
-    pub http_status_code: Option<u16>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1365,8 +1363,6 @@ pub struct UndoCompletedEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct StreamErrorEvent {
     pub message: String,
-    #[serde(default)]
-    pub http_status_code: Option<u16>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1378,6 +1374,10 @@ pub struct StreamInfoEvent {
 pub struct PatchApplyBeginEvent {
     /// Identifier so this can be paired with the PatchApplyEnd event.
     pub call_id: String,
+    /// Turn ID that this patch belongs to.
+    /// Uses `#[serde(default)]` for backwards compatibility.
+    #[serde(default)]
+    pub turn_id: String,
     /// If true, there was no ApplyPatchApprovalRequest for this patch.
     pub auto_approved: bool,
     /// The changes to be applied.
@@ -1388,12 +1388,19 @@ pub struct PatchApplyBeginEvent {
 pub struct PatchApplyEndEvent {
     /// Identifier for the PatchApplyBegin that finished.
     pub call_id: String,
+    /// Turn ID that this patch belongs to.
+    /// Uses `#[serde(default)]` for backwards compatibility.
+    #[serde(default)]
+    pub turn_id: String,
     /// Captured stdout (summary printed by apply_patch).
     pub stdout: String,
     /// Captured stderr (parser errors, IO failures, etc.).
     pub stderr: String,
     /// Whether the patch was applied successfully.
     pub success: bool,
+    /// The changes that were applied (mirrors PatchApplyBeginEvent::changes).
+    #[serde(default)]
+    pub changes: HashMap<PathBuf, FileChange>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
