@@ -4,6 +4,9 @@ use codex_core::CodexConversation;
 use codex_core::ConversationManager;
 use codex_core::NewConversation;
 use codex_core::config::Config;
+use codex_core::protocol::ErrorEvent;
+use codex_core::protocol::Event;
+use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
@@ -28,9 +31,16 @@ pub(crate) fn spawn_agent(
             session_configured,
         } = match server.new_conversation(config).await {
             Ok(v) => v,
-            Err(e) => {
-                // TODO: surface this error to the user.
-                tracing::error!("failed to initialize codex: {e}");
+            #[allow(clippy::print_stderr)]
+            Err(err) => {
+                let message = err.to_string();
+                eprintln!("{message}");
+                app_event_tx_clone.send(AppEvent::CodexEvent(Event {
+                    id: "".to_string(),
+                    msg: EventMsg::Error(ErrorEvent { message }),
+                }));
+                app_event_tx_clone.send(AppEvent::ExitRequest);
+                tracing::error!("failed to initialize codex: {err}");
                 return;
             }
         };

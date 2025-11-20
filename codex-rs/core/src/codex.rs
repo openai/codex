@@ -66,7 +66,6 @@ use crate::context_manager::ContextManager;
 use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
-use crate::error::http_status_code_value;
 #[cfg(test)]
 use crate::exec::StreamOutput;
 use crate::mcp::auth::compute_auth_statuses;
@@ -80,6 +79,7 @@ use crate::protocol::ApplyPatchApprovalRequestEvent;
 use crate::protocol::AskForApproval;
 use crate::protocol::BackgroundEventEvent;
 use crate::protocol::DeprecationNoticeEvent;
+use crate::protocol::ErrorEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecApprovalRequestEvent;
@@ -123,6 +123,7 @@ use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
 use codex_async_utils::OrCancelExt;
+use codex_execpolicy::Policy as ExecPolicy;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -171,6 +172,10 @@ impl Codex {
 
         let user_instructions = get_user_instructions(&config).await;
 
+        let exec_policy = crate::exec_policy::exec_policy_for(&config.features, &config.codex_home)
+            .await
+            .map_err(|err| CodexErr::Fatal(format!("failed to load execpolicy: {err}")))?;
+
         let config = Arc::new(config);
 
         let session_configuration = SessionConfiguration {
@@ -187,6 +192,7 @@ impl Codex {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: config.features.clone(),
+            exec_policy,
             session_source,
         };
 
@@ -286,6 +292,7 @@ pub(crate) struct TurnContext {
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
+    pub(crate) exec_policy: Arc<ExecPolicy>,
     pub(crate) truncation_policy: TruncationPolicy,
 }
 
@@ -342,6 +349,8 @@ pub(crate) struct SessionConfiguration {
 
     /// Set of feature flags for this session
     features: Features,
+    /// Execpolicy policy, applied only when enabled by feature flag.
+    exec_policy: Arc<ExecPolicy>,
 
     // TODO(pakrym): Remove config from here
     original_config_do_not_use: Arc<Config>,
@@ -442,6 +451,7 @@ impl Session {
             final_output_json_schema: None,
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
+            exec_policy: session_configuration.exec_policy.clone(),
             truncation_policy: TruncationPolicy::new(&per_turn_config),
         }
     }
@@ -976,6 +986,7 @@ impl Session {
 
         let event = EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id,
+            turn_id: turn_context.sub_id.clone(),
             changes,
             reason,
             grant_root,
@@ -1253,11 +1264,9 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         message: impl Into<String>,
-        http_status_code: Option<StatusCode>,
     ) {
         let event = EventMsg::StreamError(StreamErrorEvent {
             message: message.into(),
-            http_status_code: http_status_code_value(http_status_code),
         });
         self.send_event(turn_context, event).await;
     }
@@ -1785,7 +1794,6 @@ mod handlers {
                 id: sub_id.clone(),
                 msg: EventMsg::Error(ErrorEvent {
                     message: "Failed to shutdown rollout recorder".to_string(),
-                    http_status_code: None,
                 }),
             };
             sess.send_event_raw(event).await;
@@ -1891,6 +1899,7 @@ async fn spawn_review_thread(
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
+        exec_policy: parent_turn_context.exec_policy.clone(),
         truncation_policy: TruncationPolicy::new(&per_turn_config),
     };
 
@@ -2039,8 +2048,10 @@ pub(crate) async fn run_task(
             }
             Err(e) => {
                 info!("Turn error: {e:#}");
-                sess.send_event(&turn_context, EventMsg::Error(e.to_error_event(None)))
-                    .await;
+                let event = EventMsg::Error(ErrorEvent {
+                    message: e.to_string(),
+                });
+                sess.send_event(&turn_context, event).await;
                 // let the user continue the conversation
                 break;
             }
@@ -2164,7 +2175,6 @@ async fn run_turn(
                     sess.notify_stream_error(
                         &turn_context,
                         format!("Reconnecting... {retries}/{max_retries}"),
-                        e.http_status_code(),
                     )
                     .await;
 
@@ -2710,6 +2720,7 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
+            exec_policy: Arc::new(ExecPolicy::empty()),
             session_source: SessionSource::Exec,
         };
 
@@ -2787,6 +2798,7 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
+            exec_policy: Arc::new(ExecPolicy::empty()),
             session_source: SessionSource::Exec,
         };
 

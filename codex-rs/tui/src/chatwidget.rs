@@ -290,6 +290,8 @@ pub(crate) struct ChatWidget {
     pending_notification: Option<Notification>,
     // Simple review mode flag; used to adjust layout and banners.
     is_review_mode: bool,
+    // Snapshot of token usage to restore after review mode exits.
+    pre_review_token_info: Option<Option<TokenUsageInfo>>,
     // Whether to add a final message separator after the last message
     needs_final_message_separator: bool,
 
@@ -489,16 +491,39 @@ impl ChatWidget {
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
-        if let Some(info) = info {
-            let context_window = info
-                .model_context_window
-                .or(self.config.model_context_window);
-            let percent = context_window.map(|window| {
+        match info {
+            Some(info) => self.apply_token_info(info),
+            None => {
+                self.bottom_pane.set_context_window_percent(None);
+                self.token_info = None;
+            }
+        }
+    }
+
+    fn apply_token_info(&mut self, info: TokenUsageInfo) {
+        let percent = self.context_remaining_percent(&info);
+        self.bottom_pane.set_context_window_percent(percent);
+        self.token_info = Some(info);
+    }
+
+    fn context_remaining_percent(&self, info: &TokenUsageInfo) -> Option<i64> {
+        info.model_context_window
+            .or(self.config.model_context_window)
+            .map(|window| {
                 info.last_token_usage
                     .percent_of_context_window_remaining(window)
-            });
-            self.bottom_pane.set_context_window_percent(percent);
-            self.token_info = Some(info);
+            })
+    }
+
+    fn restore_pre_review_token_info(&mut self) {
+        if let Some(saved) = self.pre_review_token_info.take() {
+            match saved {
+                Some(info) => self.apply_token_info(info),
+                None => {
+                    self.bottom_pane.set_context_window_percent(None);
+                    self.token_info = None;
+                }
+            }
         }
     }
 
@@ -1150,6 +1175,7 @@ impl ChatWidget {
             suppress_session_configured_redraw: false,
             pending_notification: None,
             is_review_mode: false,
+            pre_review_token_info: None,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
@@ -1223,6 +1249,7 @@ impl ChatWidget {
             suppress_session_configured_redraw: true,
             pending_notification: None,
             is_review_mode: false,
+            pre_review_token_info: None,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
@@ -1440,6 +1467,7 @@ impl ChatWidget {
                     // }),
                     msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
                         call_id: "1".to_string(),
+                        turn_id: "turn-1".to_string(),
                         changes: HashMap::from([
                             (
                                 PathBuf::from("/tmp/test.txt"),
@@ -1655,7 +1683,7 @@ impl ChatWidget {
                 self.on_rate_limit_snapshot(ev.rate_limits);
             }
             EventMsg::Warning(WarningEvent { message }) => self.on_warning(message),
-            EventMsg::Error(ErrorEvent { message, .. }) => self.on_error(message),
+            EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
             EventMsg::McpStartupUpdate(ev) => self.on_mcp_startup_update(ev),
             EventMsg::McpStartupComplete(ev) => self.on_mcp_startup_complete(ev),
             EventMsg::SaveSessionResponse(ev) => {
@@ -1704,9 +1732,7 @@ impl ChatWidget {
             }
             EventMsg::UndoStarted(ev) => self.on_undo_started(ev),
             EventMsg::UndoCompleted(ev) => self.on_undo_completed(ev),
-            EventMsg::StreamError(StreamErrorEvent { message, .. }) => {
-                self.on_stream_error(message)
-            }
+            EventMsg::StreamError(StreamErrorEvent { message }) => self.on_stream_error(message),
             EventMsg::UserMessage(ev) => {
                 if from_replay {
                     self.on_user_message_event(ev);
@@ -1727,6 +1753,9 @@ impl ChatWidget {
 
     fn on_entered_review_mode(&mut self, review: ReviewRequest) {
         // Enter review mode and emit a concise banner
+        if self.pre_review_token_info.is_none() {
+            self.pre_review_token_info = Some(self.token_info.clone());
+        }
         self.is_review_mode = true;
         let banner = format!(">> Code review started: {} <<", review.user_facing_hint);
         self.add_to_history(history_cell::new_review_status_line(banner));
@@ -1767,6 +1796,7 @@ impl ChatWidget {
         }
 
         self.is_review_mode = false;
+        self.restore_pre_review_token_info();
         // Append a finishing banner at the end of this turn.
         self.add_to_history(history_cell::new_review_status_line(
             "<< Code review finished >>".to_string(),
