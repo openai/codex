@@ -445,6 +445,7 @@ impl UnifiedExecSessionManager {
     ) -> Result<UnifiedExecSession, UnifiedExecError> {
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);
+        let exec_policy = context.session.current_exec_policy().await;
         let req = UnifiedExecToolRequest::new(
             command.to_vec(),
             cwd,
@@ -452,7 +453,7 @@ impl UnifiedExecSessionManager {
             with_escalated_permissions,
             justification,
             create_approval_requirement_for_command(
-                &context.turn.exec_policy,
+                exec_policy.as_ref(),
                 command,
                 context.turn.approval_policy,
                 &context.turn.sandbox_policy,
