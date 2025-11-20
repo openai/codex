@@ -95,6 +95,7 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
         .submit(Op::ExecApproval {
             id: "0".into(),
             decision: ReviewDecision::Approved,
+            allow_prefix: None,
         })
         .await
         .expect("submit exec approval");

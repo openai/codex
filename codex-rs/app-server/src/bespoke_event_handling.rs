@@ -950,6 +950,7 @@ async fn on_exec_approval_response(
         .submit(Op::ExecApproval {
             id: event_turn_id,
             decision: response.decision,
+            allow_prefix: None,
         })
         .await
     {
@@ -1154,6 +1155,7 @@ async fn on_command_execution_request_approval_response(
         .submit(Op::ExecApproval {
             id: event_turn_id,
             decision,
+            allow_prefix: None,
         })
         .await
     {
