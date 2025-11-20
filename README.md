@@ -92,7 +92,7 @@ prefix_rule(
 
 In this example rule, if Codex wants to run commands with the prefix `git push` or `git fetch`, it will first ask for user approval.
 
-Use the hidden `codex execpolicy check` subcommand to preview decisions before you save a rule (see the [`codex-execpolicy` README](./codex-rs/execpolicy/README.md) for syntax details):
+Use the `codex execpolicy check` subcommand to preview decisions before you save a rule (see the [`codex-execpolicy` README](./codex-rs/execpolicy/README.md) for syntax details):
 
 ```shell
 codex execpolicy check --policy ~/.codex/policy/default.codexpolicy git push origin main
