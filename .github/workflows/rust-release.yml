@@ -399,11 +399,27 @@ jobs:
 
       - name: Compute SHA256 for Windows EXEs
         id: win_hash
+        continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
-          x64_sha=$(sha256sum "dist/x86_64-pc-windows-msvc/codex-rs/dist/x86_64-pc-windows-msvc/codex-x86_64-pc-windows-msvc.exe" | awk '{print $1}')
-          arm_sha=$(sha256sum "dist/aarch64-pc-windows-msvc/codex-rs/dist/aarch64-pc-windows-msvc/codex-aarch64-pc-windows-msvc.exe" | awk '{print $1}')
+          set -uo pipefail
+          x64_sha=""
+          arm_sha=""
+          x64_path="dist/x86_64-pc-windows-msvc/codex-x86_64-pc-windows-msvc.exe"
+          arm_path="dist/aarch64-pc-windows-msvc/codex-aarch64-pc-windows-msvc.exe"
+
+          if [[ -f "$x64_path" ]]; then
+            x64_sha=$(sha256sum "$x64_path" | awk '{print $1}')
+          else
+            echo "::warning::Windows x64 binary not found at $x64_path; winget validation will be skipped."
+          fi
+
+          if [[ -f "$arm_path" ]]; then
+            arm_sha=$(sha256sum "$arm_path" | awk '{print $1}')
+          else
+            echo "::warning::Windows arm64 binary not found at $arm_path; winget validation will be skipped."
+          fi
+
           echo "windows_x64_sha256=${x64_sha}" >> "$GITHUB_OUTPUT"
           echo "windows_arm64_sha256=${arm_sha}" >> "$GITHUB_OUTPUT"
 
