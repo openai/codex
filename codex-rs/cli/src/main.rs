@@ -90,8 +90,13 @@ enum Subcommand {
     /// Generate shell completion scripts.
     Completion(CompletionCommand),
 
-    /// Debug utilities (sandboxing, execpolicy checks, etc.).
-    Debug(DebugCommand),
+    /// Run commands within a Codex-provided sandbox.
+    #[clap(visible_alias = "debug")]
+    Sandbox(SandboxArgs),
+
+    /// Execpolicy tooling.
+    #[clap(hide = true)]
+    Execpolicy(ExecpolicyCommand),
 
     /// Apply the latest diff produced by Codex agent as a `git apply` to your local working tree.
     #[clap(visible_alias = "a")]
@@ -143,13 +148,13 @@ struct ResumeCommand {
 }
 
 #[derive(Debug, Parser)]
-struct DebugCommand {
+struct SandboxArgs {
     #[command(subcommand)]
-    cmd: DebugSubcommand,
+    cmd: SandboxCommand,
 }
 
 #[derive(Debug, clap::Subcommand)]
-enum DebugSubcommand {
+enum SandboxCommand {
     /// Run a command under Seatbelt (macOS only).
     #[clap(visible_alias = "seatbelt")]
     Macos(SeatbeltCommand),
@@ -160,10 +165,19 @@ enum DebugSubcommand {
 
     /// Run a command under Windows restricted token (Windows only).
     Windows(WindowsCommand),
+}
 
+#[derive(Debug, Parser)]
+struct ExecpolicyCommand {
+    #[command(subcommand)]
+    sub: ExecpolicySubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum ExecpolicySubcommand {
     /// Check execpolicy files against a command.
-    #[clap(name = "policycheck", hide = true)]
-    PolicyCheck(ExecPolicyCheckCommand),
+    #[clap(name = "check")]
+    Check(ExecPolicyCheckCommand),
 }
 
 #[derive(Debug, Parser)]
@@ -522,8 +536,8 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             );
             codex_cloud_tasks::run_main(cloud_cli, codex_linux_sandbox_exe).await?;
         }
-        Some(Subcommand::Debug(debug_cmd)) => match debug_cmd.cmd {
-            DebugSubcommand::Macos(mut seatbelt_cli) => {
+        Some(Subcommand::Sandbox(sandbox_cmd)) => match sandbox_cmd.cmd {
+            SandboxCommand::Macos(mut seatbelt_cli) => {
                 prepend_config_flags(
                     &mut seatbelt_cli.config_overrides,
                     root_config_overrides.clone(),
@@ -534,7 +548,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 )
                 .await?;
             }
-            DebugSubcommand::Linux(mut landlock_cli) => {
+            SandboxCommand::Linux(mut landlock_cli) => {
                 prepend_config_flags(
                     &mut landlock_cli.config_overrides,
                     root_config_overrides.clone(),
@@ -545,7 +559,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 )
                 .await?;
             }
-            DebugSubcommand::Windows(mut windows_cli) => {
+            SandboxCommand::Windows(mut windows_cli) => {
                 prepend_config_flags(
                     &mut windows_cli.config_overrides,
                     root_config_overrides.clone(),
@@ -556,9 +570,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 )
                 .await?;
             }
-            DebugSubcommand::PolicyCheck(cmd) => {
-                run_execpolicycheck(cmd)?;
-            }
+        },
+        Some(Subcommand::Execpolicy(ExecpolicyCommand { sub })) => match sub {
+            ExecpolicySubcommand::Check(cmd) => run_execpolicycheck(cmd)?,
         },
         Some(Subcommand::Apply(mut apply_cli)) => {
             prepend_config_flags(

@@ -20,9 +20,9 @@ prefix_rule(
 ```
 
 ## CLI
-- From the Codex CLI, run `codex debug policycheck` subcommand with one or more policy files (for example `src/default.codexpolicy`) to check a command:
+- From the Codex CLI, run the hidden `codex execpolicy check` subcommand with one or more policy files (for example `src/default.codexpolicy`) to check a command:
 ```bash
-codex debug policycheck --policy path/to/policy.codexpolicy git status
+codex execpolicy check --policy path/to/policy.codexpolicy git status
 ```
 - Pass multiple `--policy` flags to merge rules, evaluated in the order provided, and use `--pretty` for formatted JSON.
 - You can also run the standalone dev binary directly during development:
@@ -59,4 +59,4 @@ cargo run -p codex-execpolicy -- check --policy path/to/policy.codexpolicy git s
 - `matchedRules` lists every rule whose prefix matched the command; `matchedPrefix` is the exact prefix that matched.
 - The effective `decision` is the strictest severity across all matches (`forbidden` > `prompt` > `allow`).
 
-Note: `policycheck` is still in preview. The API may have breaking changes in the future.
+Note: `execpolicy` commands are still in preview. The API may have breaking changes in the future.
