@@ -161,6 +161,10 @@ pub(crate) async fn stream_chat_completions(
     // aggregated assistant message was recorded alongside an earlier partial).
     let mut last_assistant_text: Option<String> = None;
 
+    // Track if we just emitted a tool_calls message and are waiting for tool responses.
+    // We must skip any intermediate assistant messages to satisfy API requirements.
+    let mut awaiting_tool_response = false;
+
     for (idx, item) in input.iter().enumerate() {
         match item {
             ResponseItem::Message { role, content, .. } => {
@@ -186,12 +190,24 @@ pub(crate) async fn stream_chat_completions(
 
                 // Skip exact-duplicate assistant messages.
                 if role == "assistant" {
+                    // Skip assistant messages that appear between tool_calls and tool responses
+                    if awaiting_tool_response {
+                        tracing::debug!(
+                            "Skipping assistant message between tool_calls and tool response: {}",
+                            text.chars().take(50).collect::<String>()
+                        );
+                        continue;
+                    }
+
                     if let Some(prev) = &last_assistant_text
                         && prev == &text
                     {
                         continue;
                     }
                     last_assistant_text = Some(text.clone());
+                } else if role == "tool" {
+                    // Reset flag when we see a tool response
+                    awaiting_tool_response = false;
                 }
 
                 // For assistant messages, always send a plain string for compatibility.
@@ -237,6 +253,8 @@ pub(crate) async fn stream_chat_completions(
                     obj.insert("reasoning".to_string(), json!(reasoning));
                 }
                 messages.push(msg);
+                // Set flag to skip any assistant messages until we see the tool response
+                awaiting_tool_response = true;
             }
             ResponseItem::LocalShellCall {
                 id,
@@ -261,8 +279,10 @@ pub(crate) async fn stream_chat_completions(
                     obj.insert("reasoning".to_string(), json!(reasoning));
                 }
                 messages.push(msg);
+                awaiting_tool_response = true;
             }
             ResponseItem::FunctionCallOutput { call_id, output } => {
+                awaiting_tool_response = false;
                 // Prefer structured content items when available (e.g., images)
                 // otherwise fall back to the legacy plain-string content.
                 let content_value = if let Some(items) = &output.content_items {
@@ -307,8 +327,10 @@ pub(crate) async fn stream_chat_completions(
                         }
                     }]
                 }));
+                awaiting_tool_response = true;
             }
             ResponseItem::CustomToolCallOutput { call_id, output } => {
+                awaiting_tool_response = false;
                 messages.push(json!({
                     "role": "tool",
                     "tool_call_id": call_id,
