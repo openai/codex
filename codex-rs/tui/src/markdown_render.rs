@@ -368,10 +368,10 @@ where
         let width = depth * 4 - 3;
         let marker = if let Some(last_index) = self.list_indices.last_mut() {
             match last_index {
-                None => Some(vec![
-                    Span::from(" ".repeat(width - 1)),
-                    Span::styled("- ", self.styles.unordered_list_marker),
-                ]),
+                None => Some(vec![Span::styled(
+                    " ".repeat(width - 1) + "- ",
+                    self.styles.unordered_list_marker,
+                )]),
                 Some(index) => {
                     *index += 1;
                     Some(vec![Span::styled(
