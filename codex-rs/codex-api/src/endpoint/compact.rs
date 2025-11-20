@@ -53,11 +53,13 @@ impl<T: HttpTransport, A: AuthProvider> CompactClient<T, A> {
             add_auth_headers(&self.auth, &mut req)
         };
 
-        let resp =
-            run_with_request_telemetry(self.provider.retry.to_policy(), self.request_telemetry.clone(), builder, |req| {
-                self.transport.execute(req)
-            })
-            .await?;
+        let resp = run_with_request_telemetry(
+            self.provider.retry.to_policy(),
+            self.request_telemetry.clone(),
+            builder,
+            |req| self.transport.execute(req),
+        )
+        .await?;
         let parsed: CompactHistoryResponse =
             serde_json::from_slice(&resp.body).map_err(|e| ApiError::Stream(e.to_string()))?;
         Ok(parsed.output)
