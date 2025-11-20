@@ -52,12 +52,12 @@ pub async fn run_with_retry<T, F, Fut>(
     op: F,
 ) -> Result<T, TransportError>
 where
-    F: Fn(Request) -> Fut,
+    F: Fn(Request, u64) -> Fut,
     Fut: Future<Output = Result<T, TransportError>>,
 {
     for attempt in 0..=policy.max_attempts {
         let req = make_req();
-        match op(req).await {
+        match op(req, attempt).await {
             Ok(resp) => return Ok(resp),
             Err(err)
                 if policy

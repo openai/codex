@@ -114,7 +114,22 @@ fn extract_request_id(headers: Option<&HeaderMap>) -> Option<String> {
 #[allow(dead_code)]
 pub(crate) async fn auth_provider_from_auth(
     auth: Option<CodexAuth>,
+    provider: &ModelProviderInfo,
 ) -> crate::error::Result<CoreAuthProvider> {
+    if let Some(api_key) = provider.api_key()? {
+        return Ok(CoreAuthProvider {
+            token: Some(api_key),
+            account_id: None,
+        });
+    }
+
+    if let Some(token) = provider.experimental_bearer_token.clone() {
+        return Ok(CoreAuthProvider {
+            token: Some(token),
+            account_id: None,
+        });
+    }
+
     if let Some(auth) = auth {
         let token = auth.get_token().await?;
         Ok(CoreAuthProvider {

@@ -1,107 +1,28 @@
-use crate::auth::AuthProvider;
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::error::ApiError;
-use crate::provider::Provider;
-use crate::provider::WireApi;
 use crate::rate_limits::parse_rate_limit;
+use crate::telemetry::SseTelemetry;
 use codex_client::ByteStream;
-use codex_client::HttpTransport;
-use codex_client::Request;
+use codex_client::StreamResponse;
 use codex_client::TransportError;
-use codex_client::run_with_retry;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
 use futures::TryStreamExt;
-use http::HeaderMap;
-use http::Method;
 use serde::Deserialize;
 use serde_json::Value;
 use std::io::BufRead;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio::time::Instant;
 use tokio::time::timeout;
 use tokio_util::io::ReaderStream;
 use tracing::debug;
 use tracing::trace;
-
-#[derive(Debug)]
-pub struct ResponsesClient<T: HttpTransport, A: AuthProvider> {
-    transport: T,
-    provider: Provider,
-    auth: A,
-}
-
-impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
-    pub fn new(transport: T, provider: Provider, auth: A) -> Self {
-        Self {
-            transport,
-            provider,
-            auth,
-        }
-    }
-
-    fn path(&self) -> &'static str {
-        match self.provider.wire {
-            WireApi::Responses | WireApi::Compact => "responses",
-            WireApi::Chat => "chat/completions",
-        }
-    }
-
-    pub async fn stream(
-        &self,
-        body: serde_json::Value,
-        extra_headers: HeaderMap,
-    ) -> Result<ResponseStream, ApiError> {
-        let request_builder = || {
-            let mut req = self.provider.build_request(Method::POST, self.path());
-            req.headers.extend(extra_headers.clone());
-            req.headers.insert(
-                http::header::ACCEPT,
-                http::HeaderValue::from_static("text/event-stream"),
-            );
-            req.body = Some(body.clone());
-            add_auth_headers(&self.auth, &mut req)
-        };
-
-        let policy = self.provider.retry.to_policy();
-        let (headers, stream) = run_with_retry(policy, request_builder, |r| async {
-            self.transport.stream(r).await
-        })
-        .await?;
-
-        let rate_limits = parse_rate_limit(&headers);
-        let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent, ApiError>>(1600);
-        let idle = self.provider.stream_idle_timeout;
-        tokio::spawn(async move {
-            if let Some(snapshot) = rate_limits {
-                let _ = tx_event.send(Ok(ResponseEvent::RateLimits(snapshot))).await;
-            }
-            process_sse(stream, tx_event, idle).await;
-        });
-
-        Ok(ResponseStream { rx_event })
-    }
-}
-
-pub(crate) fn add_auth_headers<A: AuthProvider>(auth: &A, req: &mut Request) -> Request {
-    let mut headers = req.headers.clone();
-    if let Some(token) = futures::executor::block_on(auth.bearer_token())
-        && let Ok(header) = format!("Bearer {token}").parse()
-    {
-        let _ = headers.insert(http::header::AUTHORIZATION, header);
-    }
-    if let Some(account_id) = futures::executor::block_on(auth.account_id())
-        && let Ok(header) = account_id.parse()
-    {
-        let _ = headers.insert("ChatGPT-Account-ID", header);
-    }
-    req.headers = headers;
-    req.clone()
-}
 
 /// Streams SSE events from an on-disk fixture for tests.
 pub fn stream_from_fixture(
@@ -120,8 +41,25 @@ pub fn stream_from_fixture(
     let reader = std::io::Cursor::new(content);
     let stream = ReaderStream::new(reader).map_err(|err| TransportError::Network(err.to_string()));
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent, ApiError>>(1600);
-    tokio::spawn(process_sse(Box::pin(stream), tx_event, idle_timeout));
+    tokio::spawn(process_sse(Box::pin(stream), tx_event, idle_timeout, None));
     Ok(ResponseStream { rx_event })
+}
+
+pub(crate) fn spawn_response_stream(
+    stream_response: StreamResponse,
+    idle_timeout: Duration,
+    telemetry: Option<Arc<dyn SseTelemetry>>,
+) -> ResponseStream {
+    let rate_limits = parse_rate_limit(&stream_response.headers);
+    let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent, ApiError>>(1600);
+    tokio::spawn(async move {
+        if let Some(snapshot) = rate_limits {
+            let _ = tx_event.send(Ok(ResponseEvent::RateLimits(snapshot))).await;
+        }
+        process_sse(stream_response.bytes, tx_event, idle_timeout, telemetry).await;
+    });
+
+    ResponseStream { rx_event }
 }
 
 #[derive(Debug, Deserialize)]
@@ -194,13 +132,18 @@ pub async fn process_sse(
     stream: ByteStream,
     tx_event: mpsc::Sender<Result<ResponseEvent, ApiError>>,
     idle_timeout: Duration,
+    telemetry: Option<Arc<dyn SseTelemetry>>,
 ) {
     let mut stream = stream.eventsource();
     let mut response_completed: Option<ResponseCompleted> = None;
     let mut response_error: Option<ApiError> = None;
 
     loop {
+        let start = Instant::now();
         let response = timeout(idle_timeout, stream.next()).await;
+        if let Some(t) = telemetry.as_ref() {
+            t.on_sse_poll(&response, start.elapsed());
+        }
         let sse = match response {
             Ok(Some(Ok(sse))) => sse,
             Ok(Some(Err(e))) => {
@@ -235,7 +178,7 @@ pub async fn process_sse(
         };
 
         let raw = sse.data.clone();
-        trace!("SSE event: {}", raw);
+        trace!("SSE event: {raw}");
 
         let event: SseEvent = match serde_json::from_str(&sse.data) {
             Ok(event) => event,
@@ -421,7 +364,7 @@ mod tests {
         let stream =
             ReaderStream::new(reader).map_err(|err| TransportError::Network(err.to_string()));
         let (tx, mut rx) = mpsc::channel::<Result<ResponseEvent, ApiError>>(16);
-        tokio::spawn(process_sse(Box::pin(stream), tx, idle_timeout()));
+        tokio::spawn(process_sse(Box::pin(stream), tx, idle_timeout(), None));
 
         let mut events = Vec::new();
         while let Some(ev) = rx.recv().await {
@@ -447,7 +390,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel::<Result<ResponseEvent, ApiError>>(8);
         let stream = ReaderStream::new(std::io::Cursor::new(body))
             .map_err(|err| TransportError::Network(err.to_string()));
-        tokio::spawn(process_sse(Box::pin(stream), tx, idle_timeout()));
+        tokio::spawn(process_sse(Box::pin(stream), tx, idle_timeout(), None));
 
         let mut out = Vec::new();
         while let Some(ev) = rx.recv().await {

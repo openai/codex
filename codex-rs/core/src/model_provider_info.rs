@@ -232,7 +232,7 @@ impl ModelProviderInfo {
         let retry = ApiRetryConfig {
             max_attempts: self.request_max_retries(),
             base_delay: Duration::from_millis(200),
-            retry_429: true,
+            retry_429: false,
             retry_5xx: true,
             retry_transport: true,
         };

@@ -6,8 +6,10 @@ use crate::api_bridge::map_api_error;
 use crate::api_bridge::to_api_provider;
 use codex_api::CompactClient as ApiCompactClient;
 use codex_api::ResponsesClient as ApiResponsesClient;
+use codex_api::SseTelemetry;
 use codex_api::error::ApiError;
 use codex_app_server_protocol::AuthMode;
+use codex_client::RequestTelemetry;
 use codex_client::TransportError;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
@@ -15,12 +17,16 @@ use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
+use eventsource_stream::Event;
+use eventsource_stream::EventStreamError;
 use futures::StreamExt;
 use http::HeaderMap as ApiHeaderMap;
 use http::HeaderValue;
+use http::StatusCode as HttpStatusCode;
 use reqwest::StatusCode;
 use serde::Serialize;
 use serde_json::Value;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::warn;
 
@@ -260,9 +266,13 @@ impl ModelClient {
         loop {
             let auth = auth_manager.as_ref().and_then(|m| m.auth());
             let api_provider = to_api_provider(&self.provider, auth.as_ref().map(|a| a.mode))?;
-            let api_auth = auth_provider_from_auth(auth.clone()).await?;
+            let api_auth = auth_provider_from_auth(auth.clone(), &self.provider).await?;
             let transport = create_transport();
-            let client = ApiResponsesClient::new(transport, api_provider, api_auth);
+            let telemetry = Arc::new(ApiTelemetry::new(self.otel_event_manager.clone()));
+            let request_telemetry: Arc<dyn RequestTelemetry> = telemetry.clone();
+            let sse_telemetry: Arc<dyn SseTelemetry> = telemetry;
+            let client = ApiResponsesClient::new(transport, api_provider, api_auth)
+                .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
 
             let stream_result = client
                 .stream(payload_json.clone(), extra_headers.clone())
@@ -355,9 +365,12 @@ impl ModelClient {
         let auth_manager = self.auth_manager.clone();
         let auth = auth_manager.as_ref().and_then(|m| m.auth());
         let api_provider = to_api_provider(&self.provider, auth.as_ref().map(|a| a.mode))?;
-        let api_auth = auth_provider_from_auth(auth.clone()).await?;
+        let api_auth = auth_provider_from_auth(auth.clone(), &self.provider).await?;
         let transport = create_transport();
-        let client = ApiCompactClient::new(transport, api_provider, api_auth);
+        let telemetry = Arc::new(ApiTelemetry::new(self.otel_event_manager.clone()));
+        let request_telemetry: Arc<dyn RequestTelemetry> = telemetry;
+        let client = ApiCompactClient::new(transport, api_provider, api_auth)
+            .with_telemetry(Some(request_telemetry));
 
         let payload = CompactHistoryRequest {
             model: &self.config.model,
@@ -443,6 +456,47 @@ fn map_response_stream(
     });
 
     ResponseStream { rx_event }
+}
+
+struct ApiTelemetry {
+    otel_event_manager: OtelEventManager,
+}
+
+impl ApiTelemetry {
+    fn new(otel_event_manager: OtelEventManager) -> Self {
+        Self { otel_event_manager }
+    }
+}
+
+impl RequestTelemetry for ApiTelemetry {
+    fn on_request(
+        &self,
+        attempt: u64,
+        status: Option<HttpStatusCode>,
+        error: Option<&TransportError>,
+        duration: Duration,
+    ) {
+        let error_message = error.map(std::string::ToString::to_string);
+        self.otel_event_manager.record_api_request(
+            attempt,
+            status.map(|s| s.as_u16()),
+            error_message.as_deref(),
+            duration,
+        );
+    }
+}
+
+impl SseTelemetry for ApiTelemetry {
+    fn on_sse_poll(
+        &self,
+        result: &std::result::Result<
+            Option<std::result::Result<Event, EventStreamError<TransportError>>>,
+            tokio::time::error::Elapsed,
+        >,
+        duration: Duration,
+    ) {
+        self.otel_event_manager.log_sse_event(result, duration);
+    }
 }
 
 fn attach_item_ids(payload_json: &mut Value, original_items: &[ResponseItem]) {

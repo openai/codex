@@ -5,14 +5,22 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::StreamExt;
 use futures::stream::BoxStream;
+use http::HeaderMap;
 use http::Method;
+use http::StatusCode;
 
 pub type ByteStream = BoxStream<'static, Result<Bytes, TransportError>>;
+
+pub struct StreamResponse {
+    pub status: StatusCode,
+    pub headers: HeaderMap,
+    pub bytes: ByteStream,
+}
 
 #[async_trait]
 pub trait HttpTransport: Send + Sync {
     async fn execute(&self, req: Request) -> Result<Response, TransportError>;
-    async fn stream(&self, req: Request) -> Result<(http::HeaderMap, ByteStream), TransportError>;
+    async fn stream(&self, req: Request) -> Result<StreamResponse, TransportError>;
 }
 
 #[derive(Clone, Debug)]
@@ -74,7 +82,7 @@ impl HttpTransport for ReqwestTransport {
         })
     }
 
-    async fn stream(&self, req: Request) -> Result<(http::HeaderMap, ByteStream), TransportError> {
+    async fn stream(&self, req: Request) -> Result<StreamResponse, TransportError> {
         let builder = self.build(req)?;
         let resp = builder.send().await.map_err(Self::map_error)?;
         let status = resp.status();
@@ -90,6 +98,10 @@ impl HttpTransport for ReqwestTransport {
         let stream = resp
             .bytes_stream()
             .map(|result| result.map_err(Self::map_error));
-        Ok((headers, Box::pin(stream)))
+        Ok(StreamResponse {
+            status,
+            headers,
+            bytes: Box::pin(stream),
+        })
     }
 }

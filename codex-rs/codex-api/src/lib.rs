@@ -6,7 +6,9 @@ pub mod error;
 pub mod provider;
 pub mod rate_limits;
 pub mod responses;
+mod sse;
 pub mod stream;
+pub mod telemetry;
 
 pub use crate::auth::AuthProvider;
 pub use crate::chat::ChatClient;
@@ -20,6 +22,7 @@ pub use crate::error::ApiError;
 pub use crate::provider::Provider;
 pub use crate::provider::WireApi;
 pub use crate::responses::ResponsesClient;
-pub use crate::responses::stream_from_fixture;
+pub use crate::sse::stream_from_fixture;
 pub use crate::stream::AggregateStreamExt;
 pub use crate::stream::AggregatedStream;
+pub use crate::telemetry::SseTelemetry;
