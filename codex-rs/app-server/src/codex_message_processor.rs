@@ -1171,7 +1171,7 @@ impl CodexMessageProcessor {
         let exec_params = ExecParams {
             command: params.command,
             cwd,
-            timeout_ms,
+            expiration: timeout_ms.into(),
             env,
             with_escalated_permissions: None,
             justification: None,
