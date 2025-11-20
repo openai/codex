@@ -90,9 +90,8 @@ enum Subcommand {
     /// Generate shell completion scripts.
     Completion(CompletionCommand),
 
-    /// Run commands within a Codex-provided sandbox.
-    #[clap(visible_alias = "debug")]
-    Sandbox(SandboxArgs),
+    /// Debug utilities (sandboxing, execpolicy checks, etc.).
+    Debug(DebugCommand),
 
     /// Apply the latest diff produced by Codex agent as a `git apply` to your local working tree.
     #[clap(visible_alias = "a")]
@@ -112,10 +111,6 @@ enum Subcommand {
     /// Internal: relay stdio to a Unix domain socket.
     #[clap(hide = true, name = "stdio-to-uds")]
     StdioToUds(StdioToUdsCommand),
-
-    /// Check execpolicy files against a command.
-    #[clap(name = "execpolicycheck")]
-    ExecPolicyCheck(ExecPolicyCheckCommand),
 
     /// Inspect feature flags.
     Features(FeaturesCli),
@@ -148,13 +143,13 @@ struct ResumeCommand {
 }
 
 #[derive(Debug, Parser)]
-struct SandboxArgs {
+struct DebugCommand {
     #[command(subcommand)]
-    cmd: SandboxCommand,
+    cmd: DebugSubcommand,
 }
 
 #[derive(Debug, clap::Subcommand)]
-enum SandboxCommand {
+enum DebugSubcommand {
     /// Run a command under Seatbelt (macOS only).
     #[clap(visible_alias = "seatbelt")]
     Macos(SeatbeltCommand),
@@ -165,6 +160,10 @@ enum SandboxCommand {
 
     /// Run a command under Windows restricted token (Windows only).
     Windows(WindowsCommand),
+
+    /// Check execpolicy files against a command.
+    #[clap(name = "policycheck", hide = true)]
+    PolicyCheck(ExecPolicyCheckCommand),
 }
 
 #[derive(Debug, Parser)]
@@ -523,8 +522,8 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             );
             codex_cloud_tasks::run_main(cloud_cli, codex_linux_sandbox_exe).await?;
         }
-        Some(Subcommand::Sandbox(sandbox_args)) => match sandbox_args.cmd {
-            SandboxCommand::Macos(mut seatbelt_cli) => {
+        Some(Subcommand::Debug(debug_cmd)) => match debug_cmd.cmd {
+            DebugSubcommand::Macos(mut seatbelt_cli) => {
                 prepend_config_flags(
                     &mut seatbelt_cli.config_overrides,
                     root_config_overrides.clone(),
@@ -535,7 +534,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 )
                 .await?;
             }
-            SandboxCommand::Linux(mut landlock_cli) => {
+            DebugSubcommand::Linux(mut landlock_cli) => {
                 prepend_config_flags(
                     &mut landlock_cli.config_overrides,
                     root_config_overrides.clone(),
@@ -546,7 +545,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 )
                 .await?;
             }
-            SandboxCommand::Windows(mut windows_cli) => {
+            DebugSubcommand::Windows(mut windows_cli) => {
                 prepend_config_flags(
                     &mut windows_cli.config_overrides,
                     root_config_overrides.clone(),
@@ -556,6 +555,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     codex_linux_sandbox_exe,
                 )
                 .await?;
+            }
+            DebugSubcommand::PolicyCheck(cmd) => {
+                run_execpolicycheck(cmd)?;
             }
         },
         Some(Subcommand::Apply(mut apply_cli)) => {
@@ -573,9 +575,6 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             let socket_path = cmd.socket_path;
             tokio::task::spawn_blocking(move || codex_stdio_to_uds::run(socket_path.as_path()))
                 .await??;
-        }
-        Some(Subcommand::ExecPolicyCheck(cmd)) => {
-            run_execpolicycheck(cmd)?;
         }
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
             FeaturesSubcommand::List => {
