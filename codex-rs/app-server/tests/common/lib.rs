@@ -14,7 +14,7 @@ pub use mock_model_server::create_mock_chat_completions_server;
 pub use mock_model_server::create_mock_chat_completions_server_unchecked;
 pub use responses::create_apply_patch_sse_response;
 pub use responses::create_final_assistant_message_sse_response;
-pub use responses::create_shell_sse_response;
+pub use responses::create_shell_command_sse_response;
 pub use rollout::create_fake_rollout;
 use serde::de::DeserializeOwned;
 

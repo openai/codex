@@ -30,7 +30,7 @@ use mcp_test_support::McpProcess;
 use mcp_test_support::create_apply_patch_sse_response;
 use mcp_test_support::create_final_assistant_message_sse_response;
 use mcp_test_support::create_mock_chat_completions_server;
-use mcp_test_support::create_shell_sse_response;
+use mcp_test_support::create_shell_command_sse_response;
 
 // Allow ample time on slower CI or under load to avoid flakes.
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
@@ -77,7 +77,7 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
         server: _server,
         dir: _dir,
     } = create_mcp_process(vec![
-        create_shell_sse_response(
+        create_shell_command_sse_response(
             shell_command.clone(),
             Some(workdir_for_shell_function_call.path()),
             Some(5_000),

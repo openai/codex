@@ -97,7 +97,7 @@ impl ActionKind {
         server: &MockServer,
         call_id: &str,
         with_escalated_permissions: bool,
-    ) -> Result<(Value, Option<Vec<String>>)> {
+    ) -> Result<(Value, Option<String>)> {
         match self {
             ActionKind::WriteFile { target, content } => {
                 let (path, _) = target.resolve_for_patch(test);
@@ -111,8 +111,9 @@ impl ActionKind {
                         path = path
                     ),
                 ];
-                let event = shell_event(call_id, &command, 1_000, with_escalated_permissions)?;
-                Ok((event, Some(command)))
+                let (event, expected_command) =
+                    shell_event(call_id, &command, 1_000, with_escalated_permissions)?;
+                Ok((event, Some(expected_command)))
             }
             ActionKind::FetchUrl {
                 endpoint,
@@ -132,16 +133,18 @@ impl ActionKind {
                 );
 
                 let command = vec!["python3".to_string(), "-c".to_string(), script];
-                let event = shell_event(call_id, &command, 1_000, with_escalated_permissions)?;
-                Ok((event, Some(command)))
+                let (event, expected_command) =
+                    shell_event(call_id, &command, 1_000, with_escalated_permissions)?;
+                Ok((event, Some(expected_command)))
             }
             ActionKind::RunCommand { command } => {
                 let command: Vec<String> = command
                     .iter()
                     .map(std::string::ToString::to_string)
                     .collect();
-                let event = shell_event(call_id, &command, 1_000, with_escalated_permissions)?;
-                Ok((event, Some(command)))
+                let (event, expected_command) =
+                    shell_event(call_id, &command, 1_000, with_escalated_permissions)?;
+                Ok((event, Some(expected_command)))
             }
             ActionKind::RunUnifiedExecCommand {
                 command,
@@ -154,14 +157,7 @@ impl ActionKind {
                     with_escalated_permissions,
                     *justification,
                 )?;
-                Ok((
-                    event,
-                    Some(vec![
-                        "/bin/bash".to_string(),
-                        "-lc".to_string(),
-                        command.to_string(),
-                    ]),
-                ))
+                Ok((event, Some(command.to_string())))
             }
             ActionKind::ApplyPatchFunction { target, content } => {
                 let (path, patch_path) = target.resolve_for_patch(test);
@@ -174,8 +170,9 @@ impl ActionKind {
                 let _ = fs::remove_file(&path);
                 let patch = build_add_file_patch(&patch_path, content);
                 let command = shell_apply_patch_command(&patch);
-                let event = shell_event(call_id, &command, 5_000, with_escalated_permissions)?;
-                Ok((event, Some(command)))
+                let (event, expected_command) =
+                    shell_event(call_id, &command, 5_000, with_escalated_permissions)?;
+                Ok((event, Some(expected_command)))
             }
         }
     }
@@ -192,7 +189,7 @@ fn shell_apply_patch_command(patch: &str) -> Vec<String> {
         script.push('\n');
     }
     script.push_str("PATCH\n");
-    vec!["bash".to_string(), "-lc".to_string(), script]
+    vec![script]
 }
 
 fn shell_event(
@@ -200,16 +197,24 @@ fn shell_event(
     command: &[String],
     timeout_ms: u64,
     with_escalated_permissions: bool,
-) -> Result<Value> {
+) -> Result<(Value, String)> {
+    let command_str = if command.len() == 1 {
+        command[0].clone()
+    } else {
+        shlex::try_join(command.iter().map(String::as_str))?
+    };
     let mut args = json!({
-        "command": command,
+        "command": command_str,
         "timeout_ms": timeout_ms,
     });
     if with_escalated_permissions {
         args["with_escalated_permissions"] = json!(true);
     }
     let args_str = serde_json::to_string(&args)?;
-    Ok(ev_function_call(call_id, "shell", &args_str))
+    Ok((
+        ev_function_call(call_id, "shell_command", &args_str),
+        command_str,
+    ))
 }
 
 fn exec_command_event(
@@ -296,7 +301,10 @@ impl Expectation {
             }
             Expectation::FileCreatedNoExitCode { target, content } => {
                 let (path, _) = target.resolve_for_patch(test);
-                assert_eq!(result.exit_code, None, "expected no exit code for {path:?}");
+                assert!(
+                    result.exit_code.is_none() || result.exit_code == Some(0),
+                    "expected no exit code for {path:?}",
+                );
                 assert!(
                     result.stdout.contains(content),
                     "stdout missing {content:?}: {}",
@@ -385,8 +393,8 @@ impl Expectation {
                 );
             }
             Expectation::NetworkSuccessNoExitCode { body_contains } => {
-                assert_eq!(
-                    result.exit_code, None,
+                assert!(
+                    result.exit_code.is_none() || result.exit_code == Some(0),
                     "expected no exit code for successful network call: {}",
                     result.stdout
                 );
@@ -433,8 +441,8 @@ impl Expectation {
                 );
             }
             Expectation::CommandSuccessNoExitCode { stdout_contains } => {
-                assert_eq!(
-                    result.exit_code, None,
+                assert!(
+                    result.exit_code.is_none() || result.exit_code == Some(0),
                     "expected no exit code for trusted command: {}",
                     result.stdout
                 );
@@ -531,10 +539,18 @@ fn parse_result(item: &Value) -> CommandResult {
             CommandResult { exit_code, stdout }
         }
         Err(_) => {
+            let structured = Regex::new(r"(?s)^Exit code:\s*(-?\d+).*?Output:\n(.*)$").unwrap();
             let regex =
                 Regex::new(r"(?s)^.*?Process exited with code (\d+)\n.*?Output:\n(.*)$").unwrap();
             // parse freeform output
-            if let Some(captures) = regex.captures(output_str) {
+            if let Some(captures) = structured.captures(output_str) {
+                let exit_code = captures.get(1).unwrap().as_str().parse::<i64>().unwrap();
+                let output = captures.get(2).unwrap().as_str();
+                CommandResult {
+                    exit_code: Some(exit_code),
+                    stdout: output.to_string(),
+                }
+            } else if let Some(captures) = regex.captures(output_str) {
                 let exit_code = captures.get(1).unwrap().as_str().parse::<i64>().unwrap();
                 let output = captures.get(2).unwrap().as_str();
                 CommandResult {
@@ -553,7 +569,7 @@ fn parse_result(item: &Value) -> CommandResult {
 
 async fn expect_exec_approval(
     test: &TestCodex,
-    expected_command: &[String],
+    expected_command: &str,
 ) -> ExecApprovalRequestEvent {
     let event = wait_for_event(&test.codex, |event| {
         matches!(
@@ -565,7 +581,12 @@ async fn expect_exec_approval(
 
     match event {
         EventMsg::ExecApprovalRequest(approval) => {
-            assert_eq!(approval.command, expected_command);
+            let last_arg = approval
+                .command
+                .last()
+                .map(std::string::String::as_str)
+                .unwrap_or_default();
+            assert_eq!(last_arg, expected_command);
             approval
         }
         EventMsg::TaskComplete(_) => panic!("expected approval request before completion"),
@@ -660,7 +681,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             features: vec![],
             model_override: Some("gpt-5.1"),
             outcome: Outcome::Auto,
-            expectation: Expectation::FileCreatedNoExitCode {
+            expectation: Expectation::FileCreated {
                 target: TargetPath::OutsideWorkspace("dfa_on_request_5_1.txt"),
                 content: "danger-on-request",
             },
@@ -1020,7 +1041,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
         },
         ScenarioSpec {
-            name: "apply_patch_shell_requires_patch_approval",
+            name: "apply_patch_shell_command_requires_patch_approval",
             approval_policy: UnlessTrusted,
             sandbox_policy: workspace_write(false),
             action: ActionKind::ApplyPatchShell {
@@ -1114,7 +1135,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
         },
         ScenarioSpec {
-            name: "apply_patch_shell_outside_requires_patch_approval",
+            name: "apply_patch_shell_command_outside_requires_patch_approval",
             approval_policy: OnRequest,
             sandbox_policy: workspace_write(false),
             action: ActionKind::ApplyPatchShell {
@@ -1509,7 +1530,7 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
             expected_reason,
         } => {
             let command = expected_command
-                .as_ref()
+                .as_deref()
                 .expect("exec approval requires shell command");
             let approval = expect_exec_approval(&test, command).await;
             if let Some(expected_reason) = expected_reason {

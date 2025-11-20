@@ -2,7 +2,7 @@ use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_chat_completions_server;
-use app_test_support::create_shell_sse_response;
+use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
@@ -56,7 +56,7 @@ async fn test_codex_jsonrpc_conversation_flow() -> Result<()> {
     // Create a mock model server that immediately ends each turn.
     // Two turns are expected: initial session configure + one user message.
     let responses = vec![
-        create_shell_sse_response(
+        create_shell_command_sse_response(
             vec!["ls".to_string()],
             Some(&working_directory),
             Some(5000),
@@ -175,7 +175,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
 
     // Mock server will request a python shell call for the first and second turn, then finish.
     let responses = vec![
-        create_shell_sse_response(
+        create_shell_command_sse_response(
             vec![
                 "python3".to_string(),
                 "-c".to_string(),
@@ -186,7 +186,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
             "call1",
         )?,
         create_final_assistant_message_sse_response("done 1")?,
-        create_shell_sse_response(
+        create_shell_command_sse_response(
             vec![
                 "python3".to_string(),
                 "-c".to_string(),
@@ -353,7 +353,7 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
     std::fs::create_dir(&second_cwd)?;
 
     let responses = vec![
-        create_shell_sse_response(
+        create_shell_command_sse_response(
             vec![
                 "bash".to_string(),
                 "-lc".to_string(),
@@ -364,7 +364,7 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
             "call-first",
         )?,
         create_final_assistant_message_sse_response("done first")?,
-        create_shell_sse_response(
+        create_shell_command_sse_response(
             vec![
                 "bash".to_string(),
                 "-lc".to_string(),
