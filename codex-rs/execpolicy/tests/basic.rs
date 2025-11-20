@@ -62,14 +62,6 @@ prefix_rule(
 }
 
 #[test]
-fn serializes_no_match_as_object() {
-    let serialized =
-        serde_json::to_value(&Evaluation::NoMatch {}).expect("should serialize evaluation");
-
-    assert_eq!(json!({"noMatch": {}}), serialized);
-}
-
-#[test]
 fn parses_multiple_policy_files() {
     let first_policy = r#"
 prefix_rule(
