@@ -248,7 +248,7 @@ pub fn default_user_shell() -> Shell {
                 .or_else(|| get_shell(ShellType::Zsh, None))
         };
 
-            .unwrap_or(ultimate_fallback_shell())
+        shell_with_fallback.unwrap_or(ultimate_fallback_shell())
     }
 }
 
