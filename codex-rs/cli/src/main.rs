@@ -333,9 +333,7 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
 }
 
 fn run_execpolicycheck(cmd: ExecPolicyCheckCommand) -> anyhow::Result<()> {
-    let json = cmd.run()?;
-    println!("{json}");
-    Ok(())
+    cmd.run()
 }
 
 #[derive(Debug, Default, Parser, Clone)]

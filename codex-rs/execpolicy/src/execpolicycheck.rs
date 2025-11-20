@@ -13,7 +13,7 @@ use crate::PolicyParser;
 #[derive(Debug, Parser, Clone)]
 pub struct ExecPolicyCheckCommand {
     /// Paths to execpolicy files to evaluate (repeatable).
-    #[arg(short = 'p", long = "policy", value_name = "PATH", required = true)]
+    #[arg(short = 'p', long = "policy", value_name = "PATH", required = true)]
     pub policies: Vec<PathBuf>,
 
     /// Pretty-print the JSON output.
@@ -32,11 +32,14 @@ pub struct ExecPolicyCheckCommand {
 
 impl ExecPolicyCheckCommand {
     /// Load the policies for this command, evaluate the command, and render JSON output.
-    pub fn run(&self) -> Result<String> {
+    pub fn run(&self) -> Result<()> {
         let policy = load_policies(&self.policies)?;
         let evaluation = policy.check(&self.command);
 
-        format_evaluation_json(&evaluation, self.pretty)
+        let json = format_evaluation_json(&evaluation, self.pretty)?;
+        println!("{json}");
+
+        Ok(())
     }
 }
 
