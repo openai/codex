@@ -1587,17 +1587,16 @@ mod handlers {
                 decision,
                 ReviewDecision::Approved | ReviewDecision::ApprovedForSession
             )
+            && let Err(err) = sess.persist_command_allow_prefix(&prefix).await
         {
-            if let Err(err) = sess.persist_command_allow_prefix(&prefix).await {
-                let message = format!("Failed to update execpolicy allow list: {err}");
-                tracing::warn!("{message}");
-                let warning = EventMsg::Warning(WarningEvent { message });
-                sess.send_event_raw(Event {
-                    id: id.clone(),
-                    msg: warning,
-                })
-                .await;
-            }
+            let message = format!("Failed to update execpolicy allow list: {err}");
+            tracing::warn!("{message}");
+            let warning = EventMsg::Warning(WarningEvent { message });
+            sess.send_event_raw(Event {
+                id: id.clone(),
+                msg: warning,
+            })
+            .await;
         }
         match decision {
             ReviewDecision::Abort => {

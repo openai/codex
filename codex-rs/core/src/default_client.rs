@@ -329,7 +329,10 @@ mod tests {
         let originator_header = headers
             .get("originator")
             .expect("originator header missing");
-        assert_eq!(originator_header.to_str().unwrap(), "codex_cli_rs");
+        assert_eq!(
+            originator_header.to_str().unwrap(),
+            originator().value.as_str()
+        );
 
         // User-Agent matches the computed Codex UA for that originator
         let expected_ua = get_codex_user_agent();

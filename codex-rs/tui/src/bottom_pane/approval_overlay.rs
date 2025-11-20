@@ -414,23 +414,23 @@ fn exec_options(allow_prefix: Option<Vec<String>>) -> Vec<ApprovalOption> {
         allow_prefix: None,
     });
 
-    let (label, allow_prefix) = match allow_prefix {
-        Some(prefix) => (
-            "Yes, and don't ask again for commands with this prefix".to_string(),
-            Some(prefix),
-        ),
-        None => (
-            "Yes, and don't ask again for this command".to_string(),
-            None,
-        ),
-    };
     options.push(ApprovalOption {
-        label,
+        label: "Yes, and don't ask again for this command".to_string(),
         decision: ReviewDecision::ApprovedForSession,
         display_shortcut: None,
         additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
-        allow_prefix,
+        allow_prefix: None,
     });
+
+    if let Some(prefix) = allow_prefix {
+        options.push(ApprovalOption {
+            label: "Yes, and don't ask again for commands with this prefix".to_string(),
+            decision: ReviewDecision::ApprovedForSession,
+            display_shortcut: None,
+            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('p'))],
+            allow_prefix: Some(prefix),
+        });
+    }
 
     options.push(ApprovalOption {
         label: "No, and tell Codex what to do differently".to_string(),
@@ -522,7 +522,7 @@ mod tests {
             },
             tx,
         );
-        view.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
         let mut saw_op = false;
         while let Ok(ev) = rx.try_recv() {
             if let AppEvent::CodexOp(Op::ExecApproval {
