@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Interactive Logic Gate Map - TITAN Numerology</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <style>
+    body {
+      background: #161d21;
+      color: #fafafa;
+      font-family: ui-monospace, monospace;
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    h1 {
+      font-size: 20px;
+      margin-top: 20px;
+      margin-bottom: 6px;
+      letter-spacing: 0.03em;
+      text-align: center;
+    }
+    .tip {
+      font-size: 13px;
+      color: #b7c0c9;
+      margin-bottom: 10px;
+      text-align: center;
+    }
+    .svgwrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      width: 100vw;
+      max-width: 540px;
+      box-sizing: border-box;
+    }
+    svg {
+      background: #242a32;
+      border-radius: 16px;
+      box-shadow: 0 2px 24px #000a;
+      width: 98vw;
+      max-width: 500px;
+      height: auto;
+      margin: 0 auto;
+      touch-action: manipulation;
+      user-select: none;
+      margin-bottom: 16px;
+    }
+    .infopanel {
+      min-height: 58px;
+      background: #222937f9;
+      color: #e4e9ee;
+      font-size: 16px;
+      border-radius: 10px;
+      padding: 15px 18px 13px 18px;
+      margin: 0 auto 18px auto;
+      box-shadow: 0 2px 14px #0004;
+      width: 98vw;
+      max-width: 450px;
+      transition: background 0.2s;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .labeltitle {
+      font-size: 17px;
+      font-weight: bold;
+      color: #62e9c8;
+      letter-spacing: 0.04em;
+    }
+    @media (max-width: 560px) {
+      svg { max-width: 97vw; }
+      .infopanel { max-width: 97vw; }
+    }
+    .gate {
+      cursor: pointer;
+      transition: filter 0.18s, r 0.22s;
+      outline: none;
+    }
+    .gate:focus-visible {
+      filter: drop-shadow(0 0 8px #fff8) brightness(1.15);
+    }
+    .gate.selected circle {
+      filter: drop-shadow(0 0 20px #29f9  );
+      stroke: #f9f871;
+      stroke-width: 3;
+      r: 24;
+      animation: pulse 1.2s cubic-bezier(.6,0,.4,1) 2;
+    }
+    @keyframes pulse {
+      0% { filter: drop-shadow(0 0 0px #29f9); r: 18; }
+      35% { filter: drop-shadow(0 0 20px #29f9); r: 25; }
+      70% { filter: drop-shadow(0 0 10px #29f9); r: 21; }
+      100% { filter: drop-shadow(0 0 0px #29f9); r: 18; }
+    }
+  </style>
+</head>
+<body>
+  <h1>Interactive Logic Gate Map</h1>
+  <div class="tip">Tap or click any gate for details. (Mobile & desktop supported.)</div>
+  <div class="svgwrap">
+    <svg id="gatemap" viewBox="0 0 500 500">
+      <!-- Grid Lines and Axes -->
+      <g stroke="#39414e" stroke-width="1">
+        <line x1="50" y1="50" x2="50" y2="470"/>
+        <line x1="470" y1="50" x2="470" y2="470"/>
+        <line x1="50" y1="50" x2="470" y2="50"/>
+        <line x1="50" y1="470" x2="470" y2="470"/>
+        <g stroke="#31363e" stroke-dasharray="2 4">
+          <line x1="110" y1="50" x2="110" y2="470"/>
+          <line x1="170" y1="50" x2="170" y2="470"/>
+          <line x1="230" y1="50" x2="230" y2="470"/>
+          <line x1="290" y1="50" x2="290" y2="470"/>
+          <line x1="350" y1="50" x2="350" y2="470"/>
+          <line x1="410" y1="50" x2="410" y2="470"/>
+          <line x1="50" y1="110" x2="470" y2="110"/>
+          <line x1="50" y1="170" x2="470" y2="170"/>
+          <line x1="50" y1="230" x2="470" y2="230"/>
+          <line x1="50" y1="290" x2="470" y2="290"/>
+          <line x1="50" y1="350" x2="470" y2="350"/>
+          <line x1="50" y1="410" x2="470" y2="410"/>
+        </g>
+      </g>
+      <g font-size="16" fill="#9eacc4" font-family="ui-monospace, monospace" text-anchor="middle">
+        <text x="50" y="38">1</text>
+        <text x="110" y="38">2</text>
+        <text x="170" y="38">3</text>
+        <text x="230" y="38">4</text>
+        <text x="290" y="38">5</text>
+        <text x="350" y="38">6</text>
+        <text x="410" y="38">7</text>
+        <text x="470" y="38">8</text>
+        <text x="35" y="50">1</text>
+        <text x="35" y="110">2</text>
+        <text x="35" y="170">3</text>
+        <text x="35" y="230">4</text>
+        <text x="35" y="290">5</text>
+        <text x="35" y="350">6</text>
+        <text x="35" y="410">7</text>
+        <text x="35" y="470">8</text>
+      </g>
+      <!-- Gates with data-* for JS -->
+      <g id="gates">
+        <g class="gate" tabindex="0" data-label="INIT_GATE" data-desc="Start signal. Initializes the logic cycle." data-color="#25cb85">
+          <circle cx="50" cy="50" r="18" fill="#25cb85"/>
+          <text x="50" y="56" text-anchor="middle" font-size="26" fill="#191d17">⎋</text>
+        </g>
+        <g class="gate" tabindex="0" data-label="PASS_GATE" data-desc="Passes signal onward. Forwards current without modification." data-color="#4fd7ff">
+          <circle cx="170" cy="50" r="18" fill="#4fd7ff"/>
+          <text x="170" y="56" text-anchor="middle" font-size="26" fill="#233b4c">→</text>
+        </g>
+        <g class="gate" tabindex="0" data-label="DAMPER" data-desc="Dampens/amplifies signal, modeling delay or resistance." data-color="#bbbfc6">
+          <circle cx="290" cy="110" r="18" fill="#bbbfc6"/>
+          <text x="290" y="116" text-anchor="middle" font-size="26" fill="#363636">▓</text>
+        </g>
+        <g class="gate" tabindex="0" data-label="SWITCH" data-desc="Switches or reroutes signal; logic branch or toggle." data-color="#feac46">
+          <circle cx="410" cy="170" r="18" fill="#feac46"/>
+          <text x="410" y="176" text-anchor="middle" font-size="26" fill="#443203">⇄</text>
+        </g>
+        <g class="gate" tabindex="0" data-label="LOGIC_Q1" data-desc="Logic checkpoint Q1. Evaluates a logical query or condition." data-color="#bc77fa">
+          <circle cx="470" cy="230" r="18" fill="#bc77fa"/>
+          <text x="470" y="236" text-anchor="middle" font-size="22" fill="#26124c">Q1?</text>
+        </g>
+        <g class="gate" tabindex="0" data-label="LOGIC_Q2" data-desc="Logic checkpoint Q2. Evaluates a logical query or condition." data-color="#bc77fa">
+          <circle cx="230" cy="290" r="18" fill="#bc77fa"/>
+          <text x="230" y="296" text-anchor="middle" font-size="22" fill="#26124c">Q2?</text>
+        </g>
+        <g class="gate" tabindex="0" data-label="LOGIC_Q3" data-desc="Logic checkpoint Q3. Evaluates a logical query or condition." data-color="#bc77fa">
+          <circle cx="350" cy="350" r="18" fill="#bc77fa"/>
+          <text x="350" y="356" text-anchor="middle" font-size="22" fill="#26124c">Q3?</text>
+        </g>
+        <g class="gate" tabindex="0" data-label="THETA_GATE" data-desc="Completes the logic cycle. End or transformation gate." data-color="#ef3557">
+          <circle cx="470" cy="350" r="18" fill="#ef3557"/>
+          <text x="470" y="356" text-anchor="middle" font-size="26" fill="#23070c">⊗</text>
+        </g>
+      </g>
+    </svg>
+    <div class="infopanel" id="info">
+      <span class="labeltitle">Tap a gate to view info.</span>
+      <span class="desc" style="font-size:14px; color:#e0e0e0;">You’ll see the function of each logic node here.</span>
+    </div>
+  </div>
+  <script>
+    // Simple interactive panel
+    const gates = document.querySelectorAll('.gate');
+    const info = document.getElementById('info');
+    function showInfo(gate) {
+      gates.forEach(g => g.classList.remove('selected'));
+      gate.classList.add('selected');
+      info.innerHTML = `
+        <span class="labeltitle">${gate.dataset.label.replace(/_/g," ")} </span>
+        <span class="desc">${gate.dataset.desc}</span>
+      `;
+    }
+    gates.forEach(gate => {
+      gate.addEventListener('click', e => showInfo(gate));
+      gate.addEventListener('keydown', e => { if (e.key === "Enter" || e.key === " ") showInfo(gate); });
+      gate.addEventListener('touchstart', e => { showInfo(gate); e.stopPropagation(); });
+    });
+    document.getElementById('gatemap').addEventListener('click', e => {
+      if(e.target.tagName === 'svg') {
+        gates.forEach(g => g.classList.remove('selected'));
+        info.innerHTML = `<span class="labeltitle">Tap a gate to view info.</span>
+          <span class="desc" style="font-size:14px; color:#e0e0e0;">You’ll see the function of each logic node here.</span>`;
+      }
+    });
+  </script>
+</body>
+</html>
