@@ -44,7 +44,17 @@ impl CustomPromptView {
         context_label: Option<String>,
         on_submit: PromptSubmitted,
     ) -> Self {
-        Self {
+        Self::new_with_initial_text(title, placeholder, context_label, None, on_submit)
+    }
+
+    pub(crate) fn new_with_initial_text(
+        title: String,
+        placeholder: String,
+        context_label: Option<String>,
+        initial_text: Option<String>,
+        on_submit: PromptSubmitted,
+    ) -> Self {
+        let mut this = Self {
             title,
             placeholder,
             context_label,
@@ -52,7 +62,11 @@ impl CustomPromptView {
             textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
             complete: false,
+        };
+        if let Some(text) = initial_text {
+            this.textarea.set_text(&text);
         }
+        this
     }
 }
 

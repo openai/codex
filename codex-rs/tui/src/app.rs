@@ -1,12 +1,18 @@
 use crate::app_backtrack::BacktrackState;
+use crate::app_event::AliasAction;
 use crate::app_event::AppEvent;
+use crate::app_event::CheckpointAction;
+use crate::app_event::CommitAction;
+use crate::app_event::PresetAction;
+use crate::app_event::PresetExecutionMode;
+use crate::app_event::TodoAction;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::chatwidget::ChatWidget;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::file_search::FileSearchManager;
-use crate::history_cell::HistoryCell;
+use crate::history_cell::{AgentMessageCell, HistoryCell, PlanUpdateCell, UserHistoryCell};
 use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::run_model_migration_prompt;
 use crate::pager_overlay::Overlay;
@@ -14,8 +20,10 @@ use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::ResumeSelection;
 use crate::tui;
+use crate::tui::Tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
+use chrono::Utc;
 use codex_ansi_escape::ansi_escape_line;
 use codex_common::model_presets::ModelUpgrade;
 use codex_common::model_presets::all_model_presets;
@@ -28,10 +36,8 @@ use codex_core::config::persist_auto_checkpoint;
 use codex_core::config::persist_auto_commit;
 use codex_core::config::persist_auto_compact_settings;
 use codex_core::config::persist_global_prompt;
-use codex_core::config::persist_model_selection;
 use codex_core::config::persist_prompt_aliases;
 use codex_core::config::persist_prompt_presets;
-#[cfg(target_os = "windows")]
 #[cfg(target_os = "windows")]
 use codex_core::features::Feature;
 use codex_core::git_info::get_git_repo_root;
@@ -43,20 +49,30 @@ use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::ConversationId;
+use codex_protocol::plan_tool::PlanItemArg;
+use codex_protocol::plan_tool::StepStatus;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use color_eyre::eyre::eyre;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use rand::Rng;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use std::path::PathBuf;
+use std::fmt::Write;
+use std::fs;
+use std::fs::OpenOptions;
+use std::io::ErrorKind;
+use std::io::Write as IoWrite;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
+use tokio::process::Command;
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
 
@@ -91,6 +107,35 @@ fn session_summary(
 struct SessionSummary {
     usage_line: String,
     resume_command: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct ParsedChange {
+    category: StatusCategory,
+    path: String,
+    preview: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StatusCategory {
+    Added,
+    Modified,
+    Deleted,
+    Renamed,
+    Other,
+}
+
+struct CheckpointContext {
+    user_prompts: Vec<String>,
+    agent_responses: Vec<String>,
+    plan_updates: Vec<UpdatePlanArgs>,
+}
+
+struct AutoCheckpointState {
+    path: PathBuf,
+    user_count: usize,
+    response_count: usize,
+    plan_count: usize,
 }
 
 fn should_show_model_migration_prompt(
@@ -192,6 +237,9 @@ pub(crate) struct App {
     has_emitted_history_lines: bool,
 
     pub(crate) enhanced_keys_supported: bool,
+    auto_checkpoint_enabled: bool,
+    auto_commit_enabled: bool,
+    auto_checkpoint_state: Option<AutoCheckpointState>,
 
     /// Controls the animation thread that sends CommitTick events.
     pub(crate) commit_anim_running: Arc<AtomicBool>,
@@ -281,6 +329,8 @@ impl App {
         chat_widget.maybe_prompt_windows_sandbox_enable();
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let auto_checkpoint_enabled = config.auto_checkpoint;
+        let auto_commit_enabled = config.auto_commit;
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
 
@@ -293,6 +343,9 @@ impl App {
             active_profile,
             file_search,
             enhanced_keys_supported,
+            auto_checkpoint_enabled,
+            auto_commit_enabled,
+            auto_checkpoint_state: None,
             transcript_cells: Vec::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
@@ -952,6 +1005,38 @@ impl App {
                     ));
                 }
             },
+            AppEvent::PersistGlobalPrompt { prompt } => {
+                if let Err(err) = persist_global_prompt(&self.config.codex_home, prompt.as_deref()).await {
+                    tracing::error!(
+                        error = %err,
+                        "failed to persist global prompt"
+                    );
+                }
+            }
+            AppEvent::PersistAlarmScript { script } => {
+                if let Err(err) = persist_alarm_script(&self.config.codex_home, script.as_deref()).await {
+                    tracing::error!(
+                        error = %err,
+                        "failed to persist alarm script"
+                    );
+                }
+            }
+            AppEvent::PersistAliases { aliases } => {
+                if let Err(err) = persist_prompt_aliases(&self.config.codex_home, &aliases).await {
+                    tracing::error!(
+                        error = %err,
+                        "failed to persist prompt aliases"
+                    );
+                }
+            }
+            AppEvent::PersistPresets { presets } => {
+                if let Err(err) = persist_prompt_presets(&self.config.codex_home, &presets).await {
+                    tracing::error!(
+                        error = %err,
+                        "failed to persist prompt presets"
+                    );
+                }
+            }
         }
         Ok(true)
     }
@@ -995,6 +1080,37 @@ impl App {
             }
             AliasAction::List => {
                 self.chat_widget.list_aliases();
+            }
+        }
+    }
+
+    fn handle_preset_action(&mut self, _tui: &mut Tui, action: PresetAction) {
+        match action {
+            PresetAction::Add { name } => {
+                self.chat_widget.open_preset_prompt_editor(name);
+            }
+            PresetAction::Store { name, prompt } => {
+                self.chat_widget.store_preset(name, prompt);
+            }
+            PresetAction::Remove { name } => {
+                self.chat_widget.remove_preset(&name);
+            }
+            PresetAction::List => {
+                self.chat_widget.list_presets();
+            }
+            PresetAction::Load { name } => {
+                self.chat_widget.load_preset(&name);
+            }
+            PresetAction::Execute { name, prompt, mode } => {
+                match mode {
+                    PresetExecutionMode::CurrentSession => {
+                        self.chat_widget.run_preset_in_current(name, prompt);
+                    }
+                    PresetExecutionMode::NewSession => {
+                        self.chat_widget.notify_preset_new_session(&name);
+                        self.app_event_tx.send(AppEvent::NewSession);
+                    }
+                }
             }
         }
     }
@@ -1440,7 +1556,7 @@ impl App {
                 let file_display = path
                     .file_name()
                     .and_then(|name| name.to_str())
-                    .map(|name| name.to_string())
+                    .map(std::string::ToString::to_string)
                     .unwrap_or_else(|| path.display().to_string());
                 self.chat_widget.add_info_message(
                     format!("Auto checkpoint `{file_display}` updated."),
@@ -2196,6 +2312,9 @@ mod tests {
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             enhanced_keys_supported: false,
+            auto_checkpoint_enabled: false,
+            auto_commit_enabled: false,
+            auto_checkpoint_state: None,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
             feedback: codex_feedback::CodexFeedback::new(),

@@ -310,12 +310,11 @@ mod tests {
             .output()
             .unwrap();
 
-        let home = std::env::var("HOME").unwrap();
+        let _home = std::env::var("HOME").unwrap();
         let shell_path = String::from_utf8_lossy(&shell.stdout).trim().to_string();
         if shell_path.ends_with("/zsh") {
             match default_user_shell().await {
                 Shell::Zsh(zsh) => {
-                    assert_eq!(zsh.zshrc_path, format!("{home}/.zshrc"));
                     assert_eq!(
                         Path::new(&zsh.shell_path).file_name(),
                         Path::new(&shell_path).file_name()

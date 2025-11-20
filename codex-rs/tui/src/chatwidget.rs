@@ -71,7 +71,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 use tracing::debug;
 
-use crate::app_event::AppEvent;
+use crate::app_event::{AliasAction, AppEvent, PresetAction, PresetExecutionMode};
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::BottomPane;
@@ -94,6 +94,7 @@ use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PlainHistoryCell;
+use crate::history_cell::TodoEntry;
 use crate::markdown::append_markdown;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
@@ -127,6 +128,7 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_file_search::FileMatch;
+use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use strum::IntoEnumIterator;
 
@@ -253,6 +255,18 @@ enum RateLimitSwitchPromptState {
     Shown,
 }
 
+#[derive(Debug, Clone)]
+struct AliasEntry {
+    name: String,
+    prompt: String,
+}
+
+#[derive(Debug, Clone)]
+struct PresetEntry {
+    name: String,
+    prompt: String,
+}
+
 pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
@@ -293,6 +307,7 @@ pub(crate) struct ChatWidget {
     queued_user_messages: VecDeque<UserMessage>,
     todo_items: Vec<TodoItem>,
     todo_auto_enabled: bool,
+    auto_checkpoint_enabled: bool,
     auto_commit_enabled: bool,
     auto_compact_enabled: bool,
     auto_compact_threshold_percent: u8,
@@ -529,7 +544,8 @@ impl ChatWidget {
                     .percent_of_context_window_remaining(window)
             });
             self.bottom_pane.set_context_window_percent(percent);
-            self.update_auto_compact_state(percent);
+            let auto_compact_percent = percent.and_then(|value| u8::try_from(value).ok());
+            self.update_auto_compact_state(auto_compact_percent);
             self.token_info = Some(info);
         } else {
             self.bottom_pane.set_context_window_percent(None);
@@ -1196,6 +1212,7 @@ impl ChatWidget {
             queued_user_messages: VecDeque::new(),
             todo_items: Vec::new(),
             todo_auto_enabled: false,
+            auto_checkpoint_enabled: config.auto_checkpoint,
             auto_commit_enabled: config.auto_commit,
             auto_compact_enabled: config.auto_compact,
             auto_compact_threshold_percent: config.auto_compact_threshold_percent,
@@ -1281,6 +1298,7 @@ impl ChatWidget {
             queued_user_messages: VecDeque::new(),
             todo_items: Vec::new(),
             todo_auto_enabled: false,
+            auto_checkpoint_enabled: config.auto_checkpoint,
             auto_commit_enabled: config.auto_commit,
             auto_compact_enabled: config.auto_compact,
             auto_compact_threshold_percent: config.auto_compact_threshold_percent,
@@ -1528,6 +1546,9 @@ impl ChatWidget {
                         grant_root: Some(PathBuf::from("/tmp")),
                     }),
                 }));
+            }
+            SlashCommand::Alias | SlashCommand::Preset | SlashCommand::Todo | SlashCommand::Checkpoint | SlashCommand::Commit => {
+                // These commands are handled in the bottom pane's chat composer
             }
         }
     }
@@ -2757,12 +2778,11 @@ impl ChatWidget {
         let initial_text = self.presets.get(&key).map(|entry| entry.prompt.clone());
 
         let tx = self.app_event_tx.clone();
-        let view = CustomPromptView::new(
+        let view = CustomPromptView::new_with_initial_text(
             format!("Save preset {display_name}"),
             "Type the prompt to run when this preset is loaded.".to_string(),
             Some("Press Enter to save; Esc to cancel.".to_string()),
             initial_text,
-            false,
             Box::new(move |input: String| {
                 tx.send(AppEvent::PresetCommand {
                     action: PresetAction::Store {
@@ -2946,7 +2966,7 @@ impl ChatWidget {
             format!("Running preset {name} in current conversation."),
             Some("Use `/preset load <name>` again to open the session menu.".to_string()),
         );
-        self.submit_text_message(prompt);
+        self.submit_user_message(UserMessage::from(prompt));
     }
 
     pub(crate) fn notify_preset_new_session(&mut self, name: &str) {
@@ -2969,12 +2989,11 @@ impl ChatWidget {
         let initial_text = self.aliases.get(&key).map(|entry| entry.prompt.clone());
 
         let tx = self.app_event_tx.clone();
-        let view = CustomPromptView::new(
+        let view = CustomPromptView::new_with_initial_text(
             format!("Save alias //{display_name}"),
             "Type the prompt to run when this alias is invoked.".to_string(),
             Some("Press Enter to save; Esc to cancel.".to_string()),
             initial_text,
-            false,
             Box::new(move |input: String| {
                 tx.send(AppEvent::AliasCommand {
                     action: AliasAction::Store {
@@ -3405,11 +3424,6 @@ impl ChatWidget {
             .map(|value| Config::alarm_script_to_notify_command(value));
     }
 
-    pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
-        self.add_to_history(history_cell::new_info_event(message, hint));
-        self.request_redraw();
-    }
-
     pub(crate) fn add_error_message(&mut self, message: String) {
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
@@ -3723,6 +3737,36 @@ impl Renderable for ChatWidget {
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         self.as_renderable().cursor_pos(area)
     }
+}
+
+#[derive(Clone)]
+struct TodoItem {
+    text: String,
+    normalized: String,
+    completed: bool,
+}
+
+impl TodoItem {
+    fn new(text: String) -> Self {
+        let normalized = normalize_todo_key(&text);
+        Self {
+            text,
+            normalized,
+            completed: false,
+        }
+    }
+}
+
+fn normalize_todo_key(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    trimmed
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
 }
 
 enum Notification {

@@ -48,7 +48,9 @@ use codex_core::config::DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 
-use crate::app_event::AppEvent;
+use crate::app_event::{
+    AliasAction, AppEvent, CheckpointAction, CommitAction, PresetAction, TodoAction,
+};
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
@@ -1579,6 +1581,129 @@ impl ChatComposer {
     }
 
     fn is_valid_alias_name(name: &str) -> bool {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return false;
+        }
+        trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    }
+
+    fn handle_preset_command(&mut self, rest: &str) -> bool {
+        let trimmed = rest.trim();
+        if trimmed.is_empty() {
+            self.app_event_tx.send(AppEvent::PresetCommand {
+                action: PresetAction::List,
+            });
+            return true;
+        }
+
+        let mut parts = trimmed.split_whitespace();
+        let action_token = parts.next().unwrap_or_default();
+        match action_token.to_ascii_lowercase().as_str() {
+            "add" => {
+                let Some(name) = parts.next() else {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event("Usage: /preset add <name>".to_string()),
+                    )));
+                    return false;
+                };
+                if parts.next().is_some() {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event("Usage: /preset add <name>".to_string()),
+                    )));
+                    return false;
+                }
+                let trimmed = name.trim();
+                if !Self::is_valid_preset_name(trimmed) {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event(
+                            "Preset names may only contain letters, numbers, '-' or '_' and cannot be blank.".to_string(),
+                        ),
+                    )));
+                    return false;
+                }
+                self.app_event_tx.send(AppEvent::PresetCommand {
+                    action: PresetAction::Add {
+                        name: trimmed.to_string(),
+                    },
+                });
+                true
+            }
+            "remove" | "rm" | "delete" => {
+                let Some(name) = parts.next() else {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event("Usage: /preset remove <name>".to_string()),
+                    )));
+                    return false;
+                };
+                if parts.next().is_some() {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event("Usage: /preset remove <name>".to_string()),
+                    )));
+                    return false;
+                }
+                let trimmed = name.trim();
+                if !Self::is_valid_preset_name(trimmed) {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event(
+                            "Preset names may only contain letters, numbers, '-' or '_' and cannot be blank.".to_string(),
+                        ),
+                    )));
+                    return false;
+                }
+                self.app_event_tx.send(AppEvent::PresetCommand {
+                    action: PresetAction::Remove {
+                        name: trimmed.to_string(),
+                    },
+                });
+                true
+            }
+            "list" => {
+                if parts.next().is_some() {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event("Usage: /preset list".to_string()),
+                    )));
+                    return false;
+                }
+                self.app_event_tx.send(AppEvent::PresetCommand {
+                    action: PresetAction::List,
+                });
+                true
+            }
+            "load" => {
+                let Some(name) = parts.next() else {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event("Usage: /preset load <name>".to_string()),
+                    )));
+                    return false;
+                };
+                if parts.next().is_some() {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event("Usage: /preset load <name>".to_string()),
+                    )));
+                    return false;
+                }
+                self.app_event_tx.send(AppEvent::PresetCommand {
+                    action: PresetAction::Load {
+                        name: name.to_string(),
+                    },
+                });
+                true
+            }
+            other => {
+                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    history_cell::new_error_event(format!(
+                        "Invalid preset action '{other}'. Use 'add', 'remove', 'list', or 'load'."
+                    )),
+                )));
+                false
+            }
+        }
+    }
+
+    fn is_valid_preset_name(name: &str) -> bool {
         let trimmed = name.trim();
         if trimmed.is_empty() {
             return false;

@@ -34,6 +34,7 @@ use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use anyhow::Context;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -52,10 +53,13 @@ use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
+use tempfile::NamedTempFile;
 
 use crate::config::profile::ConfigProfile;
 use toml::Value as TomlValue;
+use toml_edit::Array as TomlArray;
 use toml_edit::DocumentMut;
+use toml_edit::Item as TomlItem;
 
 pub mod edit;
 pub mod profile;
@@ -85,6 +89,7 @@ fn clamp_auto_compact_threshold(percent: u8) -> u8 {
 }
 
 pub(crate) const CONFIG_TOML_FILE: &str = "config.toml";
+pub(crate) const ALARM_NOTIFY_SENTINEL_ARG: &str = "codex-alarm";
 
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
@@ -145,8 +150,23 @@ pub struct Config {
     /// Developer instructions override injected as a separate message.
     pub developer_instructions: Option<String>,
 
+    /// Optional text prepended to the first user message of every session.
+    pub global_prompt: Option<String>,
+
     /// Compact prompt override.
     pub compact_prompt: Option<String>,
+
+    /// Prompt aliases loaded from config.
+    pub prompt_aliases: HashMap<String, String>,
+
+    /// Prompt presets loaded from config.
+    pub prompt_presets: HashMap<String, String>,
+
+    /// Whether automatic checkpoints should be enabled by default for new sessions.
+    pub auto_checkpoint: bool,
+
+    /// Whether automatic commits should be enabled by default for new sessions.
+    pub auto_commit: bool,
 
     /// Whether automatic conversation compaction should run when the remaining
     /// context window percentage falls below the configured threshold.
@@ -155,6 +175,11 @@ pub struct Config {
     /// Percentage of the model's effective context window that should trigger
     /// automatic compaction when `auto_compact` is enabled.
     pub auto_compact_threshold_percent: u8,
+
+    /// Optional shell script that Codex should run when a turn completes.
+    /// When set, Codex spawns `/bin/sh -c <script>` and exports the last
+    /// assistant reply via the `CODEX_ALARM_LAST_RESPONSE` environment variable.
+    pub alarm_script: Option<String>,
 
     /// Optional external notifier command. When set, Codex will spawn this
     /// program after each completed *turn* (i.e. when the agent finishes
@@ -299,6 +324,47 @@ pub struct Config {
 }
 
 impl Config {
+    /// Build the notify command vector used to spawn the alarm script.
+    pub fn alarm_script_to_notify_command(script: &str) -> Vec<String> {
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            script.to_string(),
+            ALARM_NOTIFY_SENTINEL_ARG.to_string(),
+        ]
+    }
+
+    fn script_from_notify_command(command: &[String]) -> Option<String> {
+        if command.len() < 3 {
+            return None;
+        }
+        let is_shell = matches!(command[0].as_str(), "sh" | "/bin/sh" | "bash" | "/bin/bash");
+        let is_shell_flag = matches!(command[1].as_str(), "-c" | "-lc");
+        if is_shell && is_shell_flag {
+            Some(command[2].clone())
+        } else {
+            None
+        }
+    }
+
+    fn resolve_alarm_settings(
+        notify: Option<Vec<String>>,
+        alarm_script: Option<String>,
+    ) -> (Option<Vec<String>>, Option<String>) {
+        match (notify, alarm_script) {
+            (Some(command), Some(script)) => (Some(command), Some(script)),
+            (Some(command), None) => {
+                let script = Self::script_from_notify_command(&command);
+                (Some(command), script)
+            }
+            (None, Some(script)) => {
+                let notify_command = Self::alarm_script_to_notify_command(&script);
+                (Some(notify_command), Some(script))
+            }
+            (None, None) => (None, None),
+        }
+    }
+
     pub async fn load_with_cli_overrides(
         cli_overrides: Vec<(String, TomlValue)>,
         overrides: ConfigOverrides,
@@ -1087,8 +1153,20 @@ pub struct ConfigToml {
     #[serde(default)]
     pub developer_instructions: Option<String>,
 
+    /// Optional text prepended to the first user message of every session.
+    pub global_prompt: Option<String>,
+
     /// Compact prompt used for history compaction.
     pub compact_prompt: Option<String>,
+
+    /// Default state for automatic checkpoints.
+    pub auto_checkpoint: Option<bool>,
+
+    /// Default state for automatic commits.
+    pub auto_commit: Option<bool>,
+
+    /// Optional shell script executed when a turn completes.
+    pub alarm_script: Option<String>,
 
     /// When set, restricts ChatGPT login to a specific workspace identifier.
     #[serde(default)]
@@ -1651,6 +1729,20 @@ impl Config {
         let base_instructions = base_instructions.or(file_base_instructions);
         let developer_instructions = developer_instructions.or(cfg.developer_instructions);
 
+        let global_prompt = config_profile
+            .global_prompt
+            .or(cfg.global_prompt)
+            .and_then(|prompt| {
+                let trimmed = prompt.trim();
+                if trimmed.is_empty() {
+                    None
+                } else if trimmed.len() == prompt.len() {
+                    Some(prompt)
+                } else {
+                    Some(trimmed.to_string())
+                }
+            });
+
         let experimental_compact_prompt_path = config_profile
             .experimental_compact_prompt_file
             .as_ref()
@@ -1662,9 +1754,25 @@ impl Config {
         )?;
         let compact_prompt = compact_prompt.or(file_compact_prompt);
 
+        let (prompt_aliases, prompt_presets) = cfg
+            .tui
+            .as_ref()
+            .map(|tui| (tui.aliases.clone(), tui.presets.clone()))
+            .unwrap_or_default();
+
         let auto_compact = config_profile
             .auto_compact
             .or(cfg.auto_compact)
+            .unwrap_or(false);
+
+        let auto_checkpoint = config_profile
+            .auto_checkpoint
+            .or(cfg.auto_checkpoint)
+            .unwrap_or(false);
+
+        let auto_commit = config_profile
+            .auto_commit
+            .or(cfg.auto_commit)
             .unwrap_or(false);
 
         let auto_compact_threshold_percent = {
@@ -1688,6 +1796,19 @@ impl Config {
             .or(cfg.review_model)
             .unwrap_or_else(default_review_model);
 
+        let explicit_alarm_script = cfg.alarm_script.as_ref().and_then(|script| {
+            let trimmed = script.trim();
+            if trimmed.is_empty() {
+                None
+            } else if trimmed.len() == script.len() {
+                Some(script.clone())
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
+        let (notify, alarm_script) =
+            Config::resolve_alarm_settings(cfg.notify.clone(), explicit_alarm_script);
+
         let config = Self {
             model,
             review_model,
@@ -1703,13 +1824,19 @@ impl Config {
             did_user_set_custom_approval_policy_or_sandbox_mode,
             forced_auto_mode_downgraded_on_windows,
             shell_environment_policy,
+            global_prompt,
+            auto_checkpoint,
+            auto_commit,
             auto_compact,
             auto_compact_threshold_percent,
-            notify: cfg.notify,
+            alarm_script,
+            notify,
             user_instructions,
             base_instructions,
             developer_instructions,
             compact_prompt,
+            prompt_aliases,
+            prompt_presets,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
             cli_auth_credentials_store_mode: cfg.cli_auth_credentials_store.unwrap_or_default(),
@@ -3786,10 +3913,16 @@ model_verbosity = "high"
                 model_verbosity: None,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 base_instructions: None,
+                global_prompt: None,
                 developer_instructions: None,
                 compact_prompt: None,
+                prompt_aliases: HashMap::new(),
+                prompt_presets: HashMap::new(),
+                auto_checkpoint: false,
+                auto_commit: false,
                 auto_compact: false,
                 auto_compact_threshold_percent: DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT,
+                alarm_script: None,
                 forced_chatgpt_workspace_id: None,
                 forced_login_method: None,
                 include_apply_patch_tool: false,
@@ -3860,10 +3993,16 @@ model_verbosity = "high"
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            global_prompt: None,
             developer_instructions: None,
             compact_prompt: None,
+            prompt_aliases: HashMap::new(),
+            prompt_presets: HashMap::new(),
+            auto_checkpoint: false,
+            auto_commit: false,
             auto_compact: false,
             auto_compact_threshold_percent: DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT,
+            alarm_script: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
@@ -3949,10 +4088,16 @@ model_verbosity = "high"
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            global_prompt: None,
             developer_instructions: None,
             compact_prompt: None,
+            prompt_aliases: HashMap::new(),
+            prompt_presets: HashMap::new(),
+            auto_checkpoint: false,
+            auto_commit: false,
             auto_compact: false,
             auto_compact_threshold_percent: DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT,
+            alarm_script: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
@@ -4024,10 +4169,16 @@ model_verbosity = "high"
             model_verbosity: Some(Verbosity::High),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            global_prompt: None,
             developer_instructions: None,
             compact_prompt: None,
+            prompt_aliases: HashMap::new(),
+            prompt_presets: HashMap::new(),
+            auto_checkpoint: false,
+            auto_commit: false,
             auto_compact: false,
             auto_compact_threshold_percent: DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT,
+            alarm_script: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,

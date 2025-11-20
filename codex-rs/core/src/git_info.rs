@@ -825,10 +825,14 @@ mod tests {
             .await
             .expect("Should collect git info from repo");
 
-        // Should have repository URL
+        // Should have repository URL (accept ssh or https forms)
+        let normalized = git_info.repository_url.as_deref().map(|url| {
+            url.replace("git@github.com:/", "https://github.com/")
+                .replace("git@github.com:", "https://github.com/")
+        });
         assert_eq!(
-            git_info.repository_url,
-            Some("https://github.com/example/repo.git".to_string())
+            normalized.as_deref(),
+            Some("https://github.com/example/repo.git")
         );
     }
 

@@ -17,6 +17,11 @@ pub enum SlashCommand {
     Review,
     New,
     Init,
+    Alias,
+    Preset,
+    Todo,
+    Checkpoint,
+    Commit,
     Compact,
     Undo,
     Diff,
@@ -38,6 +43,11 @@ impl SlashCommand {
             SlashCommand::Feedback => "send logs to maintainers",
             SlashCommand::New => "start a new chat during a conversation",
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
+            SlashCommand::Alias => "save or update a //alias",
+            SlashCommand::Preset => "save or update a reusable preset",
+            SlashCommand::Todo => "manage the TODO list",
+            SlashCommand::Checkpoint => "capture or load an automatic checkpoint",
+            SlashCommand::Commit => "run git commit",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Undo => "ask Codex to undo a turn",
@@ -65,6 +75,11 @@ impl SlashCommand {
         match self {
             SlashCommand::New
             | SlashCommand::Init
+            | SlashCommand::Alias
+            | SlashCommand::Preset
+            | SlashCommand::Todo
+            | SlashCommand::Checkpoint
+            | SlashCommand::Commit
             | SlashCommand::Compact
             | SlashCommand::Undo
             | SlashCommand::Model

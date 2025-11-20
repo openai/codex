@@ -114,6 +114,8 @@ impl BottomPane {
         self.status.as_ref()
     }
 
+    pub(crate) fn set_aliases(&mut self, _aliases: Vec<String>) {}
+
     fn active_view(&self) -> Option<&dyn BottomPaneView> {
         self.view_stack.last().map(std::convert::AsRef::as_ref)
     }
