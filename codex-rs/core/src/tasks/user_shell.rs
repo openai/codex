@@ -107,7 +107,7 @@ impl SessionTask for UserShellCommandTask {
         });
 
         let sandbox_policy = SandboxPolicy::DangerFullAccess;
-        let exec_result = execute_exec_env(exec_env, &sandbox_policy, stdout_stream)
+        let exec_result = execute_exec_env(exec_env, &sandbox_policy, stdout_stream, None)
             .or_cancel(&cancellation_token)
             .await;
 

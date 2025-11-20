@@ -25,6 +25,7 @@ use crate::tools::sandboxing::SandboxablePreference;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use tokio::sync::oneshot;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SandboxPermissions {
@@ -195,6 +196,7 @@ pub async fn execute_env(
     env: &ExecEnv,
     policy: &SandboxPolicy,
     stdout_stream: Option<StdoutStream>,
+    cancel_rx: Option<oneshot::Receiver<()>>,
 ) -> crate::error::Result<ExecToolCallOutput> {
-    execute_exec_env(env.clone(), policy, stdout_stream).await
+    execute_exec_env(env.clone(), policy, stdout_stream, cancel_rx).await
 }
