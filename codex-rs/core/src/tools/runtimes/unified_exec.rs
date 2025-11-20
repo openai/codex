@@ -36,6 +36,8 @@ pub struct UnifiedExecRequest {
     pub env: HashMap<String, String>,
     pub with_escalated_permissions: Option<bool>,
     pub justification: Option<String>,
+    pub max_output_tokens: Option<usize>,
+    pub max_output_chars: Option<usize>,
 }
 
 impl ProvidesSandboxRetryData for UnifiedExecRequest {
@@ -72,6 +74,8 @@ impl UnifiedExecRequest {
             env,
             with_escalated_permissions,
             justification,
+            max_output_tokens: None,
+            max_output_chars: None,
         }
     }
 }
@@ -162,6 +166,8 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecSession> for UnifiedExecRunt
             None,
             req.with_escalated_permissions,
             req.justification.clone(),
+            req.max_output_tokens,
+            req.max_output_chars,
         )
         .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
         let exec_env = attempt

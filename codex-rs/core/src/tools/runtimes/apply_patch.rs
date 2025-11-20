@@ -72,6 +72,8 @@ impl ApplyPatchRuntime {
             env: HashMap::new(),
             with_escalated_permissions: None,
             justification: None,
+            max_output_tokens: None,
+            max_output_chars: None,
         })
     }
 

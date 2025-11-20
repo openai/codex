@@ -8,6 +8,7 @@ use crate::tools::handlers::apply_patch::ApplyPatchToolType;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
 use crate::tools::registry::ToolRegistryBuilder;
+use crate::truncate::TruncationPolicy;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -17,7 +18,7 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ConfigShellToolType {
-    Default,
+    Default(TruncationPolicy),
     Local,
     UnifiedExec,
     /// Do not include a shell tool by default. Useful when using Codex
@@ -26,7 +27,7 @@ pub enum ConfigShellToolType {
     /// to customize agent behavior.
     Disabled,
     /// Takes a command as a single string to be run in the user's default shell.
-    ShellCommand,
+    ShellCommand(TruncationPolicy),
 }
 
 #[derive(Debug, Clone)]
@@ -58,7 +59,7 @@ impl ToolsConfig {
         } else if features.enabled(Feature::UnifiedExec) {
             ConfigShellToolType::UnifiedExec
         } else if features.enabled(Feature::ShellCommandTool) {
-            ConfigShellToolType::ShellCommand
+            ConfigShellToolType::ShellCommand(model_family.truncation_policy)
         } else {
             model_family.shell_type.clone()
         };
@@ -266,7 +267,7 @@ fn create_write_stdin_tool() -> ToolSpec {
     })
 }
 
-fn create_shell_tool() -> ToolSpec {
+fn create_shell_tool(truncation_policy: TruncationPolicy) -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
         "command".to_string(),
@@ -300,6 +301,24 @@ fn create_shell_tool() -> ToolSpec {
             description: Some("Only set if with_escalated_permissions is true. 1-sentence explanation of why we want to run this command.".to_string()),
         },
     );
+    match truncation_policy {
+        TruncationPolicy::Tokens(_) => {
+            properties.insert(
+                "max_output_tokens".to_string(),
+                JsonSchema::Number {
+                    description: Some("Maximum number of tokens to return from stdout/stderr. Excess tokens will be truncated".to_string()),
+                },
+            );
+        }
+        TruncationPolicy::Bytes(_) => {
+            properties.insert(
+                "max_output_chars".to_string(),
+                JsonSchema::Number {
+                    description: Some("Maximum number of characters to return from stdout/stderr. Excess characters will be truncated".to_string()),
+                },
+            );
+        }
+    }
 
     let description  = if cfg!(windows) {
         r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
@@ -330,7 +349,7 @@ Examples of valid command strings:
     })
 }
 
-fn create_shell_command_tool() -> ToolSpec {
+fn create_shell_command_tool(truncation_policy: TruncationPolicy) -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
         "command".to_string(),
@@ -364,6 +383,30 @@ fn create_shell_command_tool() -> ToolSpec {
             description: Some("Only set if with_escalated_permissions is true. 1-sentence explanation of why we want to run this command.".to_string()),
         },
     );
+    match truncation_policy {
+        TruncationPolicy::Tokens(_) => {
+            properties.insert(
+                "max_output_tokens".to_string(),
+                JsonSchema::Number {
+                    description: Some(
+                        "Maximum number of tokens to return. Excess output will be truncated."
+                            .to_string(),
+                    ),
+                },
+            );
+        }
+        TruncationPolicy::Bytes(_) => {
+            properties.insert(
+                "max_output_chars".to_string(),
+                JsonSchema::Number {
+                    description: Some(
+                        "Maximum number of tokens to return. Excess output will be truncated."
+                            .to_string(),
+                    ),
+                },
+            );
+        }
+    }
 
     let description = if cfg!(windows) {
         r#"Runs a Powershell command (Windows) and returns its output.
@@ -1001,8 +1044,8 @@ pub(crate) fn build_specs(
     let shell_command_handler = Arc::new(ShellCommandHandler);
 
     match &config.shell_type {
-        ConfigShellToolType::Default => {
-            builder.push_spec(create_shell_tool());
+        ConfigShellToolType::Default(truncation_policy) => {
+            builder.push_spec(create_shell_tool(*truncation_policy));
         }
         ConfigShellToolType::Local => {
             builder.push_spec(ToolSpec::LocalShell {});
@@ -1016,8 +1059,8 @@ pub(crate) fn build_specs(
         ConfigShellToolType::Disabled => {
             // Do nothing.
         }
-        ConfigShellToolType::ShellCommand => {
-            builder.push_spec(create_shell_command_tool());
+        ConfigShellToolType::ShellCommand(truncation_policy) => {
+            builder.push_spec(create_shell_command_tool(*truncation_policy));
         }
     }
 
@@ -1160,11 +1203,11 @@ mod tests {
 
     fn shell_tool_name(config: &ToolsConfig) -> Option<&'static str> {
         match config.shell_type {
-            ConfigShellToolType::Default => Some("shell"),
+            ConfigShellToolType::Default(_) => Some("shell"),
             ConfigShellToolType::Local => Some("local_shell"),
             ConfigShellToolType::UnifiedExec => None,
             ConfigShellToolType::Disabled => None,
-            ConfigShellToolType::ShellCommand => Some("shell_command"),
+            ConfigShellToolType::ShellCommand(_) => Some("shell_command"),
         }
     }
 
@@ -1926,7 +1969,7 @@ mod tests {
 
     #[test]
     fn test_shell_tool() {
-        let tool = super::create_shell_tool();
+        let tool = super::create_shell_tool(TruncationPolicy::Bytes(10_000));
         let ToolSpec::Function(ResponsesApiTool {
             description, name, ..
         }) = &tool
@@ -1956,7 +1999,7 @@ Examples of valid command strings:
 
     #[test]
     fn test_shell_command_tool() {
-        let tool = super::create_shell_command_tool();
+        let tool = super::create_shell_command_tool(TruncationPolicy::Tokens(10_000));
         let ToolSpec::Function(ResponsesApiTool {
             description, name, ..
         }) = &tool

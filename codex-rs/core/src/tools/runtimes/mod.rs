@@ -15,6 +15,7 @@ pub mod unified_exec;
 
 /// Shared helper to construct a CommandSpec from a tokenized command line.
 /// Validates that at least a program is present.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_command_spec(
     command: &[String],
     cwd: &Path,
@@ -22,6 +23,8 @@ pub(crate) fn build_command_spec(
     timeout_ms: Option<u64>,
     with_escalated_permissions: Option<bool>,
     justification: Option<String>,
+    max_output_tokens: Option<usize>,
+    max_output_chars: Option<usize>,
 ) -> Result<CommandSpec, ToolError> {
     let (program, args) = command
         .split_first()
@@ -34,5 +37,7 @@ pub(crate) fn build_command_spec(
         timeout_ms,
         with_escalated_permissions,
         justification,
+        max_output_tokens,
+        max_output_chars,
     })
 }

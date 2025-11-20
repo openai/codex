@@ -55,6 +55,8 @@ pub struct ExecParams {
     pub with_escalated_permissions: Option<bool>,
     pub justification: Option<String>,
     pub arg0: Option<String>,
+    pub max_output_tokens: Option<usize>,
+    pub max_output_chars: Option<usize>,
 }
 
 impl ExecParams {
@@ -100,6 +102,8 @@ pub async fn process_exec_tool_call(
         with_escalated_permissions,
         justification,
         arg0: _,
+        max_output_tokens,
+        max_output_chars,
     } = params;
 
     let (program, args) = command.split_first().ok_or_else(|| {
@@ -117,6 +121,8 @@ pub async fn process_exec_tool_call(
         timeout_ms,
         with_escalated_permissions,
         justification,
+        max_output_tokens,
+        max_output_chars,
     };
 
     let manager = SandboxManager::new();
@@ -148,6 +154,8 @@ pub(crate) async fn execute_exec_env(
         with_escalated_permissions,
         justification,
         arg0,
+        max_output_tokens,
+        max_output_chars,
     } = env;
 
     let params = ExecParams {
@@ -158,6 +166,8 @@ pub(crate) async fn execute_exec_env(
         with_escalated_permissions,
         justification,
         arg0,
+        max_output_tokens,
+        max_output_chars,
     };
 
     let start = Instant::now();
@@ -794,6 +804,8 @@ mod tests {
             with_escalated_permissions: None,
             justification: None,
             arg0: None,
+            max_output_tokens: None,
+            max_output_chars: None,
         };
 
         let output = exec(params, SandboxType::None, &SandboxPolicy::ReadOnly, None).await?;

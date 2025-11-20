@@ -15,6 +15,8 @@ use crate::protocol::PatchApplyEndEvent;
 use crate::protocol::TurnDiffEvent;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::sandboxing::ToolError;
+use crate::truncate::TruncationPolicy;
+use crate::truncate::formatted_truncate_text;
 use codex_protocol::parse_command::ParsedCommand;
 use std::collections::HashMap;
 use std::path::Path;
@@ -29,6 +31,7 @@ pub(crate) struct ToolEventCtx<'a> {
     pub turn: &'a TurnContext,
     pub call_id: &'a str,
     pub turn_diff_tracker: Option<&'a SharedTurnDiffTracker>,
+    pub override_truncation_policy: Option<&'a TruncationPolicy>,
 }
 
 impl<'a> ToolEventCtx<'a> {
@@ -37,12 +40,14 @@ impl<'a> ToolEventCtx<'a> {
         turn: &'a TurnContext,
         call_id: &'a str,
         turn_diff_tracker: Option<&'a SharedTurnDiffTracker>,
+        override_truncation_policy: Option<&'a TruncationPolicy>,
     ) -> Self {
         Self {
             session,
             turn,
             call_id,
             turn_diff_tracker,
+            override_truncation_policy,
         }
     }
 }
@@ -245,13 +250,13 @@ impl ToolEmitter {
     fn format_exec_output_for_model(
         &self,
         output: &ExecToolCallOutput,
-        ctx: ToolEventCtx<'_>,
+        truncation_policy: &TruncationPolicy,
     ) -> String {
         match self {
             Self::Shell { freeform: true, .. } => {
-                super::format_exec_output_for_model_freeform(output, ctx.turn.truncation_policy)
+                super::format_exec_output_for_model_freeform(output, *truncation_policy)
             }
-            _ => super::format_exec_output_for_model_structured(output, ctx.turn.truncation_policy),
+            _ => super::format_exec_output_for_model_structured(output, *truncation_policy),
         }
     }
 
@@ -260,9 +265,12 @@ impl ToolEmitter {
         ctx: ToolEventCtx<'_>,
         out: Result<ExecToolCallOutput, ToolError>,
     ) -> Result<String, FunctionCallError> {
+        let truncation_policy = ctx
+            .override_truncation_policy
+            .unwrap_or(&ctx.turn.truncation_policy);
         let (event, result) = match out {
             Ok(output) => {
-                let content = self.format_exec_output_for_model(&output, ctx);
+                let content = self.format_exec_output_for_model(&output, truncation_policy);
                 let exit_code = output.exit_code;
                 let event = ToolEventStage::Success(output);
                 let result = if exit_code == 0 {
@@ -274,24 +282,26 @@ impl ToolEmitter {
             }
             Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output })))
             | Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output }))) => {
-                let response = self.format_exec_output_for_model(&output, ctx);
+                let response = self.format_exec_output_for_model(&output, truncation_policy);
                 let event = ToolEventStage::Failure(ToolEventFailure::Output(*output));
                 let result = Err(FunctionCallError::RespondToModel(response));
                 (event, result)
             }
             Err(ToolError::Codex(err)) => {
-                let message = format!("execution error: {err:?}");
-                let event = ToolEventStage::Failure(ToolEventFailure::Message(message.clone()));
-                let result = Err(FunctionCallError::RespondToModel(message));
+                let formatted_error = formatted_truncate_text(&err.to_string(), *truncation_policy);
+                let message = format!("execution error: {formatted_error}");
+                let event = ToolEventStage::Failure(ToolEventFailure::Message(message));
+                let result = Err(FunctionCallError::RespondToModel(formatted_error));
                 (event, result)
             }
             Err(ToolError::Rejected(msg)) => {
+                let formatted_msg = formatted_truncate_text(&msg, *truncation_policy);
                 // Normalize common rejection messages for exec tools so tests and
                 // users see a clear, consistent phrase.
-                let normalized = if msg == "rejected by user" {
+                let normalized = if formatted_msg == "rejected by user" {
                     "exec command rejected by user".to_string()
                 } else {
-                    msg
+                    formatted_msg
                 };
                 let event = ToolEventStage::Failure(ToolEventFailure::Message(normalized.clone()));
                 let result = Err(FunctionCallError::RespondToModel(normalized));

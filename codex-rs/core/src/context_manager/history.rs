@@ -5,6 +5,7 @@ use crate::truncate::truncate_function_output_items_with_policy;
 use crate::truncate::truncate_text;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ShellToolCallParams;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_utils_tokenizer::Tokenizer;
@@ -135,6 +136,47 @@ impl ContextManager {
         normalize::remove_orphan_outputs(&mut self.items);
     }
 
+    fn get_shell_truncation_policy(&self, call_id: &str) -> Option<TruncationPolicy> {
+        let call = self.get_call_for_call_id(call_id)?;
+        match call {
+            ResponseItem::FunctionCall { arguments, .. } => {
+                let shell_tool_call_params =
+                    serde_json::from_str::<ShellToolCallParams>(&arguments).ok()?;
+                Self::create_truncation_policy(
+                    shell_tool_call_params.max_output_tokens,
+                    shell_tool_call_params.max_output_chars,
+                )
+            }
+            _ => None,
+        }
+    }
+
+    fn create_truncation_policy(
+        max_output_tokens: Option<usize>,
+        max_output_chars: Option<usize>,
+    ) -> Option<TruncationPolicy> {
+        if let Some(max_output_tokens) = max_output_tokens {
+            Some(TruncationPolicy::Tokens(max_output_tokens))
+        } else {
+            max_output_chars.map(TruncationPolicy::Bytes)
+        }
+    }
+
+    fn get_call_for_call_id(&self, call_id: &str) -> Option<ResponseItem> {
+        self.items.iter().find_map(|item| match item {
+            ResponseItem::FunctionCall {
+                call_id: existing, ..
+            } => {
+                if existing == call_id {
+                    Some(item.clone())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        })
+    }
+
     /// Returns a clone of the contents in the transcript.
     fn contents(&self) -> Vec<ResponseItem> {
         self.items.clone()
@@ -148,13 +190,12 @@ impl ContextManager {
         let policy_with_serialization_budget = policy.mul(1.2);
         match item {
             ResponseItem::FunctionCallOutput { call_id, output } => {
-                let truncated =
-                    truncate_text(output.content.as_str(), policy_with_serialization_budget);
+                let truncation_policy_override = self.get_shell_truncation_policy(call_id);
+                let truncation_policy =
+                    truncation_policy_override.unwrap_or(policy_with_serialization_budget);
+                let truncated = truncate_text(output.content.as_str(), truncation_policy);
                 let truncated_items = output.content_items.as_ref().map(|items| {
-                    truncate_function_output_items_with_policy(
-                        items,
-                        policy_with_serialization_budget,
-                    )
+                    truncate_function_output_items_with_policy(items, truncation_policy)
                 });
                 ResponseItem::FunctionCallOutput {
                     call_id: call_id.clone(),

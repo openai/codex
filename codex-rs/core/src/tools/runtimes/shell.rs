@@ -33,6 +33,8 @@ pub struct ShellRequest {
     pub env: std::collections::HashMap<String, String>,
     pub with_escalated_permissions: Option<bool>,
     pub justification: Option<String>,
+    pub max_output_tokens: Option<usize>,
+    pub max_output_chars: Option<usize>,
 }
 
 impl ProvidesSandboxRetryData for ShellRequest {
@@ -147,6 +149,8 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             req.timeout_ms,
             req.with_escalated_permissions,
             req.justification.clone(),
+            req.max_output_tokens,
+            req.max_output_chars,
         )?;
         let env = attempt
             .env_for(&spec)

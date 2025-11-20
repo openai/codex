@@ -100,6 +100,7 @@ impl ToolHandler for ApplyPatchHandler {
                             turn.as_ref(),
                             &call_id,
                             Some(&tracker),
+                            None,
                         );
                         emitter.begin(event_ctx).await;
 
@@ -127,6 +128,7 @@ impl ToolHandler for ApplyPatchHandler {
                             turn.as_ref(),
                             &call_id,
                             Some(&tracker),
+                            None,
                         );
                         let content = emitter.finish(event_ctx, out).await?;
                         Ok(ToolOutput::Function {

@@ -25,6 +25,7 @@ use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
 use crate::tools::runtimes::shell::ShellRequest;
 use crate::tools::runtimes::shell::ShellRuntime;
 use crate::tools::sandboxing::ToolCtx;
+use crate::truncate::TruncationPolicy;
 
 pub struct ShellHandler;
 
@@ -40,6 +41,8 @@ impl ShellHandler {
             with_escalated_permissions: params.with_escalated_permissions,
             justification: params.justification,
             arg0: None,
+            max_output_tokens: params.max_output_tokens,
+            max_output_chars: params.max_output_chars,
         }
     }
 }
@@ -62,6 +65,8 @@ impl ShellCommandHandler {
             with_escalated_permissions: params.with_escalated_permissions,
             justification: params.justification,
             arg0: None,
+            max_output_tokens: params.max_output_tokens,
+            max_output_chars: params.max_output_chars,
         }
     }
 }
@@ -207,6 +212,9 @@ impl ShellHandler {
             )));
         }
 
+        let override_truncation_policy =
+            create_truncation_policy(exec_params.max_output_tokens, exec_params.max_output_chars);
+
         // Intercept apply_patch if present.
         match codex_apply_patch::maybe_parse_apply_patch_verified(
             &exec_params.command,
@@ -235,6 +243,7 @@ impl ShellHandler {
                             turn.as_ref(),
                             &call_id,
                             Some(&tracker),
+                            override_truncation_policy.as_ref(),
                         );
                         emitter.begin(event_ctx).await;
 
@@ -261,6 +270,7 @@ impl ShellHandler {
                             turn.as_ref(),
                             &call_id,
                             Some(&tracker),
+                            override_truncation_policy.as_ref(),
                         );
                         let content = emitter.finish(event_ctx, out).await?;
                         return Ok(ToolOutput::Function {
@@ -292,7 +302,13 @@ impl ShellHandler {
             source,
             freeform,
         );
-        let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
+        let event_ctx = ToolEventCtx::new(
+            session.as_ref(),
+            turn.as_ref(),
+            &call_id,
+            None,
+            override_truncation_policy.as_ref(),
+        );
         emitter.begin(event_ctx).await;
 
         let req = ShellRequest {
@@ -302,6 +318,8 @@ impl ShellHandler {
             env: exec_params.env.clone(),
             with_escalated_permissions: exec_params.with_escalated_permissions,
             justification: exec_params.justification.clone(),
+            max_output_tokens: exec_params.max_output_tokens,
+            max_output_chars: exec_params.max_output_chars,
         };
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = ShellRuntime::new();
@@ -314,7 +332,13 @@ impl ShellHandler {
         let out = orchestrator
             .run(&mut runtime, &req, &tool_ctx, &turn, turn.approval_policy)
             .await;
-        let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
+        let event_ctx = ToolEventCtx::new(
+            session.as_ref(),
+            turn.as_ref(),
+            &call_id,
+            None,
+            override_truncation_policy.as_ref(),
+        );
         let content = emitter.finish(event_ctx, out).await?;
         Ok(ToolOutput::Function {
             content,
@@ -324,6 +348,16 @@ impl ShellHandler {
     }
 }
 
+fn create_truncation_policy(
+    max_output_tokens: Option<usize>,
+    max_output_chars: Option<usize>,
+) -> Option<TruncationPolicy> {
+    if let Some(max_output_tokens) = max_output_tokens {
+        Some(TruncationPolicy::Tokens(max_output_tokens))
+    } else {
+        max_output_chars.map(TruncationPolicy::Bytes)
+    }
+}
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
