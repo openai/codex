@@ -37,7 +37,7 @@ impl ShellHandler {
         ExecParams {
             command: params.command,
             cwd: turn_context.resolve_path(params.workdir.clone()),
-            timeout_ms: params.timeout_ms,
+            expiration: params.timeout_ms.into(),
             env: create_env(&turn_context.shell_environment_policy),
             with_escalated_permissions: params.with_escalated_permissions,
             justification: params.justification,
@@ -59,7 +59,7 @@ impl ShellCommandHandler {
         ExecParams {
             command,
             cwd: turn_context.resolve_path(params.workdir.clone()),
-            timeout_ms: params.timeout_ms,
+            expiration: params.timeout_ms.into(),
             env: create_env(&turn_context.shell_environment_policy),
             with_escalated_permissions: params.with_escalated_permissions,
             justification: params.justification,
@@ -243,7 +243,7 @@ impl ShellHandler {
                         let req = ApplyPatchRequest {
                             patch: apply.action.patch.clone(),
                             cwd: apply.action.cwd.clone(),
-                            timeout_ms: exec_params.timeout_ms,
+                            timeout_ms: exec_params.expiration.timeout_ms(),
                             user_explicitly_approved: apply.user_explicitly_approved_this_action,
                             codex_exe: turn.codex_linux_sandbox_exe.clone(),
                         };
@@ -300,7 +300,7 @@ impl ShellHandler {
         let req = ShellRequest {
             command: exec_params.command.clone(),
             cwd: exec_params.cwd.clone(),
-            timeout_ms: exec_params.timeout_ms,
+            timeout_ms: exec_params.expiration.timeout_ms(),
             env: exec_params.env.clone(),
             with_escalated_permissions: exec_params.with_escalated_permissions,
             justification: exec_params.justification.clone(),
