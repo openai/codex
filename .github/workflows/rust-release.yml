@@ -371,8 +371,19 @@ jobs:
           path: |
             codex-rs/dist/${{ matrix.target }}/*
 
+  shell-tool-mcp:
+    name: shell-tool-mcp
+    needs: tag-check
+    uses: ./.github/workflows/shell-tool-mcp.yml
+    with:
+      release-tag: ${{ github.ref_name }}
+      publish: true
+    secrets: inherit
+
   release:
-    needs: build
+    needs:
+      - build
+      - shell-tool-mcp
     name: release
     runs-on: ubuntu-latest
     permissions:
