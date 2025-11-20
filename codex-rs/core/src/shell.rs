@@ -213,7 +213,9 @@ pub async fn default_user_shell() -> Shell {
                 .or_else(|| get_shell(ShellType::Zsh, None))
                 .or_else(|| get_shell(ShellType::Bash, None))
         } else {
-            user_default_shell.or_else(|| get_shell(ShellType::Bash, None))
+            user_default_shell
+                .or_else(|| get_shell(ShellType::Bash, None))
+                .or_else(|| get_shell(ShellType::Zsh, None))
         };
 
         shell_with_fallback.unwrap_or(Shell::Unknown)
