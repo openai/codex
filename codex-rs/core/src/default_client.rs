@@ -368,10 +368,8 @@ mod tests {
         let originator = originator().value.clone();
         let user_agent = get_codex_user_agent();
         let re = Regex::new(
-            format!(
-                r"^{originator}/\d+\.\d+\.\d+ \(Mac OS \d+\.\d+\.\d+; (x86_64|arm64)\) (\S+)$"
-            )
-            .as_str(),
+            format!(r"^{originator}/\d+\.\d+\.\d+ \(Mac OS \d+\.\d+\.\d+; (x86_64|arm64)\) (\S+)$")
+                .as_str(),
         )
         .unwrap();
         assert!(re.is_match(&user_agent));
