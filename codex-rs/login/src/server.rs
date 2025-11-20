@@ -1452,4 +1452,71 @@ mod tests {
         let err = client.expect_err("client should fail for malformed cert");
         assert!(err.to_string().contains("failed to parse PEM file"));
     }
+
+    #[serial(login_cert_env)]
+    #[test]
+    fn build_client_handles_multi_certificate_bundle() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let cert_path = write_test_cert_bundle(&temp_dir, "bundle.pem");
+        let (codex_env_before, ssl_env_before) = capture_env();
+
+        set_env_var(CODEX_CA_CERT_ENV, &cert_path);
+        remove_env_var(SSL_CERT_FILE_ENV);
+
+        let client = build_login_http_client();
+
+        restore_env(CODEX_CA_CERT_ENV, codex_env_before);
+        restore_env(SSL_CERT_FILE_ENV, ssl_env_before);
+
+        assert!(
+            client.is_ok(),
+            "Failed to build client with bundle: {:?}",
+            client.err()
+        );
+    }
+
+    #[serial(login_cert_env)]
+    #[test]
+    fn build_client_rejects_empty_pem_file() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let cert_path = temp_dir.path().join("empty.pem");
+        fs::write(&cert_path, "").expect("write empty file");
+        let (codex_env_before, ssl_env_before) = capture_env();
+
+        set_env_var(CODEX_CA_CERT_ENV, &cert_path);
+        remove_env_var(SSL_CERT_FILE_ENV);
+
+        let client = build_login_http_client();
+
+        restore_env(CODEX_CA_CERT_ENV, codex_env_before);
+        restore_env(SSL_CERT_FILE_ENV, ssl_env_before);
+
+        assert!(client.is_err());
+        let err = client.unwrap_err();
+        assert!(err.to_string().contains("no certificates found"));
+    }
+
+    #[serial(login_cert_env)]
+    #[test]
+    fn build_client_rejects_malformed_pem() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let cert_path = temp_dir.path().join("malformed.pem");
+        fs::write(&cert_path, "-----BEGIN CERTIFICATE-----\nMIIBroken").expect("write malformed");
+        let (codex_env_before, ssl_env_before) = capture_env();
+
+        set_env_var(CODEX_CA_CERT_ENV, &cert_path);
+        remove_env_var(SSL_CERT_FILE_ENV);
+
+        let client = build_login_http_client();
+
+        restore_env(CODEX_CA_CERT_ENV, codex_env_before);
+        restore_env(SSL_CERT_FILE_ENV, ssl_env_before);
+
+        assert!(client.is_err());
+        let err = client.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("BEGIN CERTIFICATE without matching END")
+        );
+    }
 }
