@@ -22,9 +22,13 @@ use crate::posix::escalate_server::EscalateServer;
 use crate::posix::escalate_server::{self};
 use crate::posix::mcp_escalation_policy::ExecPolicy;
 use crate::posix::mcp_escalation_policy::McpEscalationPolicy;
+use crate::posix::stopwatch::Stopwatch;
 
 /// Path to our patched bash.
 const CODEX_BASH_PATH_ENV_VAR: &str = "CODEX_BASH_PATH";
+
+/// Default timeout for the shell tool.
+const DEFAULT_TIMEOUT_MS: u64 = 10_000;
 
 pub(crate) fn get_bash_path() -> Result<PathBuf> {
     std::env::var(CODEX_BASH_PATH_ENV_VAR)
@@ -87,10 +91,18 @@ impl ExecTool {
         context: RequestContext<RoleServer>,
         Parameters(params): Parameters<ExecParams>,
     ) -> Result<CallToolResult, McpError> {
+        let effective_timeout_ms = params.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
+        let stopwatch = Stopwatch::new(Some(effective_timeout_ms));
+        let cancel_rx = stopwatch.cancellation_receiver();
+        let process_timeout_ms = if cancel_rx.is_some() {
+            Some(u64::MAX)
+        } else {
+            params.timeout_ms
+        };
         let escalate_server = EscalateServer::new(
             self.bash_path.clone(),
             self.execve_wrapper.clone(),
-            McpEscalationPolicy::new(self.policy, context),
+            McpEscalationPolicy::new(self.policy, context, stopwatch.clone()),
         );
         let result = escalate_server
             .exec(
@@ -98,7 +110,8 @@ impl ExecTool {
                 // TODO: use ShellEnvironmentPolicy
                 std::env::vars().collect(),
                 PathBuf::from(&params.workdir),
-                params.timeout_ms,
+                process_timeout_ms,
+                cancel_rx,
             )
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
