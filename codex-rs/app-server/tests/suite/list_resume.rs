@@ -1,5 +1,6 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
+use app_test_support::create_fake_rollout;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -15,12 +16,8 @@ use codex_core::protocol::EventMsg;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use pretty_assertions::assert_eq;
-use serde_json::json;
-use std::fs;
-use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
-use uuid::Uuid;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -355,72 +352,5 @@ async fn test_list_and_resume_conversations() -> Result<()> {
         "expected no initial messages in resume response when history is provided but got {history_initial_messages:#?}"
     );
 
-    Ok(())
-}
-
-fn create_fake_rollout(
-    codex_home: &Path,
-    filename_ts: &str,
-    meta_rfc3339: &str,
-    preview: &str,
-    model_provider: Option<&str>,
-) -> Result<()> {
-    let uuid = Uuid::new_v4();
-    // sessions/YYYY/MM/DD/ derived from filename_ts (YYYY-MM-DDThh-mm-ss)
-    let year = &filename_ts[0..4];
-    let month = &filename_ts[5..7];
-    let day = &filename_ts[8..10];
-    let dir = codex_home.join("sessions").join(year).join(month).join(day);
-    fs::create_dir_all(&dir)?;
-
-    let file_path = dir.join(format!("rollout-{filename_ts}-{uuid}.jsonl"));
-    let mut lines = Vec::new();
-    // Meta line with timestamp (flattened meta in payload for new schema)
-    let mut payload = json!({
-        "id": uuid,
-        "timestamp": meta_rfc3339,
-        "cwd": "/",
-        "originator": "codex",
-        "cli_version": "0.0.0",
-        "instructions": null,
-    });
-    if let Some(provider) = model_provider {
-        payload["model_provider"] = json!(provider);
-    }
-    lines.push(
-        json!({
-            "timestamp": meta_rfc3339,
-            "type": "session_meta",
-            "payload": payload
-        })
-        .to_string(),
-    );
-    // Minimal user message entry as a persisted response item (with envelope timestamp)
-    lines.push(
-        json!({
-            "timestamp": meta_rfc3339,
-            "type":"response_item",
-            "payload": {
-                "type":"message",
-                "role":"user",
-                "content":[{"type":"input_text","text": preview}]
-            }
-        })
-        .to_string(),
-    );
-    // Add a matching user message event line to satisfy filters
-    lines.push(
-        json!({
-            "timestamp": meta_rfc3339,
-            "type":"event_msg",
-            "payload": {
-                "type":"user_message",
-                "message": preview,
-                "kind": "plain"
-            }
-        })
-        .to_string(),
-    );
-    fs::write(file_path, lines.join("\n") + "\n")?;
     Ok(())
 }

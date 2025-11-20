@@ -132,6 +132,9 @@ pub enum ResponseItem {
     GhostSnapshot {
         ghost_commit: GhostCommit,
     },
+    CompactionSummary {
+        encrypted_content: String,
+    },
     #[serde(other)]
     Other,
 }
@@ -152,6 +155,19 @@ fn local_image_error_placeholder(
     ContentItem::InputText {
         text: format!(
             "Codex could not read the local image at `{}`: {}",
+            path.display(),
+            error
+        ),
+    }
+}
+
+fn invalid_image_error_placeholder(
+    path: &std::path::Path,
+    error: impl std::fmt::Display,
+) -> ContentItem {
+    ContentItem::InputText {
+        text: format!(
+            "Image located at `{}` is invalid: {}",
             path.display(),
             error
         ),
@@ -247,9 +263,10 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                             image_url: image.into_data_url(),
                         },
                         Err(err) => {
-                            tracing::warn!("Failed to resize image {}: {}", path.display(), err);
                             if matches!(&err, ImageProcessingError::Read { .. }) {
                                 local_image_error_placeholder(&path, &err)
+                            } else if err.is_invalid_image() {
+                                invalid_image_error_placeholder(&path, &err)
                             } else {
                                 match std::fs::read(&path) {
                                     Ok(bytes) => {
@@ -292,10 +309,26 @@ impl From<Vec<UserInput>> for ResponseInputItem {
 }
 
 /// If the `name` of a `ResponseItem::FunctionCall` is either `container.exec`
-/// or shell`, the `arguments` field should deserialize to this struct.
+/// or `shell`, the `arguments` field should deserialize to this struct.
 #[derive(Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 pub struct ShellToolCallParams {
     pub command: Vec<String>,
+    pub workdir: Option<String>,
+
+    /// This is the maximum time in milliseconds that the command is allowed to run.
+    #[serde(alias = "timeout")]
+    pub timeout_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub with_escalated_permissions: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub justification: Option<String>,
+}
+
+/// If the `name` of a `ResponseItem::FunctionCall` is `shell_command`, the
+/// `arguments` field should deserialize to this struct.
+#[derive(Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+pub struct ShellCommandToolCallParams {
+    pub command: String,
     pub workdir: Option<String>,
 
     /// This is the maximum time in milliseconds that the command is allowed to run.
@@ -349,6 +382,7 @@ impl Serialize for FunctionCallOutputPayload {
     where
         S: Serializer,
     {
+        tracing::debug!("Function call output payload: {:?}", self);
         if let Some(items) = &self.content_items {
             items.serialize(serializer)
         } else {
@@ -436,7 +470,7 @@ fn convert_content_blocks_to_items(
 ) -> Option<Vec<FunctionCallOutputContentItem>> {
     let mut saw_image = false;
     let mut items = Vec::with_capacity(blocks.len());
-
+    tracing::warn!("Blocks: {:?}", blocks);
     for block in blocks {
         match block {
             ContentBlock::TextContent(text) => {

@@ -174,6 +174,7 @@ async fn run_codex_tool_session_inner(
 
                 match event.msg {
                     EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
+                        turn_id: _,
                         command,
                         cwd,
                         call_id,
@@ -204,8 +205,12 @@ async fn run_codex_tool_session_inner(
                         outgoing.send_response(request_id.clone(), result).await;
                         break;
                     }
+                    EventMsg::Warning(_) => {
+                        continue;
+                    }
                     EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
                         call_id,
+                        turn_id: _,
                         reason,
                         grant_root,
                         changes,
@@ -254,6 +259,9 @@ async fn run_codex_tool_session_inner(
                     }
                     EventMsg::AgentReasoningDelta(_) => {
                         // TODO: think how we want to support this in the MCP
+                    }
+                    EventMsg::McpStartupUpdate(_) | EventMsg::McpStartupComplete(_) => {
+                        // Ignored in MCP tool runner.
                     }
                     EventMsg::AgentMessage(AgentMessageEvent { .. }) => {
                         // TODO: think how we want to support this in the MCP

@@ -33,7 +33,7 @@ Then simply run `codex` to get started:
 codex
 ```
 
-If you're running into upgrade issues with Homebrew, see the [FAQ entry on brew upgrade codex](./docs/faq.md#brew-update-codex-isnt-upgrading-me).
+If you're running into upgrade issues with Homebrew, see the [FAQ entry on brew upgrade codex](./docs/faq.md#brew-upgrade-codex-isnt-upgrading-me).
 
 <details>
 <summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
@@ -69,17 +69,50 @@ Codex can access MCP servers. To configure them, refer to the [config docs](./do
 
 Codex CLI supports a rich set of configuration options, with preferences stored in `~/.codex/config.toml`. For full configuration options, see [Configuration](./docs/config.md).
 
+### Execpolicy Quickstart
+
+Codex can enforce your own rules-based execution policy before it runs shell commands.
+
+1. Create a policy directory: `mkdir -p ~/.codex/policy`.
+2. Create one or more `.codexpolicy` files in that folder. Codex automatically loads every `.codexpolicy` file in there on startup.
+3. Write `prefix_rule` entries to describe the commands you want to allow, prompt, or block:
+
+```starlark
+prefix_rule(
+    pattern = ["git", ["push", "fetch"]],
+    decision = "prompt",  # allow | prompt | forbidden
+    match = [["git", "push", "origin", "main"]],  # examples that must match
+    not_match = [["git", "status"]],              # examples that must not match
+)
+```
+
+- `pattern` is a list of shell tokens, evaluated from left to right; wrap tokens in a nested list to express alternatives (e.g., match both `push` and `fetch`).
+- `decision` sets the severity; Codex picks the strictest decision when multiple rules match (forbidden > prompt > allow).
+- `match` and `not_match` act as (optional) unit tests. Codex validates them when it loads your policy, so you get feedback if an example has unexpected behavior.
+
+In this example rule, if Codex wants to run commands with the prefix `git push` or `git fetch`, it will first ask for user approval.
+
+Use [`execpolicy2` CLI](./codex-rs/execpolicy2/README.md) to preview decisions for policy files:
+
+```shell
+cargo run -p codex-execpolicy2 -- check --policy ~/.codex/policy/default.codexpolicy git push origin main
+```
+
+Pass multiple `--policy` flags to test how several files combine. See the [`codex-rs/execpolicy2` README](./codex-rs/execpolicy2/README.md) for a more detailed walkthrough of the available syntax.
+
 ---
 
 ### Docs & FAQ
 
 - [**Getting started**](./docs/getting-started.md)
   - [CLI usage](./docs/getting-started.md#cli-usage)
+  - [Slash Commands](./docs/slash_commands.md)
   - [Running with a prompt as input](./docs/getting-started.md#running-with-a-prompt-as-input)
   - [Example prompts](./docs/getting-started.md#example-prompts)
   - [Custom prompts](./docs/prompts.md)
   - [Memory with AGENTS.md](./docs/getting-started.md#memory-with-agentsmd)
-  - [Configuration](./docs/config.md)
+- [**Configuration**](./docs/config.md)
+  - [Example config](./docs/example-config.md)
 - [**Sandbox & approvals**](./docs/sandbox.md)
 - [**Authentication**](./docs/authentication.md)
   - [Auth methods](./docs/authentication.md#forcing-a-specific-auth-method-advanced)

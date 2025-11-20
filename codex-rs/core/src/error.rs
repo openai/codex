@@ -2,8 +2,11 @@ use crate::codex::ProcessedResponseItem;
 use crate::exec::ExecToolCallOutput;
 use crate::token_data::KnownPlan;
 use crate::token_data::PlanType;
-use crate::truncate::truncate_middle;
+use crate::truncate::TruncationPolicy;
+use crate::truncate::truncate_text;
 use chrono::DateTime;
+use chrono::Datelike;
+use chrono::Local;
 use chrono::Utc;
 use codex_async_utils::CancelErr;
 use codex_protocol::ConversationId;
@@ -107,6 +110,9 @@ pub enum CodexErr {
     #[error("{0}")]
     ConnectionFailed(ConnectionFailedError),
 
+    #[error("Quota exceeded. Check your plan and billing details.")]
+    QuotaExceeded,
+
     #[error(
         "To use Codex with your ChatGPT plan, upgrade to Plus: https://openai.com/chatgpt/pricing."
     )]
@@ -132,6 +138,9 @@ pub enum CodexErr {
 
     #[error("unsupported operation: {0}")]
     UnsupportedOperation(String),
+
+    #[error("{0}")]
+    RefreshTokenFailed(RefreshTokenFailedError),
 
     #[error("Fatal error: {0}")]
     Fatal(String),
@@ -199,6 +208,30 @@ impl std::fmt::Display for ResponseStreamFailed {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{message}")]
+pub struct RefreshTokenFailedError {
+    pub reason: RefreshTokenFailedReason,
+    pub message: String,
+}
+
+impl RefreshTokenFailedError {
+    pub fn new(reason: RefreshTokenFailedReason, message: impl Into<String>) -> Self {
+        Self {
+            reason,
+            message: message.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefreshTokenFailedReason {
+    Expired,
+    Exhausted,
+    Revoked,
+    Other,
+}
+
 #[derive(Debug)]
 pub struct UnexpectedResponseError {
     pub status: StatusCode,
@@ -206,18 +239,44 @@ pub struct UnexpectedResponseError {
     pub request_id: Option<String>,
 }
 
+const CLOUDFLARE_BLOCKED_MESSAGE: &str =
+    "Access blocked by Cloudflare. This usually happens when connecting from a restricted region";
+
+impl UnexpectedResponseError {
+    fn friendly_message(&self) -> Option<String> {
+        if self.status != StatusCode::FORBIDDEN {
+            return None;
+        }
+
+        if !self.body.contains("Cloudflare") || !self.body.contains("blocked") {
+            return None;
+        }
+
+        let mut message = format!("{CLOUDFLARE_BLOCKED_MESSAGE} (status {})", self.status);
+        if let Some(id) = &self.request_id {
+            message.push_str(&format!(", request id: {id}"));
+        }
+
+        Some(message)
+    }
+}
+
 impl std::fmt::Display for UnexpectedResponseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "unexpected status {}: {}{}",
-            self.status,
-            self.body,
-            self.request_id
-                .as_ref()
-                .map(|id| format!(", request id: {id}"))
-                .unwrap_or_default()
-        )
+        if let Some(friendly) = self.friendly_message() {
+            write!(f, "{friendly}")
+        } else {
+            write!(
+                f,
+                "unexpected status {}: {}{}",
+                self.status,
+                self.body,
+                self.request_id
+                    .as_ref()
+                    .map(|id| format!(", request id: {id}"))
+                    .unwrap_or_default()
+            )
+        }
     }
 }
 
@@ -253,7 +312,7 @@ impl std::fmt::Display for UsageLimitReachedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let message = match self.plan_type.as_ref() {
             Some(PlanType::Known(KnownPlan::Plus)) => format!(
-                "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing), visit chatgpt.com/codex/settings/usage to purchase more credits{}",
+                "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing), visit https://chatgpt.com/codex/settings/usage to purchase more credits{}",
                 retry_suffix_after_or(self.resets_at.as_ref())
             ),
             Some(PlanType::Known(KnownPlan::Team)) | Some(PlanType::Known(KnownPlan::Business)) => {
@@ -267,7 +326,7 @@ impl std::fmt::Display for UsageLimitReachedError {
                     .to_string()
             }
             Some(PlanType::Known(KnownPlan::Pro)) => format!(
-                "You've hit your usage limit. Visit chatgpt.com/codex/settings/usage to purchase more credits{}",
+                "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits{}",
                 retry_suffix_after_or(self.resets_at.as_ref())
             ),
             Some(PlanType::Known(KnownPlan::Enterprise))
@@ -286,28 +345,46 @@ impl std::fmt::Display for UsageLimitReachedError {
 }
 
 fn retry_suffix(resets_at: Option<&DateTime<Utc>>) -> String {
-    if let Some(secs) = remaining_seconds(resets_at) {
-        let reset_duration = format_reset_duration(secs);
-        format!(" Try again in {reset_duration}.")
+    if let Some(resets_at) = resets_at {
+        let formatted = format_retry_timestamp(resets_at);
+        format!(" Try again at {formatted}.")
     } else {
         " Try again later.".to_string()
     }
 }
 
 fn retry_suffix_after_or(resets_at: Option<&DateTime<Utc>>) -> String {
-    if let Some(secs) = remaining_seconds(resets_at) {
-        let reset_duration = format_reset_duration(secs);
-        format!(" or try again in {reset_duration}.")
+    if let Some(resets_at) = resets_at {
+        let formatted = format_retry_timestamp(resets_at);
+        format!(" or try again at {formatted}.")
     } else {
         " or try again later.".to_string()
     }
 }
 
-fn remaining_seconds(resets_at: Option<&DateTime<Utc>>) -> Option<u64> {
-    let resets_at = resets_at.cloned()?;
-    let now = now_for_retry();
-    let secs = resets_at.signed_duration_since(now).num_seconds();
-    Some(if secs <= 0 { 0 } else { secs as u64 })
+fn format_retry_timestamp(resets_at: &DateTime<Utc>) -> String {
+    let local_reset = resets_at.with_timezone(&Local);
+    let local_now = now_for_retry().with_timezone(&Local);
+    if local_reset.date_naive() == local_now.date_naive() {
+        local_reset.format("%-I:%M %p").to_string()
+    } else {
+        let suffix = day_suffix(local_reset.day());
+        local_reset
+            .format(&format!("%b %-d{suffix}, %Y %-I:%M %p"))
+            .to_string()
+    }
+}
+
+fn day_suffix(day: u32) -> &'static str {
+    match day {
+        11..=13 => "th",
+        _ => match day % 10 {
+            1 => "st",
+            2 => "nd", // codespell:ignore
+            3 => "rd",
+            _ => "th",
+        },
+    }
 }
 
 #[cfg(test)]
@@ -324,36 +401,6 @@ fn now_for_retry() -> DateTime<Utc> {
         }
     }
     Utc::now()
-}
-
-fn format_reset_duration(total_secs: u64) -> String {
-    let days = total_secs / 86_400;
-    let hours = (total_secs % 86_400) / 3_600;
-    let minutes = (total_secs % 3_600) / 60;
-
-    let mut parts: Vec<String> = Vec::new();
-    if days > 0 {
-        let unit = if days == 1 { "day" } else { "days" };
-        parts.push(format!("{days} {unit}"));
-    }
-    if hours > 0 {
-        let unit = if hours == 1 { "hour" } else { "hours" };
-        parts.push(format!("{hours} {unit}"));
-    }
-    if minutes > 0 {
-        let unit = if minutes == 1 { "minute" } else { "minutes" };
-        parts.push(format!("{minutes} {unit}"));
-    }
-
-    if parts.is_empty() {
-        return "less than a minute".to_string();
-    }
-
-    match parts.len() {
-        1 => parts[0].clone(),
-        2 => format!("{} {}", parts[0], parts[1]),
-        _ => format!("{} {} {}", parts[0], parts[1], parts[2]),
-    }
 }
 
 #[derive(Debug)]
@@ -415,7 +462,10 @@ pub fn get_error_message_ui(e: &CodexErr) -> String {
         _ => e.to_string(),
     };
 
-    truncate_middle(&message, ERROR_MESSAGE_UI_MAX_BYTES).0
+    truncate_text(
+        &message,
+        TruncationPolicy::Bytes(ERROR_MESSAGE_UI_MAX_BYTES),
+    )
 }
 
 #[cfg(test)]
@@ -449,6 +499,7 @@ mod tests {
                 window_minutes: Some(120),
                 resets_at: Some(secondary_reset_at),
             }),
+            credits: None,
         }
     }
 
@@ -470,7 +521,7 @@ mod tests {
         };
         assert_eq!(
             err.to_string(),
-            "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing), visit chatgpt.com/codex/settings/usage to purchase more credits or try again later."
+            "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again later."
         );
     }
 
@@ -572,15 +623,16 @@ mod tests {
         let base = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
         let resets_at = base + ChronoDuration::hours(1);
         with_now_override(base, move || {
+            let expected_time = format_retry_timestamp(&resets_at);
             let err = UsageLimitReachedError {
                 plan_type: Some(PlanType::Known(KnownPlan::Team)),
                 resets_at: Some(resets_at),
                 rate_limits: Some(rate_limit_snapshot()),
             };
-            assert_eq!(
-                err.to_string(),
-                "You've hit your usage limit. To get more access now, send a request to your admin or try again in 1 hour."
+            let expected = format!(
+                "You've hit your usage limit. To get more access now, send a request to your admin or try again at {expected_time}."
             );
+            assert_eq!(err.to_string(), expected);
         });
     }
 
@@ -615,15 +667,16 @@ mod tests {
         let base = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
         let resets_at = base + ChronoDuration::hours(1);
         with_now_override(base, move || {
+            let expected_time = format_retry_timestamp(&resets_at);
             let err = UsageLimitReachedError {
                 plan_type: Some(PlanType::Known(KnownPlan::Pro)),
                 resets_at: Some(resets_at),
                 rate_limits: Some(rate_limit_snapshot()),
             };
-            assert_eq!(
-                err.to_string(),
-                "You've hit your usage limit. Visit chatgpt.com/codex/settings/usage to purchase more credits or try again in 1 hour."
+            let expected = format!(
+                "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at {expected_time}."
             );
+            assert_eq!(err.to_string(), expected);
         });
     }
 
@@ -632,16 +685,44 @@ mod tests {
         let base = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
         let resets_at = base + ChronoDuration::minutes(5);
         with_now_override(base, move || {
+            let expected_time = format_retry_timestamp(&resets_at);
             let err = UsageLimitReachedError {
                 plan_type: None,
                 resets_at: Some(resets_at),
                 rate_limits: Some(rate_limit_snapshot()),
             };
-            assert_eq!(
-                err.to_string(),
-                "You've hit your usage limit. Try again in 5 minutes."
-            );
+            let expected = format!("You've hit your usage limit. Try again at {expected_time}.");
+            assert_eq!(err.to_string(), expected);
         });
+    }
+
+    #[test]
+    fn unexpected_status_cloudflare_html_is_simplified() {
+        let err = UnexpectedResponseError {
+            status: StatusCode::FORBIDDEN,
+            body: "<html><body>Cloudflare error: Sorry, you have been blocked</body></html>"
+                .to_string(),
+            request_id: Some("ray-id".to_string()),
+        };
+        let status = StatusCode::FORBIDDEN.to_string();
+        assert_eq!(
+            err.to_string(),
+            format!("{CLOUDFLARE_BLOCKED_MESSAGE} (status {status}), request id: ray-id")
+        );
+    }
+
+    #[test]
+    fn unexpected_status_non_html_is_unchanged() {
+        let err = UnexpectedResponseError {
+            status: StatusCode::FORBIDDEN,
+            body: "plain text error".to_string(),
+            request_id: None,
+        };
+        let status = StatusCode::FORBIDDEN.to_string();
+        assert_eq!(
+            err.to_string(),
+            format!("unexpected status {status}: plain text error")
+        );
     }
 
     #[test]
@@ -649,15 +730,16 @@ mod tests {
         let base = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
         let resets_at = base + ChronoDuration::hours(3) + ChronoDuration::minutes(32);
         with_now_override(base, move || {
+            let expected_time = format_retry_timestamp(&resets_at);
             let err = UsageLimitReachedError {
                 plan_type: Some(PlanType::Known(KnownPlan::Plus)),
                 resets_at: Some(resets_at),
                 rate_limits: Some(rate_limit_snapshot()),
             };
-            assert_eq!(
-                err.to_string(),
-                "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing), visit chatgpt.com/codex/settings/usage to purchase more credits or try again in 3 hours 32 minutes."
+            let expected = format!(
+                "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at {expected_time}."
             );
+            assert_eq!(err.to_string(), expected);
         });
     }
 
@@ -667,15 +749,14 @@ mod tests {
         let resets_at =
             base + ChronoDuration::days(2) + ChronoDuration::hours(3) + ChronoDuration::minutes(5);
         with_now_override(base, move || {
+            let expected_time = format_retry_timestamp(&resets_at);
             let err = UsageLimitReachedError {
                 plan_type: None,
                 resets_at: Some(resets_at),
                 rate_limits: Some(rate_limit_snapshot()),
             };
-            assert_eq!(
-                err.to_string(),
-                "You've hit your usage limit. Try again in 2 days 3 hours 5 minutes."
-            );
+            let expected = format!("You've hit your usage limit. Try again at {expected_time}.");
+            assert_eq!(err.to_string(), expected);
         });
     }
 
@@ -684,15 +765,14 @@ mod tests {
         let base = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
         let resets_at = base + ChronoDuration::seconds(30);
         with_now_override(base, move || {
+            let expected_time = format_retry_timestamp(&resets_at);
             let err = UsageLimitReachedError {
                 plan_type: None,
                 resets_at: Some(resets_at),
                 rate_limits: Some(rate_limit_snapshot()),
             };
-            assert_eq!(
-                err.to_string(),
-                "You've hit your usage limit. Try again in less than a minute."
-            );
+            let expected = format!("You've hit your usage limit. Try again at {expected_time}.");
+            assert_eq!(err.to_string(), expected);
         });
     }
 }

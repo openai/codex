@@ -5,6 +5,7 @@ use crate::default_client::originator;
 use codex_otel::config::OtelExporter;
 use codex_otel::config::OtelHttpProtocol;
 use codex_otel::config::OtelSettings;
+use codex_otel::config::OtelTlsConfig as OtelTlsSettings;
 use codex_otel::otel_provider::OtelProvider;
 use std::error::Error;
 
@@ -21,6 +22,7 @@ pub fn build_provider(
             endpoint,
             headers,
             protocol,
+            tls,
         } => {
             let protocol = match protocol {
                 Protocol::Json => OtelHttpProtocol::Json,
@@ -34,14 +36,28 @@ pub fn build_provider(
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
                 protocol,
+                tls: tls.as_ref().map(|config| OtelTlsSettings {
+                    ca_certificate: config.ca_certificate.clone(),
+                    client_certificate: config.client_certificate.clone(),
+                    client_private_key: config.client_private_key.clone(),
+                }),
             }
         }
-        Kind::OtlpGrpc { endpoint, headers } => OtelExporter::OtlpGrpc {
+        Kind::OtlpGrpc {
+            endpoint,
+            headers,
+            tls,
+        } => OtelExporter::OtlpGrpc {
             endpoint: endpoint.clone(),
             headers: headers
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
+            tls: tls.as_ref().map(|config| OtelTlsSettings {
+                ca_certificate: config.ca_certificate.clone(),
+                client_certificate: config.client_certificate.clone(),
+                client_private_key: config.client_private_key.clone(),
+            }),
         },
     };
 

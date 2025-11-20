@@ -15,11 +15,18 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ConfigShellToolType {
     Default,
     Local,
-    Streamable,
+    UnifiedExec,
+    /// Do not include a shell tool by default. Useful when using Codex
+    /// with tools provided exclusively provided by MCP servers. Often used
+    /// with `--config base_instructions=CUSTOM_INSTRUCTIONS`
+    /// to customize agent behavior.
+    Disabled,
+    /// Takes a command as a single string to be run in the user's default shell.
+    ShellCommand,
 }
 
 #[derive(Debug, Clone)]
@@ -28,7 +35,6 @@ pub(crate) struct ToolsConfig {
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_request: bool,
     pub include_view_image_tool: bool,
-    pub experimental_unified_exec_tool: bool,
     pub experimental_supported_tools: Vec<String>,
 }
 
@@ -43,18 +49,18 @@ impl ToolsConfig {
             model_family,
             features,
         } = params;
-        let use_streamable_shell_tool = features.enabled(Feature::StreamableShell);
-        let experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_web_search_request = features.enabled(Feature::WebSearchRequest);
         let include_view_image_tool = features.enabled(Feature::ViewImageTool);
 
-        let shell_type = if use_streamable_shell_tool {
-            ConfigShellToolType::Streamable
-        } else if model_family.uses_local_shell_tool {
-            ConfigShellToolType::Local
+        let shell_type = if !features.enabled(Feature::ShellTool) {
+            ConfigShellToolType::Disabled
+        } else if features.enabled(Feature::UnifiedExec) {
+            ConfigShellToolType::UnifiedExec
+        } else if features.enabled(Feature::ShellCommandTool) {
+            ConfigShellToolType::ShellCommand
         } else {
-            ConfigShellToolType::Default
+            model_family.shell_type.clone()
         };
 
         let apply_patch_tool_type = match model_family.apply_patch_tool_type {
@@ -74,7 +80,6 @@ impl ToolsConfig {
             apply_patch_tool_type,
             web_search_request: include_web_search_request,
             include_view_image_tool,
-            experimental_unified_exec_tool,
             experimental_supported_tools: model_family.experimental_supported_tools.clone(),
         }
     }
@@ -145,6 +150,15 @@ fn create_exec_command_tool() -> ToolSpec {
         },
     );
     properties.insert(
+        "workdir".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional working directory to run the command in; defaults to the turn cwd."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
         "shell".to_string(),
         JsonSchema::String {
             description: Some("Shell binary to launch. Defaults to /bin/bash.".to_string()),
@@ -171,6 +185,24 @@ fn create_exec_command_tool() -> ToolSpec {
         JsonSchema::Number {
             description: Some(
                 "Maximum number of tokens to return. Excess output will be truncated.".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "with_escalated_permissions".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "Whether to request escalated permissions. Set to true if command needs to be run without sandbox restrictions"
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "justification".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Only set if with_escalated_permissions is true. 1-sentence explanation of why we want to run this command."
+                    .to_string(),
             ),
         },
     );
@@ -269,9 +301,89 @@ fn create_shell_tool() -> ToolSpec {
         },
     );
 
+    let description  = if cfg!(windows) {
+        r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
+        
+Examples of valid command strings:
+
+- ls -a (show hidden): ["powershell.exe", "-Command", "Get-ChildItem -Force"]
+- recursive find by name: ["powershell.exe", "-Command", "Get-ChildItem -Recurse -Filter *.py"]
+- recursive grep: ["powershell.exe", "-Command", "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"]
+- ps aux | grep python: ["powershell.exe", "-Command", "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"]
+- setting an env var: ["powershell.exe", "-Command", "$env:FOO='bar'; echo $env:FOO"]
+- running an inline Python script: ["powershell.exe", "-Command", "@'\\nprint('Hello, world!')\\n'@ | python -"]"#
+    } else {
+        r#"Runs a shell command and returns its output.
+- The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with ["bash", "-lc"].
+- Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary."#
+    }.to_string();
+
     ToolSpec::Function(ResponsesApiTool {
         name: "shell".to_string(),
-        description: "Runs a shell command and returns its output.".to_string(),
+        description,
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["command".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_shell_command_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "command".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "The shell script to execute in the user's default shell".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "workdir".to_string(),
+        JsonSchema::String {
+            description: Some("The working directory to execute the command in".to_string()),
+        },
+    );
+    properties.insert(
+        "timeout_ms".to_string(),
+        JsonSchema::Number {
+            description: Some("The timeout for the command in milliseconds".to_string()),
+        },
+    );
+    properties.insert(
+        "with_escalated_permissions".to_string(),
+        JsonSchema::Boolean {
+            description: Some("Whether to request escalated permissions. Set to true if command needs to be run without sandbox restrictions".to_string()),
+        },
+    );
+    properties.insert(
+        "justification".to_string(),
+        JsonSchema::String {
+            description: Some("Only set if with_escalated_permissions is true. 1-sentence explanation of why we want to run this command.".to_string()),
+        },
+    );
+
+    let description = if cfg!(windows) {
+        r#"Runs a Powershell command (Windows) and returns its output.
+        
+Examples of valid command strings:
+
+- ls -a (show hidden): "Get-ChildItem -Force"
+- recursive find by name: "Get-ChildItem -Recurse -Filter *.py"
+- recursive grep: "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"
+- ps aux | grep python: "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"
+- setting an env var: "$env:FOO='bar'; echo $env:FOO"
+- running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -"#
+    } else {
+        r#"Runs a shell command and returns its output.
+- Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary."#
+    }.to_string();
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "shell_command".to_string(),
+        description,
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -870,6 +982,7 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::McpResourceHandler;
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::ReadFileHandler;
+    use crate::tools::handlers::ShellCommandHandler;
     use crate::tools::handlers::ShellHandler;
     use crate::tools::handlers::TestSyncHandler;
     use crate::tools::handlers::UnifiedExecHandler;
@@ -885,16 +998,8 @@ pub(crate) fn build_specs(
     let view_image_handler = Arc::new(ViewImageHandler);
     let mcp_handler = Arc::new(McpHandler);
     let mcp_resource_handler = Arc::new(McpResourceHandler);
+    let shell_command_handler = Arc::new(ShellCommandHandler);
 
-    let use_unified_exec = config.experimental_unified_exec_tool
-        || matches!(config.shell_type, ConfigShellToolType::Streamable);
-
-    if use_unified_exec {
-        builder.push_spec(create_exec_command_tool());
-        builder.push_spec(create_write_stdin_tool());
-        builder.register_handler("exec_command", unified_exec_handler.clone());
-        builder.register_handler("write_stdin", unified_exec_handler);
-    }
     match &config.shell_type {
         ConfigShellToolType::Default => {
             builder.push_spec(create_shell_tool());
@@ -902,15 +1007,27 @@ pub(crate) fn build_specs(
         ConfigShellToolType::Local => {
             builder.push_spec(ToolSpec::LocalShell {});
         }
-        ConfigShellToolType::Streamable => {
-            // Already handled by use_unified_exec.
+        ConfigShellToolType::UnifiedExec => {
+            builder.push_spec(create_exec_command_tool());
+            builder.push_spec(create_write_stdin_tool());
+            builder.register_handler("exec_command", unified_exec_handler.clone());
+            builder.register_handler("write_stdin", unified_exec_handler);
+        }
+        ConfigShellToolType::Disabled => {
+            // Do nothing.
+        }
+        ConfigShellToolType::ShellCommand => {
+            builder.push_spec(create_shell_command_tool());
         }
     }
 
-    // Always register shell aliases so older prompts remain compatible.
-    builder.register_handler("shell", shell_handler.clone());
-    builder.register_handler("container.exec", shell_handler.clone());
-    builder.register_handler("local_shell", shell_handler);
+    if config.shell_type != ConfigShellToolType::Disabled {
+        // Always register shell aliases so older prompts remain compatible.
+        builder.register_handler("shell", shell_handler.clone());
+        builder.register_handler("container.exec", shell_handler.clone());
+        builder.register_handler("local_shell", shell_handler);
+        builder.register_handler("shell_command", shell_command_handler);
+    }
 
     builder.push_spec_with_parallel_support(create_list_mcp_resources_tool(), true);
     builder.push_spec_with_parallel_support(create_list_mcp_resource_templates_tool(), true);
@@ -1045,7 +1162,9 @@ mod tests {
         match config.shell_type {
             ConfigShellToolType::Default => Some("shell"),
             ConfigShellToolType::Local => Some("local_shell"),
-            ConfigShellToolType::Streamable => None,
+            ConfigShellToolType::UnifiedExec => None,
+            ConfigShellToolType::Disabled => None,
+            ConfigShellToolType::ShellCommand => Some("shell_command"),
         }
     }
 
@@ -1095,7 +1214,7 @@ mod tests {
     }
 
     #[test]
-    fn test_full_toolset_specs_for_gpt5_codex() {
+    fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         let model_family = find_family_for_model("gpt-5-codex")
             .expect("gpt-5-codex should be a valid model family");
         let mut features = Features::with_defaults();
@@ -1129,7 +1248,6 @@ mod tests {
         for spec in [
             create_exec_command_tool(),
             create_write_stdin_tool(),
-            create_shell_tool(),
             create_list_mcp_resources_tool(),
             create_list_mcp_resource_templates_tool(),
             create_read_mcp_resource_tool(),
@@ -1156,32 +1274,177 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_build_specs_contains_expected_basics() {
-        let model_family = find_family_for_model("codex-mini-latest")
-            .expect("codex-mini-latest should be a valid model family");
-        let mut features = Features::with_defaults();
-        features.enable(Feature::WebSearchRequest);
-        features.enable(Feature::UnifiedExec);
+    fn assert_model_tools(model_family: &str, features: &Features, expected_tools: &[&str]) {
+        let model_family = find_family_for_model(model_family)
+            .unwrap_or_else(|| panic!("{model_family} should be a valid model family"));
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            features: &features,
+            features,
         });
         let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
         let tool_names = tools.iter().map(|t| t.spec.name()).collect::<Vec<_>>();
-        assert_eq!(
-            &tool_names,
+        assert_eq!(&tool_names, &expected_tools,);
+    }
+
+    #[test]
+    fn test_build_specs_gpt5_codex_default() {
+        assert_model_tools(
+            "gpt-5-codex",
+            &Features::with_defaults(),
+            &[
+                "shell_command",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "apply_patch",
+                "view_image",
+            ],
+        );
+    }
+
+    #[test]
+    fn test_build_specs_gpt51_codex_default() {
+        assert_model_tools(
+            "gpt-5.1-codex",
+            &Features::with_defaults(),
+            &[
+                "shell_command",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "apply_patch",
+                "view_image",
+            ],
+        );
+    }
+
+    #[test]
+    fn test_build_specs_gpt5_codex_unified_exec_web_search() {
+        assert_model_tools(
+            "gpt-5-codex",
+            Features::with_defaults()
+                .enable(Feature::UnifiedExec)
+                .enable(Feature::WebSearchRequest),
             &[
                 "exec_command",
                 "write_stdin",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "apply_patch",
+                "web_search",
+                "view_image",
+            ],
+        );
+    }
+
+    #[test]
+    fn test_build_specs_gpt51_codex_unified_exec_web_search() {
+        assert_model_tools(
+            "gpt-5.1-codex",
+            Features::with_defaults()
+                .enable(Feature::UnifiedExec)
+                .enable(Feature::WebSearchRequest),
+            &[
+                "exec_command",
+                "write_stdin",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "apply_patch",
+                "web_search",
+                "view_image",
+            ],
+        );
+    }
+
+    #[test]
+    fn test_codex_mini_defaults() {
+        assert_model_tools(
+            "codex-mini-latest",
+            &Features::with_defaults(),
+            &[
                 "local_shell",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "view_image",
+            ],
+        );
+    }
+
+    #[test]
+    fn test_codex_5_1_mini_defaults() {
+        assert_model_tools(
+            "gpt-5.1-codex-mini",
+            &Features::with_defaults(),
+            &[
+                "shell_command",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "apply_patch",
+                "view_image",
+            ],
+        );
+    }
+
+    #[test]
+    fn test_gpt_5_defaults() {
+        assert_model_tools(
+            "gpt-5",
+            &Features::with_defaults(),
+            &[
+                "shell",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "view_image",
+            ],
+        );
+    }
+
+    #[test]
+    fn test_gpt_5_1_defaults() {
+        assert_model_tools(
+            "gpt-5.1",
+            &Features::with_defaults(),
+            &[
+                "shell_command",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "apply_patch",
+                "view_image",
+            ],
+        );
+    }
+
+    #[test]
+    fn test_codex_mini_unified_exec_web_search() {
+        assert_model_tools(
+            "codex-mini-latest",
+            Features::with_defaults()
+                .enable(Feature::UnifiedExec)
+                .enable(Feature::WebSearchRequest),
+            &[
+                "exec_command",
+                "write_stdin",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
                 "web_search",
                 "view_image",
-            ]
+            ],
         );
     }
 
@@ -1203,6 +1466,22 @@ mod tests {
             subset.push(shell_tool);
         }
         assert_contains_tool_names(&tools, &subset);
+    }
+
+    #[test]
+    fn test_build_specs_shell_command_present() {
+        assert_model_tools(
+            "codex-mini-latest",
+            Features::with_defaults().enable(Feature::ShellCommandTool),
+            &[
+                "shell_command",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "view_image",
+            ],
+        );
     }
 
     #[test]
@@ -1656,8 +1935,52 @@ mod tests {
         };
         assert_eq!(name, "shell");
 
-        let expected = "Runs a shell command and returns its output.";
-        assert_eq!(description, expected);
+        let expected = if cfg!(windows) {
+            r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
+        
+Examples of valid command strings:
+
+- ls -a (show hidden): ["powershell.exe", "-Command", "Get-ChildItem -Force"]
+- recursive find by name: ["powershell.exe", "-Command", "Get-ChildItem -Recurse -Filter *.py"]
+- recursive grep: ["powershell.exe", "-Command", "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"]
+- ps aux | grep python: ["powershell.exe", "-Command", "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"]
+- setting an env var: ["powershell.exe", "-Command", "$env:FOO='bar'; echo $env:FOO"]
+- running an inline Python script: ["powershell.exe", "-Command", "@'\\nprint('Hello, world!')\\n'@ | python -"]"#
+        } else {
+            r#"Runs a shell command and returns its output.
+- The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with ["bash", "-lc"].
+- Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary."#
+        }.to_string();
+        assert_eq!(description, &expected);
+    }
+
+    #[test]
+    fn test_shell_command_tool() {
+        let tool = super::create_shell_command_tool();
+        let ToolSpec::Function(ResponsesApiTool {
+            description, name, ..
+        }) = &tool
+        else {
+            panic!("expected function tool");
+        };
+        assert_eq!(name, "shell_command");
+
+        let expected = if cfg!(windows) {
+            r#"Runs a Powershell command (Windows) and returns its output.
+        
+Examples of valid command strings:
+
+- ls -a (show hidden): "Get-ChildItem -Force"
+- recursive find by name: "Get-ChildItem -Recurse -Filter *.py"
+- recursive grep: "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"
+- ps aux | grep python: "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"
+- setting an env var: "$env:FOO='bar'; echo $env:FOO"
+- running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -"#.to_string()
+        } else {
+            r#"Runs a shell command and returns its output.
+- Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary."#.to_string()
+        };
+        assert_eq!(description, &expected);
     }
 
     #[test]

@@ -23,7 +23,6 @@ use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id_from_str;
 use core_test_support::skip_if_no_network;
 use core_test_support::wait_for_event;
-use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -83,6 +82,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
             review_request: ReviewRequest {
                 prompt: "Please review my changes".to_string(),
                 user_facing_hint: "my changes".to_string(),
+                append_to_original_thread: true,
             },
         })
         .await
@@ -179,6 +179,7 @@ async fn review_op_with_plain_text_emits_review_fallback() {
             review_request: ReviewRequest {
                 prompt: "Plain text review".to_string(),
                 user_facing_hint: "plain text review".to_string(),
+                append_to_original_thread: true,
             },
         })
         .await
@@ -237,6 +238,7 @@ async fn review_filters_agent_message_related_events() {
             review_request: ReviewRequest {
                 prompt: "Filter streaming events".to_string(),
                 user_facing_hint: "Filter streaming events".to_string(),
+                append_to_original_thread: true,
             },
         })
         .await
@@ -246,37 +248,31 @@ async fn review_filters_agent_message_related_events() {
     let mut saw_exited = false;
 
     // Drain until TaskComplete; assert filtered events never surface.
-    wait_for_event_with_timeout(
-        &codex,
-        |event| match event {
-            EventMsg::TaskComplete(_) => true,
-            EventMsg::EnteredReviewMode(_) => {
-                saw_entered = true;
-                false
+    wait_for_event(&codex, |event| match event {
+        EventMsg::TaskComplete(_) => true,
+        EventMsg::EnteredReviewMode(_) => {
+            saw_entered = true;
+            false
+        }
+        EventMsg::ExitedReviewMode(_) => {
+            saw_exited = true;
+            false
+        }
+        // The following must be filtered by review flow
+        EventMsg::AgentMessageContentDelta(_) => {
+            panic!("unexpected AgentMessageContentDelta surfaced during review")
+        }
+        EventMsg::AgentMessageDelta(_) => {
+            panic!("unexpected AgentMessageDelta surfaced during review")
+        }
+        EventMsg::ItemCompleted(ev) => match &ev.item {
+            codex_protocol::items::TurnItem::AgentMessage(_) => {
+                panic!("unexpected ItemCompleted for TurnItem::AgentMessage surfaced during review")
             }
-            EventMsg::ExitedReviewMode(_) => {
-                saw_exited = true;
-                false
-            }
-            // The following must be filtered by review flow
-            EventMsg::AgentMessageContentDelta(_) => {
-                panic!("unexpected AgentMessageContentDelta surfaced during review")
-            }
-            EventMsg::AgentMessageDelta(_) => {
-                panic!("unexpected AgentMessageDelta surfaced during review")
-            }
-            EventMsg::ItemCompleted(ev) => match &ev.item {
-                codex_protocol::items::TurnItem::AgentMessage(_) => {
-                    panic!(
-                        "unexpected ItemCompleted for TurnItem::AgentMessage surfaced during review"
-                    )
-                }
-                _ => false,
-            },
             _ => false,
         },
-        tokio::time::Duration::from_secs(5),
-    )
+        _ => false,
+    })
     .await;
     assert!(saw_entered && saw_exited, "missing review lifecycle events");
 
@@ -327,6 +323,7 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
             review_request: ReviewRequest {
                 prompt: "check structured".to_string(),
                 user_facing_hint: "check structured".to_string(),
+                append_to_original_thread: true,
             },
         })
         .await
@@ -335,25 +332,21 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
     // Drain events until TaskComplete; ensure none are AgentMessage.
     let mut saw_entered = false;
     let mut saw_exited = false;
-    wait_for_event_with_timeout(
-        &codex,
-        |event| match event {
-            EventMsg::TaskComplete(_) => true,
-            EventMsg::AgentMessage(_) => {
-                panic!("unexpected AgentMessage during review with structured output")
-            }
-            EventMsg::EnteredReviewMode(_) => {
-                saw_entered = true;
-                false
-            }
-            EventMsg::ExitedReviewMode(_) => {
-                saw_exited = true;
-                false
-            }
-            _ => false,
-        },
-        tokio::time::Duration::from_secs(5),
-    )
+    wait_for_event(&codex, |event| match event {
+        EventMsg::TaskComplete(_) => true,
+        EventMsg::AgentMessage(_) => {
+            panic!("unexpected AgentMessage during review with structured output")
+        }
+        EventMsg::EnteredReviewMode(_) => {
+            saw_entered = true;
+            false
+        }
+        EventMsg::ExitedReviewMode(_) => {
+            saw_exited = true;
+            false
+        }
+        _ => false,
+    })
     .await;
     assert!(saw_entered && saw_exited, "missing review lifecycle events");
 
@@ -375,7 +368,7 @@ async fn review_uses_custom_review_model_from_config() {
     // Choose a review model different from the main model; ensure it is used.
     let codex = new_conversation_for_server(&server, &codex_home, |cfg| {
         cfg.model = "gpt-4.1".to_string();
-        cfg.review_model = "gpt-5".to_string();
+        cfg.review_model = "gpt-5.1".to_string();
     })
     .await;
 
@@ -384,6 +377,7 @@ async fn review_uses_custom_review_model_from_config() {
             review_request: ReviewRequest {
                 prompt: "use custom model".to_string(),
                 user_facing_hint: "use custom model".to_string(),
+                append_to_original_thread: true,
             },
         })
         .await
@@ -405,7 +399,7 @@ async fn review_uses_custom_review_model_from_config() {
     // Assert the request body model equals the configured review model
     let request = &server.received_requests().await.unwrap()[0];
     let body = request.body_json::<serde_json::Value>().unwrap();
-    assert_eq!(body["model"].as_str().unwrap(), "gpt-5");
+    assert_eq!(body["model"].as_str().unwrap(), "gpt-5.1");
 
     server.verify().await;
 }
@@ -501,6 +495,7 @@ async fn review_input_isolated_from_parent_history() {
             review_request: ReviewRequest {
                 prompt: review_prompt.clone(),
                 user_facing_hint: review_prompt.clone(),
+                append_to_original_thread: true,
             },
         })
         .await
@@ -613,6 +608,7 @@ async fn review_history_does_not_leak_into_parent_session() {
             review_request: ReviewRequest {
                 prompt: "Start a review".to_string(),
                 user_facing_hint: "Start a review".to_string(),
+                append_to_original_thread: true,
             },
         })
         .await

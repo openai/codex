@@ -159,6 +159,8 @@ pub fn run(
         .threads(num_walk_builder_threads)
         // Allow hidden entries.
         .hidden(false)
+        // Follow symlinks to search their contents.
+        .follow_links(true)
         // Don't require git to be present to apply to apply git-related ignore rules.
         .require_git(false);
     if !respect_gitignore {

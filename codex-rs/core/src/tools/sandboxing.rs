@@ -86,6 +86,37 @@ pub(crate) struct ApprovalCtx<'a> {
     pub risk: Option<SandboxCommandAssessment>,
 }
 
+// Specifies what tool orchestrator should do with a given tool call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ApprovalRequirement {
+    /// No approval required for this tool call
+    Skip,
+    /// Approval required for this tool call
+    NeedsApproval { reason: Option<String> },
+    /// Execution forbidden for this tool call
+    Forbidden { reason: String },
+}
+
+/// - Never, OnFailure: do not ask
+/// - OnRequest: ask unless sandbox policy is DangerFullAccess
+/// - UnlessTrusted: always ask
+pub(crate) fn default_approval_requirement(
+    policy: AskForApproval,
+    sandbox_policy: &SandboxPolicy,
+) -> ApprovalRequirement {
+    let needs_approval = match policy {
+        AskForApproval::Never | AskForApproval::OnFailure => false,
+        AskForApproval::OnRequest => !matches!(sandbox_policy, SandboxPolicy::DangerFullAccess),
+        AskForApproval::UnlessTrusted => true,
+    };
+
+    if needs_approval {
+        ApprovalRequirement::NeedsApproval { reason: None }
+    } else {
+        ApprovalRequirement::Skip
+    }
+}
+
 pub(crate) trait Approvable<Req> {
     type ApprovalKey: Hash + Eq + Clone + Debug + Serialize;
 
@@ -106,22 +137,11 @@ pub(crate) trait Approvable<Req> {
         matches!(policy, AskForApproval::Never)
     }
 
-    /// Decide whether an initial user approval should be requested before the
-    /// first attempt. Defaults to the orchestrator's behavior (pre‑refactor):
-    /// - Never, OnFailure: do not ask
-    /// - OnRequest: ask unless sandbox policy is DangerFullAccess
-    /// - UnlessTrusted: always ask
-    fn wants_initial_approval(
-        &self,
-        _req: &Req,
-        policy: AskForApproval,
-        sandbox_policy: &SandboxPolicy,
-    ) -> bool {
-        match policy {
-            AskForApproval::Never | AskForApproval::OnFailure => false,
-            AskForApproval::OnRequest => !matches!(sandbox_policy, SandboxPolicy::DangerFullAccess),
-            AskForApproval::UnlessTrusted => true,
-        }
+    /// Override the default approval requirement. Return `Some(_)` to specify
+    /// a custom requirement, or `None` to fall back to
+    /// policy-based default.
+    fn approval_requirement(&self, _req: &Req) -> Option<ApprovalRequirement> {
+        None
     }
 
     /// Decide we can request an approval for no-sandbox execution.

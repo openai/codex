@@ -50,6 +50,9 @@ pub fn default_bg() -> Option<(u8, u8, u8)> {
 #[cfg(all(unix, not(test)))]
 mod imp {
     use super::DefaultColors;
+    use crossterm::style::Color as CrosstermColor;
+    use crossterm::style::query_background_color;
+    use crossterm::style::query_foreground_color;
     use std::sync::Mutex;
     use std::sync::OnceLock;
 
@@ -105,128 +108,16 @@ mod imp {
     }
 
     fn query_default_colors() -> std::io::Result<Option<DefaultColors>> {
-        use std::fs::OpenOptions;
-        use std::io::ErrorKind;
-        use std::io::IsTerminal;
-        use std::io::Read;
-        use std::io::Write;
-        use std::os::fd::AsRawFd;
-        use std::time::Duration;
-        use std::time::Instant;
-
-        let mut stdout_handle = std::io::stdout();
-        if !stdout_handle.is_terminal() {
-            return Ok(None);
-        }
-
-        let mut tty = match OpenOptions::new().read(true).open("/dev/tty") {
-            Ok(file) => file,
-            Err(_) => return Ok(None),
-        };
-
-        let fd = tty.as_raw_fd();
-        unsafe {
-            let flags = libc::fcntl(fd, libc::F_GETFL);
-            if flags >= 0 {
-                libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
-            }
-        }
-
-        stdout_handle.write_all(b"\x1b]10;?\x07\x1b]11;?\x07")?;
-        stdout_handle.flush()?;
-
-        let mut deadline = Instant::now() + Duration::from_millis(200);
-        let mut buffer = Vec::new();
-        let mut fg = None;
-        let mut bg = None;
-
-        while Instant::now() < deadline {
-            let mut chunk = [0u8; 128];
-            match tty.read(&mut chunk) {
-                Ok(0) => break,
-                Ok(n) => {
-                    deadline = Instant::now() + Duration::from_millis(200);
-                    buffer.extend_from_slice(&chunk[..n]);
-                    if fg.is_none() {
-                        fg = parse_osc_color(&buffer, 10);
-                    }
-                    if bg.is_none() {
-                        bg = parse_osc_color(&buffer, 11);
-                    }
-                    if let (Some(fg), Some(bg)) = (fg, bg) {
-                        return Ok(Some(DefaultColors { fg, bg }));
-                    }
-                }
-                Err(err) if err.kind() == ErrorKind::WouldBlock => {
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                Err(err) if err.kind() == ErrorKind::Interrupted => continue,
-                Err(_) => break,
-            }
-        }
-
-        if fg.is_none() {
-            fg = parse_osc_color(&buffer, 10);
-        }
-        if bg.is_none() {
-            bg = parse_osc_color(&buffer, 11);
-        }
-
+        let fg = query_foreground_color()?.and_then(color_to_tuple);
+        let bg = query_background_color()?.and_then(color_to_tuple);
         Ok(fg.zip(bg).map(|(fg, bg)| DefaultColors { fg, bg }))
     }
 
-    fn parse_component(component: &str) -> Option<u8> {
-        let trimmed = component.trim();
-        if trimmed.is_empty() {
-            return None;
+    fn color_to_tuple(color: CrosstermColor) -> Option<(u8, u8, u8)> {
+        match color {
+            CrosstermColor::Rgb { r, g, b } => Some((r, g, b)),
+            _ => None,
         }
-        let bits = trimmed.len().checked_mul(4)?;
-        if bits == 0 || bits > 64 {
-            return None;
-        }
-        let max = if bits == 64 {
-            u64::MAX
-        } else {
-            (1u64 << bits) - 1
-        };
-        let value = u64::from_str_radix(trimmed, 16).ok()?;
-        Some(((value * 255 + max / 2) / max) as u8)
-    }
-
-    fn parse_osc_color(buffer: &[u8], code: u8) -> Option<(u8, u8, u8)> {
-        let text = std::str::from_utf8(buffer).ok()?;
-        let prefix = match code {
-            10 => "\u{1b}]10;",
-            11 => "\u{1b}]11;",
-            _ => return None,
-        };
-        let start = text.rfind(prefix)?;
-        let after_prefix = &text[start + prefix.len()..];
-        let end_bel = after_prefix.find('\u{7}');
-        let end_st = after_prefix.find("\u{1b}\\");
-        let end_idx = match (end_bel, end_st) {
-            (Some(bel), Some(st)) => bel.min(st),
-            (Some(bel), None) => bel,
-            (None, Some(st)) => st,
-            (None, None) => return None,
-        };
-        let payload = after_prefix[..end_idx].trim();
-        parse_color_payload(payload)
-    }
-
-    fn parse_color_payload(payload: &str) -> Option<(u8, u8, u8)> {
-        if payload.is_empty() || payload == "?" {
-            return None;
-        }
-        let (model, values) = payload.split_once(':')?;
-        if model != "rgb" && model != "rgba" {
-            return None;
-        }
-        let mut parts = values.split('/');
-        let r = parse_component(parts.next()?)?;
-        let g = parse_component(parts.next()?)?;
-        let b = parse_component(parts.next()?)?;
-        Some((r, g, b))
     }
 }
 

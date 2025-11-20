@@ -16,24 +16,10 @@ pub enum SandboxRiskLevel {
     High,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum SandboxRiskCategory {
-    DataDeletion,
-    DataExfiltration,
-    PrivilegeEscalation,
-    SystemModification,
-    NetworkAccess,
-    ResourceExhaustion,
-    Compliance,
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct SandboxCommandAssessment {
     pub description: String,
     pub risk_level: SandboxRiskLevel,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub risk_categories: Vec<SandboxRiskCategory>,
 }
 
 impl SandboxRiskLevel {
@@ -46,24 +32,14 @@ impl SandboxRiskLevel {
     }
 }
 
-impl SandboxRiskCategory {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::DataDeletion => "data_deletion",
-            Self::DataExfiltration => "data_exfiltration",
-            Self::PrivilegeEscalation => "privilege_escalation",
-            Self::SystemModification => "system_modification",
-            Self::NetworkAccess => "network_access",
-            Self::ResourceExhaustion => "resource_exhaustion",
-            Self::Compliance => "compliance",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ExecApprovalRequestEvent {
     /// Identifier for the associated exec call, if available.
     pub call_id: String,
+    /// Turn ID that this command belongs to.
+    /// Uses `#[serde(default)]` for backwards compatibility.
+    #[serde(default)]
+    pub turn_id: String,
     /// The command to be executed.
     pub command: Vec<String>,
     /// The command's working directory.
@@ -81,6 +57,10 @@ pub struct ExecApprovalRequestEvent {
 pub struct ApplyPatchApprovalRequestEvent {
     /// Responses API call id for the associated patch apply call, if available.
     pub call_id: String,
+    /// Turn ID that this patch belongs to.
+    /// Uses `#[serde(default)]` for backwards compatibility with older senders.
+    #[serde(default)]
+    pub turn_id: String,
     pub changes: HashMap<PathBuf, FileChange>,
     /// Optional explanatory reason (e.g. request for extra write access).
     #[serde(skip_serializing_if = "Option::is_none")]
