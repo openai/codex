@@ -781,6 +781,15 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn kill_child_process_group_kills_grandchildren_on_timeout() -> Result<()> {
+        // On Linux/macOS, /bin/bash is typically present; on FreeBSD/OpenBSD,
+        // prefer /bin/sh to avoid NotFound errors.
+        #[cfg(any(target_os = "freebsd", target_os = "openbsd"))]
+        let command = vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "sleep 60 & echo $!; sleep 60".to_string(),
+        ];
+        #[cfg(all(unix, not(any(target_os = "freebsd", target_os = "openbsd"))))]
         let command = vec![
             "/bin/bash".to_string(),
             "-c".to_string(),
