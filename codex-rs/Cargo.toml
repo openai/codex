@@ -42,6 +42,8 @@ members = [
     "utils/readiness",
     "utils/string",
     "utils/tokenizer",
+    "codex-client",
+    "codex-api",
 ]
 resolver = "2"
 
@@ -80,6 +82,8 @@ codex-ollama = { path = "ollama" }
 codex-otel = { path = "otel" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
+codex-client = { path = "codex-client" }
+codex-api = { path = "codex-api" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }

@@ -9,7 +9,13 @@ use crate::CodexAuth;
 use crate::default_client::CodexHttpClient;
 use crate::default_client::CodexRequestBuilder;
 use crate::error::CodexErr;
+use codex_api::Provider as ApiProvider;
+use codex_api::WireApi as ApiWireApi;
+use codex_api::provider::RetryConfig as ApiRetryConfig;
 use codex_app_server_protocol::AuthMode;
+use http::HeaderMap;
+use http::header::HeaderName;
+use http::header::HeaderValue;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -123,6 +129,32 @@ impl ModelProviderInfo {
         Ok(self.apply_http_headers(builder))
     }
 
+    #[allow(dead_code)]
+    fn build_header_map(&self) -> crate::error::Result<HeaderMap> {
+        let mut headers = HeaderMap::new();
+        if let Some(extra) = &self.http_headers {
+            for (k, v) in extra {
+                if let (Ok(name), Ok(value)) = (HeaderName::try_from(k), HeaderValue::try_from(v)) {
+                    headers.insert(name, value);
+                }
+            }
+        }
+
+        if let Some(env_headers) = &self.env_http_headers {
+            for (header, env_var) in env_headers {
+                if let Ok(val) = std::env::var(env_var)
+                    && !val.trim().is_empty()
+                    && let (Ok(name), Ok(value)) =
+                        (HeaderName::try_from(header), HeaderValue::try_from(val))
+                {
+                    headers.insert(name, value);
+                }
+            }
+        }
+
+        Ok(headers)
+    }
+
     pub async fn create_compact_request_builder<'a>(
         &'a self,
         client: &'a CodexHttpClient,
@@ -179,6 +211,44 @@ impl ModelProviderInfo {
                     .join("&");
                 format!("?{full_params}")
             })
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn to_api_provider(
+        &self,
+        auth_mode: Option<AuthMode>,
+    ) -> crate::error::Result<ApiProvider> {
+        let default_base_url = if matches!(auth_mode, Some(AuthMode::ChatGPT)) {
+            "https://chatgpt.com/backend-api/codex"
+        } else {
+            "https://api.openai.com/v1"
+        };
+        let base_url = self
+            .base_url
+            .clone()
+            .unwrap_or_else(|| default_base_url.to_string());
+
+        let headers = self.build_header_map()?;
+        let retry = ApiRetryConfig {
+            max_attempts: self.request_max_retries(),
+            base_delay: Duration::from_millis(200),
+            retry_429: true,
+            retry_5xx: true,
+            retry_transport: true,
+        };
+
+        Ok(ApiProvider {
+            name: self.name.clone(),
+            base_url,
+            query_params: self.query_params.clone(),
+            wire: match self.wire_api {
+                WireApi::Responses => ApiWireApi::Responses,
+                WireApi::Chat => ApiWireApi::Chat,
+            },
+            headers,
+            retry,
+            stream_idle_timeout: self.stream_idle_timeout(),
+        })
     }
 
     pub(crate) fn get_full_url(&self, auth: &Option<CodexAuth>) -> String {

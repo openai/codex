@@ -1,8 +1,7 @@
 use crate::client_common::tools::ToolSpec;
 use crate::error::Result;
 use crate::model_family::ModelFamily;
-use crate::protocol::RateLimitSnapshot;
-use crate::protocol::TokenUsage;
+pub use codex_api::common::ResponseEvent;
 use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -182,30 +181,6 @@ fn strip_total_output_header(output: &str) -> Option<(&str, u32)> {
     let total_lines = total_segment.parse::<u32>().ok()?;
     let remainder = remainder.strip_prefix('\n').unwrap_or(remainder);
     Some((remainder, total_lines))
-}
-
-#[derive(Debug)]
-pub enum ResponseEvent {
-    Created,
-    OutputItemDone(ResponseItem),
-    OutputItemAdded(ResponseItem),
-    Completed {
-        response_id: String,
-        token_usage: Option<TokenUsage>,
-    },
-    OutputTextDelta(String),
-    ReasoningSummaryDelta {
-        delta: String,
-        summary_index: i64,
-    },
-    ReasoningContentDelta {
-        delta: String,
-        content_index: i64,
-    },
-    ReasoningSummaryPartAdded {
-        summary_index: i64,
-    },
-    RateLimits(RateLimitSnapshot),
 }
 
 #[derive(Debug, Serialize)]
