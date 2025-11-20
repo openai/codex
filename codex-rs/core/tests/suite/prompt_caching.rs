@@ -343,18 +343,18 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
     // reflecting the new approval policy and sandbox settings. Omit cwd because it did
     // not change.
     let shell = default_user_shell();
-    let shell_name = shell.name();
-    let writable_root = writable.path().to_string_lossy();
     let expected_env_text_2 = format!(
         r#"<environment_context>
   <approval_policy>never</approval_policy>
   <sandbox_mode>workspace-write</sandbox_mode>
   <network_access>enabled</network_access>
   <writable_roots>
-    <root>{writable_root}</root>
+    <root>{}</root>
   </writable_roots>
-  <shell>{shell_name}</shell>
-</environment_context>"#
+  <shell>{}</shell>
+</environment_context>"#,
+        writable.path().display(),
+        shell.name()
     );
     let expected_env_msg_2 = serde_json::json!({
         "type": "message",
@@ -523,20 +523,21 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
         "content": [ { "type": "input_text", "text": "hello 2" } ]
     });
     let shell = default_user_shell();
-    let shell_name = shell.name();
-    let cwd = new_cwd.path().to_string_lossy();
-    let writable_root = writable.path().to_string_lossy();
+
     let expected_env_text_2 = format!(
         r#"<environment_context>
-  <cwd>{cwd}</cwd>
+  <cwd>{}</cwd>
   <approval_policy>never</approval_policy>
   <sandbox_mode>workspace-write</sandbox_mode>
   <network_access>enabled</network_access>
   <writable_roots>
-    <root>{writable_root}</root>
+    <root>{}</root>
   </writable_roots>
-  <shell>{shell_name}</shell>
-</environment_context>"#
+  <shell>{}</shell>
+</environment_context>"#,
+        new_cwd.path().display(),
+        writable.path().display(),
+        shell.name(),
     );
     let expected_env_msg_2 = serde_json::json!({
         "type": "message",

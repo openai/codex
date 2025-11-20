@@ -187,7 +187,7 @@ fn ultimate_fallback_shell() -> Shell {
         }
     } else {
         Shell {
-            shell_type: ShellType::Bash,
+            shell_type: ShellType::Sh,
             shell_path: PathBuf::from("/bin/sh"),
         }
     }
