@@ -483,7 +483,7 @@ impl Session {
         // - load history metadata
         let rollout_fut = RolloutRecorder::new(&config, rollout_params);
 
-        let default_shell_fut = shell::default_user_shell();
+        let default_shell = shell::default_user_shell();
         let history_meta_fut = crate::message_history::history_metadata(&config);
         let auth_statuses_fut = compute_auth_statuses(
             config.mcp_servers.iter(),
@@ -491,12 +491,8 @@ impl Session {
         );
 
         // Join all independent futures.
-        let (rollout_recorder, default_shell, (history_log_id, history_entry_count), auth_statuses) = tokio::join!(
-            rollout_fut,
-            default_shell_fut,
-            history_meta_fut,
-            auth_statuses_fut
-        );
+        let (rollout_recorder, (history_log_id, history_entry_count), auth_statuses) =
+            tokio::join!(rollout_fut, history_meta_fut, auth_statuses_fut);
 
         let rollout_recorder = rollout_recorder.map_err(|e| {
             error!("failed to initialize rollout recorder: {e:#}");
@@ -1046,7 +1042,7 @@ impl Session {
             Some(turn_context.cwd.clone()),
             Some(turn_context.approval_policy),
             Some(turn_context.sandbox_policy.clone()),
-            Some(self.user_shell().clone()),
+            self.user_shell().clone(),
         )));
         items
     }
@@ -2378,6 +2374,7 @@ mod tests {
     use crate::config::ConfigOverrides;
     use crate::config::ConfigToml;
     use crate::exec::ExecToolCallOutput;
+    use crate::shell::default_user_shell;
     use crate::tools::format_exec_output_str;
 
     use crate::protocol::CompactedItem;
@@ -2616,7 +2613,7 @@ mod tests {
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::new(None),
             rollout: Mutex::new(None),
-            user_shell: shell::Shell::Unknown,
+            user_shell: default_user_shell(),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager: otel_event_manager.clone(),
@@ -2693,7 +2690,7 @@ mod tests {
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::new(None),
             rollout: Mutex::new(None),
-            user_shell: shell::Shell::Unknown,
+            user_shell: default_user_shell(),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager: otel_event_manager.clone(),
