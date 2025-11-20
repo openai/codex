@@ -20,18 +20,18 @@ prefix_rule(
 ```
 
 ## CLI
-- Provide one or more policy files (for example `src/default.codexpolicy`) to check a command:
+- From the Codex CLI, run `codex execpolicycheck` with one or more policy files (for example `src/default.codexpolicy`) to check a command:
+```bash
+codex execpolicycheck --policy path/to/policy.codexpolicy git status
+```
+- Pass multiple `--policy` flags to merge rules, evaluated in the order provided, and use `--pretty` for formatted JSON.
+- You can also run the standalone dev binary directly during development:
 ```bash
 cargo run -p codex-execpolicy -- check --policy path/to/policy.codexpolicy git status
 ```
-- Pass multiple `--policy` flags to merge rules, evaluated in the order provided:
-```bash
-cargo run -p codex-execpolicy -- check --policy base.codexpolicy --policy overrides.codexpolicy git status
-```
-- Output is JSON by default; pass `--pretty` for pretty-printed JSON
 - Example outcomes:
   - Match: `{"match": { ... "decision": "allow" ... }}`
-  - No match: `"noMatch"`
+  - No match: `{"noMatch": {}}`
 
 ## Response shapes
 - Match:
@@ -53,7 +53,7 @@ cargo run -p codex-execpolicy -- check --policy base.codexpolicy --policy overri
 
 - No match:
 ```json
-"noMatch"
+{"noMatch": {}}
 ```
 
 - `matchedRules` lists every rule whose prefix matched the command; `matchedPrefix` is the exact prefix that matched.

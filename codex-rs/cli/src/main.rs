@@ -18,6 +18,7 @@ use codex_cli::login::run_logout;
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_common::CliConfigOverrides;
 use codex_exec::Cli as ExecCli;
+use codex_execpolicy::ExecPolicyCheckCommand;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
@@ -111,6 +112,10 @@ enum Subcommand {
     /// Internal: relay stdio to a Unix domain socket.
     #[clap(hide = true, name = "stdio-to-uds")]
     StdioToUds(StdioToUdsCommand),
+
+    /// Check execpolicy files against a command.
+    #[clap(name = "execpolicycheck")]
+    ExecPolicyCheck(ExecPolicyCheckCommand),
 
     /// Inspect feature flags.
     Features(FeaturesCli),
@@ -324,6 +329,12 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     }
     println!();
     println!("🎉 Update ran successfully! Please restart Codex.");
+    Ok(())
+}
+
+fn run_execpolicycheck(cmd: ExecPolicyCheckCommand) -> anyhow::Result<()> {
+    let json = cmd.run()?;
+    println!("{json}");
     Ok(())
 }
 
@@ -564,6 +575,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             let socket_path = cmd.socket_path;
             tokio::task::spawn_blocking(move || codex_stdio_to_uds::run(socket_path.as_path()))
                 .await??;
+        }
+        Some(Subcommand::ExecPolicyCheck(cmd)) => {
+            run_execpolicycheck(cmd)?;
         }
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
             FeaturesSubcommand::List => {
