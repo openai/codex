@@ -680,7 +680,7 @@ impl CodexClient {
                 self.handle_command_execution_request_approval(request_id, params)?;
             }
             ServerRequest::FileChangeRequestApproval { request_id, params } => {
-                self.handle_file_change_request_approval(request_id, params)?;
+                self.approve_file_change_request(request_id, params)?;
             }
             other => {
                 bail!("received unsupported server request: {other:?}");
@@ -722,7 +722,7 @@ impl CodexClient {
         Ok(())
     }
 
-    fn handle_file_change_request_approval(
+    fn approve_file_change_request(
         &mut self,
         request_id: RequestId,
         params: FileChangeRequestApprovalParams,

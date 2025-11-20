@@ -994,7 +994,7 @@ pub struct FileChangeRequestApprovalParams {
     pub item_id: String,
     /// Optional explanatory reason (e.g. request for extra write access).
     pub reason: Option<String>,
-    /// When set, the agent is asking the user to allow writes under this root
+    /// [UNSTABLE] When set, the agent is asking the user to allow writes under this root
     /// for the remainder of the session (unclear if this is honored today).
     pub grant_root: Option<PathBuf>,
 }

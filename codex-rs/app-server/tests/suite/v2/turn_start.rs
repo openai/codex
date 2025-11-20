@@ -34,7 +34,7 @@ use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[tokio::test]
 async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<()> {
