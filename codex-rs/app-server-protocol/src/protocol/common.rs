@@ -438,6 +438,13 @@ server_request_definitions! {
         response: v2::CommandExecutionRequestApprovalResponse,
     },
 
+    /// Sent when approval is requested for a specific file change.
+    /// This request is used for Turns started via turn/start.
+    FileChangeRequestApproval => "item/fileChange/requestApproval" {
+        params: v2::FileChangeRequestApprovalParams,
+        response: v2::FileChangeRequestApprovalResponse,
+    },
+
     /// DEPRECATED APIs below
     /// Request to approve a patch.
     /// This request is used for Turns started via the legacy APIs (i.e. SendUserTurn, SendUserMessage).

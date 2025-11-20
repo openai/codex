@@ -18,7 +18,7 @@ members = [
     "exec",
     "exec-server",
     "execpolicy",
-    "execpolicy2",
+    "execpolicy-legacy",
     "keyring-store",
     "file-search",
     "linux-sandbox",
@@ -67,7 +67,7 @@ codex-chatgpt = { path = "chatgpt" }
 codex-common = { path = "common" }
 codex-core = { path = "core" }
 codex-exec = { path = "exec" }
-codex-execpolicy2 = { path = "execpolicy2" }
+codex-execpolicy = { path = "execpolicy" }
 codex-feedback = { path = "feedback" }
 codex-file-search = { path = "file-search" }
 codex-git = { path = "utils/git" }

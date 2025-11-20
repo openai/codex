@@ -1,103 +1,84 @@
+use crate::decision::Decision;
+use crate::rule::RuleMatch;
+use crate::rule::RuleRef;
 use multimap::MultiMap;
-use regex_lite::Error as RegexError;
-use regex_lite::Regex;
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::ExecCall;
-use crate::Forbidden;
-use crate::MatchedExec;
-use crate::NegativeExamplePassedCheck;
-use crate::ProgramSpec;
-use crate::error::Error;
-use crate::error::Result;
-use crate::policy_parser::ForbiddenProgramRegex;
-use crate::program::PositiveExampleFailedCheck;
-
+#[derive(Clone, Debug)]
 pub struct Policy {
-    programs: MultiMap<String, ProgramSpec>,
-    forbidden_program_regexes: Vec<ForbiddenProgramRegex>,
-    forbidden_substrings_pattern: Option<Regex>,
+    rules_by_program: MultiMap<String, RuleRef>,
 }
 
 impl Policy {
-    pub fn new(
-        programs: MultiMap<String, ProgramSpec>,
-        forbidden_program_regexes: Vec<ForbiddenProgramRegex>,
-        forbidden_substrings: Vec<String>,
-    ) -> std::result::Result<Self, RegexError> {
-        let forbidden_substrings_pattern = if forbidden_substrings.is_empty() {
-            None
-        } else {
-            let escaped_substrings = forbidden_substrings
-                .iter()
-                .map(|s| regex_lite::escape(s))
-                .collect::<Vec<_>>()
-                .join("|");
-            Some(Regex::new(&format!("({escaped_substrings})"))?)
+    pub fn new(rules_by_program: MultiMap<String, RuleRef>) -> Self {
+        Self { rules_by_program }
+    }
+
+    pub fn empty() -> Self {
+        Self::new(MultiMap::new())
+    }
+
+    pub fn rules(&self) -> &MultiMap<String, RuleRef> {
+        &self.rules_by_program
+    }
+
+    pub fn check(&self, cmd: &[String]) -> Evaluation {
+        let rules = match cmd.first() {
+            Some(first) => match self.rules_by_program.get_vec(first) {
+                Some(rules) => rules,
+                None => return Evaluation::NoMatch,
+            },
+            None => return Evaluation::NoMatch,
         };
-        Ok(Self {
-            programs,
-            forbidden_program_regexes,
-            forbidden_substrings_pattern,
-        })
+
+        let matched_rules: Vec<RuleMatch> =
+            rules.iter().filter_map(|rule| rule.matches(cmd)).collect();
+        match matched_rules.iter().map(RuleMatch::decision).max() {
+            Some(decision) => Evaluation::Match {
+                decision,
+                matched_rules,
+            },
+            None => Evaluation::NoMatch,
+        }
     }
 
-    pub fn check(&self, exec_call: &ExecCall) -> Result<MatchedExec> {
-        let ExecCall { program, args } = &exec_call;
-        for ForbiddenProgramRegex { regex, reason } in &self.forbidden_program_regexes {
-            if regex.is_match(program) {
-                return Ok(MatchedExec::Forbidden {
-                    cause: Forbidden::Program {
-                        program: program.clone(),
-                        exec_call: exec_call.clone(),
-                    },
-                    reason: reason.clone(),
-                });
-            }
-        }
+    pub fn check_multiple<Commands>(&self, commands: Commands) -> Evaluation
+    where
+        Commands: IntoIterator,
+        Commands::Item: AsRef<[String]>,
+    {
+        let matched_rules: Vec<RuleMatch> = commands
+            .into_iter()
+            .flat_map(|command| match self.check(command.as_ref()) {
+                Evaluation::Match { matched_rules, .. } => matched_rules,
+                Evaluation::NoMatch => Vec::new(),
+            })
+            .collect();
 
-        for arg in args {
-            if let Some(regex) = &self.forbidden_substrings_pattern
-                && regex.is_match(arg)
-            {
-                return Ok(MatchedExec::Forbidden {
-                    cause: Forbidden::Arg {
-                        arg: arg.clone(),
-                        exec_call: exec_call.clone(),
-                    },
-                    reason: format!("arg `{arg}` contains forbidden substring"),
-                });
-            }
+        match matched_rules.iter().map(RuleMatch::decision).max() {
+            Some(decision) => Evaluation::Match {
+                decision,
+                matched_rules,
+            },
+            None => Evaluation::NoMatch,
         }
-
-        let mut last_err = Err(Error::NoSpecForProgram {
-            program: program.clone(),
-        });
-        if let Some(spec_list) = self.programs.get_vec(program) {
-            for spec in spec_list {
-                match spec.check(exec_call) {
-                    Ok(matched_exec) => return Ok(matched_exec),
-                    Err(err) => {
-                        last_err = Err(err);
-                    }
-                }
-            }
-        }
-        last_err
     }
+}
 
-    pub fn check_each_good_list_individually(&self) -> Vec<PositiveExampleFailedCheck> {
-        let mut violations = Vec::new();
-        for (_program, spec) in self.programs.flat_iter() {
-            violations.extend(spec.verify_should_match_list());
-        }
-        violations
-    }
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Evaluation {
+    NoMatch,
+    Match {
+        decision: Decision,
+        #[serde(rename = "matchedRules")]
+        matched_rules: Vec<RuleMatch>,
+    },
+}
 
-    pub fn check_each_bad_list_individually(&self) -> Vec<NegativeExamplePassedCheck> {
-        let mut violations = Vec::new();
-        for (_program, spec) in self.programs.flat_iter() {
-            violations.extend(spec.verify_should_not_match_list());
-        }
-        violations
+impl Evaluation {
+    pub fn is_match(&self) -> bool {
+        matches!(self, Self::Match { .. })
     }
 }

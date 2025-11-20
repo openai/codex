@@ -1912,6 +1912,7 @@ fn approval_modal_patch_snapshot() {
     );
     let ev = ApplyPatchApprovalRequestEvent {
         call_id: "call-approve-patch".into(),
+        turn_id: "turn-approve-patch".into(),
         changes,
         reason: Some("The model wants to apply changes".into()),
         grant_root: Some(PathBuf::from("/tmp")),
@@ -2164,6 +2165,7 @@ fn apply_patch_events_emit_history_cells() {
     );
     let ev = ApplyPatchApprovalRequestEvent {
         call_id: "c1".into(),
+        turn_id: "turn-c1".into(),
         changes,
         reason: None,
         grant_root: None,
@@ -2204,6 +2206,7 @@ fn apply_patch_events_emit_history_cells() {
     );
     let begin = PatchApplyBeginEvent {
         call_id: "c1".into(),
+        turn_id: "turn-c1".into(),
         auto_approved: true,
         changes: changes2,
     };
@@ -2220,11 +2223,20 @@ fn apply_patch_events_emit_history_cells() {
     );
 
     // 3) End apply success -> success cell
+    let mut end_changes = HashMap::new();
+    end_changes.insert(
+        PathBuf::from("foo.txt"),
+        FileChange::Add {
+            content: "hello\n".to_string(),
+        },
+    );
     let end = PatchApplyEndEvent {
         call_id: "c1".into(),
+        turn_id: "turn-c1".into(),
         stdout: "ok\n".into(),
         stderr: String::new(),
         success: true,
+        changes: end_changes,
     };
     chat.handle_codex_event(Event {
         id: "s1".into(),
@@ -2252,6 +2264,7 @@ fn apply_patch_manual_approval_adjusts_header() {
         id: "s1".into(),
         msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id: "c1".into(),
+            turn_id: "turn-c1".into(),
             changes: proposed_changes,
             reason: None,
             grant_root: None,
@@ -2270,6 +2283,7 @@ fn apply_patch_manual_approval_adjusts_header() {
         id: "s1".into(),
         msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
             call_id: "c1".into(),
+            turn_id: "turn-c1".into(),
             auto_approved: false,
             changes: apply_changes,
         }),
@@ -2299,6 +2313,7 @@ fn apply_patch_manual_flow_snapshot() {
         id: "s1".into(),
         msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id: "c1".into(),
+            turn_id: "turn-c1".into(),
             changes: proposed_changes,
             reason: Some("Manual review required".into()),
             grant_root: None,
@@ -2321,6 +2336,7 @@ fn apply_patch_manual_flow_snapshot() {
         id: "s1".into(),
         msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
             call_id: "c1".into(),
+            turn_id: "turn-c1".into(),
             auto_approved: false,
             changes: apply_changes,
         }),
@@ -2348,6 +2364,7 @@ fn apply_patch_approval_sends_op_with_submission_id() {
     );
     let ev = ApplyPatchApprovalRequestEvent {
         call_id: "call-999".into(),
+        turn_id: "turn-999".into(),
         changes,
         reason: None,
         grant_root: None,
@@ -2387,6 +2404,7 @@ fn apply_patch_full_flow_integration_like() {
         id: "sub-xyz".into(),
         msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id: "call-1".into(),
+            turn_id: "turn-call-1".into(),
             changes,
             reason: None,
             grant_root: None,
@@ -2427,17 +2445,25 @@ fn apply_patch_full_flow_integration_like() {
         id: "sub-xyz".into(),
         msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
             call_id: "call-1".into(),
+            turn_id: "turn-call-1".into(),
             auto_approved: false,
             changes: changes2,
         }),
     });
+    let mut end_changes = HashMap::new();
+    end_changes.insert(
+        PathBuf::from("pkg.rs"),
+        FileChange::Add { content: "".into() },
+    );
     chat.handle_codex_event(Event {
         id: "sub-xyz".into(),
         msg: EventMsg::PatchApplyEnd(PatchApplyEndEvent {
             call_id: "call-1".into(),
+            turn_id: "turn-call-1".into(),
             stdout: String::from("ok"),
             stderr: String::new(),
             success: true,
+            changes: end_changes,
         }),
     });
 }
@@ -2458,6 +2484,7 @@ fn apply_patch_untrusted_shows_approval_modal() {
         id: "sub-1".into(),
         msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id: "call-1".into(),
+            turn_id: "turn-call-1".into(),
             changes,
             reason: None,
             grant_root: None,
@@ -2506,6 +2533,7 @@ fn apply_patch_request_shows_diff_summary() {
         id: "sub-apply".into(),
         msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id: "call-apply".into(),
+            turn_id: "turn-apply".into(),
             changes,
             reason: None,
             grant_root: None,

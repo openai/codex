@@ -1086,7 +1086,7 @@ dependencies = [
  "codex-apply-patch",
  "codex-arg0",
  "codex-async-utils",
- "codex-execpolicy2",
+ "codex-execpolicy",
  "codex-file-search",
  "codex-git",
  "codex-keyring-store",
@@ -1210,6 +1210,21 @@ dependencies = [
 name = "codex-execpolicy"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
+ "clap",
+ "multimap",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "shlex",
+ "starlark",
+ "thiserror 2.0.17",
+]
+
+[[package]]
+name = "codex-execpolicy-legacy"
+version = "0.0.0"
+dependencies = [
  "allocative",
  "anyhow",
  "clap",
@@ -1224,21 +1239,6 @@ dependencies = [
  "serde_with",
  "starlark",
  "tempfile",
-]
-
-[[package]]
-name = "codex-execpolicy2"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "clap",
- "multimap",
- "pretty_assertions",
- "serde",
- "serde_json",
- "shlex",
- "starlark",
- "thiserror 2.0.17",
 ]
 
 [[package]]

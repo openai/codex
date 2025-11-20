@@ -139,6 +139,7 @@ use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_utils_json_to_toml::json_to_toml;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::io::Error as IoError;
 use std::path::Path;
@@ -162,6 +163,7 @@ pub(crate) type PendingInterrupts = Arc<Mutex<HashMap<ConversationId, PendingInt
 #[derive(Default, Clone)]
 pub(crate) struct TurnSummary {
     pub(crate) last_error_message: Option<String>,
+    pub(crate) file_change_started: HashSet<String>,
 }
 
 pub(crate) type TurnSummaryStore = Arc<Mutex<HashMap<ConversationId, TurnSummary>>>;

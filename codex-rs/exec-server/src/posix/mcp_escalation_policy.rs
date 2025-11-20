@@ -6,8 +6,6 @@ use rmcp::model::CreateElicitationRequestParam;
 use rmcp::model::CreateElicitationResult;
 use rmcp::model::ElicitationAction;
 use rmcp::model::ElicitationSchema;
-use rmcp::model::PrimitiveSchema;
-use rmcp::model::StringSchema;
 use rmcp::service::RequestContext;
 
 use crate::posix::escalate_protocol::EscalateAction;
@@ -45,21 +43,33 @@ impl McpEscalationPolicy {
 
     async fn prompt(
         &self,
-        _file: &Path,
+        file: &Path,
         argv: &[String],
         workdir: &Path,
         context: RequestContext<RoleServer>,
     ) -> Result<CreateElicitationResult, McpError> {
-        let command = shlex::try_join(argv.iter().map(String::as_str)).unwrap_or_default();
+        let args = shlex::try_join(argv.iter().skip(1).map(String::as_str)).unwrap_or_default();
+        let command = if args.is_empty() {
+            file.display().to_string()
+        } else {
+            format!("{} {}", file.display(), args)
+        };
         context
             .peer
             .create_elicitation(CreateElicitationRequestParam {
-                message: format!("Allow Codex to run `{command:?}` in `{workdir:?}`?"),
-                #[allow(clippy::expect_used)]
+                message: format!("Allow agent to run `{command}` in `{}`?", workdir.display()),
                 requested_schema: ElicitationSchema::builder()
-                    .property("dummy", PrimitiveSchema::String(StringSchema::new()))
+                    .title("Execution Permission Request")
+                    .optional_string_with("reason", |schema| {
+                        schema.description("Optional reason for allowing or denying execution")
+                    })
                     .build()
-                    .expect("failed to build elicitation schema"),
+                    .map_err(|e| {
+                        McpError::internal_error(
+                            format!("failed to build elicitation schema: {e}"),
+                            None,
+                        )
+                    })?,
             })
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))
