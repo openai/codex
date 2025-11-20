@@ -536,7 +536,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             );
             codex_cloud_tasks::run_main(cloud_cli, codex_linux_sandbox_exe).await?;
         }
-        Some(Subcommand::Sandbox(sandbox_cmd)) => match sandbox_cmd.cmd {
+        Some(Subcommand::Sandbox(sandbox_args)) => match sandbox_args.cmd {
             SandboxCommand::Macos(mut seatbelt_cli) => {
                 prepend_config_flags(
                     &mut seatbelt_cli.config_overrides,
