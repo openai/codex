@@ -8,8 +8,10 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+codex-utils-cache = { workspace = true }
 thiserror = { workspace = true }
-tiktoken-rs = "0.7"
+tiktoken-rs = { workspace = true }
+tokio = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

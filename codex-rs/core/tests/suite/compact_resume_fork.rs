@@ -7,6 +7,7 @@
 //! request payload that Codex would send to the model and assert that the
 //! model-visible history matches the expected sequence of messages.
 
+use super::compact::COMPACT_WARNING_MESSAGE;
 use super::compact::FIRST_REPLY;
 use super::compact::SUMMARY_TEXT;
 use codex_core::CodexAuth;
@@ -15,11 +16,11 @@ use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
 use codex_core::built_in_model_providers;
-use codex_core::codex::compact::SUMMARIZATION_PROMPT;
+use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
-use codex_core::config::OPENAI_DEFAULT_MODEL;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
+use codex_core::protocol::WarningEvent;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
@@ -39,6 +40,17 @@ const AFTER_SECOND_RESUME: &str = "AFTER_SECOND_RESUME";
 
 fn network_disabled() -> bool {
     std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok()
+}
+
+fn body_contains_text(body: &str, text: &str) -> bool {
+    body.contains(&json_fragment(text))
+}
+
+fn json_fragment(text: &str) -> String {
+    serde_json::to_string(text)
+        .expect("serialize text to JSON")
+        .trim_matches('"')
+        .to_string()
 }
 
 fn filter_out_ghost_snapshot_entries(items: &[Value]) -> Vec<Value> {
@@ -64,6 +76,66 @@ fn is_ghost_snapshot_message(item: &Value) -> bool {
         .is_some_and(|text| text.trim_start().starts_with("<ghost_snapshot>"))
 }
 
+fn normalize_line_endings_str(text: &str) -> String {
+    if text.contains('\r') {
+        text.replace("\r\n", "\n").replace('\r', "\n")
+    } else {
+        text.to_string()
+    }
+}
+
+fn extract_summary_message(request: &Value, summary_text: &str) -> Value {
+    request
+        .get("input")
+        .and_then(Value::as_array)
+        .and_then(|items| {
+            items.iter().find(|item| {
+                item.get("type").and_then(Value::as_str) == Some("message")
+                    && item.get("role").and_then(Value::as_str) == Some("user")
+                    && item
+                        .get("content")
+                        .and_then(Value::as_array)
+                        .and_then(|arr| arr.first())
+                        .and_then(|entry| entry.get("text"))
+                        .and_then(Value::as_str)
+                        .map(|text| text.contains(summary_text))
+                        .unwrap_or(false)
+            })
+        })
+        .cloned()
+        .unwrap_or_else(|| panic!("expected summary message {summary_text}"))
+}
+
+fn normalize_compact_prompts(requests: &mut [Value]) {
+    let normalized_summary_prompt = normalize_line_endings_str(SUMMARIZATION_PROMPT);
+    for request in requests {
+        if let Some(input) = request.get_mut("input").and_then(Value::as_array_mut) {
+            input.retain(|item| {
+                if item.get("type").and_then(Value::as_str) != Some("message")
+                    || item.get("role").and_then(Value::as_str) != Some("user")
+                {
+                    return true;
+                }
+                let content = item
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                if let Some(first) = content.first() {
+                    let text = first
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let normalized_text = normalize_line_endings_str(text);
+                    !(text.is_empty() || normalized_text == normalized_summary_prompt)
+                } else {
+                    false
+                }
+            });
+        }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 /// Scenario: compact an initial conversation, resume it, fork one turn back, and
 /// ensure the model-visible history matches expectations at each request.
@@ -76,9 +148,10 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     // 1. Arrange mocked SSE responses for the initial compact/resume/fork flow.
     let server = MockServer::start().await;
     mount_initial_flow(&server).await;
-
+    let expected_model = "gpt-5.1-codex";
     // 2. Start a new conversation and drive it through the compact/resume/fork steps.
-    let (_home, config, manager, base) = start_test_conversation(&server).await;
+    let (_home, config, manager, base) =
+        start_test_conversation(&server, Some(expected_model)).await;
 
     user_turn(&base, "hello world").await;
     compact_conversation(&base).await;
@@ -101,7 +174,8 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     user_turn(&forked, "AFTER_FORK").await;
 
     // 3. Capture the requests to the model and validate the history slices.
-    let requests = gather_request_bodies(&server).await;
+    let mut requests = gather_request_bodies(&server).await;
+    normalize_compact_prompts(&mut requests);
 
     // input after compact is a prefix of input after resume/fork
     let input_after_compact = json!(requests[requests.len() - 3]["input"]);
@@ -133,6 +207,10 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         &fork_arr[..compact_arr.len()]
     );
 
+    let expected_model = requests[0]["model"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
     let prompt = requests[0]["instructions"]
         .as_str()
         .unwrap_or_default()
@@ -154,7 +232,9 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         .as_str()
         .unwrap_or_default()
         .to_string();
-    let expected_model = OPENAI_DEFAULT_MODEL;
+    let summary_after_compact = extract_summary_message(&requests[2], SUMMARY_TEXT);
+    let summary_after_resume = extract_summary_message(&requests[3], SUMMARY_TEXT);
+    let summary_after_fork = extract_summary_message(&requests[4], SUMMARY_TEXT);
     let user_turn_1 = json!(
     {
       "model": expected_model,
@@ -304,16 +384,11 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
           "content": [
             {
               "type": "input_text",
-              "text": "You were originally given instructions from a user over one or more turns. Here were the user messages:
-
-hello world
-
-Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:
-
-SUMMARY_ONLY_CONTEXT"
+              "text": "hello world"
             }
           ]
         },
+        summary_after_compact,
         {
           "type": "message",
           "role": "user",
@@ -369,16 +444,11 @@ SUMMARY_ONLY_CONTEXT"
           "content": [
             {
               "type": "input_text",
-              "text": "You were originally given instructions from a user over one or more turns. Here were the user messages:
-
-hello world
-
-Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:
-
-SUMMARY_ONLY_CONTEXT"
+              "text": "hello world"
             }
           ]
         },
+        summary_after_resume,
         {
           "type": "message",
           "role": "user",
@@ -454,16 +524,11 @@ SUMMARY_ONLY_CONTEXT"
           "content": [
             {
               "type": "input_text",
-              "text": "You were originally given instructions from a user over one or more turns. Here were the user messages:
-
-hello world
-
-Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:
-
-SUMMARY_ONLY_CONTEXT"
+              "text": "hello world"
             }
           ]
         },
+        summary_after_fork,
         {
           "type": "message",
           "role": "user",
@@ -516,6 +581,9 @@ SUMMARY_ONLY_CONTEXT"
         user_turn_3_after_fork
     ]);
     normalize_line_endings(&mut expected);
+    if let Some(arr) = expected.as_array_mut() {
+        normalize_compact_prompts(arr);
+    }
     assert_eq!(requests.len(), 5);
     assert_eq!(json!(requests), expected);
 }
@@ -535,7 +603,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
     mount_second_compact_flow(&server).await;
 
     // 2. Drive the conversation through compact -> resume -> fork -> compact -> resume.
-    let (_home, config, manager, base) = start_test_conversation(&server).await;
+    let (_home, config, manager, base) = start_test_conversation(&server, None).await;
 
     user_turn(&base, "hello world").await;
     compact_conversation(&base).await;
@@ -568,7 +636,8 @@ async fn compact_resume_after_second_compaction_preserves_history() {
     let resumed_again = resume_conversation(&manager, &config, forked_path).await;
     user_turn(&resumed_again, AFTER_SECOND_RESUME).await;
 
-    let requests = gather_request_bodies(&server).await;
+    let mut requests = gather_request_bodies(&server).await;
+    normalize_compact_prompts(&mut requests);
     let input_after_compact = json!(requests[requests.len() - 2]["input"]);
     let input_after_resume = json!(requests[requests.len() - 1]["input"]);
 
@@ -603,6 +672,11 @@ async fn compact_resume_after_second_compaction_preserves_history() {
         .unwrap_or_default()
         .to_string();
 
+    // Build expected final request input: initial context + forked user message +
+    // compacted summary + post-compact user message + resumed user message.
+    let summary_after_second_compact =
+        extract_summary_message(&requests[requests.len() - 3], SUMMARY_TEXT);
+
     let mut expected = json!([
       {
         "instructions": prompt,
@@ -633,10 +707,11 @@ async fn compact_resume_after_second_compaction_preserves_history() {
             "content": [
               {
                 "type": "input_text",
-                "text": "You were originally given instructions from a user over one or more turns. Here were the user messages:\n\nAFTER_FORK\n\nAnother language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:\n\nSUMMARY_ONLY_CONTEXT"
+                "text": "AFTER_FORK"
               }
             ]
           },
+          summary_after_second_compact,
           {
             "type": "message",
             "role": "user",
@@ -661,10 +736,16 @@ async fn compact_resume_after_second_compaction_preserves_history() {
       }
     ]);
     normalize_line_endings(&mut expected);
-    let last_request_after_2_compacts = json!([{
+    let mut last_request_after_2_compacts = json!([{
         "instructions": requests[requests.len() -1]["instructions"],
         "input": requests[requests.len() -1]["input"],
     }]);
+    if let Some(arr) = expected.as_array_mut() {
+        normalize_compact_prompts(arr);
+    }
+    if let Some(arr) = last_request_after_2_compacts.as_array_mut() {
+        normalize_compact_prompts(arr);
+    }
     assert_eq!(expected, last_request_after_2_compacts);
 }
 
@@ -722,7 +803,6 @@ async fn mount_initial_flow(server: &MockServer) {
     let match_first = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains("\"text\":\"hello world\"")
-            && !body.contains("You have exceeded the maximum number of tokens")
             && !body.contains(&format!("\"text\":\"{SUMMARY_TEXT}\""))
             && !body.contains("\"text\":\"AFTER_COMPACT\"")
             && !body.contains("\"text\":\"AFTER_RESUME\"")
@@ -732,7 +812,7 @@ async fn mount_initial_flow(server: &MockServer) {
 
     let match_compact = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains("You have exceeded the maximum number of tokens")
+        body_contains_text(body, SUMMARIZATION_PROMPT) || body.contains(&json_fragment(FIRST_REPLY))
     };
     mount_sse_once_match(server, match_compact, sse2).await;
 
@@ -766,8 +846,7 @@ async fn mount_second_compact_flow(server: &MockServer) {
 
     let match_second_compact = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains("You have exceeded the maximum number of tokens")
-            && body.contains("AFTER_FORK")
+        body.contains("AFTER_FORK")
     };
     mount_sse_once_match(server, match_second_compact, sse6).await;
 
@@ -780,6 +859,7 @@ async fn mount_second_compact_flow(server: &MockServer) {
 
 async fn start_test_conversation(
     server: &MockServer,
+    model: Option<&str>,
 ) -> (TempDir, Config, ConversationManager, Arc<CodexConversation>) {
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
@@ -788,7 +868,10 @@ async fn start_test_conversation(
     let home = TempDir::new().expect("create temp dir");
     let mut config = load_default_config_for_test(&home);
     config.model_provider = model_provider;
-
+    config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
+    if let Some(model) = model {
+        config.model = model.to_string();
+    }
     let manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
     let NewConversation { conversation, .. } = manager
         .new_conversation(config.clone())
@@ -813,6 +896,11 @@ async fn compact_conversation(conversation: &Arc<CodexConversation>) {
         .submit(Op::Compact)
         .await
         .expect("compact conversation");
+    let warning_event = wait_for_event(conversation, |ev| matches!(ev, EventMsg::Warning(_))).await;
+    let EventMsg::Warning(WarningEvent { message }) = warning_event else {
+        panic!("expected warning event after compact");
+    };
+    assert_eq!(message, COMPACT_WARNING_MESSAGE);
     wait_for_event(conversation, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 }
 

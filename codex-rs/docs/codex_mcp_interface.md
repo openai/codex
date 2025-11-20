@@ -21,7 +21,8 @@ At a glance:
   - `getUserSavedConfig`, `setDefaultModel`, `getUserAgent`, `userInfo`
   - `model/list` → enumerate available models and reasoning options
 - Auth
-  - `loginApiKey`, `loginChatGpt`, `cancelLoginChatGpt`, `logoutChatGpt`, `getAuthStatus`
+  - `account/read`, `account/login/start`, `account/login/cancel`, `account/logout`, `account/rateLimits/read`
+  - notifications: `account/login/completed`, `account/updated`, `account/rateLimits/updated`
 - Utilities
   - `gitDiffToRemote`, `execOneOffCommand`
 - Approvals (server → client requests)
@@ -54,7 +55,7 @@ Start a new session with optional overrides:
 
 Request `newConversation` params (subset):
 
-- `model`: string model id (e.g. "o3", "gpt-5", "gpt-5-codex")
+- `model`: string model id (e.g. "o3", "gpt-5.1", "gpt-5.1-codex")
 - `profile`: optional named profile
 - `cwd`: optional working directory
 - `approvalPolicy`: `untrusted` | `on-request` | `on-failure` | `never`
@@ -113,22 +114,18 @@ The client must reply with `{ decision: "allow" | "deny" }` for each request.
 
 ## Auth helpers
 
-For ChatGPT or API‑key based auth flows, the server exposes helpers:
-
-- `loginApiKey { apiKey }`
-- `loginChatGpt` → returns `{ loginId, authUrl }`; browser completes flow; then `loginChatGptComplete` notification follows
-- `cancelLoginChatGpt { loginId }`, `logoutChatGpt`, `getAuthStatus { includeToken?, refreshToken? }`
+For the complete request/response shapes and flow examples, see the [“Auth endpoints (v2)” section in the app‑server README](../app-server/README.md#auth-endpoints-v2).
 
 ## Example: start and send a message
 
 ```json
-{ "jsonrpc": "2.0", "id": 1, "method": "newConversation", "params": { "model": "gpt-5", "approvalPolicy": "on-request" } }
+{ "jsonrpc": "2.0", "id": 1, "method": "newConversation", "params": { "model": "gpt-5.1", "approvalPolicy": "on-request" } }
 ```
 
 Server responds:
 
 ```json
-{ "jsonrpc": "2.0", "id": 1, "result": { "conversationId": "c7b0…", "model": "gpt-5", "rolloutPath": "/path/to/rollout.jsonl" } }
+{ "jsonrpc": "2.0", "id": 1, "result": { "conversationId": "c7b0…", "model": "gpt-5.1", "rolloutPath": "/path/to/rollout.jsonl" } }
 ```
 
 Then send input:

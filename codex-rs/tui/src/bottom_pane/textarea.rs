@@ -1,3 +1,4 @@
+use crate::key_hint::is_altgr;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -13,6 +14,12 @@ use std::ops::Range;
 use textwrap::Options;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
+
+const WORD_SEPARATORS: &str = "`~!@#$%^&*()-=+[{]}\\|;:'\",.<>/?";
+
+fn is_word_separator(ch: char) -> bool {
+    WORD_SEPARATORS.contains(ch)
+}
 
 #[derive(Debug, Clone)]
 struct TextElement {
@@ -241,6 +248,13 @@ impl TextArea {
             } if modifiers == (KeyModifiers::CONTROL | KeyModifiers::ALT) => {
                 self.delete_backward_word()
             },
+            // Windows AltGr generates ALT|CONTROL; treat as a plain character input unless
+            // we match a specific Control+Alt binding above.
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers,
+                ..
+            } if is_altgr(modifiers) => self.insert_str(&c.to_string()),
             KeyEvent {
                 code: KeyCode::Backspace,
                 modifiers: KeyModifiers::ALT,
@@ -841,21 +855,23 @@ impl TextArea {
 
     pub(crate) fn beginning_of_previous_word(&self) -> usize {
         let prefix = &self.text[..self.cursor_pos];
-        let Some((first_non_ws_idx, _)) = prefix
+        let Some((first_non_ws_idx, ch)) = prefix
             .char_indices()
             .rev()
             .find(|&(_, ch)| !ch.is_whitespace())
         else {
             return 0;
         };
-        let before = &prefix[..first_non_ws_idx];
-        let candidate = before
-            .char_indices()
-            .rev()
-            .find(|&(_, ch)| ch.is_whitespace())
-            .map(|(idx, ch)| idx + ch.len_utf8())
-            .unwrap_or(0);
-        self.adjust_pos_out_of_elements(candidate, true)
+        let is_separator = is_word_separator(ch);
+        let mut start = first_non_ws_idx;
+        for (idx, ch) in prefix[..first_non_ws_idx].char_indices().rev() {
+            if ch.is_whitespace() || is_word_separator(ch) != is_separator {
+                start = idx + ch.len_utf8();
+                break;
+            }
+            start = idx;
+        }
+        self.adjust_pos_out_of_elements(start, true)
     }
 
     pub(crate) fn end_of_next_word(&self) -> usize {
@@ -864,11 +880,19 @@ impl TextArea {
             return self.text.len();
         };
         let word_start = self.cursor_pos + first_non_ws;
-        let candidate = match self.text[word_start..].find(|c: char| c.is_whitespace()) {
-            Some(rel_idx) => word_start + rel_idx,
-            None => self.text.len(),
+        let mut iter = self.text[word_start..].char_indices();
+        let Some((_, first_ch)) = iter.next() else {
+            return word_start;
         };
-        self.adjust_pos_out_of_elements(candidate, false)
+        let is_separator = is_word_separator(first_ch);
+        let mut end = self.text.len();
+        for (idx, ch) in iter {
+            if ch.is_whitespace() || is_word_separator(ch) != is_separator {
+                end = word_start + idx;
+                break;
+            }
+        }
+        self.adjust_pos_out_of_elements(end, false)
     }
 
     fn adjust_pos_out_of_elements(&self, pos: usize, prefer_start: bool) -> usize {
@@ -1240,6 +1264,56 @@ mod tests {
     }
 
     #[test]
+    fn delete_backward_word_respects_word_separators() {
+        let mut t = ta_with("path/to/file");
+        t.set_cursor(t.text().len());
+        t.delete_backward_word();
+        assert_eq!(t.text(), "path/to/");
+        assert_eq!(t.cursor(), t.text().len());
+
+        t.delete_backward_word();
+        assert_eq!(t.text(), "path/to");
+        assert_eq!(t.cursor(), t.text().len());
+
+        let mut t = ta_with("foo/ ");
+        t.set_cursor(t.text().len());
+        t.delete_backward_word();
+        assert_eq!(t.text(), "foo");
+        assert_eq!(t.cursor(), 3);
+
+        let mut t = ta_with("foo /");
+        t.set_cursor(t.text().len());
+        t.delete_backward_word();
+        assert_eq!(t.text(), "foo ");
+        assert_eq!(t.cursor(), 4);
+    }
+
+    #[test]
+    fn delete_forward_word_respects_word_separators() {
+        let mut t = ta_with("path/to/file");
+        t.set_cursor(0);
+        t.delete_forward_word();
+        assert_eq!(t.text(), "/to/file");
+        assert_eq!(t.cursor(), 0);
+
+        t.delete_forward_word();
+        assert_eq!(t.text(), "to/file");
+        assert_eq!(t.cursor(), 0);
+
+        let mut t = ta_with("/ foo");
+        t.set_cursor(0);
+        t.delete_forward_word();
+        assert_eq!(t.text(), " foo");
+        assert_eq!(t.cursor(), 0);
+
+        let mut t = ta_with(" /foo");
+        t.set_cursor(0);
+        t.delete_forward_word();
+        assert_eq!(t.text(), "foo");
+        assert_eq!(t.cursor(), 0);
+    }
+
+    #[test]
     fn yank_restores_last_kill() {
         let mut t = ta_with("hello");
         t.set_cursor(0);
@@ -1386,6 +1460,18 @@ mod tests {
         t.input(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
         assert_eq!(t.text(), "124");
         assert_eq!(t.cursor(), 3);
+    }
+
+    #[cfg_attr(not(windows), ignore = "AltGr modifier only applies on Windows")]
+    #[test]
+    fn altgr_ctrl_alt_char_inserts_literal() {
+        let mut t = ta_with("");
+        t.input(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        ));
+        assert_eq!(t.text(), "c");
+        assert_eq!(t.cursor(), 1);
     }
 
     #[test]

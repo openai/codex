@@ -8,6 +8,7 @@ use crate::event_processor::handle_last_message;
 use crate::exec_events::AgentMessageItem;
 use crate::exec_events::CommandExecutionItem;
 use crate::exec_events::CommandExecutionStatus;
+use crate::exec_events::ErrorItem;
 use crate::exec_events::FileChangeItem;
 use crate::exec_events::FileUpdateChange;
 use crate::exec_events::ItemCompletedEvent;
@@ -128,6 +129,15 @@ impl EventProcessorWithJsonOutput {
                 };
                 self.last_critical_error = Some(error.clone());
                 vec![ThreadEvent::Error(error)]
+            }
+            EventMsg::Warning(ev) => {
+                let item = ThreadItem {
+                    id: self.get_next_item_id(),
+                    details: ThreadItemDetails::Error(ErrorItem {
+                        message: ev.message.clone(),
+                    }),
+                };
+                vec![ThreadEvent::ItemCompleted(ItemCompletedEvent { item })]
             }
             EventMsg::StreamError(ev) => vec![ThreadEvent::Error(ThreadErrorEvent {
                 message: ev.message.clone(),

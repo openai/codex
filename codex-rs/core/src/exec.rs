@@ -28,6 +28,7 @@ use crate::sandboxing::ExecEnv;
 use crate::sandboxing::SandboxManager;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
+use crate::text_encoding::bytes_to_string_smart;
 
 const DEFAULT_TIMEOUT_MS: u64 = 10_000;
 
@@ -72,6 +73,9 @@ pub enum SandboxType {
 
     /// Only available on Linux.
     LinuxSeccomp,
+
+    /// Only available on Windows.
+    WindowsRestrictedToken,
 }
 
 #[derive(Clone)]
@@ -158,9 +162,90 @@ pub(crate) async fn execute_exec_env(
     };
 
     let start = Instant::now();
-    let raw_output_result = exec(params, sandbox_policy, stdout_stream).await;
+    let raw_output_result = exec(params, sandbox, sandbox_policy, stdout_stream).await;
     let duration = start.elapsed();
     finalize_exec_result(raw_output_result, sandbox, duration)
+}
+
+#[cfg(target_os = "windows")]
+async fn exec_windows_sandbox(
+    params: ExecParams,
+    sandbox_policy: &SandboxPolicy,
+) -> Result<RawExecToolCallOutput> {
+    use crate::config::find_codex_home;
+    use codex_windows_sandbox::run_windows_sandbox_capture;
+
+    let ExecParams {
+        command,
+        cwd,
+        env,
+        timeout_ms,
+        ..
+    } = params;
+
+    let policy_str = serde_json::to_string(sandbox_policy).map_err(|err| {
+        CodexErr::Io(io::Error::other(format!(
+            "failed to serialize Windows sandbox policy: {err}"
+        )))
+    })?;
+    let sandbox_cwd = cwd.clone();
+    let codex_home = find_codex_home().map_err(|err| {
+        CodexErr::Io(io::Error::other(format!(
+            "windows sandbox: failed to resolve codex_home: {err}"
+        )))
+    })?;
+    let spawn_res = tokio::task::spawn_blocking(move || {
+        run_windows_sandbox_capture(
+            policy_str.as_str(),
+            &sandbox_cwd,
+            codex_home.as_ref(),
+            command,
+            &cwd,
+            env,
+            timeout_ms,
+        )
+    })
+    .await;
+
+    let capture = match spawn_res {
+        Ok(Ok(v)) => v,
+        Ok(Err(err)) => {
+            return Err(CodexErr::Io(io::Error::other(format!(
+                "windows sandbox: {err}"
+            ))));
+        }
+        Err(join_err) => {
+            return Err(CodexErr::Io(io::Error::other(format!(
+                "windows sandbox join error: {join_err}"
+            ))));
+        }
+    };
+
+    let exit_status = synthetic_exit_status(capture.exit_code);
+    let stdout = StreamOutput {
+        text: capture.stdout,
+        truncated_after_lines: None,
+    };
+    let stderr = StreamOutput {
+        text: capture.stderr,
+        truncated_after_lines: None,
+    };
+    // Best-effort aggregate: stdout then stderr
+    let mut aggregated = Vec::with_capacity(stdout.text.len() + stderr.text.len());
+    append_all(&mut aggregated, &stdout.text);
+    append_all(&mut aggregated, &stderr.text);
+    let aggregated_output = StreamOutput {
+        text: aggregated,
+        truncated_after_lines: None,
+    };
+
+    Ok(RawExecToolCallOutput {
+        exit_status,
+        stdout,
+        stderr,
+        aggregated_output,
+        timed_out: capture.timed_out,
+    })
 }
 
 fn finalize_exec_result(
@@ -232,6 +317,10 @@ pub(crate) mod errors {
                 SandboxTransformError::MissingLinuxSandboxExecutable => {
                     CodexErr::LandlockSandboxExecutableNotProvided
                 }
+                #[cfg(not(target_os = "macos"))]
+                SandboxTransformError::SeatbeltUnavailable => CodexErr::UnsupportedOperation(
+                    "seatbelt sandbox is only available on macOS".to_string(),
+                ),
             }
         }
     }
@@ -326,7 +415,7 @@ impl StreamOutput<String> {
 impl StreamOutput<Vec<u8>> {
     pub fn from_utf8_lossy(&self) -> StreamOutput<String> {
         StreamOutput {
-            text: String::from_utf8_lossy(&self.text).to_string(),
+            text: bytes_to_string_smart(&self.text),
             truncated_after_lines: self.truncated_after_lines,
         }
     }
@@ -347,11 +436,19 @@ pub struct ExecToolCallOutput {
     pub timed_out: bool,
 }
 
+#[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
 async fn exec(
     params: ExecParams,
+    sandbox: SandboxType,
     sandbox_policy: &SandboxPolicy,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<RawExecToolCallOutput> {
+    #[cfg(target_os = "windows")]
+    if sandbox == SandboxType::WindowsRestrictedToken
+        && !matches!(sandbox_policy, SandboxPolicy::DangerFullAccess)
+    {
+        return exec_windows_sandbox(params, sandbox_policy).await;
+    }
     let timeout = params.timeout_duration();
     let ExecParams {
         command,
@@ -427,6 +524,7 @@ async fn consume_truncated_output(
                 }
                 Err(_) => {
                     // timeout
+                    kill_child_process_group(&mut child)?;
                     child.start_kill()?;
                     // Debatable whether `child.wait().await` should be called here.
                     (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE), true)
@@ -434,13 +532,58 @@ async fn consume_truncated_output(
             }
         }
         _ = tokio::signal::ctrl_c() => {
+            kill_child_process_group(&mut child)?;
             child.start_kill()?;
             (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + SIGKILL_CODE), false)
         }
     };
 
-    let stdout = stdout_handle.await??;
-    let stderr = stderr_handle.await??;
+    // Wait for the stdout/stderr collection tasks but guard against them
+    // hanging forever. In the normal case, both pipes are closed once the child
+    // terminates so the tasks exit quickly. However, if the child process
+    // spawned grandchildren that inherited its stdout/stderr file descriptors
+    // those pipes may stay open after we `kill` the direct child on timeout.
+    // That would cause the `read_capped` tasks to block on `read()`
+    // indefinitely, effectively hanging the whole agent.
+
+    const IO_DRAIN_TIMEOUT_MS: u64 = 2_000; // 2 s should be plenty for local pipes
+
+    // We need mutable bindings so we can `abort()` them on timeout.
+    use tokio::task::JoinHandle;
+
+    async fn await_with_timeout(
+        handle: &mut JoinHandle<std::io::Result<StreamOutput<Vec<u8>>>>,
+        timeout: Duration,
+    ) -> std::io::Result<StreamOutput<Vec<u8>>> {
+        match tokio::time::timeout(timeout, &mut *handle).await {
+            Ok(join_res) => match join_res {
+                Ok(io_res) => io_res,
+                Err(join_err) => Err(std::io::Error::other(join_err)),
+            },
+            Err(_elapsed) => {
+                // Timeout: abort the task to avoid hanging on open pipes.
+                handle.abort();
+                Ok(StreamOutput {
+                    text: Vec::new(),
+                    truncated_after_lines: None,
+                })
+            }
+        }
+    }
+
+    let mut stdout_handle = stdout_handle;
+    let mut stderr_handle = stderr_handle;
+
+    let stdout = await_with_timeout(
+        &mut stdout_handle,
+        Duration::from_millis(IO_DRAIN_TIMEOUT_MS),
+    )
+    .await?;
+    let stderr = await_with_timeout(
+        &mut stderr_handle,
+        Duration::from_millis(IO_DRAIN_TIMEOUT_MS),
+    )
+    .await?;
 
     drop(agg_tx);
 
@@ -525,8 +668,41 @@ fn synthetic_exit_status(code: i32) -> ExitStatus {
 #[cfg(windows)]
 fn synthetic_exit_status(code: i32) -> ExitStatus {
     use std::os::windows::process::ExitStatusExt;
-    #[expect(clippy::unwrap_used)]
-    std::process::ExitStatus::from_raw(code.try_into().unwrap())
+    // On Windows the raw status is a u32. Use a direct cast to avoid
+    // panicking on negative i32 values produced by prior narrowing casts.
+    std::process::ExitStatus::from_raw(code as u32)
+}
+
+#[cfg(unix)]
+fn kill_child_process_group(child: &mut Child) -> io::Result<()> {
+    use std::io::ErrorKind;
+
+    if let Some(pid) = child.id() {
+        let pid = pid as libc::pid_t;
+        let pgid = unsafe { libc::getpgid(pid) };
+        if pgid == -1 {
+            let err = std::io::Error::last_os_error();
+            if err.kind() != ErrorKind::NotFound {
+                return Err(err);
+            }
+            return Ok(());
+        }
+
+        let result = unsafe { libc::killpg(pgid, libc::SIGKILL) };
+        if result == -1 {
+            let err = std::io::Error::last_os_error();
+            if err.kind() != ErrorKind::NotFound {
+                return Err(err);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn kill_child_process_group(_: &mut Child) -> io::Result<()> {
+    Ok(())
 }
 
 #[cfg(test)]
@@ -600,5 +776,52 @@ mod tests {
         let exit_code = EXIT_CODE_SIGNAL_BASE + libc::SIGSYS;
         let output = make_exec_output(exit_code, "", "", "");
         assert!(is_likely_sandbox_denied(SandboxType::LinuxSeccomp, &output));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn kill_child_process_group_kills_grandchildren_on_timeout() -> Result<()> {
+        let command = vec![
+            "/bin/bash".to_string(),
+            "-c".to_string(),
+            "sleep 60 & echo $!; sleep 60".to_string(),
+        ];
+        let env: HashMap<String, String> = std::env::vars().collect();
+        let params = ExecParams {
+            command,
+            cwd: std::env::current_dir()?,
+            timeout_ms: Some(500),
+            env,
+            with_escalated_permissions: None,
+            justification: None,
+            arg0: None,
+        };
+
+        let output = exec(params, SandboxType::None, &SandboxPolicy::ReadOnly, None).await?;
+        assert!(output.timed_out);
+
+        let stdout = output.stdout.from_utf8_lossy().text;
+        let pid_line = stdout.lines().next().unwrap_or("").trim();
+        let pid: i32 = pid_line.parse().map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Failed to parse pid from stdout '{pid_line}': {error}"),
+            )
+        })?;
+
+        let mut killed = false;
+        for _ in 0..20 {
+            // Use kill(pid, 0) to check if the process is alive.
+            if unsafe { libc::kill(pid, 0) } == -1
+                && let Some(libc::ESRCH) = std::io::Error::last_os_error().raw_os_error()
+            {
+                killed = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        assert!(killed, "grandchild process with pid {pid} is still alive");
+        Ok(())
     }
 }

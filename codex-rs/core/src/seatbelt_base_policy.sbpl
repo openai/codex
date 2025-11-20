@@ -49,6 +49,7 @@
   (sysctl-name "hw.packages")
   (sysctl-name "hw.pagesize_compat")
   (sysctl-name "hw.pagesize")
+  (sysctl-name "hw.physicalcpu")
   (sysctl-name "hw.physicalcpu_max")
   (sysctl-name "hw.tbfrequency_compat")
   (sysctl-name "hw.vectorunit")
@@ -70,6 +71,10 @@
   (sysctl-name-prefix "kern.proc.pid.")
   (sysctl-name-prefix "net.routetable.")
 )
+
+; Allow Java to set CPU type grade when required
+(allow sysctl-write
+  (sysctl-name "kern.grade_cputype"))
 
 ; IOKit
 (allow iokit-open

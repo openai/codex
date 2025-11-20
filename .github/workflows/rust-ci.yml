@@ -76,7 +76,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@1.90
-      - uses: taiki-e/install-action@0c5db7f7f897c03b771660e91d065338615679f4 # v2
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
         with:
           tool: cargo-shear
           version: 1.5.1
@@ -95,8 +95,8 @@ jobs:
       run:
         working-directory: codex-rs
     env:
-      # Speed up repeated builds across CI runs by caching compiled objects.
-      RUSTC_WRAPPER: sccache
+      # Speed up repeated builds across CI runs by caching compiled objects (non-Windows).
+      USE_SCCACHE: ${{ startsWith(matrix.runner, 'windows') && 'false' || 'true' }}
       CARGO_INCREMENTAL: "0"
       SCCACHE_CACHE_SIZE: 10G
 
@@ -170,12 +170,14 @@ jobs:
 
       # Install and restore sccache cache
       - name: Install sccache
-        uses: taiki-e/install-action@0c5db7f7f897c03b771660e91d065338615679f4 # v2
+        if: ${{ env.USE_SCCACHE == 'true' }}
+        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
         with:
           tool: sccache
           version: 0.7.5
 
       - name: Configure sccache backend
+        if: ${{ env.USE_SCCACHE == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -188,8 +190,13 @@ jobs:
             echo "Using sccache local disk + actions/cache fallback"
           fi
 
+      - name: Enable sccache wrapper
+        if: ${{ env.USE_SCCACHE == 'true' }}
+        shell: bash
+        run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+
       - name: Restore sccache cache (fallback)
-        if: ${{ env.SCCACHE_GHA_ENABLED != 'true' }}
+        if: ${{ env.USE_SCCACHE == 'true' && env.SCCACHE_GHA_ENABLED != 'true' }}
         id: cache_sccache_restore
         uses: actions/cache/restore@v4
         with:
@@ -228,7 +235,7 @@ jobs:
 
       - name: Install cargo-chef
         if: ${{ matrix.profile == 'release' }}
-        uses: taiki-e/install-action@0c5db7f7f897c03b771660e91d065338615679f4 # v2
+        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
         with:
           tool: cargo-chef
           version: 0.1.71
@@ -274,7 +281,7 @@ jobs:
           key: cargo-home-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('codex-rs/rust-toolchain.toml') }}
 
       - name: Save sccache cache (fallback)
-        if: always() && !cancelled() && env.SCCACHE_GHA_ENABLED != 'true'
+        if: always() && !cancelled() && env.USE_SCCACHE == 'true' && env.SCCACHE_GHA_ENABLED != 'true'
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
@@ -282,12 +289,12 @@ jobs:
           key: sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
 
       - name: sccache stats
-        if: always()
+        if: always() && env.USE_SCCACHE == 'true'
         continue-on-error: true
         run: sccache --show-stats || true
 
       - name: sccache summary
-        if: always()
+        if: always() && env.USE_SCCACHE == 'true'
         shell: bash
         run: |
           {
@@ -326,7 +333,8 @@ jobs:
       run:
         working-directory: codex-rs
     env:
-      RUSTC_WRAPPER: sccache
+      # Speed up repeated builds across CI runs by caching compiled objects (non-Windows).
+      USE_SCCACHE: ${{ startsWith(matrix.runner, 'windows') && 'false' || 'true' }}
       CARGO_INCREMENTAL: "0"
       SCCACHE_CACHE_SIZE: 10G
 
@@ -370,12 +378,14 @@ jobs:
             cargo-home-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-
 
       - name: Install sccache
-        uses: taiki-e/install-action@0c5db7f7f897c03b771660e91d065338615679f4 # v2
+        if: ${{ env.USE_SCCACHE == 'true' }}
+        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
         with:
           tool: sccache
           version: 0.7.5
 
       - name: Configure sccache backend
+        if: ${{ env.USE_SCCACHE == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -388,8 +398,13 @@ jobs:
             echo "Using sccache local disk + actions/cache fallback"
           fi
 
+      - name: Enable sccache wrapper
+        if: ${{ env.USE_SCCACHE == 'true' }}
+        shell: bash
+        run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+
       - name: Restore sccache cache (fallback)
-        if: ${{ env.SCCACHE_GHA_ENABLED != 'true' }}
+        if: ${{ env.USE_SCCACHE == 'true' && env.SCCACHE_GHA_ENABLED != 'true' }}
         id: cache_sccache_restore
         uses: actions/cache/restore@v4
         with:
@@ -399,17 +414,17 @@ jobs:
             sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}-
             sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-
 
-      - uses: taiki-e/install-action@0c5db7f7f897c03b771660e91d065338615679f4 # v2
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
         with:
           tool: nextest
           version: 0.9.103
 
       - name: tests
         id: test
-        continue-on-error: true
         run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test
         env:
           RUST_BACKTRACE: 1
+          NEXTEST_STATUS_LEVEL: leak
 
       - name: Save cargo home cache
         if: always() && !cancelled() && steps.cache_cargo_home_restore.outputs.cache-hit != 'true'
@@ -424,7 +439,7 @@ jobs:
           key: cargo-home-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('codex-rs/rust-toolchain.toml') }}
 
       - name: Save sccache cache (fallback)
-        if: always() && !cancelled() && env.SCCACHE_GHA_ENABLED != 'true'
+        if: always() && !cancelled() && env.USE_SCCACHE == 'true' && env.SCCACHE_GHA_ENABLED != 'true'
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
@@ -432,12 +447,12 @@ jobs:
           key: sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
 
       - name: sccache stats
-        if: always()
+        if: always() && env.USE_SCCACHE == 'true'
         continue-on-error: true
         run: sccache --show-stats || true
 
       - name: sccache summary
-        if: always()
+        if: always() && env.USE_SCCACHE == 'true'
         shell: bash
         run: |
           {
