@@ -10,6 +10,7 @@ use crate::error::Result as CodexResult;
 use crate::features::Feature;
 use crate::protocol::AgentMessageEvent;
 use crate::protocol::CompactedItem;
+use crate::protocol::ErrorEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::TaskStartedEvent;
 use crate::protocol::TurnContextItem;
@@ -127,8 +128,10 @@ async fn run_compact_task_inner(
                     continue;
                 }
                 sess.set_total_tokens_full(turn_context.as_ref()).await;
-                sess.send_event(&turn_context, EventMsg::Error(e.to_error_event(None)))
-                    .await;
+                let event = EventMsg::Error(ErrorEvent {
+                    message: e.to_string(),
+                });
+                sess.send_event(&turn_context, event).await;
                 return;
             }
             Err(e) => {
@@ -138,14 +141,15 @@ async fn run_compact_task_inner(
                     sess.notify_stream_error(
                         turn_context.as_ref(),
                         format!("Reconnecting... {retries}/{max_retries}"),
-                        e.http_status_code(),
                     )
                     .await;
                     tokio::time::sleep(delay).await;
                     continue;
                 } else {
-                    sess.send_event(&turn_context, EventMsg::Error(e.to_error_event(None)))
-                        .await;
+                    let event = EventMsg::Error(ErrorEvent {
+                        message: e.to_string(),
+                    });
+                    sess.send_event(&turn_context, event).await;
                     return;
                 }
             }

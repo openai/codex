@@ -6,6 +6,7 @@ use crate::codex::TurnContext;
 use crate::error::Result as CodexResult;
 use crate::protocol::AgentMessageEvent;
 use crate::protocol::CompactedItem;
+use crate::protocol::ErrorEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::RolloutItem;
 use crate::protocol::TaskStartedEvent;
@@ -29,8 +30,10 @@ pub(crate) async fn run_remote_compact_task(sess: Arc<Session>, turn_context: Ar
 
 async fn run_remote_compact_task_inner(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) {
     if let Err(err) = run_remote_compact_task_inner_impl(sess, turn_context).await {
-        let event = err.to_error_event(Some("Error running remote compact task".to_string()));
-        sess.send_event(turn_context, EventMsg::Error(event)).await;
+        let event = EventMsg::Error(ErrorEvent {
+            message: format!("Error running remote compact task: {err}"),
+        });
+        sess.send_event(turn_context, event).await;
     }
 }
 

@@ -26,6 +26,28 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SandboxPermissions {
+    UseDefault,
+    RequireEscalated,
+}
+
+impl SandboxPermissions {
+    pub fn requires_escalated_permissions(self) -> bool {
+        matches!(self, SandboxPermissions::RequireEscalated)
+    }
+}
+
+impl From<bool> for SandboxPermissions {
+    fn from(with_escalated_permissions: bool) -> Self {
+        if with_escalated_permissions {
+            SandboxPermissions::RequireEscalated
+        } else {
+            SandboxPermissions::UseDefault
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct CommandSpec {
     pub program: String,

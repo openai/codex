@@ -15,6 +15,10 @@ impl Policy {
         Self { rules_by_program }
     }
 
+    pub fn empty() -> Self {
+        Self::new(MultiMap::new())
+    }
+
     pub fn rules(&self) -> &MultiMap<String, RuleRef> {
         &self.rules_by_program
     }

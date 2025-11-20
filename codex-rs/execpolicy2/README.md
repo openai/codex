@@ -5,7 +5,7 @@
 - This release covers only the prefix-rule subset of the planned execpolicy v2 language; a richer language will follow.
 - Tokens are matched in order; any `pattern` element may be a list to denote alternatives. `decision` defaults to `allow`; valid values: `allow`, `prompt`, `forbidden`.
 - `match` / `not_match` supply example invocations that are validated at load time (think of them as unit tests); examples can be token arrays or strings (strings are tokenized with `shlex`).
-- The CLI always prints the JSON serialization of the evaluation result (whether a match or not).
+- The CLI always prints the JSON serialization of the evaluation result.
 
 ## Policy shapes
 - Prefix rules use Starlark syntax:
@@ -17,6 +17,20 @@ prefix_rule(
     not_match = [["cmd", "oops"], "cmd alt3"],       # examples that must not match this rule
 )
 ```
+
+## CLI
+- Provide one or more policy files (for example `src/default.codexpolicy`) to check a command:
+```bash
+cargo run -p codex-execpolicy2 -- check --policy path/to/policy.codexpolicy git status
+```
+- Pass multiple `--policy` flags to merge rules, evaluated in the order provided:
+```bash
+cargo run -p codex-execpolicy2 -- check --policy base.codexpolicy --policy overrides.codexpolicy git status
+```
+- Output is JSON by default; pass `--pretty` for pretty-printed JSON
+- Example outcomes:
+  - Match: `{"match": { ... "decision": "allow" ... }}`
+  - No match: `"noMatch"`
 
 ## Response shapes
 - Match:
@@ -43,17 +57,3 @@ prefix_rule(
 
 - `matchedRules` lists every rule whose prefix matched the command; `matchedPrefix` is the exact prefix that matched.
 - The effective `decision` is the strictest severity across all matches (`forbidden` > `prompt` > `allow`).
-
-## CLI
-- Provide one or more policy files (for example `src/default.codexpolicy`) to check a command:
-```bash
-cargo run -p codex-execpolicy2 -- check --policy path/to/policy.codexpolicy git status
-```
-- Pass multiple `--policy` flags to merge rules, evaluated in the order provided:
-```bash
-cargo run -p codex-execpolicy2 -- check --policy base.codexpolicy --policy overrides.codexpolicy git status
-```
-- Output is newline-delimited JSON by default; pass `--pretty` for pretty-printed JSON if desired.
-- Example outcomes:
-  - Match: `{"match": { ... "decision": "allow" ... }}`
-  - No match: `"noMatch"`

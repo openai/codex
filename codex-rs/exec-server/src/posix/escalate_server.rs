@@ -27,16 +27,18 @@ use crate::posix::socket::AsyncSocket;
 
 pub(crate) struct EscalateServer {
     bash_path: PathBuf,
+    execve_wrapper: PathBuf,
     policy: Arc<dyn EscalationPolicy>,
 }
 
 impl EscalateServer {
-    pub fn new<P>(bash_path: PathBuf, policy: P) -> Self
+    pub fn new<P>(bash_path: PathBuf, execve_wrapper: PathBuf, policy: P) -> Self
     where
         P: EscalationPolicy + Send + Sync + 'static,
     {
         Self {
             bash_path,
+            execve_wrapper,
             policy: Arc::new(policy),
         }
     }
@@ -60,8 +62,15 @@ impl EscalateServer {
         );
         env.insert(
             BASH_EXEC_WRAPPER_ENV_VAR.to_string(),
-            format!("{} escalate", std::env::current_exe()?.to_string_lossy()),
+            self.execve_wrapper.to_string_lossy().to_string(),
         );
+
+        // TODO: use the sandbox policy and cwd from the calling client.
+        // Note that sandbox_cwd is ignored for ReadOnly, but needs to be legit
+        // for `SandboxPolicy::WorkspaceWrite`.
+        let sandbox_policy = SandboxPolicy::ReadOnly;
+        let sandbox_cwd = PathBuf::from("/__NONEXISTENT__");
+
         let result = process_exec_tool_call(
             codex_core::exec::ExecParams {
                 command: vec![
@@ -77,9 +86,8 @@ impl EscalateServer {
                 arg0: None,
             },
             get_platform_sandbox().unwrap_or(SandboxType::None),
-            // TODO: use the sandbox policy and cwd from the calling client
-            &SandboxPolicy::ReadOnly,
-            &PathBuf::from("/__NONEXISTENT__"), // This is ignored for ReadOnly
+            &sandbox_policy,
+            &sandbox_cwd,
             &None,
             None,
         )

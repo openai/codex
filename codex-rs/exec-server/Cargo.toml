@@ -4,8 +4,16 @@ name = "codex-exec-server"
 version = { workspace = true }
 
 [[bin]]
-name = "codex-exec-server"
-path = "src/main.rs"
+name = "codex-execve-wrapper"
+path = "src/bin/main_execve_wrapper.rs"
+
+[[bin]]
+name = "codex-exec-mcp-server"
+path = "src/bin/main_mcp_server.rs"
+
+[lib]
+name = "codex_exec_server"
+path = "src/lib.rs"
 
 [lints]
 workspace = true

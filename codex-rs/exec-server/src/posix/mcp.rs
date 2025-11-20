@@ -65,15 +65,17 @@ impl From<escalate_server::ExecResult> for ExecResult {
 pub struct ExecTool {
     tool_router: ToolRouter<ExecTool>,
     bash_path: PathBuf,
+    execve_wrapper: PathBuf,
     policy: ExecPolicy,
 }
 
 #[tool_router]
 impl ExecTool {
-    pub fn new(bash_path: PathBuf, policy: ExecPolicy) -> Self {
+    pub fn new(bash_path: PathBuf, execve_wrapper: PathBuf, policy: ExecPolicy) -> Self {
         Self {
             tool_router: Self::tool_router(),
             bash_path,
+            execve_wrapper,
             policy,
         }
     }
@@ -87,6 +89,7 @@ impl ExecTool {
     ) -> Result<CallToolResult, McpError> {
         let escalate_server = EscalateServer::new(
             self.bash_path.clone(),
+            self.execve_wrapper.clone(),
             McpEscalationPolicy::new(self.policy, context),
         );
         let result = escalate_server
@@ -130,8 +133,9 @@ impl ServerHandler for ExecTool {
 
 pub(crate) async fn serve(
     bash_path: PathBuf,
+    execve_wrapper: PathBuf,
     policy: ExecPolicy,
 ) -> Result<RunningService<RoleServer, ExecTool>, rmcp::service::ServerInitializeError> {
-    let tool = ExecTool::new(bash_path, policy);
+    let tool = ExecTool::new(bash_path, execve_wrapper, policy);
     tool.serve(stdio()).await
 }
