@@ -27,12 +27,6 @@ const POLICY_DIR_NAME: &str = "policy";
 const POLICY_EXTENSION: &str = "codexpolicy";
 const DEFAULT_POLICY_FILE: &str = "default.codexpolicy";
 
-#[derive(Debug, PartialEq)]
-pub(crate) struct CommandApprovalOutcome {
-    pub requirement: ApprovalRequirement,
-    pub allow_prefix: Option<Vec<String>>,
-}
-
 #[derive(Debug, Error)]
 pub enum ExecPolicyError {
     #[error("failed to read execpolicy files from {dir}: {source}")]
@@ -139,6 +133,7 @@ fn requirement_from_decision(
             } else {
                 ApprovalRequirement::NeedsApproval {
                     reason: Some(reason),
+                    allow_prefix: None,
                 }
             }
         }
@@ -146,33 +141,36 @@ fn requirement_from_decision(
     }
 }
 
+/// Attach an allow-prefix option when a single plain command needs approval without
+/// any matching policy rule. We only surface the prefix opt-in when execpolicy did
+/// not already drive the decision (NoMatch) and when the command is a single
+/// unrolled command (multi-part scripts shouldn’t be whitelisted via prefix).
 fn allow_prefix_if_applicable(
     commands: &[Vec<String>],
     evaluation: &Evaluation,
-    requirement: &ApprovalRequirement,
-) -> Option<Vec<String>> {
-    if !matches!(requirement, ApprovalRequirement::NeedsApproval { .. }) {
-        return None;
+    requirement: ApprovalRequirement,
+) -> ApprovalRequirement {
+    match requirement {
+        ApprovalRequirement::NeedsApproval {
+            reason,
+            allow_prefix: None,
+        } if matches!(evaluation, Evaluation::NoMatch) && commands.len() == 1 => {
+            ApprovalRequirement::NeedsApproval {
+                reason,
+                allow_prefix: Some(commands[0].clone()),
+            }
+        }
+        other => other,
     }
-
-    if !matches!(evaluation, Evaluation::NoMatch) {
-        return None;
-    }
-
-    let [single_command] = commands else {
-        return None;
-    };
-
-    Some(single_command.clone())
 }
 
-pub(crate) fn command_approval_outcome_for_command(
+pub(crate) fn command_approval_requirement_for_command(
     policy: &Policy,
     command: &[String],
     approval_policy: AskForApproval,
     sandbox_policy: &SandboxPolicy,
     sandbox_permissions: SandboxPermissions,
-) -> CommandApprovalOutcome {
+) -> ApprovalRequirement {
     let commands = parse_shell_lc_plain_commands(command).unwrap_or_else(|| vec![command.to_vec()]);
     let evaluation = policy.check_multiple(commands.iter());
 
@@ -185,19 +183,17 @@ pub(crate) fn command_approval_outcome_for_command(
                 command,
                 sandbox_permissions,
             ) {
-                ApprovalRequirement::NeedsApproval { reason: None }
+                ApprovalRequirement::NeedsApproval {
+                    reason: None,
+                    allow_prefix: None,
+                }
             } else {
                 ApprovalRequirement::Skip
             }
         }
     };
 
-    let allow_prefix = allow_prefix_if_applicable(&commands, &evaluation, &requirement);
-
-    CommandApprovalOutcome {
-        requirement,
-        allow_prefix,
-    }
+    allow_prefix_if_applicable(&commands, &evaluation, requirement)
 }
 
 #[cfg(test)]
@@ -225,14 +221,13 @@ pub(crate) fn create_approval_requirement_for_command(
     sandbox_policy: &SandboxPolicy,
     sandbox_permissions: SandboxPermissions,
 ) -> ApprovalRequirement {
-    command_approval_outcome_for_command(
+    command_approval_requirement_for_command(
         policy,
         command,
         approval_policy,
         sandbox_policy,
         sandbox_permissions,
     )
-    .requirement
 }
 
 async fn collect_policy_files(dir: &Path) -> Result<Vec<PathBuf>, ExecPolicyError> {
@@ -412,7 +407,8 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         assert_eq!(
             requirement,
             ApprovalRequirement::NeedsApproval {
-                reason: Some(PROMPT_REASON.to_string())
+                reason: Some(PROMPT_REASON.to_string()),
+                allow_prefix: None,
             }
         );
     }
@@ -458,7 +454,10 @@ prefix_rule(pattern=["rm"], decision="forbidden")
 
         assert_eq!(
             requirement,
-            ApprovalRequirement::NeedsApproval { reason: None }
+            ApprovalRequirement::NeedsApproval {
+                reason: None,
+                allow_prefix: Some(command)
+            }
         );
     }
 
@@ -467,7 +466,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         let command = vec!["python".to_string()];
 
         let empty_policy = Policy::empty();
-        let outcome = command_approval_outcome_for_command(
+        let requirement = command_approval_requirement_for_command(
             &empty_policy,
             &command,
             AskForApproval::UnlessTrusted,
@@ -476,10 +475,12 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         );
 
         assert_eq!(
-            outcome.requirement,
-            ApprovalRequirement::NeedsApproval { reason: None }
+            requirement,
+            ApprovalRequirement::NeedsApproval {
+                reason: None,
+                allow_prefix: Some(command)
+            }
         );
-        assert_eq!(outcome.allow_prefix, Some(command));
     }
 
     #[test]
@@ -492,7 +493,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         let policy = parser.build();
         let command = vec!["rm".to_string()];
 
-        let outcome = command_approval_outcome_for_command(
+        let requirement = command_approval_requirement_for_command(
             &policy,
             &command,
             AskForApproval::OnRequest,
@@ -501,12 +502,12 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         );
 
         assert_eq!(
-            outcome.requirement,
+            requirement,
             ApprovalRequirement::NeedsApproval {
-                reason: Some(PROMPT_REASON.to_string())
+                reason: Some(PROMPT_REASON.to_string()),
+                allow_prefix: None,
             }
         );
-        assert_eq!(outcome.allow_prefix, None);
     }
 
     #[test]
@@ -516,7 +517,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             "-lc".to_string(),
             "python && echo ok".to_string(),
         ];
-        let outcome = command_approval_outcome_for_command(
+        let requirement = command_approval_requirement_for_command(
             &Policy::empty(),
             &command,
             AskForApproval::UnlessTrusted,
@@ -525,9 +526,11 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         );
 
         assert_eq!(
-            outcome.requirement,
-            ApprovalRequirement::NeedsApproval { reason: None }
+            requirement,
+            ApprovalRequirement::NeedsApproval {
+                reason: None,
+                allow_prefix: None,
+            }
         );
-        assert_eq!(outcome.allow_prefix, None);
     }
 }

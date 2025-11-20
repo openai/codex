@@ -32,7 +32,6 @@ pub struct ShellRequest {
     pub with_escalated_permissions: Option<bool>,
     pub justification: Option<String>,
     pub approval_requirement: ApprovalRequirement,
-    pub approval_allow_prefix: Option<Vec<String>>,
 }
 
 impl ProvidesSandboxRetryData for ShellRequest {
@@ -101,7 +100,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
             .clone()
             .or_else(|| req.justification.clone());
         let risk = ctx.risk.clone();
-        let allow_prefix = req.approval_allow_prefix.clone();
+        let allow_prefix = req.approval_requirement.allow_prefix().cloned();
         let session = ctx.session;
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
