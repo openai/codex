@@ -90,6 +90,7 @@ impl EscalateServer {
             &sandbox_cwd,
             &None,
             None,
+            None,
         )
         .await?;
         escalate_task.abort();

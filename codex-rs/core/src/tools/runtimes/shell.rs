@@ -140,7 +140,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         let env = attempt
             .env_for(&spec)
             .map_err(|err| ToolError::Codex(err.into()))?;
-        let out = execute_env(&env, attempt.policy, Self::stdout_stream(ctx))
+        let out = execute_env(&env, attempt.policy, Self::stdout_stream(ctx), None)
             .await
             .map_err(ToolError::Codex)?;
         Ok(out)
