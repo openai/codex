@@ -144,7 +144,7 @@ pub async fn main_execve_wrapper() -> anyhow::Result<()> {
     std::process::exit(exit_code);
 }
 
-// TODO: replace with execpolicy2
+// TODO: replace with execpolicy
 
 fn dummy_exec_policy(file: &Path, argv: &[String], _workdir: &Path) -> ExecPolicyOutcome {
     if file.ends_with("rm") {

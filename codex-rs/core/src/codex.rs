@@ -121,7 +121,7 @@ use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
 use codex_async_utils::OrCancelExt;
-use codex_execpolicy2::Policy as ExecPolicy;
+use codex_execpolicy::Policy as ExecPolicy;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -919,6 +919,7 @@ impl Session {
 
         let event = EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id,
+            turn_id: turn_context.sub_id.clone(),
             changes,
             reason,
             grant_root,
@@ -2616,7 +2617,7 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
-            exec_policy: Arc::new(codex_execpolicy2::Policy::empty()),
+            exec_policy: Arc::new(ExecPolicy::empty()),
             session_source: SessionSource::Exec,
         };
 
@@ -2694,7 +2695,7 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
-            exec_policy: Arc::new(codex_execpolicy2::Policy::empty()),
+            exec_policy: Arc::new(ExecPolicy::empty()),
             session_source: SessionSource::Exec,
         };
 

@@ -4,10 +4,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::command_safety::is_dangerous_command::requires_initial_appoval;
-use codex_execpolicy2::Decision;
-use codex_execpolicy2::Evaluation;
-use codex_execpolicy2::Policy;
-use codex_execpolicy2::PolicyParser;
+use codex_execpolicy::Decision;
+use codex_execpolicy::Evaluation;
+use codex_execpolicy::Policy;
+use codex_execpolicy::PolicyParser;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use thiserror::Error;
@@ -41,7 +41,7 @@ pub enum ExecPolicyError {
     #[error("failed to parse execpolicy file {path}: {source}")]
     ParsePolicy {
         path: String,
-        source: codex_execpolicy2::Error,
+        source: codex_execpolicy::Error,
     },
 }
 
