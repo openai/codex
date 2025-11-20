@@ -165,7 +165,6 @@ pub(crate) fn create_approval_requirement_for_command(
 ) -> ApprovalRequirement {
     let commands = parse_shell_lc_plain_commands(command).unwrap_or_else(|| vec![command.to_vec()]);
     let evaluation = policy.check_multiple(commands.iter());
-    let allow_prefix = allow_prefix_if_applicable(&commands, &evaluation);
 
     match evaluation {
         Evaluation::Match { decision, .. } => requirement_from_decision(decision, approval_policy),
@@ -178,7 +177,7 @@ pub(crate) fn create_approval_requirement_for_command(
             ) {
                 ApprovalRequirement::NeedsApproval {
                     reason: None,
-                    allow_prefix,
+                    allow_prefix: allow_prefix_if_applicable(&commands, &evaluation),
                 }
             } else {
                 ApprovalRequirement::Skip
