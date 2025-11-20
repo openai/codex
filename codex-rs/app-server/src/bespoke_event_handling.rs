@@ -8,6 +8,7 @@ use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
 use codex_app_server_protocol::ApplyPatchApprovalResponse;
 use codex_app_server_protocol::ApprovalDecision;
+use codex_app_server_protocol::CodexErrorCode as V2CodexErrorCode;
 use codex_app_server_protocol::CommandAction as V2ParsedCommand;
 use codex_app_server_protocol::CommandExecutionOutputDeltaNotification;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
@@ -60,7 +61,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use tracing::error;
-
 type JsonValue = serde_json::Value;
 
 pub(crate) async fn apply_bespoke_event_handling(
@@ -263,7 +263,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::Error(ev) => {
             let turn_error = TurnError {
                 message: ev.message,
-                codex_error_code: ev.codex_error_code,
+                codex_error_code: ev.codex_error_code.map(V2CodexErrorCode::from),
             };
             handle_error(conversation_id, turn_error.clone(), &turn_summary_store).await;
             outgoing
@@ -277,7 +277,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             // but we notify the client.
             let turn_error = TurnError {
                 message: ev.message,
-                codex_error_code: ev.codex_error_code,
+                codex_error_code: ev.codex_error_code.map(V2CodexErrorCode::from),
             };
             outgoing
                 .send_server_notification(ServerNotification::Error(ErrorNotification {
@@ -898,7 +898,7 @@ mod tests {
             conversation_id,
             TurnError {
                 message: "boom".to_string(),
-                codex_error_code: Some(CodexErrorCode::InternalServerError),
+                codex_error_code: Some(V2CodexErrorCode::InternalServerError),
             },
             &turn_summary_store,
         )
@@ -909,7 +909,7 @@ mod tests {
             turn_summary.last_error,
             Some(TurnError {
                 message: "boom".to_string(),
-                codex_error_code: Some(CodexErrorCode::InternalServerError),
+                codex_error_code: Some(V2CodexErrorCode::InternalServerError),
             })
         );
         Ok(())
@@ -995,7 +995,7 @@ mod tests {
             conversation_id,
             TurnError {
                 message: "bad".to_string(),
-                codex_error_code: Some(CodexErrorCode::Other),
+                codex_error_code: Some(V2CodexErrorCode::Other),
             },
             &turn_summary_store,
         )
@@ -1023,7 +1023,7 @@ mod tests {
                     TurnStatus::Failed {
                         error: TurnError {
                             message: "bad".to_string(),
-                            codex_error_code: Some(CodexErrorCode::Other),
+                            codex_error_code: Some(V2CodexErrorCode::Other),
                         }
                     }
                 );
@@ -1078,7 +1078,7 @@ mod tests {
             conversation_a,
             TurnError {
                 message: "a1".to_string(),
-                codex_error_code: Some(CodexErrorCode::BadRequest),
+                codex_error_code: Some(V2CodexErrorCode::BadRequest),
             },
             &turn_summary_store,
         )
@@ -1133,7 +1133,7 @@ mod tests {
                     TurnStatus::Failed {
                         error: TurnError {
                             message: "a1".to_string(),
-                            codex_error_code: Some(CodexErrorCode::BadRequest),
+                            codex_error_code: Some(V2CodexErrorCode::BadRequest),
                         }
                     }
                 );

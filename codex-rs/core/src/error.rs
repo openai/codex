@@ -531,9 +531,10 @@ mod tests {
     use chrono::Utc;
     use codex_protocol::protocol::RateLimitWindow;
     use pretty_assertions::assert_eq;
-    use reqwest::Client;
     use reqwest::Response;
     use reqwest::ResponseBuilderExt;
+    use reqwest::StatusCode;
+    use reqwest::Url;
 
     fn rate_limit_snapshot() -> RateLimitSnapshot {
         let primary_reset_at = Utc
@@ -631,24 +632,22 @@ mod tests {
 
     #[test]
     fn to_error_event_handles_response_stream_failed() {
-        let mut response = http::Response::builder()
-            .status(reqwest::StatusCode::TOO_MANY_REQUESTS)
+        let response = http::Response::builder()
+            .status(StatusCode::TOO_MANY_REQUESTS)
+            .url(Url::parse("http://example.com").unwrap())
             .body("")
             .unwrap();
-        response.extensions_mut().insert(reqwest::ResponseUrl(
-            reqwest::Url::parse("http://example.com").unwrap(),
-        ));
         let source = Response::from(response).error_for_status_ref().unwrap_err();
         let err = CodexErr::ResponseStreamFailed(ResponseStreamFailed {
             source,
             request_id: Some("req-123".to_string()),
         });
 
-        let event = err.to_error_event("prefix".to_string());
+        let event = err.to_error_event(Some("prefix".to_string()));
 
         assert_eq!(
             event.message,
-            "prefix: Error while reading the server response: HTTP status client error (429) for url (http://example.com/), request id: req-123"
+            "prefix: Error while reading the server response: HTTP status client error (429 Too Many Requests) for url (http://example.com/), request id: req-123"
         );
         assert_eq!(
             event.codex_error_code,

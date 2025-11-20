@@ -11,7 +11,7 @@ use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
-use codex_protocol::protocol::CodexErrorCode;
+use codex_protocol::protocol::CodexErrorCode as CoreCodexErrorCode;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
@@ -47,6 +47,69 @@ macro_rules! v2_enum_from_core {
             }
         }
     };
+}
+
+/// This translation layer make sure that we expose codex error code in camel case.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum CodexErrorCode {
+    ContextWindowExceeded,
+    UsageLimitExceeded,
+    HttpConnectionFailed {
+        #[serde(rename = "httpStatusCode")]
+        #[ts(rename = "httpStatusCode")]
+        http_status_code: Option<u16>,
+    },
+    /// Failed to connect to the response SSE stream.
+    ResponseStreamConnectionFailed {
+        #[serde(rename = "httpStatusCode")]
+        #[ts(rename = "httpStatusCode")]
+        http_status_code: Option<u16>,
+    },
+    InternalServerError,
+    Unauthorized,
+    BadRequest,
+    Sandbox,
+    /// The response SSE stream disconnected in the middle of a turn before completion.
+    ResponseStreamDisconnected {
+        #[serde(rename = "httpStatusCode")]
+        #[ts(rename = "httpStatusCode")]
+        http_status_code: Option<u16>,
+    },
+    /// Reached the retry limit for responses.
+    ResponseTooManyFailedAttempts {
+        #[serde(rename = "httpStatusCode")]
+        #[ts(rename = "httpStatusCode")]
+        http_status_code: Option<u16>,
+    },
+    Other,
+}
+
+impl From<CoreCodexErrorCode> for CodexErrorCode {
+    fn from(value: CoreCodexErrorCode) -> Self {
+        match value {
+            CoreCodexErrorCode::ContextWindowExceeded => CodexErrorCode::ContextWindowExceeded,
+            CoreCodexErrorCode::UsageLimitExceeded => CodexErrorCode::UsageLimitExceeded,
+            CoreCodexErrorCode::HttpConnectionFailed { http_status_code } => {
+                CodexErrorCode::HttpConnectionFailed { http_status_code }
+            }
+            CoreCodexErrorCode::ResponseStreamConnectionFailed { http_status_code } => {
+                CodexErrorCode::ResponseStreamConnectionFailed { http_status_code }
+            }
+            CoreCodexErrorCode::InternalServerError => CodexErrorCode::InternalServerError,
+            CoreCodexErrorCode::Unauthorized => CodexErrorCode::Unauthorized,
+            CoreCodexErrorCode::BadRequest => CodexErrorCode::BadRequest,
+            CoreCodexErrorCode::Sandbox => CodexErrorCode::Sandbox,
+            CoreCodexErrorCode::ResponseStreamDisconnected { http_status_code } => {
+                CodexErrorCode::ResponseStreamDisconnected { http_status_code }
+            }
+            CoreCodexErrorCode::ResponseTooManyFailedAttempts { http_status_code } => {
+                CodexErrorCode::ResponseTooManyFailedAttempts { http_status_code }
+            }
+            CoreCodexErrorCode::Other => CodexErrorCode::Other,
+        }
+    }
 }
 
 v2_enum_from_core!(
@@ -1102,6 +1165,7 @@ mod tests {
     use codex_protocol::items::WebSearchItem;
     use codex_protocol::user_input::UserInput as CoreUserInput;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
     use std::path::PathBuf;
 
     #[test]
@@ -1185,6 +1249,22 @@ mod tests {
                 id: "search-1".to_string(),
                 query: "docs".to_string(),
             }
+        );
+    }
+
+    #[test]
+    fn codex_error_code_serializes_http_status_code_in_camel_case() {
+        let value = CodexErrorCode::ResponseTooManyFailedAttempts {
+            http_status_code: Some(401),
+        };
+
+        assert_eq!(
+            serde_json::to_value(value).unwrap(),
+            json!({
+                "responseTooManyFailedAttempts": {
+                    "httpStatusCode": 401
+                }
+            })
         );
     }
 }
