@@ -100,13 +100,22 @@ impl Approvable<ShellRequest> for ShellRuntime {
             .clone()
             .or_else(|| req.justification.clone());
         let risk = ctx.risk.clone();
+        let allow_prefix = req.approval_requirement.allow_prefix().cloned();
         let session = ctx.session;
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
         Box::pin(async move {
             with_cached_approval(&session.services, key, move || async move {
                 session
-                    .request_command_approval(turn, call_id, command, cwd, reason, risk)
+                    .request_command_approval(
+                        turn,
+                        call_id,
+                        command,
+                        cwd,
+                        reason,
+                        risk,
+                        allow_prefix,
+                    )
                     .await
             })
             .await

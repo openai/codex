@@ -1524,6 +1524,7 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
                 .submit(Op::ExecApproval {
                     id: "0".into(),
                     decision: *decision,
+                    allow_prefix: None,
                 })
                 .await?;
             wait_for_completion(&test).await;

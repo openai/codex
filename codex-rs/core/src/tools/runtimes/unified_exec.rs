@@ -120,10 +120,19 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
             .clone()
             .or_else(|| req.justification.clone());
         let risk = ctx.risk.clone();
+        let allow_prefix = req.approval_requirement.allow_prefix().cloned();
         Box::pin(async move {
             with_cached_approval(&session.services, key, || async move {
                 session
-                    .request_command_approval(turn, call_id, command, cwd, reason, risk)
+                    .request_command_approval(
+                        turn,
+                        call_id,
+                        command,
+                        cwd,
+                        reason,
+                        risk,
+                        allow_prefix,
+                    )
                     .await
             })
             .await
