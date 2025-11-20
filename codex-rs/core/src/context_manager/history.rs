@@ -1,6 +1,7 @@
 use crate::codex::TurnContext;
 use crate::context_manager::normalize;
 use crate::truncate::TruncationPolicy;
+use crate::truncate::approx_token_count;
 use crate::truncate::truncate_function_output_items_with_policy;
 use crate::truncate::truncate_text;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -73,10 +74,21 @@ impl ContextManager {
         history
     }
 
-    // Token estimation is disabled without a tokenizer backend. Return None to
-    // skip heuristic counts.
-    pub(crate) fn estimate_token_count(&self, _turn_context: &TurnContext) -> Option<i64> {
-        None
+    // Estimate token usage using byte-based heuristics from the truncation helpers.
+    // This is a coarse lower bound, not a tokenizer-accurate count.
+    pub(crate) fn estimate_token_count(&self, turn_context: &TurnContext) -> Option<i64> {
+        let model_family = turn_context.client.get_model_family();
+        let base_tokens =
+            i64::try_from(approx_token_count(model_family.base_instructions.as_str()))
+                .unwrap_or(i64::MAX);
+
+        let items_tokens = self.items.iter().fold(0i64, |acc, item| {
+            let serialized = serde_json::to_string(item).unwrap_or_default();
+            let item_tokens = i64::try_from(approx_token_count(&serialized)).unwrap_or(i64::MAX);
+            acc.saturating_add(item_tokens)
+        });
+
+        Some(base_tokens.saturating_add(items_tokens))
     }
 
     pub(crate) fn remove_first_item(&mut self) {
