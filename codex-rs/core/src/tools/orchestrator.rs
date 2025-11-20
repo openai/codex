@@ -59,12 +59,12 @@ impl ToolOrchestrator {
         });
         match requirement {
             ApprovalRequirement::Skip { .. } => {
-                otel.tool_decision(otel_tn, otel_ci, ReviewDecision::Approved, otel_cfg);
+                otel.tool_decision(otel_tn, otel_ci, &ReviewDecision::Approved, otel_cfg);
             }
             ApprovalRequirement::Forbidden { reason } => {
                 return Err(ToolError::Rejected(reason));
             }
-            ApprovalRequirement::NeedsApproval { reason } => {
+            ApprovalRequirement::NeedsApproval { reason, .. } => {
                 let mut risk = None;
 
                 if let Some(metadata) = req.sandbox_retry_data() {
@@ -88,13 +88,15 @@ impl ToolOrchestrator {
                 };
                 let decision = tool.start_approval_async(req, approval_ctx).await;
 
-                otel.tool_decision(otel_tn, otel_ci, decision, otel_user.clone());
+                otel.tool_decision(otel_tn, otel_ci, &decision, otel_user.clone());
 
                 match decision {
                     ReviewDecision::Denied | ReviewDecision::Abort => {
                         return Err(ToolError::Rejected("rejected by user".to_string()));
                     }
-                    ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {}
+                    ReviewDecision::Approved
+                    | ReviewDecision::ApprovedAllowPrefix { .. }
+                    | ReviewDecision::ApprovedForSession => {}
                 }
                 already_approved = true;
             }
@@ -169,13 +171,15 @@ impl ToolOrchestrator {
                     };
 
                     let decision = tool.start_approval_async(req, approval_ctx).await;
-                    otel.tool_decision(otel_tn, otel_ci, decision, otel_user);
+                    otel.tool_decision(otel_tn, otel_ci, &decision, otel_user);
 
                     match decision {
                         ReviewDecision::Denied | ReviewDecision::Abort => {
                             return Err(ToolError::Rejected("rejected by user".to_string()));
                         }
-                        ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {}
+                        ReviewDecision::Approved
+                        | ReviewDecision::ApprovedAllowPrefix { .. }
+                        | ReviewDecision::ApprovedForSession => {}
                     }
                 }
 
