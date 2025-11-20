@@ -22,6 +22,7 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TokenUsage;
 use eventsource_stream::Eventsource;
 use futures::Stream;
 use futures::StreamExt;
@@ -490,6 +491,42 @@ async fn append_reasoning_text(
             .await;
     }
 }
+
+fn parse_openai_usage(usage: &serde_json::Value) -> Option<TokenUsage> {
+    let prompt_tokens = usage
+        .get("prompt_tokens")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let completion_tokens = usage
+        .get("completion_tokens")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let total_tokens = usage
+        .get("total_tokens")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+
+    let cached_input_tokens = usage
+        .get("prompt_tokens_details")
+        .and_then(|d| d.get("cached_tokens"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+
+    let reasoning_output_tokens = usage
+        .get("completion_tokens_details")
+        .and_then(|d| d.get("reasoning_tokens"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+
+    Some(TokenUsage {
+        input_tokens: prompt_tokens,
+        cached_input_tokens,
+        output_tokens: completion_tokens,
+        reasoning_output_tokens,
+        total_tokens,
+    })
+}
+
 /// Lightweight SSE processor for the Chat Completions streaming format. The
 /// output is mapped onto Codex's internal [`ResponseEvent`] so that the rest
 /// of the pipeline can stay agnostic of the underlying wire format.
@@ -519,6 +556,8 @@ async fn process_chat_sse<S>(
     let mut fn_call_state = FunctionCallState::default();
     let mut assistant_item: Option<ResponseItem> = None;
     let mut reasoning_item: Option<ResponseItem> = None;
+    let mut token_usage: Option<TokenUsage> = None;
+    let mut response_id = String::new();
 
     loop {
         let start = std::time::Instant::now();
@@ -538,8 +577,8 @@ async fn process_chat_sse<S>(
                 // Stream closed gracefully – emit Completed with dummy id.
                 let _ = tx_event
                     .send(Ok(ResponseEvent::Completed {
-                        response_id: String::new(),
-                        token_usage: None,
+                        response_id: response_id.clone(),
+                        token_usage: token_usage.clone(),
                     }))
                     .await;
                 return;
@@ -569,8 +608,8 @@ async fn process_chat_sse<S>(
 
             let _ = tx_event
                 .send(Ok(ResponseEvent::Completed {
-                    response_id: String::new(),
-                    token_usage: None,
+                    response_id: response_id.clone(),
+                    token_usage: token_usage.clone(),
                 }))
                 .await;
             return;
@@ -582,6 +621,16 @@ async fn process_chat_sse<S>(
             Err(_) => continue,
         };
         trace!("chat_completions received SSE chunk: {chunk:?}");
+
+        if let Some(id) = chunk.get("id").and_then(|s| s.as_str()) {
+            if response_id.is_empty() {
+                response_id = id.to_string();
+            }
+        }
+
+        if let Some(usage) = chunk.get("usage") {
+            token_usage = parse_openai_usage(usage);
+        }
 
         let choice_opt = chunk.get("choices").and_then(|c| c.get(0));
 
@@ -713,8 +762,8 @@ async fn process_chat_sse<S>(
                 // Emit Completed regardless of reason so the agent can advance.
                 let _ = tx_event
                     .send(Ok(ResponseEvent::Completed {
-                        response_id: String::new(),
-                        token_usage: None,
+                        response_id: response_id.clone(),
+                        token_usage: token_usage.clone(),
                     }))
                     .await;
 
