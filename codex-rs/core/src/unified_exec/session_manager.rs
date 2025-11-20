@@ -1,12 +1,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::time::Duration;
 use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
@@ -40,7 +39,19 @@ use super::clamp_yield_time;
 use super::generate_chunk_id;
 use super::resolve_max_tokens;
 use super::session::OutputBuffer;
+use super::session::OutputHandles;
 use super::session::UnifiedExecSession;
+
+struct PreparedSessionHandles {
+    writer_tx: mpsc::Sender<Vec<u8>>,
+    output_buffer: OutputBuffer,
+    output_notify: Arc<Notify>,
+    cancellation_token: CancellationToken,
+    session_ref: Arc<Session>,
+    turn_ref: Arc<TurnContext>,
+    command: Vec<String>,
+    cwd: PathBuf,
+}
 
 impl UnifiedExecSessionManager {
     pub(crate) async fn exec_command(
@@ -67,13 +78,16 @@ impl UnifiedExecSessionManager {
         let yield_time_ms = clamp_yield_time(request.yield_time_ms);
 
         let start = Instant::now();
-        let (output_buffer, output_notify, exit_notify, exit_signaled) = session.output_handles();
+        let OutputHandles {
+            output_buffer,
+            output_notify,
+            cancellation_token,
+        } = session.output_handles();
         let deadline = start + Duration::from_millis(yield_time_ms);
         let collected = Self::collect_output_until_deadline(
             &output_buffer,
             &output_notify,
-            &exit_notify,
-            &exit_signaled,
+            &cancellation_token,
             deadline,
         )
         .await;
@@ -135,17 +149,16 @@ impl UnifiedExecSessionManager {
     ) -> Result<UnifiedExecResponse, UnifiedExecError> {
         let session_id = request.session_id;
 
-        let (
+        let PreparedSessionHandles {
             writer_tx,
             output_buffer,
             output_notify,
-            exit_notify,
-            exit_signaled,
+            cancellation_token,
             session_ref,
             turn_ref,
-            session_command,
-            session_cwd,
-        ) = self.prepare_session_handles(session_id).await?;
+            command: session_command,
+            cwd: session_cwd,
+        } = self.prepare_session_handles(session_id).await?;
 
         let interaction_emitter = ToolEmitter::unified_exec(
             &session_command,
@@ -187,8 +200,7 @@ impl UnifiedExecSessionManager {
         let collected = Self::collect_output_until_deadline(
             &output_buffer,
             &output_notify,
-            &exit_notify,
-            &exit_signaled,
+            &cancellation_token,
             deadline,
         )
         .await;
@@ -279,59 +291,27 @@ impl UnifiedExecSessionManager {
     async fn prepare_session_handles(
         &self,
         session_id: i32,
-    ) -> Result<
-        (
-            mpsc::Sender<Vec<u8>>,
-            OutputBuffer,
-            Arc<Notify>,
-            Arc<Notify>,
-            Arc<AtomicBool>,
-            Arc<Session>,
-            Arc<TurnContext>,
-            Vec<String>,
-            PathBuf,
-        ),
-        UnifiedExecError,
-    > {
+    ) -> Result<PreparedSessionHandles, UnifiedExecError> {
         let sessions = self.sessions.lock().await;
-        let (
+        let entry = sessions
+            .get(&session_id)
+            .ok_or(UnifiedExecError::UnknownSessionId { session_id })?;
+        let OutputHandles {
             output_buffer,
             output_notify,
-            exit_notify,
-            exit_signaled,
-            writer_tx,
-            session,
-            turn,
-            command,
-            cwd,
-        ) = if let Some(entry) = sessions.get(&session_id) {
-            let (buffer, notify, exit_notify, exit_signaled) = entry.session.output_handles();
-            (
-                buffer,
-                notify,
-                exit_notify,
-                exit_signaled,
-                entry.session.writer_sender(),
-                Arc::clone(&entry.session_ref),
-                Arc::clone(&entry.turn_ref),
-                entry.command.clone(),
-                entry.cwd.clone(),
-            )
-        } else {
-            return Err(UnifiedExecError::UnknownSessionId { session_id });
-        };
+            cancellation_token,
+        } = entry.session.output_handles();
 
-        Ok((
-            writer_tx,
+        Ok(PreparedSessionHandles {
+            writer_tx: entry.session.writer_sender(),
             output_buffer,
             output_notify,
-            exit_notify,
-            exit_signaled,
-            session,
-            turn,
-            command,
-            cwd,
-        ))
+            cancellation_token,
+            session_ref: Arc::clone(&entry.session_ref),
+            turn_ref: Arc::clone(&entry.turn_ref),
+            command: entry.command.clone(),
+            cwd: entry.cwd.clone(),
+        })
     }
 
     async fn send_input(
@@ -502,12 +482,11 @@ impl UnifiedExecSessionManager {
     pub(super) async fn collect_output_until_deadline(
         output_buffer: &OutputBuffer,
         output_notify: &Arc<Notify>,
-        exit_notify: &Arc<Notify>,
-        exit_signaled: &Arc<AtomicBool>,
+        cancellation_token: &CancellationToken,
         deadline: Instant,
     ) -> Vec<u8> {
         let mut collected: Vec<u8> = Vec::with_capacity(4096);
-        let mut exit_signal_received = exit_signaled.load(Ordering::SeqCst);
+        let mut exit_signal_received = cancellation_token.is_cancelled();
         loop {
             let drained_chunks;
             let mut wait_for_output = None;
@@ -520,7 +499,7 @@ impl UnifiedExecSessionManager {
             }
 
             if drained_chunks.is_empty() {
-                exit_signal_received |= exit_signaled.load(Ordering::SeqCst);
+                exit_signal_received |= cancellation_token.is_cancelled();
                 if exit_signal_received {
                     break;
                 }
@@ -532,10 +511,7 @@ impl UnifiedExecSessionManager {
 
                 let notified = wait_for_output.unwrap_or_else(|| output_notify.notified());
                 tokio::pin!(notified);
-                if exit_signaled.load(Ordering::SeqCst) {
-                    break;
-                }
-                let exit_notified = exit_notify.notified();
+                let exit_notified = cancellation_token.cancelled();
                 tokio::pin!(exit_notified);
                 tokio::select! {
                     _ = &mut notified => {}
@@ -549,7 +525,7 @@ impl UnifiedExecSessionManager {
                 collected.extend_from_slice(&chunk);
             }
 
-            exit_signal_received |= exit_signaled.load(Ordering::SeqCst);
+            exit_signal_received |= cancellation_token.is_cancelled();
             if Instant::now() >= deadline {
                 break;
             }

@@ -2,15 +2,13 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
-
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot::error::TryRecvError;
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
+use tokio_util::sync::CancellationToken;
 
 use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
@@ -69,15 +67,18 @@ impl OutputBufferState {
 }
 
 pub(crate) type OutputBuffer = Arc<Mutex<OutputBufferState>>;
-pub(crate) type OutputHandles = (OutputBuffer, Arc<Notify>, Arc<Notify>, Arc<AtomicBool>);
+pub(crate) struct OutputHandles {
+    pub(crate) output_buffer: OutputBuffer,
+    pub(crate) output_notify: Arc<Notify>,
+    pub(crate) cancellation_token: CancellationToken,
+}
 
 #[derive(Debug)]
 pub(crate) struct UnifiedExecSession {
     session: ExecCommandSession,
     output_buffer: OutputBuffer,
     output_notify: Arc<Notify>,
-    exit_notify: Arc<Notify>,
-    exit_signaled: Arc<AtomicBool>,
+    cancellation_token: CancellationToken,
     output_task: JoinHandle<()>,
     sandbox_type: SandboxType,
 }
@@ -90,13 +91,11 @@ impl UnifiedExecSession {
     ) -> Self {
         let output_buffer = Arc::new(Mutex::new(OutputBufferState::default()));
         let output_notify = Arc::new(Notify::new());
-        let exit_notify = Arc::new(Notify::new());
-        let exit_signaled = Arc::new(AtomicBool::new(false));
+        let cancellation_token = CancellationToken::new();
         let mut receiver = initial_output_rx;
         let buffer_clone = Arc::clone(&output_buffer);
         let notify_clone = Arc::clone(&output_notify);
-        let exit_notify_clone = Arc::clone(&exit_notify);
-        let exit_signaled_clone = Arc::clone(&exit_signaled);
+        let cancellation_token_clone = cancellation_token.clone();
         let output_task = tokio::spawn(async move {
             loop {
                 match receiver.recv().await {
@@ -108,8 +107,7 @@ impl UnifiedExecSession {
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        exit_signaled_clone.store(true, Ordering::SeqCst);
-                        exit_notify_clone.notify_waiters();
+                        cancellation_token_clone.cancel();
                         break;
                     }
                 }
@@ -120,8 +118,7 @@ impl UnifiedExecSession {
             session,
             output_buffer,
             output_notify,
-            exit_notify,
-            exit_signaled,
+            cancellation_token,
             output_task,
             sandbox_type,
         }
@@ -132,12 +129,11 @@ impl UnifiedExecSession {
     }
 
     pub(super) fn output_handles(&self) -> OutputHandles {
-        (
-            Arc::clone(&self.output_buffer),
-            Arc::clone(&self.output_notify),
-            Arc::clone(&self.exit_notify),
-            Arc::clone(&self.exit_signaled),
-        )
+        OutputHandles {
+            output_buffer: Arc::clone(&self.output_buffer),
+            output_notify: Arc::clone(&self.output_notify),
+            cancellation_token: self.cancellation_token.clone(),
+        }
     }
 
     pub(super) fn has_exited(&self) -> bool {
@@ -230,24 +226,18 @@ impl UnifiedExecSession {
         }
 
         tokio::spawn({
-            let exit_notify = Arc::clone(&managed.exit_notify);
-            let exit_signaled = Arc::clone(&managed.exit_signaled);
+            let cancellation_token = managed.cancellation_token.clone();
             async move {
                 let _ = exit_rx.await;
-                exit_signaled.store(true, Ordering::SeqCst);
-                exit_notify.notify_waiters();
+                cancellation_token.cancel();
             }
         });
 
         Ok(managed)
     }
-}
 
-impl UnifiedExecSession {
     fn signal_exit(&self) {
-        if !self.exit_signaled.swap(true, Ordering::SeqCst) {
-            self.exit_notify.notify_waiters();
-        }
+        self.cancellation_token.cancel();
     }
 }
 

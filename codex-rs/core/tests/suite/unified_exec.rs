@@ -924,7 +924,7 @@ async fn unified_exec_respects_early_exit_notifications() -> Result<()> {
     let call_id = "uexec-early-exit";
     let args = serde_json::json!({
         "cmd": "sleep 0.05",
-        "yield_time_ms": 1000,
+        "yield_time_ms": 31415,
     });
 
     let responses = vec![
