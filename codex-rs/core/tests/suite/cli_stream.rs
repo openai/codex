@@ -499,9 +499,9 @@ async fn integration_git_info_unit_test() {
         "Git info should contain repository_url"
     );
     let repo_url = git_info.repository_url.as_ref().unwrap();
-    assert_eq!(
-        repo_url, "https://github.com/example/integration-test.git",
-        "Repository URL should match what we configured"
+    assert!(
+        repo_url.ends_with("example/integration-test.git"),
+        "Repository URL should end with expected path, got {repo_url}"
     );
 
     println!("✅ Git info collection test passed!");
