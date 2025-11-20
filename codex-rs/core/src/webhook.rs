@@ -1,15 +1,16 @@
+mod formatter;
+
 use std::sync::Arc;
 
 use crate::config::types::WebhookConfig;
-use crate::config::types::WebhookFormat;
 use crate::protocol::TurnAbortReason;
 use crate::state::TaskKind;
 use codex_protocol::ConversationId;
+use formatter::format_payload;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
 use serde::Serialize;
-use serde_json::json;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -44,10 +45,8 @@ impl WebhookDispatcher {
             headers.insert(header_name, header_value);
         }
 
-        let body = match self.config.format {
-            Some(WebhookFormat::Dingtalk) => to_dingtalk_text(payload),
-            None => json!(payload),
-        };
+        let format = self.config.format;
+        let body = format_payload(format, payload);
 
         let mut request = self.client.post(&self.config.url).json(&body);
         if !headers.is_empty() {
@@ -81,36 +80,6 @@ impl WebhookDispatcher {
             Err(err) => error!(%event_name, %target_url, "failed to POST webhook payload: {err}"),
         }
     }
-}
-
-fn to_dingtalk_text(payload: &WebhookPayload) -> serde_json::Value {
-    let text = match payload {
-        WebhookPayload::TaskCompleted {
-            turn_id,
-            task_kind,
-            cwd,
-            last_agent_message,
-            ..
-        } => format!(
-            "[codex] 任务完成 | turn={} | task={} | cwd={} | {}",
-            turn_id,
-            task_kind,
-            cwd,
-            last_agent_message
-                .clone()
-                .unwrap_or_else(|| "无总结".to_string())
-        ),
-        WebhookPayload::TaskAborted {
-            turn_id,
-            task_kind,
-            cwd,
-            reason,
-            ..
-        } => format!(
-            "[codex] 任务中止 | turn={turn_id} | task={task_kind} | cwd={cwd} | reason={reason:?}"
-        ),
-    };
-    json!({ "msgtype": "text", "text": { "content": text } })
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -767,17 +767,17 @@ notify = ["python3", "/Users/mbolin/.codex/notify.py"]
 
 ### webhook
 
-向外部 HTTP 端点投递生命周期事件。配置 `webhook` 表后，Codex 会在任务完成或中止时 POST 一条 JSON 记录：
+Send lifecycle events to an external HTTP endpoint. After configuring the webhook section, Codex will POST a JSON record whenever a task is completed or aborted:
 
 ```toml
 [webhook]
 url = "https://hooks.example.com/codex"
-format = "dingtalk" # 可选：钉钉文本格式
+format = "dingtalk" # optional: dingtalk | slack | discord | teams | feishu | wecom
 timeout = 5.0 # seconds, optional
 headers = { Authorization = "Bearer ${WEBHOOK_TOKEN}" }
 ```
 
-负载示例：
+Example payload:：
 
 ```json
 {
@@ -790,7 +790,15 @@ headers = { Authorization = "Bearer ${WEBHOOK_TOKEN}" }
 }
 ```
 
-中止时事件为 `"task-aborted"`，并包含 `reason`（如 `"Interrupted"` 或 `"Replaced"`）。`task_kind` 为 `regular`/`review`/`compact`。配置的 `headers` 会作为 HTTP 请求头发送，`timeout` 控制请求超时时间（默认沿用 reqwest 默认值）。
+For aborted tasks, the event becomes "task-aborted" and includes a reason field (such as "Interrupted" or "Replaced").
+task_kind may be regular, review, or compact.
+Configured headers will be included in the outbound HTTP request, and timeout controls the request timeout (fallbacks to reqwest’s default if omitted).
+
+- When `format` is unset: the raw JSON payload shown above is sent.
+
+- `dingtalk`: sends a DingTalk text message.
+
+- `slack` / `discord` / `teams` / `feishu` / `wecom`: sends a simple text message containing the key information from the JSON payload.
 
 ### hide_agent_reasoning
 
@@ -977,7 +985,7 @@ Valid values:
 | `sandbox_workspace_write.exclude_tmpdir_env_var` | boolean                                                           | Exclude `$TMPDIR` from writable roots (default: false).                                                                    |
 | `sandbox_workspace_write.exclude_slash_tmp`      | boolean                                                           | Exclude `/tmp` from writable roots (default: false).                                                                       |
 | `notify`                                         | array<string>                                                     | External program for notifications.                                                                                        |
-| `webhook`                                        | table                                                             | HTTP webhook for lifecycle events (`task-completed`/`task-aborted`); supports `url`, optional `headers`, `timeout`, and `format` (`dingtalk`).    |
+| `webhook`                                        | table                                                             | HTTP webhook for lifecycle events (`task-completed`/`task-aborted`); supports `url`, optional `headers`, `timeout`, and `format` (`dingtalk`/`slack`/`discord`/`teams`/`feishu`/`wecom`; empty = raw JSON). |
 | `instructions`                                   | string                                                            | Currently ignored; use `experimental_instructions_file` or `AGENTS.md`.                                                    |
 | `features.<feature-flag>`                        | boolean                                                           | See [feature flags](#feature-flags) for details                                                                            |
 | `mcp_servers.<id>.command`                       | string                                                            | MCP server launcher command (stdio servers only).                                                                          |

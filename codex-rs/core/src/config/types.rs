@@ -21,6 +21,7 @@ pub struct WebhookConfig {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub headers: HashMap<String, String>,
     /// Optional payload format. When set to "dingtalk", the webhook will send DingTalk-compatible text messages.
+    /// Other supported formats: "slack", "discord", "teams", "feishu", "wecom".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<WebhookFormat>,
     #[serde(
@@ -31,10 +32,15 @@ pub struct WebhookConfig {
     pub timeout: Option<Duration>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum WebhookFormat {
     Dingtalk,
+    Slack,
+    Discord,
+    Teams,
+    Feishu,
+    Wecom,
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
