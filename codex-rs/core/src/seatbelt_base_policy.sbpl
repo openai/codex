@@ -17,6 +17,15 @@
 
 ; process-info
 (allow process-info* (target same-sandbox))
+; Allow limited parent/self inspection so tools like Homebrew's shellenv can run `/bin/ps`.
+(allow process-info-pidinfo
+  (require-any
+    (target self)
+    (target parent)))
+(allow process-info-pidpath
+  (require-any
+    (target self)
+    (target parent)))
 
 (allow file-write-data
   (require-all

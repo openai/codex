@@ -266,6 +266,57 @@ async fn java_home_finds_runtime_under_seatbelt() {
     );
 }
 
+#[tokio::test]
+async fn ps_can_inspect_parent_process_under_seatbelt() {
+    // Homebrew's shellenv uses `ps -p ${PPID}`; ensure it works under seatbelt.
+    if std::env::var(CODEX_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {
+        eprintln!("{CODEX_SANDBOX_ENV_VAR} is set to 'seatbelt', skipping test.");
+        return;
+    }
+
+    let policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![],
+        network_access: false,
+        exclude_tmpdir_env_var: false,
+        exclude_slash_tmp: false,
+    };
+    let command_cwd = std::env::current_dir().expect("getcwd");
+    let sandbox_cwd = command_cwd.clone();
+
+    let child = spawn_command_under_seatbelt(
+        vec![
+            "/bin/zsh".to_string(),
+            "-c".to_string(),
+            "/bin/ps -p ${PPID} -c -o comm=".to_string(),
+        ],
+        command_cwd,
+        &policy,
+        sandbox_cwd.as_path(),
+        StdioPolicy::RedirectForShellTool,
+        HashMap::new(),
+    )
+    .await
+    .expect("should be able to spawn ps under seatbelt");
+
+    let output = child
+        .wait_with_output()
+        .await
+        .expect("should be able to wait for ps");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "ps exited with {:?}, stderr: {}",
+        output.status,
+        stderr
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.trim().is_empty(),
+        "ps output unexpectedly empty; stderr: {stderr}"
+    );
+}
+
 #[expect(clippy::expect_used)]
 fn create_test_scenario(tmp: &TempDir) -> TestScenario {
     let repo_parent = tmp.path().to_path_buf();
