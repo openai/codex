@@ -100,8 +100,7 @@ codex execpolicy check --policy ~/.codex/policy/default.codexpolicy git push ori
 
 Pass multiple `--policy` flags to test how several files combine, and use `--pretty` for formatted JSON output. See the [`codex-rs/execpolicy` README](./codex-rs/execpolicy/README.md) for a more detailed walkthrough of the available syntax.
 
-Note: `execpolicy` commands are still in preview. The API may have breaking changes in the future.
----
+## Note: `execpolicy` commands are still in preview. The API may have breaking changes in the future.
 
 ### Docs & FAQ
 
