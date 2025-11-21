@@ -15,6 +15,7 @@ use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
+use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::user_input::UserInput as CoreUserInput;
 use mcp_types::ContentBlock as McpContentBlock;
 use schemars::JsonSchema;
@@ -50,6 +51,9 @@ macro_rules! v2_enum_from_core {
 }
 
 /// This translation layer make sure that we expose codex error code in camel case.
+///
+/// When an upstream HTTP status is available (for example, from the Responses API or a provider),
+/// it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -254,6 +258,56 @@ pub enum CommandAction {
     Unknown {
         command: String,
     },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+#[derive(Default)]
+pub enum SessionSource {
+    Cli,
+    #[serde(rename = "vscode")]
+    #[ts(rename = "vscode")]
+    #[default]
+    VsCode,
+    Exec,
+    AppServer,
+    #[serde(other)]
+    Unknown,
+}
+
+impl From<CoreSessionSource> for SessionSource {
+    fn from(value: CoreSessionSource) -> Self {
+        match value {
+            CoreSessionSource::Cli => SessionSource::Cli,
+            CoreSessionSource::VSCode => SessionSource::VsCode,
+            CoreSessionSource::Exec => SessionSource::Exec,
+            CoreSessionSource::Mcp => SessionSource::AppServer,
+            CoreSessionSource::SubAgent(_) => SessionSource::Unknown,
+            CoreSessionSource::Unknown => SessionSource::Unknown,
+        }
+    }
+}
+
+impl From<SessionSource> for CoreSessionSource {
+    fn from(value: SessionSource) -> Self {
+        match value {
+            SessionSource::Cli => CoreSessionSource::Cli,
+            SessionSource::VsCode => CoreSessionSource::VSCode,
+            SessionSource::Exec => CoreSessionSource::Exec,
+            SessionSource::AppServer => CoreSessionSource::Mcp,
+            SessionSource::Unknown => CoreSessionSource::Unknown,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct GitInfo {
+    pub sha: Option<String>,
+    pub branch: Option<String>,
+    pub origin_url: Option<String>,
 }
 
 impl CommandAction {
@@ -578,11 +632,20 @@ pub struct Thread {
     pub id: String,
     /// Usually the first user message in the thread, if available.
     pub preview: String,
+    /// Model provider used for this thread (for example, 'openai').
     pub model_provider: String,
     /// Unix timestamp (in seconds) when the thread was created.
     pub created_at: i64,
     /// [UNSTABLE] Path to the thread on disk.
     pub path: PathBuf,
+    /// Working directory captured for the thread.
+    pub cwd: PathBuf,
+    /// Version of the CLI that created the thread.
+    pub cli_version: String,
+    /// Origin of the thread (CLI, VSCode, codex exec, codex app-server, etc.).
+    pub source: SessionSource,
+    /// Optional Git metadata captured when the thread was created.
+    pub git_info: Option<GitInfo>,
     /// Only populated on a `thread/resume` response.
     /// For all other responses and notifications returning a Thread,
     /// the turns field will be an empty list.
@@ -615,7 +678,7 @@ pub struct Turn {
 #[error("{message}")]
 pub struct TurnError {
     pub message: String,
-    pub codex_error_code: Option<CodexErrorInfo>,
+    pub codex_error_info: Option<CodexErrorInfo>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -856,6 +919,7 @@ pub enum CommandExecutionStatus {
     InProgress,
     Completed,
     Failed,
+    Declined,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1253,7 +1317,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_error_code_serializes_http_status_code_in_camel_case() {
+    fn codex_error_info_serializes_http_status_code_in_camel_case() {
         let value = CodexErrorInfo::ResponseTooManyFailedAttempts {
             http_status_code: Some(401),
         };

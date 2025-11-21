@@ -175,12 +175,20 @@ pub(crate) async fn apply_bespoke_event_handling(
                 });
             }
             ApiVersion::V2 => {
+                let item_id = call_id.clone();
+                let command_actions = parsed_cmd
+                    .iter()
+                    .cloned()
+                    .map(V2ParsedCommand::from)
+                    .collect::<Vec<_>>();
+                let command_string = shlex_join(&command);
+
                 let params = CommandExecutionRequestApprovalParams {
                     thread_id: conversation_id.to_string(),
                     turn_id: turn_id.clone(),
                     // Until we migrate the core to be aware of a first class CommandExecutionItem
                     // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
-                    item_id: call_id.clone(),
+                    item_id: item_id.clone(),
                     reason,
                     risk: risk.map(V2SandboxCommandAssessment::from),
                 };
@@ -190,8 +198,17 @@ pub(crate) async fn apply_bespoke_event_handling(
                     ))
                     .await;
                 tokio::spawn(async move {
-                    on_command_execution_request_approval_response(event_id, rx, conversation)
-                        .await;
+                    on_command_execution_request_approval_response(
+                        event_id,
+                        item_id,
+                        command_string,
+                        cwd,
+                        command_actions,
+                        rx,
+                        conversation,
+                        outgoing,
+                    )
+                    .await;
                 });
             }
         },
@@ -264,7 +281,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::Error(ev) => {
             let turn_error = TurnError {
                 message: ev.message,
-                codex_error_code: ev.codex_error_code.map(V2CodexErrorInfo::from),
+                codex_error_info: ev.codex_error_info.map(V2CodexErrorInfo::from),
             };
             handle_error(conversation_id, turn_error.clone(), &turn_summary_store).await;
             outgoing
@@ -278,7 +295,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             // but we notify the client.
             let turn_error = TurnError {
                 message: ev.message,
-                codex_error_code: ev.codex_error_code.map(V2CodexErrorInfo::from),
+                codex_error_info: ev.codex_error_info.map(V2CodexErrorInfo::from),
             };
             outgoing
                 .send_server_notification(ServerNotification::Error(ErrorNotification {
@@ -370,16 +387,21 @@ pub(crate) async fn apply_bespoke_event_handling(
             .await;
         }
         EventMsg::ExecCommandBegin(exec_command_begin_event) => {
+            let item_id = exec_command_begin_event.call_id.clone();
+            let command_actions = exec_command_begin_event
+                .parsed_cmd
+                .into_iter()
+                .map(V2ParsedCommand::from)
+                .collect::<Vec<_>>();
+            let command = shlex_join(&exec_command_begin_event.command);
+            let cwd = exec_command_begin_event.cwd;
+
             let item = ThreadItem::CommandExecution {
-                id: exec_command_begin_event.call_id.clone(),
-                command: shlex_join(&exec_command_begin_event.command),
-                cwd: exec_command_begin_event.cwd,
+                id: item_id,
+                command,
+                cwd,
                 status: CommandExecutionStatus::InProgress,
-                command_actions: exec_command_begin_event
-                    .parsed_cmd
-                    .into_iter()
-                    .map(V2ParsedCommand::from)
-                    .collect(),
+                command_actions,
                 aggregated_output: None,
                 exit_code: None,
                 duration_ms: None,
@@ -417,6 +439,10 @@ pub(crate) async fn apply_bespoke_event_handling(
             } else {
                 CommandExecutionStatus::Failed
             };
+            let command_actions = parsed_cmd
+                .into_iter()
+                .map(V2ParsedCommand::from)
+                .collect::<Vec<_>>();
 
             let aggregated_output = if aggregated_output.is_empty() {
                 None
@@ -431,7 +457,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 command: shlex_join(&command),
                 cwd,
                 status,
-                command_actions: parsed_cmd.into_iter().map(V2ParsedCommand::from).collect(),
+                command_actions,
                 aggregated_output,
                 exit_code: Some(exit_code),
                 duration_ms: Some(duration_ms),
@@ -509,6 +535,30 @@ async fn complete_file_change_item(
         id: item_id,
         changes,
         status,
+    };
+    let notification = ItemCompletedNotification { item };
+    outgoing
+        .send_server_notification(ServerNotification::ItemCompleted(notification))
+        .await;
+}
+
+async fn complete_command_execution_item(
+    item_id: String,
+    command: String,
+    cwd: PathBuf,
+    command_actions: Vec<V2ParsedCommand>,
+    status: CommandExecutionStatus,
+    outgoing: &OutgoingMessageSender,
+) {
+    let item = ThreadItem::CommandExecution {
+        id: item_id,
+        command,
+        cwd,
+        status,
+        command_actions,
+        aggregated_output: None,
+        exit_code: None,
+        duration_ms: None,
     };
     let notification = ItemCompletedNotification { item };
     outgoing
@@ -765,42 +815,68 @@ async fn on_file_change_request_approval_response(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn on_command_execution_request_approval_response(
     event_id: String,
+    item_id: String,
+    command: String,
+    cwd: PathBuf,
+    command_actions: Vec<V2ParsedCommand>,
     receiver: oneshot::Receiver<JsonValue>,
     conversation: Arc<CodexConversation>,
+    outgoing: Arc<OutgoingMessageSender>,
 ) {
     let response = receiver.await;
-    let value = match response {
-        Ok(value) => value,
+    let (decision, completion_status) = match response {
+        Ok(value) => {
+            let response = serde_json::from_value::<CommandExecutionRequestApprovalResponse>(value)
+                .unwrap_or_else(|err| {
+                    error!("failed to deserialize CommandExecutionRequestApprovalResponse: {err}");
+                    CommandExecutionRequestApprovalResponse {
+                        decision: ApprovalDecision::Decline,
+                        accept_settings: None,
+                    }
+                });
+
+            let CommandExecutionRequestApprovalResponse {
+                decision,
+                accept_settings,
+            } = response;
+
+            let (decision, completion_status) = match (decision, accept_settings) {
+                (ApprovalDecision::Accept, Some(settings)) if settings.for_session => {
+                    (ReviewDecision::ApprovedForSession, None)
+                }
+                (ApprovalDecision::Accept, _) => (ReviewDecision::Approved, None),
+                (ApprovalDecision::Decline, _) => (
+                    ReviewDecision::Denied,
+                    Some(CommandExecutionStatus::Declined),
+                ),
+                (ApprovalDecision::Cancel, _) => (
+                    ReviewDecision::Abort,
+                    Some(CommandExecutionStatus::Declined),
+                ),
+            };
+            (decision, completion_status)
+        }
         Err(err) => {
             error!("request failed: {err:?}");
-            return;
+            (ReviewDecision::Denied, Some(CommandExecutionStatus::Failed))
         }
     };
 
-    let response = serde_json::from_value::<CommandExecutionRequestApprovalResponse>(value)
-        .unwrap_or_else(|err| {
-            error!("failed to deserialize CommandExecutionRequestApprovalResponse: {err}");
-            CommandExecutionRequestApprovalResponse {
-                decision: ApprovalDecision::Decline,
-                accept_settings: None,
-            }
-        });
+    if let Some(status) = completion_status {
+        complete_command_execution_item(
+            item_id.clone(),
+            command.clone(),
+            cwd.clone(),
+            command_actions.clone(),
+            status,
+            outgoing.as_ref(),
+        )
+        .await;
+    }
 
-    let CommandExecutionRequestApprovalResponse {
-        decision,
-        accept_settings,
-    } = response;
-
-    let decision = match (decision, accept_settings) {
-        (ApprovalDecision::Accept, Some(settings)) if settings.for_session => {
-            ReviewDecision::ApprovedForSession
-        }
-        (ApprovalDecision::Accept, _) => ReviewDecision::Approved,
-        (ApprovalDecision::Decline, _) => ReviewDecision::Denied,
-        (ApprovalDecision::Cancel, _) => ReviewDecision::Abort,
-    };
     if let Err(err) = conversation
         .submit(Op::ExecApproval {
             id: event_id,
@@ -899,7 +975,7 @@ mod tests {
             conversation_id,
             TurnError {
                 message: "boom".to_string(),
-                codex_error_code: Some(V2CodexErrorInfo::InternalServerError),
+                codex_error_info: Some(V2CodexErrorInfo::InternalServerError),
             },
             &turn_summary_store,
         )
@@ -910,7 +986,7 @@ mod tests {
             turn_summary.last_error,
             Some(TurnError {
                 message: "boom".to_string(),
-                codex_error_code: Some(V2CodexErrorInfo::InternalServerError),
+                codex_error_info: Some(V2CodexErrorInfo::InternalServerError),
             })
         );
         Ok(())
@@ -956,7 +1032,7 @@ mod tests {
             conversation_id,
             TurnError {
                 message: "oops".to_string(),
-                codex_error_code: None,
+                codex_error_info: None,
             },
             &turn_summary_store,
         )
@@ -996,7 +1072,7 @@ mod tests {
             conversation_id,
             TurnError {
                 message: "bad".to_string(),
-                codex_error_code: Some(V2CodexErrorInfo::Other),
+                codex_error_info: Some(V2CodexErrorInfo::Other),
             },
             &turn_summary_store,
         )
@@ -1024,7 +1100,7 @@ mod tests {
                     TurnStatus::Failed {
                         error: TurnError {
                             message: "bad".to_string(),
-                            codex_error_code: Some(V2CodexErrorInfo::Other),
+                            codex_error_info: Some(V2CodexErrorInfo::Other),
                         }
                     }
                 );
@@ -1079,7 +1155,7 @@ mod tests {
             conversation_a,
             TurnError {
                 message: "a1".to_string(),
-                codex_error_code: Some(V2CodexErrorInfo::BadRequest),
+                codex_error_info: Some(V2CodexErrorInfo::BadRequest),
             },
             &turn_summary_store,
         )
@@ -1098,7 +1174,7 @@ mod tests {
             conversation_b,
             TurnError {
                 message: "b1".to_string(),
-                codex_error_code: None,
+                codex_error_info: None,
             },
             &turn_summary_store,
         )
@@ -1134,7 +1210,7 @@ mod tests {
                     TurnStatus::Failed {
                         error: TurnError {
                             message: "a1".to_string(),
-                            codex_error_code: Some(V2CodexErrorInfo::BadRequest),
+                            codex_error_info: Some(V2CodexErrorInfo::BadRequest),
                         }
                     }
                 );
@@ -1155,7 +1231,7 @@ mod tests {
                     TurnStatus::Failed {
                         error: TurnError {
                             message: "b1".to_string(),
-                            codex_error_code: None,
+                            codex_error_info: None,
                         }
                     }
                 );

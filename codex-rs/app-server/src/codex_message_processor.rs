@@ -39,6 +39,7 @@ use codex_app_server_protocol::GetConversationSummaryResponse;
 use codex_app_server_protocol::GetUserAgentResponse;
 use codex_app_server_protocol::GetUserSavedConfigResponse;
 use codex_app_server_protocol::GitDiffToRemoteResponse;
+use codex_app_server_protocol::GitInfo as ApiGitInfo;
 use codex_app_server_protocol::InputItem as WireInputItem;
 use codex_app_server_protocol::InterruptConversationParams;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -92,7 +93,6 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInfoResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_app_server_protocol::UserSavedConfig;
-use codex_app_server_protocol::WindowsWorldWritableWarningNotification;
 use codex_app_server_protocol::build_turns_from_event_msgs;
 use codex_backend_client::Client as BackendClient;
 use codex_core::AuthManager;
@@ -131,7 +131,7 @@ use codex_protocol::ConversationId;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::GitInfo;
+use codex_protocol::protocol::GitInfo as CoreGitInfo;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionMetaLine;
@@ -1170,7 +1170,7 @@ impl CodexMessageProcessor {
         let exec_params = ExecParams {
             command: params.command,
             cwd,
-            timeout_ms,
+            expiration: timeout_ms.into(),
             env,
             with_escalated_permissions: None,
             justification: None,
@@ -1273,10 +1273,6 @@ impl CodexMessageProcessor {
                 return;
             }
         };
-        if cfg!(windows) && config.features.enabled(Feature::WindowsSandbox) {
-            self.handle_windows_world_writable_warning(config.cwd.clone())
-                .await;
-        }
 
         match self.conversation_manager.new_conversation(config).await {
             Ok(conversation_id) => {
@@ -1996,10 +1992,6 @@ impl CodexMessageProcessor {
                 return;
             }
         };
-        if cfg!(windows) && config.features.enabled(Feature::WindowsSandbox) {
-            self.handle_windows_world_writable_warning(config.cwd.clone())
-                .await;
-        }
 
         let conversation_history = if let Some(path) = path {
             match RolloutRecorder::get_rollout_history(&path).await {
@@ -2858,53 +2850,6 @@ impl CodexMessageProcessor {
             Err(_) => None,
         }
     }
-
-    /// On Windows, when using the experimental sandbox, we need to warn the user about world-writable directories.
-    async fn handle_windows_world_writable_warning(&self, cwd: PathBuf) {
-        if !cfg!(windows) {
-            return;
-        }
-
-        if !self.config.features.enabled(Feature::WindowsSandbox) {
-            return;
-        }
-
-        if !matches!(
-            self.config.sandbox_policy,
-            codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                | codex_protocol::protocol::SandboxPolicy::ReadOnly
-        ) {
-            return;
-        }
-
-        if self
-            .config
-            .notices
-            .hide_world_writable_warning
-            .unwrap_or(false)
-        {
-            return;
-        }
-
-        // This function is stubbed out to return None on non-Windows platforms
-        if let Some((sample_paths, extra_count, failed_scan)) =
-            codex_windows_sandbox::world_writable_warning_details(
-                self.config.codex_home.as_path(),
-                cwd,
-            )
-        {
-            tracing::warn!("world writable warning: {sample_paths:?} {extra_count} {failed_scan}");
-            self.outgoing
-                .send_server_notification(ServerNotification::WindowsWorldWritableWarning(
-                    WindowsWorldWritableWarningNotification {
-                        sample_paths,
-                        extra_count,
-                        failed_scan,
-                    },
-                ))
-                .await;
-        }
-    }
 }
 
 async fn derive_config_from_params(
@@ -2983,7 +2928,7 @@ fn extract_conversation_summary(
     path: PathBuf,
     head: &[serde_json::Value],
     session_meta: &SessionMeta,
-    git: Option<&GitInfo>,
+    git: Option<&CoreGitInfo>,
     fallback_provider: &str,
 ) -> Option<ConversationSummary> {
     let preview = head
@@ -3024,7 +2969,7 @@ fn extract_conversation_summary(
     })
 }
 
-fn map_git_info(git_info: &GitInfo) -> ConversationGitInfo {
+fn map_git_info(git_info: &CoreGitInfo) -> ConversationGitInfo {
     ConversationGitInfo {
         sha: git_info.commit_hash.clone(),
         branch: git_info.branch.clone(),
@@ -3047,10 +2992,18 @@ fn summary_to_thread(summary: ConversationSummary) -> Thread {
         preview,
         timestamp,
         model_provider,
-        ..
+        cwd,
+        cli_version,
+        source,
+        git_info,
     } = summary;
 
     let created_at = parse_datetime(timestamp.as_deref());
+    let git_info = git_info.map(|info| ApiGitInfo {
+        sha: info.sha,
+        branch: info.branch,
+        origin_url: info.origin_url,
+    });
 
     Thread {
         id: conversation_id.to_string(),
@@ -3058,6 +3011,10 @@ fn summary_to_thread(summary: ConversationSummary) -> Thread {
         model_provider,
         created_at: created_at.map(|dt| dt.timestamp()).unwrap_or(0),
         path,
+        cwd,
+        cli_version,
+        source: source.into(),
+        git_info,
         turns: Vec::new(),
     }
 }

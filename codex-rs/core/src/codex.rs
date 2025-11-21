@@ -543,7 +543,6 @@ impl Session {
             config.model_reasoning_effort,
             config.model_reasoning_summary,
             config.model_context_window,
-            config.model_max_output_tokens,
             config.model_auto_compact_token_limit,
             config.approval_policy,
             config.sandbox_policy.clone(),
@@ -1191,12 +1190,12 @@ impl Session {
         message: impl Into<String>,
         codex_error: CodexErr,
     ) {
-        let codex_error_code = CodexErrorInfo::ResponseStreamDisconnected {
+        let codex_error_info = CodexErrorInfo::ResponseStreamDisconnected {
             http_status_code: codex_error.http_status_code_value(),
         };
         let event = EventMsg::StreamError(StreamErrorEvent {
             message: message.into(),
-            codex_error_code: Some(codex_error_code),
+            codex_error_info: Some(codex_error_info),
         });
         self.send_event(turn_context, event).await;
     }
@@ -1689,7 +1688,7 @@ mod handlers {
                 id: sub_id.clone(),
                 msg: EventMsg::Error(ErrorEvent {
                     message: "Failed to shutdown rollout recorder".to_string(),
-                    codex_error_code: Some(CodexErrorInfo::Other),
+                    codex_error_info: Some(CodexErrorInfo::Other),
                 }),
             };
             sess.send_event_raw(event).await;
@@ -3051,6 +3050,7 @@ mod tests {
         let session = Arc::new(session);
         let mut turn_context = Arc::new(turn_context_raw);
 
+        let timeout_ms = 1000;
         let params = ExecParams {
             command: if cfg!(windows) {
                 vec![
@@ -3066,7 +3066,7 @@ mod tests {
                 ]
             },
             cwd: turn_context.cwd.clone(),
-            timeout_ms: Some(1000),
+            expiration: timeout_ms.into(),
             env: HashMap::new(),
             with_escalated_permissions: Some(true),
             justification: Some("test".to_string()),
@@ -3075,7 +3075,12 @@ mod tests {
 
         let params2 = ExecParams {
             with_escalated_permissions: Some(false),
-            ..params.clone()
+            command: params.command.clone(),
+            cwd: params.cwd.clone(),
+            expiration: timeout_ms.into(),
+            env: HashMap::new(),
+            justification: params.justification.clone(),
+            arg0: None,
         };
 
         let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
@@ -3095,7 +3100,7 @@ mod tests {
                     arguments: serde_json::json!({
                         "command": params.command.clone(),
                         "workdir": Some(turn_context.cwd.to_string_lossy().to_string()),
-                        "timeout_ms": params.timeout_ms,
+                        "timeout_ms": params.expiration.timeout_ms(),
                         "with_escalated_permissions": params.with_escalated_permissions,
                         "justification": params.justification.clone(),
                     })
@@ -3132,7 +3137,7 @@ mod tests {
                     arguments: serde_json::json!({
                         "command": params2.command.clone(),
                         "workdir": Some(turn_context.cwd.to_string_lossy().to_string()),
-                        "timeout_ms": params2.timeout_ms,
+                        "timeout_ms": params2.expiration.timeout_ms(),
                         "with_escalated_permissions": params2.with_escalated_permissions,
                         "justification": params2.justification.clone(),
                     })
