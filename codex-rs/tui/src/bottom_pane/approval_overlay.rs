@@ -386,21 +386,18 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 request_id,
                 message,
             } => {
-                let mut header: Vec<Box<dyn Renderable>> = Vec::new();
-                header.push(Box::new(Line::from(vec![
-                    "Server: ".into(),
-                    server_name.clone().bold(),
-                ])));
-                header.push(Box::new(Line::from("")));
-                header.push(Box::new(
-                    Paragraph::new(Line::from(message.clone())).wrap(Wrap { trim: false }),
-                ));
+                let header = Paragraph::new(vec![
+                    Line::from(vec!["Server: ".into(), server_name.clone().bold()]),
+                    Line::from(""),
+                    Line::from(message),
+                ])
+                .wrap(Wrap { trim: false });
                 Self {
                     variant: ApprovalVariant::Elicitation {
                         server_name,
                         request_id,
                     },
-                    header: Box::new(ColumnRenderable::with(header)),
+                    header: Box::new(header),
                 }
             }
         }
@@ -444,7 +441,7 @@ enum ApprovalVariant {
     },
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum ApprovalDecision {
     Review(ReviewDecision),
     Elicitation(ElicitationDecision),

@@ -59,6 +59,8 @@ pub struct ElicitationRequestEvent {
     pub server_name: String,
     pub id: RequestId,
     pub message: String,
+    // TODO: MCP servers can request we fill out a schema for the elicitation. We don't support
+    // this yet.
     // pub requested_schema: ElicitRequestParamsRequestedSchema,
 }
 
