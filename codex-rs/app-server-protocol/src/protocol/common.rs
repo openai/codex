@@ -242,6 +242,10 @@ client_request_definitions! {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         response: v1::GetUserSavedConfigResponse,
     },
+    GetMcpServersConfig {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: v2::GetMcpServersConfigResponse,
+    },
     SetDefaultModel {
         params: v1::SetDefaultModelParams,
         response: v1::SetDefaultModelResponse,

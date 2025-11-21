@@ -213,6 +213,55 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct GetMcpServersConfigResponse {
+    pub servers: HashMap<String, McpServerConfig>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", tag = "type")]
+#[ts(export_to = "v2/")]
+pub enum McpServerTransportConfig {
+    Stdio {
+        command: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        args: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        env: Option<HashMap<String, String>>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        env_vars: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<PathBuf>,
+    },
+    StreamableHttp {
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bearer_token_env_var: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        http_headers: Option<HashMap<String, String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        env_http_headers: Option<HashMap<String, String>>,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpServerConfig {
+    pub transport: McpServerTransportConfig,
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub startup_timeout_sec: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_timeout_sec: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled_tools: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disabled_tools: Option<Vec<String>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct SandboxCommandAssessment {
     pub description: String,
     pub risk_level: CommandRiskLevel,

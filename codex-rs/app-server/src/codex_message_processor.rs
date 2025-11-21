@@ -36,6 +36,7 @@ use codex_app_server_protocol::GetAuthStatusParams;
 use codex_app_server_protocol::GetAuthStatusResponse;
 use codex_app_server_protocol::GetConversationSummaryParams;
 use codex_app_server_protocol::GetConversationSummaryResponse;
+use codex_app_server_protocol::GetMcpServersConfigResponse;
 use codex_app_server_protocol::GetUserAgentResponse;
 use codex_app_server_protocol::GetUserSavedConfigResponse;
 use codex_app_server_protocol::GitDiffToRemoteResponse;
@@ -52,6 +53,8 @@ use codex_app_server_protocol::LoginChatGptCompleteNotification;
 use codex_app_server_protocol::LoginChatGptResponse;
 use codex_app_server_protocol::LogoutAccountResponse;
 use codex_app_server_protocol::LogoutChatGptResponse;
+use codex_app_server_protocol::McpServerConfig as WireMcpServerConfig;
+use codex_app_server_protocol::McpServerTransportConfig as WireMcpServerTransportConfig;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::NewConversationParams;
@@ -110,6 +113,8 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
 use codex_core::config::edit::ConfigEditsBuilder;
+use codex_core::config::types::McpServerConfig as CoreMcpServerConfig;
+use codex_core::config::types::McpServerTransportConfig as CoreMcpServerTransportConfig;
 use codex_core::config_loader::load_config_as_toml;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::exec::ExecParams;
@@ -450,6 +455,12 @@ impl CodexMessageProcessor {
                 params: _,
             } => {
                 self.get_user_saved_config(request_id).await;
+            }
+            ClientRequest::GetMcpServersConfig {
+                request_id,
+                params: _,
+            } => {
+                self.get_mcp_servers_config(request_id).await;
             }
             ClientRequest::SetDefaultModel { request_id, params } => {
                 self.set_default_model(request_id, params).await;
@@ -1113,6 +1124,17 @@ impl CodexMessageProcessor {
         let response = GetUserSavedConfigResponse {
             config: user_saved_config,
         };
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn get_mcp_servers_config(&self, request_id: RequestId) {
+        let servers = self
+            .config
+            .mcp_servers
+            .iter()
+            .map(|(name, server)| (name.clone(), to_wire_mcp_server_config(server)))
+            .collect();
+        let response = GetMcpServersConfigResponse { servers };
         self.outgoing.send_response(request_id, response).await;
     }
 
@@ -2845,6 +2867,48 @@ impl CodexMessageProcessor {
             Err(_) => None,
         }
     }
+}
+
+fn to_wire_mcp_server_config(config: &CoreMcpServerConfig) -> WireMcpServerConfig {
+    let transport = match &config.transport {
+        CoreMcpServerTransportConfig::Stdio {
+            command,
+            args,
+            env,
+            env_vars,
+            cwd,
+        } => WireMcpServerTransportConfig::Stdio {
+            command: command.clone(),
+            args: args.clone(),
+            env: env.clone(),
+            env_vars: env_vars.clone(),
+            cwd: cwd.clone(),
+        },
+        CoreMcpServerTransportConfig::StreamableHttp {
+            url,
+            bearer_token_env_var,
+            http_headers,
+            env_http_headers,
+        } => WireMcpServerTransportConfig::StreamableHttp {
+            url: url.clone(),
+            bearer_token_env_var: bearer_token_env_var.clone(),
+            http_headers: http_headers.clone(),
+            env_http_headers: env_http_headers.clone(),
+        },
+    };
+
+    WireMcpServerConfig {
+        transport,
+        enabled: config.enabled,
+        startup_timeout_sec: config.startup_timeout_sec.and_then(duration_to_seconds),
+        tool_timeout_sec: config.tool_timeout_sec.and_then(duration_to_seconds),
+        enabled_tools: config.enabled_tools.clone(),
+        disabled_tools: config.disabled_tools.clone(),
+    }
+}
+
+fn duration_to_seconds(duration: Duration) -> Option<i64> {
+    i64::try_from(duration.as_secs()).ok()
 }
 
 async fn derive_config_from_params(
