@@ -127,6 +127,7 @@ pub(crate) async fn append_allow_prefix_rule_and_update(
         .add_prefix_rule(prefix, Decision::Allow)?;
 
     Ok(())
+    Ok(())
 }
 
 fn requirement_from_decision(
@@ -463,6 +464,20 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             "hello".to_string(),
             "world".to_string(),
         ]);
+=======
+    #[test]
+    fn append_allow_prefix_rule_updates_policy_and_file() {
+        let codex_home = tempdir().expect("create temp dir");
+        let current_policy = Arc::new(Policy::empty());
+        let prefix = vec!["echo".to_string(), "hello".to_string()];
+
+        let updated_policy =
+            append_allow_prefix_rule_and_update(codex_home.path(), current_policy, &prefix)
+                .expect("update policy");
+
+        let evaluation =
+            updated_policy.check(&["echo".to_string(), "hello".to_string(), "world".to_string()]);
+>>>>>>> 8fb06a9d5 (mutating in memory policy instead of reloading)
         assert!(matches!(
             evaluation,
             Evaluation::Match {
