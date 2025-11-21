@@ -64,6 +64,8 @@ codex-apply-patch = { path = "apply-patch" }
 codex-arg0 = { path = "arg0" }
 codex-async-utils = { path = "async-utils" }
 codex-backend-client = { path = "backend-client" }
+codex-api = { path = "codex-api" }
+codex-client = { path = "codex-client" }
 codex-chatgpt = { path = "chatgpt" }
 codex-common = { path = "common" }
 codex-core = { path = "core" }
@@ -91,7 +93,6 @@ codex-utils-json-to-toml = { path = "utils/json-to-toml" }
 codex-utils-pty = { path = "utils/pty" }
 codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-string = { path = "utils/string" }
-codex-utils-tokenizer = { path = "utils/tokenizer" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
 mcp-types = { path = "mcp-types" }
@@ -111,6 +112,7 @@ async-trait = "0.1.89"
 axum = { version = "0.8", default-features = false }
 base64 = "0.22.1"
 bytes = "1.10.1"
+chardetng = "0.1.17"
 chrono = "0.4.42"
 clap = "4"
 clap_complete = "4"
@@ -122,6 +124,7 @@ diffy = "0.4.2"
 dirs = "6"
 dotenvy = "0.15.7"
 dunce = "1.0.4"
+encoding_rs = "0.8.35"
 env-flags = "0.1.1"
 env_logger = "0.11.5"
 escargot = "0.5"
@@ -189,7 +192,6 @@ tempfile = "3.23.0"
 test-log = "0.2.18"
 textwrap = "0.16.2"
 thiserror = "2.0.17"
-tiktoken-rs = "0.9"
 time = "0.3"
 tiny_http = "0.12"
 tokio = "1"
@@ -267,7 +269,6 @@ ignored = [
     "icu_provider",
     "openssl-sys",
     "codex-utils-readiness",
-    "codex-utils-tokenizer",
 ]
 
 [profile.release]
