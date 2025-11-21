@@ -572,6 +572,7 @@ async fn emit_tool_call_begin(
             turn,
             EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
                 call_id: call_id.to_string(),
+                turn_id: turn.sub_id.clone(),
                 invocation,
             }),
         )
@@ -591,6 +592,7 @@ async fn emit_tool_call_end(
             turn,
             EventMsg::McpToolCallEnd(McpToolCallEndEvent {
                 call_id: call_id.to_string(),
+                turn_id: turn.sub_id.clone(),
                 invocation,
                 duration,
                 result,

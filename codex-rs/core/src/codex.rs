@@ -1803,6 +1803,8 @@ async fn spawn_review_thread(
         text: review_prompt,
     }];
     let tc = Arc::new(review_turn_context);
+    let mut review_request = review_request;
+    review_request.turn_id = tc.sub_id.clone();
     sess.spawn_task(
         tc.clone(),
         input,

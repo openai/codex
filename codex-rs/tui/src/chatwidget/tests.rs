@@ -155,6 +155,7 @@ fn entered_review_mode_uses_request_hint() {
             prompt: "Review the latest changes".to_string(),
             user_facing_hint: "feature branch".to_string(),
             append_to_original_thread: true,
+            turn_id: String::new(),
         }),
     });
 
@@ -175,6 +176,7 @@ fn entered_review_mode_defaults_to_current_changes_banner() {
             prompt: "Review the current changes".to_string(),
             user_facing_hint: "current changes".to_string(),
             append_to_original_thread: true,
+            turn_id: String::new(),
         }),
     });
 
@@ -209,6 +211,7 @@ fn exited_review_mode_emits_results_and_finishes() {
     chat.handle_codex_event(Event {
         id: "review-end".into(),
         msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            turn_id: String::new(),
             review_output: Some(review),
         }),
     });
@@ -243,6 +246,7 @@ fn review_restores_context_window_indicator() {
             prompt: "Review the latest changes".to_string(),
             user_facing_hint: "feature branch".to_string(),
             append_to_original_thread: true,
+            turn_id: String::new(),
         }),
     });
 
@@ -258,6 +262,7 @@ fn review_restores_context_window_indicator() {
     chat.handle_codex_event(Event {
         id: "review-end".into(),
         msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            turn_id: String::new(),
             review_output: None,
         }),
     });

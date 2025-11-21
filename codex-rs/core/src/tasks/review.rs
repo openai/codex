@@ -229,7 +229,10 @@ pub(crate) async fn exit_review_mode(
     session
         .send_event(
             ctx.as_ref(),
-            EventMsg::ExitedReviewMode(ExitedReviewModeEvent { review_output }),
+            EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+                turn_id: ctx.sub_id.clone(),
+                review_output,
+            }),
         )
         .await;
 }

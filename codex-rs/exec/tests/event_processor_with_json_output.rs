@@ -261,6 +261,7 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
         "m1",
         EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
             call_id: "call-1".to_string(),
+            turn_id: "turn-1".to_string(),
             invocation: invocation.clone(),
         }),
     );
@@ -286,6 +287,7 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
         "m2",
         EventMsg::McpToolCallEnd(McpToolCallEndEvent {
             call_id: "call-1".to_string(),
+            turn_id: "turn-1".to_string(),
             invocation,
             duration: Duration::from_secs(1),
             result: Ok(CallToolResult {
@@ -330,6 +332,7 @@ fn mcp_tool_call_failure_sets_failed_status() {
         "m3",
         EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
             call_id: "call-2".to_string(),
+            turn_id: "turn-2".to_string(),
             invocation: invocation.clone(),
         }),
     );
@@ -339,6 +342,7 @@ fn mcp_tool_call_failure_sets_failed_status() {
         "m4",
         EventMsg::McpToolCallEnd(McpToolCallEndEvent {
             call_id: "call-2".to_string(),
+            turn_id: "turn-2".to_string(),
             invocation,
             duration: Duration::from_millis(5),
             result: Err("tool exploded".to_string()),
@@ -378,6 +382,7 @@ fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
         "m5",
         EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
             call_id: "call-3".to_string(),
+            turn_id: "turn-3".to_string(),
             invocation: invocation.clone(),
         }),
     );
@@ -403,6 +408,7 @@ fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
         "m6",
         EventMsg::McpToolCallEnd(McpToolCallEndEvent {
             call_id: "call-3".to_string(),
+            turn_id: "turn-3".to_string(),
             invocation,
             duration: Duration::from_millis(10),
             result: Ok(CallToolResult {

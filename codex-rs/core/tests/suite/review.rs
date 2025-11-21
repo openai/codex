@@ -83,6 +83,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
                 prompt: "Please review my changes".to_string(),
                 user_facing_hint: "my changes".to_string(),
                 append_to_original_thread: true,
+                turn_id: String::new(),
             },
         })
         .await
@@ -180,6 +181,7 @@ async fn review_op_with_plain_text_emits_review_fallback() {
                 prompt: "Plain text review".to_string(),
                 user_facing_hint: "plain text review".to_string(),
                 append_to_original_thread: true,
+                turn_id: String::new(),
             },
         })
         .await
@@ -239,6 +241,7 @@ async fn review_filters_agent_message_related_events() {
                 prompt: "Filter streaming events".to_string(),
                 user_facing_hint: "Filter streaming events".to_string(),
                 append_to_original_thread: true,
+                turn_id: String::new(),
             },
         })
         .await
@@ -324,6 +327,7 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
                 prompt: "check structured".to_string(),
                 user_facing_hint: "check structured".to_string(),
                 append_to_original_thread: true,
+                turn_id: String::new(),
             },
         })
         .await
@@ -378,6 +382,7 @@ async fn review_uses_custom_review_model_from_config() {
                 prompt: "use custom model".to_string(),
                 user_facing_hint: "use custom model".to_string(),
                 append_to_original_thread: true,
+                turn_id: String::new(),
             },
         })
         .await
@@ -389,7 +394,8 @@ async fn review_uses_custom_review_model_from_config() {
         matches!(
             ev,
             EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
-                review_output: None
+                review_output: None,
+                ..
             })
         )
     })
@@ -496,6 +502,7 @@ async fn review_input_isolated_from_parent_history() {
                 prompt: review_prompt.clone(),
                 user_facing_hint: review_prompt.clone(),
                 append_to_original_thread: true,
+                turn_id: String::new(),
             },
         })
         .await
@@ -506,7 +513,8 @@ async fn review_input_isolated_from_parent_history() {
         matches!(
             ev,
             EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
-                review_output: None
+                review_output: None,
+                ..
             })
         )
     })
@@ -609,6 +617,7 @@ async fn review_history_does_not_leak_into_parent_session() {
                 prompt: "Start a review".to_string(),
                 user_facing_hint: "Start a review".to_string(),
                 append_to_original_thread: true,
+                turn_id: String::new(),
             },
         })
         .await
@@ -618,7 +627,8 @@ async fn review_history_does_not_leak_into_parent_session() {
         matches!(
             ev,
             EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
-                review_output: Some(_)
+                review_output: Some(_),
+                ..
             })
         )
     })

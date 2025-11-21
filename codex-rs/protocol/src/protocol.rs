@@ -707,6 +707,8 @@ impl HasLegacyEvent for EventMsg {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ExitedReviewModeEvent {
+    #[serde(default)]
+    pub turn_id: String,
     pub review_output: Option<ReviewOutputEvent>,
 }
 
@@ -1002,6 +1004,8 @@ pub struct McpInvocation {
 pub struct McpToolCallBeginEvent {
     /// Identifier so this can be paired with the McpToolCallEnd event.
     pub call_id: String,
+    #[serde(default)]
+    pub turn_id: String,
     pub invocation: McpInvocation,
 }
 
@@ -1009,6 +1013,8 @@ pub struct McpToolCallBeginEvent {
 pub struct McpToolCallEndEvent {
     /// Identifier for the corresponding McpToolCallBegin that finished.
     pub call_id: String,
+    #[serde(default)]
+    pub turn_id: String,
     pub invocation: McpInvocation,
     #[ts(type = "string")]
     pub duration: Duration,
@@ -1219,6 +1225,8 @@ pub struct ReviewRequest {
     pub user_facing_hint: String,
     #[serde(default)]
     pub append_to_original_thread: bool,
+    #[serde(default)]
+    pub turn_id: String,
 }
 
 /// Structured review result produced by a child review session.
