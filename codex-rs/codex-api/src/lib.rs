@@ -23,6 +23,7 @@ pub use crate::endpoint::chat::AggregateStreamExt;
 pub use crate::endpoint::chat::ChatClient;
 pub use crate::endpoint::compact::CompactClient;
 pub use crate::endpoint::responses::ResponsesClient;
+pub use crate::endpoint::responses::ResponsesOptions;
 pub use crate::error::ApiError;
 pub use crate::provider::Provider;
 pub use crate::provider::WireApi;

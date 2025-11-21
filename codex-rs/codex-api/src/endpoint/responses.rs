@@ -22,6 +22,17 @@ pub struct ResponsesClient<T: HttpTransport, A: AuthProvider> {
     streaming: StreamingClient<T, A>,
 }
 
+#[derive(Default)]
+pub struct ResponsesOptions {
+    pub reasoning: Option<Reasoning>,
+    pub include: Vec<String>,
+    pub prompt_cache_key: Option<String>,
+    pub text: Option<TextControls>,
+    pub store_override: Option<bool>,
+    pub conversation_id: Option<String>,
+    pub session_source: Option<SessionSource>,
+}
+
 impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
     pub fn new(transport: T, provider: Provider, auth: A) -> Self {
         Self {
@@ -50,14 +61,18 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         &self,
         model: &str,
         prompt: &ApiPrompt,
-        reasoning: Option<Reasoning>,
-        include: Vec<String>,
-        prompt_cache_key: Option<String>,
-        text: Option<TextControls>,
-        store_override: Option<bool>,
-        conversation_id: Option<String>,
-        session_source: Option<SessionSource>,
+        options: ResponsesOptions,
     ) -> Result<ResponseStream, ApiError> {
+        let ResponsesOptions {
+            reasoning,
+            include,
+            prompt_cache_key,
+            text,
+            store_override,
+            conversation_id,
+            session_source,
+        } = options;
+
         let request = ResponsesRequestBuilder::new(model, &prompt.instructions, &prompt.input)
             .tools(&prompt.tools)
             .parallel_tool_calls(prompt.parallel_tool_calls)

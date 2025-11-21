@@ -9,6 +9,7 @@ use codex_protocol::models::ResponseItem;
 use eventsource_stream::Eventsource;
 use futures::Stream;
 use futures::StreamExt;
+use std::collections::HashMap;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
@@ -38,15 +39,14 @@ pub async fn process_chat_sse<S>(
 {
     let mut stream = stream.eventsource();
 
-    #[derive(Default)]
-    struct FunctionCallState {
+    #[derive(Default, Debug)]
+    struct ToolCallState {
         name: Option<String>,
         arguments: String,
-        call_id: Option<String>,
-        active: bool,
     }
 
-    let mut fn_call_state = FunctionCallState::default();
+    let mut tool_calls: HashMap<String, ToolCallState> = HashMap::new();
+    let mut tool_call_order: Vec<String> = Vec::new();
     let mut assistant_item: Option<ResponseItem> = None;
     let mut reasoning_item: Option<ResponseItem> = None;
     let mut completed_sent = false;
@@ -99,8 +99,7 @@ pub async fn process_chat_sse<S>(
             continue;
         }
 
-        let cooked = sse.data.replace("\\", "\\\\");
-        let value: serde_json::Value = match serde_json::from_str(&cooked) {
+        let value: serde_json::Value = match serde_json::from_str(&sse.data) {
             Ok(val) => val,
             Err(err) => {
                 debug!(
@@ -148,29 +147,28 @@ pub async fn process_chat_sse<S>(
                     }
                 }
 
-                if let Some(tool_calls) = delta.get("tool_calls").and_then(|c| c.as_array()) {
-                    for tool_call in tool_calls {
-                        let mut name = None;
+                if let Some(tool_call_values) = delta.get("tool_calls").and_then(|c| c.as_array()) {
+                    for tool_call in tool_call_values {
+                        let id = tool_call
+                            .get("id")
+                            .and_then(|i| i.as_str())
+                            .map(str::to_string)
+                            .unwrap_or_else(|| format!("tool-call-{}", tool_call_order.len()));
+
+                        let call_state = tool_calls.entry(id.clone()).or_default();
+                        if !tool_call_order.contains(&id) {
+                            tool_call_order.push(id.clone());
+                        }
+
                         if let Some(func) = tool_call.get("function") {
-                            name = func
-                                .get("name")
-                                .and_then(|n| n.as_str())
-                                .map(str::to_string);
+                            if let Some(fname) = func.get("name").and_then(|n| n.as_str()) {
+                                call_state.name = Some(fname.to_string());
+                            }
+                            if let Some(arguments) = func.get("arguments").and_then(|a| a.as_str())
+                            {
+                                call_state.arguments.push_str(arguments);
+                            }
                         }
-                        if let Some(id) = tool_call.get("id").and_then(|i| i.as_str()) {
-                            fn_call_state.call_id = Some(id.to_string());
-                        }
-                        if let Some(arguments) = tool_call
-                            .get("function")
-                            .and_then(|f| f.get("arguments"))
-                            .and_then(|a| a.as_str())
-                        {
-                            fn_call_state.arguments.push_str(arguments);
-                        }
-                        if let Some(fname) = name {
-                            fn_call_state.name = Some(fname);
-                        }
-                        fn_call_state.active = true;
                     }
                 }
             }
@@ -224,18 +222,16 @@ pub async fn process_chat_sse<S>(
                         .await;
                 }
 
-                let Some(call_id) = fn_call_state.call_id.take() else {
-                    continue;
-                };
-
-                let item = ResponseItem::FunctionCall {
-                    id: None,
-                    name: fn_call_state.name.take().unwrap_or_default(),
-                    arguments: fn_call_state.arguments.clone(),
-                    call_id,
-                };
-                fn_call_state = FunctionCallState::default();
-                let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
+                for call_id in tool_call_order.drain(..) {
+                    let state = tool_calls.remove(&call_id).unwrap_or_default();
+                    let item = ResponseItem::FunctionCall {
+                        id: None,
+                        name: state.name.unwrap_or_default(),
+                        arguments: state.arguments,
+                        call_id: call_id.clone(),
+                    };
+                    let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
+                }
             }
         }
     }
@@ -298,5 +294,211 @@ async fn append_reasoning_text(
                 content_index,
             }))
             .await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use assert_matches::assert_matches;
+    use codex_protocol::models::ResponseItem;
+    use futures::TryStreamExt;
+    use serde_json::json;
+    use tokio::sync::mpsc;
+    use tokio_util::io::ReaderStream;
+
+    fn build_body(events: &[serde_json::Value]) -> String {
+        let mut body = String::new();
+        for e in events {
+            body.push_str(&format!("event: message\ndata: {e}\n\n"));
+        }
+        body
+    }
+
+    async fn collect_events(body: &str) -> Vec<ResponseEvent> {
+        let reader = ReaderStream::new(std::io::Cursor::new(body.to_string()))
+            .map_err(|err| codex_client::TransportError::Network(err.to_string()));
+        let (tx, mut rx) = mpsc::channel::<Result<ResponseEvent, ApiError>>(16);
+        tokio::spawn(process_chat_sse(
+            reader,
+            tx,
+            Duration::from_millis(1000),
+            None,
+        ));
+
+        let mut out = Vec::new();
+        while let Some(ev) = rx.recv().await {
+            out.push(ev.expect("stream error"));
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn emits_multiple_tool_calls() {
+        let delta_a = json!({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "id": "call_a",
+                        "function": { "name": "do_a", "arguments": "{\"foo\":1}" }
+                    }]
+                }
+            }]
+        });
+
+        let delta_b = json!({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "id": "call_b",
+                        "function": { "name": "do_b", "arguments": "{\"bar\":2}" }
+                    }]
+                }
+            }]
+        });
+
+        let finish = json!({
+            "choices": [{
+                "finish_reason": "tool_calls"
+            }]
+        });
+
+        let body = build_body(&[delta_a, delta_b, finish]);
+        let events = collect_events(&body).await;
+        assert_eq!(events.len(), 3);
+
+        assert_matches!(
+            &events[0],
+            ResponseEvent::OutputItemDone(ResponseItem::FunctionCall { call_id, name, arguments, .. })
+            if call_id == "call_a" && name == "do_a" && arguments == "{\"foo\":1}"
+        );
+        assert_matches!(
+            &events[1],
+            ResponseEvent::OutputItemDone(ResponseItem::FunctionCall { call_id, name, arguments, .. })
+            if call_id == "call_b" && name == "do_b" && arguments == "{\"bar\":2}"
+        );
+        assert_matches!(events[2], ResponseEvent::Completed { .. });
+    }
+
+    #[tokio::test]
+    async fn concatenates_tool_call_arguments_across_deltas() {
+        let delta_name = json!({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "id": "call_a",
+                        "function": { "name": "do_a" }
+                    }]
+                }
+            }]
+        });
+
+        let delta_args_1 = json!({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "id": "call_a",
+                        "function": { "arguments": "{ \"foo\":" }
+                    }]
+                }
+            }]
+        });
+
+        let delta_args_2 = json!({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "id": "call_a",
+                        "function": { "arguments": "1}" }
+                    }]
+                }
+            }]
+        });
+
+        let finish = json!({
+            "choices": [{
+                "finish_reason": "tool_calls"
+            }]
+        });
+
+        let body = build_body(&[delta_name, delta_args_1, delta_args_2, finish]);
+        let events = collect_events(&body).await;
+        assert_matches!(
+            &events[..],
+            [
+                ResponseEvent::OutputItemDone(ResponseItem::FunctionCall { call_id, name, arguments, .. }),
+                ResponseEvent::Completed { .. }
+            ] if call_id == "call_a" && name == "do_a" && arguments == "{ \"foo\":1}"
+        );
+    }
+
+    #[tokio::test]
+    async fn emits_tool_calls_even_when_content_and_reasoning_present() {
+        let delta_content_and_tools = json!({
+            "choices": [{
+                "delta": {
+                    "content": [{"text": "hi"}],
+                    "reasoning": "because",
+                    "tool_calls": [{
+                        "id": "call_a",
+                        "function": { "name": "do_a", "arguments": "{}" }
+                    }]
+                }
+            }]
+        });
+
+        let finish = json!({
+            "choices": [{
+                "finish_reason": "tool_calls"
+            }]
+        });
+
+        let body = build_body(&[delta_content_and_tools, finish]);
+        let events = collect_events(&body).await;
+
+        assert_matches!(
+            &events[..],
+            [
+                ResponseEvent::OutputItemAdded(ResponseItem::Reasoning { .. }),
+                ResponseEvent::ReasoningContentDelta { .. },
+                ResponseEvent::OutputItemAdded(ResponseItem::Message { .. }),
+                ResponseEvent::OutputTextDelta(delta),
+                ResponseEvent::OutputItemDone(ResponseItem::Reasoning { .. }),
+                ResponseEvent::OutputItemDone(ResponseItem::FunctionCall { call_id, name, .. }),
+                ResponseEvent::OutputItemDone(ResponseItem::Message { .. }),
+                ResponseEvent::Completed { .. }
+            ] if delta == "hi" && call_id == "call_a" && name == "do_a"
+        );
+    }
+
+    #[tokio::test]
+    async fn drops_partial_tool_calls_on_stop_finish_reason() {
+        let delta_tool = json!({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "id": "call_a",
+                        "function": { "name": "do_a", "arguments": "{}" }
+                    }]
+                }
+            }]
+        });
+
+        let finish_stop = json!({
+            "choices": [{
+                "finish_reason": "stop"
+            }]
+        });
+
+        let body = build_body(&[delta_tool, finish_stop]);
+        let events = collect_events(&body).await;
+
+        assert!(!events.iter().any(|ev| {
+            matches!(
+                ev,
+                ResponseEvent::OutputItemDone(ResponseItem::FunctionCall { .. })
+            )
+        }));
+        assert_matches!(events.last(), Some(ResponseEvent::Completed { .. }));
     }
 }

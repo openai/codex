@@ -12,6 +12,7 @@ use codex_api::Prompt as ApiPrompt;
 use codex_api::RequestTelemetry;
 use codex_api::ResponseStream as ApiResponseStream;
 use codex_api::ResponsesClient as ApiResponsesClient;
+use codex_api::ResponsesOptions as ApiResponsesOptions;
 use codex_api::SseTelemetry;
 use codex_api::TransportError;
 use codex_api::common::Reasoning;
@@ -252,18 +253,18 @@ impl ModelClient {
             let client = ApiResponsesClient::new(transport, api_provider, api_auth)
                 .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
 
+            let options = ApiResponsesOptions {
+                reasoning: reasoning.clone(),
+                include: include.clone(),
+                prompt_cache_key: Some(conversation_id.clone()),
+                text: text.clone(),
+                store_override: None,
+                conversation_id: Some(conversation_id.clone()),
+                session_source: Some(session_source.clone()),
+            };
+
             let stream_result = client
-                .stream_prompt(
-                    &self.config.model,
-                    &api_prompt,
-                    reasoning.clone(),
-                    include.clone(),
-                    Some(conversation_id.clone()),
-                    text.clone(),
-                    None,
-                    Some(conversation_id.clone()),
-                    Some(session_source.clone()),
-                )
+                .stream_prompt(&self.config.model, &api_prompt, options)
                 .await;
 
             match stream_result {
