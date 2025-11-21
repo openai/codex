@@ -121,4 +121,18 @@ async fn model_selects_expected_tools() {
         ],
         "gpt-5.1 should expose the apply_patch tool",
     );
+    let exp_tools = collect_tool_identifiers_for_model("exp-5.1").await;
+    assert_eq!(
+        exp_tools,
+        vec![
+            "shell_command".to_string(),
+            "list_mcp_resources".to_string(),
+            "list_mcp_resource_templates".to_string(),
+            "read_mcp_resource".to_string(),
+            "update_plan".to_string(),
+            "apply_patch".to_string(),
+            "view_image".to_string()
+        ],
+        "exp-5.1 should expose the apply_patch tool",
+    );
 }

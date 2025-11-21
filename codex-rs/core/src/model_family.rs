@@ -183,7 +183,7 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             base_instructions: BASE_INSTRUCTIONS.to_string(),
             default_reasoning_effort: Some(ReasoningEffort::Medium),
             truncation_policy: TruncationPolicy::Bytes(10_000),
-            shell_type: ConfigShellToolType::ShellCommand,
+            shell_type: ConfigShellToolType::UnifiedExec,
             supports_parallel_tool_calls: true,
         )
 
