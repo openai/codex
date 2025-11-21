@@ -2,10 +2,14 @@ use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout;
 use app_test_support::to_response;
+use codex_app_server_protocol::GitInfo as ApiGitInfo;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
+use codex_protocol::protocol::GitInfo as CoreGitInfo;
+use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -24,7 +28,7 @@ async fn thread_list_basic_empty() -> Result<()> {
         .send_thread_list_request(ThreadListParams {
             cursor: None,
             limit: Some(10),
-            model_providers: None,
+            model_providers: Some(vec!["mock_provider".to_string()]),
         })
         .await?;
     let list_resp: JSONRPCResponse = timeout(
@@ -63,6 +67,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         "2025-01-02T12:00:00Z",
         "Hello",
         Some("mock_provider"),
+        None,
     )?;
     let _b = create_fake_rollout(
         codex_home.path(),
@@ -70,6 +75,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         "2025-01-01T13:00:00Z",
         "Hello",
         Some("mock_provider"),
+        None,
     )?;
     let _c = create_fake_rollout(
         codex_home.path(),
@@ -77,6 +83,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         "2025-01-01T12:00:00Z",
         "Hello",
         Some("mock_provider"),
+        None,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -104,6 +111,10 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         assert_eq!(thread.preview, "Hello");
         assert_eq!(thread.model_provider, "mock_provider");
         assert!(thread.created_at > 0);
+        assert_eq!(thread.cwd, PathBuf::from("/"));
+        assert_eq!(thread.cli_version, "0.0.0");
+        assert_eq!(thread.source, SessionSource::Cli);
+        assert_eq!(thread.git_info, None);
     }
     let cursor1 = cursor1.expect("expected nextCursor on first page");
 
@@ -129,6 +140,10 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         assert_eq!(thread.preview, "Hello");
         assert_eq!(thread.model_provider, "mock_provider");
         assert!(thread.created_at > 0);
+        assert_eq!(thread.cwd, PathBuf::from("/"));
+        assert_eq!(thread.cli_version, "0.0.0");
+        assert_eq!(thread.source, SessionSource::Cli);
+        assert_eq!(thread.git_info, None);
     }
     assert_eq!(cursor2, None, "expected nextCursor to be null on last page");
 
@@ -147,6 +162,7 @@ async fn thread_list_respects_provider_filter() -> Result<()> {
         "2025-01-02T10:00:00Z",
         "X",
         Some("mock_provider"),
+        None,
     )?; // mock_provider
     let _b = create_fake_rollout(
         codex_home.path(),
@@ -154,6 +170,7 @@ async fn thread_list_respects_provider_filter() -> Result<()> {
         "2025-01-02T11:00:00Z",
         "X",
         Some("other_provider"),
+        None,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -180,6 +197,63 @@ async fn thread_list_respects_provider_filter() -> Result<()> {
     assert_eq!(thread.model_provider, "other_provider");
     let expected_ts = chrono::DateTime::parse_from_rfc3339("2025-01-02T11:00:00Z")?.timestamp();
     assert_eq!(thread.created_at, expected_ts);
+    assert_eq!(thread.cwd, PathBuf::from("/"));
+    assert_eq!(thread.cli_version, "0.0.0");
+    assert_eq!(thread.source, SessionSource::Cli);
+    assert_eq!(thread.git_info, None);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_list_includes_git_info() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+
+    let git_info = CoreGitInfo {
+        commit_hash: Some("abc123".to_string()),
+        branch: Some("main".to_string()),
+        repository_url: Some("https://example.com/repo.git".to_string()),
+    };
+    let conversation_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-02-01T09-00-00",
+        "2025-02-01T09:00:00Z",
+        "Git info preview",
+        Some("mock_provider"),
+        Some(git_info),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let list_id = mcp
+        .send_thread_list_request(ThreadListParams {
+            cursor: None,
+            limit: Some(10),
+            model_providers: Some(vec!["mock_provider".to_string()]),
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(list_id)),
+    )
+    .await??;
+    let ThreadListResponse { data, .. } = to_response::<ThreadListResponse>(resp)?;
+    let thread = data
+        .iter()
+        .find(|t| t.id == conversation_id)
+        .expect("expected thread for created rollout");
+
+    let expected_git = ApiGitInfo {
+        sha: Some("abc123".to_string()),
+        branch: Some("main".to_string()),
+        origin_url: Some("https://example.com/repo.git".to_string()),
+    };
+    assert_eq!(thread.git_info, Some(expected_git));
+    assert_eq!(thread.source, SessionSource::Cli);
+    assert_eq!(thread.cwd, PathBuf::from("/"));
+    assert_eq!(thread.cli_version, "0.0.0");
 
     Ok(())
 }

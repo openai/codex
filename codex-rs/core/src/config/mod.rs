@@ -86,9 +86,6 @@ pub struct Config {
     /// Size of the context window for the model, in tokens.
     pub model_context_window: Option<i64>,
 
-    /// Maximum number of output tokens.
-    pub model_max_output_tokens: Option<i64>,
-
     /// Token usage threshold triggering auto-compaction of conversation history.
     pub model_auto_compact_token_limit: Option<i64>,
 
@@ -569,9 +566,6 @@ pub struct ConfigToml {
 
     /// Size of the context window for the model, in tokens.
     pub model_context_window: Option<i64>,
-
-    /// Maximum number of output tokens.
-    pub model_max_output_tokens: Option<i64>,
 
     /// Token usage threshold triggering auto-compaction of conversation history.
     pub model_auto_compact_token_limit: Option<i64>,
@@ -1122,11 +1116,6 @@ impl Config {
         let model_context_window = cfg
             .model_context_window
             .or_else(|| openai_model_info.as_ref().map(|info| info.context_window));
-        let model_max_output_tokens = cfg.model_max_output_tokens.or_else(|| {
-            openai_model_info
-                .as_ref()
-                .map(|info| info.max_output_tokens)
-        });
         let model_auto_compact_token_limit = cfg.model_auto_compact_token_limit.or_else(|| {
             openai_model_info
                 .as_ref()
@@ -1178,7 +1167,6 @@ impl Config {
             review_model,
             model_family,
             model_context_window,
-            model_max_output_tokens,
             model_auto_compact_token_limit,
             model_provider_id,
             model_provider,
@@ -2961,7 +2949,6 @@ model_verbosity = "high"
                 review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
                 model_family: find_family_for_model("o3").expect("known model slug"),
                 model_context_window: Some(200_000),
-                model_max_output_tokens: Some(100_000),
                 model_auto_compact_token_limit: Some(180_000),
                 model_provider_id: "openai".to_string(),
                 model_provider: fixture.openai_provider.clone(),
@@ -3034,7 +3021,6 @@ model_verbosity = "high"
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
             model_family: find_family_for_model("gpt-3.5-turbo").expect("known model slug"),
             model_context_window: Some(16_385),
-            model_max_output_tokens: Some(4_096),
             model_auto_compact_token_limit: Some(14_746),
             model_provider_id: "openai-chat-completions".to_string(),
             model_provider: fixture.openai_chat_completions_provider.clone(),
@@ -3122,7 +3108,6 @@ model_verbosity = "high"
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
             model_family: find_family_for_model("o3").expect("known model slug"),
             model_context_window: Some(200_000),
-            model_max_output_tokens: Some(100_000),
             model_auto_compact_token_limit: Some(180_000),
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
@@ -3196,7 +3181,6 @@ model_verbosity = "high"
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
             model_family: find_family_for_model("gpt-5.1").expect("known model slug"),
             model_context_window: Some(272_000),
-            model_max_output_tokens: Some(128_000),
             model_auto_compact_token_limit: Some(244_800),
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),

@@ -39,6 +39,7 @@ use codex_app_server_protocol::GetConversationSummaryResponse;
 use codex_app_server_protocol::GetUserAgentResponse;
 use codex_app_server_protocol::GetUserSavedConfigResponse;
 use codex_app_server_protocol::GitDiffToRemoteResponse;
+use codex_app_server_protocol::GitInfo as ApiGitInfo;
 use codex_app_server_protocol::InputItem as WireInputItem;
 use codex_app_server_protocol::InterruptConversationParams;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -131,7 +132,7 @@ use codex_protocol::ConversationId;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::GitInfo;
+use codex_protocol::protocol::GitInfo as CoreGitInfo;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionMetaLine;
@@ -2931,7 +2932,7 @@ fn extract_conversation_summary(
     path: PathBuf,
     head: &[serde_json::Value],
     session_meta: &SessionMeta,
-    git: Option<&GitInfo>,
+    git: Option<&CoreGitInfo>,
     fallback_provider: &str,
 ) -> Option<ConversationSummary> {
     let preview = head
@@ -2972,7 +2973,7 @@ fn extract_conversation_summary(
     })
 }
 
-fn map_git_info(git_info: &GitInfo) -> ConversationGitInfo {
+fn map_git_info(git_info: &CoreGitInfo) -> ConversationGitInfo {
     ConversationGitInfo {
         sha: git_info.commit_hash.clone(),
         branch: git_info.branch.clone(),
@@ -2995,10 +2996,18 @@ fn summary_to_thread(summary: ConversationSummary) -> Thread {
         preview,
         timestamp,
         model_provider,
-        ..
+        cwd,
+        cli_version,
+        source,
+        git_info,
     } = summary;
 
     let created_at = parse_datetime(timestamp.as_deref());
+    let git_info = git_info.map(|info| ApiGitInfo {
+        sha: info.sha,
+        branch: info.branch,
+        origin_url: info.origin_url,
+    });
 
     Thread {
         id: conversation_id.to_string(),
@@ -3006,6 +3015,10 @@ fn summary_to_thread(summary: ConversationSummary) -> Thread {
         model_provider,
         created_at: created_at.map(|dt| dt.timestamp()).unwrap_or(0),
         path,
+        cwd,
+        cli_version,
+        source: source.into(),
+        git_info,
         turns: Vec::new(),
     }
 }

@@ -5,6 +5,7 @@ use app_test_support::create_mock_chat_completions_server;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
@@ -14,6 +15,7 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -75,6 +77,7 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
         "2025-01-05T12:00:00Z",
         preview,
         Some("mock_provider"),
+        None,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -97,6 +100,10 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
     assert_eq!(thread.preview, preview);
     assert_eq!(thread.model_provider, "mock_provider");
     assert!(thread.path.is_absolute());
+    assert_eq!(thread.cwd, PathBuf::from("/"));
+    assert_eq!(thread.cli_version, "0.0.0");
+    assert_eq!(thread.source, SessionSource::Cli);
+    assert_eq!(thread.git_info, None);
 
     assert_eq!(
         thread.turns.len(),

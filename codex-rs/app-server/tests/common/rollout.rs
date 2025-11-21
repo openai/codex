@@ -1,6 +1,8 @@
 use anyhow::Result;
 use codex_protocol::ConversationId;
+use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use serde_json::json;
 use std::fs;
@@ -22,6 +24,7 @@ pub fn create_fake_rollout(
     meta_rfc3339: &str,
     preview: &str,
     model_provider: Option<&str>,
+    git_info: Option<GitInfo>,
 ) -> Result<String> {
     let uuid = Uuid::new_v4();
     let uuid_str = uuid.to_string();
@@ -37,7 +40,7 @@ pub fn create_fake_rollout(
     let file_path = dir.join(format!("rollout-{filename_ts}-{uuid}.jsonl"));
 
     // Build JSONL lines
-    let payload = serde_json::to_value(SessionMeta {
+    let meta = SessionMeta {
         id: conversation_id,
         timestamp: meta_rfc3339.to_string(),
         cwd: PathBuf::from("/"),
@@ -46,6 +49,10 @@ pub fn create_fake_rollout(
         instructions: None,
         source: SessionSource::Cli,
         model_provider: model_provider.map(str::to_string),
+    };
+    let payload = serde_json::to_value(SessionMetaLine {
+        meta,
+        git: git_info,
     })?;
 
     let lines = [

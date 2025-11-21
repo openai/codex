@@ -30,7 +30,6 @@ model_provider = "openai"
 # Optional manual model metadata. When unset, Codex auto-detects from model.
 # Uncomment to force values.
 # model_context_window = 128000       # tokens; default: auto for model
-# model_max_output_tokens = 8192      # tokens; default: auto for model
 # model_auto_compact_token_limit = 0  # disable/override auto; default: model family specific
 # tool_output_token_limit = 10000  # tokens stored per tool output; default: 10000 for gpt-5.1-codex-max
 

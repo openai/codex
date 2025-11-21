@@ -71,6 +71,30 @@ importers:
         specifier: ^3.24.6
         version: 3.24.6(zod@3.25.76)
 
+  shell-tool-mcp:
+    devDependencies:
+      '@types/jest':
+        specifier: ^29.5.14
+        version: 29.5.14
+      '@types/node':
+        specifier: ^20.19.18
+        version: 20.19.18
+      jest:
+        specifier: ^29.7.0
+        version: 29.7.0(@types/node@20.19.18)(ts-node@10.9.2(@types/node@20.19.18)(typescript@5.9.2))
+      prettier:
+        specifier: ^3.6.2
+        version: 3.6.2
+      ts-jest:
+        specifier: ^29.3.4
+        version: 29.4.4(@babel/core@7.28.4)(@jest/transform@29.7.0)(@jest/types@29.6.3)(babel-jest@29.7.0(@babel/core@7.28.4))(esbuild@0.25.10)(jest-util@29.7.0)(jest@29.7.0(@types/node@20.19.18)(ts-node@10.9.2(@types/node@20.19.18)(typescript@5.9.2)))(typescript@5.9.2)
+      tsup:
+        specifier: ^8.5.0
+        version: 8.5.0(postcss@8.5.6)(typescript@5.9.2)(yaml@2.8.1)
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.2
+
 packages:
 
   '@babel/code-frame@7.27.1':
