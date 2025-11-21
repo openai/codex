@@ -709,12 +709,11 @@ impl ChatWidget {
         );
     }
 
-    fn on_elicitation_request(&mut self, id: String, ev: ElicitationRequestEvent) {
-        let id2 = id.clone();
+    fn on_elicitation_request(&mut self, ev: ElicitationRequestEvent) {
         let ev2 = ev.clone();
         self.defer_or_handle(
-            |q| q.push_elicitation(id, ev),
-            |s| s.handle_elicitation_request_now(id2, ev2),
+            |q| q.push_elicitation(ev),
+            |s| s.handle_elicitation_request_now(ev2),
         );
     }
 
@@ -1023,19 +1022,8 @@ impl ChatWidget {
         });
     }
 
-    pub(crate) fn handle_elicitation_request_now(
-        &mut self,
-        id: String,
-        ev: ElicitationRequestEvent,
-    ) {
+    pub(crate) fn handle_elicitation_request_now(&mut self, ev: ElicitationRequestEvent) {
         self.flush_answer_stream_with_separator();
-        if self.conversation_id.is_none() {
-            tracing::warn!("received elicitation request without a conversation id: {id}");
-            self.add_error_message(
-                "Received an elicitation request before the session was ready.".to_string(),
-            );
-            return;
-        }
 
         self.notify(Notification::ElicitationRequested {
             server_name: ev.server_name.clone(),
@@ -1687,7 +1675,7 @@ impl ChatWidget {
                 self.on_apply_patch_approval_request(id.unwrap_or_default(), ev)
             }
             EventMsg::ElicitationRequest(ev) => {
-                self.on_elicitation_request(id.unwrap_or_default(), ev);
+                self.on_elicitation_request(ev);
             }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::ExecCommandOutputDelta(delta) => self.on_exec_command_output_delta(delta),
