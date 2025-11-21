@@ -89,10 +89,12 @@ pub(crate) struct ApprovalCtx<'a> {
 // Specifies what tool orchestrator should do with a given tool call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ApprovalRequirement {
-    /// No approval required for this tool call. `bypass_sandbox` signals that
-    /// the first attempt should skip sandboxing (e.g., when explicitly
-    /// greenlit by policy).
-    Skip { bypass_sandbox: bool },
+    /// No approval required for this tool call.
+    Skip {
+        /// The first attempt should skip sandboxing (e.g., when explicitly
+        /// greenlit by policy).
+        bypass_sandbox: bool,
+    },
     /// Approval required for this tool call
     NeedsApproval { reason: Option<String> },
     /// Execution forbidden for this tool call
