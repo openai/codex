@@ -705,12 +705,9 @@ async fn start_server_task(
         .await
         .map_err(StartupOutcomeError::from)?;
 
-    let tools = match list_tools_for_client(&server_name, &client, startup_timeout).await {
-        Ok(tools) => tools,
-        Err(error) => {
-            return Err(error.into());
-        }
-    };
+    let tools = list_tools_for_client(&server_name, &client, startup_timeout)
+        .await
+        .map_err(StartupOutcomeError::from)?;
 
     let managed = ManagedClient {
         client: Arc::clone(&client),
