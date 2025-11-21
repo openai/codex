@@ -38,6 +38,7 @@ pub(crate) struct EnvironmentContext {
     pub network_access: Option<NetworkAccess>,
     pub writable_roots: Option<Vec<PathBuf>>,
     pub shell: Shell,
+    pub operating_system: Option<OperatingSystemInfo>,
 }
 
 impl EnvironmentContext {
@@ -110,7 +111,7 @@ impl EnvironmentContext {
         cwd: Option<PathBuf>,
         approval_policy: Option<AskForApproval>,
         sandbox_policy: Option<SandboxPolicy>,
-        shell: Option<Shell>,
+        shell: Shell,
     ) -> Self {
         let mut ec = Self::new(cwd, approval_policy, sandbox_policy, shell);
         ec.operating_system = None;
@@ -133,7 +134,12 @@ impl EnvironmentContext {
         } else {
             None
         };
-        EnvironmentContext::new(cwd, approval_policy, sandbox_policy, default_user_shell())
+        EnvironmentContext::new_without_operating_system(
+            cwd,
+            approval_policy,
+            sandbox_policy,
+            default_user_shell(),
+        )
     }
 }
 
@@ -195,6 +201,20 @@ impl EnvironmentContext {
 
         let shell_name = self.shell.name();
         lines.push(format!("  <shell>{shell_name}</shell>"));
+        if let Some(operating_system) = self.operating_system {
+            lines.push("  <operating_system>".to_string());
+            lines.push(format!("    <name>{}</name>", operating_system.name));
+            lines.push(format!(
+                "    <version>{}</version>",
+                operating_system.version
+            ));
+            if let Some(is_wsl) = operating_system.is_likely_windows_subsystem_for_linux {
+                lines.push(format!(
+                    "    <is_likely_windows_subsystem_for_linux>{is_wsl}</is_likely_windows_subsystem_for_linux>"
+                ));
+            }
+            lines.push("  </operating_system>".to_string());
+        }
         lines.push(ENVIRONMENT_CONTEXT_CLOSE_TAG.to_string());
         lines.join("\n")
     }
@@ -362,17 +382,17 @@ mod tests {
             fake_shell(),
         );
 
-        let expected = r#"<environment_context>
-  <cwd>/repo</cwd>
-  <approval_policy>on-request</approval_policy>
-  <sandbox_mode>workspace-write</sandbox_mode>
-  <network_access>restricted</network_access>
-  <writable_roots>
-    <root>/repo</root>
-    <root>/tmp</root>
-  </writable_roots>
-  <shell>bash</shell>
-</environment_context>"#;
+        let expected = expected_environment_context(vec![
+            "  <cwd>/repo</cwd>".to_string(),
+            "  <approval_policy>on-request</approval_policy>".to_string(),
+            "  <sandbox_mode>workspace-write</sandbox_mode>".to_string(),
+            "  <network_access>restricted</network_access>".to_string(),
+            "  <writable_roots>".to_string(),
+            "    <root>/repo</root>".to_string(),
+            "    <root>/tmp</root>".to_string(),
+            "  </writable_roots>".to_string(),
+            "  <shell>bash</shell>".to_string(),
+        ]);
 
         assert_eq!(context.serialize_to_xml(), expected);
     }
@@ -386,12 +406,12 @@ mod tests {
             fake_shell(),
         );
 
-        let expected = r#"<environment_context>
-  <approval_policy>never</approval_policy>
-  <sandbox_mode>read-only</sandbox_mode>
-  <network_access>restricted</network_access>
-  <shell>bash</shell>
-</environment_context>"#;
+        let expected = expected_environment_context(vec![
+            "  <approval_policy>never</approval_policy>".to_string(),
+            "  <sandbox_mode>read-only</sandbox_mode>".to_string(),
+            "  <network_access>restricted</network_access>".to_string(),
+            "  <shell>bash</shell>".to_string(),
+        ]);
 
         assert_eq!(context.serialize_to_xml(), expected);
     }
@@ -405,12 +425,12 @@ mod tests {
             fake_shell(),
         );
 
-        let expected = r#"<environment_context>
-  <approval_policy>on-failure</approval_policy>
-  <sandbox_mode>danger-full-access</sandbox_mode>
-  <network_access>enabled</network_access>
-  <shell>bash</shell>
-</environment_context>"#;
+        let expected = expected_environment_context(vec![
+            "  <approval_policy>on-failure</approval_policy>".to_string(),
+            "  <sandbox_mode>danger-full-access</sandbox_mode>".to_string(),
+            "  <network_access>enabled</network_access>".to_string(),
+            "  <shell>bash</shell>".to_string(),
+        ]);
 
         assert_eq!(context.serialize_to_xml(), expected);
     }
