@@ -289,7 +289,7 @@ pub(crate) struct TurnContext {
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
-    pub(crate) exec_policy: Arc<ExecPolicy>,
+    pub(crate) exec_policy: Arc<RwLock<ExecPolicy>>,
     pub(crate) truncation_policy: TruncationPolicy,
 }
 
@@ -347,7 +347,7 @@ pub(crate) struct SessionConfiguration {
     /// Set of feature flags for this session
     features: Features,
     /// Execpolicy policy, applied only when enabled by feature flag.
-    exec_policy: Arc<ExecPolicy>,
+    exec_policy: Arc<RwLock<ExecPolicy>>,
 
     // TODO(pakrym): Remove config from here
     original_config_do_not_use: Arc<Config>,
@@ -884,19 +884,17 @@ impl Session {
             return Err(ExecPolicyUpdateError::FeatureDisabled);
         }
 
-        let policy = crate::exec_policy::append_allow_prefix_rule_and_update(
+        crate::exec_policy::append_allow_prefix_rule_and_update(
             &codex_home,
-            current_policy,
+            &current_policy,
             prefix,
-        )?;
-
-        let mut state = self.state.lock().await;
-        state.session_configuration.exec_policy = policy;
+        )
+        .await?;
 
         Ok(())
     }
 
-    pub(crate) async fn current_exec_policy(&self) -> Arc<ExecPolicy> {
+    pub(crate) async fn current_exec_policy(&self) -> Arc<RwLock<ExecPolicy>> {
         let state = self.state.lock().await;
         state.session_configuration.exec_policy.clone()
     }
@@ -2844,7 +2842,7 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
-            exec_policy: Arc::new(ExecPolicy::empty()),
+            exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
             session_source: SessionSource::Exec,
         };
 
@@ -2922,7 +2920,7 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
-            exec_policy: Arc::new(ExecPolicy::empty()),
+            exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
             session_source: SessionSource::Exec,
         };
 

@@ -232,6 +232,7 @@ impl ShellHandler {
         emitter.begin(event_ctx).await;
 
         let exec_policy = session.current_exec_policy().await;
+        let exec_policy = exec_policy.read().await;
         let req = ShellRequest {
             command: exec_params.command.clone(),
             cwd: exec_params.cwd.clone(),
@@ -240,7 +241,7 @@ impl ShellHandler {
             with_escalated_permissions: exec_params.with_escalated_permissions,
             justification: exec_params.justification.clone(),
             approval_requirement: create_approval_requirement_for_command(
-                exec_policy.as_ref(),
+                &exec_policy,
                 &exec_params.command,
                 turn.approval_policy,
                 &turn.sandbox_policy,

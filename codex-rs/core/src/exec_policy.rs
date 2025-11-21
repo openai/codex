@@ -15,6 +15,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use thiserror::Error;
 use tokio::fs;
+use tokio::sync::RwLock;
 
 use crate::bash::parse_shell_lc_plain_commands;
 use crate::features::Feature;
@@ -67,9 +68,9 @@ pub enum ExecPolicyUpdateError {
 pub(crate) async fn exec_policy_for(
     features: &Features,
     codex_home: &Path,
-) -> Result<Arc<Policy>, ExecPolicyError> {
+) -> Result<Arc<RwLock<Policy>>, ExecPolicyError> {
     if !features.enabled(Feature::ExecPolicy) {
-        return Ok(Arc::new(Policy::empty()));
+        return Ok(Arc::new(RwLock::new(Policy::empty())));
     }
 
     let policy_dir = codex_home.join(POLICY_DIR_NAME);
@@ -93,7 +94,7 @@ pub(crate) async fn exec_policy_for(
             })?;
     }
 
-    let policy = Arc::new(parser.build());
+    let policy = Arc::new(RwLock::new(parser.build()));
     tracing::debug!(
         "loaded execpolicy from {} files in {}",
         policy_paths.len(),
@@ -107,11 +108,11 @@ pub(crate) fn default_policy_path(codex_home: &Path) -> PathBuf {
     codex_home.join(POLICY_DIR_NAME).join(DEFAULT_POLICY_FILE)
 }
 
-pub(crate) fn append_allow_prefix_rule_and_update(
+pub(crate) async fn append_allow_prefix_rule_and_update(
     codex_home: &Path,
-    mut current_policy: Arc<Policy>,
+    current_policy: &Arc<RwLock<Policy>>,
     prefix: &[String],
-) -> Result<Arc<Policy>, ExecPolicyUpdateError> {
+) -> Result<(), ExecPolicyUpdateError> {
     let policy_path = default_policy_path(codex_home);
     append_allow_prefix_rule(&policy_path, prefix).map_err(|source| {
         ExecPolicyUpdateError::AppendRule {
@@ -120,9 +121,12 @@ pub(crate) fn append_allow_prefix_rule_and_update(
         }
     })?;
 
-    Arc::make_mut(&mut current_policy).add_prefix_rule(prefix, Decision::Allow)?;
+    current_policy
+        .write()
+        .await
+        .add_prefix_rule(prefix, Decision::Allow)?;
 
-    Ok(current_policy)
+    Ok(())
 }
 
 fn requirement_from_decision(
@@ -267,7 +271,7 @@ mod tests {
 
         let commands = [vec!["rm".to_string()]];
         assert!(matches!(
-            policy.check_multiple(commands.iter()),
+            policy.read().await.check_multiple(commands.iter()),
             Evaluation::NoMatch { .. }
         ));
         assert!(!temp_dir.path().join(POLICY_DIR_NAME).exists());
@@ -301,7 +305,7 @@ mod tests {
             .expect("policy result");
         let command = [vec!["rm".to_string()]];
         assert!(matches!(
-            policy.check_multiple(command.iter()),
+            policy.read().await.check_multiple(command.iter()),
             Evaluation::Match { .. }
         ));
     }
@@ -320,7 +324,7 @@ mod tests {
             .expect("policy result");
         let command = [vec!["ls".to_string()]];
         assert!(matches!(
-            policy.check_multiple(command.iter()),
+            policy.read().await.check_multiple(command.iter()),
             Evaluation::NoMatch { .. }
         ));
     }
@@ -433,18 +437,21 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         );
     }
 
-    #[test]
-    fn append_allow_prefix_rule_updates_policy_and_file() {
+    #[tokio::test]
+    async fn append_allow_prefix_rule_updates_policy_and_file() {
         let codex_home = tempdir().expect("create temp dir");
-        let current_policy = Arc::new(Policy::empty());
+        let current_policy = Arc::new(RwLock::new(Policy::empty()));
         let prefix = vec!["echo".to_string(), "hello".to_string()];
 
-        let updated_policy =
-            append_allow_prefix_rule_and_update(codex_home.path(), current_policy, &prefix)
-                .expect("update policy");
+        append_allow_prefix_rule_and_update(codex_home.path(), &current_policy, &prefix)
+            .await
+            .expect("update policy");
 
-        let evaluation =
-            updated_policy.check(&["echo".to_string(), "hello".to_string(), "world".to_string()]);
+        let evaluation = current_policy.read().await.check(&[
+            "echo".to_string(),
+            "hello".to_string(),
+            "world".to_string(),
+        ]);
         assert!(matches!(
             evaluation,
             Evaluation::Match {
@@ -457,16 +464,17 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             .expect("policy file should have been created");
         assert_eq!(
             contents,
-            "prefix_rule(pattern=[\"echo\", \"hello\"], decision=\"allow\")\n"
+            "prefix_rule(pattern=[\"echo\",\"hello\"], decision=\"allow\")\n"
         );
     }
 
-    #[test]
-    fn append_allow_prefix_rule_rejects_empty_prefix() {
+    #[tokio::test]
+    async fn append_allow_prefix_rule_rejects_empty_prefix() {
         let codex_home = tempdir().expect("create temp dir");
-        let current_policy = Arc::new(Policy::empty());
+        let current_policy = Arc::new(RwLock::new(Policy::empty()));
 
-        let result = append_allow_prefix_rule_and_update(codex_home.path(), current_policy, &[]);
+        let result =
+            append_allow_prefix_rule_and_update(codex_home.path(), &current_policy, &[]).await;
 
         assert!(matches!(
             result,
