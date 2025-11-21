@@ -298,8 +298,8 @@ def create_tag_ref(version: str, tag_sha: str) -> None:
 
 def determine_version(args: argparse.Namespace) -> str:
     latest_version = get_latest_release_version()
-    major, minor, patch = parse_semver(latest_version)
-    next_minor_version = format_version(major, minor + 1, patch)
+    major, minor, _patch = parse_semver(latest_version)
+    next_minor_version = format_version(major, minor + 1, 0)
 
     if args.publish_release:
         return next_minor_version
