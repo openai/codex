@@ -498,7 +498,7 @@ fn exec_options(allow_prefix: Option<Vec<String>>) -> Vec<ApprovalOption> {
     .into_iter()
     .chain(allow_prefix.map(|prefix| ApprovalOption {
         label: "Yes, and don't ask again for commands with this prefix".to_string(),
-        decision: ApprovalDecision::Review(ReviewDecision::ApprovedForSession),
+        decision: ApprovalDecision::Review(ReviewDecision::ApprovedAllowPrefix),
         display_shortcut: None,
         additional_shortcuts: vec![key_hint::plain(KeyCode::Char('p'))],
         allow_prefix: Some(prefix),
@@ -627,7 +627,7 @@ mod tests {
                 ..
             }) = ev
             {
-                assert_eq!(decision, ReviewDecision::ApprovedForSession);
+                assert_eq!(decision, ReviewDecision::ApprovedAllowPrefix);
                 assert_eq!(allow_prefix, Some(vec!["echo".to_string()]));
                 saw_op = true;
                 break;

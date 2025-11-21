@@ -1671,7 +1671,9 @@ mod handlers {
         if let Some(prefix) = allow_prefix
             && matches!(
                 decision,
-                ReviewDecision::Approved | ReviewDecision::ApprovedForSession
+                ReviewDecision::Approved
+                    | ReviewDecision::ApprovedAllowPrefix
+                    | ReviewDecision::ApprovedForSession
             )
             && let Err(err) = sess.persist_command_allow_prefix(&prefix).await
         {

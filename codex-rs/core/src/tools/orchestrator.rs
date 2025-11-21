@@ -94,7 +94,9 @@ impl ToolOrchestrator {
                     ReviewDecision::Denied | ReviewDecision::Abort => {
                         return Err(ToolError::Rejected("rejected by user".to_string()));
                     }
-                    ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {}
+                    ReviewDecision::Approved
+                    | ReviewDecision::ApprovedAllowPrefix
+                    | ReviewDecision::ApprovedForSession => {}
                 }
                 already_approved = true;
             }
@@ -175,7 +177,9 @@ impl ToolOrchestrator {
                         ReviewDecision::Denied | ReviewDecision::Abort => {
                             return Err(ToolError::Rejected("rejected by user".to_string()));
                         }
-                        ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {}
+                        ReviewDecision::Approved
+                        | ReviewDecision::ApprovedAllowPrefix
+                        | ReviewDecision::ApprovedForSession => {}
                     }
                 }
 
