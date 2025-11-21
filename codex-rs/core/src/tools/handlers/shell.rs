@@ -232,7 +232,17 @@ impl ShellHandler {
         emitter.begin(event_ctx).await;
 
         let features = session.features().await;
-        let exec_policy = session.current_exec_policy().await;
+        let approval_requirement = {
+            let exec_policy = session.current_exec_policy().await;
+            create_approval_requirement_for_command(
+                &exec_policy,
+                &features,
+                &exec_params.command,
+                turn.approval_policy,
+                &turn.sandbox_policy,
+                SandboxPermissions::from(exec_params.with_escalated_permissions.unwrap_or(false)),
+            )
+        };
         let req = ShellRequest {
             command: exec_params.command.clone(),
             cwd: exec_params.cwd.clone(),
@@ -240,14 +250,7 @@ impl ShellHandler {
             env: exec_params.env.clone(),
             with_escalated_permissions: exec_params.with_escalated_permissions,
             justification: exec_params.justification.clone(),
-            approval_requirement: create_approval_requirement_for_command(
-                &exec_policy,
-                &features,
-                &exec_params.command,
-                turn.approval_policy,
-                &turn.sandbox_policy,
-                SandboxPermissions::from(exec_params.with_escalated_permissions.unwrap_or(false)),
-            ),
+            approval_requirement,
         };
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = ShellRuntime::new();
