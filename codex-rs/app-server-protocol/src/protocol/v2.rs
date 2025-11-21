@@ -336,7 +336,7 @@ impl From<SessionSource> for CoreSessionSource {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ThreadGitInfo {
+pub struct GitInfo {
     pub sha: Option<String>,
     pub branch: Option<String>,
     pub origin_url: Option<String>,
@@ -672,7 +672,7 @@ pub struct Thread {
     pub cwd: PathBuf,
     pub cli_version: String,
     pub source: SessionSource,
-    pub git_info: Option<ThreadGitInfo>,
+    pub git_info: Option<GitInfo>,
     /// Only populated on a `thread/resume` response.
     /// For all other responses and notifications returning a Thread,
     /// the turns field will be an empty list.

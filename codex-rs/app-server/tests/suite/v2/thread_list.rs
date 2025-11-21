@@ -2,13 +2,13 @@ use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout;
 use app_test_support::to_response;
+use codex_app_server_protocol::GitInfo as ApiGitInfo;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SessionSource;
-use codex_app_server_protocol::ThreadGitInfo;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
-use codex_protocol::protocol::GitInfo;
+use codex_protocol::protocol::GitInfo as CoreGitInfo;
 use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -210,7 +210,7 @@ async fn thread_list_includes_git_info() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_minimal_config(codex_home.path())?;
 
-    let git_info = GitInfo {
+    let git_info = CoreGitInfo {
         commit_hash: Some("abc123".to_string()),
         branch: Some("main".to_string()),
         repository_url: Some("https://example.com/repo.git".to_string()),
@@ -245,7 +245,7 @@ async fn thread_list_includes_git_info() -> Result<()> {
         .find(|t| t.id == conversation_id)
         .expect("expected thread for created rollout");
 
-    let expected_git = ThreadGitInfo {
+    let expected_git = ApiGitInfo {
         sha: Some("abc123".to_string()),
         branch: Some("main".to_string()),
         origin_url: Some("https://example.com/repo.git".to_string()),
