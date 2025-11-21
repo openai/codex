@@ -557,7 +557,6 @@ impl UnifiedExecSessionManager {
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);
         let exec_policy = context.session.current_exec_policy().await;
-        let exec_policy = exec_policy.read().await;
         let req = UnifiedExecToolRequest::new(
             command.to_vec(),
             cwd,

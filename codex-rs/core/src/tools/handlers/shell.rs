@@ -233,7 +233,6 @@ impl ShellHandler {
 
         let features = session.features().await;
         let exec_policy = session.current_exec_policy().await;
-        let exec_policy = exec_policy.read().await;
         let req = ShellRequest {
             command: exec_params.command.clone(),
             cwd: exec_params.cwd.clone(),

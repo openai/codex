@@ -50,6 +50,7 @@ use mcp_types::RequestId;
 use serde_json;
 use serde_json::Value;
 use tokio::sync::Mutex;
+use tokio::sync::OwnedRwLockReadGuard;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -894,9 +895,12 @@ impl Session {
         Ok(())
     }
 
-    pub(crate) async fn current_exec_policy(&self) -> Arc<RwLock<ExecPolicy>> {
-        let state = self.state.lock().await;
-        state.session_configuration.exec_policy.clone()
+    pub(crate) async fn current_exec_policy(&self) -> OwnedRwLockReadGuard<ExecPolicy> {
+        let exec_policy = {
+            let state = self.state.lock().await;
+            state.session_configuration.exec_policy.clone()
+        };
+        exec_policy.read_owned().await
     }
 
     /// Emit an exec approval request event and await the user's decision.
