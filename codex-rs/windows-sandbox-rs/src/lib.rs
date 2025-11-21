@@ -71,6 +71,10 @@ mod windows_impl {
 
     type PipeHandles = ((HANDLE, HANDLE), (HANDLE, HANDLE), (HANDLE, HANDLE));
 
+    fn should_apply_network_block(policy: &SandboxPolicy) -> bool {
+        !policy.has_full_network_access()
+    }
+
     fn ensure_dir(p: &Path) -> Result<()> {
         if let Some(d) = p.parent() {
             std::fs::create_dir_all(d)?;
@@ -214,9 +218,12 @@ mod windows_impl {
         timeout_ms: Option<u64>,
     ) -> Result<CaptureResult> {
         let policy = parse_policy(policy_json_or_preset)?;
+        let apply_network_block = should_apply_network_block(&policy);
         normalize_null_device_env(&mut env_map);
         ensure_non_interactive_pager(&mut env_map);
-        apply_no_network_to_env(&mut env_map)?;
+        if apply_network_block {
+            apply_no_network_to_env(&mut env_map)?;
+        }
         ensure_codex_home_exists(codex_home)?;
 
         let current_dir = cwd.to_path_buf();
@@ -446,6 +453,36 @@ mod windows_impl {
             stderr,
             timed_out,
         })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::should_apply_network_block;
+        use crate::policy::SandboxPolicy;
+
+        fn workspace_policy(network_access: bool) -> SandboxPolicy {
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots: Vec::new(),
+                network_access,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
+            }
+        }
+
+        #[test]
+        fn applies_network_block_when_access_is_disabled() {
+            assert!(should_apply_network_block(&workspace_policy(false)));
+        }
+
+        #[test]
+        fn skips_network_block_when_access_is_allowed() {
+            assert!(!should_apply_network_block(&workspace_policy(true)));
+        }
+
+        #[test]
+        fn applies_network_block_for_read_only() {
+            assert!(should_apply_network_block(&SandboxPolicy::ReadOnly));
+        }
     }
 }
 
