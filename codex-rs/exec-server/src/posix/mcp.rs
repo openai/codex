@@ -41,6 +41,8 @@ pub struct ExecParams {
     pub workdir: String,
     /// The timeout for the command in milliseconds.
     pub timeout_ms: Option<u64>,
+    /// Launch Bash with -lc instead of -c: defaults to true.
+    pub login: Option<bool>,
 }
 
 #[derive(Debug, serde::Serialize, schemars::JsonSchema)]
@@ -101,13 +103,7 @@ impl ExecTool {
             McpEscalationPolicy::new(self.policy, context, stopwatch.clone()),
         );
         let result = escalate_server
-            .exec(
-                params.command,
-                // TODO: use ShellEnvironmentPolicy
-                std::env::vars().collect(),
-                PathBuf::from(&params.workdir),
-                cancel_token,
-            )
+            .exec(params, cancel_token)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![Content::json(
