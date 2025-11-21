@@ -13,6 +13,7 @@ use codex_core::exec::process_exec_tool_call;
 use codex_core::get_platform_sandbox;
 use codex_core::protocol::SandboxPolicy;
 use tokio::process::Command;
+use tokio_util::sync::CancellationToken;
 
 use crate::posix::escalate_protocol::BASH_EXEC_WRAPPER_ENV_VAR;
 use crate::posix::escalate_protocol::ESCALATE_SOCKET_ENV_VAR;
@@ -24,6 +25,7 @@ use crate::posix::escalate_protocol::SuperExecResult;
 use crate::posix::escalation_policy::EscalationPolicy;
 use crate::posix::socket::AsyncDatagramSocket;
 use crate::posix::socket::AsyncSocket;
+use codex_core::exec::ExecExpiration;
 
 pub(crate) struct EscalateServer {
     bash_path: PathBuf,
@@ -48,7 +50,7 @@ impl EscalateServer {
         command: String,
         env: HashMap<String, String>,
         workdir: PathBuf,
-        timeout_ms: Option<u64>,
+        cancel_rx: CancellationToken,
     ) -> anyhow::Result<ExecResult> {
         let (escalate_server, escalate_client) = AsyncDatagramSocket::pair()?;
         let client_socket = escalate_client.into_inner();
@@ -79,7 +81,7 @@ impl EscalateServer {
                     command,
                 ],
                 cwd: PathBuf::from(&workdir),
-                expiration: timeout_ms.into(),
+                expiration: ExecExpiration::Cancellation(cancel_rx),
                 env,
                 with_escalated_permissions: None,
                 justification: None,
