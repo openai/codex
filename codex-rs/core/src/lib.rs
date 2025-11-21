@@ -29,7 +29,6 @@ mod exec_policy;
 pub mod features;
 mod flags;
 pub mod git_info;
-pub mod landlock;
 pub mod mcp;
 mod mcp_connection_manager;
 mod mcp_tool_call;
@@ -67,7 +66,6 @@ mod openai_model_info;
 pub mod project_doc;
 mod rollout;
 pub(crate) mod safety;
-pub mod seatbelt;
 pub mod shell;
 pub mod spawn;
 pub mod terminal;
@@ -84,6 +82,10 @@ pub use rollout::list::ConversationsPage;
 pub use rollout::list::Cursor;
 pub use rollout::list::parse_cursor;
 pub use rollout::list::read_head_for_summary;
+#[cfg(target_os = "linux")]
+pub use sandboxing::linux::landlock;
+#[cfg(target_os = "macos")]
+pub use sandboxing::mac::seatbelt;
 mod function_tool;
 mod state;
 mod tasks;
@@ -93,7 +95,7 @@ pub mod util;
 
 pub use apply_patch::CODEX_APPLY_PATCH_ARG1;
 pub use command_safety::is_safe_command;
-pub use safety::get_platform_sandbox;
+pub use safety::get_platform_has_sandbox;
 pub use safety::set_windows_sandbox_enabled;
 // Re-export the protocol types from the standalone `codex-protocol` crate so existing
 // `codex_core::protocol::...` references continue to work across the workspace.

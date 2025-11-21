@@ -443,7 +443,7 @@ impl UnifiedExecSessionManager {
         )
         .await
         .map_err(|err| UnifiedExecError::create_session(err.to_string()))?;
-        UnifiedExecSession::from_spawned(spawned, env.sandbox).await
+        UnifiedExecSession::from_spawned(spawned, env.sandboxed).await
     }
 
     pub(super) async fn open_session_with_sandbox(

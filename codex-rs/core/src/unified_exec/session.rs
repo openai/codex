@@ -11,7 +11,6 @@ use tokio::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 use crate::exec::ExecToolCallOutput;
-use crate::exec::SandboxType;
 use crate::exec::StreamOutput;
 use crate::exec::is_likely_sandbox_denied;
 use crate::truncate::TruncationPolicy;
@@ -80,14 +79,14 @@ pub(crate) struct UnifiedExecSession {
     output_notify: Arc<Notify>,
     cancellation_token: CancellationToken,
     output_task: JoinHandle<()>,
-    sandbox_type: SandboxType,
+    sandboxed: bool,
 }
 
 impl UnifiedExecSession {
     pub(super) fn new(
         session: ExecCommandSession,
         initial_output_rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
-        sandbox_type: SandboxType,
+        sandboxed: bool,
     ) -> Self {
         let output_buffer = Arc::new(Mutex::new(OutputBufferState::default()));
         let output_notify = Arc::new(Notify::new());
@@ -120,7 +119,7 @@ impl UnifiedExecSession {
             output_notify,
             cancellation_token,
             output_task,
-            sandbox_type,
+            sandboxed,
         }
     }
 
@@ -149,12 +148,12 @@ impl UnifiedExecSession {
         guard.snapshot()
     }
 
-    fn sandbox_type(&self) -> SandboxType {
-        self.sandbox_type
+    fn sandboxed(&self) -> bool {
+        self.sandboxed
     }
 
     pub(super) async fn check_for_sandbox_denial(&self) -> Result<(), UnifiedExecError> {
-        if self.sandbox_type() == SandboxType::None || !self.has_exited() {
+        if !self.sandboxed() || !self.has_exited() {
             return Ok(());
         }
 
@@ -178,7 +177,7 @@ impl UnifiedExecSession {
             timed_out: false,
         };
 
-        if is_likely_sandbox_denied(self.sandbox_type(), &exec_output) {
+        if is_likely_sandbox_denied(&exec_output) {
             let snippet = formatted_truncate_text(
                 &aggregated_text,
                 TruncationPolicy::Tokens(UNIFIED_EXEC_OUTPUT_MAX_TOKENS),
@@ -196,14 +195,14 @@ impl UnifiedExecSession {
 
     pub(super) async fn from_spawned(
         spawned: SpawnedPty,
-        sandbox_type: SandboxType,
+        sandboxed: bool,
     ) -> Result<Self, UnifiedExecError> {
         let SpawnedPty {
             session,
             output_rx,
             mut exit_rx,
         } = spawned;
-        let managed = Self::new(session, output_rx, sandbox_type);
+        let managed = Self::new(session, output_rx, sandboxed);
 
         let exit_ready = match exit_rx.try_recv() {
             Ok(_) | Err(TryRecvError::Closed) => true,

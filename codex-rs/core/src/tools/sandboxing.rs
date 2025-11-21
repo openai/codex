@@ -206,7 +206,7 @@ pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
 }
 
 pub(crate) struct SandboxAttempt<'a> {
-    pub sandbox: crate::exec::SandboxType,
+    pub sandboxed: bool,
     pub policy: &'a crate::protocol::SandboxPolicy,
     pub(crate) manager: &'a SandboxManager,
     pub(crate) sandbox_cwd: &'a Path,
@@ -221,7 +221,7 @@ impl<'a> SandboxAttempt<'a> {
         self.manager.transform(
             spec,
             self.policy,
-            self.sandbox,
+            self.sandboxed,
             self.sandbox_cwd,
             self.codex_linux_sandbox_exe,
         )

@@ -5,8 +5,6 @@ use std::path::PathBuf;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
 
-use crate::exec::SandboxType;
-
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
 
@@ -30,7 +28,7 @@ pub fn set_windows_sandbox_enabled(_enabled: bool) {}
 #[derive(Debug, PartialEq)]
 pub enum SafetyCheck {
     AutoApprove {
-        sandbox_type: SandboxType,
+        sandboxed: bool,
         user_explicitly_approved: bool,
     },
     AskUser,
@@ -71,19 +69,19 @@ pub fn assess_patch_safety(
         if matches!(sandbox_policy, SandboxPolicy::DangerFullAccess) {
             // DangerFullAccess is intended to bypass sandboxing entirely.
             SafetyCheck::AutoApprove {
-                sandbox_type: SandboxType::None,
+                sandboxed: false,
                 user_explicitly_approved: false,
             }
         } else {
             // Only auto‑approve when we can actually enforce a sandbox. Otherwise
             // fall back to asking the user because the patch may touch arbitrary
             // paths outside the project.
-            match get_platform_sandbox() {
-                Some(sandbox_type) => SafetyCheck::AutoApprove {
-                    sandbox_type,
+            match get_platform_has_sandbox() {
+                true => SafetyCheck::AutoApprove {
+                    sandboxed: true,
                     user_explicitly_approved: false,
                 },
-                None => SafetyCheck::AskUser,
+                false => SafetyCheck::AskUser,
             }
         }
     } else if policy == AskForApproval::Never {
@@ -96,22 +94,24 @@ pub fn assess_patch_safety(
     }
 }
 
-pub fn get_platform_sandbox() -> Option<SandboxType> {
-    if cfg!(target_os = "macos") {
-        Some(SandboxType::MacosSeatbelt)
-    } else if cfg!(target_os = "linux") {
-        Some(SandboxType::LinuxSeccomp)
-    } else if cfg!(target_os = "windows") {
-        #[cfg(target_os = "windows")]
-        {
-            if WINDOWS_SANDBOX_ENABLED.load(Ordering::Relaxed) {
-                return Some(SandboxType::WindowsRestrictedToken);
-            }
-        }
-        None
-    } else {
-        None
-    }
+#[cfg(target_os = "macos")]
+pub fn get_platform_has_sandbox() -> bool {
+    true
+}
+
+#[cfg(target_os = "linux")]
+pub fn get_platform_has_sandbox() -> bool {
+    true
+}
+
+#[cfg(target_os = "windows")]
+pub fn get_platform_has_sandbox() -> bool {
+    WINDOWS_SANDBOX_ENABLED.load(Ordering::Relaxed)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+pub fn get_platform_has_sandbox() -> bool {
+    false
 }
 
 fn is_write_patch_constrained_to_writable_paths(

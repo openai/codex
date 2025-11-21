@@ -11,7 +11,6 @@ use uuid::Uuid;
 
 use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
-use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
 use crate::exec::StreamOutput;
 use crate::exec::execute_exec_env;
@@ -98,7 +97,7 @@ impl SessionTask for UserShellCommandTask {
             // TODO(zhao-oai): Now that we have ExecExpiration::Cancellation, we
             // should use that instead of an "arbitrarily large" timeout here.
             expiration: USER_SHELL_TIMEOUT_MS.into(),
-            sandbox: SandboxType::None,
+            sandboxed: false,
             with_escalated_permissions: None,
             justification: None,
             arg0: None,

@@ -1,5 +1,3 @@
-#![cfg(target_os = "macos")]
-
 use std::collections::HashMap;
 use std::ffi::CStr;
 use std::path::Path;
@@ -11,8 +9,8 @@ use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
 
-const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("seatbelt_base_policy.sbpl");
-const MACOS_SEATBELT_NETWORK_POLICY: &str = include_str!("seatbelt_network_policy.sbpl");
+const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("../../seatbelt_base_policy.sbpl");
+const MACOS_SEATBELT_NETWORK_POLICY: &str = include_str!("../../seatbelt_network_policy.sbpl");
 
 /// When working with `sandbox-exec`, only consider `sandbox-exec` in `/usr/bin`
 /// to defend against an attacker trying to inject a malicious version on the
@@ -147,6 +145,7 @@ fn confstr_path(name: libc::c_int) -> Option<PathBuf> {
 }
 
 fn macos_dir_params() -> Vec<(String, PathBuf)> {
+    #[cfg(target_os = "macos")]
     if let Some(p) = confstr_path(libc::_CS_DARWIN_USER_CACHE_DIR) {
         return vec![("DARWIN_USER_CACHE_DIR".to_string(), p)];
     }
