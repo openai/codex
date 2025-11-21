@@ -100,12 +100,15 @@ impl ToolOrchestrator {
         }
 
         // 2) First attempt under the selected sandbox.
-        let mut initial_sandbox = self
-            .sandbox
-            .select_initial(&turn_ctx.sandbox_policy, tool.sandbox_preference());
-        if tool.should_bypass_sandbox_first_attempt(req) {
-            initial_sandbox = crate::exec::SandboxType::None;
-        }
+        let initial_sandbox = match tool.sandbox_override(req) {
+            crate::tools::sandboxing::SandboxOverride::BypassSandboxFirstAttempt => {
+                crate::exec::SandboxType::None
+            }
+            crate::tools::sandboxing::SandboxOverride::NoOverride => self
+                .sandbox
+                .select_initial(&turn_ctx.sandbox_policy, tool.sandbox_preference()),
+        };
+
         // Platform-specific flag gating is handled by SandboxManager::select_initial
         // via crate::safety::get_platform_sandbox().
         let initial_attempt = SandboxAttempt {

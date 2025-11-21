@@ -123,6 +123,12 @@ pub(crate) fn default_approval_requirement(
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SandboxOverride {
+    NoOverride,
+    BypassSandboxFirstAttempt,
+}
+
 pub(crate) trait Approvable<Req> {
     type ApprovalKey: Hash + Eq + Clone + Debug + Serialize;
 
@@ -130,9 +136,9 @@ pub(crate) trait Approvable<Req> {
 
     /// Some tools may request to skip the sandbox on the first attempt
     /// (e.g., when the request explicitly asks for escalated permissions).
-    /// Defaults to `false`.
-    fn should_bypass_sandbox_first_attempt(&self, _req: &Req) -> bool {
-        false
+    /// Defaults to `NoOverride`.
+    fn sandbox_override(&self, _req: &Req) -> SandboxOverride {
+        SandboxOverride::NoOverride
     }
 
     fn should_bypass_approval(&self, policy: AskForApproval, already_approved: bool) -> bool {

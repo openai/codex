@@ -12,6 +12,7 @@ use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ApprovalRequirement;
 use crate::tools::sandboxing::ProvidesSandboxRetryData;
 use crate::tools::sandboxing::SandboxAttempt;
+use crate::tools::sandboxing::SandboxOverride;
 use crate::tools::sandboxing::SandboxRetryData;
 use crate::tools::sandboxing::Sandboxable;
 use crate::tools::sandboxing::SandboxablePreference;
@@ -117,14 +118,19 @@ impl Approvable<ShellRequest> for ShellRuntime {
         Some(req.approval_requirement.clone())
     }
 
-    fn should_bypass_sandbox_first_attempt(&self, req: &ShellRequest) -> bool {
-        req.with_escalated_permissions.unwrap_or(false)
+    fn sandbox_override(&self, req: &ShellRequest) -> SandboxOverride {
+        if req.with_escalated_permissions.unwrap_or(false)
             || matches!(
                 req.approval_requirement,
                 ApprovalRequirement::Skip {
                     bypass_sandbox: true
                 }
             )
+        {
+            SandboxOverride::BypassSandboxFirstAttempt
+        } else {
+            SandboxOverride::NoOverride
+        }
     }
 }
 
