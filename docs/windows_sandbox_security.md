@@ -8,7 +8,7 @@ When commands run via `codex sandbox windows …` (or when the CLI/TUI calls int
 
 ## Known Security Limitations
 
-Running `python windows-sandbox-rs/sandbox_smoketests.py` with full filesystem and network access currently results in **37/42** passing cases. The list below focuses on the four high-value failures numbered #32 and higher in the smoketests (earlier tests are less security-focused).
+Running `python windows-sandbox-rs/sandbox_smoketests.py` with full filesystem and network access currently results in **37/41** passing cases. The list below focuses on the four high-value failures numbered #32 and higher in the smoketests (earlier tests are less security-focused).
 
 | Test                                          | Purpose                                                                                                                                                                                                                                                                                                      |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -19,4 +19,4 @@ Running `python windows-sandbox-rs/sandbox_smoketests.py` with full filesystem a
 
 ## Want to Help?
 
-If you are a security-minded Windows user, help us get these tests passing! Improved implementations that make these smoke tests pass meaningfully reduce Codex's escape surface. After iterating, rerun `python windows-sandbox-rs/sandbox_smoketests.py` to validate the fixes and help us drive the suite toward 42/42.
+If you are a security-minded Windows user, help us get these tests passing! Improved implementations that make these smoke tests pass meaningfully reduce Codex's escape surface. After iterating, rerun `python windows-sandbox-rs/sandbox_smoketests.py` to validate the fixes and help us drive the suite toward 41/41.
