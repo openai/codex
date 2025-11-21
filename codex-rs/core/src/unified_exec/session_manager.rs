@@ -566,9 +566,9 @@ impl UnifiedExecSessionManager {
             justification,
             create_approval_requirement_for_command(
                 &exec_policy,
+                &features,
                 command,
                 context.turn.approval_policy,
-                &features,
                 &context.turn.sandbox_policy,
                 SandboxPermissions::from(with_escalated_permissions.unwrap_or(false)),
             ),

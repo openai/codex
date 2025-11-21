@@ -172,9 +172,9 @@ fn allow_prefix_if_applicable(
 
 pub(crate) fn create_approval_requirement_for_command(
     policy: &Policy,
+    features: &Features,
     command: &[String],
     approval_policy: AskForApproval,
-    features: &Features,
     sandbox_policy: &SandboxPolicy,
     sandbox_permissions: SandboxPermissions,
 ) -> ApprovalRequirement {
@@ -350,9 +350,9 @@ prefix_rule(pattern=["rm"], decision="forbidden")
 
         let requirement = create_approval_requirement_for_command(
             &policy,
+            &Features::with_defaults(),
             &forbidden_script,
             AskForApproval::OnRequest,
-            &Features::with_defaults(),
             &SandboxPolicy::DangerFullAccess,
             SandboxPermissions::UseDefault,
         );
@@ -377,9 +377,9 @@ prefix_rule(pattern=["rm"], decision="forbidden")
 
         let requirement = create_approval_requirement_for_command(
             &policy,
+            &Features::with_defaults(),
             &command,
             AskForApproval::OnRequest,
-            &Features::with_defaults(),
             &SandboxPolicy::DangerFullAccess,
             SandboxPermissions::UseDefault,
         );
@@ -405,9 +405,9 @@ prefix_rule(pattern=["rm"], decision="forbidden")
 
         let requirement = create_approval_requirement_for_command(
             &policy,
+            &Features::with_defaults(),
             &command,
             AskForApproval::Never,
-            &Features::with_defaults(),
             &SandboxPolicy::DangerFullAccess,
             SandboxPermissions::UseDefault,
         );
@@ -427,9 +427,9 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         let empty_policy = Policy::empty();
         let requirement = create_approval_requirement_for_command(
             &empty_policy,
+            &Features::with_defaults(),
             &command,
             AskForApproval::UnlessTrusted,
-            &Features::with_defaults(),
             &SandboxPolicy::ReadOnly,
             SandboxPermissions::UseDefault,
         );
@@ -498,9 +498,9 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         let empty_policy = Policy::empty();
         let requirement = create_approval_requirement_for_command(
             &empty_policy,
+            &Features::with_defaults(),
             &command,
             AskForApproval::UnlessTrusted,
-            &Features::with_defaults(),
             &SandboxPolicy::ReadOnly,
             SandboxPermissions::UseDefault,
         );
@@ -523,9 +523,9 @@ prefix_rule(pattern=["rm"], decision="forbidden")
 
         let requirement = create_approval_requirement_for_command(
             &Policy::empty(),
+            &features,
             &command,
             AskForApproval::UnlessTrusted,
-            &features,
             &SandboxPolicy::ReadOnly,
             SandboxPermissions::UseDefault,
         );
@@ -551,9 +551,9 @@ prefix_rule(pattern=["rm"], decision="forbidden")
 
         let requirement = create_approval_requirement_for_command(
             &policy,
+            &Features::with_defaults(),
             &command,
             AskForApproval::OnRequest,
-            &Features::with_defaults(),
             &SandboxPolicy::DangerFullAccess,
             SandboxPermissions::UseDefault,
         );
@@ -576,9 +576,9 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         ];
         let requirement = create_approval_requirement_for_command(
             &Policy::empty(),
+            &Features::with_defaults(),
             &command,
             AskForApproval::UnlessTrusted,
-            &Features::with_defaults(),
             &SandboxPolicy::ReadOnly,
             SandboxPermissions::UseDefault,
         );

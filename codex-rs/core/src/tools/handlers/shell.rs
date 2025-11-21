@@ -243,9 +243,9 @@ impl ShellHandler {
             justification: exec_params.justification.clone(),
             approval_requirement: create_approval_requirement_for_command(
                 &exec_policy,
+                &features,
                 &exec_params.command,
                 turn.approval_policy,
-                &features,
                 &turn.sandbox_policy,
                 SandboxPermissions::from(exec_params.with_escalated_permissions.unwrap_or(false)),
             ),
