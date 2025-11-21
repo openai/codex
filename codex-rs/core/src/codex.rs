@@ -2383,6 +2383,9 @@ use crate::features::Features;
 pub(crate) use tests::make_session_and_context;
 
 #[cfg(test)]
+pub(crate) use tests::make_session_and_context_with_rx;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::ConfigOverrides;
@@ -3211,6 +3214,3 @@ mod tests {
         pretty_assertions::assert_eq!(output, expected);
     }
 }
-
-#[cfg(test)]
-pub(crate) use tests::make_session_and_context_with_rx;

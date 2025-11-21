@@ -415,7 +415,7 @@ mod tests {
             "expected Interrupt op after cancellation"
         );
         assert!(
-            ops.iter().any(|op| matches!(op, Op::Shutdown { .. })),
+            ops.iter().any(|op| matches!(op, Op::Shutdown)),
             "expected Shutdown op after cancellation"
         );
     }
