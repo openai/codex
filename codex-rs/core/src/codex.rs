@@ -543,7 +543,6 @@ impl Session {
             config.model_reasoning_effort,
             config.model_reasoning_summary,
             config.model_context_window,
-            config.model_max_output_tokens,
             config.model_auto_compact_token_limit,
             config.approval_policy,
             config.sandbox_policy.clone(),
