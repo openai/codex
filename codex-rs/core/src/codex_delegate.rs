@@ -13,6 +13,8 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::Submission;
 use codex_protocol::user_input::UserInput;
+use std::time::Duration;
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 use crate::AuthManager;
@@ -60,14 +62,13 @@ pub(crate) async fn run_codex_conversation_interactive(
     let parent_ctx_clone = Arc::clone(&parent_ctx);
     let codex_for_events = Arc::clone(&codex);
     tokio::spawn(async move {
-        let _ = forward_events(
+        forward_events(
             codex_for_events,
             tx_sub,
             parent_session_clone,
             parent_ctx_clone,
-            cancel_token_events.clone(),
+            cancel_token_events,
         )
-        .or_cancel(&cancel_token_events)
         .await;
     });
 
@@ -156,51 +157,91 @@ async fn forward_events(
     parent_ctx: Arc<TurnContext>,
     cancel_token: CancellationToken,
 ) {
-    while let Ok(event) = codex.next_event().await {
-        match event {
-            // ignore all legacy delta events
-            Event {
-                id: _,
-                msg: EventMsg::AgentMessageDelta(_) | EventMsg::AgentReasoningDelta(_),
-            } => continue,
-            Event {
-                id: _,
-                msg: EventMsg::SessionConfigured(_),
-            } => continue,
-            Event {
-                id,
-                msg: EventMsg::ExecApprovalRequest(event),
-            } => {
-                // Initiate approval via parent session; do not surface to consumer.
-                handle_exec_approval(
-                    &codex,
-                    id,
-                    &parent_session,
-                    &parent_ctx,
-                    event,
-                    &cancel_token,
-                )
-                .await;
+    let cancelled = cancel_token.cancelled();
+    tokio::pin!(cancelled);
+
+    loop {
+        tokio::select! {
+            _ = &mut cancelled => {
+                shutdown_delegate(&codex).await;
+                break;
             }
-            Event {
-                id,
-                msg: EventMsg::ApplyPatchApprovalRequest(event),
-            } => {
-                handle_patch_approval(
-                    &codex,
-                    id,
-                    &parent_session,
-                    &parent_ctx,
-                    event,
-                    &cancel_token,
-                )
-                .await;
-            }
-            other => {
-                let _ = tx_sub.send(other).await;
+            event = codex.next_event() => {
+                let event = match event {
+                    Ok(event) => event,
+                    Err(_) => break,
+                };
+                match event {
+                    // ignore all legacy delta events
+                    Event {
+                        id: _,
+                        msg: EventMsg::AgentMessageDelta(_) | EventMsg::AgentReasoningDelta(_),
+                    } => {}
+                    Event {
+                        id: _,
+                        msg: EventMsg::SessionConfigured(_),
+                    } => {}
+                    Event {
+                        id,
+                        msg: EventMsg::ExecApprovalRequest(event),
+                    } => {
+                        // Initiate approval via parent session; do not surface to consumer.
+                        handle_exec_approval(
+                            &codex,
+                            id,
+                            &parent_session,
+                            &parent_ctx,
+                            event,
+                            &cancel_token,
+                        )
+                        .await;
+                    }
+                    Event {
+                        id,
+                        msg: EventMsg::ApplyPatchApprovalRequest(event),
+                    } => {
+                        handle_patch_approval(
+                            &codex,
+                            id,
+                            &parent_session,
+                            &parent_ctx,
+                            event,
+                            &cancel_token,
+                        )
+                        .await;
+                    }
+                    other => {
+                        match tx_sub.send(other).or_cancel(&cancel_token).await {
+                            Ok(Ok(())) => {}
+                            Ok(Err(_)) => break,
+                            Err(_) => {
+                                shutdown_delegate(&codex).await;
+                                break;
+                            }
+                        }
+                    }
+                }
             }
         }
     }
+}
+
+/// Ask the delegate to stop and drain its events so background sends do not hit a closed channel.
+async fn shutdown_delegate(codex: &Codex) {
+    let _ = codex.submit(Op::Interrupt).await;
+    let _ = codex.submit(Op::Shutdown {}).await;
+
+    let _ = timeout(Duration::from_millis(500), async {
+        while let Ok(event) = codex.next_event().await {
+            if matches!(
+                event.msg,
+                EventMsg::TurnAborted(_) | EventMsg::TaskComplete(_)
+            ) {
+                break;
+            }
+        }
+    })
+    .await;
 }
 
 /// Forward ops from a caller to a sub-agent, respecting cancellation.
