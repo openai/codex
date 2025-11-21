@@ -954,7 +954,11 @@ IbATwYj77wg3CFLFKcDYs3tdUqpiniabKcf6zAs=
         restore_env(CODEX_CA_CERT_ENV, codex_env_before);
         restore_env(SSL_CERT_FILE_ENV, ssl_env_before);
 
-        assert!(client.is_ok(), "Failed to build client with bundle: {:?}", client.err());
+        assert!(
+            client.is_ok(),
+            "Failed to build client with bundle: {:?}",
+            client.err()
+        );
     }
 
     #[serial(login_cert_env)]
@@ -1000,6 +1004,9 @@ IbATwYj77wg3CFLFKcDYs3tdUqpiniabKcf6zAs=
 
         assert!(client.is_err());
         let err = client.unwrap_err();
-        assert!(err.to_string().contains("BEGIN CERTIFICATE without matching END"));
+        assert!(
+            err.to_string()
+                .contains("BEGIN CERTIFICATE without matching END")
+        );
     }
 }
