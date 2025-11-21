@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -21,6 +20,7 @@ use http::HeaderMap;
 use http::StatusCode;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use tokio::sync::Mutex;
 
 #[derive(Debug, Default, Clone)]
 struct RecordingState {
@@ -28,13 +28,13 @@ struct RecordingState {
 }
 
 impl RecordingState {
-    fn record(&self, req: Request) {
-        let mut guard = self.stream_requests.lock().unwrap();
+    async fn record(&self, req: Request) {
+        let mut guard = self.stream_requests.lock().await;
         guard.push(req);
     }
 
-    fn take_stream_requests(&self) -> Vec<Request> {
-        let mut guard = self.stream_requests.lock().unwrap();
+    async fn take_stream_requests(&self) -> Vec<Request> {
+        let mut guard = self.stream_requests.lock().await;
         std::mem::take(&mut *guard)
     }
 }
@@ -57,7 +57,7 @@ impl HttpTransport for RecordingTransport {
     }
 
     async fn stream(&self, req: Request) -> Result<StreamResponse, TransportError> {
-        self.state.record(req);
+        self.state.record(req).await;
 
         let stream = futures::stream::iter(Vec::<Result<Bytes, TransportError>>::new());
         Ok(StreamResponse {
@@ -141,7 +141,7 @@ async fn chat_client_uses_chat_completions_path_for_chat_wire() {
         .await
         .expect("stream should succeed");
 
-    let requests = state.take_stream_requests();
+    let requests = state.take_stream_requests().await;
     assert_path_ends_with(&requests, "/chat/completions");
 }
 
@@ -157,7 +157,7 @@ async fn chat_client_uses_responses_path_for_responses_wire() {
         .await
         .expect("stream should succeed");
 
-    let requests = state.take_stream_requests();
+    let requests = state.take_stream_requests().await;
     assert_path_ends_with(&requests, "/responses");
 }
 
@@ -173,7 +173,7 @@ async fn responses_client_uses_responses_path_for_responses_wire() {
         .await
         .expect("stream should succeed");
 
-    let requests = state.take_stream_requests();
+    let requests = state.take_stream_requests().await;
     assert_path_ends_with(&requests, "/responses");
 }
 
@@ -189,7 +189,7 @@ async fn responses_client_uses_chat_path_for_chat_wire() {
         .await
         .expect("stream should succeed");
 
-    let requests = state.take_stream_requests();
+    let requests = state.take_stream_requests().await;
     assert_path_ends_with(&requests, "/chat/completions");
 }
 
@@ -206,7 +206,7 @@ async fn streaming_client_adds_auth_headers() {
         .await
         .expect("stream should succeed");
 
-    let requests = state.take_stream_requests();
+    let requests = state.take_stream_requests().await;
     assert_eq!(requests.len(), 1);
     let req = &requests[0];
 
@@ -241,8 +241,8 @@ impl FlakyTransport {
         }
     }
 
-    fn attempts(&self) -> i64 {
-        *self.state.lock().unwrap()
+    async fn attempts(&self) -> i64 {
+        *self.state.lock().await
     }
 }
 
@@ -253,7 +253,7 @@ impl HttpTransport for FlakyTransport {
     }
 
     async fn stream(&self, _req: Request) -> Result<StreamResponse, TransportError> {
-        let mut attempts = self.state.lock().unwrap();
+        let mut attempts = self.state.lock().await;
         *attempts += 1;
 
         if *attempts == 1 {
@@ -317,5 +317,5 @@ async fn streaming_client_retries_on_transport_error() {
         .stream_prompt("gpt-test", &prompt, options)
         .await
         .expect("stream should start after retries");
-    assert_eq!(transport.attempts(), 2);
+    assert_eq!(transport.attempts().await, 2);
 }
