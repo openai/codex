@@ -16,7 +16,6 @@ use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
-use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
 use codex_protocol::user_input::UserInput as CoreUserInput;
 use mcp_types::ContentBlock as McpContentBlock;
 use schemars::JsonSchema;
@@ -264,35 +263,6 @@ pub enum CommandAction {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
-pub enum SubAgentSource {
-    Review,
-    Compact,
-    Other(String),
-}
-
-impl From<CoreSubAgentSource> for SubAgentSource {
-    fn from(value: CoreSubAgentSource) -> Self {
-        match value {
-            CoreSubAgentSource::Review => SubAgentSource::Review,
-            CoreSubAgentSource::Compact => SubAgentSource::Compact,
-            CoreSubAgentSource::Other(label) => SubAgentSource::Other(label),
-        }
-    }
-}
-
-impl From<SubAgentSource> for CoreSubAgentSource {
-    fn from(value: SubAgentSource) -> Self {
-        match value {
-            SubAgentSource::Review => CoreSubAgentSource::Review,
-            SubAgentSource::Compact => CoreSubAgentSource::Compact,
-            SubAgentSource::Other(label) => CoreSubAgentSource::Other(label),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase", export_to = "v2/")]
 #[derive(Default)]
 pub enum SessionSource {
     Cli,
@@ -301,8 +271,7 @@ pub enum SessionSource {
     #[default]
     VsCode,
     Exec,
-    Mcp,
-    SubAgent(SubAgentSource),
+    AppServer,
     #[serde(other)]
     Unknown,
 }
@@ -313,8 +282,8 @@ impl From<CoreSessionSource> for SessionSource {
             CoreSessionSource::Cli => SessionSource::Cli,
             CoreSessionSource::VSCode => SessionSource::VsCode,
             CoreSessionSource::Exec => SessionSource::Exec,
-            CoreSessionSource::Mcp => SessionSource::Mcp,
-            CoreSessionSource::SubAgent(source) => SessionSource::SubAgent(source.into()),
+            CoreSessionSource::Mcp => SessionSource::AppServer,
+            CoreSessionSource::SubAgent(_) => SessionSource::Unknown,
             CoreSessionSource::Unknown => SessionSource::Unknown,
         }
     }
@@ -326,8 +295,7 @@ impl From<SessionSource> for CoreSessionSource {
             SessionSource::Cli => CoreSessionSource::Cli,
             SessionSource::VsCode => CoreSessionSource::VSCode,
             SessionSource::Exec => CoreSessionSource::Exec,
-            SessionSource::Mcp => CoreSessionSource::Mcp,
-            SessionSource::SubAgent(source) => CoreSessionSource::SubAgent(source.into()),
+            SessionSource::AppServer => CoreSessionSource::Mcp,
             SessionSource::Unknown => CoreSessionSource::Unknown,
         }
     }
