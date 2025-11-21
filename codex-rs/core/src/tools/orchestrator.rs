@@ -14,6 +14,7 @@ use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ApprovalRequirement;
 use crate::tools::sandboxing::ProvidesSandboxRetryData;
 use crate::tools::sandboxing::SandboxAttempt;
+use crate::tools::sandboxing::SandboxOverride;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
@@ -100,11 +101,9 @@ impl ToolOrchestrator {
         }
 
         // 2) First attempt under the selected sandbox.
-        let initial_sandbox = match tool.sandbox_override(req) {
-            crate::tools::sandboxing::SandboxOverride::BypassSandboxFirstAttempt => {
-                crate::exec::SandboxType::None
-            }
-            crate::tools::sandboxing::SandboxOverride::NoOverride => self
+        let initial_sandbox = match tool.sandbox_mode_for_first_attempt(req) {
+            SandboxOverride::BypassSandboxFirstAttempt => crate::exec::SandboxType::None,
+            SandboxOverride::NoOverride => self
                 .sandbox
                 .select_initial(&turn_ctx.sandbox_policy, tool.sandbox_preference()),
         };
