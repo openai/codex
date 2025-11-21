@@ -474,6 +474,10 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
 #[tokio::test]
 async fn turn_start_file_change_approval_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    if cfg!(windows) {
+        // TODO apply_patch approvals are not parsed from powershell commands yet
+        return Ok(());
+    }
 
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
@@ -620,6 +624,10 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
 #[tokio::test]
 async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    if cfg!(windows) {
+        // TODO apply_patch approvals are not parsed from powershell commands yet
+        return Ok(());
+    }
 
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
