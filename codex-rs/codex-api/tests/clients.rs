@@ -57,7 +57,7 @@ impl HttpTransport for RecordingTransport {
     }
 
     async fn stream(&self, req: Request) -> Result<StreamResponse, TransportError> {
-        self.state.record(req.clone());
+        self.state.record(req);
 
         let stream = futures::stream::iter(Vec::<Result<Bytes, TransportError>>::new());
         Ok(StreamResponse {
