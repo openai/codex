@@ -20,6 +20,7 @@ regex-lite = { workspace = true }
 tokio-util = { version = "0.7", features = ["codec"] }
 
 [dev-dependencies]
+anyhow = { workspace = true }
 assert_matches = { workspace = true }
 pretty_assertions = { workspace = true }
 tokio-test = "0.4"

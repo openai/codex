@@ -847,6 +847,7 @@ dependencies = [
 name = "codex-api"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "assert_matches",
  "async-trait",
  "bytes",
