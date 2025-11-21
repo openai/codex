@@ -1,0 +1,5 @@
+﻿PackageIdentifier: OpenAI.Codex
+PackageVersion: {{VERSION}}
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.5.0
