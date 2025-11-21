@@ -303,12 +303,25 @@ fn restore_to_commit_inner(
     repo_prefix: Option<&Path>,
     commit_id: &str,
 ) -> Result<(), GitToolingError> {
+    let temp_index = Builder::new().prefix("codex-restore-index-").tempdir()?;
+    let index_path = temp_index.path().join("index");
+    let base_env = vec![(
+        OsString::from("GIT_INDEX_FILE"),
+        OsString::from(index_path.as_os_str()),
+    )];
+
+    run_git_for_status(
+        repo_root,
+        vec![OsString::from("read-tree"), OsString::from(commit_id)],
+        Some(base_env.as_slice()),
+    )?;
+
     let mut restore_args = vec![
         OsString::from("restore"),
         OsString::from("--source"),
         OsString::from(commit_id),
-        OsString::from("--worktree"),
         OsString::from("--staged"),
+        OsString::from("--worktree"),
         OsString::from("--"),
     ];
     if let Some(prefix) = repo_prefix {
@@ -317,7 +330,7 @@ fn restore_to_commit_inner(
         restore_args.push(OsString::from("."));
     }
 
-    run_git_for_status(repo_root, restore_args, None)?;
+    run_git_for_status(repo_root, restore_args, Some(base_env.as_slice()))?;
     Ok(())
 }
 
@@ -502,6 +515,21 @@ mod tests {
         String::from_utf8_lossy(&output.stdout).trim().to_string()
     }
 
+    fn commit_with_test_identity(repo_path: &Path, message: &str) {
+        run_git_in(
+            repo_path,
+            &[
+                "-c",
+                "user.name=Tester",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                message,
+            ],
+        );
+    }
+
     /// Initializes a repository with consistent settings for cross-platform tests.
     fn init_test_repo(repo: &Path) {
         run_git_in(repo, &["init", "--initial-branch=main"]);
@@ -517,18 +545,7 @@ mod tests {
         std::fs::write(repo.join("tracked.txt"), "initial\n")?;
         std::fs::write(repo.join("delete-me.txt"), "to be removed\n")?;
         run_git_in(repo, &["add", "tracked.txt", "delete-me.txt"]);
-        run_git_in(
-            repo,
-            &[
-                "-c",
-                "user.name=Tester",
-                "-c",
-                "user.email=test@example.com",
-                "commit",
-                "-m",
-                "init",
-            ],
-        );
+        commit_with_test_identity(repo, "init");
 
         let preexisting_untracked = repo.join("notes.txt");
         std::fs::write(&preexisting_untracked, "notes before\n")?;
@@ -580,6 +597,38 @@ mod tests {
     }
 
     #[test]
+    /// Ensures restoring a ghost commit does not stage previously unstaged changes.
+    fn restore_preserves_unstaged_changes_in_index() -> Result<(), GitToolingError> {
+        let temp = tempfile::tempdir()?;
+        let repo = temp.path();
+        init_test_repo(repo);
+
+        let tracked = repo.join("tracked.txt");
+        std::fs::write(&tracked, "before undo\n")?;
+        run_git_in(repo, &["add", "tracked.txt"]);
+        commit_with_test_identity(repo, "track file");
+
+        std::fs::write(&tracked, "preexisting unstaged change\n")?;
+        let ghost = create_ghost_commit(&CreateGhostCommitOptions::new(repo))?;
+
+        std::fs::write(&tracked, "turn edit\n")?;
+
+        restore_ghost_commit(repo, &ghost)?;
+
+        let tracked_after = std::fs::read_to_string(&tracked)?;
+        assert_eq!(tracked_after, "preexisting unstaged change\n");
+        let status_output = Command::new("git")
+            .args(["status", "--short"])
+            .current_dir(repo)
+            .output()
+            .expect("git status");
+        let status = String::from_utf8(status_output.stdout).expect("utf8 status");
+        assert_eq!(status.trim_end(), " M tracked.txt");
+
+        Ok(())
+    }
+
+    #[test]
     fn create_snapshot_reports_large_untracked_dirs() -> Result<(), GitToolingError> {
         let temp = tempfile::tempdir()?;
         let repo = temp.path();
@@ -587,18 +636,7 @@ mod tests {
 
         std::fs::write(repo.join("tracked.txt"), "contents\n")?;
         run_git_in(repo, &["add", "tracked.txt"]);
-        run_git_in(
-            repo,
-            &[
-                "-c",
-                "user.name=Tester",
-                "-c",
-                "user.email=test@example.com",
-                "commit",
-                "-m",
-                "initial",
-            ],
-        );
+        commit_with_test_identity(repo, "initial");
 
         let models = repo.join("models");
         std::fs::create_dir(&models)?;
@@ -633,18 +671,7 @@ mod tests {
         std::fs::create_dir(&src)?;
         std::fs::write(src.join("main.rs"), "fn main() {}\n")?;
         run_git_in(repo, &["add", "src/main.rs"]);
-        run_git_in(
-            repo,
-            &[
-                "-c",
-                "user.name=Tester",
-                "-c",
-                "user.email=test@example.com",
-                "commit",
-                "-m",
-                "initial",
-            ],
-        );
+        commit_with_test_identity(repo, "initial");
 
         // Create a large untracked tree nested under the tracked src directory.
         let generated = src.join("generated").join("cache");
@@ -705,18 +732,7 @@ mod tests {
 
         std::fs::write(repo.join("tracked.txt"), "contents\n")?;
         run_git_in(repo, &["add", "tracked.txt"]);
-        run_git_in(
-            repo,
-            &[
-                "-c",
-                "user.name=Tester",
-                "-c",
-                "user.email=test@example.com",
-                "commit",
-                "-m",
-                "initial",
-            ],
-        );
+        commit_with_test_identity(repo, "initial");
 
         let message = "custom message";
         let ghost = create_ghost_commit(&CreateGhostCommitOptions::new(repo).message(message))?;
@@ -758,18 +774,7 @@ mod tests {
         std::fs::write(repo.join("root.txt"), "root contents\n")?;
         std::fs::write(workspace.join("nested.txt"), "nested contents\n")?;
         run_git_in(repo, &["add", "."]);
-        run_git_in(
-            repo,
-            &[
-                "-c",
-                "user.name=Tester",
-                "-c",
-                "user.email=test@example.com",
-                "commit",
-                "-m",
-                "initial",
-            ],
-        );
+        commit_with_test_identity(repo, "initial");
 
         std::fs::write(repo.join("root.txt"), "root modified\n")?;
         std::fs::write(workspace.join("nested.txt"), "nested modified\n")?;
@@ -802,18 +807,7 @@ mod tests {
         std::fs::write(repo.join(".gitignore"), ".vscode/\n")?;
         std::fs::write(workspace.join("tracked.txt"), "snapshot version\n")?;
         run_git_in(repo, &["add", "."]);
-        run_git_in(
-            repo,
-            &[
-                "-c",
-                "user.name=Tester",
-                "-c",
-                "user.email=test@example.com",
-                "commit",
-                "-m",
-                "initial",
-            ],
-        );
+        commit_with_test_identity(repo, "initial");
 
         std::fs::write(workspace.join("tracked.txt"), "snapshot delta\n")?;
         let ghost = create_ghost_commit(&CreateGhostCommitOptions::new(&workspace))?;
@@ -847,18 +841,7 @@ mod tests {
         std::fs::create_dir_all(&vscode)?;
         std::fs::write(vscode.join("settings.json"), "{\n  \"before\": true\n}\n")?;
         run_git_in(repo, &["add", ".gitignore", "tracked.txt"]);
-        run_git_in(
-            repo,
-            &[
-                "-c",
-                "user.name=Tester",
-                "-c",
-                "user.email=test@example.com",
-                "commit",
-                "-m",
-                "initial",
-            ],
-        );
+        commit_with_test_identity(repo, "initial");
 
         std::fs::write(repo.join("tracked.txt"), "snapshot delta\n")?;
         let ghost = create_ghost_commit(&CreateGhostCommitOptions::new(repo))?;
@@ -889,18 +872,7 @@ mod tests {
         std::fs::write(repo.join(".gitignore"), ".vscode/\n")?;
         std::fs::write(repo.join("tracked.txt"), "snapshot version\n")?;
         run_git_in(repo, &["add", ".gitignore", "tracked.txt"]);
-        run_git_in(
-            repo,
-            &[
-                "-c",
-                "user.name=Tester",
-                "-c",
-                "user.email=test@example.com",
-                "commit",
-                "-m",
-                "initial",
-            ],
-        );
+        commit_with_test_identity(repo, "initial");
 
         let ghost = create_ghost_commit(&CreateGhostCommitOptions::new(repo))?;
 
