@@ -150,7 +150,6 @@ async fn on_exec_approval_response(
         .submit(Op::ExecApproval {
             id: event_id,
             decision: response.decision,
-            allow_prefix: None,
         })
         .await
     {
