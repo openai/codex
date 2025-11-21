@@ -338,3 +338,85 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_channel::bounded;
+    use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::RawResponseItemEvent;
+    use codex_protocol::protocol::TurnAbortReason;
+    use codex_protocol::protocol::TurnAbortedEvent;
+    use pretty_assertions::assert_eq;
+
+    #[tokio::test]
+    async fn forward_events_cancelled_while_send_blocked_shuts_down_delegate() {
+        let (tx_events, rx_events) = bounded(1);
+        let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+        let codex = Arc::new(Codex {
+            next_id: AtomicU64::new(0),
+            tx_sub,
+            rx_event: rx_events,
+        });
+
+        let (session, ctx, _rx_evt) = crate::codex::make_session_and_context_with_rx();
+
+        let (tx_out, rx_out) = bounded(1);
+        tx_out
+            .send(Event {
+                id: "full".to_string(),
+                msg: EventMsg::TurnAborted(TurnAbortedEvent {
+                    reason: TurnAbortReason::Interrupted,
+                }),
+            })
+            .await
+            .unwrap();
+
+        let cancel = CancellationToken::new();
+        let forward = tokio::spawn(forward_events(
+            Arc::clone(&codex),
+            tx_out.clone(),
+            session,
+            ctx,
+            cancel.clone(),
+        ));
+
+        tx_events
+            .send(Event {
+                id: "evt".to_string(),
+                msg: EventMsg::RawResponseItem(RawResponseItemEvent {
+                    item: ResponseItem::CustomToolCall {
+                        id: None,
+                        status: None,
+                        call_id: "call-1".to_string(),
+                        name: "tool".to_string(),
+                        input: "{}".to_string(),
+                    },
+                }),
+            })
+            .await
+            .unwrap();
+
+        drop(tx_events);
+        cancel.cancel();
+        timeout(std::time::Duration::from_millis(1000), forward)
+            .await
+            .expect("forward_events hung")
+            .expect("forward_events join error");
+
+        let received = rx_out.recv().await.expect("prefilled event missing");
+        assert_eq!("full", received.id);
+        let mut ops = Vec::new();
+        while let Ok(sub) = rx_sub.try_recv() {
+            ops.push(sub.op);
+        }
+        assert!(
+            ops.iter().any(|op| matches!(op, Op::Interrupt)),
+            "expected Interrupt op after cancellation"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(op, Op::Shutdown { .. })),
+            "expected Shutdown op after cancellation"
+        );
+    }
+}

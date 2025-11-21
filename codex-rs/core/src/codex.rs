@@ -2658,7 +2658,7 @@ mod tests {
 
     // Like make_session_and_context, but returns Arc<Session> and the event receiver
     // so tests can assert on emitted events.
-    fn make_session_and_context_with_rx() -> (
+    pub(crate) fn make_session_and_context_with_rx() -> (
         Arc<Session>,
         Arc<TurnContext>,
         async_channel::Receiver<Event>,
@@ -3211,3 +3211,6 @@ mod tests {
         pretty_assertions::assert_eq!(output, expected);
     }
 }
+
+#[cfg(test)]
+pub(crate) use tests::make_session_and_context_with_rx;
