@@ -114,44 +114,18 @@ pub async fn process_chat_sse<S>(
         };
 
         for choice in choices {
-            let finish_reason = choice.get("finish_reason").and_then(|r| r.as_str());
-            if finish_reason == Some("stop") {
-                if let Some(reasoning) = reasoning_item.take() {
-                    let _ = tx_event
-                        .send(Ok(ResponseEvent::OutputItemDone(reasoning)))
-                        .await;
-                }
-
-                if let Some(assistant) = assistant_item.take() {
-                    let _ = tx_event
-                        .send(Ok(ResponseEvent::OutputItemDone(assistant)))
-                        .await;
-                }
-                if !completed_sent {
-                    let _ = tx_event
-                        .send(Ok(ResponseEvent::Completed {
-                            response_id: String::new(),
-                            token_usage: None,
-                        }))
-                        .await;
-                    completed_sent = true;
-                }
-                continue;
-            }
-
-            if finish_reason == Some("length") {
-                let _ = tx_event
-                    .send(Err(ApiError::Stream("context window exceeded".to_string())))
-                    .await;
-                return;
-            }
-
             if let Some(delta) = choice.get("delta") {
-                if let Some(reasoning) = delta.get("reasoning")
-                    && reasoning.is_string()
-                {
-                    let text = reasoning.as_str().unwrap_or_default().to_string();
-                    append_reasoning_text(&tx_event, &mut reasoning_item, text).await;
+                if let Some(reasoning) = delta.get("reasoning") {
+                    if let Some(text) = reasoning.as_str() {
+                        append_reasoning_text(&tx_event, &mut reasoning_item, text.to_string())
+                            .await;
+                    } else if let Some(text) = reasoning.get("text").and_then(|v| v.as_str()) {
+                        append_reasoning_text(&tx_event, &mut reasoning_item, text.to_string())
+                            .await;
+                    } else if let Some(text) = reasoning.get("content").and_then(|v| v.as_str()) {
+                        append_reasoning_text(&tx_event, &mut reasoning_item, text.to_string())
+                            .await;
+                    }
                 }
 
                 if let Some(content) = delta.get("content") {
@@ -199,7 +173,57 @@ pub async fn process_chat_sse<S>(
                 }
             }
 
-            if choice.get("finish_reason").and_then(|v| v.as_str()) == Some("tool_calls") {
+            if let Some(message) = choice.get("message")
+                && let Some(reasoning) = message.get("reasoning")
+            {
+                if let Some(text) = reasoning.as_str() {
+                    append_reasoning_text(&tx_event, &mut reasoning_item, text.to_string()).await;
+                } else if let Some(text) = reasoning.get("text").and_then(|v| v.as_str()) {
+                    append_reasoning_text(&tx_event, &mut reasoning_item, text.to_string()).await;
+                } else if let Some(text) = reasoning.get("content").and_then(|v| v.as_str()) {
+                    append_reasoning_text(&tx_event, &mut reasoning_item, text.to_string()).await;
+                }
+            }
+
+            let finish_reason = choice.get("finish_reason").and_then(|r| r.as_str());
+            if finish_reason == Some("stop") {
+                if let Some(reasoning) = reasoning_item.take() {
+                    let _ = tx_event
+                        .send(Ok(ResponseEvent::OutputItemDone(reasoning)))
+                        .await;
+                }
+
+                if let Some(assistant) = assistant_item.take() {
+                    let _ = tx_event
+                        .send(Ok(ResponseEvent::OutputItemDone(assistant)))
+                        .await;
+                }
+                if !completed_sent {
+                    let _ = tx_event
+                        .send(Ok(ResponseEvent::Completed {
+                            response_id: String::new(),
+                            token_usage: None,
+                        }))
+                        .await;
+                    completed_sent = true;
+                }
+                continue;
+            }
+
+            if finish_reason == Some("length") {
+                let _ = tx_event
+                    .send(Err(ApiError::Stream("context window exceeded".to_string())))
+                    .await;
+                return;
+            }
+
+            if finish_reason == Some("tool_calls") {
+                if let Some(reasoning) = reasoning_item.take() {
+                    let _ = tx_event
+                        .send(Ok(ResponseEvent::OutputItemDone(reasoning)))
+                        .await;
+                }
+
                 let Some(call_id) = fn_call_state.call_id.take() else {
                     continue;
                 };

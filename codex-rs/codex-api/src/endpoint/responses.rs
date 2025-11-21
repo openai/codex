@@ -1,14 +1,19 @@
 use crate::auth::AuthProvider;
+use crate::common::Prompt as ApiPrompt;
+use crate::common::Reasoning;
 use crate::common::ResponseStream;
+use crate::common::TextControls;
 use crate::endpoint::streaming::StreamingClient;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::provider::WireApi;
 use crate::requests::ResponsesRequest;
+use crate::requests::ResponsesRequestBuilder;
 use crate::sse::spawn_response_stream;
 use crate::telemetry::SseTelemetry;
 use codex_client::HttpTransport;
 use codex_client::RequestTelemetry;
+use codex_protocol::protocol::SessionSource;
 use http::HeaderMap;
 use serde_json::Value;
 use std::sync::Arc;
@@ -39,6 +44,33 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         request: ResponsesRequest,
     ) -> Result<ResponseStream, ApiError> {
         self.stream(request.body, request.headers).await
+    }
+
+    pub async fn stream_prompt(
+        &self,
+        model: &str,
+        prompt: &ApiPrompt,
+        reasoning: Option<Reasoning>,
+        include: Vec<String>,
+        prompt_cache_key: Option<String>,
+        text: Option<TextControls>,
+        store_override: Option<bool>,
+        conversation_id: Option<String>,
+        session_source: Option<SessionSource>,
+    ) -> Result<ResponseStream, ApiError> {
+        let request = ResponsesRequestBuilder::new(model, &prompt.instructions, &prompt.input)
+            .tools(&prompt.tools)
+            .parallel_tool_calls(prompt.parallel_tool_calls)
+            .reasoning(reasoning)
+            .include(include)
+            .prompt_cache_key(prompt_cache_key)
+            .text(text)
+            .conversation(conversation_id)
+            .session_source(session_source)
+            .store_override(store_override)
+            .build(self.streaming.provider())?;
+
+        self.stream_request(request).await
     }
 
     fn path(&self) -> &'static str {

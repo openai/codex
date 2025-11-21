@@ -47,7 +47,7 @@ impl WithStatus for StreamResponse {
 pub(crate) async fn run_with_request_telemetry<T, F, Fut>(
     policy: RetryPolicy,
     telemetry: Option<Arc<dyn RequestTelemetry>>,
-    mut make_request: impl FnMut() -> Request,
+    make_request: impl FnMut() -> Request,
     send: F,
 ) -> Result<T, TransportError>
 where
@@ -55,25 +55,21 @@ where
     F: Clone + Fn(Request) -> Fut,
     Fut: Future<Output = Result<T, TransportError>>,
 {
-    run_with_retry(
-        policy,
-        move || make_request(),
-        move |req, attempt| {
-            let telemetry = telemetry.clone();
-            let send = send.clone();
-            async move {
-                let start = Instant::now();
-                let result = send(req).await;
-                if let Some(t) = telemetry.as_ref() {
-                    let (status, err) = match &result {
-                        Ok(resp) => (Some(resp.status()), None),
-                        Err(err) => (None, Some(err)),
-                    };
-                    t.on_request(attempt, status, err, start.elapsed());
-                }
-                result
+    run_with_retry(policy, make_request, move |req, attempt| {
+        let telemetry = telemetry.clone();
+        let send = send.clone();
+        async move {
+            let start = Instant::now();
+            let result = send(req).await;
+            if let Some(t) = telemetry.as_ref() {
+                let (status, err) = match &result {
+                    Ok(resp) => (Some(resp.status()), None),
+                    Err(err) => (None, Some(err)),
+                };
+                t.on_request(attempt, status, err, start.elapsed());
             }
-        },
-    )
+            result
+        }
+    })
     .await
 }

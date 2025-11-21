@@ -6,15 +6,20 @@ pub mod provider;
 pub mod rate_limits;
 pub mod requests;
 pub mod sse;
-pub mod stream;
 pub mod telemetry;
 
+pub use codex_client::RequestTelemetry;
+pub use codex_client::ReqwestTransport;
+pub use codex_client::TransportError;
+
 pub use crate::auth::AuthProvider;
+pub use crate::common::CompactionInput;
 pub use crate::common::Prompt;
 pub use crate::common::ResponseEvent;
 pub use crate::common::ResponseStream;
 pub use crate::common::ResponsesApiRequest;
 pub use crate::common::create_text_param_for_request;
+pub use crate::endpoint::chat::AggregateStreamExt;
 pub use crate::endpoint::chat::ChatClient;
 pub use crate::endpoint::compact::CompactClient;
 pub use crate::endpoint::responses::ResponsesClient;
@@ -26,6 +31,4 @@ pub use crate::requests::ChatRequestBuilder;
 pub use crate::requests::ResponsesRequest;
 pub use crate::requests::ResponsesRequestBuilder;
 pub use crate::sse::stream_from_fixture;
-pub use crate::stream::AggregateStreamExt;
-pub use crate::stream::AggregatedStream;
 pub use crate::telemetry::SseTelemetry;

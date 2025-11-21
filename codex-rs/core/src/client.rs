@@ -4,18 +4,20 @@ use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::create_transport;
 use crate::api_bridge::map_api_error;
 use crate::api_bridge::to_api_provider;
+use codex_api::AggregateStreamExt;
 use codex_api::ChatClient as ApiChatClient;
 use codex_api::CompactClient as ApiCompactClient;
+use codex_api::CompactionInput as ApiCompactionInput;
+use codex_api::Prompt as ApiPrompt;
+use codex_api::RequestTelemetry;
+use codex_api::ResponseStream as ApiResponseStream;
 use codex_api::ResponsesClient as ApiResponsesClient;
-use codex_api::ResponsesRequestBuilder;
 use codex_api::SseTelemetry;
+use codex_api::TransportError;
 use codex_api::common::Reasoning;
 use codex_api::create_text_param_for_request;
 use codex_api::error::ApiError;
-use codex_api::requests::ChatRequestBuilder as ApiChatRequestBuilder;
 use codex_app_server_protocol::AuthMode;
-use codex_client::RequestTelemetry;
-use codex_client::TransportError;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
@@ -29,7 +31,6 @@ use http::HeaderMap as ApiHeaderMap;
 use http::HeaderValue;
 use http::StatusCode as HttpStatusCode;
 use reqwest::StatusCode;
-use serde::Serialize;
 use serde_json::Value;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -37,13 +38,10 @@ use tracing::warn;
 
 use crate::AuthManager;
 use crate::auth::RefreshTokenError;
-use crate::chat_completions::AggregateStreamExt;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::config::Config;
-use crate::default_client::CodexHttpClient;
-use crate::default_client::create_client;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
@@ -54,19 +52,11 @@ use crate::openai_model_info::get_model_info;
 use crate::tools::spec::create_tools_json_for_chat_completions_api;
 use crate::tools::spec::create_tools_json_for_responses_api;
 
-#[derive(Debug, Serialize)]
-struct CompactHistoryRequest<'a> {
-    model: &'a str,
-    input: &'a [ResponseItem],
-    instructions: &'a str,
-}
-
 #[derive(Debug, Clone)]
 pub struct ModelClient {
     config: Arc<Config>,
     auth_manager: Option<Arc<AuthManager>>,
     otel_event_manager: OtelEventManager,
-    client: CodexHttpClient,
     provider: ModelProviderInfo,
     conversation_id: ConversationId,
     effort: Option<ReasoningEffortConfig>,
@@ -86,13 +76,10 @@ impl ModelClient {
         conversation_id: ConversationId,
         session_source: SessionSource,
     ) -> Self {
-        let client = create_client();
-
         Self {
             config,
             auth_manager,
             otel_event_manager,
-            client,
             provider,
             conversation_id,
             effort,
@@ -123,42 +110,37 @@ impl ModelClient {
         &self.provider
     }
 
+    /// Streams a single model turn using either the Responses or Chat
+    /// Completions wire API, depending on the configured provider.
+    ///
+    /// For Chat providers, the underlying stream is optionally aggregated
+    /// based on the `show_raw_agent_reasoning` flag in the config.
     pub async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
         match self.provider.wire_api {
-            WireApi::Responses => self.stream_responses(prompt).await,
+            WireApi::Responses => self.stream_responses_api(prompt).await,
             WireApi::Chat => {
-                let response_stream = self.stream_chat(prompt).await?;
+                let api_stream = self.stream_chat_completions(prompt).await?;
 
-                // Wrap it with the aggregation adapter so callers see *only*
-                // the final assistant message per turn (matching the
-                // behaviour of the Responses API).
-                let mut aggregated = if self.config.show_raw_agent_reasoning {
-                    response_stream.streaming_mode()
+                if self.config.show_raw_agent_reasoning {
+                    Ok(map_response_stream(
+                        api_stream.streaming_mode(),
+                        self.otel_event_manager.clone(),
+                    ))
                 } else {
-                    response_stream.aggregate()
-                };
-
-                // Bridge the aggregated stream back into a standard
-                // `ResponseStream` by forwarding events through a channel.
-                let (tx, rx) = mpsc::channel::<Result<ResponseEvent>>(16);
-
-                tokio::spawn(async move {
-                    use futures::StreamExt;
-                    while let Some(ev) = aggregated.next().await {
-                        // Exit early if receiver hung up.
-                        if tx.send(ev).await.is_err() {
-                            break;
-                        }
-                    }
-                });
-
-                Ok(ResponseStream { rx_event: rx })
+                    Ok(map_response_stream(
+                        api_stream.aggregate(),
+                        self.otel_event_manager.clone(),
+                    ))
+                }
             }
         }
     }
 
-    /// Implementation for the OpenAI *Responses* experimental API.
-    async fn stream_chat(&self, prompt: &Prompt) -> Result<ResponseStream> {
+    /// Streams a turn via the OpenAI Chat Completions API.
+    ///
+    /// This path is only used when the provider is configured with
+    /// `WireApi::Chat`; it does not support `output_schema` today.
+    async fn stream_chat_completions(&self, prompt: &Prompt) -> Result<ApiResponseStream> {
         if prompt.output_schema.is_some() {
             return Err(CodexErr::UnsupportedOperation(
                 "output_schema is not supported for Chat Completions API".to_string(),
@@ -169,8 +151,8 @@ impl ModelClient {
         let instructions = prompt
             .get_full_instructions(&self.config.model_family)
             .into_owned();
-        let input_with_instructions = prompt.get_formatted_input();
         let tools_json = create_tools_json_for_chat_completions_api(&prompt.tools)?;
+        let api_prompt = build_api_prompt(prompt, instructions, tools_json);
         let conversation_id = self.conversation_id.to_string();
         let session_source = self.session_source.clone();
 
@@ -180,71 +162,41 @@ impl ModelClient {
             let api_provider = to_api_provider(&self.provider, auth.as_ref().map(|a| a.mode))?;
             let api_auth = auth_provider_from_auth(auth.clone(), &self.provider).await?;
             let transport = create_transport();
-            let telemetry = Arc::new(ApiTelemetry::new(self.otel_event_manager.clone()));
-            let request_telemetry: Arc<dyn RequestTelemetry> = telemetry.clone();
-            let sse_telemetry: Arc<dyn SseTelemetry> = telemetry;
-
-            let request = ApiChatRequestBuilder::new(
-                &self.config.model,
-                &instructions,
-                &input_with_instructions,
-                &tools_json,
-            )
-            .conversation_id(Some(conversation_id.clone()))
-            .session_source(Some(session_source.clone()))
-            .build(&api_provider)
-            .map_err(map_api_error)?;
-
+            let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
             let client = ApiChatClient::new(transport, api_provider, api_auth)
                 .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
 
-            let stream_result = client.stream_request(request).await;
+            let stream_result = client
+                .stream_prompt(
+                    &self.config.model,
+                    &api_prompt,
+                    Some(conversation_id.clone()),
+                    Some(session_source.clone()),
+                )
+                .await;
 
             match stream_result {
-                Ok(stream) => {
-                    return Ok(map_response_stream(stream, self.otel_event_manager.clone()));
-                }
+                Ok(stream) => return Ok(stream),
                 Err(ApiError::Transport(TransportError::Http { status, .. }))
                     if status == StatusCode::UNAUTHORIZED =>
                 {
-                    if refreshed {
-                        return Err(map_api_error(ApiError::Transport(TransportError::Http {
-                            status,
-                            headers: None,
-                            body: None,
-                        })));
-                    }
-
-                    if let Some(manager) = auth_manager.as_ref()
-                        && let Some(auth) = auth.as_ref()
-                        && auth.mode == AuthMode::ChatGPT
+                    if let Err(error) =
+                        handle_unauthorized(status, &mut refreshed, &auth_manager, &auth).await
                     {
-                        match manager.refresh_token().await {
-                            Ok(_) => {
-                                refreshed = true;
-                                continue;
-                            }
-                            Err(RefreshTokenError::Permanent(failed)) => {
-                                return Err(CodexErr::RefreshTokenFailed(failed));
-                            }
-                            Err(RefreshTokenError::Transient(other)) => {
-                                return Err(CodexErr::Io(other));
-                            }
-                        }
-                    } else {
-                        return Err(map_api_error(ApiError::Transport(TransportError::Http {
-                            status,
-                            headers: None,
-                            body: None,
-                        })));
+                        return Err(error);
                     }
+                    continue;
                 }
                 Err(err) => return Err(map_api_error(err)),
             }
         }
     }
 
-    async fn stream_responses(&self, prompt: &Prompt) -> Result<ResponseStream> {
+    /// Streams a turn via the OpenAI Responses API.
+    ///
+    /// Handles SSE fixtures, reasoning summaries, verbosity, and the
+    /// `text` controls used for output schemas.
+    async fn stream_responses_api(&self, prompt: &Prompt) -> Result<ResponseStream> {
         if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
             warn!(path, "Streaming from fixture");
             let stream = codex_api::stream_from_fixture(path, self.provider.stream_idle_timeout())
@@ -275,8 +227,6 @@ impl ModelClient {
             vec![]
         };
 
-        let input_with_instructions = prompt.get_formatted_input();
-
         let verbosity = if self.config.model_family.support_verbosity {
             self.config
                 .model_verbosity
@@ -292,6 +242,7 @@ impl ModelClient {
         };
 
         let text = create_text_param_for_request(verbosity, &prompt.output_schema);
+        let api_prompt = build_api_prompt(prompt, instructions.clone(), tools_json);
         let conversation_id = self.conversation_id.to_string();
         let session_source = self.session_source.clone();
 
@@ -301,29 +252,23 @@ impl ModelClient {
             let api_provider = to_api_provider(&self.provider, auth.as_ref().map(|a| a.mode))?;
             let api_auth = auth_provider_from_auth(auth.clone(), &self.provider).await?;
             let transport = create_transport();
-            let telemetry = Arc::new(ApiTelemetry::new(self.otel_event_manager.clone()));
-            let request_telemetry: Arc<dyn RequestTelemetry> = telemetry.clone();
-            let sse_telemetry: Arc<dyn SseTelemetry> = telemetry;
-            let request = ResponsesRequestBuilder::new(
-                &self.config.model,
-                &instructions,
-                &input_with_instructions,
-            )
-            .tools(&tools_json)
-            .parallel_tool_calls(prompt.parallel_tool_calls)
-            .reasoning(reasoning.clone())
-            .include(include.clone())
-            .prompt_cache_key(Some(conversation_id.clone()))
-            .text(text.clone())
-            .conversation(Some(conversation_id.clone()))
-            .session_source(Some(session_source.clone()))
-            .build(&api_provider)
-            .map_err(map_api_error)?;
-
+            let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
             let client = ApiResponsesClient::new(transport, api_provider, api_auth)
                 .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
 
-            let stream_result = client.stream_request(request).await;
+            let stream_result = client
+                .stream_prompt(
+                    &self.config.model,
+                    &api_prompt,
+                    reasoning.clone(),
+                    include.clone(),
+                    Some(conversation_id.clone()),
+                    text.clone(),
+                    None,
+                    Some(conversation_id.clone()),
+                    Some(session_source.clone()),
+                )
+                .await;
 
             match stream_result {
                 Ok(stream) => {
@@ -332,37 +277,12 @@ impl ModelClient {
                 Err(ApiError::Transport(TransportError::Http { status, .. }))
                     if status == StatusCode::UNAUTHORIZED =>
                 {
-                    if refreshed {
-                        return Err(map_api_error(ApiError::Transport(TransportError::Http {
-                            status,
-                            headers: None,
-                            body: None,
-                        })));
-                    }
-
-                    if let Some(manager) = auth_manager.as_ref()
-                        && let Some(auth) = auth.as_ref()
-                        && auth.mode == AuthMode::ChatGPT
+                    if let Err(error) =
+                        handle_unauthorized(status, &mut refreshed, &auth_manager, &auth).await
                     {
-                        match manager.refresh_token().await {
-                            Ok(_) => {
-                                refreshed = true;
-                                continue;
-                            }
-                            Err(RefreshTokenError::Permanent(failed)) => {
-                                return Err(CodexErr::RefreshTokenFailed(failed));
-                            }
-                            Err(RefreshTokenError::Transient(other)) => {
-                                return Err(CodexErr::Io(other));
-                            }
-                        }
-                    } else {
-                        return Err(map_api_error(ApiError::Transport(TransportError::Http {
-                            status,
-                            headers: None,
-                            body: None,
-                        })));
+                        return Err(error);
                     }
+                    continue;
                 }
                 Err(err) => return Err(map_api_error(err)),
             }
@@ -405,6 +325,10 @@ impl ModelClient {
         self.auth_manager.clone()
     }
 
+    /// Compacts the current conversation history using the Compact endpoint.
+    ///
+    /// This is a unary call (no streaming) that returns a new list of
+    /// `ResponseItem`s representing the compacted transcript.
     pub async fn compact_conversation_history(&self, prompt: &Prompt) -> Result<Vec<ResponseItem>> {
         if prompt.input.is_empty() {
             return Ok(Vec::new());
@@ -414,17 +338,18 @@ impl ModelClient {
         let api_provider = to_api_provider(&self.provider, auth.as_ref().map(|a| a.mode))?;
         let api_auth = auth_provider_from_auth(auth.clone(), &self.provider).await?;
         let transport = create_transport();
-        let telemetry = Arc::new(ApiTelemetry::new(self.otel_event_manager.clone()));
-        let request_telemetry: Arc<dyn RequestTelemetry> = telemetry;
+        let request_telemetry = self.build_request_telemetry();
         let client = ApiCompactClient::new(transport, api_provider, api_auth)
             .with_telemetry(Some(request_telemetry));
 
-        let payload = CompactHistoryRequest {
+        let instructions = prompt
+            .get_full_instructions(&self.config.model_family)
+            .into_owned();
+        let payload = ApiCompactionInput {
             model: &self.config.model,
             input: &prompt.input,
-            instructions: &prompt.get_full_instructions(&self.config.model_family),
+            instructions: &instructions,
         };
-        let body = serde_json::to_value(&payload)?;
 
         let mut extra_headers = ApiHeaderMap::new();
         if let SessionSource::SubAgent(sub) = &self.session_source {
@@ -442,21 +367,53 @@ impl ModelClient {
         }
 
         client
-            .compact(body, extra_headers)
+            .compact_input(&payload, extra_headers)
             .await
             .map_err(map_api_error)
     }
 }
 
-fn map_response_stream(
-    mut api_stream: codex_api::ResponseStream,
-    otel_event_manager: OtelEventManager,
-) -> ResponseStream {
+impl ModelClient {
+    /// Builds request and SSE telemetry for streaming API calls (Chat/Responses).
+    fn build_streaming_telemetry(&self) -> (Arc<dyn RequestTelemetry>, Arc<dyn SseTelemetry>) {
+        let telemetry = Arc::new(ApiTelemetry::new(self.otel_event_manager.clone()));
+        let request_telemetry: Arc<dyn RequestTelemetry> = telemetry.clone();
+        let sse_telemetry: Arc<dyn SseTelemetry> = telemetry;
+        (request_telemetry, sse_telemetry)
+    }
+
+    /// Builds request telemetry for unary API calls (e.g., Compact endpoint).
+    fn build_request_telemetry(&self) -> Arc<dyn RequestTelemetry> {
+        let telemetry = Arc::new(ApiTelemetry::new(self.otel_event_manager.clone()));
+        let request_telemetry: Arc<dyn RequestTelemetry> = telemetry;
+        request_telemetry
+    }
+}
+
+/// Adapts the core `Prompt` type into the `codex-api` payload shape.
+fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value>) -> ApiPrompt {
+    ApiPrompt {
+        instructions,
+        input: prompt.get_formatted_input(),
+        tools: tools_json,
+        parallel_tool_calls: prompt.parallel_tool_calls,
+        output_schema: prompt.output_schema.clone(),
+    }
+}
+
+fn map_response_stream<S>(api_stream: S, otel_event_manager: OtelEventManager) -> ResponseStream
+where
+    S: futures::Stream<Item = std::result::Result<ResponseEvent, ApiError>>
+        + Unpin
+        + Send
+        + 'static,
+{
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
-    let manager = otel_event_manager.clone();
+    let manager = otel_event_manager;
 
     tokio::spawn(async move {
         let mut logged_error = false;
+        let mut api_stream = api_stream;
         while let Some(event) = api_stream.next().await {
             match event {
                 Ok(ResponseEvent::Completed {
@@ -503,6 +460,45 @@ fn map_response_stream(
     });
 
     ResponseStream { rx_event }
+}
+
+/// Handles a 401 response by optionally refreshing ChatGPT tokens once.
+///
+/// When refresh succeeds, the caller should retry the API call; otherwise
+/// the mapped `CodexErr` is returned to the caller.
+async fn handle_unauthorized(
+    status: StatusCode,
+    refreshed: &mut bool,
+    auth_manager: &Option<Arc<AuthManager>>,
+    auth: &Option<crate::auth::CodexAuth>,
+) -> Result<()> {
+    if *refreshed {
+        return Err(map_unauthorized_status(status));
+    }
+
+    if let Some(manager) = auth_manager.as_ref()
+        && let Some(auth) = auth.as_ref()
+        && auth.mode == AuthMode::ChatGPT
+    {
+        match manager.refresh_token().await {
+            Ok(_) => {
+                *refreshed = true;
+                Ok(())
+            }
+            Err(RefreshTokenError::Permanent(failed)) => Err(CodexErr::RefreshTokenFailed(failed)),
+            Err(RefreshTokenError::Transient(other)) => Err(CodexErr::Io(other)),
+        }
+    } else {
+        Err(map_unauthorized_status(status))
+    }
+}
+
+fn map_unauthorized_status(status: StatusCode) -> CodexErr {
+    map_api_error(ApiError::Transport(TransportError::Http {
+        status,
+        headers: None,
+        body: None,
+    }))
 }
 
 struct ApiTelemetry {

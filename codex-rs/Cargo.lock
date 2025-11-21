@@ -1150,7 +1150,6 @@ dependencies = [
  "codex-apply-patch",
  "codex-arg0",
  "codex-async-utils",
- "codex-client",
  "codex-execpolicy",
  "codex-file-search",
  "codex-git",

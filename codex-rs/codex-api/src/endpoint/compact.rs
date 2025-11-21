@@ -1,5 +1,6 @@
 use crate::auth::AuthProvider;
 use crate::auth::add_auth_headers;
+use crate::common::CompactionInput;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::provider::WireApi;
@@ -10,6 +11,7 @@ use codex_protocol::models::ResponseItem;
 use http::HeaderMap;
 use http::Method;
 use serde::Deserialize;
+use serde_json::to_value;
 use std::sync::Arc;
 
 pub struct CompactClient<T: HttpTransport, A: AuthProvider> {
@@ -63,6 +65,16 @@ impl<T: HttpTransport, A: AuthProvider> CompactClient<T, A> {
         let parsed: CompactHistoryResponse =
             serde_json::from_slice(&resp.body).map_err(|e| ApiError::Stream(e.to_string()))?;
         Ok(parsed.output)
+    }
+
+    pub async fn compact_input(
+        &self,
+        input: &CompactionInput<'_>,
+        extra_headers: HeaderMap,
+    ) -> Result<Vec<ResponseItem>, ApiError> {
+        let body = to_value(input)
+            .map_err(|e| ApiError::Stream(format!("failed to encode compaction input: {e}")))?;
+        self.compact(body, extra_headers).await
     }
 }
 

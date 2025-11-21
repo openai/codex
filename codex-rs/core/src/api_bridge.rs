@@ -3,10 +3,11 @@ use chrono::DateTime;
 use chrono::Utc;
 use codex_api::AuthProvider as ApiAuthProvider;
 use codex_api::Provider as ApiProvider;
+use codex_api::ReqwestTransport;
+use codex_api::TransportError;
 use codex_api::error::ApiError;
 use codex_api::rate_limits::parse_rate_limit;
 use codex_app_server_protocol::AuthMode;
-use codex_client::ReqwestTransport;
 use http::HeaderMap;
 use serde::Deserialize;
 
@@ -46,7 +47,7 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
             request_id: None,
         }),
         ApiError::Transport(transport) => match transport {
-            codex_client::TransportError::Http {
+            TransportError::Http {
                 status,
                 headers,
                 body,
@@ -85,15 +86,14 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
                     })
                 }
             }
-            codex_client::TransportError::RetryLimit => {
-                CodexErr::RetryLimit(RetryLimitReachedError {
-                    status: http::StatusCode::INTERNAL_SERVER_ERROR,
-                    request_id: None,
-                })
+            TransportError::RetryLimit => CodexErr::RetryLimit(RetryLimitReachedError {
+                status: http::StatusCode::INTERNAL_SERVER_ERROR,
+                request_id: None,
+            }),
+            TransportError::Timeout => CodexErr::Timeout,
+            TransportError::Network(msg) | TransportError::Build(msg) => {
+                CodexErr::Stream(msg, None)
             }
-            codex_client::TransportError::Timeout => CodexErr::Timeout,
-            codex_client::TransportError::Network(msg)
-            | codex_client::TransportError::Build(msg) => CodexErr::Stream(msg, None),
         },
         ApiError::RateLimit(msg) => CodexErr::Stream(msg, None),
     }
