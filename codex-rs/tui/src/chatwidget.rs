@@ -1664,7 +1664,7 @@ impl ChatWidget {
                 self.on_rate_limit_snapshot(ev.rate_limits);
             }
             EventMsg::Warning(WarningEvent { message }) => self.on_warning(message),
-            EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
+            EventMsg::Error(ErrorEvent { message, .. }) => self.on_error(message),
             EventMsg::McpStartupUpdate(ev) => self.on_mcp_startup_update(ev),
             EventMsg::McpStartupComplete(ev) => self.on_mcp_startup_complete(ev),
             EventMsg::TurnAborted(ev) => match ev.reason {
@@ -1707,7 +1707,9 @@ impl ChatWidget {
             }
             EventMsg::UndoStarted(ev) => self.on_undo_started(ev),
             EventMsg::UndoCompleted(ev) => self.on_undo_completed(ev),
-            EventMsg::StreamError(StreamErrorEvent { message }) => self.on_stream_error(message),
+            EventMsg::StreamError(StreamErrorEvent { message, .. }) => {
+                self.on_stream_error(message)
+            }
             EventMsg::UserMessage(ev) => {
                 if from_replay {
                     self.on_user_message_event(ev);
@@ -2118,6 +2120,14 @@ impl ChatWidget {
         } else {
             default_choice
         };
+        let selection_choice = highlight_choice.or(default_choice);
+        let initial_selected_idx = choices
+            .iter()
+            .position(|choice| choice.stored == selection_choice)
+            .or_else(|| {
+                selection_choice
+                    .and_then(|effort| choices.iter().position(|choice| choice.display == effort))
+            });
         let mut items: Vec<SelectionItem> = Vec::new();
         for choice in choices.iter() {
             let effort = choice.display;
@@ -2194,6 +2204,7 @@ impl ChatWidget {
             header: Box::new(header),
             footer_hint: Some(standard_popup_hint_line()),
             items,
+            initial_selected_idx,
             ..Default::default()
         });
     }

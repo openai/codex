@@ -83,6 +83,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::Turn;
+use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
@@ -162,8 +163,8 @@ pub(crate) type PendingInterrupts = Arc<Mutex<HashMap<ConversationId, PendingInt
 /// Per-conversation accumulation of the latest states e.g. error message while a turn runs.
 #[derive(Default, Clone)]
 pub(crate) struct TurnSummary {
-    pub(crate) last_error_message: Option<String>,
     pub(crate) file_change_started: HashSet<String>,
+    pub(crate) last_error: Option<TurnError>,
 }
 
 pub(crate) type TurnSummaryStore = Arc<Mutex<HashMap<ConversationId, TurnSummary>>>;
@@ -1170,7 +1171,7 @@ impl CodexMessageProcessor {
         let exec_params = ExecParams {
             command: params.command,
             cwd,
-            timeout_ms,
+            expiration: timeout_ms.into(),
             env,
             with_escalated_permissions: None,
             justification: None,

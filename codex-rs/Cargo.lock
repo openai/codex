@@ -894,6 +894,7 @@ dependencies = [
  "serde",
  "serde_json",
  "strum_macros 0.27.2",
+ "thiserror 2.0.17",
  "ts-rs",
  "uuid",
 ]
@@ -1218,6 +1219,7 @@ dependencies = [
  "socket2 0.6.0",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]
