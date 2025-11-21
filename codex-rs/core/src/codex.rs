@@ -1895,9 +1895,7 @@ pub(crate) async fn run_task(
         .await
         {
             Ok(turn_output) => {
-                let TurnRunResult {
-                    processed_items, ..
-                } = turn_output;
+                let TurnRunResult { processed_items } = turn_output;
                 let limit = turn_context
                     .client
                     .get_auto_compact_token_limit()
