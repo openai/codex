@@ -1191,12 +1191,12 @@ impl Session {
         message: impl Into<String>,
         codex_error: CodexErr,
     ) {
-        let codex_error_code = CodexErrorInfo::ResponseStreamDisconnected {
+        let codex_error_info = CodexErrorInfo::ResponseStreamDisconnected {
             http_status_code: codex_error.http_status_code_value(),
         };
         let event = EventMsg::StreamError(StreamErrorEvent {
             message: message.into(),
-            codex_error_code: Some(codex_error_code),
+            codex_error_info: Some(codex_error_info),
         });
         self.send_event(turn_context, event).await;
     }
@@ -1689,7 +1689,7 @@ mod handlers {
                 id: sub_id.clone(),
                 msg: EventMsg::Error(ErrorEvent {
                     message: "Failed to shutdown rollout recorder".to_string(),
-                    codex_error_code: Some(CodexErrorInfo::Other),
+                    codex_error_info: Some(CodexErrorInfo::Other),
                 }),
             };
             sess.send_event_raw(event).await;

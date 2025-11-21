@@ -92,7 +92,6 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInfoResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_app_server_protocol::UserSavedConfig;
-use codex_app_server_protocol::WindowsWorldWritableWarningNotification;
 use codex_app_server_protocol::build_turns_from_event_msgs;
 use codex_backend_client::Client as BackendClient;
 use codex_core::AuthManager;
@@ -1277,10 +1276,6 @@ impl CodexMessageProcessor {
                 return;
             }
         };
-        if cfg!(windows) && config.features.enabled(Feature::WindowsSandbox) {
-            self.handle_windows_world_writable_warning(config.cwd.clone())
-                .await;
-        }
 
         match self.conversation_manager.new_conversation(config).await {
             Ok(conversation_id) => {
@@ -2000,10 +1995,6 @@ impl CodexMessageProcessor {
                 return;
             }
         };
-        if cfg!(windows) && config.features.enabled(Feature::WindowsSandbox) {
-            self.handle_windows_world_writable_warning(config.cwd.clone())
-                .await;
-        }
 
         let conversation_history = if let Some(path) = path {
             match RolloutRecorder::get_rollout_history(&path).await {
@@ -2860,53 +2851,6 @@ impl CodexMessageProcessor {
         {
             Ok(conv) => Some(conv.rollout_path()),
             Err(_) => None,
-        }
-    }
-
-    /// On Windows, when using the experimental sandbox, we need to warn the user about world-writable directories.
-    async fn handle_windows_world_writable_warning(&self, cwd: PathBuf) {
-        if !cfg!(windows) {
-            return;
-        }
-
-        if !self.config.features.enabled(Feature::WindowsSandbox) {
-            return;
-        }
-
-        if !matches!(
-            self.config.sandbox_policy,
-            codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                | codex_protocol::protocol::SandboxPolicy::ReadOnly
-        ) {
-            return;
-        }
-
-        if self
-            .config
-            .notices
-            .hide_world_writable_warning
-            .unwrap_or(false)
-        {
-            return;
-        }
-
-        // This function is stubbed out to return None on non-Windows platforms
-        if let Some((sample_paths, extra_count, failed_scan)) =
-            codex_windows_sandbox::world_writable_warning_details(
-                self.config.codex_home.as_path(),
-                cwd,
-            )
-        {
-            tracing::warn!("world writable warning: {sample_paths:?} {extra_count} {failed_scan}");
-            self.outgoing
-                .send_server_notification(ServerNotification::WindowsWorldWritableWarning(
-                    WindowsWorldWritableWarningNotification {
-                        sample_paths,
-                        extra_count,
-                        failed_scan,
-                    },
-                ))
-                .await;
         }
     }
 }

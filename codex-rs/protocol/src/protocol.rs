@@ -716,7 +716,7 @@ pub struct ExitedReviewModeEvent {
 pub struct ErrorEvent {
     pub message: String,
     #[serde(default)]
-    pub codex_error_code: Option<CodexErrorInfo>,
+    pub codex_error_info: Option<CodexErrorInfo>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1395,7 +1395,7 @@ pub struct UndoCompletedEvent {
 pub struct StreamErrorEvent {
     pub message: String,
     #[serde(default)]
-    pub codex_error_code: Option<CodexErrorInfo>,
+    pub codex_error_info: Option<CodexErrorInfo>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

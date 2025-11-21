@@ -50,6 +50,9 @@ macro_rules! v2_enum_from_core {
 }
 
 /// This translation layer make sure that we expose codex error code in camel case.
+///
+/// When an upstream HTTP status is available (for example, from the Responses API or a provider),
+/// it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -615,7 +618,7 @@ pub struct Turn {
 #[error("{message}")]
 pub struct TurnError {
     pub message: String,
-    pub codex_error_code: Option<CodexErrorInfo>,
+    pub codex_error_info: Option<CodexErrorInfo>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1253,7 +1256,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_error_code_serializes_http_status_code_in_camel_case() {
+    fn codex_error_info_serializes_http_status_code_in_camel_case() {
         let value = CodexErrorInfo::ResponseTooManyFailedAttempts {
             http_status_code: Some(401),
         };
