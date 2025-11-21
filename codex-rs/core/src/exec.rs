@@ -898,6 +898,8 @@ mod tests {
             with_escalated_permissions: None,
             justification: None,
             arg0: None,
+            max_output_tokens: None,
+            max_output_chars: None,
         };
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(1_000)).await;
