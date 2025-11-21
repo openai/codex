@@ -9,7 +9,7 @@
 - [Initialization](#initialization)
 - [Core primitives](#core-primitives)
 - [Thread & turn endpoints](#thread--turn-endpoints)
-- [Events (work-in-progress)](#v2-streaming-events-work-in-progress)
+- [Events (work-in-progress)](#events-work-in-progress)
 - [Auth endpoints](#auth-endpoints)
 
 ## Protocol
