@@ -118,7 +118,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
         Some(req.approval_requirement.clone())
     }
 
-    fn sandbox_override(&self, req: &ShellRequest) -> SandboxOverride {
+    fn sandbox_mode_for_first_attempt(&self, req: &ShellRequest) -> SandboxOverride {
         if req.with_escalated_permissions.unwrap_or(false)
             || matches!(
                 req.approval_requirement,

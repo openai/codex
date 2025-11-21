@@ -136,7 +136,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         Some(req.approval_requirement.clone())
     }
 
-    fn sandbox_override(&self, req: &UnifiedExecRequest) -> SandboxOverride {
+    fn sandbox_mode_for_first_attempt(&self, req: &UnifiedExecRequest) -> SandboxOverride {
         if req.with_escalated_permissions.unwrap_or(false)
             || matches!(
                 req.approval_requirement,

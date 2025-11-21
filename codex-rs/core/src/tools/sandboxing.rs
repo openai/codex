@@ -137,7 +137,7 @@ pub(crate) trait Approvable<Req> {
     /// Some tools may request to skip the sandbox on the first attempt
     /// (e.g., when the request explicitly asks for escalated permissions).
     /// Defaults to `NoOverride`.
-    fn sandbox_override(&self, _req: &Req) -> SandboxOverride {
+    fn sandbox_mode_for_first_attempt(&self, _req: &Req) -> SandboxOverride {
         SandboxOverride::NoOverride
     }
 
