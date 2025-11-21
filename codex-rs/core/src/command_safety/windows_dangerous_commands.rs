@@ -157,12 +157,20 @@ fn looks_like_url(token: &str) -> bool {
     // Capture the middle token after trimming leading quotes/parens/whitespace and trailing semicolons/closing parens.
     static RE: Lazy<Option<Regex>> =
         Lazy::new(|| Regex::new(r#"^[ "'\(\s]*([^\s"'\);]+)[\s;\)]*$"#).ok());
+    // If the token embeds a URL alongside other text (e.g., Start-Process('https://...'))
+    // as a single shlex token, grab the substring starting at the first URL prefix.
+    let urlish = token
+        .find("https://")
+        .or_else(|| token.find("http://"))
+        .map(|idx| &token[idx..])
+        .unwrap_or(token);
+
     let candidate = RE
         .as_ref()
-        .and_then(|re| re.captures(token))
+        .and_then(|re| re.captures(urlish))
         .and_then(|caps| caps.get(1))
         .map(|m| m.as_str())
-        .unwrap_or(token);
+        .unwrap_or(urlish);
     let Ok(url) = Url::parse(candidate) else {
         return false;
     };
