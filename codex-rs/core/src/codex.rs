@@ -866,7 +866,7 @@ impl Session {
         &self,
         prefix: &[String],
     ) -> Result<(), ExecPolicyUpdateError> {
-        let (features, codex_home) = {
+        let (features, codex_home, current_policy) = {
             let state = self.state.lock().await;
             (
                 state.session_configuration.features.clone(),
@@ -875,12 +875,20 @@ impl Session {
                     .original_config_do_not_use
                     .codex_home
                     .clone(),
+                state.session_configuration.exec_policy.clone(),
             )
         };
 
-        let policy =
-            crate::exec_policy::append_allow_prefix_rule_and_reload(&features, &codex_home, prefix)
-                .await?;
+        if !features.enabled(Feature::ExecPolicy) {
+            error!("attempted to append execpolicy rule while execpolicy feature is disabled");
+            return Err(ExecPolicyUpdateError::FeatureDisabled);
+        }
+
+        let policy = crate::exec_policy::append_allow_prefix_rule_and_update(
+            &codex_home,
+            current_policy,
+            prefix,
+        )?;
 
         let mut state = self.state.lock().await;
         state.session_configuration.exec_policy = policy;
@@ -1668,23 +1676,19 @@ mod handlers {
         decision: ReviewDecision,
         allow_prefix: Option<Vec<String>>,
     ) {
-        if let Some(prefix) = allow_prefix
-            && matches!(
-                decision,
-                ReviewDecision::Approved
-                    | ReviewDecision::ApprovedAllowPrefix
-                    | ReviewDecision::ApprovedForSession
-            )
-            && let Err(err) = sess.persist_command_allow_prefix(&prefix).await
-        {
-            let message = format!("Failed to update execpolicy allow list: {err}");
-            tracing::warn!("{message}");
-            let warning = EventMsg::Warning(WarningEvent { message });
-            sess.send_event_raw(Event {
-                id: id.clone(),
-                msg: warning,
-            })
-            .await;
+        if let Some(prefix) = allow_prefix {
+            if matches!(decision, ReviewDecision::ApprovedAllowPrefix)
+                && let Err(err) = sess.persist_command_allow_prefix(&prefix).await
+            {
+                let message = format!("Failed to update execpolicy allow list: {err}");
+                tracing::warn!("{message}");
+                let warning = EventMsg::Warning(WarningEvent { message });
+                sess.send_event_raw(Event {
+                    id: id.clone(),
+                    msg: warning,
+                })
+                .await;
+            }
         }
         match decision {
             ReviewDecision::Abort => {

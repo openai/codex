@@ -6,6 +6,7 @@ use std::sync::Arc;
 use crate::command_safety::is_dangerous_command::requires_initial_appoval;
 use codex_execpolicy::AmendError;
 use codex_execpolicy::Decision;
+use codex_execpolicy::Error as ExecPolicyRuleError;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::Policy;
 use codex_execpolicy::PolicyParser;
@@ -53,8 +54,14 @@ pub enum ExecPolicyUpdateError {
     #[error("failed to update execpolicy file {path}: {source}")]
     AppendRule { path: PathBuf, source: AmendError },
 
-    #[error("failed to reload execpolicy after updating policy: {0}")]
-    Reload(#[from] ExecPolicyError),
+    #[error("failed to update in-memory execpolicy: {source}")]
+    AddRule {
+        #[from]
+        source: ExecPolicyRuleError,
+    },
+
+    #[error("cannot append execpolicy rule because execpolicy feature is disabled")]
+    FeatureDisabled,
 }
 
 pub(crate) async fn exec_policy_for(
@@ -100,9 +107,9 @@ pub(crate) fn default_policy_path(codex_home: &Path) -> PathBuf {
     codex_home.join(POLICY_DIR_NAME).join(DEFAULT_POLICY_FILE)
 }
 
-pub(crate) async fn append_allow_prefix_rule_and_reload(
-    features: &Features,
+pub(crate) fn append_allow_prefix_rule_and_update(
     codex_home: &Path,
+    mut current_policy: Arc<Policy>,
     prefix: &[String],
 ) -> Result<Arc<Policy>, ExecPolicyUpdateError> {
     let policy_path = default_policy_path(codex_home);
@@ -113,9 +120,9 @@ pub(crate) async fn append_allow_prefix_rule_and_reload(
         }
     })?;
 
-    exec_policy_for(features, codex_home)
-        .await
-        .map_err(ExecPolicyUpdateError::Reload)
+    Arc::make_mut(&mut current_policy).add_prefix_rule(prefix, Decision::Allow)?;
+
+    Ok(current_policy)
 }
 
 fn requirement_from_decision(
@@ -245,6 +252,7 @@ mod tests {
     use codex_protocol::protocol::SandboxPolicy;
     use pretty_assertions::assert_eq;
     use std::fs;
+    use std::sync::Arc;
     use tempfile::tempdir;
 
     #[tokio::test]
@@ -423,6 +431,50 @@ prefix_rule(pattern=["rm"], decision="forbidden")
                 allow_prefix: Some(command)
             }
         );
+    }
+
+    #[test]
+    fn append_allow_prefix_rule_updates_policy_and_file() {
+        let codex_home = tempdir().expect("create temp dir");
+        let current_policy = Arc::new(Policy::empty());
+        let prefix = vec!["echo".to_string(), "hello".to_string()];
+
+        let updated_policy =
+            append_allow_prefix_rule_and_update(codex_home.path(), current_policy, &prefix)
+                .expect("update policy");
+
+        let evaluation =
+            updated_policy.check(&["echo".to_string(), "hello".to_string(), "world".to_string()]);
+        assert!(matches!(
+            evaluation,
+            Evaluation::Match {
+                decision: Decision::Allow,
+                ..
+            }
+        ));
+
+        let contents = fs::read_to_string(default_policy_path(codex_home.path()))
+            .expect("policy file should have been created");
+        assert_eq!(
+            contents,
+            "prefix_rule(pattern=[\"echo\", \"hello\"], decision=\"allow\")\n"
+        );
+    }
+
+    #[test]
+    fn append_allow_prefix_rule_rejects_empty_prefix() {
+        let codex_home = tempdir().expect("create temp dir");
+        let current_policy = Arc::new(Policy::empty());
+
+        let result = append_allow_prefix_rule_and_update(codex_home.path(), current_policy, &[]);
+
+        assert!(matches!(
+            result,
+            Err(ExecPolicyUpdateError::AppendRule {
+                source: AmendError::EmptyPrefix,
+                ..
+            })
+        ));
     }
 
     #[test]
