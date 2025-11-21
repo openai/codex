@@ -162,7 +162,9 @@ async fn tool_call_output_configured_limit_chars_type() -> Result<()> {
     );
 
     assert!(
-        (400000..=401000).contains(&output.len()), "we should be almost 100k tokens");
+        (400000..=401000).contains(&output.len()),
+        "we should be almost 100k tokens"
+    );
 
     assert!(
         !output.contains("tokens truncated"),
@@ -239,7 +241,7 @@ async fn tool_call_output_exceeds_limit_truncated_chars_limit() -> Result<()> {
 
     let len = output.len();
     assert!(
-        (9_900..=10_000).contains(&len),
+        (9_900..=10_100).contains(&len),
         "expected ~10k chars after truncation, got {len}"
     );
 

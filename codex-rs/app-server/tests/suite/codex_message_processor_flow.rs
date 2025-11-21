@@ -58,7 +58,7 @@ async fn test_codex_jsonrpc_conversation_flow() -> Result<()> {
     // Two turns are expected: initial session configure + one user message.
     let responses = vec![
         create_shell_command_sse_response(
-            vec!["ls".to_string()],
+            vec!["echo".to_string(), "shell_ready".to_string()],
             Some(&working_directory),
             Some(5000),
             "call1234",

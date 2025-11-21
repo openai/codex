@@ -222,7 +222,8 @@ async fn test_patch_approval_triggers_elicitation() {
 }
 
 async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
-    if cfg!(windows) { // powershell apply_patch shell calls are not parsed into apply patch approvals
+    if cfg!(windows) {
+        // powershell apply_patch shell calls are not parsed into apply patch approvals
 
         return Ok(());
     }
