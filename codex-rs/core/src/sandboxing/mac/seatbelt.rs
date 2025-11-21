@@ -145,6 +145,7 @@ fn confstr_path(name: libc::c_int) -> Option<PathBuf> {
 }
 
 fn macos_dir_params() -> Vec<(String, PathBuf)> {
+    #[cfg(target_os = "macos")]
     if let Some(p) = confstr_path(libc::_CS_DARWIN_USER_CACHE_DIR) {
         return vec![("DARWIN_USER_CACHE_DIR".to_string(), p)];
     }
