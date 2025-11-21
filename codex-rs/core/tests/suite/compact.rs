@@ -481,12 +481,18 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
 
     // mock responses from the model
 
+    let reasoning_response_1 = ev_reasoning_item("m1", &["I will create a react app"], &[]);
+
     // first chunk of work
     let model_reasoning_response_1_sse = sse(vec![
-        ev_reasoning_item("m1", &["I will create a react app"], &[]),
+        reasoning_response_1.clone(),
         ev_local_shell_call("r1-shell", "completed", vec!["echo", "make-react"]),
         ev_completed_with_tokens("r1", token_count_used),
     ]);
+
+    let encrypted_content_1 = reasoning_response_1["item"]["encrypted_content"]
+        .as_str()
+        .unwrap();
 
     // first compaction response
     let model_compact_response_1_sse = sse(vec![
@@ -494,9 +500,14 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         ev_completed_with_tokens("r2", token_count_used_after_compaction),
     ]);
 
+    let reasoning_response_2 = ev_reasoning_item("m3", &["I will create a node app"], &[]);
+    let encrypted_content_2 = reasoning_response_2["item"]["encrypted_content"]
+        .as_str()
+        .unwrap();
+
     // second chunk of work
     let model_reasoning_response_2_sse = sse(vec![
-        ev_reasoning_item("m3", &["I will create a node app"], &[]),
+        reasoning_response_2.clone(),
         ev_local_shell_call("r3-shell", "completed", vec!["echo", "make-node"]),
         ev_completed_with_tokens("r3", token_count_used),
     ]);
@@ -506,6 +517,11 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         ev_assistant_message("m4", second_summary_text),
         ev_completed_with_tokens("r4", token_count_used_after_compaction),
     ]);
+
+    let reasoning_response_3 = ev_reasoning_item("m6", &["I will create a python app"], &[]);
+    let encrypted_content_3 = reasoning_response_3["item"]["encrypted_content"]
+        .as_str()
+        .unwrap();
 
     // third chunk of work
     let model_reasoning_response_3_sse = sse(vec![
@@ -635,7 +651,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
       },
       {
         "content": null,
-        "encrypted_content": null,
+        "encrypted_content": encrypted_content_1,
         "summary": [
           {
             "text": "I will create a react app",
@@ -745,7 +761,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
       },
       {
         "content": null,
-        "encrypted_content": null,
+        "encrypted_content": encrypted_content_2,
         "summary": [
           {
             "text": "I will create a node app",
@@ -855,7 +871,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
       },
       {
         "content": null,
-        "encrypted_content": null,
+        "encrypted_content": encrypted_content_3,
         "summary": [
           {
             "text": "I will create a python app",
