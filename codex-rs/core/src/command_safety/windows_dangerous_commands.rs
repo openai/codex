@@ -46,7 +46,8 @@ fn is_dangerous_powershell(command: &[String]) -> bool {
             matches!(
                 t.as_str(),
                 "start-process" | "start" | "saps" | "invoke-item" | "ii"
-            )
+            ) || t.contains("start-process")
+                || t.contains("invoke-item")
         })
     {
         return true;
