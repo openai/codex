@@ -269,7 +269,8 @@ mod tests {
 
     #[test]
     fn windows_powershell_full_path_is_safe() {
-        if cfg!(windows) {
+        if !cfg!(windows) {
+            // Windows only because on Linux path splitting doesn't handle `/` separators properly
             return;
         }
 

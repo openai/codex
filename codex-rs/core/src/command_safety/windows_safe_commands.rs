@@ -322,7 +322,7 @@ mod tests {
 
     #[test]
     fn accepts_full_path_powershell_invocations() {
-        if cfg!(windows) {
+        if !cfg!(windows) {
             // Windows only because on Linux path splitting doesn't handle `/` separators properly
             return;
         }
