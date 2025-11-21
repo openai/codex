@@ -1889,143 +1889,86 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
     let first_user = "COUNT_PRE_LAST_REASONING";
     let second_user = "TRIGGER_COMPACT_AT_LIMIT";
 
-    let pre_last_encrypted = "a".repeat(2_400);
-    let post_last_encrypted = "b".repeat(4_000);
+    let pre_last_reasoning_content = "a".repeat(2_400);
+    let post_last_reasoning_content = "b".repeat(4_000);
 
-    let pre_last_reasoning = serde_json::json!({
-        "type": "response.output_item.done",
-        "item": {
-            "type": "reasoning",
-            "id": "pre-reasoning",
-            "summary": [{"type": "summary_text", "text": "pre"}],
-            "encrypted_content": pre_last_encrypted,
-        }
-    });
-
-    let post_last_reasoning = serde_json::json!({
-        "type": "response.output_item.done",
-        "item": {
-            "type": "reasoning",
-            "id": "post-reasoning",
-            "summary": [{"type": "summary_text", "text": "post"}],
-            "encrypted_content": post_last_encrypted,
-        }
-    });
-
-    // First turn seeds encrypted reasoning before the eventual last user.
-    let first_turn = sse(vec![pre_last_reasoning, ev_completed_with_tokens("r1", 10)]);
-
-    // Second turn adds a reasoning item after the last user (should be ignored by the estimate)
-    // and reports low token usage, so compaction only triggers if the pre-last reasoning is counted.
+    let first_turn = sse(vec![
+        ev_reasoning_item("pre-reasoning", &["pre"], &[&pre_last_reasoning_content]),
+        ev_completed_with_tokens("r1", 10),
+    ]);
     let second_turn = sse(vec![
-        post_last_reasoning,
+        ev_reasoning_item("post-reasoning", &["post"], &[&post_last_reasoning_content]),
         ev_completed_with_tokens("r2", 80),
     ]);
 
     let auto_summary_payload = auto_summary(AUTO_SUMMARY_TEXT);
-    let auto_compact_turn = sse(vec![
-        ev_assistant_message("m3", &auto_summary_payload),
-        ev_completed_with_tokens("r3", 1),
-    ]);
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            // Turn 1: reasoning before last user (should count).
+            first_turn,
+            // Turn 2: reasoning after last user (should be ignored for compaction).
+            second_turn,
+            // Turn 3: auto compact, only if the pre-last reasoning was counted.
+            sse(vec![
+                ev_assistant_message("m3", &auto_summary_payload),
+                ev_completed_with_tokens("r3", 1),
+            ]),
+            // Turn 4: resume after compaction.
+            sse(vec![
+                ev_assistant_message("m4", FINAL_REPLY),
+                ev_completed_with_tokens("r4", 1),
+            ]),
+        ],
+    )
+    .await;
 
-    let resume_turn = sse(vec![
-        ev_assistant_message("m4", FINAL_REPLY),
-        ev_completed_with_tokens("r4", 1),
-    ]);
-
-    let first_matcher = move |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(first_user) && !body_contains_text(body, SUMMARIZATION_PROMPT)
-    };
-    mount_sse_once_match(&server, first_matcher, first_turn).await;
-
-    let second_matcher = move |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(first_user)
-            && body.contains(second_user)
-            && !body_contains_text(body, SUMMARIZATION_PROMPT)
-    };
-    mount_sse_once_match(&server, second_matcher, second_turn).await;
-
-    let compact_matcher = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body_contains_text(body, SUMMARIZATION_PROMPT)
-    };
-    let auto_compact_mock = mount_sse_once_match(&server, compact_matcher, auto_compact_turn).await;
-
-    let resume_marker = auto_summary_payload.clone();
-    let resume_matcher = move |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(&resume_marker) && !body_contains_text(body, SUMMARIZATION_PROMPT)
-    };
-    let resume_mock = mount_sse_once_match(&server, resume_matcher, resume_turn).await;
-
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-
-    let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home);
-    config.model_provider = model_provider;
-    set_test_compact_prompt(&mut config);
-    config.model_auto_compact_token_limit = Some(300);
-
-    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
-    let codex = conversation_manager
-        .new_conversation(config)
-        .await
-        .unwrap()
-        .conversation;
-
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: first_user.into(),
-            }],
+    let codex = test_codex()
+        .with_config(|config| {
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(300);
         })
+        .build(&server)
         .await
-        .unwrap();
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+        .expect("build codex")
+        .codex;
 
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: second_user.into(),
-            }],
-        })
-        .await
-        .unwrap();
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    for user in [first_user, second_user] {
+        codex
+            .submit(Op::UserInput {
+                items: vec![UserInput::Text { text: user.into() }],
+            })
+            .await
+            .unwrap();
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    }
 
-    let requests = server.received_requests().await.unwrap();
+    let requests = request_log.requests();
     assert_eq!(
         requests.len(),
         4,
         "second turn should trigger an auto compact and follow-up resume"
     );
 
-    let auto_compact_index = requests
-        .iter()
-        .position(|req| {
-            let body = std::str::from_utf8(&req.body).unwrap_or("");
-            body_contains_text(body, SUMMARIZATION_PROMPT)
-        })
-        .expect("auto compact request missing");
-    assert_eq!(
-        auto_compact_index, 2,
+    // If we double-counted the post-last reasoning, compaction would fire here.
+    let second_request_body = requests[1].body_json().to_string();
+    assert!(
+        !body_contains_text(&second_request_body, SUMMARIZATION_PROMPT),
+        "summarization should not be requested before evaluating the second turn's usage"
+    );
+
+    // Compaction should happen only after considering pre-last encrypted reasoning.
+    let auto_compact_body = requests[2].body_json().to_string();
+    assert!(
+        body_contains_text(&auto_compact_body, SUMMARIZATION_PROMPT),
         "auto compact should be the third request (after two user turns)"
     );
 
-    let resume_index = requests
-        .iter()
-        .position(|req| {
-            let body = std::str::from_utf8(&req.body).unwrap_or("");
-            body.contains(&auto_summary_payload) && !body_contains_text(body, SUMMARIZATION_PROMPT)
-        })
-        .expect("resume request missing after auto compact");
-    assert_eq!(resume_index, 3, "resume request should follow auto compact");
-
-    assert_eq!(auto_compact_mock.requests().len(), 1);
-    assert_eq!(resume_mock.requests().len(), 1);
+    // Final request resumes normal flow.
+    let resume_body = requests[3].body_json().to_string();
+    assert!(
+        body_contains_text(&resume_body, FINAL_REPLY)
+            || body_contains_text(&resume_body, &auto_summary_payload),
+        "resume request should follow auto compact"
+    );
 }
