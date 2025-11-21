@@ -19,6 +19,7 @@ use tokio_util::sync::CancellationToken;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::error::SandboxErr;
+use crate::get_platform_sandbox;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandOutputDeltaEvent;
@@ -127,12 +128,17 @@ pub struct StdoutStream {
 
 pub async fn process_exec_tool_call(
     params: ExecParams,
-    sandbox_type: SandboxType,
     sandbox_policy: &SandboxPolicy,
     sandbox_cwd: &Path,
     codex_linux_sandbox_exe: &Option<PathBuf>,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<ExecToolCallOutput> {
+    let sandbox_type = match &sandbox_policy {
+        SandboxPolicy::DangerFullAccess => SandboxType::None,
+        _ => get_platform_sandbox().unwrap_or(SandboxType::None),
+    };
+    tracing::debug!("Sandbox type: {sandbox_type:?}");
+
     let ExecParams {
         command,
         cwd,
@@ -893,7 +899,6 @@ mod tests {
         });
         let result = process_exec_tool_call(
             params,
-            SandboxType::None,
             &SandboxPolicy::DangerFullAccess,
             cwd.as_path(),
             &None,
