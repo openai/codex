@@ -632,14 +632,19 @@ pub struct Thread {
     pub id: String,
     /// Usually the first user message in the thread, if available.
     pub preview: String,
+    /// Model provider used for this thread (for example, 'openai').
     pub model_provider: String,
     /// Unix timestamp (in seconds) when the thread was created.
     pub created_at: i64,
     /// [UNSTABLE] Path to the thread on disk.
     pub path: PathBuf,
+    /// Working directory captured for the thread.
     pub cwd: PathBuf,
+    /// Version of the CLI that created the thread.
     pub cli_version: String,
+    /// Origin of the thread (CLI, VSCode, codex exec, codex app-server, etc.).
     pub source: SessionSource,
+    /// Optional Git metadata captured when the thread was created.
     pub git_info: Option<GitInfo>,
     /// Only populated on a `thread/resume` response.
     /// For all other responses and notifications returning a Thread,
