@@ -377,8 +377,7 @@ jobs:
     uses: ./.github/workflows/shell-tool-mcp.yml
     with:
       release-tag: ${{ github.ref_name }}
-      # We are not ready to publish yet.
-      publish: false
+      publish: true
     secrets: inherit
 
   release:
