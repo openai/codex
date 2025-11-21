@@ -22,9 +22,13 @@ use crate::posix::escalate_server::EscalateServer;
 use crate::posix::escalate_server::{self};
 use crate::posix::mcp_escalation_policy::ExecPolicy;
 use crate::posix::mcp_escalation_policy::McpEscalationPolicy;
+use crate::posix::stopwatch::Stopwatch;
 
 /// Path to our patched bash.
 const CODEX_BASH_PATH_ENV_VAR: &str = "CODEX_BASH_PATH";
+
+/// Default timeout for the shell tool.
+const DEFAULT_TIMEOUT_MS: u64 = 10_000;
 
 pub(crate) fn get_bash_path() -> Result<PathBuf> {
     std::env::var(CODEX_BASH_PATH_ENV_VAR)
@@ -87,10 +91,20 @@ impl ExecTool {
         context: RequestContext<RoleServer>,
         Parameters(params): Parameters<ExecParams>,
     ) -> Result<CallToolResult, McpError> {
+        let effective_timeout =
+            Duration::from_millis(params.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS));
+        let stopwatch = Stopwatch::new(effective_timeout);
+        let cancel_token = stopwatch.cancellation_token();
+        // We want a large timeout that is effectively infinite, because the
+        // real timeout is enforced by the stopwatch and cancellation receiver.
+        // While we could use u64::MAX here, using a more reasonable value
+        // avoids potential issues with libraries that might not handle extreme
+        // values well.
+        let process_timeout_ms: u64 = 365 * 24 * 60 * 60 * 1000;
         let escalate_server = EscalateServer::new(
             self.bash_path.clone(),
             self.execve_wrapper.clone(),
-            McpEscalationPolicy::new(self.policy, context),
+            McpEscalationPolicy::new(self.policy, context, stopwatch.clone()),
         );
         let result = escalate_server
             .exec(
@@ -98,7 +112,8 @@ impl ExecTool {
                 // TODO: use ShellEnvironmentPolicy
                 std::env::vars().collect(),
                 PathBuf::from(&params.workdir),
-                params.timeout_ms,
+                Some(process_timeout_ms),
+                Some(cancel_token),
             )
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
