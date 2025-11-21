@@ -1,47 +1,37 @@
 use crate::ChatRequest;
 use crate::auth::AuthProvider;
-use crate::auth::add_auth_headers;
 use crate::common::ResponseStream;
+use crate::endpoint::streaming::StreamingClient;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::provider::WireApi;
 use crate::sse::chat::spawn_chat_stream;
 use crate::telemetry::SseTelemetry;
-use crate::telemetry::run_with_request_telemetry;
 use codex_client::HttpTransport;
 use codex_client::RequestTelemetry;
 use http::HeaderMap;
-use http::Method;
 use serde_json::Value;
 use std::sync::Arc;
 
 pub struct ChatClient<T: HttpTransport, A: AuthProvider> {
-    transport: T,
-    provider: Provider,
-    auth: A,
-    request_telemetry: Option<Arc<dyn RequestTelemetry>>,
-    sse_telemetry: Option<Arc<dyn SseTelemetry>>,
+    streaming: StreamingClient<T, A>,
 }
 
 impl<T: HttpTransport, A: AuthProvider> ChatClient<T, A> {
     pub fn new(transport: T, provider: Provider, auth: A) -> Self {
         Self {
-            transport,
-            provider,
-            auth,
-            request_telemetry: None,
-            sse_telemetry: None,
+            streaming: StreamingClient::new(transport, provider, auth),
         }
     }
 
     pub fn with_telemetry(
-        mut self,
+        self,
         request: Option<Arc<dyn RequestTelemetry>>,
         sse: Option<Arc<dyn SseTelemetry>>,
     ) -> Self {
-        self.request_telemetry = request;
-        self.sse_telemetry = sse;
-        self
+        Self {
+            streaming: self.streaming.with_telemetry(request, sse),
+        }
     }
 
     pub async fn stream_request(&self, request: ChatRequest) -> Result<ResponseStream, ApiError> {
@@ -49,7 +39,7 @@ impl<T: HttpTransport, A: AuthProvider> ChatClient<T, A> {
     }
 
     fn path(&self) -> &'static str {
-        match self.provider.wire {
+        match self.streaming.provider().wire {
             WireApi::Chat => "chat/completions",
             _ => "responses",
         }
@@ -60,28 +50,8 @@ impl<T: HttpTransport, A: AuthProvider> ChatClient<T, A> {
         body: Value,
         extra_headers: HeaderMap,
     ) -> Result<ResponseStream, ApiError> {
-        let builder = || {
-            let mut req = self.provider.build_request(Method::POST, self.path());
-            req.headers.extend(extra_headers.clone());
-            req.headers.insert(
-                http::header::ACCEPT,
-                http::HeaderValue::from_static("text/event-stream"),
-            );
-            req.body = Some(body.clone());
-            add_auth_headers(&self.auth, &mut req)
-        };
-        let stream_response = run_with_request_telemetry(
-            self.provider.retry.to_policy(),
-            self.request_telemetry.clone(),
-            builder,
-            |req| self.transport.stream(req),
-        )
-        .await?;
-
-        Ok(spawn_chat_stream(
-            stream_response,
-            self.provider.stream_idle_timeout,
-            self.sse_telemetry.clone(),
-        ))
+        self.streaming
+            .stream(self.path(), body, extra_headers, spawn_chat_stream)
+            .await
     }
 }

@@ -1,13 +1,14 @@
 use crate::error::ApiError;
 use crate::provider::Provider;
+use crate::requests::headers::build_conversation_headers;
+use crate::requests::headers::insert_header;
+use crate::requests::headers::subagent_header;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
 use http::HeaderMap;
-use http::HeaderValue;
 use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
@@ -315,20 +316,8 @@ impl<'a> ChatRequestBuilder<'a> {
             "tools": self.tools,
         });
 
-        let mut headers = HeaderMap::new();
-        if let Some(id) = self.conversation_id {
-            insert_header(&mut headers, "conversation_id", &id);
-            insert_header(&mut headers, "session_id", &id);
-        }
-
-        if let Some(SessionSource::SubAgent(sub)) = &self.session_source {
-            let subagent = match sub {
-                SubAgentSource::Other(label) => label.clone(),
-                other => serde_json::to_value(other)
-                    .ok()
-                    .and_then(|v| v.as_str().map(std::string::ToString::to_string))
-                    .unwrap_or_else(|| "other".to_string()),
-            };
+        let mut headers = build_conversation_headers(self.conversation_id);
+        if let Some(subagent) = subagent_header(&self.session_source) {
             insert_header(&mut headers, "x-openai-subagent", &subagent);
         }
 
@@ -339,15 +328,6 @@ impl<'a> ChatRequestBuilder<'a> {
     }
 }
 
-fn insert_header(headers: &mut HeaderMap, name: &str, value: &str) {
-    if let (Ok(header_name), Ok(header_value)) = (
-        name.parse::<http::HeaderName>(),
-        HeaderValue::from_str(value),
-    ) {
-        headers.insert(header_name, header_value);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -355,6 +335,7 @@ mod tests {
     use crate::provider::WireApi;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
+    use http::HeaderValue;
     use pretty_assertions::assert_eq;
     use std::time::Duration;
 
