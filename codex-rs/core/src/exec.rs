@@ -104,7 +104,7 @@ impl ExecExpiration {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize)]
 pub enum SandboxType {
     None,
 

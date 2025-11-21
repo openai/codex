@@ -1,8 +1,12 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context as _;
 use anyhow::Result;
+use codex_core::exec::SandboxType;
+use codex_core::get_platform_sandbox;
+use codex_core::protocol::SandboxPolicy;
 use rmcp::ErrorData as McpError;
 use rmcp::RoleServer;
 use rmcp::ServerHandler;
@@ -17,6 +21,9 @@ use rmcp::tool;
 use rmcp::tool_handler;
 use rmcp::tool_router;
 use rmcp::transport::stdio;
+use serde::Deserialize;
+use tokio::sync::RwLock;
+use tracing::debug;
 
 use crate::posix::escalate_server::EscalateServer;
 use crate::posix::escalate_server::{self};
@@ -27,10 +34,43 @@ use crate::posix::stopwatch::Stopwatch;
 /// Path to our patched bash.
 const CODEX_BASH_PATH_ENV_VAR: &str = "CODEX_BASH_PATH";
 
+const SANDBOX_STATE_CAPABILITY: &str = "codex/sandbox-state";
+const SANDBOX_STATE_CAPABILITY_VERSION: &str = "1.0.0";
+const SANDBOX_STATE_NOTIFICATION: &str = "codex/sandbox-state/update";
+
 pub(crate) fn get_bash_path() -> Result<PathBuf> {
     std::env::var(CODEX_BASH_PATH_ENV_VAR)
         .map(PathBuf::from)
         .context(format!("{CODEX_BASH_PATH_ENV_VAR} must be set"))
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SandboxState {
+    pub sandbox_policy: SandboxPolicy,
+    pub sandbox_type: SandboxType,
+    pub codex_linux_sandbox_exe: Option<PathBuf>,
+    pub sandbox_cwd: PathBuf,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum SandboxTypeWire {
+    None,
+    MacosSeatbelt,
+    LinuxSeccomp,
+    WindowsRestrictedToken,
+}
+
+impl From<SandboxTypeWire> for SandboxType {
+    fn from(value: SandboxTypeWire) -> Self {
+        match value {
+            SandboxTypeWire::None => SandboxType::None,
+            SandboxTypeWire::MacosSeatbelt => SandboxType::MacosSeatbelt,
+            SandboxTypeWire::LinuxSeccomp => SandboxType::LinuxSeccomp,
+            SandboxTypeWire::WindowsRestrictedToken => SandboxType::WindowsRestrictedToken,
+        }
+    }
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -68,6 +108,7 @@ pub struct ExecTool {
     bash_path: PathBuf,
     execve_wrapper: PathBuf,
     policy: ExecPolicy,
+    sandbox_state: Arc<RwLock<Option<SandboxState>>>,
 }
 
 #[tool_router]
@@ -78,6 +119,7 @@ impl ExecTool {
             bash_path,
             execve_wrapper,
             policy,
+            sandbox_state: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -95,18 +137,31 @@ impl ExecTool {
         );
         let stopwatch = Stopwatch::new(effective_timeout);
         let cancel_token = stopwatch.cancellation_token();
+        let sandbox_state =
+            self.sandbox_state
+                .read()
+                .await
+                .clone()
+                .unwrap_or_else(|| SandboxState {
+                    sandbox_policy: SandboxPolicy::ReadOnly,
+                    sandbox_type: get_platform_sandbox().unwrap_or(SandboxType::None),
+                    codex_linux_sandbox_exe: None,
+                    sandbox_cwd: PathBuf::from(&params.workdir),
+                });
         let escalate_server = EscalateServer::new(
             self.bash_path.clone(),
             self.execve_wrapper.clone(),
             McpEscalationPolicy::new(self.policy, context, stopwatch.clone()),
         );
+
         let result = escalate_server
             .exec(
                 params.command,
                 // TODO: use ShellEnvironmentPolicy
                 std::env::vars().collect(),
-                PathBuf::from(&params.workdir),
+                PathBuf::from(params.workdir),
                 cancel_token,
+                &sandbox_state,
             )
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -119,9 +174,22 @@ impl ExecTool {
 #[tool_handler]
 impl ServerHandler for ExecTool {
     fn get_info(&self) -> ServerInfo {
+        let mut experimental_capabilities = ExperimentalCapabilities::new();
+        let mut sandbox_state_capability = JsonObject::new();
+        sandbox_state_capability.insert(
+            "version".to_string(),
+            serde_json::Value::String(SANDBOX_STATE_CAPABILITY_VERSION.to_string()),
+        );
+        experimental_capabilities.insert(
+            SANDBOX_STATE_CAPABILITY.to_string(),
+            sandbox_state_capability,
+        );
         ServerInfo {
             protocol_version: ProtocolVersion::V_2025_06_18,
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
+            capabilities: ServerCapabilities::builder()
+                .enable_tools()
+                .enable_experimental_with(experimental_capabilities)
+                .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
                 "This server provides a tool to execute shell commands and return their output."
@@ -136,6 +204,32 @@ impl ServerHandler for ExecTool {
         _context: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, McpError> {
         Ok(self.get_info())
+    }
+
+    async fn on_custom_notification(
+        &self,
+        notification: rmcp::model::CustomClientNotification,
+        _context: rmcp::service::NotificationContext<rmcp::RoleServer>,
+    ) {
+        let rmcp::model::CustomClientNotification { method, params, .. } = notification;
+        if method == SANDBOX_STATE_NOTIFICATION
+            && let Some(params) = params
+        {
+            match serde_json::from_value::<SandboxState>(params) {
+                Ok(sandbox_state) => {
+                    debug!(
+                        ?sandbox_state.sandbox_policy,
+                        ?sandbox_state.sandbox_type,
+                        "received sandbox state notification"
+                    );
+                    let mut state = self.sandbox_state.write().await;
+                    *state = Some(sandbox_state);
+                }
+                Err(err) => {
+                    tracing::warn!(?err, "failed to deserialize sandbox state notification");
+                }
+            }
+        }
     }
 }
 
