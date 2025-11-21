@@ -316,7 +316,7 @@ Order of messages:
 3. Client response — `{ "decision": "accept" }` or `{ "decision": "decline" }`.
 4. `item/completed` — returns the same `fileChange` item with `status` updated to `completed`, `failed`, or `declined` after the patch attempt. Rely on this to show success/failure and finalize the diff state in your UI.
 
-UI guidance for IDEs: surface the approval modal as soon as the request arrives, keep the associated `item/started` preview visible underneath, and disable turn-level inputs until you respond. If approvals are declined, expect the turn to keep running. The terminal `item/completed` notification will be sent with the `declined` status on the associated item.
+UI guidance for IDEs: surface an approval dialog as soon as the request arrives. The turn will proceed after the server receives a response to the approval request. The terminal `item/completed` notification will be sent with the appropriate status.
 
 ## Auth endpoints
 
