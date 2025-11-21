@@ -13,7 +13,7 @@
 //! 1) Build a small request `{ command, cwd }`.
 //! 2) Orchestrator: approval (bypass/cache/prompt) → select sandbox → run.
 //! 3) Runtime: transform `CommandSpec` → `ExecEnv` → spawn PTY.
-//! 4) If denial, orchestrator retries with `SandboxType::None`.
+//! 4) If denial, orchestrator retries without sandboxing.
 //! 5) Session is returned with streaming output + metadata.
 //!
 //! This keeps policy logic and user interaction centralized while the PTY/session

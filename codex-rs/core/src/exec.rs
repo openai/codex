@@ -64,20 +64,6 @@ impl ExecParams {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum SandboxType {
-    None,
-
-    /// Only available on macOS.
-    MacosSeatbelt,
-
-    /// Only available on Linux.
-    LinuxSeccomp,
-
-    /// Only available on Windows.
-    WindowsRestrictedToken,
-}
-
 #[derive(Clone)]
 pub struct StdoutStream {
     pub sub_id: String,
@@ -87,7 +73,7 @@ pub struct StdoutStream {
 
 pub async fn process_exec_tool_call(
     params: ExecParams,
-    sandbox_type: SandboxType,
+    sandboxed: bool,
     sandbox_policy: &SandboxPolicy,
     sandbox_cwd: &Path,
     codex_linux_sandbox_exe: &Option<PathBuf>,
@@ -125,7 +111,7 @@ pub async fn process_exec_tool_call(
         .transform(
             &spec,
             sandbox_policy,
-            sandbox_type,
+            sandboxed,
             sandbox_cwd,
             codex_linux_sandbox_exe.as_ref(),
         )
@@ -145,7 +131,7 @@ pub(crate) async fn execute_exec_env(
         cwd,
         env,
         timeout_ms,
-        sandbox,
+        sandboxed,
         with_escalated_permissions,
         justification,
         arg0,
@@ -162,9 +148,9 @@ pub(crate) async fn execute_exec_env(
     };
 
     let start = Instant::now();
-    let raw_output_result = exec(params, sandbox, sandbox_policy, stdout_stream).await;
+    let raw_output_result = exec(params, sandboxed, sandbox_policy, stdout_stream).await;
     let duration = start.elapsed();
-    finalize_exec_result(raw_output_result, sandbox, duration)
+    finalize_exec_result(raw_output_result, sandboxed, duration)
 }
 
 #[cfg(target_os = "windows")]
@@ -250,7 +236,7 @@ async fn exec_windows_sandbox(
 
 fn finalize_exec_result(
     raw_output_result: std::result::Result<RawExecToolCallOutput, CodexErr>,
-    sandbox_type: SandboxType,
+    sandboxed: bool,
     duration: Duration,
 ) -> Result<ExecToolCallOutput> {
     match raw_output_result {
@@ -292,7 +278,7 @@ fn finalize_exec_result(
                 }));
             }
 
-            if is_likely_sandbox_denied(sandbox_type, &exec_output) {
+            if sandboxed && is_likely_sandbox_denied(&exec_output) {
                 return Err(CodexErr::Sandbox(SandboxErr::Denied {
                     output: Box::new(exec_output),
                 }));
@@ -311,17 +297,21 @@ pub(crate) mod errors {
     use super::CodexErr;
     use crate::sandboxing::SandboxTransformError;
 
+    #[cfg(target_os = "linux")]
     impl From<SandboxTransformError> for CodexErr {
         fn from(err: SandboxTransformError) -> Self {
             match err {
                 SandboxTransformError::MissingLinuxSandboxExecutable => {
                     CodexErr::LandlockSandboxExecutableNotProvided
                 }
-                #[cfg(not(target_os = "macos"))]
-                SandboxTransformError::SeatbeltUnavailable => CodexErr::UnsupportedOperation(
-                    "seatbelt sandbox is only available on macOS".to_string(),
-                ),
             }
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    impl From<SandboxTransformError> for CodexErr {
+        fn from(err: SandboxTransformError) -> Self {
+            match err {}
         }
     }
 }
@@ -331,11 +321,8 @@ pub(crate) mod errors {
 /// error, but the command itself might fail or succeed for other reasons.
 /// For now, we conservatively check for well known command failure exit codes and
 /// also look for common sandbox denial keywords in the command output.
-pub(crate) fn is_likely_sandbox_denied(
-    sandbox_type: SandboxType,
-    exec_output: &ExecToolCallOutput,
-) -> bool {
-    if sandbox_type == SandboxType::None || exec_output.exit_code == 0 {
+pub(crate) fn is_likely_sandbox_denied(exec_output: &ExecToolCallOutput) -> bool {
+    if exec_output.exit_code == 0 {
         return false;
     }
 
@@ -375,12 +362,10 @@ pub(crate) fn is_likely_sandbox_denied(
         return false;
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     {
         const SIGSYS_CODE: i32 = libc::SIGSYS;
-        if sandbox_type == SandboxType::LinuxSeccomp
-            && exec_output.exit_code == EXIT_CODE_SIGNAL_BASE + SIGSYS_CODE
-        {
+        if exec_output.exit_code == EXIT_CODE_SIGNAL_BASE + SIGSYS_CODE {
             return true;
         }
     }
@@ -439,14 +424,12 @@ pub struct ExecToolCallOutput {
 #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
 async fn exec(
     params: ExecParams,
-    sandbox: SandboxType,
+    sandboxed: bool,
     sandbox_policy: &SandboxPolicy,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<RawExecToolCallOutput> {
     #[cfg(target_os = "windows")]
-    if sandbox == SandboxType::WindowsRestrictedToken
-        && !matches!(sandbox_policy, SandboxPolicy::DangerFullAccess)
-    {
+    if sandboxed && !matches!(sandbox_policy, SandboxPolicy::DangerFullAccess) {
         return exec_windows_sandbox(params, sandbox_policy).await;
     }
     let timeout = params.timeout_duration();
@@ -729,31 +712,19 @@ mod tests {
     #[test]
     fn sandbox_detection_requires_keywords() {
         let output = make_exec_output(1, "", "", "");
-        assert!(!is_likely_sandbox_denied(
-            SandboxType::LinuxSeccomp,
-            &output
-        ));
+        assert!(!is_likely_sandbox_denied(&output));
     }
 
     #[test]
     fn sandbox_detection_identifies_keyword_in_stderr() {
         let output = make_exec_output(1, "", "Operation not permitted", "");
-        assert!(is_likely_sandbox_denied(SandboxType::LinuxSeccomp, &output));
+        assert!(is_likely_sandbox_denied(&output));
     }
 
     #[test]
     fn sandbox_detection_respects_quick_reject_exit_codes() {
         let output = make_exec_output(127, "", "command not found", "");
-        assert!(!is_likely_sandbox_denied(
-            SandboxType::LinuxSeccomp,
-            &output
-        ));
-    }
-
-    #[test]
-    fn sandbox_detection_ignores_non_sandbox_mode() {
-        let output = make_exec_output(1, "", "Operation not permitted", "");
-        assert!(!is_likely_sandbox_denied(SandboxType::None, &output));
+        assert!(!is_likely_sandbox_denied(&output));
     }
 
     #[test]
@@ -764,18 +735,15 @@ mod tests {
             "",
             "cargo failed: Read-only file system when writing target",
         );
-        assert!(is_likely_sandbox_denied(
-            SandboxType::MacosSeatbelt,
-            &output
-        ));
+        assert!(is_likely_sandbox_denied(&output));
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn sandbox_detection_flags_sigsys_exit_code() {
         let exit_code = EXIT_CODE_SIGNAL_BASE + libc::SIGSYS;
         let output = make_exec_output(exit_code, "", "", "");
-        assert!(is_likely_sandbox_denied(SandboxType::LinuxSeccomp, &output));
+        assert!(is_likely_sandbox_denied(&output));
     }
 
     #[cfg(unix)]
@@ -797,7 +765,7 @@ mod tests {
             arg0: None,
         };
 
-        let output = exec(params, SandboxType::None, &SandboxPolicy::ReadOnly, None).await?;
+        let output = exec(params, false, &SandboxPolicy::ReadOnly, None).await?;
         assert!(output.timed_out);
 
         let stdout = output.stdout.from_utf8_lossy().text;

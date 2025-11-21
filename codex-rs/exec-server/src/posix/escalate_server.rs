@@ -8,9 +8,7 @@ use std::time::Duration;
 use anyhow::Context as _;
 use path_absolutize::Absolutize as _;
 
-use codex_core::exec::SandboxType;
 use codex_core::exec::process_exec_tool_call;
-use codex_core::get_platform_sandbox;
 use codex_core::protocol::SandboxPolicy;
 use tokio::process::Command;
 
@@ -85,7 +83,7 @@ impl EscalateServer {
                 justification: None,
                 arg0: None,
             },
-            get_platform_sandbox().unwrap_or(SandboxType::None),
+            true,
             &sandbox_policy,
             &sandbox_cwd,
             &None,

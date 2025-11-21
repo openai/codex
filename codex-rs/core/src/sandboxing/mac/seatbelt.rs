@@ -1,5 +1,3 @@
-#![cfg(target_os = "macos")]
-
 use std::collections::HashMap;
 use std::ffi::CStr;
 use std::path::Path;
@@ -11,8 +9,8 @@ use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
 
-const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("seatbelt_base_policy.sbpl");
-const MACOS_SEATBELT_NETWORK_POLICY: &str = include_str!("seatbelt_network_policy.sbpl");
+const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("../../seatbelt_base_policy.sbpl");
+const MACOS_SEATBELT_NETWORK_POLICY: &str = include_str!("../../seatbelt_network_policy.sbpl");
 
 /// When working with `sandbox-exec`, only consider `sandbox-exec` in `/usr/bin`
 /// to defend against an attacker trying to inject a malicious version on the

@@ -5,15 +5,12 @@ use std::string::ToString;
 
 use codex_core::exec::ExecParams;
 use codex_core::exec::ExecToolCallOutput;
-use codex_core::exec::SandboxType;
 use codex_core::exec::process_exec_tool_call;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::spawn::CODEX_SANDBOX_ENV_VAR;
 use tempfile::TempDir;
 
 use codex_core::error::Result;
-
-use codex_core::get_platform_sandbox;
 
 fn skip_test() -> bool {
     if std::env::var(CODEX_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {
@@ -24,11 +21,7 @@ fn skip_test() -> bool {
     false
 }
 
-#[expect(clippy::expect_used)]
 async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput> {
-    let sandbox_type = get_platform_sandbox().expect("should be able to get sandbox type");
-    assert_eq!(sandbox_type, SandboxType::MacosSeatbelt);
-
     let params = ExecParams {
         command: cmd.iter().map(ToString::to_string).collect(),
         cwd: tmp.path().to_path_buf(),
@@ -41,7 +34,7 @@ async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput
 
     let policy = SandboxPolicy::new_read_only_policy();
 
-    process_exec_tool_call(params, sandbox_type, &policy, tmp.path(), &None, None).await
+    process_exec_tool_call(params, true, &policy, tmp.path(), &None, None).await
 }
 
 /// Command succeeds with exit code 0 normally

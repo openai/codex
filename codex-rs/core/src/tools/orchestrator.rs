@@ -104,12 +104,12 @@ impl ToolOrchestrator {
             .sandbox
             .select_initial(&turn_ctx.sandbox_policy, tool.sandbox_preference());
         if tool.wants_escalated_first_attempt(req) {
-            initial_sandbox = crate::exec::SandboxType::None;
+            initial_sandbox = false;
         }
         // Platform-specific flag gating is handled by SandboxManager::select_initial
-        // via crate::safety::get_platform_sandbox().
+        // via crate::safety::get_platform_has_sandbox().
         let initial_attempt = SandboxAttempt {
-            sandbox: initial_sandbox,
+            sandboxed: initial_sandbox,
             policy: &turn_ctx.sandbox_policy,
             manager: &self.sandbox,
             sandbox_cwd: &turn_ctx.cwd,
@@ -178,7 +178,7 @@ impl ToolOrchestrator {
                 }
 
                 let escalated_attempt = SandboxAttempt {
-                    sandbox: crate::exec::SandboxType::None,
+                    sandboxed: false,
                     policy: &turn_ctx.sandbox_policy,
                     manager: &self.sandbox,
                     sandbox_cwd: &turn_ctx.cwd,

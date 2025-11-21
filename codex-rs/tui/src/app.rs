@@ -327,7 +327,7 @@ impl App {
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
         {
-            let should_check = codex_core::get_platform_sandbox().is_some()
+            let should_check = codex_core::get_platform_has_sandbox()
                 && matches!(
                     app.config.sandbox_policy,
                     codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
@@ -693,7 +693,7 @@ impl App {
                 self.config.sandbox_policy = policy.clone();
                 #[cfg(target_os = "windows")]
                 if !matches!(policy, codex_core::protocol::SandboxPolicy::ReadOnly)
-                    || codex_core::get_platform_sandbox().is_some()
+                    || codex_core::get_platform_has_sandbox()
                 {
                     self.config.forced_auto_mode_downgraded_on_windows = false;
                 }
@@ -708,7 +708,7 @@ impl App {
                         return Ok(true);
                     }
 
-                    let should_check = codex_core::get_platform_sandbox().is_some()
+                    let should_check = codex_core::get_platform_has_sandbox()
                         && policy_is_workspace_write_or_ro
                         && !self.chat_widget.world_writable_warning_hidden();
                     if should_check {
