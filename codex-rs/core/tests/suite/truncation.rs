@@ -6,7 +6,6 @@ use anyhow::Result;
 use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::features::Feature;
-use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -38,12 +37,7 @@ async fn truncate_function_error_trims_respond_to_model() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(|config| {
-        // Use the test model that wires function tools like grep_files
-        config.model = "test-gpt-5.1-codex".to_string();
-        config.model_family =
-            find_family_for_model("test-gpt-5.1-codex").expect("model family for test model");
-    });
+    let mut builder = test_codex().with_model("test-gpt-5.1-codex");
     let test = builder.build(&server).await?;
 
     // Construct a very long, non-existent path to force a RespondToModel error with a large message
@@ -257,11 +251,7 @@ async fn tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> {
     let server = start_mock_server().await;
 
     // Use a model that exposes the shell_command tool.
-    let mut builder = test_codex().with_config(|config| {
-        config.model = "gpt-5.1-codex".to_string();
-        config.model_family =
-            find_family_for_model("gpt-5.1-codex").expect("gpt-5.1-codex is a model family");
-    });
+    let mut builder = test_codex().with_model("gpt-5.1-codex");
     let fixture = builder.build(&server).await?;
 
     let call_id = "shell-too-large";
@@ -337,11 +327,7 @@ async fn tool_call_output_truncated_only_once() -> Result<()> {
 
     let server = start_mock_server().await;
 
-    let mut builder = test_codex().with_config(|config| {
-        config.model = "gpt-5.1-codex".to_string();
-        config.model_family =
-            find_family_for_model("gpt-5.1-codex").expect("gpt-5.1-codex is a model family");
-    });
+    let mut builder = test_codex().with_model("gpt-5.1-codex");
     let fixture = builder.build(&server).await?;
     let call_id = "shell-single-truncation";
     let command = if cfg!(windows) {
@@ -588,12 +574,11 @@ async fn token_policy_marker_reports_tokens() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(|config| {
-        config.model = "gpt-5.1-codex".to_string(); // token policy
-        config.model_family =
-            find_family_for_model("gpt-5.1-codex").expect("model family for gpt-5.1-codex");
-        config.tool_output_token_limit = Some(50); // small budget to force truncation
-    });
+    let mut builder = test_codex()
+        .with_model("gpt-5.1-codex")
+        .with_config(|config| {
+            config.tool_output_token_limit = Some(50); // small budget to force truncation
+        });
     let fixture = builder.build(&server).await?;
 
     let call_id = "shell-token-marker";
@@ -642,9 +627,7 @@ async fn byte_policy_marker_reports_bytes() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(|config| {
-        config.model = "gpt-5.1".to_string(); // byte policy
-        config.model_family = find_family_for_model("gpt-5.1").expect("model family for gpt-5.1");
+    let mut builder = test_codex().with_model("gpt-5.1").with_config(|config| {
         config.tool_output_token_limit = Some(50); // ~200 byte cap
     });
     let fixture = builder.build(&server).await?;
@@ -695,12 +678,11 @@ async fn shell_command_output_not_truncated_with_custom_limit() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(|config| {
-        config.model = "gpt-5.1-codex".to_string();
-        config.model_family =
-            find_family_for_model("gpt-5.1-codex").expect("model family for gpt-5.1-codex");
-        config.tool_output_token_limit = Some(50_000); // ample budget
-    });
+    let mut builder = test_codex()
+        .with_model("gpt-5.1-codex")
+        .with_config(|config| {
+            config.tool_output_token_limit = Some(50_000); // ample budget
+        });
     let fixture = builder.build(&server).await?;
 
     let call_id = "shell-no-trunc";

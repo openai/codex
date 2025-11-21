@@ -1,4 +1,3 @@
-use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -59,11 +58,9 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
 
     // Build a conversation configured to require approvals so the delegate
     // routes ExecApprovalRequest via the parent.
-    let mut builder = test_codex().with_config(|config| {
+    let mut builder = test_codex().with_model("gpt-5.1").with_config(|config| {
         config.approval_policy = AskForApproval::OnRequest;
         config.sandbox_policy = SandboxPolicy::ReadOnly;
-        config.model = "gpt-5.1".to_string();
-        config.model_family = find_family_for_model("gpt-5.1").expect("gpt-5.1 is a valid model");
     });
     let test = builder.build(&server).await.expect("build test codex");
 
@@ -136,13 +133,11 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
     let server = start_mock_server().await;
     mount_sse_sequence(&server, vec![sse1, sse2]).await;
 
-    let mut builder = test_codex().with_config(|config| {
+    let mut builder = test_codex().with_model("gpt-5.1").with_config(|config| {
         config.approval_policy = AskForApproval::OnRequest;
         // Use a restricted sandbox so patch approval is required
         config.sandbox_policy = SandboxPolicy::ReadOnly;
         config.include_apply_patch_tool = true;
-        config.model = "gpt-5.1".to_string();
-        config.model_family = find_family_for_model("gpt-5.1").expect("gpt-5.1 is a valid model");
     });
     let test = builder.build(&server).await.expect("build test codex");
 

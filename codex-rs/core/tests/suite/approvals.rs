@@ -2,7 +2,6 @@
 
 use anyhow::Result;
 use codex_core::features::Feature;
-use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
@@ -1458,14 +1457,11 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
     let sandbox_policy = scenario.sandbox_policy.clone();
     let features = scenario.features.clone();
     let model_override = scenario.model_override;
+    let model = model_override.unwrap_or("gpt-5.1");
 
-    let mut builder = test_codex().with_config(move |config| {
+    let mut builder = test_codex().with_model(model).with_config(move |config| {
         config.approval_policy = approval_policy;
         config.sandbox_policy = sandbox_policy.clone();
-        let model = model_override.unwrap_or("gpt-5.1");
-        config.model = model.to_string();
-        config.model_family =
-            find_family_for_model(model).expect("model should map to a known family");
         for feature in features {
             config.features.enable(feature);
         }
