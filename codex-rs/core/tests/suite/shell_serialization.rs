@@ -366,7 +366,7 @@ async fn shell_output_for_freeform_tool_records_duration(
     let test = builder.build(&server).await?;
 
     let call_id = "shell-structured";
-    let responses = shell_responses(call_id, vec!["/bin/bash", "-c", "sleep 1"], output_type)?;
+    let responses = shell_responses(call_id, vec!["/bin/sh", "-c", "sleep 1"], output_type)?;
     let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
