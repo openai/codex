@@ -321,7 +321,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing
                 .send_server_notification(ServerNotification::Error(ErrorNotification {
                     error: turn_error,
-                    thread_id: ev.thread_id,
+                    thread_id: ev.conversation_id,
                     turn_id: ev.turn_id,
                 }))
                 .await;

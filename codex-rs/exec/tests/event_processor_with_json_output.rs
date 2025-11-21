@@ -589,7 +589,7 @@ fn stream_error_event_produces_error() {
         EventMsg::StreamError(codex_core::protocol::StreamErrorEvent {
             message: "retrying".to_string(),
             codex_error_info: Some(CodexErrorInfo::Other),
-            thread_id: "thread-1".to_string(),
+            conversation_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
         }),
     ));

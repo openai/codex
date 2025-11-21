@@ -1409,7 +1409,7 @@ pub struct StreamErrorEvent {
     #[serde(default)]
     pub codex_error_info: Option<CodexErrorInfo>,
     #[serde(default)]
-    pub thread_id: String,
+    pub conversation_id: String,
     #[serde(default)]
     pub turn_id: String,
 }

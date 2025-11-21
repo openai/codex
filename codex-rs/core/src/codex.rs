@@ -767,7 +767,7 @@ impl Session {
                 EventMsg::Error(ev)
             }
             EventMsg::StreamError(mut ev) => {
-                ev.thread_id = self.conversation_id.to_string();
+                ev.conversation_id = self.conversation_id.to_string();
                 ev.turn_id = turn_context.sub_id.clone();
                 EventMsg::StreamError(ev)
             }
@@ -1209,7 +1209,7 @@ impl Session {
         let event = EventMsg::StreamError(StreamErrorEvent {
             message: message.into(),
             codex_error_info: Some(codex_error_info),
-            thread_id: String::new(),
+            conversation_id: String::new(),
             turn_id: String::new(),
         });
         self.send_event(turn_context, event).await;
