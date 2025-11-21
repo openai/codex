@@ -40,7 +40,6 @@ tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 opentelemetry-appender-tracing = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v7"] }
-codex-windows-sandbox.workspace = true
 
 [dev-dependencies]
 app_test_support = { workspace = true }
