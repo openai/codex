@@ -27,9 +27,9 @@ impl Policy {
         let rules = match cmd.first() {
             Some(first) => match self.rules_by_program.get_vec(first) {
                 Some(rules) => rules,
-                None => return Evaluation::NoMatch,
+                None => return Evaluation::NoMatch {},
             },
-            None => return Evaluation::NoMatch,
+            None => return Evaluation::NoMatch {},
         };
 
         let matched_rules: Vec<RuleMatch> =
@@ -39,7 +39,7 @@ impl Policy {
                 decision,
                 matched_rules,
             },
-            None => Evaluation::NoMatch,
+            None => Evaluation::NoMatch {},
         }
     }
 
@@ -52,7 +52,7 @@ impl Policy {
             .into_iter()
             .flat_map(|command| match self.check(command.as_ref()) {
                 Evaluation::Match { matched_rules, .. } => matched_rules,
-                Evaluation::NoMatch => Vec::new(),
+                Evaluation::NoMatch { .. } => Vec::new(),
             })
             .collect();
 
@@ -61,7 +61,7 @@ impl Policy {
                 decision,
                 matched_rules,
             },
-            None => Evaluation::NoMatch,
+            None => Evaluation::NoMatch {},
         }
     }
 }
@@ -69,7 +69,7 @@ impl Policy {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Evaluation {
-    NoMatch,
+    NoMatch {},
     Match {
         decision: Decision,
         #[serde(rename = "matchedRules")]

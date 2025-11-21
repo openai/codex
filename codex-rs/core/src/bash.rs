@@ -100,7 +100,7 @@ pub fn extract_bash_command(command: &[String]) -> Option<(&str, &str)> {
     if !matches!(flag.as_str(), "-lc" | "-c")
         || !matches!(
             detect_shell_type(&PathBuf::from(shell)),
-            Some(ShellType::Zsh) | Some(ShellType::Bash)
+            Some(ShellType::Zsh) | Some(ShellType::Bash) | Some(ShellType::Sh)
         )
     {
         return None;
