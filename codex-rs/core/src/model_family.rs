@@ -186,6 +186,7 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             shell_type: ConfigShellToolType::ShellCommand,
             supports_parallel_tool_calls: true,
         )
+
     // Production models.
     } else if slug.starts_with("gpt-5.1-codex-max") {
         model_family!(
