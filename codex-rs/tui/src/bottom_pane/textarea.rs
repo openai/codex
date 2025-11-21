@@ -275,6 +275,13 @@ impl TextArea {
                 ..
             }  => self.delete_forward_word(),
             KeyEvent {
+                code: KeyCode::Char('d'),
+                modifiers: KeyModifiers::ALT,
+                ..
+            } => {
+                self.delete_forward_word();
+            }
+            KeyEvent {
                 code: KeyCode::Delete,
                 ..
             }
