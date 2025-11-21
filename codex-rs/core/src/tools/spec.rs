@@ -1432,7 +1432,8 @@ mod tests {
             "exp-5.1",
             &Features::with_defaults(),
             &[
-                "unified_exec",
+                "exec_command",
+                "write_stdin",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",

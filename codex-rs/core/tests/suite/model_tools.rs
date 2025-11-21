@@ -125,7 +125,8 @@ async fn model_selects_expected_tools() {
     assert_eq!(
         exp_tools,
         vec![
-            "unified_exec".to_string(),
+            "exec_command".to_string(),
+            "write_stdin".to_string(),
             "list_mcp_resources".to_string(),
             "list_mcp_resource_templates".to_string(),
             "read_mcp_resource".to_string(),
