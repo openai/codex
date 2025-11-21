@@ -2648,7 +2648,7 @@ fn stream_error_updates_status_indicator() {
         id: "sub-1".into(),
         msg: EventMsg::StreamError(StreamErrorEvent {
             message: msg.to_string(),
-            codex_error_code: Some(CodexErrorInfo::Other),
+            codex_error_info: Some(CodexErrorInfo::Other),
         }),
     });
 

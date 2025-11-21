@@ -340,11 +340,14 @@ Event notifications are the server-initiated event stream for thread lifecycles,
 The app-server streams JSON-RPC notifications while a turn is running. Each turn starts with `turn/started` (initial `turn`) and ends with `turn/completed` (final `turn` plus token `usage`), and clients subscribe to the events they care about, rendering each item incrementally as updates arrive. The per-item lifecycle is always: `item/started` → zero or more item-specific deltas → `item/completed`.
 
 - `turn/started` — `{ turn }` with the turn id, empty `items`, and `status: "inProgress"`.
-- `turn/completed` — `{ turn }` where `turn.status` is `completed`, `interrupted`, or `failed`; failures carry `{ error: { message, codexErrorCode? } }`.
+- `turn/completed` — `{ turn }` where `turn.status` is `completed`, `interrupted`, or `failed`; failures carry `{ error: { message, codexErrorInfo? } }`.
 
-- `error` — emitted whenever the server hits an error mid-turn (for example, upstream model errors or quota limits). Carries the same `{ error: { message, codexErrorCode? } }` payload as `turn.status: "failed"` and may precede that terminal notification.
+Today both notifications carry an empty `items` array even when item events were streamed; rely on `item/*` notifications for the canonical item list until this is fixed.
 
-  `codexErrorCode` maps to the `CodexErrorInfo` enum. Common values:
+#### Errors
+`error` event is emitted whenever the server hits an error mid-turn (for example, upstream model errors or quota limits). Carries the same `{ error: { message, codexErrorInfo? } }` payload as `turn.status: "failed"` and may precede that terminal notification.
+
+  `codexErrorInfo` maps to the `CodexErrorInfo` enum. Common values:
   - `ContextWindowExceeded`
   - `UsageLimitExceeded`
   - `HttpConnectionFailed { httpStatusCode? }`: upstream HTTP failures including 4xx/5xx
@@ -357,7 +360,7 @@ The app-server streams JSON-RPC notifications while a turn is running. Each turn
   - `InternalServerError`
   - `Other`: all unclassified errors
 
-  When an upstream HTTP status is available (for example, from the Responses API or a provider), it is forwarded in `httpStatusCode` on the relevant `codexErrorCode` variant; otherwise it is `null`.
+When an upstream HTTP status is available (for example, from the Responses API or a provider), it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.
 
 #### Thread items
 

@@ -469,7 +469,7 @@ impl CodexErr {
         };
         ErrorEvent {
             message,
-            codex_error_code: Some(self.to_codex_protocol_error()),
+            codex_error_info: Some(self.to_codex_protocol_error()),
         }
     }
 
@@ -650,7 +650,7 @@ mod tests {
             "prefix: Error while reading the server response: HTTP status client error (429 Too Many Requests) for url (http://example.com/), request id: req-123"
         );
         assert_eq!(
-            event.codex_error_code,
+            event.codex_error_info,
             Some(CodexErrorInfo::ResponseStreamConnectionFailed {
                 http_status_code: Some(429)
             })
