@@ -105,7 +105,7 @@ impl ActionKind {
                 let command = format!("printf {content:?} > {path:?} && cat {path:?}");
                 let event =
                     shell_event(call_id, &command, 1_000, with_escalated_permissions)?;
-                Ok((event, Some(command.to_string())))
+                Ok((event, Some(command)))
             }
             ActionKind::FetchUrl {
                 endpoint,
@@ -128,7 +128,7 @@ impl ActionKind {
                 let command = format!("python3 -c \"{script}\"");
                 let event =
                     shell_event(call_id, &command, 1_000, with_escalated_permissions)?;
-                Ok((event, Some(command.to_string())))
+                Ok((event, Some(command)))
             }
             ActionKind::RunCommand { command } => {
                 let event =
@@ -161,7 +161,7 @@ impl ActionKind {
                 let command = shell_apply_patch_command(&patch);
                 let event =
                     shell_event(call_id, &command, 5_000, with_escalated_permissions)?;
-                Ok((event, Some(command.to_string())))
+                Ok((event, Some(command)))
             }
         }
     }

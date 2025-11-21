@@ -7,7 +7,6 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
 use regex_lite::Regex;
-use shlex;
 
 #[cfg(target_os = "linux")]
 use assert_cmd::cargo::cargo_bin;

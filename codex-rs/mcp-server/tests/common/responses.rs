@@ -1,5 +1,4 @@
 use serde_json::json;
-use shlex;
 use std::path::Path;
 
 pub fn create_shell_command_sse_response(
