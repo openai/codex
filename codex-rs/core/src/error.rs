@@ -470,6 +470,8 @@ impl CodexErr {
         ErrorEvent {
             message,
             codex_error_info: Some(self.to_codex_protocol_error()),
+            thread_id: String::new(),
+            turn_id: String::new(),
         }
     }
 

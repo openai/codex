@@ -719,6 +719,10 @@ pub struct ErrorEvent {
     pub message: String,
     #[serde(default)]
     pub codex_error_info: Option<CodexErrorInfo>,
+    #[serde(default)]
+    pub thread_id: String,
+    #[serde(default)]
+    pub turn_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1404,6 +1408,10 @@ pub struct StreamErrorEvent {
     pub message: String,
     #[serde(default)]
     pub codex_error_info: Option<CodexErrorInfo>,
+    #[serde(default)]
+    pub thread_id: String,
+    #[serde(default)]
+    pub turn_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

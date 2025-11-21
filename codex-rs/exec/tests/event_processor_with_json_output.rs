@@ -547,6 +547,8 @@ fn error_event_produces_error() {
         EventMsg::Error(codex_core::protocol::ErrorEvent {
             message: "boom".to_string(),
             codex_error_info: Some(CodexErrorInfo::Other),
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
         }),
     ));
     assert_eq!(
@@ -587,6 +589,8 @@ fn stream_error_event_produces_error() {
         EventMsg::StreamError(codex_core::protocol::StreamErrorEvent {
             message: "retrying".to_string(),
             codex_error_info: Some(CodexErrorInfo::Other),
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
         }),
     ));
     assert_eq!(
@@ -606,6 +610,8 @@ fn error_followed_by_task_complete_produces_turn_failed() {
         EventMsg::Error(ErrorEvent {
             message: "boom".to_string(),
             codex_error_info: Some(CodexErrorInfo::Other),
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
         }),
     );
     assert_eq!(
