@@ -213,8 +213,7 @@ async fn forward_events(
                     other => {
                         match tx_sub.send(other).or_cancel(&cancel_token).await {
                             Ok(Ok(())) => {}
-                            Ok(Err(_)) => break,
-                            Err(_) => {
+                            _ => {
                                 shutdown_delegate(&codex).await;
                                 break;
                             }
