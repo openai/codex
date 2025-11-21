@@ -340,7 +340,6 @@ pub(crate) mod errors {
     use super::CodexErr;
     use crate::sandboxing::SandboxTransformError;
 
-    #[cfg(target_os = "linux")]
     impl From<SandboxTransformError> for CodexErr {
         fn from(err: SandboxTransformError) -> Self {
             match err {
@@ -348,13 +347,6 @@ pub(crate) mod errors {
                     CodexErr::LandlockSandboxExecutableNotProvided
                 }
             }
-        }
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    impl From<SandboxTransformError> for CodexErr {
-        fn from(err: SandboxTransformError) -> Self {
-            match err {}
         }
     }
 }
