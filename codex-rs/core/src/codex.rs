@@ -1455,7 +1455,6 @@ mod handlers {
     use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandTask;
-    use codex_protocol::approvals::ElicitationDecision;
     use codex_protocol::custom_prompts::CustomPrompt;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
@@ -1557,12 +1556,12 @@ mod handlers {
         sess: &Arc<Session>,
         server_name: String,
         request_id: RequestId,
-        decision: ElicitationDecision,
+        decision: codex_protocol::approvals::ElicitationAction,
     ) {
         let action = match decision {
-            ElicitationDecision::Accept => ElicitationAction::Accept,
-            ElicitationDecision::Decline => ElicitationAction::Decline,
-            ElicitationDecision::Cancel => ElicitationAction::Cancel,
+            codex_protocol::approvals::ElicitationAction::Accept => ElicitationAction::Accept,
+            codex_protocol::approvals::ElicitationAction::Decline => ElicitationAction::Decline,
+            codex_protocol::approvals::ElicitationAction::Cancel => ElicitationAction::Cancel,
         };
         let response = ElicitationResponse {
             action,

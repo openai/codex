@@ -823,7 +823,7 @@ impl App {
                         "E X E C".to_string(),
                     ));
                 }
-                ApprovalRequest::Elicitation {
+                ApprovalRequest::McpElicitation {
                     server_name,
                     message,
                     ..

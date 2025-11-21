@@ -30,7 +30,7 @@ use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
-use codex_protocol::approvals::ElicitationDecision;
+use codex_protocol::approvals::ElicitationAction;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::user_input::UserInput;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
@@ -408,7 +408,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 .submit(Op::ResolveElicitation {
                     server_name: ev.server_name.clone(),
                     request_id: ev.id.clone(),
-                    decision: ElicitationDecision::Cancel,
+                    decision: ElicitationAction::Cancel,
                 })
                 .await?;
         }

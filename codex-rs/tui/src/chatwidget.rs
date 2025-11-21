@@ -1029,7 +1029,7 @@ impl ChatWidget {
             server_name: ev.server_name.clone(),
         });
 
-        let request = ApprovalRequest::Elicitation {
+        let request = ApprovalRequest::McpElicitation {
             server_name: ev.server_name,
             request_id: ev.id,
             message: ev.message,

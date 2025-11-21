@@ -66,7 +66,7 @@ pub struct ElicitationRequestEvent {
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
-pub enum ElicitationDecision {
+pub enum ElicitationAction {
     Accept,
     Decline,
     Cancel,

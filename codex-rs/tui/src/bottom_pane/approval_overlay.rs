@@ -16,7 +16,7 @@ use crate::key_hint::KeyBinding;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
-use codex_core::protocol::ElicitationDecision;
+use codex_core::protocol::ElicitationAction;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
@@ -50,7 +50,7 @@ pub(crate) enum ApprovalRequest {
         cwd: PathBuf,
         changes: HashMap<PathBuf, FileChange>,
     },
-    Elicitation {
+    McpElicitation {
         server_name: String,
         request_id: RequestId,
         message: String,
@@ -112,7 +112,7 @@ impl ApprovalOverlay {
                 patch_options(),
                 "Would you like to make the following edits?".to_string(),
             ),
-            ApprovalVariant::Elicitation { server_name, .. } => (
+            ApprovalVariant::McpElicitation { server_name, .. } => (
                 elicitation_options(),
                 format!("{server_name} needs your approval."),
             ),
@@ -168,11 +168,11 @@ impl ApprovalOverlay {
                     self.handle_patch_decision(id, *decision);
                 }
                 (
-                    ApprovalVariant::Elicitation {
+                    ApprovalVariant::McpElicitation {
                         server_name,
                         request_id,
                     },
-                    ApprovalDecision::Elicitation(decision),
+                    ApprovalDecision::McpElicitation(decision),
                 ) => {
                     self.handle_elicitation_decision(server_name, request_id, *decision);
                 }
@@ -204,7 +204,7 @@ impl ApprovalOverlay {
         &self,
         server_name: &str,
         request_id: &RequestId,
-        decision: ElicitationDecision,
+        decision: ElicitationAction,
     ) {
         self.app_event_tx
             .send(AppEvent::CodexOp(Op::ResolveElicitation {
@@ -279,14 +279,14 @@ impl BottomPaneView for ApprovalOverlay {
                 ApprovalVariant::ApplyPatch { id, .. } => {
                     self.handle_patch_decision(id, ReviewDecision::Abort);
                 }
-                ApprovalVariant::Elicitation {
+                ApprovalVariant::McpElicitation {
                     server_name,
                     request_id,
                 } => {
                     self.handle_elicitation_decision(
                         server_name,
                         request_id,
-                        ElicitationDecision::Cancel,
+                        ElicitationAction::Cancel,
                     );
                 }
             }
@@ -381,7 +381,7 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                     header: Box::new(ColumnRenderable::with(header)),
                 }
             }
-            ApprovalRequest::Elicitation {
+            ApprovalRequest::McpElicitation {
                 server_name,
                 request_id,
                 message,
@@ -393,7 +393,7 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 ])
                 .wrap(Wrap { trim: false });
                 Self {
-                    variant: ApprovalVariant::Elicitation {
+                    variant: ApprovalVariant::McpElicitation {
                         server_name,
                         request_id,
                     },
@@ -435,7 +435,7 @@ enum ApprovalVariant {
     ApplyPatch {
         id: String,
     },
-    Elicitation {
+    McpElicitation {
         server_name: String,
         request_id: RequestId,
     },
@@ -444,7 +444,7 @@ enum ApprovalVariant {
 #[derive(Clone)]
 enum ApprovalDecision {
     Review(ReviewDecision),
-    Elicitation(ElicitationDecision),
+    McpElicitation(ElicitationAction),
 }
 
 #[derive(Clone)]
@@ -507,19 +507,19 @@ fn elicitation_options() -> Vec<ApprovalOption> {
     vec![
         ApprovalOption {
             label: "Yes, provide the requested info".to_string(),
-            decision: ApprovalDecision::Elicitation(ElicitationDecision::Accept),
+            decision: ApprovalDecision::McpElicitation(ElicitationAction::Accept),
             display_shortcut: None,
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
         },
         ApprovalOption {
             label: "No, but continue without it".to_string(),
-            decision: ApprovalDecision::Elicitation(ElicitationDecision::Decline),
+            decision: ApprovalDecision::McpElicitation(ElicitationAction::Decline),
             display_shortcut: None,
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
         },
         ApprovalOption {
             label: "Cancel this request".to_string(),
-            decision: ApprovalDecision::Elicitation(ElicitationDecision::Cancel),
+            decision: ApprovalDecision::McpElicitation(ElicitationAction::Cancel),
             display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('c'))],
         },

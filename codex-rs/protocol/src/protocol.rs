@@ -37,7 +37,7 @@ use strum_macros::Display;
 use ts_rs::TS;
 
 pub use crate::approvals::ApplyPatchApprovalRequestEvent;
-pub use crate::approvals::ElicitationDecision;
+pub use crate::approvals::ElicitationAction;
 pub use crate::approvals::ExecApprovalRequestEvent;
 pub use crate::approvals::SandboxCommandAssessment;
 pub use crate::approvals::SandboxRiskLevel;
@@ -163,7 +163,7 @@ pub enum Op {
         /// Request identifier from the MCP server.
         request_id: RequestId,
         /// User's decision for the request.
-        decision: ElicitationDecision,
+        decision: ElicitationAction,
     },
 
     /// Append an entry to the persistent cross-session message history.
