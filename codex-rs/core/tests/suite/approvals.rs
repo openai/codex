@@ -1523,7 +1523,7 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
             test.codex
                 .submit(Op::ExecApproval {
                     id: "0".into(),
-                    decision: *decision,
+                    decision: decision.clone(),
                 })
                 .await?;
             wait_for_completion(&test).await;
@@ -1544,7 +1544,7 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
             test.codex
                 .submit(Op::PatchApproval {
                     id: "0".into(),
-                    decision: *decision,
+                    decision: decision.clone(),
                 })
                 .await?;
             wait_for_completion(&test).await;

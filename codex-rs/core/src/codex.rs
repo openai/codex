@@ -47,6 +47,7 @@ use mcp_types::ReadResourceResult;
 use serde_json;
 use serde_json::Value;
 use tokio::sync::Mutex;
+use tokio::sync::OwnedRwLockReadGuard;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -68,6 +69,7 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 #[cfg(test)]
 use crate::exec::StreamOutput;
+use crate::exec_policy::ExecPolicyUpdateError;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::model_family::find_family_for_model;
@@ -285,7 +287,7 @@ pub(crate) struct TurnContext {
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
-    pub(crate) exec_policy: Arc<ExecPolicy>,
+    pub(crate) exec_policy: Arc<RwLock<ExecPolicy>>,
     pub(crate) truncation_policy: TruncationPolicy,
 }
 
@@ -343,7 +345,7 @@ pub(crate) struct SessionConfiguration {
     /// Set of feature flags for this session
     features: Features,
     /// Execpolicy policy, applied only when enabled by feature flag.
-    exec_policy: Arc<ExecPolicy>,
+    exec_policy: Arc<RwLock<ExecPolicy>>,
 
     // TODO(pakrym): Remove config from here
     original_config_do_not_use: Arc<Config>,
@@ -845,11 +847,52 @@ impl Session {
         .await
     }
 
+    pub(crate) async fn persist_command_allow_prefix(
+        &self,
+        prefix: &[String],
+    ) -> Result<(), ExecPolicyUpdateError> {
+        let (features, codex_home, current_policy) = {
+            let state = self.state.lock().await;
+            (
+                state.session_configuration.features.clone(),
+                state
+                    .session_configuration
+                    .original_config_do_not_use
+                    .codex_home
+                    .clone(),
+                state.session_configuration.exec_policy.clone(),
+            )
+        };
+
+        if !features.enabled(Feature::ExecPolicy) {
+            error!("attempted to append execpolicy rule while execpolicy feature is disabled");
+            return Err(ExecPolicyUpdateError::FeatureDisabled);
+        }
+
+        crate::exec_policy::append_allow_prefix_rule_and_update(
+            &codex_home,
+            &current_policy,
+            prefix,
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    pub(crate) async fn current_exec_policy(&self) -> OwnedRwLockReadGuard<ExecPolicy> {
+        let exec_policy = {
+            let state = self.state.lock().await;
+            state.session_configuration.exec_policy.clone()
+        };
+        exec_policy.read_owned().await
+    }
+
     /// Emit an exec approval request event and await the user's decision.
     ///
     /// The request is keyed by `sub_id`/`call_id` so matching responses are delivered
     /// to the correct in-flight turn. If the task is aborted, this returns the
     /// default `ReviewDecision` (`Denied`).
+    #[allow(clippy::too_many_arguments)]
     pub async fn request_command_approval(
         &self,
         turn_context: &TurnContext,
@@ -858,6 +901,7 @@ impl Session {
         cwd: PathBuf,
         reason: Option<String>,
         risk: Option<SandboxCommandAssessment>,
+        allow_prefix: Option<Vec<String>>,
     ) -> ReviewDecision {
         let sub_id = turn_context.sub_id.clone();
         // Add the tx_approve callback to the map before sending the request.
@@ -885,6 +929,7 @@ impl Session {
             cwd,
             reason,
             risk,
+            allow_prefix,
             parsed_cmd,
         });
         self.send_event(turn_context, event).await;
@@ -1027,6 +1072,15 @@ impl Session {
             .session_configuration
             .features
             .enabled(feature)
+    }
+
+    pub(crate) async fn features(&self) -> Features {
+        self.state
+            .lock()
+            .await
+            .session_configuration
+            .features
+            .clone()
     }
 
     async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {
@@ -1453,6 +1507,7 @@ mod handlers {
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
     use codex_protocol::protocol::TurnAbortReason;
+    use codex_protocol::protocol::WarningEvent;
 
     use codex_protocol::user_input::UserInput;
     use std::sync::Arc;
@@ -1539,6 +1594,18 @@ mod handlers {
     }
 
     pub async fn exec_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) {
+        if let ReviewDecision::ApprovedAllowPrefix { allow_prefix } = &decision
+            && let Err(err) = sess.persist_command_allow_prefix(allow_prefix).await
+        {
+            let message = format!("Failed to update execpolicy allow list: {err}");
+            tracing::warn!("{message}");
+            let warning = EventMsg::Warning(WarningEvent { message });
+            sess.send_event_raw(Event {
+                id: id.clone(),
+                msg: warning,
+            })
+            .await;
+        }
         match decision {
             ReviewDecision::Abort => {
                 sess.interrupt_task().await;
@@ -2617,7 +2684,7 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
-            exec_policy: Arc::new(ExecPolicy::empty()),
+            exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
             session_source: SessionSource::Exec,
         };
 
@@ -2695,7 +2762,7 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
-            exec_policy: Arc::new(ExecPolicy::empty()),
+            exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
             session_source: SessionSource::Exec,
         };
 

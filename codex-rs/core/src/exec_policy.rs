@@ -4,14 +4,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::command_safety::is_dangerous_command::requires_initial_appoval;
+use codex_execpolicy::AmendError;
 use codex_execpolicy::Decision;
+use codex_execpolicy::Error as ExecPolicyRuleError;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::Policy;
 use codex_execpolicy::PolicyParser;
+use codex_execpolicy::append_allow_prefix_rule;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use thiserror::Error;
 use tokio::fs;
+use tokio::sync::RwLock;
 
 use crate::bash::parse_shell_lc_plain_commands;
 use crate::features::Feature;
@@ -23,6 +27,7 @@ const FORBIDDEN_REASON: &str = "execpolicy forbids this command";
 const PROMPT_REASON: &str = "execpolicy requires approval for this command";
 const POLICY_DIR_NAME: &str = "policy";
 const POLICY_EXTENSION: &str = "codexpolicy";
+const DEFAULT_POLICY_FILE: &str = "default.codexpolicy";
 
 #[derive(Debug, Error)]
 pub enum ExecPolicyError {
@@ -45,12 +50,27 @@ pub enum ExecPolicyError {
     },
 }
 
+#[derive(Debug, Error)]
+pub enum ExecPolicyUpdateError {
+    #[error("failed to update execpolicy file {path}: {source}")]
+    AppendRule { path: PathBuf, source: AmendError },
+
+    #[error("failed to update in-memory execpolicy: {source}")]
+    AddRule {
+        #[from]
+        source: ExecPolicyRuleError,
+    },
+
+    #[error("cannot append execpolicy rule because execpolicy feature is disabled")]
+    FeatureDisabled,
+}
+
 pub(crate) async fn exec_policy_for(
     features: &Features,
     codex_home: &Path,
-) -> Result<Arc<Policy>, ExecPolicyError> {
+) -> Result<Arc<RwLock<Policy>>, ExecPolicyError> {
     if !features.enabled(Feature::ExecPolicy) {
-        return Ok(Arc::new(Policy::empty()));
+        return Ok(Arc::new(RwLock::new(Policy::empty())));
     }
 
     let policy_dir = codex_home.join(POLICY_DIR_NAME);
@@ -74,7 +94,7 @@ pub(crate) async fn exec_policy_for(
             })?;
     }
 
-    let policy = Arc::new(parser.build());
+    let policy = Arc::new(RwLock::new(parser.build()));
     tracing::debug!(
         "loaded execpolicy from {} files in {}",
         policy_paths.len(),
@@ -84,55 +104,98 @@ pub(crate) async fn exec_policy_for(
     Ok(policy)
 }
 
-fn evaluate_with_policy(
-    policy: &Policy,
-    command: &[String],
-    approval_policy: AskForApproval,
-) -> Option<ApprovalRequirement> {
-    let commands = parse_shell_lc_plain_commands(command).unwrap_or_else(|| vec![command.to_vec()]);
-    let evaluation = policy.check_multiple(commands.iter());
+pub(crate) fn default_policy_path(codex_home: &Path) -> PathBuf {
+    codex_home.join(POLICY_DIR_NAME).join(DEFAULT_POLICY_FILE)
+}
 
-    match evaluation {
-        Evaluation::Match { decision, .. } => match decision {
-            Decision::Forbidden => Some(ApprovalRequirement::Forbidden {
-                reason: FORBIDDEN_REASON.to_string(),
-            }),
-            Decision::Prompt => {
-                let reason = PROMPT_REASON.to_string();
-                if matches!(approval_policy, AskForApproval::Never) {
-                    Some(ApprovalRequirement::Forbidden { reason })
-                } else {
-                    Some(ApprovalRequirement::NeedsApproval {
-                        reason: Some(reason),
-                    })
+pub(crate) async fn append_allow_prefix_rule_and_update(
+    codex_home: &Path,
+    current_policy: &Arc<RwLock<Policy>>,
+    prefix: &[String],
+) -> Result<(), ExecPolicyUpdateError> {
+    let policy_path = default_policy_path(codex_home);
+    append_allow_prefix_rule(&policy_path, prefix).map_err(|source| {
+        ExecPolicyUpdateError::AppendRule {
+            path: policy_path,
+            source,
+        }
+    })?;
+
+    current_policy
+        .write()
+        .await
+        .add_prefix_rule(prefix, Decision::Allow)?;
+
+    Ok(())
+}
+
+fn requirement_from_decision(
+    decision: Decision,
+    approval_policy: AskForApproval,
+) -> ApprovalRequirement {
+    match decision {
+        Decision::Forbidden => ApprovalRequirement::Forbidden {
+            reason: FORBIDDEN_REASON.to_string(),
+        },
+        Decision::Prompt => {
+            let reason = PROMPT_REASON.to_string();
+            if matches!(approval_policy, AskForApproval::Never) {
+                ApprovalRequirement::Forbidden { reason }
+            } else {
+                ApprovalRequirement::NeedsApproval {
+                    reason: Some(reason),
+                    allow_prefix: None,
                 }
             }
-            Decision::Allow => Some(ApprovalRequirement::Skip),
-        },
-        Evaluation::NoMatch => None,
+        }
+        Decision::Allow => ApprovalRequirement::Skip,
     }
+}
+
+/// Return an allow-prefix option when a single plain command needs approval without
+/// any matching policy rule. We only surface the prefix opt-in when execpolicy did
+/// not already drive the decision (NoMatch) and when the command is a single
+/// unrolled command (multi-part scripts shouldn’t be whitelisted via prefix) and
+/// when execpolicy feature is enabled.
+fn allow_prefix_if_applicable(
+    commands: &[Vec<String>],
+    features: &Features,
+) -> Option<Vec<String>> {
+    if features.enabled(Feature::ExecPolicy) && commands.len() == 1 {
+        return Some(commands[0].clone());
+    }
+
+    None
 }
 
 pub(crate) fn create_approval_requirement_for_command(
     policy: &Policy,
+    features: &Features,
     command: &[String],
     approval_policy: AskForApproval,
     sandbox_policy: &SandboxPolicy,
     sandbox_permissions: SandboxPermissions,
 ) -> ApprovalRequirement {
-    if let Some(requirement) = evaluate_with_policy(policy, command, approval_policy) {
-        return requirement;
-    }
+    let commands = parse_shell_lc_plain_commands(command).unwrap_or_else(|| vec![command.to_vec()]);
+    let evaluation = policy.check_multiple(commands.iter());
 
-    if requires_initial_appoval(
-        approval_policy,
-        sandbox_policy,
-        command,
-        sandbox_permissions,
-    ) {
-        ApprovalRequirement::NeedsApproval { reason: None }
-    } else {
-        ApprovalRequirement::Skip
+    match evaluation {
+        Evaluation::Match { decision, .. } => requirement_from_decision(decision, approval_policy),
+        Evaluation::NoMatch => {
+            if requires_initial_appoval(
+                approval_policy,
+                sandbox_policy,
+                command,
+                sandbox_permissions,
+            ) {
+                ApprovalRequirement::NeedsApproval {
+                    reason: None,
+                    allow_prefix: allow_prefix_if_applicable(&commands, features),
+                }
+            } else {
+                ApprovalRequirement::Skip
+            }
+        }
     }
 }
 
@@ -191,6 +254,7 @@ mod tests {
     use codex_protocol::protocol::SandboxPolicy;
     use pretty_assertions::assert_eq;
     use std::fs;
+    use std::sync::Arc;
     use tempfile::tempdir;
 
     #[tokio::test]
@@ -205,7 +269,7 @@ mod tests {
 
         let commands = [vec!["rm".to_string()]];
         assert!(matches!(
-            policy.check_multiple(commands.iter()),
+            policy.read().await.check_multiple(commands.iter()),
             Evaluation::NoMatch
         ));
         assert!(!temp_dir.path().join(POLICY_DIR_NAME).exists());
@@ -239,7 +303,7 @@ mod tests {
             .expect("policy result");
         let command = [vec!["rm".to_string()]];
         assert!(matches!(
-            policy.check_multiple(command.iter()),
+            policy.read().await.check_multiple(command.iter()),
             Evaluation::Match { .. }
         ));
     }
@@ -249,7 +313,7 @@ mod tests {
         let temp_dir = tempdir().expect("create temp dir");
         fs::write(
             temp_dir.path().join("root.codexpolicy"),
-            r#"prefix_rule(pattern=["ls"], decision="prompt")"#,
+            r#"prefix_rule(pattern=[\"ls\"], decision=\"prompt\")"#,
         )
         .expect("write policy file");
 
@@ -258,7 +322,7 @@ mod tests {
             .expect("policy result");
         let command = [vec!["ls".to_string()]];
         assert!(matches!(
-            policy.check_multiple(command.iter()),
+            policy.read().await.check_multiple(command.iter()),
             Evaluation::NoMatch
         ));
     }
@@ -280,9 +344,14 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             "rm -rf /tmp".to_string(),
         ];
 
-        let requirement =
-            evaluate_with_policy(&policy, &forbidden_script, AskForApproval::OnRequest)
-                .expect("expected match for forbidden command");
+        let requirement = create_approval_requirement_for_command(
+            &policy,
+            &Features::with_defaults(),
+            &forbidden_script,
+            AskForApproval::OnRequest,
+            &SandboxPolicy::DangerFullAccess,
+            SandboxPermissions::UseDefault,
+        );
 
         assert_eq!(
             requirement,
@@ -304,6 +373,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
 
         let requirement = create_approval_requirement_for_command(
             &policy,
+            &Features::with_defaults(),
             &command,
             AskForApproval::OnRequest,
             &SandboxPolicy::DangerFullAccess,
@@ -313,7 +383,8 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         assert_eq!(
             requirement,
             ApprovalRequirement::NeedsApproval {
-                reason: Some(PROMPT_REASON.to_string())
+                reason: Some(PROMPT_REASON.to_string()),
+                allow_prefix: None,
             }
         );
     }
@@ -330,6 +401,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
 
         let requirement = create_approval_requirement_for_command(
             &policy,
+            &Features::with_defaults(),
             &command,
             AskForApproval::Never,
             &SandboxPolicy::DangerFullAccess,
@@ -351,6 +423,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         let empty_policy = Policy::empty();
         let requirement = create_approval_requirement_for_command(
             &empty_policy,
+            &Features::with_defaults(),
             &command,
             AskForApproval::UnlessTrusted,
             &SandboxPolicy::ReadOnly,
@@ -359,7 +432,159 @@ prefix_rule(pattern=["rm"], decision="forbidden")
 
         assert_eq!(
             requirement,
-            ApprovalRequirement::NeedsApproval { reason: None }
+            ApprovalRequirement::NeedsApproval {
+                reason: None,
+                allow_prefix: Some(command)
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn append_allow_prefix_rule_updates_policy_and_file() {
+        let codex_home = tempdir().expect("create temp dir");
+        let current_policy = Arc::new(RwLock::new(Policy::empty()));
+        let prefix = vec!["echo".to_string(), "hello".to_string()];
+
+        append_allow_prefix_rule_and_update(codex_home.path(), &current_policy, &prefix)
+            .await
+            .expect("update policy");
+
+        let evaluation = current_policy.read().await.check(&[
+            "echo".to_string(),
+            "hello".to_string(),
+            "world".to_string(),
+        ]);
+        assert!(matches!(
+            evaluation,
+            Evaluation::Match {
+                decision: Decision::Allow,
+                ..
+            }
+        ));
+
+        let contents = fs::read_to_string(default_policy_path(codex_home.path()))
+            .expect("policy file should have been created");
+        assert_eq!(
+            contents,
+            "prefix_rule(pattern=[\"echo\",\"hello\"], decision=\"allow\")\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn append_allow_prefix_rule_rejects_empty_prefix() {
+        let codex_home = tempdir().expect("create temp dir");
+        let current_policy = Arc::new(RwLock::new(Policy::empty()));
+
+        let result =
+            append_allow_prefix_rule_and_update(codex_home.path(), &current_policy, &[]).await;
+
+        assert!(matches!(
+            result,
+            Err(ExecPolicyUpdateError::AppendRule {
+                source: AmendError::EmptyPrefix,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn allow_prefix_is_present_for_single_command_without_policy_match() {
+        let command = vec!["python".to_string()];
+
+        let empty_policy = Policy::empty();
+        let requirement = create_approval_requirement_for_command(
+            &empty_policy,
+            &Features::with_defaults(),
+            &command,
+            AskForApproval::UnlessTrusted,
+            &SandboxPolicy::ReadOnly,
+            SandboxPermissions::UseDefault,
+        );
+
+        assert_eq!(
+            requirement,
+            ApprovalRequirement::NeedsApproval {
+                reason: None,
+                allow_prefix: Some(command)
+            }
+        );
+    }
+
+    #[test]
+    fn allow_prefix_is_disabled_when_execpolicy_feature_disabled() {
+        let command = vec!["python".to_string()];
+
+        let mut features = Features::with_defaults();
+        features.disable(Feature::ExecPolicy);
+
+        let requirement = create_approval_requirement_for_command(
+            &Policy::empty(),
+            &features,
+            &command,
+            AskForApproval::UnlessTrusted,
+            &SandboxPolicy::ReadOnly,
+            SandboxPermissions::UseDefault,
+        );
+
+        assert_eq!(
+            requirement,
+            ApprovalRequirement::NeedsApproval {
+                reason: None,
+                allow_prefix: None,
+            }
+        );
+    }
+
+    #[test]
+    fn allow_prefix_is_omitted_when_policy_prompts() {
+        let policy_src = r#"prefix_rule(pattern=["rm"], decision="prompt")"#;
+        let mut parser = PolicyParser::new();
+        parser
+            .parse("test.codexpolicy", policy_src)
+            .expect("parse policy");
+        let policy = parser.build();
+        let command = vec!["rm".to_string()];
+
+        let requirement = create_approval_requirement_for_command(
+            &policy,
+            &Features::with_defaults(),
+            &command,
+            AskForApproval::OnRequest,
+            &SandboxPolicy::DangerFullAccess,
+            SandboxPermissions::UseDefault,
+        );
+
+        assert_eq!(
+            requirement,
+            ApprovalRequirement::NeedsApproval {
+                reason: Some(PROMPT_REASON.to_string()),
+                allow_prefix: None,
+            }
+        );
+    }
+
+    #[test]
+    fn allow_prefix_is_omitted_for_multi_command_scripts() {
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "python && echo ok".to_string(),
+        ];
+        let requirement = create_approval_requirement_for_command(
+            &Policy::empty(),
+            &Features::with_defaults(),
+            &command,
+            AskForApproval::UnlessTrusted,
+            &SandboxPolicy::ReadOnly,
+            SandboxPermissions::UseDefault,
+        );
+
+        assert_eq!(
+            requirement,
+            ApprovalRequirement::NeedsApproval {
+                reason: None,
+                allow_prefix: None,
+            }
         );
     }
 }
