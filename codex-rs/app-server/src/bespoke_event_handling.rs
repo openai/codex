@@ -591,6 +591,7 @@ async fn complete_file_change_item(
         .await;
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn complete_command_execution_item(
     thread_id: String,
     turn_id: String,
