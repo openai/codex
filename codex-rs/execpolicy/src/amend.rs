@@ -97,11 +97,10 @@ fn append_locked_line(policy_path: &Path, line: &str) -> Result<(), AmendError> 
             path: policy_path.clone(),
             source,
         })?;
-    file.lock()
-        .map_err(|source| AmendError::LockPolicyFile {
-            path: policy_path.clone(),
-            source,
-        })?;
+    file.lock().map_err(|source| AmendError::LockPolicyFile {
+        path: policy_path.clone(),
+        source,
+    })?;
 
     let len = file
         .metadata()
