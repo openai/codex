@@ -136,15 +136,30 @@ jobs:
           done
 
       - if: ${{ contains(matrix.target, 'windows') }}
+        name: Azure login for Trusted Signing (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TRUSTED_SIGNING_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID }}
+
+      - if: ${{ contains(matrix.target, 'windows') }}
         name: Sign Windows binaries with Azure Trusted Signing
         uses: azure/trusted-signing-action@v0
         with:
           endpoint: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
-          code-signing-account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          trusted-signing-account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
           certificate-profile-name: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
-          app-registration-client-id: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID }}
-          app-registration-tenant-id: ${{ secrets.AZURE_TRUSTED_SIGNING_TENANT_ID }}
-          app-registration-client-secret: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_SECRET }}
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-cli-credential: false
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
           files: |
             ${{ github.workspace }}/codex-rs/target/${{ matrix.target }}/release/codex.exe
             ${{ github.workspace }}/codex-rs/target/${{ matrix.target }}/release/codex-responses-api-proxy.exe
