@@ -5,6 +5,7 @@ use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_chat_completions_server;
 use app_test_support::create_mock_chat_completions_server_unchecked;
 use app_test_support::create_shell_command_sse_response;
+use app_test_support::format_with_current_shell_display;
 use app_test_support::to_response;
 use codex_app_server_protocol::ApprovalDecision;
 use codex_app_server_protocol::CommandExecutionStatus;
@@ -344,22 +345,14 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
 
     let responses = vec![
         create_shell_command_sse_response(
-            vec![
-                "bash".to_string(),
-                "-lc".to_string(),
-                "echo first turn".to_string(),
-            ],
+            vec!["echo".to_string(), "first".to_string(), "turn".to_string()],
             None,
             Some(5000),
             "call-first",
         )?,
         create_final_assistant_message_sse_response("done first")?,
         create_shell_command_sse_response(
-            vec![
-                "bash".to_string(),
-                "-lc".to_string(),
-                "echo second turn".to_string(),
-            ],
+            vec!["echo".to_string(), "second".to_string(), "turn".to_string()],
             None,
             Some(5000),
             "call-second",
@@ -465,7 +458,8 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
         unreachable!("loop ensures we break on command execution items");
     };
     assert_eq!(cwd, second_cwd);
-    assert_eq!(command, "bash -lc 'echo second turn'");
+    let expected_command = format_with_current_shell_display("echo second turn");
+    assert_eq!(command, expected_command);
     assert_eq!(status, CommandExecutionStatus::InProgress);
 
     timeout(

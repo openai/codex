@@ -9,7 +9,7 @@ pub fn create_shell_command_sse_response(
     call_id: &str,
 ) -> anyhow::Result<String> {
     // The `arguments` for the `shell_command` tool is a serialized JSON object.
-    let command_str = shlex::try_join(command)?;
+    let command_str = shlex::try_join(command.iter().map(String::as_str))?;
     let tool_call_arguments = serde_json::to_string(&json!({
         "command": command_str,
         "workdir": workdir.map(|w| w.to_string_lossy()),
@@ -65,8 +65,7 @@ pub fn create_apply_patch_sse_response(
     call_id: &str,
 ) -> anyhow::Result<String> {
     // Use shell_command to call apply_patch with heredoc format
-    let shell_command = format!("apply_patch <<'EOF'\n{patch_content}\nEOF");
-    let command = shlex::try_join(vec!["bash", "-lc", shell_command.as_str()])?;
+    let command = format!("apply_patch <<'EOF'\n{patch_content}\nEOF");
     let tool_call_arguments = serde_json::to_string(&json!({
         "command": command
     }))?;
