@@ -82,7 +82,21 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     let prompt_arg = match &command {
         // Allow prompt before the subcommand by falling back to the parent-level prompt
         // when the Resume subcommand did not provide its own prompt.
-        Some(ExecCommand::Resume(args)) => args.prompt.clone().or(prompt),
+        Some(ExecCommand::Resume(args)) => {
+            let resume_prompt = args
+                .prompt
+                .clone()
+                // When using `resume --last <PROMPT>`, clap still parses the first positional
+                // as `session_id`. Reinterpret it as the prompt so the flag works with JSON mode.
+                .or_else(|| {
+                    if args.last {
+                        args.session_id.clone()
+                    } else {
+                        None
+                    }
+                });
+            resume_prompt.or(prompt)
+        }
         None => prompt,
     };
 

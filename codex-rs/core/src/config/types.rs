@@ -363,6 +363,15 @@ pub struct Tui {
     /// Defaults to `true`.
     #[serde(default)]
     pub notifications: Notifications,
+
+    /// Enable animations (welcome screen, shimmer effects, spinners).
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub animations: bool,
+}
+
+const fn default_true() -> bool {
+    true
 }
 
 /// Settings for notices we display to users via the tui and app-server clients

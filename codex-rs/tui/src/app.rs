@@ -343,7 +343,8 @@ impl App {
                 let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
                 let tx = app.app_event_tx.clone();
                 let logs_base_dir = app.config.codex_home.clone();
-                Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, tx);
+                let sandbox_policy = app.config.sandbox_policy.clone();
+                Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, sandbox_policy, tx);
             }
         }
 
@@ -717,7 +718,14 @@ impl App {
                             std::env::vars().collect();
                         let tx = self.app_event_tx.clone();
                         let logs_base_dir = self.config.codex_home.clone();
-                        Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, tx);
+                        let sandbox_policy = self.config.sandbox_policy.clone();
+                        Self::spawn_world_writable_scan(
+                            cwd,
+                            env_map,
+                            logs_base_dir,
+                            sandbox_policy,
+                            tx,
+                        );
                     }
                 }
             }
@@ -911,6 +919,7 @@ impl App {
         cwd: PathBuf,
         env_map: std::collections::HashMap<String, String>,
         logs_base_dir: PathBuf,
+        sandbox_policy: codex_core::protocol::SandboxPolicy,
         tx: AppEventSender,
     ) {
         #[inline]
@@ -920,8 +929,10 @@ impl App {
         }
         tokio::task::spawn_blocking(move || {
             let result = codex_windows_sandbox::preflight_audit_everyone_writable(
+                &logs_base_dir,
                 &cwd,
                 &env_map,
+                &sandbox_policy,
                 Some(logs_base_dir.as_path()),
             );
             if let Ok(ref paths) = result

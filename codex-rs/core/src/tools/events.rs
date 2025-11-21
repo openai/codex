@@ -179,15 +179,17 @@ impl ToolEmitter {
                         ctx.turn,
                         EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                             call_id: ctx.call_id.to_string(),
+                            turn_id: ctx.turn.sub_id.clone(),
                             auto_approved: *auto_approved,
                             changes: changes.clone(),
                         }),
                     )
                     .await;
             }
-            (Self::ApplyPatch { .. }, ToolEventStage::Success(output)) => {
+            (Self::ApplyPatch { changes, .. }, ToolEventStage::Success(output)) => {
                 emit_patch_end(
                     ctx,
+                    changes.clone(),
                     output.stdout.text.clone(),
                     output.stderr.text.clone(),
                     output.exit_code == 0,
@@ -195,11 +197,12 @@ impl ToolEmitter {
                 .await;
             }
             (
-                Self::ApplyPatch { .. },
+                Self::ApplyPatch { changes, .. },
                 ToolEventStage::Failure(ToolEventFailure::Output(output)),
             ) => {
                 emit_patch_end(
                     ctx,
+                    changes.clone(),
                     output.stdout.text.clone(),
                     output.stderr.text.clone(),
                     output.exit_code == 0,
@@ -207,10 +210,17 @@ impl ToolEmitter {
                 .await;
             }
             (
-                Self::ApplyPatch { .. },
+                Self::ApplyPatch { changes, .. },
                 ToolEventStage::Failure(ToolEventFailure::Message(message)),
             ) => {
-                emit_patch_end(ctx, String::new(), (*message).to_string(), false).await;
+                emit_patch_end(
+                    ctx,
+                    changes.clone(),
+                    String::new(),
+                    (*message).to_string(),
+                    false,
+                )
+                .await;
             }
             (
                 Self::UnifiedExec {
@@ -409,15 +419,23 @@ async fn emit_exec_end(
         .await;
 }
 
-async fn emit_patch_end(ctx: ToolEventCtx<'_>, stdout: String, stderr: String, success: bool) {
+async fn emit_patch_end(
+    ctx: ToolEventCtx<'_>,
+    changes: HashMap<PathBuf, FileChange>,
+    stdout: String,
+    stderr: String,
+    success: bool,
+) {
     ctx.session
         .send_event(
             ctx.turn,
             EventMsg::PatchApplyEnd(PatchApplyEndEvent {
                 call_id: ctx.call_id.to_string(),
+                turn_id: ctx.turn.sub_id.clone(),
                 stdout,
                 stderr,
                 success,
+                changes,
             }),
         )
         .await;

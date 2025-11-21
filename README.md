@@ -92,15 +92,15 @@ prefix_rule(
 
 In this example rule, if Codex wants to run commands with the prefix `git push` or `git fetch`, it will first ask for user approval.
 
-Use [`execpolicy2` CLI](./codex-rs/execpolicy2/README.md) to preview decisions for policy files:
+Use the `codex execpolicy check` subcommand to preview decisions before you save a rule (see the [`codex-execpolicy` README](./codex-rs/execpolicy/README.md) for syntax details):
 
 ```shell
-cargo run -p codex-execpolicy2 -- check --policy ~/.codex/policy/default.codexpolicy git push origin main
+codex execpolicy check --policy ~/.codex/policy/default.codexpolicy git push origin main
 ```
 
-Pass multiple `--policy` flags to test how several files combine. See the [`codex-rs/execpolicy2` README](./codex-rs/execpolicy2/README.md) for a more detailed walkthrough of the available syntax.
+Pass multiple `--policy` flags to test how several files combine, and use `--pretty` for formatted JSON output. See the [`codex-rs/execpolicy` README](./codex-rs/execpolicy/README.md) for a more detailed walkthrough of the available syntax.
 
----
+## Note: `execpolicy` commands are still in preview. The API may have breaking changes in the future.
 
 ### Docs & FAQ
 

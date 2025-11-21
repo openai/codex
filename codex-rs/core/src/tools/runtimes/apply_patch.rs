@@ -67,7 +67,7 @@ impl ApplyPatchRuntime {
             program,
             args: vec![CODEX_APPLY_PATCH_ARG1.to_string(), req.patch.clone()],
             cwd: req.cwd.clone(),
-            timeout_ms: req.timeout_ms,
+            expiration: req.timeout_ms.into(),
             // Run apply_patch with a minimal environment for determinism and to avoid leaks.
             env: HashMap::new(),
             with_escalated_permissions: None,
@@ -153,9 +153,9 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
     ) -> Result<ExecToolCallOutput, ToolError> {
         let spec = Self::build_command_spec(req)?;
         let env = attempt
-            .env_for(&spec)
+            .env_for(spec)
             .map_err(|err| ToolError::Codex(err.into()))?;
-        let out = execute_env(&env, attempt.policy, Self::stdout_stream(ctx))
+        let out = execute_env(env, attempt.policy, Self::stdout_stream(ctx))
             .await
             .map_err(ToolError::Codex)?;
         Ok(out)

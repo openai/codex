@@ -71,6 +71,7 @@ mod escalation_policy;
 mod mcp;
 mod mcp_escalation_policy;
 mod socket;
+mod stopwatch;
 
 /// Default value of --execve option relative to the current executable.
 /// Note this must match the name of the binary as specified in Cargo.toml.
@@ -144,7 +145,7 @@ pub async fn main_execve_wrapper() -> anyhow::Result<()> {
     std::process::exit(exit_code);
 }
 
-// TODO: replace with execpolicy2
+// TODO: replace with execpolicy
 
 fn dummy_exec_policy(file: &Path, argv: &[String], _workdir: &Path) -> ExecPolicyOutcome {
     if file.ends_with("rm") {

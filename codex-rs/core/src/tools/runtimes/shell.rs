@@ -133,14 +133,14 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             &req.command,
             &req.cwd,
             &req.env,
-            req.timeout_ms,
+            req.timeout_ms.into(),
             req.with_escalated_permissions,
             req.justification.clone(),
         )?;
         let env = attempt
-            .env_for(&spec)
+            .env_for(spec)
             .map_err(|err| ToolError::Codex(err.into()))?;
-        let out = execute_env(&env, attempt.policy, Self::stdout_stream(ctx))
+        let out = execute_env(env, attempt.policy, Self::stdout_stream(ctx))
             .await
             .map_err(ToolError::Codex)?;
         Ok(out)

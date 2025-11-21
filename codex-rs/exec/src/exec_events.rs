@@ -166,6 +166,7 @@ pub struct FileUpdateChange {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum PatchApplyStatus {
+    InProgress,
     Completed,
     Failed,
 }

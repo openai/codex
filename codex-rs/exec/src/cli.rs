@@ -101,7 +101,7 @@ pub struct ResumeArgs {
     pub session_id: Option<String>,
 
     /// Resume the most recent recorded session (newest) without specifying an id.
-    #[arg(long = "last", default_value_t = false, conflicts_with = "session_id")]
+    #[arg(long = "last", default_value_t = false)]
     pub last: bool,
 
     /// Prompt to send after resuming the session. If `-` is used, read from stdin.

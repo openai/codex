@@ -4,6 +4,7 @@ Module: runtimes
 Concrete ToolRuntime implementations for specific tools. Each runtime stays
 small and focused and reuses the orchestrator for approvals + sandbox + retry.
 */
+use crate::exec::ExecExpiration;
 use crate::sandboxing::CommandSpec;
 use crate::tools::sandboxing::ToolError;
 use std::collections::HashMap;
@@ -19,7 +20,7 @@ pub(crate) fn build_command_spec(
     command: &[String],
     cwd: &Path,
     env: &HashMap<String, String>,
-    timeout_ms: Option<u64>,
+    expiration: ExecExpiration,
     with_escalated_permissions: Option<bool>,
     justification: Option<String>,
 ) -> Result<CommandSpec, ToolError> {
@@ -31,7 +32,7 @@ pub(crate) fn build_command_spec(
         args: args.to_vec(),
         cwd: cwd.to_path_buf(),
         env: env.clone(),
-        timeout_ms,
+        expiration,
         with_escalated_permissions,
         justification,
     })

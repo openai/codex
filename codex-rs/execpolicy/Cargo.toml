@@ -1,33 +1,29 @@
 [package]
-edition = "2024"
 name = "codex-execpolicy"
 version = { workspace = true }
-
-[[bin]]
-name = "codex-execpolicy"
-path = "src/main.rs"
+edition = "2024"
+description = "Codex exec policy: prefix-based Starlark rules for command decisions."
 
 [lib]
 name = "codex_execpolicy"
 path = "src/lib.rs"
 
+[[bin]]
+name = "codex-execpolicy"
+path = "src/main.rs"
+
 [lints]
 workspace = true
 
 [dependencies]
-allocative = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
-derive_more = { workspace = true, features = ["display"] }
-env_logger = { workspace = true }
-log = { workspace = true }
 multimap = { workspace = true }
-path-absolutize = { workspace = true }
-regex-lite = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-serde_with = { workspace = true, features = ["macros"] }
+shlex = { workspace = true }
 starlark = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
-tempfile = { workspace = true }
+pretty_assertions = { workspace = true }

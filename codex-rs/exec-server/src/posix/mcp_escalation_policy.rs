@@ -6,12 +6,11 @@ use rmcp::model::CreateElicitationRequestParam;
 use rmcp::model::CreateElicitationResult;
 use rmcp::model::ElicitationAction;
 use rmcp::model::ElicitationSchema;
-use rmcp::model::PrimitiveSchema;
-use rmcp::model::StringSchema;
 use rmcp::service::RequestContext;
 
 use crate::posix::escalate_protocol::EscalateAction;
 use crate::posix::escalation_policy::EscalationPolicy;
+use crate::posix::stopwatch::Stopwatch;
 
 /// This is the policy which decides how to handle an exec() call.
 ///
@@ -36,33 +35,63 @@ pub(crate) enum ExecPolicyOutcome {
 pub(crate) struct McpEscalationPolicy {
     policy: ExecPolicy,
     context: RequestContext<RoleServer>,
+    stopwatch: Stopwatch,
 }
 
 impl McpEscalationPolicy {
-    pub(crate) fn new(policy: ExecPolicy, context: RequestContext<RoleServer>) -> Self {
-        Self { policy, context }
+    pub(crate) fn new(
+        policy: ExecPolicy,
+        context: RequestContext<RoleServer>,
+        stopwatch: Stopwatch,
+    ) -> Self {
+        Self {
+            policy,
+            context,
+            stopwatch,
+        }
     }
 
     async fn prompt(
         &self,
-        _file: &Path,
+        file: &Path,
         argv: &[String],
         workdir: &Path,
         context: RequestContext<RoleServer>,
     ) -> Result<CreateElicitationResult, McpError> {
-        let command = shlex::try_join(argv.iter().map(String::as_str)).unwrap_or_default();
-        context
-            .peer
-            .create_elicitation(CreateElicitationRequestParam {
-                message: format!("Allow Codex to run `{command:?}` in `{workdir:?}`?"),
-                #[allow(clippy::expect_used)]
-                requested_schema: ElicitationSchema::builder()
-                    .property("dummy", PrimitiveSchema::String(StringSchema::new()))
-                    .build()
-                    .expect("failed to build elicitation schema"),
+        let args = shlex::try_join(argv.iter().skip(1).map(String::as_str)).unwrap_or_default();
+        let command = if args.is_empty() {
+            file.display().to_string()
+        } else {
+            format!("{} {}", file.display(), args)
+        };
+        self.stopwatch
+            .pause_for(async {
+                context
+                    .peer
+                    .create_elicitation(CreateElicitationRequestParam {
+                        message: format!(
+                            "Allow agent to run `{command}` in `{}`?",
+                            workdir.display()
+                        ),
+                        requested_schema: ElicitationSchema::builder()
+                            .title("Execution Permission Request")
+                            .optional_string_with("reason", |schema| {
+                                schema.description(
+                                    "Optional reason for allowing or denying execution",
+                                )
+                            })
+                            .build()
+                            .map_err(|e| {
+                                McpError::internal_error(
+                                    format!("failed to build elicitation schema: {e}"),
+                                    None,
+                                )
+                            })?,
+                    })
+                    .await
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))
             })
             .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))
     }
 }
 

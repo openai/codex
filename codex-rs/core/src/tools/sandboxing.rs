@@ -216,7 +216,7 @@ pub(crate) struct SandboxAttempt<'a> {
 impl<'a> SandboxAttempt<'a> {
     pub fn env_for(
         &self,
-        spec: &CommandSpec,
+        spec: CommandSpec,
     ) -> Result<crate::sandboxing::ExecEnv, SandboxTransformError> {
         self.manager.transform(
             spec,

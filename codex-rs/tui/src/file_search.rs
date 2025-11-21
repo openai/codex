@@ -31,7 +31,7 @@ use std::time::Duration;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 
-const MAX_FILE_SEARCH_RESULTS: NonZeroUsize = NonZeroUsize::new(8).unwrap();
+const MAX_FILE_SEARCH_RESULTS: NonZeroUsize = NonZeroUsize::new(20).unwrap();
 const NUM_FILE_SEARCH_THREADS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 
 /// How long to wait after a keystroke before firing the first search when none

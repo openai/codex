@@ -1,13 +1,13 @@
 use crate::codex::TurnContext;
 use crate::context_manager::normalize;
 use crate::truncate::TruncationPolicy;
+use crate::truncate::approx_token_count;
 use crate::truncate::truncate_function_output_items_with_policy;
 use crate::truncate::truncate_text;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
-use codex_utils_tokenizer::Tokenizer;
 use std::ops::Deref;
 
 /// Transcript of conversation history
@@ -74,26 +74,21 @@ impl ContextManager {
         history
     }
 
-    // Estimate the number of tokens in the history. Return None if no tokenizer
-    // is available. This does not consider the reasoning traces.
-    // /!\ The value is a lower bound estimate and does not represent the exact
-    // context length.
+    // Estimate token usage using byte-based heuristics from the truncation helpers.
+    // This is a coarse lower bound, not a tokenizer-accurate count.
     pub(crate) fn estimate_token_count(&self, turn_context: &TurnContext) -> Option<i64> {
-        let model = turn_context.client.get_model();
-        let tokenizer = Tokenizer::for_model(model.as_str()).ok()?;
         let model_family = turn_context.client.get_model_family();
+        let base_tokens =
+            i64::try_from(approx_token_count(model_family.base_instructions.as_str()))
+                .unwrap_or(i64::MAX);
 
-        Some(
-            self.items
-                .iter()
-                .map(|item| {
-                    serde_json::to_string(&item)
-                        .map(|item| tokenizer.count(&item))
-                        .unwrap_or_default()
-                })
-                .sum::<i64>()
-                + tokenizer.count(model_family.base_instructions.as_str()),
-        )
+        let items_tokens = self.items.iter().fold(0i64, |acc, item| {
+            let serialized = serde_json::to_string(item).unwrap_or_default();
+            let item_tokens = i64::try_from(approx_token_count(&serialized)).unwrap_or(i64::MAX);
+            acc.saturating_add(item_tokens)
+        });
+
+        Some(base_tokens.saturating_add(items_tokens))
     }
 
     pub(crate) fn remove_first_item(&mut self) {

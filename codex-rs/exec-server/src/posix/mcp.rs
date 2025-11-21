@@ -22,6 +22,7 @@ use crate::posix::escalate_server::EscalateServer;
 use crate::posix::escalate_server::{self};
 use crate::posix::mcp_escalation_policy::ExecPolicy;
 use crate::posix::mcp_escalation_policy::McpEscalationPolicy;
+use crate::posix::stopwatch::Stopwatch;
 
 /// Path to our patched bash.
 const CODEX_BASH_PATH_ENV_VAR: &str = "CODEX_BASH_PATH";
@@ -87,10 +88,17 @@ impl ExecTool {
         context: RequestContext<RoleServer>,
         Parameters(params): Parameters<ExecParams>,
     ) -> Result<CallToolResult, McpError> {
+        let effective_timeout = Duration::from_millis(
+            params
+                .timeout_ms
+                .unwrap_or(codex_core::exec::DEFAULT_EXEC_COMMAND_TIMEOUT_MS),
+        );
+        let stopwatch = Stopwatch::new(effective_timeout);
+        let cancel_token = stopwatch.cancellation_token();
         let escalate_server = EscalateServer::new(
             self.bash_path.clone(),
             self.execve_wrapper.clone(),
-            McpEscalationPolicy::new(self.policy, context),
+            McpEscalationPolicy::new(self.policy, context, stopwatch.clone()),
         );
         let result = escalate_server
             .exec(
@@ -98,7 +106,7 @@ impl ExecTool {
                 // TODO: use ShellEnvironmentPolicy
                 std::env::vars().collect(),
                 PathBuf::from(&params.workdir),
-                params.timeout_ms,
+                cancel_token,
             )
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
