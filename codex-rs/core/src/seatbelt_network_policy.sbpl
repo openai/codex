@@ -24,7 +24,3 @@
 (allow sysctl-read
   (sysctl-name-regex #"^net.routetable")
 )
-
-(allow file-write*
-  (subpath (param "DARWIN_USER_CACHE_DIR"))
-)
