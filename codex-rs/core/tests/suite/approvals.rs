@@ -71,7 +71,7 @@ enum ActionKind {
         response_body: &'static str,
     },
     RunCommand {
-        command: &'static [&'static str],
+        command: &'static str,
     },
     RunUnifiedExecCommand {
         command: &'static str,
@@ -102,18 +102,10 @@ impl ActionKind {
             ActionKind::WriteFile { target, content } => {
                 let (path, _) = target.resolve_for_patch(test);
                 let _ = fs::remove_file(&path);
-                let command = vec![
-                    "/bin/sh".to_string(),
-                    "-c".to_string(),
-                    format!(
-                        "printf {content:?} > {path:?} && cat {path:?}",
-                        content = content,
-                        path = path
-                    ),
-                ];
-                let (event, expected_command) =
+                let command = format!("printf {content:?} > {path:?} && cat {path:?}");
+                let event =
                     shell_event(call_id, &command, 1_000, with_escalated_permissions)?;
-                Ok((event, Some(expected_command)))
+                Ok((event, Some(command.to_string())))
             }
             ActionKind::FetchUrl {
                 endpoint,
@@ -128,23 +120,20 @@ impl ActionKind {
                     .await;
 
                 let url = format!("{}{}", server.uri(), endpoint);
+                let escaped_url = url.replace('\'', "\\'");
                 let script = format!(
-                    "import sys\nimport urllib.request\nurl = {url:?}\ntry:\n    data = urllib.request.urlopen(url, timeout=2).read().decode()\n    print('OK:' + data.strip())\nexcept Exception as exc:\n    print('ERR:' + exc.__class__.__name__)\n    sys.exit(1)",
+                    "import sys\nimport urllib.request\nurl = '{escaped_url}'\ntry:\n    data = urllib.request.urlopen(url, timeout=2).read().decode()\n    print('OK:' + data.strip())\nexcept Exception as exc:\n    print('ERR:' + exc.__class__.__name__)\n    sys.exit(1)",
                 );
 
-                let command = vec!["python3".to_string(), "-c".to_string(), script];
-                let (event, expected_command) =
+                let command = format!("python3 -c \"{script}\"");
+                let event =
                     shell_event(call_id, &command, 1_000, with_escalated_permissions)?;
-                Ok((event, Some(expected_command)))
+                Ok((event, Some(command.to_string())))
             }
             ActionKind::RunCommand { command } => {
-                let command: Vec<String> = command
-                    .iter()
-                    .map(std::string::ToString::to_string)
-                    .collect();
-                let (event, expected_command) =
-                    shell_event(call_id, &command, 1_000, with_escalated_permissions)?;
-                Ok((event, Some(expected_command)))
+                let event =
+                    shell_event(call_id, command, 1_000, with_escalated_permissions)?;
+                Ok((event, Some(command.to_string())))
             }
             ActionKind::RunUnifiedExecCommand {
                 command,
@@ -170,9 +159,9 @@ impl ActionKind {
                 let _ = fs::remove_file(&path);
                 let patch = build_add_file_patch(&patch_path, content);
                 let command = shell_apply_patch_command(&patch);
-                let (event, expected_command) =
+                let event =
                     shell_event(call_id, &command, 5_000, with_escalated_permissions)?;
-                Ok((event, Some(expected_command)))
+                Ok((event, Some(command.to_string())))
             }
         }
     }
@@ -182,39 +171,31 @@ fn build_add_file_patch(patch_path: &str, content: &str) -> String {
     format!("*** Begin Patch\n*** Add File: {patch_path}\n+{content}\n*** End Patch\n")
 }
 
-fn shell_apply_patch_command(patch: &str) -> Vec<String> {
+fn shell_apply_patch_command(patch: &str) -> String {
     let mut script = String::from("apply_patch <<'PATCH'\n");
     script.push_str(patch);
     if !patch.ends_with('\n') {
         script.push('\n');
     }
     script.push_str("PATCH\n");
-    vec![script]
+    script
 }
 
 fn shell_event(
     call_id: &str,
-    command: &[String],
+    command: &str,
     timeout_ms: u64,
     with_escalated_permissions: bool,
-) -> Result<(Value, String)> {
-    let command_str = if command.len() == 1 {
-        command[0].clone()
-    } else {
-        shlex::try_join(command.iter().map(String::as_str))?
-    };
+) -> Result<Value> {
     let mut args = json!({
-        "command": command_str,
+        "command": command,
         "timeout_ms": timeout_ms,
     });
     if with_escalated_permissions {
         args["with_escalated_permissions"] = json!(true);
     }
     let args_str = serde_json::to_string(&args)?;
-    Ok((
-        ev_function_call(call_id, "shell_command", &args_str),
-        command_str,
-    ))
+    Ok(ev_function_call(call_id, "shell_command", &args_str))
 }
 
 fn exec_command_event(
@@ -723,7 +704,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             approval_policy: UnlessTrusted,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             action: ActionKind::RunCommand {
-                command: &["echo", "trusted-unless"],
+                command: "echo trusted-unless",
             },
             with_escalated_permissions: false,
             features: vec![],
@@ -738,7 +719,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             approval_policy: UnlessTrusted,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             action: ActionKind::RunCommand {
-                command: &["echo", "trusted-unless"],
+                command: "echo trusted-unless",
             },
             with_escalated_permissions: false,
             features: vec![],
@@ -901,7 +882,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             approval_policy: OnRequest,
             sandbox_policy: SandboxPolicy::ReadOnly,
             action: ActionKind::RunCommand {
-                command: &["echo", "trusted-read-only"],
+                command: "echo trusted-read-only",
             },
             with_escalated_permissions: false,
             features: vec![],
@@ -916,7 +897,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             approval_policy: OnRequest,
             sandbox_policy: SandboxPolicy::ReadOnly,
             action: ActionKind::RunCommand {
-                command: &["echo", "trusted-read-only"],
+                command: "echo trusted-read-only",
             },
             with_escalated_permissions: false,
             features: vec![],
@@ -1250,7 +1231,10 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 message_contains: if cfg!(target_os = "linux") {
                     &["Permission denied"]
                 } else {
-                    &["Permission denied|Operation not permitted|Read-only file system"]
+                    &[
+                        "Permission denied|Operation not permitted|operation not permitted|\
+                         Read-only file system",
+                    ]
                 },
             },
         },
@@ -1259,7 +1243,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             approval_policy: Never,
             sandbox_policy: SandboxPolicy::ReadOnly,
             action: ActionKind::RunCommand {
-                command: &["echo", "trusted-never"],
+                command: "echo trusted-never",
             },
             with_escalated_permissions: false,
             features: vec![],
@@ -1394,7 +1378,10 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 message_contains: if cfg!(target_os = "linux") {
                     &["Permission denied"]
                 } else {
-                    &["Permission denied|Operation not permitted|Read-only file system"]
+                    &[
+                        "Permission denied|Operation not permitted|operation not permitted|\
+                         Read-only file system",
+                    ]
                 },
             },
         },
