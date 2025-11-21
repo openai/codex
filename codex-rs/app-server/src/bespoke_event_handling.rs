@@ -8,11 +8,13 @@ use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
 use codex_app_server_protocol::ApplyPatchApprovalResponse;
 use codex_app_server_protocol::ApprovalDecision;
+use codex_app_server_protocol::CodexErrorInfo as V2CodexErrorInfo;
 use codex_app_server_protocol::CommandAction as V2ParsedCommand;
 use codex_app_server_protocol::CommandExecutionOutputDeltaNotification;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
+use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
@@ -260,7 +262,29 @@ pub(crate) async fn apply_bespoke_event_handling(
             }
         }
         EventMsg::Error(ev) => {
-            handle_error(conversation_id, ev.message, &turn_summary_store).await;
+            let turn_error = TurnError {
+                message: ev.message,
+                codex_error_code: ev.codex_error_code.map(V2CodexErrorInfo::from),
+            };
+            handle_error(conversation_id, turn_error.clone(), &turn_summary_store).await;
+            outgoing
+                .send_server_notification(ServerNotification::Error(ErrorNotification {
+                    error: turn_error,
+                }))
+                .await;
+        }
+        EventMsg::StreamError(ev) => {
+            // We don't need to update the turn summary store for stream errors as they are intermediate error states for retries,
+            // but we notify the client.
+            let turn_error = TurnError {
+                message: ev.message,
+                codex_error_code: ev.codex_error_code.map(V2CodexErrorInfo::from),
+            };
+            outgoing
+                .send_server_notification(ServerNotification::Error(ErrorNotification {
+                    error: turn_error,
+                }))
+                .await;
         }
         EventMsg::EnteredReviewMode(review_request) => {
             let notification = ItemStartedNotification {
@@ -508,10 +532,8 @@ async fn handle_turn_complete(
 ) {
     let turn_summary = find_and_remove_turn_summary(conversation_id, turn_summary_store).await;
 
-    let status = if let Some(message) = turn_summary.last_error_message {
-        TurnStatus::Failed {
-            error: TurnError { message },
-        }
+    let status = if let Some(error) = turn_summary.last_error {
+        TurnStatus::Failed { error }
     } else {
         TurnStatus::Completed
     };
@@ -532,11 +554,11 @@ async fn handle_turn_interrupted(
 
 async fn handle_error(
     conversation_id: ConversationId,
-    message: String,
+    error: TurnError,
     turn_summary_store: &TurnSummaryStore,
 ) {
     let mut map = turn_summary_store.lock().await;
-    map.entry(conversation_id).or_default().last_error_message = Some(message);
+    map.entry(conversation_id).or_default().last_error = Some(error);
 }
 
 async fn on_patch_approval_response(
@@ -873,10 +895,24 @@ mod tests {
         let conversation_id = ConversationId::new();
         let turn_summary_store = new_turn_summary_store();
 
-        handle_error(conversation_id, "boom".to_string(), &turn_summary_store).await;
+        handle_error(
+            conversation_id,
+            TurnError {
+                message: "boom".to_string(),
+                codex_error_code: Some(V2CodexErrorInfo::InternalServerError),
+            },
+            &turn_summary_store,
+        )
+        .await;
 
         let turn_summary = find_and_remove_turn_summary(conversation_id, &turn_summary_store).await;
-        assert_eq!(turn_summary.last_error_message, Some("boom".to_string()));
+        assert_eq!(
+            turn_summary.last_error,
+            Some(TurnError {
+                message: "boom".to_string(),
+                codex_error_code: Some(V2CodexErrorInfo::InternalServerError),
+            })
+        );
         Ok(())
     }
 
@@ -916,7 +952,15 @@ mod tests {
         let conversation_id = ConversationId::new();
         let event_id = "interrupt1".to_string();
         let turn_summary_store = new_turn_summary_store();
-        handle_error(conversation_id, "oops".to_string(), &turn_summary_store).await;
+        handle_error(
+            conversation_id,
+            TurnError {
+                message: "oops".to_string(),
+                codex_error_code: None,
+            },
+            &turn_summary_store,
+        )
+        .await;
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = Arc::new(OutgoingMessageSender::new(tx));
 
@@ -948,7 +992,15 @@ mod tests {
         let conversation_id = ConversationId::new();
         let event_id = "complete_err1".to_string();
         let turn_summary_store = new_turn_summary_store();
-        handle_error(conversation_id, "bad".to_string(), &turn_summary_store).await;
+        handle_error(
+            conversation_id,
+            TurnError {
+                message: "bad".to_string(),
+                codex_error_code: Some(V2CodexErrorInfo::Other),
+            },
+            &turn_summary_store,
+        )
+        .await;
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = Arc::new(OutgoingMessageSender::new(tx));
 
@@ -972,6 +1024,7 @@ mod tests {
                     TurnStatus::Failed {
                         error: TurnError {
                             message: "bad".to_string(),
+                            codex_error_code: Some(V2CodexErrorInfo::Other),
                         }
                     }
                 );
@@ -1022,7 +1075,15 @@ mod tests {
 
         // Turn 1 on conversation A
         let a_turn1 = "a_turn1".to_string();
-        handle_error(conversation_a, "a1".to_string(), &turn_summary_store).await;
+        handle_error(
+            conversation_a,
+            TurnError {
+                message: "a1".to_string(),
+                codex_error_code: Some(V2CodexErrorInfo::BadRequest),
+            },
+            &turn_summary_store,
+        )
+        .await;
         handle_turn_complete(
             conversation_a,
             a_turn1.clone(),
@@ -1033,7 +1094,15 @@ mod tests {
 
         // Turn 1 on conversation B
         let b_turn1 = "b_turn1".to_string();
-        handle_error(conversation_b, "b1".to_string(), &turn_summary_store).await;
+        handle_error(
+            conversation_b,
+            TurnError {
+                message: "b1".to_string(),
+                codex_error_code: None,
+            },
+            &turn_summary_store,
+        )
+        .await;
         handle_turn_complete(
             conversation_b,
             b_turn1.clone(),
@@ -1065,6 +1134,7 @@ mod tests {
                     TurnStatus::Failed {
                         error: TurnError {
                             message: "a1".to_string(),
+                            codex_error_code: Some(V2CodexErrorInfo::BadRequest),
                         }
                     }
                 );
@@ -1085,6 +1155,7 @@ mod tests {
                     TurnStatus::Failed {
                         error: TurnError {
                             message: "b1".to_string(),
+                            codex_error_code: None,
                         }
                     }
                 );

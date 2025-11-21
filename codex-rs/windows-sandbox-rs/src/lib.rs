@@ -38,6 +38,7 @@ mod windows_impl {
     use super::env::normalize_null_device_env;
     use super::logging::debug_log;
     use super::logging::log_failure;
+    use super::logging::log_note;
     use super::logging::log_start;
     use super::logging::log_success;
     use super::policy::parse_policy;
@@ -178,11 +179,29 @@ mod windows_impl {
     }
 
     pub fn preflight_audit_everyone_writable(
+        codex_home: &Path,
         cwd: &Path,
         env_map: &HashMap<String, String>,
+        sandbox_policy: &SandboxPolicy,
         logs_base_dir: Option<&Path>,
     ) -> Result<Vec<PathBuf>> {
-        audit::audit_everyone_writable(cwd, env_map, logs_base_dir)
+        let flagged = audit::audit_everyone_writable(cwd, env_map, logs_base_dir)?;
+        if flagged.is_empty() {
+            return Ok(flagged);
+        }
+        if let Err(err) = audit::apply_capability_denies_for_world_writable(
+            codex_home,
+            &flagged,
+            sandbox_policy,
+            cwd,
+            logs_base_dir,
+        ) {
+            log_note(
+                &format!("AUDIT: failed to apply capability deny ACEs: {}", err),
+                logs_base_dir,
+            );
+        }
+        Ok(Vec::new())
     }
 
     pub fn run_windows_sandbox_capture(
@@ -434,6 +453,7 @@ mod windows_impl {
 mod stub {
     use anyhow::bail;
     use anyhow::Result;
+    use codex_protocol::protocol::SandboxPolicy;
     use std::collections::HashMap;
     use std::path::Path;
 
@@ -446,8 +466,10 @@ mod stub {
     }
 
     pub fn preflight_audit_everyone_writable(
+        _codex_home: &Path,
         _cwd: &Path,
         _env_map: &HashMap<String, String>,
+        _sandbox_policy: &SandboxPolicy,
         _logs_base_dir: Option<&Path>,
     ) -> Result<Vec<std::path::PathBuf>> {
         bail!("Windows sandbox is only available on Windows")

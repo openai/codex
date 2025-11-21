@@ -891,6 +891,7 @@ dependencies = [
  "serde",
  "serde_json",
  "strum_macros 0.27.2",
+ "thiserror 2.0.17",
  "ts-rs",
  "uuid",
 ]
@@ -1001,6 +1002,7 @@ dependencies = [
  "codex-common",
  "codex-core",
  "codex-exec",
+ "codex-execpolicy",
  "codex-login",
  "codex-mcp-server",
  "codex-process-hardening",

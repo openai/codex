@@ -50,6 +50,7 @@ use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::protocol::CodexErrorInfo;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -2647,6 +2648,7 @@ fn stream_error_updates_status_indicator() {
         id: "sub-1".into(),
         msg: EventMsg::StreamError(StreamErrorEvent {
             message: msg.to_string(),
+            codex_error_code: Some(CodexErrorInfo::Other),
         }),
     });
 

@@ -79,7 +79,6 @@ use crate::protocol::ApplyPatchApprovalRequestEvent;
 use crate::protocol::AskForApproval;
 use crate::protocol::BackgroundEventEvent;
 use crate::protocol::DeprecationNoticeEvent;
-use crate::protocol::ErrorEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecApprovalRequestEvent;
@@ -129,6 +128,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
@@ -1189,9 +1189,14 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         message: impl Into<String>,
+        codex_error: CodexErr,
     ) {
+        let codex_error_code = CodexErrorInfo::ResponseStreamDisconnected {
+            http_status_code: codex_error.http_status_code_value(),
+        };
         let event = EventMsg::StreamError(StreamErrorEvent {
             message: message.into(),
+            codex_error_code: Some(codex_error_code),
         });
         self.send_event(turn_context, event).await;
     }
@@ -1437,6 +1442,7 @@ mod handlers {
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandTask;
     use codex_protocol::custom_prompts::CustomPrompt;
+    use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
@@ -1683,6 +1689,7 @@ mod handlers {
                 id: sub_id.clone(),
                 msg: EventMsg::Error(ErrorEvent {
                     message: "Failed to shutdown rollout recorder".to_string(),
+                    codex_error_code: Some(CodexErrorInfo::Other),
                 }),
             };
             sess.send_event_raw(event).await;
@@ -1937,9 +1944,7 @@ pub(crate) async fn run_task(
             }
             Err(e) => {
                 info!("Turn error: {e:#}");
-                let event = EventMsg::Error(ErrorEvent {
-                    message: e.to_string(),
-                });
+                let event = EventMsg::Error(e.to_error_event(None));
                 sess.send_event(&turn_context, event).await;
                 // let the user continue the conversation
                 break;
@@ -2064,6 +2069,7 @@ async fn run_turn(
                     sess.notify_stream_error(
                         &turn_context,
                         format!("Reconnecting... {retries}/{max_retries}"),
+                        e,
                     )
                     .await;
 

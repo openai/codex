@@ -562,6 +562,35 @@ pub enum EventMsg {
     ReasoningRawContentDelta(ReasoningRawContentDeltaEvent),
 }
 
+/// Codex errors that we expose to clients.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum CodexErrorInfo {
+    ContextWindowExceeded,
+    UsageLimitExceeded,
+    HttpConnectionFailed {
+        http_status_code: Option<u16>,
+    },
+    /// Failed to connect to the response SSE stream.
+    ResponseStreamConnectionFailed {
+        http_status_code: Option<u16>,
+    },
+    InternalServerError,
+    Unauthorized,
+    BadRequest,
+    SandboxError,
+    /// The response SSE stream disconnected in the middle of a turnbefore completion.
+    ResponseStreamDisconnected {
+        http_status_code: Option<u16>,
+    },
+    /// Reached the retry limit for responses.
+    ResponseTooManyFailedAttempts {
+        http_status_code: Option<u16>,
+    },
+    Other,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct RawResponseItemEvent {
     pub item: ResponseItem,
@@ -686,6 +715,8 @@ pub struct ExitedReviewModeEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ErrorEvent {
     pub message: String,
+    #[serde(default)]
+    pub codex_error_code: Option<CodexErrorInfo>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1363,6 +1394,8 @@ pub struct UndoCompletedEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct StreamErrorEvent {
     pub message: String,
+    #[serde(default)]
+    pub codex_error_code: Option<CodexErrorInfo>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

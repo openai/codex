@@ -358,7 +358,8 @@ mod tests {
 
         assert!(
             shell_path == PathBuf::from("/bin/bash")
-                || shell_path == PathBuf::from("/usr/bin/bash"),
+                || shell_path == PathBuf::from("/usr/bin/bash")
+                || shell_path == PathBuf::from("/usr/local/bin/bash"),
             "shell path: {shell_path:?}",
         );
     }

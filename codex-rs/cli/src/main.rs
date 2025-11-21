@@ -18,6 +18,7 @@ use codex_cli::login::run_logout;
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_common::CliConfigOverrides;
 use codex_exec::Cli as ExecCli;
+use codex_execpolicy::ExecPolicyCheckCommand;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
@@ -93,6 +94,10 @@ enum Subcommand {
     #[clap(visible_alias = "debug")]
     Sandbox(SandboxArgs),
 
+    /// Execpolicy tooling.
+    #[clap(hide = true)]
+    Execpolicy(ExecpolicyCommand),
+
     /// Apply the latest diff produced by Codex agent as a `git apply` to your local working tree.
     #[clap(visible_alias = "a")]
     Apply(ApplyCommand),
@@ -160,6 +165,19 @@ enum SandboxCommand {
 
     /// Run a command under Windows restricted token (Windows only).
     Windows(WindowsCommand),
+}
+
+#[derive(Debug, Parser)]
+struct ExecpolicyCommand {
+    #[command(subcommand)]
+    sub: ExecpolicySubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum ExecpolicySubcommand {
+    /// Check execpolicy files against a command.
+    #[clap(name = "check")]
+    Check(ExecPolicyCheckCommand),
 }
 
 #[derive(Debug, Parser)]
@@ -325,6 +343,10 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     println!();
     println!("🎉 Update ran successfully! Please restart Codex.");
     Ok(())
+}
+
+fn run_execpolicycheck(cmd: ExecPolicyCheckCommand) -> anyhow::Result<()> {
+    cmd.run()
 }
 
 #[derive(Debug, Default, Parser, Clone)]
@@ -548,6 +570,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 )
                 .await?;
             }
+        },
+        Some(Subcommand::Execpolicy(ExecpolicyCommand { sub })) => match sub {
+            ExecpolicySubcommand::Check(cmd) => run_execpolicycheck(cmd)?,
         },
         Some(Subcommand::Apply(mut apply_cli)) => {
             prepend_config_flags(

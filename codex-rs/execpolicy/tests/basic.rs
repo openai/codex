@@ -288,7 +288,7 @@ prefix_rule(
         "color.status=always",
         "status",
     ]));
-    assert_eq!(Evaluation::NoMatch, no_match_eval);
+    assert_eq!(Evaluation::NoMatch {}, no_match_eval);
 }
 
 #[test]
