@@ -139,7 +139,9 @@ fn non_last_reasoning_tokens_ignore_entries_after_last_user() {
         user_msg("second"),
         reasoning_with_encrypted_content(2_000),
     ]);
-
+    // first: (800 * 0.75 - 550) / 4 = 12.5 tokens
+    // second: (1000 * 0.75 - 550) / 4 = 50 tokens
+    // first + second = 62.5
     assert_eq!(history.get_non_last_reasoning_items_tokens(), 63);
 }
 
