@@ -111,7 +111,7 @@ pub async fn spawn_pty_process(
     args: &[String],
     cwd: &Path,
     env: &HashMap<String, String>,
-    arg0: &Option<String>,
+    _arg0: &Option<String>,
 ) -> Result<SpawnedPty> {
     if program.is_empty() {
         anyhow::bail!("missing program for PTY spawn");
@@ -125,7 +125,10 @@ pub async fn spawn_pty_process(
         pixel_height: 0,
     })?;
 
-    let mut command_builder = CommandBuilder::new(arg0.as_ref().unwrap_or(&program.to_string()));
+    // portable-pty does not expose a way to set argv[0] separately from the
+    // executable, so if caller supplies an arg0 override we ignore it to avoid
+    // spawning a non-existent program.
+    let mut command_builder = CommandBuilder::new(program);
     command_builder.cwd(cwd);
     command_builder.env_clear();
     for arg in args {
@@ -208,4 +211,48 @@ pub async fn spawn_pty_process(
         output_rx,
         exit_rx,
     })
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::spawn_pty_process;
+    use std::collections::HashMap;
+    use std::path::Path;
+    use tokio::sync::broadcast::error::RecvError;
+
+    #[tokio::test]
+    async fn spawn_pty_handles_arg0_override_gracefully() -> anyhow::Result<()> {
+        let args = vec![
+            "-c".to_string(),
+            "printf ok".to_string(),
+            "custom-argv0".to_string(),
+        ];
+        let spawned = spawn_pty_process(
+            "/bin/sh",
+            &args,
+            Path::new("/"),
+            &HashMap::new(),
+            &Some("custom-argv0".to_string()),
+        )
+        .await?;
+
+        let mut output_rx = spawned.output_rx;
+        let exit_code = spawned.exit_rx.await?;
+
+        drop(spawned.session);
+
+        let mut stdout = Vec::new();
+        loop {
+            match output_rx.recv().await {
+                Ok(chunk) => stdout.extend(chunk),
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => break,
+            }
+        }
+
+        assert_eq!(exit_code, 0);
+        assert_eq!(String::from_utf8_lossy(&stdout), "ok");
+
+        Ok(())
+    }
 }
