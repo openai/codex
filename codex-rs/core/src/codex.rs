@@ -1668,7 +1668,6 @@ mod handlers {
         }
     }
 
-
     /// Propagate a user's exec approval decision to the session
     /// Also optionally whitelists command in execpolicy
     pub async fn exec_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) {
