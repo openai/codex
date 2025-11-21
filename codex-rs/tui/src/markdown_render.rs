@@ -10,10 +10,49 @@ use pulldown_cmark::Parser;
 use pulldown_cmark::Tag;
 use pulldown_cmark::TagEnd;
 use ratatui::style::Style;
-use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
+
+struct MarkdownStyles {
+    h1: Style,
+    h2: Style,
+    h3: Style,
+    h4: Style,
+    h5: Style,
+    h6: Style,
+    code: Style,
+    emphasis: Style,
+    strong: Style,
+    strikethrough: Style,
+    ordered_list_marker: Style,
+    unordered_list_marker: Style,
+    link: Style,
+    blockquote: Style,
+}
+
+impl Default for MarkdownStyles {
+    fn default() -> Self {
+        use ratatui::style::Stylize;
+
+        Self {
+            h1: Style::new().bold().underlined(),
+            h2: Style::new().bold(),
+            h3: Style::new().bold().italic(),
+            h4: Style::new().italic(),
+            h5: Style::new().italic(),
+            h6: Style::new().italic(),
+            code: Style::new().cyan(),
+            emphasis: Style::new().italic(),
+            strong: Style::new().bold(),
+            strikethrough: Style::new().crossed_out(),
+            ordered_list_marker: Style::new().light_blue(),
+            unordered_list_marker: Style::new(),
+            link: Style::new().cyan().underlined(),
+            blockquote: Style::new().green(),
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 struct IndentContext {
@@ -51,6 +90,7 @@ where
 {
     iter: I,
     text: Text<'static>,
+    styles: MarkdownStyles,
     inline_styles: Vec<Style>,
     indent_stack: Vec<IndentContext>,
     list_indices: Vec<Option<u64>>,
@@ -75,6 +115,7 @@ where
         Self {
             iter,
             text: Text::default(),
+            styles: MarkdownStyles::default(),
             inline_styles: Vec::new(),
             indent_stack: Vec::new(),
             list_indices: Vec::new(),
@@ -140,9 +181,9 @@ where
             }
             Tag::List(start) => self.start_list(start),
             Tag::Item => self.start_item(),
-            Tag::Emphasis => self.push_inline_style(Style::new().italic()),
-            Tag::Strong => self.push_inline_style(Style::new().bold()),
-            Tag::Strikethrough => self.push_inline_style(Style::new().crossed_out()),
+            Tag::Emphasis => self.push_inline_style(self.styles.emphasis),
+            Tag::Strong => self.push_inline_style(self.styles.strong),
+            Tag::Strikethrough => self.push_inline_style(self.styles.strikethrough),
             Tag::Link { dest_url, .. } => self.push_link(dest_url.to_string()),
             Tag::HtmlBlock
             | Tag::FootnoteDefinition(_)
@@ -200,12 +241,12 @@ where
             self.needs_newline = false;
         }
         let heading_style = match level {
-            HeadingLevel::H1 => Style::new().bold().underlined(),
-            HeadingLevel::H2 => Style::new().bold(),
-            HeadingLevel::H3 => Style::new().bold().italic(),
-            HeadingLevel::H4 => Style::new().italic(),
-            HeadingLevel::H5 => Style::new().italic(),
-            HeadingLevel::H6 => Style::new().italic(),
+            HeadingLevel::H1 => self.styles.h1,
+            HeadingLevel::H2 => self.styles.h2,
+            HeadingLevel::H3 => self.styles.h3,
+            HeadingLevel::H4 => self.styles.h4,
+            HeadingLevel::H5 => self.styles.h5,
+            HeadingLevel::H6 => self.styles.h6,
         };
         let content = format!("{} ", "#".repeat(level as usize));
         self.push_line(Line::from(vec![Span::styled(content, heading_style)]));
@@ -276,7 +317,7 @@ where
             self.push_line(Line::default());
             self.pending_marker_line = false;
         }
-        let span = Span::from(code.into_string()).dim();
+        let span = Span::from(code.into_string()).style(self.styles.code);
         self.push_span(span);
     }
 
@@ -327,10 +368,16 @@ where
         let width = depth * 4 - 3;
         let marker = if let Some(last_index) = self.list_indices.last_mut() {
             match last_index {
-                None => Some(vec![Span::from(" ".repeat(width - 1) + "- ")]),
+                None => Some(vec![Span::styled(
+                    " ".repeat(width - 1) + "- ",
+                    self.styles.unordered_list_marker,
+                )]),
                 Some(index) => {
                     *index += 1;
-                    Some(vec![format!("{:width$}. ", *index - 1).light_blue()])
+                    Some(vec![Span::styled(
+                        format!("{:width$}. ", *index - 1),
+                        self.styles.ordered_list_marker,
+                    )])
                 }
             }
         } else {
@@ -384,7 +431,7 @@ where
     fn pop_link(&mut self) {
         if let Some(link) = self.link.take() {
             self.push_span(" (".into());
-            self.push_span(link.cyan().underlined());
+            self.push_span(Span::styled(link, self.styles.link));
             self.push_span(")".into());
         }
     }
@@ -422,7 +469,7 @@ where
             .iter()
             .any(|ctx| ctx.prefix.iter().any(|s| s.content.contains('>')));
         let style = if blockquote_active {
-            Style::new().green()
+            self.styles.blockquote
         } else {
             line.style
         };

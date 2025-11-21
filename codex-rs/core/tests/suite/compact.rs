@@ -384,7 +384,7 @@ async fn manual_compact_uses_custom_prompt() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn manual_compact_emits_estimated_token_usage_event() {
+async fn manual_compact_emits_api_and_local_token_usage_events() {
     skip_if_no_network!();
 
     let server = start_mock_server().await;

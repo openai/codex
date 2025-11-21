@@ -31,9 +31,6 @@ pub enum Feature {
     GhostCommit,
     /// Use the single unified PTY-backed exec tool.
     UnifiedExec,
-    /// Use the shell command tool that takes `command` as a single string of
-    /// shell instead of an array of args passed to `execvp(3)`.
-    ShellCommandTool,
     /// Enable experimental RMCP features such as OAuth login.
     RmcpClient,
     /// Include the freeform apply_patch tool.
@@ -272,12 +269,6 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::UnifiedExec,
         key: "unified_exec",
-        stage: Stage::Experimental,
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::ShellCommandTool,
-        key: "shell_command_tool",
         stage: Stage::Experimental,
         default_enabled: false,
     },
