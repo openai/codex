@@ -9,9 +9,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
 use codex_core::CodexConversation;
-use codex_core::config::Config;
 use codex_core::features::Feature;
-use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::UndoCompletedEvent;
@@ -23,18 +21,17 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodexHarness;
+use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 
 #[allow(clippy::expect_used)]
 async fn undo_harness() -> Result<TestCodexHarness> {
-    TestCodexHarness::with_config(|config: &mut Config| {
+    let builder = test_codex().with_model("gpt-5.1").with_config(|config| {
         config.include_apply_patch_tool = true;
-        config.model = "gpt-5.1".to_string();
-        config.model_family = find_family_for_model("gpt-5.1").expect("gpt-5.1 is valid");
         config.features.enable(Feature::GhostCommit);
-    })
-    .await
+    });
+    TestCodexHarness::with_builder(builder).await
 }
 
 fn git(path: &Path, args: &[&str]) -> Result<()> {

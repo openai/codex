@@ -116,7 +116,6 @@ use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
 use codex_core::features::Feature;
 use codex_core::find_conversation_path_by_id_str;
-use codex_core::get_platform_sandbox;
 use codex_core::git_info::git_diff_to_remote;
 use codex_core::parse_cursor;
 use codex_core::protocol::EventMsg;
@@ -1182,13 +1181,6 @@ impl CodexMessageProcessor {
             .sandbox_policy
             .unwrap_or_else(|| self.config.sandbox_policy.clone());
 
-        let sandbox_type = match &effective_policy {
-            codex_core::protocol::SandboxPolicy::DangerFullAccess => {
-                codex_core::exec::SandboxType::None
-            }
-            _ => get_platform_sandbox().unwrap_or(codex_core::exec::SandboxType::None),
-        };
-        tracing::debug!("Sandbox type: {sandbox_type:?}");
         let codex_linux_sandbox_exe = self.config.codex_linux_sandbox_exe.clone();
         let outgoing = self.outgoing.clone();
         let req_id = request_id;
@@ -1197,7 +1189,6 @@ impl CodexMessageProcessor {
         tokio::spawn(async move {
             match codex_core::exec::process_exec_tool_call(
                 exec_params,
-                sandbox_type,
                 &effective_policy,
                 sandbox_cwd.as_path(),
                 &codex_linux_sandbox_exe,

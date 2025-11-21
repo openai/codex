@@ -53,6 +53,7 @@ use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_protocol::ConversationId;
+use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::user_input::UserInput;
 use crossterm::event::KeyCode;
@@ -733,6 +734,14 @@ impl ChatWidget {
         );
     }
 
+    fn on_elicitation_request(&mut self, ev: ElicitationRequestEvent) {
+        let ev2 = ev.clone();
+        self.defer_or_handle(
+            |q| q.push_elicitation(ev),
+            |s| s.handle_elicitation_request_now(ev2),
+        );
+    }
+
     fn on_exec_command_begin(&mut self, ev: ExecCommandBeginEvent) {
         self.flush_answer_stream_with_separator();
         let ev2 = ev.clone();
@@ -1037,6 +1046,22 @@ impl ChatWidget {
             cwd: self.config.cwd.clone(),
             changes: ev.changes.keys().cloned().collect(),
         });
+    }
+
+    pub(crate) fn handle_elicitation_request_now(&mut self, ev: ElicitationRequestEvent) {
+        self.flush_answer_stream_with_separator();
+
+        self.notify(Notification::ElicitationRequested {
+            server_name: ev.server_name.clone(),
+        });
+
+        let request = ApprovalRequest::McpElicitation {
+            server_name: ev.server_name,
+            request_id: ev.id,
+            message: ev.message,
+        };
+        self.bottom_pane.push_approval_request(request);
+        self.request_redraw();
     }
 
     pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
@@ -1685,6 +1710,9 @@ impl ChatWidget {
             }
             EventMsg::ApplyPatchApprovalRequest(ev) => {
                 self.on_apply_patch_approval_request(id.unwrap_or_default(), ev)
+            }
+            EventMsg::ElicitationRequest(ev) => {
+                self.on_elicitation_request(ev);
             }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::ExecCommandOutputDelta(delta) => self.on_exec_command_output_delta(delta),
@@ -2994,6 +3022,7 @@ enum Notification {
     AgentTurnComplete { response: String },
     ExecApprovalRequested { command: String },
     EditApprovalRequested { cwd: PathBuf, changes: Vec<PathBuf> },
+    ElicitationRequested { server_name: String },
 }
 
 impl Notification {
@@ -3017,6 +3046,9 @@ impl Notification {
                     }
                 )
             }
+            Notification::ElicitationRequested { server_name } => {
+                format!("Approval requested by {server_name}")
+            }
         }
     }
 
@@ -3024,7 +3056,8 @@ impl Notification {
         match self {
             Notification::AgentTurnComplete { .. } => "agent-turn-complete",
             Notification::ExecApprovalRequested { .. }
-            | Notification::EditApprovalRequested { .. } => "approval-requested",
+            | Notification::EditApprovalRequested { .. }
+            | Notification::ElicitationRequested { .. } => "approval-requested",
         }
     }
 
