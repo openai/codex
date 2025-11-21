@@ -1,0 +1,7 @@
+---
+source: tui/src/history_cell/view_image.rs
+assertion_line: 93
+expression: cell.display_string(80)
+---
+• Viewed Image
+  └ /repo/images/very/deep/path/to/output.png

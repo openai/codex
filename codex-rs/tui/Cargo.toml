@@ -90,6 +90,7 @@ unicode-width = { workspace = true }
 url = { workspace = true }
 
 codex-windows-sandbox = { workspace = true }
+indoc = "2.0.7"
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }

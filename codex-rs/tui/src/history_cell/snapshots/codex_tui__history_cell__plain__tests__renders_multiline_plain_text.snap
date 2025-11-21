@@ -1,0 +1,6 @@
+---
+source: tui/src/history_cell/plain.rs
+expression: cell.display_string(60)
+---
+Summary: Updated the deployment script.
+Details: Added retries and improved logging output.

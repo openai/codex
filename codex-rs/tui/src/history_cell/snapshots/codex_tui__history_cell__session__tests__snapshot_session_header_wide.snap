@@ -1,0 +1,10 @@
+---
+source: tui/src/history_cell/session.rs
+expression: cell.display_string(72)
+---
+╭────────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v1.2.3)                       │
+│                                                │
+│ model:     gpt-4o-mini high   /model to change │
+│ directory: /Users/me/projects/codex            │
+╰────────────────────────────────────────────────╯

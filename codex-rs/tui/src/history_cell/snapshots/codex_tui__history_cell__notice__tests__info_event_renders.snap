@@ -1,0 +1,7 @@
+---
+source: tui/src/history_cell/notice.rs
+assertion_line: 40
+expression: cell.display_string(42)
+---
+• Indexed docs are up to date. No action
+needed.

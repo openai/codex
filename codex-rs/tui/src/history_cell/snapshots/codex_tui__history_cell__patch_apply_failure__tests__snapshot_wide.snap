@@ -1,0 +1,12 @@
+---
+source: tui/src/history_cell/patch_apply_failure.rs
+assertion_line: 83
+expression: cell.display_string(80)
+---
+✘ Failed to apply patch
+  └ line one
+    line two
+    line three
+    line four
+    line five
+    line six

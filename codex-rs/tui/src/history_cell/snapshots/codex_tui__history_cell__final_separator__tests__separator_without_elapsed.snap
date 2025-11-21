@@ -1,0 +1,5 @@
+---
+source: tui/src/history_cell/final_separator.rs
+expression: sep.display_string(34)
+---
+──────────────────────────────────

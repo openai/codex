@@ -1,0 +1,8 @@
+---
+source: tui/src/history_cell/web_search.rs
+assertion_line: 95
+expression: cell.display_string(24)
+---
+🌐 find ratatui styling
+   tips for codex tui
+   with wrapping

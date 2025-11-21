@@ -1,0 +1,7 @@
+---
+source: tui/src/history_cell/approval_decision.rs
+expression: "render(codex_core::protocol::ReviewDecision::Abort)"
+---
+✗ You canceled the request to run echo
+  checking migration script safety before
+  applying

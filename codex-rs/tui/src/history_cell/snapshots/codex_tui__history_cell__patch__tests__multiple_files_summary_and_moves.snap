@@ -1,0 +1,15 @@
+---
+source: tui/src/history_cell/patch.rs
+expression: cell.display_string(64)
+---
+• Edited 2 files (+3 -2)
+  └ /repo/docs/notes.md (+1 -0)
+    1 +Added runbook steps for deploy.
+
+  └ /repo/src/old.rs → /repo/src/renamed.rs (+2 -2)
+    1 -pub fn old() {
+    2 -    println!("old");
+    1 +pub fn renamed() {
+    2 +    println!("renamed with longer output line to wrap cle
+       anly");
+    3  }

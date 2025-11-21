@@ -1,0 +1,7 @@
+---
+source: tui/src/history_cell/mcp.rs
+assertion_line: 689
+expression: rendered
+---
+• Called search.find_docs({"query":"ratatui styling","limit":3})
+  └ Error: network timeout

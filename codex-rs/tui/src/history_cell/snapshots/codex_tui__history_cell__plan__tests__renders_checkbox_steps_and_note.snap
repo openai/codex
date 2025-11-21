@@ -1,0 +1,10 @@
+---
+source: tui/src/history_cell/plan.rs
+assertion_line: 120
+expression: rendered
+---
+• Updated Plan
+  └ Wraps the note provided by
+    the plan tool
+    ✔ Investigate errors
+    □ Add retries to client

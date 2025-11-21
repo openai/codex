@@ -1,0 +1,6 @@
+---
+source: tui/src/history_cell/agent.rs
+expression: cell.display_string(32)
+---
+  Then continue streaming
+  without a new bullet.

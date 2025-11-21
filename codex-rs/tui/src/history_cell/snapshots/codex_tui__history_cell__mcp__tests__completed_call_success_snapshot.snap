@@ -1,0 +1,7 @@
+---
+source: tui/src/history_cell/mcp.rs
+assertion_line: 668
+expression: rendered
+---
+• Called search.find_docs({"query":"ratatui styling","limit":3})
+  └ Found styling guidance in styles.md

@@ -1,0 +1,5 @@
+---
+source: tui/src/history_cell/final_separator.rs
+expression: sep.display_string(40)
+---
+─ Worked for 6m 12s ────────────────────

@@ -1,0 +1,7 @@
+---
+source: tui/src/history_cell/prefixed_wrapped.rs
+expression: cell.display_string(38)
+---
+⚠ Warning: reconnect to the VPN before
+  retrying so the service endpoint is
+  reachable.

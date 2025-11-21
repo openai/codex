@@ -1,0 +1,7 @@
+---
+source: tui/src/history_cell/notice.rs
+assertion_line: 48
+expression: cell.display_string(48)
+---
+⚠ Retry after reconnecting to VPN so the
+  registry is reachable.

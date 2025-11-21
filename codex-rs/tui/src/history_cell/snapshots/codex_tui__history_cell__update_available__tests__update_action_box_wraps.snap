@@ -1,0 +1,11 @@
+---
+source: tui/src/history_cell/update_available.rs
+expression: cell.display_string(48)
+---
+╭─────────────────────────────────────────────────╮
+│ ✨Update available! 0.0.0 -> 2.3.4              │
+│ Run brew upgrade codex to update.               │
+│                                                 │
+│ See full release notes:                         │
+│ https://github.com/openai/codex/releases/latest │
+╰─────────────────────────────────────────────────╯

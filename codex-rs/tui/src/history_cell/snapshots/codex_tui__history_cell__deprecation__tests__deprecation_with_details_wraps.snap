@@ -1,0 +1,9 @@
+---
+source: tui/src/history_cell/deprecation.rs
+assertion_line: 54
+expression: rendered
+---
+⚠ Feature flag `foo`
+Use flag `bar` instead
+of relying on implicit
+defaults.

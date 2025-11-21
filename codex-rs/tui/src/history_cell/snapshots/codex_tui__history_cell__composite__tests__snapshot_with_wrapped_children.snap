@@ -1,0 +1,7 @@
+---
+source: tui/src/history_cell/composite.rs
+expression: composite.display_string(48)
+---
+Session header: OpenAI Codex (v1.2)
+
+Help: Press ? to see keyboard shortcuts for navigating history.
