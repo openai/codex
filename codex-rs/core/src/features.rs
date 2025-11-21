@@ -31,9 +31,6 @@ pub enum Feature {
     GhostCommit,
     /// Use the single unified PTY-backed exec tool.
     UnifiedExec,
-    /// Use the shell command tool that takes `command` as a single string of
-    /// shell instead of an array of args passed to `execvp(3)`.
-    ShellCommandTool,
     /// Enable experimental RMCP features such as OAuth login.
     RmcpClient,
     /// Include the freeform apply_patch tool.
@@ -42,6 +39,8 @@ pub enum Feature {
     ViewImageTool,
     /// Allow the model to request web searches.
     WebSearchRequest,
+    /// Gate the execpolicy enforcement for shell/unified exec.
+    ExecPolicy,
     /// Enable the model-based risk assessments for sandboxed commands.
     SandboxCommandAssessment,
     /// Enable Windows sandbox (restricted token) on Windows.
@@ -274,12 +273,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::ShellCommandTool,
-        key: "shell_command_tool",
-        stage: Stage::Experimental,
-        default_enabled: false,
-    },
-    FeatureSpec {
         id: Feature::RmcpClient,
         key: "rmcp_client",
         stage: Stage::Experimental,
@@ -296,6 +289,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "web_search_request",
         stage: Stage::Stable,
         default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ExecPolicy,
+        key: "exec_policy",
+        stage: Stage::Experimental,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::SandboxCommandAssessment,

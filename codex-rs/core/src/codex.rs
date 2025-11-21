@@ -79,7 +79,6 @@ use crate::protocol::ApplyPatchApprovalRequestEvent;
 use crate::protocol::AskForApproval;
 use crate::protocol::BackgroundEventEvent;
 use crate::protocol::DeprecationNoticeEvent;
-use crate::protocol::ErrorEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecApprovalRequestEvent;
@@ -121,6 +120,7 @@ use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
 use codex_async_utils::OrCancelExt;
+use codex_execpolicy::Policy as ExecPolicy;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -128,11 +128,11 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
-use codex_utils_tokenizer::warm_model_cache;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -166,6 +166,10 @@ impl Codex {
 
         let user_instructions = get_user_instructions(&config).await;
 
+        let exec_policy = crate::exec_policy::exec_policy_for(&config.features, &config.codex_home)
+            .await
+            .map_err(|err| CodexErr::Fatal(format!("failed to load execpolicy: {err}")))?;
+
         let config = Arc::new(config);
 
         let session_configuration = SessionConfiguration {
@@ -182,6 +186,7 @@ impl Codex {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: config.features.clone(),
+            exec_policy,
             session_source,
         };
 
@@ -279,6 +284,7 @@ pub(crate) struct TurnContext {
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
+    pub(crate) exec_policy: Arc<ExecPolicy>,
     pub(crate) truncation_policy: TruncationPolicy,
 }
 
@@ -335,6 +341,8 @@ pub(crate) struct SessionConfiguration {
 
     /// Set of feature flags for this session
     features: Features,
+    /// Execpolicy policy, applied only when enabled by feature flag.
+    exec_policy: Arc<ExecPolicy>,
 
     // TODO(pakrym): Remove config from here
     original_config_do_not_use: Arc<Config>,
@@ -435,6 +443,7 @@ impl Session {
             final_output_json_schema: None,
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
+            exec_policy: session_configuration.exec_policy.clone(),
             truncation_policy: TruncationPolicy::new(&per_turn_config),
         }
     }
@@ -483,7 +492,7 @@ impl Session {
         // - load history metadata
         let rollout_fut = RolloutRecorder::new(&config, rollout_params);
 
-        let default_shell_fut = shell::default_user_shell();
+        let default_shell = shell::default_user_shell();
         let history_meta_fut = crate::message_history::history_metadata(&config);
         let auth_statuses_fut = compute_auth_statuses(
             config.mcp_servers.iter(),
@@ -491,12 +500,8 @@ impl Session {
         );
 
         // Join all independent futures.
-        let (rollout_recorder, default_shell, (history_log_id, history_entry_count), auth_statuses) = tokio::join!(
-            rollout_fut,
-            default_shell_fut,
-            history_meta_fut,
-            auth_statuses_fut
-        );
+        let (rollout_recorder, (history_log_id, history_entry_count), auth_statuses) =
+            tokio::join!(rollout_fut, history_meta_fut, auth_statuses_fut);
 
         let rollout_recorder = rollout_recorder.map_err(|e| {
             error!("failed to initialize rollout recorder: {e:#}");
@@ -548,9 +553,6 @@ impl Session {
 
         // Create the mutable state for the Session.
         let state = SessionState::new(session_configuration.clone());
-
-        // Warm the tokenizer cache for the session model without blocking startup.
-        warm_model_cache(&session_configuration.model);
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -909,6 +911,7 @@ impl Session {
 
         let event = EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id,
+            turn_id: turn_context.sub_id.clone(),
             changes,
             reason,
             grant_root,
@@ -1046,7 +1049,7 @@ impl Session {
             Some(turn_context.cwd.clone()),
             Some(turn_context.approval_policy),
             Some(turn_context.sandbox_policy.clone()),
-            Some(self.user_shell().clone()),
+            self.user_shell().clone(),
         )));
         items
     }
@@ -1186,9 +1189,14 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         message: impl Into<String>,
+        codex_error: CodexErr,
     ) {
+        let codex_error_info = CodexErrorInfo::ResponseStreamDisconnected {
+            http_status_code: codex_error.http_status_code_value(),
+        };
         let event = EventMsg::StreamError(StreamErrorEvent {
             message: message.into(),
+            codex_error_info: Some(codex_error_info),
         });
         self.send_event(turn_context, event).await;
     }
@@ -1434,6 +1442,7 @@ mod handlers {
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandTask;
     use codex_protocol::custom_prompts::CustomPrompt;
+    use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
@@ -1680,6 +1689,7 @@ mod handlers {
                 id: sub_id.clone(),
                 msg: EventMsg::Error(ErrorEvent {
                     message: "Failed to shutdown rollout recorder".to_string(),
+                    codex_error_info: Some(CodexErrorInfo::Other),
                 }),
             };
             sess.send_event_raw(event).await;
@@ -1785,6 +1795,7 @@ async fn spawn_review_thread(
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
+        exec_policy: parent_turn_context.exec_policy.clone(),
         truncation_policy: TruncationPolicy::new(&per_turn_config),
     };
 
@@ -1933,9 +1944,7 @@ pub(crate) async fn run_task(
             }
             Err(e) => {
                 info!("Turn error: {e:#}");
-                let event = EventMsg::Error(ErrorEvent {
-                    message: e.to_string(),
-                });
+                let event = EventMsg::Error(e.to_error_event(None));
                 sess.send_event(&turn_context, event).await;
                 // let the user continue the conversation
                 break;
@@ -2060,6 +2069,7 @@ async fn run_turn(
                     sess.notify_stream_error(
                         &turn_context,
                         format!("Reconnecting... {retries}/{max_retries}"),
+                        e,
                     )
                     .await;
 
@@ -2378,6 +2388,7 @@ mod tests {
     use crate::config::ConfigOverrides;
     use crate::config::ConfigToml;
     use crate::exec::ExecToolCallOutput;
+    use crate::shell::default_user_shell;
     use crate::tools::format_exec_output_str;
 
     use crate::protocol::CompactedItem;
@@ -2605,6 +2616,7 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
+            exec_policy: Arc::new(ExecPolicy::empty()),
             session_source: SessionSource::Exec,
         };
 
@@ -2616,7 +2628,7 @@ mod tests {
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::new(None),
             rollout: Mutex::new(None),
-            user_shell: shell::Shell::Unknown,
+            user_shell: default_user_shell(),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager: otel_event_manager.clone(),
@@ -2682,6 +2694,7 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
+            exec_policy: Arc::new(ExecPolicy::empty()),
             session_source: SessionSource::Exec,
         };
 
@@ -2693,7 +2706,7 @@ mod tests {
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::new(None),
             rollout: Mutex::new(None),
-            user_shell: shell::Shell::Unknown,
+            user_shell: default_user_shell(),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager: otel_event_manager.clone(),
@@ -3038,6 +3051,7 @@ mod tests {
         let session = Arc::new(session);
         let mut turn_context = Arc::new(turn_context_raw);
 
+        let timeout_ms = 1000;
         let params = ExecParams {
             command: if cfg!(windows) {
                 vec![
@@ -3053,7 +3067,7 @@ mod tests {
                 ]
             },
             cwd: turn_context.cwd.clone(),
-            timeout_ms: Some(1000),
+            expiration: timeout_ms.into(),
             env: HashMap::new(),
             with_escalated_permissions: Some(true),
             justification: Some("test".to_string()),
@@ -3064,7 +3078,12 @@ mod tests {
 
         let params2 = ExecParams {
             with_escalated_permissions: Some(false),
-            ..params.clone()
+            command: params.command.clone(),
+            cwd: params.cwd.clone(),
+            expiration: timeout_ms.into(),
+            env: HashMap::new(),
+            justification: params.justification.clone(),
+            arg0: None,
         };
 
         let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
@@ -3084,7 +3103,7 @@ mod tests {
                     arguments: serde_json::json!({
                         "command": params.command.clone(),
                         "workdir": Some(turn_context.cwd.to_string_lossy().to_string()),
-                        "timeout_ms": params.timeout_ms,
+                        "timeout_ms": params.expiration.timeout_ms(),
                         "with_escalated_permissions": params.with_escalated_permissions,
                         "justification": params.justification.clone(),
                     })
@@ -3121,7 +3140,7 @@ mod tests {
                     arguments: serde_json::json!({
                         "command": params2.command.clone(),
                         "workdir": Some(turn_context.cwd.to_string_lossy().to_string()),
-                        "timeout_ms": params2.timeout_ms,
+                        "timeout_ms": params2.expiration.timeout_ms(),
                         "with_escalated_permissions": params2.with_escalated_permissions,
                         "justification": params2.justification.clone(),
                     })

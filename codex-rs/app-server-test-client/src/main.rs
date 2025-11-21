@@ -24,6 +24,8 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CommandExecutionRequestAcceptSettings;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
+use codex_app_server_protocol::FileChangeRequestApprovalParams;
+use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::InitializeResponse;
@@ -677,6 +679,9 @@ impl CodexClient {
             ServerRequest::CommandExecutionRequestApproval { request_id, params } => {
                 self.handle_command_execution_request_approval(request_id, params)?;
             }
+            ServerRequest::FileChangeRequestApproval { request_id, params } => {
+                self.approve_file_change_request(request_id, params)?;
+            }
             other => {
                 bail!("received unsupported server request: {other:?}");
             }
@@ -714,6 +719,37 @@ impl CodexClient {
         };
         self.send_server_request_response(request_id, &response)?;
         println!("< approved commandExecution request for item {item_id}");
+        Ok(())
+    }
+
+    fn approve_file_change_request(
+        &mut self,
+        request_id: RequestId,
+        params: FileChangeRequestApprovalParams,
+    ) -> Result<()> {
+        let FileChangeRequestApprovalParams {
+            thread_id,
+            turn_id,
+            item_id,
+            reason,
+            grant_root,
+        } = params;
+
+        println!(
+            "\n< fileChange approval requested for thread {thread_id}, turn {turn_id}, item {item_id}"
+        );
+        if let Some(reason) = reason.as_deref() {
+            println!("< reason: {reason}");
+        }
+        if let Some(grant_root) = grant_root.as_deref() {
+            println!("< grant root: {}", grant_root.display());
+        }
+
+        let response = FileChangeRequestApprovalResponse {
+            decision: ApprovalDecision::Accept,
+        };
+        self.send_server_request_response(request_id, &response)?;
+        println!("< approved fileChange request for item {item_id}");
         Ok(())
     }
 

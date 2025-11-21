@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::os::fd::AsRawFd;
-use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context as _;
@@ -13,6 +13,7 @@ use codex_core::exec::process_exec_tool_call;
 use codex_core::get_platform_sandbox;
 use codex_core::protocol::SandboxPolicy;
 use tokio::process::Command;
+use tokio_util::sync::CancellationToken;
 
 use crate::posix::escalate_protocol::BASH_EXEC_WRAPPER_ENV_VAR;
 use crate::posix::escalate_protocol::ESCALATE_SOCKET_ENV_VAR;
@@ -21,25 +22,27 @@ use crate::posix::escalate_protocol::EscalateRequest;
 use crate::posix::escalate_protocol::EscalateResponse;
 use crate::posix::escalate_protocol::SuperExecMessage;
 use crate::posix::escalate_protocol::SuperExecResult;
+use crate::posix::escalation_policy::EscalationPolicy;
 use crate::posix::socket::AsyncDatagramSocket;
 use crate::posix::socket::AsyncSocket;
-
-/// This is the policy which decides how to handle an exec() call.
-///
-/// `file` is the absolute, canonical path to the executable to run, i.e. the first arg to exec.
-/// `argv` is the argv, including the program name (`argv[0]`).
-/// `workdir` is the absolute, canonical path to the working directory in which to execute the
-/// command.
-pub(crate) type ExecPolicy = fn(file: &Path, argv: &[String], workdir: &Path) -> EscalateAction;
+use codex_core::exec::ExecExpiration;
 
 pub(crate) struct EscalateServer {
     bash_path: PathBuf,
-    policy: ExecPolicy,
+    execve_wrapper: PathBuf,
+    policy: Arc<dyn EscalationPolicy>,
 }
 
 impl EscalateServer {
-    pub fn new(bash_path: PathBuf, policy: ExecPolicy) -> Self {
-        Self { bash_path, policy }
+    pub fn new<P>(bash_path: PathBuf, execve_wrapper: PathBuf, policy: P) -> Self
+    where
+        P: EscalationPolicy + Send + Sync + 'static,
+    {
+        Self {
+            bash_path,
+            execve_wrapper,
+            policy: Arc::new(policy),
+        }
     }
 
     pub async fn exec(
@@ -47,13 +50,13 @@ impl EscalateServer {
         command: String,
         env: HashMap<String, String>,
         workdir: PathBuf,
-        timeout_ms: Option<u64>,
+        cancel_rx: CancellationToken,
     ) -> anyhow::Result<ExecResult> {
         let (escalate_server, escalate_client) = AsyncDatagramSocket::pair()?;
         let client_socket = escalate_client.into_inner();
         client_socket.set_cloexec(false)?;
 
-        let escalate_task = tokio::spawn(escalate_task(escalate_server, self.policy));
+        let escalate_task = tokio::spawn(escalate_task(escalate_server, self.policy.clone()));
         let mut env = env.clone();
         env.insert(
             ESCALATE_SOCKET_ENV_VAR.to_string(),
@@ -61,8 +64,15 @@ impl EscalateServer {
         );
         env.insert(
             BASH_EXEC_WRAPPER_ENV_VAR.to_string(),
-            format!("{} escalate", std::env::current_exe()?.to_string_lossy()),
+            self.execve_wrapper.to_string_lossy().to_string(),
         );
+
+        // TODO: use the sandbox policy and cwd from the calling client.
+        // Note that sandbox_cwd is ignored for ReadOnly, but needs to be legit
+        // for `SandboxPolicy::WorkspaceWrite`.
+        let sandbox_policy = SandboxPolicy::ReadOnly;
+        let sandbox_cwd = PathBuf::from("/__NONEXISTENT__");
+
         let result = process_exec_tool_call(
             codex_core::exec::ExecParams {
                 command: vec![
@@ -71,7 +81,7 @@ impl EscalateServer {
                     command,
                 ],
                 cwd: PathBuf::from(&workdir),
-                timeout_ms,
+                expiration: ExecExpiration::Cancellation(cancel_rx),
                 env,
                 with_escalated_permissions: None,
                 justification: None,
@@ -80,9 +90,8 @@ impl EscalateServer {
                 max_output_chars: None,
             },
             get_platform_sandbox().unwrap_or(SandboxType::None),
-            // TODO: use the sandbox policy and cwd from the calling client
-            &SandboxPolicy::ReadOnly,
-            &PathBuf::from("/__NONEXISTENT__"), // This is ignored for ReadOnly
+            &sandbox_policy,
+            &sandbox_cwd,
             &None,
             None,
         )
@@ -98,7 +107,10 @@ impl EscalateServer {
     }
 }
 
-async fn escalate_task(socket: AsyncDatagramSocket, policy: ExecPolicy) -> anyhow::Result<()> {
+async fn escalate_task(
+    socket: AsyncDatagramSocket,
+    policy: Arc<dyn EscalationPolicy>,
+) -> anyhow::Result<()> {
     loop {
         let (_, mut fds) = socket.receive_with_fds().await?;
         if fds.len() != 1 {
@@ -106,6 +118,7 @@ async fn escalate_task(socket: AsyncDatagramSocket, policy: ExecPolicy) -> anyho
             continue;
         }
         let stream_socket = AsyncSocket::from_fd(fds.remove(0))?;
+        let policy = policy.clone();
         tokio::spawn(async move {
             if let Err(err) = handle_escalate_session_with_policy(stream_socket, policy).await {
                 tracing::error!("escalate session failed: {err:?}");
@@ -124,7 +137,7 @@ pub(crate) struct ExecResult {
 
 async fn handle_escalate_session_with_policy(
     socket: AsyncSocket,
-    policy: ExecPolicy,
+    policy: Arc<dyn EscalationPolicy>,
 ) -> anyhow::Result<()> {
     let EscalateRequest {
         file,
@@ -134,8 +147,12 @@ async fn handle_escalate_session_with_policy(
     } = socket.receive::<EscalateRequest>().await?;
     let file = PathBuf::from(&file).absolutize()?.into_owned();
     let workdir = PathBuf::from(&workdir).absolutize()?.into_owned();
-    let action = policy(file.as_path(), &argv, &workdir);
+    let action = policy
+        .determine_action(file.as_path(), &argv, &workdir)
+        .await?;
+
     tracing::debug!("decided {action:?} for {file:?} {argv:?} {workdir:?}");
+
     match action {
         EscalateAction::Run => {
             socket
@@ -197,6 +214,13 @@ async fn handle_escalate_session_with_policy(
                 })
                 .await?;
         }
+        EscalateAction::Deny { reason } => {
+            socket
+                .send(EscalateResponse {
+                    action: EscalateAction::Deny { reason },
+                })
+                .await?;
+        }
     }
     Ok(())
 }
@@ -206,14 +230,33 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
+    use std::path::Path;
     use std::path::PathBuf;
+
+    struct DeterministicEscalationPolicy {
+        action: EscalateAction,
+    }
+
+    #[async_trait::async_trait]
+    impl EscalationPolicy for DeterministicEscalationPolicy {
+        async fn determine_action(
+            &self,
+            _file: &Path,
+            _argv: &[String],
+            _workdir: &Path,
+        ) -> Result<EscalateAction, rmcp::ErrorData> {
+            Ok(self.action.clone())
+        }
+    }
 
     #[tokio::test]
     async fn handle_escalate_session_respects_run_in_sandbox_decision() -> anyhow::Result<()> {
         let (server, client) = AsyncSocket::pair()?;
         let server_task = tokio::spawn(handle_escalate_session_with_policy(
             server,
-            |_file, _argv, _workdir| EscalateAction::Run,
+            Arc::new(DeterministicEscalationPolicy {
+                action: EscalateAction::Run,
+            }),
         ));
 
         client
@@ -240,7 +283,9 @@ mod tests {
         let (server, client) = AsyncSocket::pair()?;
         let server_task = tokio::spawn(handle_escalate_session_with_policy(
             server,
-            |_file, _argv, _workdir| EscalateAction::Escalate,
+            Arc::new(DeterministicEscalationPolicy {
+                action: EscalateAction::Escalate,
+            }),
         ));
 
         client

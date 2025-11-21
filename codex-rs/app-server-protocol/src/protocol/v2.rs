@@ -11,6 +11,7 @@ use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
+use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
@@ -20,6 +21,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
+use thiserror::Error;
 use ts_rs::TS;
 
 // Macro to declare a camelCased API v2 enum mirroring a core enum which
@@ -45,6 +47,72 @@ macro_rules! v2_enum_from_core {
             }
         }
     };
+}
+
+/// This translation layer make sure that we expose codex error code in camel case.
+///
+/// When an upstream HTTP status is available (for example, from the Responses API or a provider),
+/// it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum CodexErrorInfo {
+    ContextWindowExceeded,
+    UsageLimitExceeded,
+    HttpConnectionFailed {
+        #[serde(rename = "httpStatusCode")]
+        #[ts(rename = "httpStatusCode")]
+        http_status_code: Option<u16>,
+    },
+    /// Failed to connect to the response SSE stream.
+    ResponseStreamConnectionFailed {
+        #[serde(rename = "httpStatusCode")]
+        #[ts(rename = "httpStatusCode")]
+        http_status_code: Option<u16>,
+    },
+    InternalServerError,
+    Unauthorized,
+    BadRequest,
+    SandboxError,
+    /// The response SSE stream disconnected in the middle of a turn before completion.
+    ResponseStreamDisconnected {
+        #[serde(rename = "httpStatusCode")]
+        #[ts(rename = "httpStatusCode")]
+        http_status_code: Option<u16>,
+    },
+    /// Reached the retry limit for responses.
+    ResponseTooManyFailedAttempts {
+        #[serde(rename = "httpStatusCode")]
+        #[ts(rename = "httpStatusCode")]
+        http_status_code: Option<u16>,
+    },
+    Other,
+}
+
+impl From<CoreCodexErrorInfo> for CodexErrorInfo {
+    fn from(value: CoreCodexErrorInfo) -> Self {
+        match value {
+            CoreCodexErrorInfo::ContextWindowExceeded => CodexErrorInfo::ContextWindowExceeded,
+            CoreCodexErrorInfo::UsageLimitExceeded => CodexErrorInfo::UsageLimitExceeded,
+            CoreCodexErrorInfo::HttpConnectionFailed { http_status_code } => {
+                CodexErrorInfo::HttpConnectionFailed { http_status_code }
+            }
+            CoreCodexErrorInfo::ResponseStreamConnectionFailed { http_status_code } => {
+                CodexErrorInfo::ResponseStreamConnectionFailed { http_status_code }
+            }
+            CoreCodexErrorInfo::InternalServerError => CodexErrorInfo::InternalServerError,
+            CoreCodexErrorInfo::Unauthorized => CodexErrorInfo::Unauthorized,
+            CoreCodexErrorInfo::BadRequest => CodexErrorInfo::BadRequest,
+            CoreCodexErrorInfo::SandboxError => CodexErrorInfo::SandboxError,
+            CoreCodexErrorInfo::ResponseStreamDisconnected { http_status_code } => {
+                CodexErrorInfo::ResponseStreamDisconnected { http_status_code }
+            }
+            CoreCodexErrorInfo::ResponseTooManyFailedAttempts { http_status_code } => {
+                CodexErrorInfo::ResponseTooManyFailedAttempts { http_status_code }
+            }
+            CoreCodexErrorInfo::Other => CodexErrorInfo::Other,
+        }
+    }
 }
 
 v2_enum_from_core!(
@@ -544,11 +612,20 @@ pub struct Turn {
     pub status: TurnStatus,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, Error)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+#[error("{message}")]
+pub struct TurnError {
+    pub message: String,
+    pub codex_error_info: Option<CodexErrorInfo>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct TurnError {
-    pub message: String,
+pub struct ErrorNotification {
+    pub error: TurnError,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -794,20 +871,23 @@ pub struct FileUpdateChange {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum PatchChangeKind {
     Add,
     Delete,
-    Update,
+    Update { move_path: Option<PathBuf> },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub enum PatchApplyStatus {
+    InProgress,
     Completed,
     Failed,
+    Declined,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -985,6 +1065,26 @@ pub struct CommandExecutionRequestApprovalResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct FileChangeRequestApprovalParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    /// Optional explanatory reason (e.g. request for extra write access).
+    pub reason: Option<String>,
+    /// [UNSTABLE] When set, the agent is asking the user to allow writes under this root
+    /// for the remainder of the session (unclear if this is honored today).
+    pub grant_root: Option<PathBuf>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[ts(export_to = "v2/")]
+pub struct FileChangeRequestApprovalResponse {
+    pub decision: ApprovalDecision,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct AccountRateLimitsUpdatedNotification {
     pub rate_limits: RateLimitSnapshot,
 }
@@ -1068,6 +1168,7 @@ mod tests {
     use codex_protocol::items::WebSearchItem;
     use codex_protocol::user_input::UserInput as CoreUserInput;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
     use std::path::PathBuf;
 
     #[test]
@@ -1151,6 +1252,22 @@ mod tests {
                 id: "search-1".to_string(),
                 query: "docs".to_string(),
             }
+        );
+    }
+
+    #[test]
+    fn codex_error_info_serializes_http_status_code_in_camel_case() {
+        let value = CodexErrorInfo::ResponseTooManyFailedAttempts {
+            http_status_code: Some(401),
+        };
+
+        assert_eq!(
+            serde_json::to_value(value).unwrap(),
+            json!({
+                "responseTooManyFailedAttempts": {
+                    "httpStatusCode": 401
+                }
+            })
         );
     }
 }

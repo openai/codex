@@ -1,4 +1,11 @@
+use crate::acl::add_deny_write_ace;
+use crate::cap::cap_sid_file;
+use crate::cap::load_or_create_cap_sids;
+use crate::logging::log_note;
+use crate::policy::SandboxPolicy;
+use crate::token::convert_string_sid_to_sid;
 use crate::token::world_sid;
+use anyhow::anyhow;
 use crate::winutil::to_wide;
 use anyhow::Result;
 use std::collections::HashMap;
@@ -9,15 +16,29 @@ use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 use windows_sys::Win32::Foundation::CloseHandle;
-use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
 use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+use windows_sys::Win32::Foundation::LocalFree;
+use windows_sys::Win32::Security::ACCESS_ALLOWED_ACE;
+use windows_sys::Win32::Security::ACE_HEADER;
+use windows_sys::Win32::Security::ACL;
+use windows_sys::Win32::Security::ACL_SIZE_INFORMATION;
+use windows_sys::Win32::Security::AclSizeInformation;
 use windows_sys::Win32::Security::Authorization::GetNamedSecurityInfoW;
 use windows_sys::Win32::Security::Authorization::GetSecurityInfo;
+use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
+use windows_sys::Win32::Security::EqualSid;
+use windows_sys::Win32::Security::GetAce;
+use windows_sys::Win32::Security::GetAclInformation;
+use windows_sys::Win32::Security::MapGenericMask;
+use windows_sys::Win32::Security::GENERIC_MAPPING;
 use windows_sys::Win32::Storage::FileSystem::CreateFileW;
+use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
 use windows_sys::Win32::Storage::FileSystem::FILE_APPEND_DATA;
 use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
+use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
+use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
@@ -26,17 +47,6 @@ use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_ATTRIBUTES;
 use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_DATA;
 use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_EA;
 use windows_sys::Win32::Storage::FileSystem::OPEN_EXISTING;
-const GENERIC_ALL_MASK: u32 = 0x1000_0000;
-const GENERIC_WRITE_MASK: u32 = 0x4000_0000;
-use windows_sys::Win32::Security::AclSizeInformation;
-use windows_sys::Win32::Security::EqualSid;
-use windows_sys::Win32::Security::GetAce;
-use windows_sys::Win32::Security::GetAclInformation;
-use windows_sys::Win32::Security::ACCESS_ALLOWED_ACE;
-use windows_sys::Win32::Security::ACE_HEADER;
-use windows_sys::Win32::Security::ACL;
-use windows_sys::Win32::Security::ACL_SIZE_INFORMATION;
-use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
 
 // Preflight scan limits
 const MAX_ITEMS_PER_DIR: i32 = 1000;
@@ -268,6 +278,13 @@ pub fn audit_everyone_writable(
         for p in &flagged {
             list.push_str(&format!("\n - {}", p.display()));
         }
+        crate::logging::log_note(
+            &format!(
+                "AUDIT: world-writable scan FAILED; cwd={cwd:?}; checked={checked}; duration_ms={elapsed_ms}; flagged:{}",
+                list
+            ),
+            logs_base_dir,
+        );
 
         return Ok(flagged);
     }
@@ -277,6 +294,70 @@ pub fn audit_everyone_writable(
         logs_base_dir,
     );
     Ok(Vec::new())
+}
+
+pub fn apply_capability_denies_for_world_writable(
+    codex_home: &Path,
+    flagged: &[PathBuf],
+    sandbox_policy: &SandboxPolicy,
+    cwd: &Path,
+    logs_base_dir: Option<&Path>,
+) -> Result<()> {
+    if flagged.is_empty() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(codex_home)?;
+    let cap_path = cap_sid_file(codex_home);
+    let caps = load_or_create_cap_sids(codex_home);
+    std::fs::write(&cap_path, serde_json::to_string(&caps)?)?;
+    let (active_sid, workspace_roots): (*mut c_void, Vec<PathBuf>) = match sandbox_policy {
+        SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+            let sid = unsafe { convert_string_sid_to_sid(&caps.workspace) }
+                .ok_or_else(|| anyhow!("ConvertStringSidToSidW failed for workspace capability"))?;
+            let mut roots: Vec<PathBuf> =
+                vec![dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf())];
+            for root in writable_roots {
+                let candidate = if root.is_absolute() {
+                    root.clone()
+                } else {
+                    cwd.join(root)
+                };
+                roots.push(dunce::canonicalize(&candidate).unwrap_or(candidate));
+            }
+            (sid, roots)
+        }
+        SandboxPolicy::ReadOnly => (
+            unsafe { convert_string_sid_to_sid(&caps.readonly) }.ok_or_else(|| {
+                anyhow!("ConvertStringSidToSidW failed for readonly capability")
+            })?,
+            Vec::new(),
+        ),
+        SandboxPolicy::DangerFullAccess => {
+            return Ok(());
+        }
+    };
+    for path in flagged {
+        if workspace_roots.iter().any(|root| path.starts_with(root)) {
+            continue;
+        }
+        let res = unsafe { add_deny_write_ace(path, active_sid) };
+        match res {
+            Ok(true) => log_note(
+                &format!("AUDIT: applied capability deny ACE to {}", path.display()),
+                logs_base_dir,
+            ),
+            Ok(false) => {}
+            Err(err) => log_note(
+                &format!(
+                    "AUDIT: failed to apply capability deny ACE to {}: {}",
+                    path.display(),
+                    err
+                ),
+                logs_base_dir,
+            ),
+        }
+    }
+    Ok(())
 }
 
 fn normalize_windows_path_for_display(p: impl AsRef<Path>) -> String {
@@ -304,7 +385,7 @@ pub fn world_writable_warning_details(
     }
 }
 // Fast mask-based check: does the DACL contain any ACCESS_ALLOWED ACE for
-// Everyone that includes generic or specific write bits? Skips inherit-only
+// Everyone that grants write after generic bits are expanded? Skips inherit-only
 // ACEs (do not apply to the current object).
 unsafe fn dacl_quick_world_write_mask_allows(p_dacl: *mut ACL, psid_world: *mut c_void) -> bool {
     if p_dacl.is_null() {
@@ -321,6 +402,12 @@ unsafe fn dacl_quick_world_write_mask_allows(p_dacl: *mut ACL, psid_world: *mut 
     if ok == 0 {
         return false;
     }
+    let mapping = GENERIC_MAPPING {
+        GenericRead: FILE_GENERIC_READ,
+        GenericWrite: FILE_GENERIC_WRITE,
+        GenericExecute: FILE_GENERIC_EXECUTE,
+        GenericAll: FILE_ALL_ACCESS,
+    };
     for i in 0..(info.AceCount as usize) {
         let mut p_ace: *mut c_void = std::ptr::null_mut();
         if GetAce(p_dacl as *const ACL, i as u32, &mut p_ace) == 0 {
@@ -337,19 +424,16 @@ unsafe fn dacl_quick_world_write_mask_allows(p_dacl: *mut ACL, psid_world: *mut 
         let base = p_ace as usize;
         let sid_ptr =
             (base + std::mem::size_of::<ACE_HEADER>() + std::mem::size_of::<u32>()) as *mut c_void; // skip header + mask
-        if EqualSid(sid_ptr, psid_world) != 0 {
-            let ace = &*(p_ace as *const ACCESS_ALLOWED_ACE);
-            let mask = ace.Mask;
-            let writey = FILE_GENERIC_WRITE
-                | FILE_WRITE_DATA
-                | FILE_APPEND_DATA
-                | FILE_WRITE_EA
-                | FILE_WRITE_ATTRIBUTES
-                | GENERIC_WRITE_MASK
-                | GENERIC_ALL_MASK;
-            if (mask & writey) != 0 {
-                return true;
-            }
+        if EqualSid(sid_ptr, psid_world) == 0 {
+            continue;
+        }
+        let ace = &*(p_ace as *const ACCESS_ALLOWED_ACE);
+        let mut mask = ace.Mask;
+        // Expand generic bits to concrete file rights before checking for write.
+        MapGenericMask(&mut mask, &mapping);
+        let write_mask = FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES;
+        if (mask & write_mask) != 0 {
+            return true;
         }
     }
     false

@@ -4,13 +4,12 @@ Runtime: shell
 Executes shell requests under the orchestrator: asks for approval when needed,
 builds a CommandSpec, and runs it under the current SandboxAttempt.
 */
-use crate::command_safety::is_dangerous_command::requires_initial_appoval;
 use crate::exec::ExecToolCallOutput;
-use crate::protocol::SandboxPolicy;
 use crate::sandboxing::execute_env;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
+use crate::tools::sandboxing::ApprovalRequirement;
 use crate::tools::sandboxing::ProvidesSandboxRetryData;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::SandboxRetryData;
@@ -20,7 +19,6 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
-use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
 use std::path::PathBuf;
@@ -35,6 +33,7 @@ pub struct ShellRequest {
     pub justification: Option<String>,
     pub max_output_tokens: Option<usize>,
     pub max_output_chars: Option<usize>,
+    pub approval_requirement: ApprovalRequirement,
 }
 
 impl ProvidesSandboxRetryData for ShellRequest {
@@ -116,18 +115,8 @@ impl Approvable<ShellRequest> for ShellRuntime {
         })
     }
 
-    fn wants_initial_approval(
-        &self,
-        req: &ShellRequest,
-        policy: AskForApproval,
-        sandbox_policy: &SandboxPolicy,
-    ) -> bool {
-        requires_initial_appoval(
-            policy,
-            sandbox_policy,
-            &req.command,
-            req.with_escalated_permissions.unwrap_or(false),
-        )
+    fn approval_requirement(&self, req: &ShellRequest) -> Option<ApprovalRequirement> {
+        Some(req.approval_requirement.clone())
     }
 
     fn wants_escalated_first_attempt(&self, req: &ShellRequest) -> bool {
@@ -146,16 +135,16 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             &req.command,
             &req.cwd,
             &req.env,
-            req.timeout_ms,
+            req.timeout_ms.into(),
             req.with_escalated_permissions,
             req.justification.clone(),
             req.max_output_tokens,
             req.max_output_chars,
         )?;
         let env = attempt
-            .env_for(&spec)
+            .env_for(spec)
             .map_err(|err| ToolError::Codex(err.into()))?;
-        let out = execute_env(&env, attempt.policy, Self::stdout_stream(ctx))
+        let out = execute_env(env, attempt.policy, Self::stdout_stream(ctx))
             .await
             .map_err(ToolError::Codex)?;
         Ok(out)

@@ -58,8 +58,6 @@ impl ToolsConfig {
             ConfigShellToolType::Disabled
         } else if features.enabled(Feature::UnifiedExec) {
             ConfigShellToolType::UnifiedExec
-        } else if features.enabled(Feature::ShellCommandTool) {
-            ConfigShellToolType::ShellCommand(model_family.truncation_policy)
         } else {
             model_family.shell_type.clone()
         };
@@ -1509,22 +1507,6 @@ mod tests {
             subset.push(shell_tool);
         }
         assert_contains_tool_names(&tools, &subset);
-    }
-
-    #[test]
-    fn test_build_specs_shell_command_present() {
-        assert_model_tools(
-            "codex-mini-latest",
-            Features::with_defaults().enable(Feature::ShellCommandTool),
-            &[
-                "shell_command",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
-                "update_plan",
-                "view_image",
-            ],
-        );
     }
 
     #[test]
