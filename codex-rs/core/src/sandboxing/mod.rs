@@ -20,14 +20,10 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
-#[cfg(target_os = "macos")]
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
-#[cfg(target_os = "macos")]
 use mac::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
-#[cfg(target_os = "macos")]
 use mac::seatbelt::create_seatbelt_command_args;
 
-#[cfg(target_os = "linux")]
 use linux::landlock::create_linux_sandbox_command_args;
 
 type TransformResult =
@@ -86,7 +82,6 @@ pub enum SandboxPreference {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SandboxTransformError {
-    #[cfg(target_os = "linux")]
     #[error("missing codex-linux-sandbox executable path")]
     MissingLinuxSandboxExecutable,
 }
@@ -175,7 +170,6 @@ impl SandboxManager {
 }
 
 fn transform_macos(
-    &self,
     command: Vec<String>,
     policy: &SandboxPolicy,
     sandbox_policy_cwd: &Path,
@@ -191,7 +185,6 @@ fn transform_macos(
 }
 
 fn transform_linux(
-    &self,
     command: Vec<String>,
     policy: &SandboxPolicy,
     sandbox_policy_cwd: &Path,
