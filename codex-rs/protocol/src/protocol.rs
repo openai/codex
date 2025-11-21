@@ -146,9 +146,6 @@ pub enum Op {
         id: String,
         /// The user's decision in response to the request.
         decision: ReviewDecision,
-        /// When set, persist this prefix to the execpolicy allow list.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        allow_prefix: Option<Vec<String>>,
     },
 
     /// Approve a code patch
@@ -1649,9 +1646,7 @@ pub struct SessionConfiguredEvent {
 }
 
 /// User's decision in response to an ExecApprovalRequest.
-#[derive(
-    Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Display, JsonSchema, TS,
-)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq, Eq, Display, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewDecision {
     /// User has approved this command and the agent should execute it.
@@ -1659,7 +1654,7 @@ pub enum ReviewDecision {
 
     /// User has approved this command and wants to add the command prefix to
     /// the execpolicy allow list so future matching commands are permitted.
-    ApprovedAllowPrefix,
+    ApprovedAllowPrefix { allow_prefix: Vec<String> },
 
     /// User has approved this command and wants to automatically approve any
     /// future identical instances (`command` and `cwd` match exactly) for the
