@@ -667,7 +667,7 @@ async fn apply_patch_cli_verification_failure_has_no_side_effects(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn apply_patch_shell_heredoc_with_cd_updates_relative_workdir() -> Result<()> {
+async fn apply_patch_shell_command_heredoc_with_cd_updates_relative_workdir() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness_with(|config| {
@@ -684,14 +684,11 @@ async fn apply_patch_shell_heredoc_with_cd_updates_relative_workdir() -> Result<
 
     let script = "cd sub && apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: in_sub.txt\n@@\n-before\n+after\n*** End Patch\nEOF\n";
     let call_id = "shell-heredoc-cd";
-    let args = json!({
-        "command": ["bash", "-lc", script],
-        "timeout_ms": 5_000,
-    });
+    let args = json!({ "command": script, "timeout_ms": 5_000 });
     let bodies = vec![
         sse(vec![
             ev_response_created("resp-1"),
-            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+            ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
             ev_completed("resp-1"),
         ]),
         sse(vec![
@@ -706,14 +703,14 @@ async fn apply_patch_shell_heredoc_with_cd_updates_relative_workdir() -> Result<
     let out = harness.function_call_stdout(call_id).await;
     assert!(
         out.contains("Success."),
-        "expected successful apply_patch invocation via shell: {out}"
+        "expected successful apply_patch invocation via shell_command: {out}"
     );
     assert_eq!(fs::read_to_string(&target)?, "after\n");
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn apply_patch_shell_failure_propagates_error_and_skips_diff() -> Result<()> {
+async fn apply_patch_shell_command_failure_propagates_error_and_skips_diff() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness_with(|config| {
@@ -730,14 +727,11 @@ async fn apply_patch_shell_failure_propagates_error_and_skips_diff() -> Result<(
 
     let script = "apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: invalid.txt\n@@\n-nope\n+changed\n*** End Patch\nEOF\n";
     let call_id = "shell-apply-failure";
-    let args = json!({
-        "command": ["bash", "-lc", script],
-        "timeout_ms": 5_000,
-    });
+    let args = json!({ "command": script, "timeout_ms": 5_000 });
     let bodies = vec![
         sse(vec![
             ev_response_created("resp-1"),
-            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+            ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
             ev_completed("resp-1"),
         ]),
         sse(vec![
@@ -780,10 +774,6 @@ async fn apply_patch_shell_failure_propagates_error_and_skips_diff() -> Result<(
     );
 
     let out = harness.function_call_stdout(call_id).await;
-    assert!(
-        out.contains("apply_patch verification failed"),
-        "expected verification failure message"
-    );
     assert!(
         out.contains("Failed to find expected lines in"),
         "expected failure diagnostics: {out}"

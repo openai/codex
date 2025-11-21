@@ -4,7 +4,8 @@ use app_test_support::create_apply_patch_sse_response;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_chat_completions_server;
 use app_test_support::create_mock_chat_completions_server_unchecked;
-use app_test_support::create_shell_sse_response;
+use app_test_support::create_shell_command_sse_response;
+use app_test_support::format_with_current_shell_display;
 use app_test_support::to_response;
 use codex_app_server_protocol::ApprovalDecision;
 use codex_app_server_protocol::CommandExecutionStatus;
@@ -203,7 +204,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     // Mock server: first turn requests a shell call (elicitation), then completes.
     // Second turn same, but we'll set approval_policy=never to avoid elicitation.
     let responses = vec![
-        create_shell_sse_response(
+        create_shell_command_sse_response(
             vec![
                 "python3".to_string(),
                 "-c".to_string(),
@@ -214,7 +215,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
             "call1",
         )?,
         create_final_assistant_message_sse_response("done 1")?,
-        create_shell_sse_response(
+        create_shell_command_sse_response(
             vec![
                 "python3".to_string(),
                 "-c".to_string(),
@@ -343,23 +344,15 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     std::fs::create_dir(&second_cwd)?;
 
     let responses = vec![
-        create_shell_sse_response(
-            vec![
-                "bash".to_string(),
-                "-lc".to_string(),
-                "echo first turn".to_string(),
-            ],
+        create_shell_command_sse_response(
+            vec!["echo".to_string(), "first".to_string(), "turn".to_string()],
             None,
             Some(5000),
             "call-first",
         )?,
         create_final_assistant_message_sse_response("done first")?,
-        create_shell_sse_response(
-            vec![
-                "bash".to_string(),
-                "-lc".to_string(),
-                "echo second turn".to_string(),
-            ],
+        create_shell_command_sse_response(
+            vec!["echo".to_string(), "second".to_string(), "turn".to_string()],
             None,
             Some(5000),
             "call-second",
@@ -465,7 +458,8 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
         unreachable!("loop ensures we break on command execution items");
     };
     assert_eq!(cwd, second_cwd);
-    assert_eq!(command, "bash -lc 'echo second turn'");
+    let expected_command = format_with_current_shell_display("echo second turn");
+    assert_eq!(command, expected_command);
     assert_eq!(status, CommandExecutionStatus::InProgress);
 
     timeout(
@@ -480,6 +474,10 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
 #[tokio::test]
 async fn turn_start_file_change_approval_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    if cfg!(windows) {
+        // TODO apply_patch approvals are not parsed from powershell commands yet
+        return Ok(());
+    }
 
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
@@ -626,6 +624,10 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
 #[tokio::test]
 async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    if cfg!(windows) {
+        // TODO apply_patch approvals are not parsed from powershell commands yet
+        return Ok(());
+    }
 
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");

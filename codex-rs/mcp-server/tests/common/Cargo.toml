@@ -23,3 +23,5 @@ tokio = { workspace = true, features = [
     "rt-multi-thread",
 ] }
 wiremock = { workspace = true }
+core_test_support = { path = "../../../core/tests/common" }
+shlex = { workspace = true }

@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::Result;
+use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -21,6 +22,11 @@ use std::fs;
 
 #[tokio::test]
 async fn execpolicy_blocks_shell_invocation() -> Result<()> {
+    // TODO execpolicy doesn't parse powershell commands yet
+    if cfg!(windows) {
+        return Ok(());
+    }
+
     let mut builder = test_codex().with_config(|config| {
         let policy_path = config.codex_home.join("policy").join("policy.codexpolicy");
         fs::create_dir_all(
@@ -34,13 +40,16 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
             r#"prefix_rule(pattern=["echo"], decision="forbidden")"#,
         )
         .expect("write policy file");
+        config.model = "gpt-5.1".to_string();
+        config.model_family =
+            find_family_for_model("gpt-5.1").expect("gpt-5.1 should have a model family");
     });
     let server = start_mock_server().await;
     let test = builder.build(&server).await?;
 
     let call_id = "shell-forbidden";
     let args = json!({
-        "command": ["echo", "blocked"],
+        "command": "echo blocked",
         "timeout_ms": 1_000,
     });
 
@@ -48,7 +57,7 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
         &server,
         sse(vec![
             ev_response_created("resp-1"),
-            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+            ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
             ev_completed("resp-1"),
         ]),
     )

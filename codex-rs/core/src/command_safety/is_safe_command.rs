@@ -268,6 +268,20 @@ mod tests {
     }
 
     #[test]
+    fn windows_powershell_full_path_is_safe() {
+        if !cfg!(windows) {
+            // Windows only because on Linux path splitting doesn't handle `/` separators properly
+            return;
+        }
+
+        assert!(is_known_safe_command(&vec_str(&[
+            r"C:\Program Files\PowerShell\7\pwsh.exe",
+            "-Command",
+            "Get-Location",
+        ])));
+    }
+
+    #[test]
     fn bash_lc_safe_examples() {
         assert!(is_known_safe_command(&vec_str(&["bash", "-lc", "ls"])));
         assert!(is_known_safe_command(&vec_str(&["bash", "-lc", "ls -1"])));

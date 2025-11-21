@@ -18,3 +18,4 @@ tempfile = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
 walkdir = { workspace = true }
 wiremock = { workspace = true }
+shlex = { workspace = true }
