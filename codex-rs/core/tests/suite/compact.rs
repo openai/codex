@@ -1879,3 +1879,153 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
         "auto compact request should include the summarization prompt after exceeding 95% (limit {limit})"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let first_user = "COUNT_PRE_LAST_REASONING";
+    let second_user = "TRIGGER_COMPACT_AT_LIMIT";
+
+    let pre_last_encrypted = "a".repeat(2_400);
+    let post_last_encrypted = "b".repeat(4_000);
+
+    let pre_last_reasoning = serde_json::json!({
+        "type": "response.output_item.done",
+        "item": {
+            "type": "reasoning",
+            "id": "pre-reasoning",
+            "summary": [{"type": "summary_text", "text": "pre"}],
+            "encrypted_content": pre_last_encrypted,
+        }
+    });
+
+    let post_last_reasoning = serde_json::json!({
+        "type": "response.output_item.done",
+        "item": {
+            "type": "reasoning",
+            "id": "post-reasoning",
+            "summary": [{"type": "summary_text", "text": "post"}],
+            "encrypted_content": post_last_encrypted,
+        }
+    });
+
+    // First turn seeds encrypted reasoning before the eventual last user.
+    let first_turn = sse(vec![pre_last_reasoning, ev_completed_with_tokens("r1", 10)]);
+
+    // Second turn adds a reasoning item after the last user (should be ignored by the estimate)
+    // and reports low token usage, so compaction only triggers if the pre-last reasoning is counted.
+    let second_turn = sse(vec![
+        post_last_reasoning,
+        ev_completed_with_tokens("r2", 80),
+    ]);
+
+    let auto_summary_payload = auto_summary(AUTO_SUMMARY_TEXT);
+    let auto_compact_turn = sse(vec![
+        ev_assistant_message("m3", &auto_summary_payload),
+        ev_completed_with_tokens("r3", 1),
+    ]);
+
+    let resume_turn = sse(vec![
+        ev_assistant_message("m4", FINAL_REPLY),
+        ev_completed_with_tokens("r4", 1),
+    ]);
+
+    let first_matcher = move |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains(first_user) && !body_contains_text(body, SUMMARIZATION_PROMPT)
+    };
+    mount_sse_once_match(&server, first_matcher, first_turn).await;
+
+    let second_matcher = move |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains(first_user)
+            && body.contains(second_user)
+            && !body_contains_text(body, SUMMARIZATION_PROMPT)
+    };
+    mount_sse_once_match(&server, second_matcher, second_turn).await;
+
+    let compact_matcher = |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body_contains_text(body, SUMMARIZATION_PROMPT)
+    };
+    let auto_compact_mock = mount_sse_once_match(&server, compact_matcher, auto_compact_turn).await;
+
+    let resume_marker = auto_summary_payload.clone();
+    let resume_matcher = move |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains(&resume_marker) && !body_contains_text(body, SUMMARIZATION_PROMPT)
+    };
+    let resume_mock = mount_sse_once_match(&server, resume_matcher, resume_turn).await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&home);
+    config.model_provider = model_provider;
+    set_test_compact_prompt(&mut config);
+    config.model_auto_compact_token_limit = Some(300);
+
+    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+    let codex = conversation_manager
+        .new_conversation(config)
+        .await
+        .unwrap()
+        .conversation;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: first_user.into(),
+            }],
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: second_user.into(),
+            }],
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(
+        requests.len(),
+        4,
+        "second turn should trigger an auto compact and follow-up resume"
+    );
+
+    let auto_compact_index = requests
+        .iter()
+        .position(|req| {
+            let body = std::str::from_utf8(&req.body).unwrap_or("");
+            body_contains_text(body, SUMMARIZATION_PROMPT)
+        })
+        .expect("auto compact request missing");
+    assert_eq!(
+        auto_compact_index, 2,
+        "auto compact should be the third request (after two user turns)"
+    );
+
+    let resume_index = requests
+        .iter()
+        .position(|req| {
+            let body = std::str::from_utf8(&req.body).unwrap_or("");
+            body.contains(&auto_summary_payload) && !body_contains_text(body, SUMMARIZATION_PROMPT)
+        })
+        .expect("resume request missing after auto compact");
+    assert_eq!(resume_index, 3, "resume request should follow auto compact");
+
+    assert_eq!(auto_compact_mock.requests().len(), 1);
+    assert_eq!(resume_mock.requests().len(), 1);
+}

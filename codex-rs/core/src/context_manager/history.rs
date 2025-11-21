@@ -2,6 +2,7 @@ use crate::codex::TurnContext;
 use crate::context_manager::normalize;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
+use crate::truncate::approx_tokens_from_byte_count;
 use crate::truncate::truncate_function_output_items_with_policy;
 use crate::truncate::truncate_text;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -117,6 +118,52 @@ impl ContextManager {
             &Some(usage.clone()),
             model_context_window,
         );
+    }
+
+    fn get_non_last_reasoning_items_tokens(&self) -> usize {
+        // get reasoning items excluding all the ones after the last user message
+        let Some(last_user_index) = self
+            .items
+            .iter()
+            .rposition(|item| matches!(item, ResponseItem::Message { role, .. } if role == "user"))
+        else {
+            return 0usize;
+        };
+
+        let total_reasoning_bytes = self
+            .items
+            .iter()
+            .take(last_user_index)
+            .filter_map(|item| {
+                if let ResponseItem::Reasoning {
+                    encrypted_content: Some(content),
+                    ..
+                } = item
+                {
+                    Some(content.len())
+                } else {
+                    None
+                }
+            })
+            .fold(0usize, |acc, len| {
+                let decoded_bytes = len
+                    .saturating_mul(3)
+                    .checked_div(4)
+                    .unwrap_or(0)
+                    .saturating_sub(550);
+                acc.saturating_add(decoded_bytes)
+            });
+
+        let token_estimate = approx_tokens_from_byte_count(total_reasoning_bytes);
+        token_estimate as usize
+    }
+
+    pub(crate) fn get_total_token_usage(&self) -> i64 {
+        self.token_info
+            .as_ref()
+            .map(|info| info.last_token_usage.total_tokens)
+            .unwrap_or(0)
+            .saturating_add(self.get_non_last_reasoning_items_tokens() as i64)
     }
 
     /// This function enforces a couple of invariants on the in-memory history:

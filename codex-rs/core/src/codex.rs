@@ -642,6 +642,11 @@ impl Session {
         format!("auto-compact-{id}")
     }
 
+    async fn get_total_token_usage(&self) -> i64 {
+        let state = self.state.lock().await;
+        state.get_total_token_usage()
+    }
+
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
         let turn_context = self.new_turn(SessionSettingsUpdate::default()).await;
         match conversation_history {
@@ -1891,19 +1896,14 @@ pub(crate) async fn run_task(
         {
             Ok(turn_output) => {
                 let TurnRunResult {
-                    processed_items,
-                    total_token_usage,
+                    processed_items, ..
                 } = turn_output;
                 let limit = turn_context
                     .client
                     .get_auto_compact_token_limit()
                     .unwrap_or(i64::MAX);
-                let total_usage_tokens = total_token_usage
-                    .as_ref()
-                    .map(TokenUsage::tokens_in_context_window);
-                let token_limit_reached = total_usage_tokens
-                    .map(|tokens| tokens >= limit)
-                    .unwrap_or(false);
+                let total_usage_tokens = sess.get_total_token_usage().await;
+                let token_limit_reached = total_usage_tokens >= limit;
                 let (responses, items_to_record_in_conversation_history) =
                     process_items(processed_items, &sess, &turn_context).await;
 
@@ -2094,7 +2094,6 @@ pub struct ProcessedResponseItem {
 #[derive(Debug)]
 struct TurnRunResult {
     processed_items: Vec<ProcessedResponseItem>,
-    total_token_usage: Option<TokenUsage>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2267,10 +2266,7 @@ async fn try_run_turn(
                     sess.send_event(&turn_context, msg).await;
                 }
 
-                let result = TurnRunResult {
-                    processed_items,
-                    total_token_usage: token_usage.clone(),
-                };
+                let result = TurnRunResult { processed_items };
 
                 return Ok(result);
             }

@@ -1774,6 +1774,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "base64",
  "codex-core",
  "codex-protocol",
  "notify",
