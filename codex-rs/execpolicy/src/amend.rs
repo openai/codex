@@ -17,11 +17,8 @@ pub enum AmendError {
         dir: PathBuf,
         source: std::io::Error,
     },
-    #[error("failed to format prefix token {token}: {source}")]
-    SerializeToken {
-        token: String,
-        source: serde_json::Error,
-    },
+    #[error("failed to format prefix tokens: {source}")]
+    SerializePrefix { source: serde_json::Error },
     #[error("failed to open policy file {path}: {source}")]
     OpenPolicyFile {
         path: PathBuf,
@@ -44,17 +41,9 @@ pub fn append_allow_prefix_rule(policy_path: &Path, prefix: &[String]) -> Result
         return Err(AmendError::EmptyPrefix);
     }
 
-    let tokens: Vec<String> = prefix
-        .iter()
-        .map(|token| {
-            serde_json::to_string(token).map_err(|source| AmendError::SerializeToken {
-                token: token.clone(),
-                source,
-            })
-        })
-        .collect::<Result<_, _>>()?;
-    let pattern = tokens.join(", ");
-    let rule = format!("prefix_rule(pattern=[{pattern}], decision=\"allow\")\n");
+    let pattern =
+        serde_json::to_string(prefix).map_err(|source| AmendError::SerializePrefix { source })?;
+    let rule = format!("prefix_rule(pattern={pattern}, decision=\"allow\")\n");
 
     let dir = policy_path
         .parent()
@@ -120,7 +109,7 @@ mod tests {
             std::fs::read_to_string(&policy_path).expect("default.codexpolicy should exist");
         assert_eq!(
             contents,
-            "prefix_rule(pattern=[\"echo\", \"Hello, world!\"], decision=\"allow\")\n"
+            "prefix_rule(pattern=[\"echo\",\"Hello, world!\"], decision=\"allow\")\n"
         );
     }
 
@@ -144,7 +133,7 @@ mod tests {
         let contents = std::fs::read_to_string(&policy_path).expect("read policy");
         assert_eq!(
             contents,
-            "prefix_rule(pattern=[\"ls\"], decision=\"allow\")\n\nprefix_rule(pattern=[\"echo\", \"Hello, world!\"], decision=\"allow\")\n"
+            "prefix_rule(pattern=[\"ls\"], decision=\"allow\")\n\nprefix_rule(pattern=[\"echo\",\"Hello, world!\"], decision=\"allow\")\n"
         );
     }
 }
