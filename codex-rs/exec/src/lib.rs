@@ -402,22 +402,18 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     // exit with a non-zero status for automation-friendly signaling.
     let mut error_seen = false;
     while let Some(event) = rx.recv().await {
-        let elicitation = match &event.msg {
-            EventMsg::ElicitationRequest(ev) => Some((ev.server_name.clone(), ev.id.clone())),
-            _ => None,
-        };
-        if matches!(event.msg, EventMsg::Error(_)) {
-            error_seen = true;
-        }
-        if let Some((server_name, request_id)) = elicitation {
+        if let EventMsg::ElicitationRequest(ev) = &event.msg {
             // Automatically cancel elicitation requests in exec mode.
             conversation
                 .submit(Op::ResolveElicitation {
-                    server_name,
-                    request_id,
+                    server_name: ev.server_name.clone(),
+                    request_id: ev.id.clone(),
                     decision: ElicitationDecision::Cancel,
                 })
                 .await?;
+        }
+        if matches!(event.msg, EventMsg::Error(_)) {
+            error_seen = true;
         }
         let shutdown: CodexStatus = event_processor.process_event(event);
         match shutdown {
