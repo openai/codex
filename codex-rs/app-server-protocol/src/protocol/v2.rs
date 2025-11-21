@@ -1021,6 +1021,8 @@ pub struct TurnCompletedNotification {
 #[ts(export_to = "v2/")]
 pub struct ItemStartedNotification {
     pub item: ThreadItem,
+    pub thread_id: String,
+    pub turn_id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1028,6 +1030,8 @@ pub struct ItemStartedNotification {
 #[ts(export_to = "v2/")]
 pub struct ItemCompletedNotification {
     pub item: ThreadItem,
+    pub thread_id: String,
+    pub turn_id: String,
 }
 
 // Item-specific progress notifications
