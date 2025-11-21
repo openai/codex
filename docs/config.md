@@ -923,6 +923,50 @@ Valid values:
   - FreeBSD/OpenBSD: DBus‑based Secret Service
 - `auto` – Save credentials to the operating system keyring when available; otherwise, fall back to `auth.json` under `$CODEX_HOME`.
 
+### Custom CA certificates for login
+
+When running behind a corporate proxy that performs SSL/TLS inspection with custom CA certificates, the `codex login` flow may fail during token exchange. To resolve this, you can configure Codex to trust additional certificate authorities using environment variables.
+
+Codex supports two environment variables for specifying custom CA certificates (checked in priority order):
+
+1. **`CODEX_CA_CERTIFICATE`** (primary) – Path to a PEM file containing one or more CA certificates
+2. **`SSL_CERT_FILE`** (fallback) – Standard environment variable used by many tools for CA certificate bundles
+
+**Usage:**
+
+```bash
+# Using CODEX_CA_CERTIFICATE (recommended for Codex-specific configuration)
+export CODEX_CA_CERTIFICATE=/path/to/corporate-ca.pem
+codex login
+
+# Or using SSL_CERT_FILE (useful if already set system-wide)
+export SSL_CERT_FILE=/path/to/ca-bundle.pem
+codex login
+```
+
+**Certificate format:**
+
+The PEM file can contain either a single certificate or a bundle of multiple certificates (root + intermediates). Both formats are supported:
+
+```pem
+# Single certificate
+-----BEGIN CERTIFICATE-----
+MIIDBTCCAe2gAwIBAgI...
+-----END CERTIFICATE-----
+
+# Or a bundle (multiple certificates)
+-----BEGIN CERTIFICATE-----
+MIIDBTCCAe2gAwIBAgI... (root CA)
+-----END CERTIFICATE-----
+-----BEGIN CERTIFICATE-----
+MIIDGTCCA... (intermediate CA)
+-----END CERTIFICATE-----
+```
+
+**Corporate proxy setup:**
+
+Corporate proxies typically distribute CA bundles containing root and intermediate certificates. Export your corporate CA certificate bundle to a PEM file and set one of the environment variables above. The certificates will be trusted for all OAuth authentication flows (browser login, device code login, and API key exchange).
+
 ## Config reference
 
 | Key                                              | Type / Values                                                     | Notes                                                                                                                           |
