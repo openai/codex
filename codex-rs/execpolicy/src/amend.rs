@@ -1,4 +1,7 @@
 use std::fs::OpenOptions;
+use std::io::Read;
+use std::io::Seek;
+use std::io::SeekFrom;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
@@ -29,6 +32,26 @@ pub enum AmendError {
         path: PathBuf,
         source: std::io::Error,
     },
+    #[error("failed to lock policy file {path}: {source}")]
+    LockPolicyFile {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("failed to unlock policy file {path}: {source}")]
+    UnlockPolicyFile {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("failed to seek policy file {path}: {source}")]
+    SeekPolicyFile {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("failed to read policy file {path}: {source}")]
+    ReadPolicyFile {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     #[error("failed to read metadata for policy file {path}: {source}")]
     PolicyMetadata {
         path: PathBuf,
@@ -43,7 +66,7 @@ pub fn append_allow_prefix_rule(policy_path: &Path, prefix: &[String]) -> Result
 
     let pattern =
         serde_json::to_string(prefix).map_err(|source| AmendError::SerializePrefix { source })?;
-    let rule = format!("prefix_rule(pattern={pattern}, decision=\"allow\")\n");
+    let rule = format!("prefix_rule(pattern={pattern}, decision=\"allow\")");
 
     let dir = policy_path
         .parent()
@@ -60,30 +83,66 @@ pub fn append_allow_prefix_rule(policy_path: &Path, prefix: &[String]) -> Result
             });
         }
     }
+    append_locked_line(policy_path, &rule)
+}
+
+fn append_locked_line(policy_path: &Path, line: &str) -> Result<(), AmendError> {
+    let policy_path = policy_path.to_path_buf();
     let mut file = OpenOptions::new()
         .create(true)
+        .read(true)
         .append(true)
-        .open(policy_path)
+        .open(&policy_path)
         .map_err(|source| AmendError::OpenPolicyFile {
-            path: policy_path.to_path_buf(),
+            path: policy_path.clone(),
             source,
         })?;
-    let needs_newline = file
-        .metadata()
-        .map(|metadata| metadata.len() > 0)
-        .map_err(|source| AmendError::PolicyMetadata {
-            path: policy_path.to_path_buf(),
+    file.lock()
+        .map_err(|source| AmendError::LockPolicyFile {
+            path: policy_path.clone(),
             source,
         })?;
-    let final_rule = if needs_newline {
-        format!("\n{rule}")
-    } else {
-        rule
-    };
 
-    file.write_all(final_rule.as_bytes())
+    let len = file
+        .metadata()
+        .map_err(|source| AmendError::PolicyMetadata {
+            path: policy_path.clone(),
+            source,
+        })?
+        .len();
+
+    if len > 0 {
+        file.seek(SeekFrom::End(-1))
+            .map_err(|source| AmendError::SeekPolicyFile {
+                path: policy_path.clone(),
+                source,
+            })?;
+        let mut last = [0; 1];
+        file.read_exact(&mut last)
+            .map_err(|source| AmendError::ReadPolicyFile {
+                path: policy_path.clone(),
+                source,
+            })?;
+
+        if last[0] != b'\n' {
+            file.write_all(b"\n")
+                .map_err(|source| AmendError::WritePolicyFile {
+                    path: policy_path.clone(),
+                    source,
+                })?;
+        }
+    }
+
+    file.write_all(line.as_bytes())
+        .and_then(|()| file.write_all(b"\n"))
         .map_err(|source| AmendError::WritePolicyFile {
-            path: policy_path.to_path_buf(),
+            path: policy_path.clone(),
+            source,
+        })?;
+
+    file.unlock()
+        .map_err(|source| AmendError::UnlockPolicyFile {
+            path: policy_path,
             source,
         })
 }
@@ -114,7 +173,7 @@ mod tests {
     }
 
     #[test]
-    fn separates_rules_with_newlines_when_appending() {
+    fn appends_rule_without_duplicate_newline() {
         let tmp = tempdir().expect("create temp dir");
         let policy_path = tmp.path().join("policy").join("default.codexpolicy");
         std::fs::create_dir_all(policy_path.parent().unwrap()).expect("create policy dir");
@@ -133,7 +192,31 @@ mod tests {
         let contents = std::fs::read_to_string(&policy_path).expect("read policy");
         assert_eq!(
             contents,
-            "prefix_rule(pattern=[\"ls\"], decision=\"allow\")\n\nprefix_rule(pattern=[\"echo\",\"Hello, world!\"], decision=\"allow\")\n"
+            "prefix_rule(pattern=[\"ls\"], decision=\"allow\")\nprefix_rule(pattern=[\"echo\",\"Hello, world!\"], decision=\"allow\")\n"
+        );
+    }
+
+    #[test]
+    fn inserts_newline_when_missing_before_append() {
+        let tmp = tempdir().expect("create temp dir");
+        let policy_path = tmp.path().join("policy").join("default.codexpolicy");
+        std::fs::create_dir_all(policy_path.parent().unwrap()).expect("create policy dir");
+        std::fs::write(
+            &policy_path,
+            "prefix_rule(pattern=[\"ls\"], decision=\"allow\")",
+        )
+        .expect("write seed rule without newline");
+
+        append_allow_prefix_rule(
+            &policy_path,
+            &[String::from("echo"), String::from("Hello, world!")],
+        )
+        .expect("append rule");
+
+        let contents = std::fs::read_to_string(&policy_path).expect("read policy");
+        assert_eq!(
+            contents,
+            "prefix_rule(pattern=[\"ls\"], decision=\"allow\")\nprefix_rule(pattern=[\"echo\",\"Hello, world!\"], decision=\"allow\")\n"
         );
     }
 }
