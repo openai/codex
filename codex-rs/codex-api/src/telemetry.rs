@@ -55,6 +55,8 @@ where
     F: Clone + Fn(Request) -> Fut,
     Fut: Future<Output = Result<T, TransportError>>,
 {
+    // Wraps `run_with_retry` to attach per-attempt request telemetry for both
+    // unary and streaming HTTP calls.
     run_with_retry(policy, make_request, move |req, attempt| {
         let telemetry = telemetry.clone();
         let send = send.clone();

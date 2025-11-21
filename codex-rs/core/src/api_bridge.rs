@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_api::AuthProvider as ApiAuthProvider;
@@ -171,13 +170,12 @@ impl CoreAuthProvider {
     }
 }
 
-#[async_trait]
 impl ApiAuthProvider for CoreAuthProvider {
-    async fn bearer_token(&self) -> Option<String> {
+    fn bearer_token(&self) -> Option<String> {
         self.token.clone()
     }
 
-    async fn account_id(&self) -> Option<String> {
+    fn account_id(&self) -> Option<String> {
         self.account_id.clone()
     }
 }

@@ -62,7 +62,7 @@ impl<T: HttpTransport, A: AuthProvider> StreamingClient<T, A> {
                 http::HeaderValue::from_static("text/event-stream"),
             );
             req.body = Some(body.clone());
-            add_auth_headers(&self.auth, &mut req)
+            add_auth_headers(&self.auth, req)
         };
 
         let stream_response = run_with_request_telemetry(

@@ -52,7 +52,7 @@ impl<T: HttpTransport, A: AuthProvider> CompactClient<T, A> {
             let mut req = self.provider.build_request(Method::POST, self.path());
             req.headers.extend(extra_headers.clone());
             req.body = Some(body.clone());
-            add_auth_headers(&self.auth, &mut req)
+            add_auth_headers(&self.auth, req)
         };
 
         let resp = run_with_request_telemetry(

@@ -78,12 +78,18 @@ pub enum TextFormatType {
 
 #[derive(Debug, Serialize, Default, Clone)]
 pub struct TextFormat {
+    /// Format type used by the OpenAI text controls.
     pub r#type: TextFormatType,
+    /// When true, the server is expected to strictly validate responses.
     pub strict: bool,
+    /// JSON schema for the desired output.
     pub schema: Value,
+    /// Friendly name for the format, used in telemetry/debugging.
     pub name: String,
 }
 
+/// Controls the `text` field for the Responses API, combining verbosity and
+/// optional JSON schema output formatting.
 #[derive(Debug, Serialize, Default, Clone)]
 pub struct TextControls {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -115,7 +121,7 @@ impl From<VerbosityConfig> for OpenAiVerbosity {
 pub struct ResponsesApiRequest<'a> {
     pub model: &'a str,
     pub instructions: &'a str,
-    pub input: &'a Vec<ResponseItem>,
+    pub input: &'a [ResponseItem],
     pub tools: &'a [serde_json::Value],
     pub tool_choice: &'static str,
     pub parallel_tool_calls: bool,

@@ -11,6 +11,7 @@ use futures::Stream;
 use futures::StreamExt;
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio::time::Instant;
 use tokio::time::timeout;
 use tracing::debug;
 use tracing::trace;
@@ -51,9 +52,10 @@ pub async fn process_chat_sse<S>(
     let mut completed_sent = false;
 
     loop {
+        let start = Instant::now();
         let response = timeout(idle_timeout, stream.next()).await;
         if let Some(t) = telemetry.as_ref() {
-            t.on_sse_poll(&response, idle_timeout);
+            t.on_sse_poll(&response, start.elapsed());
         }
         let sse = match response {
             Ok(Some(Ok(sse))) => sse,
@@ -211,9 +213,7 @@ pub async fn process_chat_sse<S>(
             }
 
             if finish_reason == Some("length") {
-                let _ = tx_event
-                    .send(Err(ApiError::Stream("context window exceeded".to_string())))
-                    .await;
+                let _ = tx_event.send(Err(ApiError::ContextWindowExceeded)).await;
                 return;
             }
 

@@ -21,7 +21,7 @@ pub struct ResponsesRequest {
 pub struct ResponsesRequestBuilder<'a> {
     model: Option<&'a str>,
     instructions: Option<&'a str>,
-    input: Option<&'a Vec<ResponseItem>>,
+    input: Option<&'a [ResponseItem]>,
     tools: Option<&'a [Value]>,
     parallel_tool_calls: bool,
     reasoning: Option<Reasoning>,
@@ -35,7 +35,7 @@ pub struct ResponsesRequestBuilder<'a> {
 }
 
 impl<'a> ResponsesRequestBuilder<'a> {
-    pub fn new(model: &'a str, instructions: &'a str, input: &'a Vec<ResponseItem>) -> Self {
+    pub fn new(model: &'a str, instructions: &'a str, input: &'a [ResponseItem]) -> Self {
         Self {
             model: Some(model),
             instructions: Some(instructions),
@@ -129,7 +129,7 @@ impl<'a> ResponsesRequestBuilder<'a> {
             .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
 
         if store && provider.is_azure_responses_endpoint() {
-            attach_item_ids(&mut body, input.as_slice());
+            attach_item_ids(&mut body, input);
         }
 
         let mut headers = self.headers;

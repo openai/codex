@@ -180,11 +180,7 @@ impl ModelClient {
                 Err(ApiError::Transport(TransportError::Http { status, .. }))
                     if status == StatusCode::UNAUTHORIZED =>
                 {
-                    if let Err(error) =
-                        handle_unauthorized(status, &mut refreshed, &auth_manager, &auth).await
-                    {
-                        return Err(error);
-                    }
+                    handle_unauthorized(status, &mut refreshed, &auth_manager, &auth).await?;
                     continue;
                 }
                 Err(err) => return Err(map_api_error(err)),
@@ -277,11 +273,7 @@ impl ModelClient {
                 Err(ApiError::Transport(TransportError::Http { status, .. }))
                     if status == StatusCode::UNAUTHORIZED =>
                 {
-                    if let Err(error) =
-                        handle_unauthorized(status, &mut refreshed, &auth_manager, &auth).await
-                    {
-                        return Err(error);
-                    }
+                    handle_unauthorized(status, &mut refreshed, &auth_manager, &auth).await?;
                     continue;
                 }
                 Err(err) => return Err(map_api_error(err)),
