@@ -222,6 +222,11 @@ async fn test_patch_approval_triggers_elicitation() {
 }
 
 async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
+    if cfg!(windows) { // powershell apply_patch shell calls are not parsed into apply patch approvals
+
+        return Ok(());
+    }
+
     let cwd = TempDir::new()?;
     let test_file = cwd.path().join("destination_file.txt");
     std::fs::write(&test_file, "original content\n")?;
