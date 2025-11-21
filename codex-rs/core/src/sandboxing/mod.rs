@@ -152,9 +152,9 @@ impl SandboxManager {
         }
 
         let (command, sandbox_env, arg0_override) = if cfg!(target_os = "macos") {
-            self.transform_macos(command, policy, sandbox_policy_cwd, codex_linux_sandbox_exe)?
+            transform_macos(command, policy, sandbox_policy_cwd, codex_linux_sandbox_exe)?
         } else if cfg!(target_os = "linux") {
-            self.transform_linux(command, policy, sandbox_policy_cwd, codex_linux_sandbox_exe)?
+            transform_linux(command, policy, sandbox_policy_cwd, codex_linux_sandbox_exe)?
         } else {
             (command, HashMap::new(), None)
         };
