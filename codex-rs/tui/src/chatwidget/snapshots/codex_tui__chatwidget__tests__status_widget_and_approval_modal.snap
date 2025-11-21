@@ -12,7 +12,7 @@ expression: terminal.backend()
 "  $ echo 'hello world'                                                          "
 "                                                                                "
 "› 1. Yes, proceed (y)                                                           "
-"  2. Yes, and don't ask again for this command (a)                              "
+"  2. Yes, and don't ask again this session (a)                                  "
 "  3. Yes, and don't ask again for commands with this prefix (p)                 "
 "  4. No, and tell Codex what to do differently (esc)                            "
 "                                                                                "
