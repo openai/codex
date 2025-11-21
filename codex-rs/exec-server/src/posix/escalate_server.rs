@@ -23,6 +23,7 @@ use crate::posix::escalate_protocol::EscalateResponse;
 use crate::posix::escalate_protocol::SuperExecMessage;
 use crate::posix::escalate_protocol::SuperExecResult;
 use crate::posix::escalation_policy::EscalationPolicy;
+use crate::posix::mcp::ExecParams;
 use crate::posix::socket::AsyncDatagramSocket;
 use crate::posix::socket::AsyncSocket;
 use codex_core::exec::ExecExpiration;
@@ -47,9 +48,7 @@ impl EscalateServer {
 
     pub async fn exec(
         &self,
-        command: String,
-        env: HashMap<String, String>,
-        workdir: PathBuf,
+        params: ExecParams,
         cancel_rx: CancellationToken,
     ) -> anyhow::Result<ExecResult> {
         let (escalate_server, escalate_client) = AsyncDatagramSocket::pair()?;
@@ -57,7 +56,7 @@ impl EscalateServer {
         client_socket.set_cloexec(false)?;
 
         let escalate_task = tokio::spawn(escalate_task(escalate_server, self.policy.clone()));
-        let mut env = env.clone();
+        let mut env = std::env::vars().collect::<HashMap<String, String>>();
         env.insert(
             ESCALATE_SOCKET_ENV_VAR.to_string(),
             client_socket.as_raw_fd().to_string(),
@@ -73,11 +72,21 @@ impl EscalateServer {
         let sandbox_policy = SandboxPolicy::ReadOnly;
         let sandbox_cwd = PathBuf::from("/__NONEXISTENT__");
 
+        let ExecParams {
+            command,
+            workdir,
+            timeout_ms: _,
+            login,
+        } = params;
         let result = process_exec_tool_call(
             codex_core::exec::ExecParams {
                 command: vec![
                     self.bash_path.to_string_lossy().to_string(),
-                    "-c".to_string(),
+                    if login == Some(false) {
+                        "-c".to_string()
+                    } else {
+                        "-lc".to_string()
+                    },
                     command,
                 ],
                 cwd: PathBuf::from(&workdir),
