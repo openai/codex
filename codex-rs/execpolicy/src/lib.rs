@@ -1,5 +1,6 @@
 pub mod decision;
 pub mod error;
+pub mod execpolicycheck;
 pub mod parser;
 pub mod policy;
 pub mod rule;
@@ -7,6 +8,7 @@ pub mod rule;
 pub use decision::Decision;
 pub use error::Error;
 pub use error::Result;
+pub use execpolicycheck::ExecPolicyCheckCommand;
 pub use parser::PolicyParser;
 pub use policy::Evaluation;
 pub use policy::Policy;
