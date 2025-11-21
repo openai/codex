@@ -107,7 +107,9 @@ fn evaluate_with_policy(
                     })
                 }
             }
-            Decision::Allow => Some(ApprovalRequirement::Skip),
+            Decision::Allow => Some(ApprovalRequirement::Skip {
+                bypass_sandbox: true,
+            }),
         },
         Evaluation::NoMatch { .. } => None,
     }
@@ -132,7 +134,9 @@ pub(crate) fn create_approval_requirement_for_command(
     ) {
         ApprovalRequirement::NeedsApproval { reason: None }
     } else {
-        ApprovalRequirement::Skip
+        ApprovalRequirement::Skip {
+            bypass_sandbox: false,
+        }
     }
 }
 

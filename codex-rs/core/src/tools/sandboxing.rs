@@ -89,8 +89,10 @@ pub(crate) struct ApprovalCtx<'a> {
 // Specifies what tool orchestrator should do with a given tool call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ApprovalRequirement {
-    /// No approval required for this tool call
-    Skip,
+    /// No approval required for this tool call. `bypass_sandbox` signals that
+    /// the first attempt should skip sandboxing (e.g., when explicitly
+    /// greenlit by policy).
+    Skip { bypass_sandbox: bool },
     /// Approval required for this tool call
     NeedsApproval { reason: Option<String> },
     /// Execution forbidden for this tool call
@@ -113,7 +115,9 @@ pub(crate) fn default_approval_requirement(
     if needs_approval {
         ApprovalRequirement::NeedsApproval { reason: None }
     } else {
-        ApprovalRequirement::Skip
+        ApprovalRequirement::Skip {
+            bypass_sandbox: false,
+        }
     }
 }
 
@@ -123,9 +127,9 @@ pub(crate) trait Approvable<Req> {
     fn approval_key(&self, req: &Req) -> Self::ApprovalKey;
 
     /// Some tools may request to skip the sandbox on the first attempt
-    /// (e.g., when the request explicitly asks for escalated permissions).
-    /// Defaults to `false`.
-    fn wants_escalated_first_attempt(&self, _req: &Req) -> bool {
+    /// (e.g., when a policy greenlights a command or the request explicitly
+    /// asks for escalated permissions). Defaults to `false`.
+    fn should_bypass_sandbox_first_attempt(&self, _req: &Req) -> bool {
         false
     }
 

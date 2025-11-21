@@ -57,7 +57,7 @@ impl ToolOrchestrator {
             default_approval_requirement(approval_policy, &turn_ctx.sandbox_policy)
         });
         match requirement {
-            ApprovalRequirement::Skip => {
+            ApprovalRequirement::Skip { .. } => {
                 otel.tool_decision(otel_tn, otel_ci, ReviewDecision::Approved, otel_cfg);
             }
             ApprovalRequirement::Forbidden { reason } => {
@@ -103,7 +103,7 @@ impl ToolOrchestrator {
         let mut initial_sandbox = self
             .sandbox
             .select_initial(&turn_ctx.sandbox_policy, tool.sandbox_preference());
-        if tool.wants_escalated_first_attempt(req) {
+        if tool.should_bypass_sandbox_first_attempt(req) {
             initial_sandbox = crate::exec::SandboxType::None;
         }
         // Platform-specific flag gating is handled by SandboxManager::select_initial

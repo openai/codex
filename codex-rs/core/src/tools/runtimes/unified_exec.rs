@@ -135,8 +135,14 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         Some(req.approval_requirement.clone())
     }
 
-    fn wants_escalated_first_attempt(&self, req: &UnifiedExecRequest) -> bool {
+    fn should_bypass_sandbox_first_attempt(&self, req: &UnifiedExecRequest) -> bool {
         req.with_escalated_permissions.unwrap_or(false)
+            || matches!(
+                req.approval_requirement,
+                ApprovalRequirement::Skip {
+                    bypass_sandbox: true
+                }
+            )
     }
 }
 
