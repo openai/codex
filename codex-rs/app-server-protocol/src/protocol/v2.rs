@@ -15,6 +15,8 @@ use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
+use codex_protocol::protocol::SessionSource as CoreSessionSource;
+use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
 use codex_protocol::user_input::UserInput as CoreUserInput;
 use mcp_types::ContentBlock as McpContentBlock;
 use schemars::JsonSchema;
@@ -257,6 +259,87 @@ pub enum CommandAction {
     Unknown {
         command: String,
     },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case", export_to = "v2/")]
+pub enum SubAgentSource {
+    Review,
+    Compact,
+    Other(String),
+}
+
+impl From<CoreSubAgentSource> for SubAgentSource {
+    fn from(value: CoreSubAgentSource) -> Self {
+        match value {
+            CoreSubAgentSource::Review => SubAgentSource::Review,
+            CoreSubAgentSource::Compact => SubAgentSource::Compact,
+            CoreSubAgentSource::Other(label) => SubAgentSource::Other(label),
+        }
+    }
+}
+
+impl From<SubAgentSource> for CoreSubAgentSource {
+    fn from(value: SubAgentSource) -> Self {
+        match value {
+            SubAgentSource::Review => CoreSubAgentSource::Review,
+            SubAgentSource::Compact => CoreSubAgentSource::Compact,
+            SubAgentSource::Other(label) => CoreSubAgentSource::Other(label),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase", export_to = "v2/")]
+#[derive(Default)]
+pub enum SessionSource {
+    Cli,
+    #[serde(rename = "vscode")]
+    #[ts(rename = "vscode")]
+    #[default]
+    VsCode,
+    Exec,
+    Mcp,
+    SubAgent(SubAgentSource),
+    #[serde(other)]
+    Unknown,
+}
+
+impl From<CoreSessionSource> for SessionSource {
+    fn from(value: CoreSessionSource) -> Self {
+        match value {
+            CoreSessionSource::Cli => SessionSource::Cli,
+            CoreSessionSource::VSCode => SessionSource::VsCode,
+            CoreSessionSource::Exec => SessionSource::Exec,
+            CoreSessionSource::Mcp => SessionSource::Mcp,
+            CoreSessionSource::SubAgent(source) => SessionSource::SubAgent(source.into()),
+            CoreSessionSource::Unknown => SessionSource::Unknown,
+        }
+    }
+}
+
+impl From<SessionSource> for CoreSessionSource {
+    fn from(value: SessionSource) -> Self {
+        match value {
+            SessionSource::Cli => CoreSessionSource::Cli,
+            SessionSource::VsCode => CoreSessionSource::VSCode,
+            SessionSource::Exec => CoreSessionSource::Exec,
+            SessionSource::Mcp => CoreSessionSource::Mcp,
+            SessionSource::SubAgent(source) => CoreSessionSource::SubAgent(source.into()),
+            SessionSource::Unknown => CoreSessionSource::Unknown,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadGitInfo {
+    pub sha: Option<String>,
+    pub branch: Option<String>,
+    pub origin_url: Option<String>,
 }
 
 impl CommandAction {
@@ -586,6 +669,10 @@ pub struct Thread {
     pub created_at: i64,
     /// [UNSTABLE] Path to the thread on disk.
     pub path: PathBuf,
+    pub cwd: PathBuf,
+    pub cli_version: String,
+    pub source: SessionSource,
+    pub git_info: Option<ThreadGitInfo>,
     /// Only populated on a `thread/resume` response.
     /// For all other responses and notifications returning a Thread,
     /// the turns field will be an empty list.

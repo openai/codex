@@ -74,6 +74,7 @@ use codex_app_server_protocol::SetDefaultModelResponse;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
+use codex_app_server_protocol::ThreadGitInfo;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
@@ -2995,10 +2996,18 @@ fn summary_to_thread(summary: ConversationSummary) -> Thread {
         preview,
         timestamp,
         model_provider,
-        ..
+        cwd,
+        cli_version,
+        source,
+        git_info,
     } = summary;
 
     let created_at = parse_datetime(timestamp.as_deref());
+    let git_info = git_info.map(|info| ThreadGitInfo {
+        sha: info.sha,
+        branch: info.branch,
+        origin_url: info.origin_url,
+    });
 
     Thread {
         id: conversation_id.to_string(),
@@ -3006,6 +3015,10 @@ fn summary_to_thread(summary: ConversationSummary) -> Thread {
         model_provider,
         created_at: created_at.map(|dt| dt.timestamp()).unwrap_or(0),
         path,
+        cwd,
+        cli_version,
+        source: source.into(),
+        git_info,
         turns: Vec::new(),
     }
 }
