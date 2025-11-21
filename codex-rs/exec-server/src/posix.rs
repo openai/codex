@@ -71,6 +71,7 @@ mod escalation_policy;
 mod mcp;
 mod mcp_escalation_policy;
 mod socket;
+mod stopwatch;
 
 /// Default value of --execve option relative to the current executable.
 /// Note this must match the name of the binary as specified in Cargo.toml.

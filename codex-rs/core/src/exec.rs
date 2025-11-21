@@ -31,7 +31,7 @@ use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
 use crate::text_encoding::bytes_to_string_smart;
 
-const DEFAULT_TIMEOUT_MS: u64 = 10_000;
+pub const DEFAULT_EXEC_COMMAND_TIMEOUT_MS: u64 = 10_000;
 
 // Hardcode these since it does not seem worth including the libc crate just
 // for these.
@@ -86,7 +86,7 @@ impl ExecExpiration {
         match self {
             ExecExpiration::Timeout(duration) => tokio::time::sleep(duration).await,
             ExecExpiration::DefaultTimeout => {
-                tokio::time::sleep(Duration::from_millis(DEFAULT_TIMEOUT_MS)).await
+                tokio::time::sleep(Duration::from_millis(DEFAULT_EXEC_COMMAND_TIMEOUT_MS)).await
             }
             ExecExpiration::Cancellation(cancel) => {
                 cancel.cancelled().await;
@@ -98,7 +98,7 @@ impl ExecExpiration {
     pub(crate) fn timeout_ms(&self) -> Option<u64> {
         match self {
             ExecExpiration::Timeout(duration) => Some(duration.as_millis() as u64),
-            ExecExpiration::DefaultTimeout => Some(DEFAULT_TIMEOUT_MS),
+            ExecExpiration::DefaultTimeout => Some(DEFAULT_EXEC_COMMAND_TIMEOUT_MS),
             ExecExpiration::Cancellation(_) => None,
         }
     }
