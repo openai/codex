@@ -2118,11 +2118,12 @@ impl ChatWidget {
         } else {
             default_choice
         };
+        let selection_choice = highlight_choice.or(default_choice);
         let initial_selected_idx = choices
             .iter()
-            .position(|choice| choice.stored == highlight_choice)
+            .position(|choice| choice.stored == selection_choice)
             .or_else(|| {
-                highlight_choice
+                selection_choice
                     .and_then(|effort| choices.iter().position(|choice| choice.display == effort))
             });
         let mut items: Vec<SelectionItem> = Vec::new();
