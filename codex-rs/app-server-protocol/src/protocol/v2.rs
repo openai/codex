@@ -859,6 +859,7 @@ pub enum CommandExecutionStatus {
     InProgress,
     Completed,
     Failed,
+    Declined,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
