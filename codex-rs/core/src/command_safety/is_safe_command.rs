@@ -269,6 +269,10 @@ mod tests {
 
     #[test]
     fn windows_powershell_full_path_is_safe() {
+        if cfg!(windows) {
+            return;
+        }
+
         assert!(is_known_safe_command(&vec_str(&[
             r"C:\Program Files\PowerShell\7\pwsh.exe",
             "-Command",

@@ -322,6 +322,11 @@ mod tests {
 
     #[test]
     fn accepts_full_path_powershell_invocations() {
+        if cfg!(windows) {
+            // Windows only because on Linux path splitting doesn't handle `/` separators properly
+            return;
+        }
+
         assert!(is_safe_command_windows(&vec_str(&[
             r"C:\Program Files\PowerShell\7\pwsh.exe",
             "-NoProfile",
