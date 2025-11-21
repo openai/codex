@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use once_cell::sync::Lazy;
+use regex::Regex;
 use shlex::split as shlex_split;
 use url::Url;
 
@@ -151,8 +153,17 @@ fn args_have_url(args: &[String]) -> bool {
 }
 
 fn looks_like_url(token: &str) -> bool {
-    let trimmed = token.trim_matches('\'').trim_matches('"');
-    let Ok(url) = Url::parse(trimmed) else {
+    // Strip common PowerShell punctuation around inline URLs (quotes, parens, trailing semicolons).
+    // Capture the middle token after trimming leading quotes/parens/whitespace and trailing semicolons/closing parens.
+    static RE: Lazy<Option<Regex>> =
+        Lazy::new(|| Regex::new(r#"^[ "'\(\s]*([^\s"'\);]+)[\s;\)]*$"#).ok());
+    let candidate = RE
+        .as_ref()
+        .and_then(|re| re.captures(token))
+        .and_then(|caps| caps.get(1))
+        .map(|m| m.as_str())
+        .unwrap_or(token);
+    let Ok(url) = Url::parse(candidate) else {
         return false;
     };
     matches!(url.scheme(), "http" | "https")
@@ -247,6 +258,15 @@ mod tests {
             "-NoLogo",
             "-Command",
             "Start-Process 'https://example.com'"
+        ])));
+    }
+
+    #[test]
+    fn powershell_start_process_url_with_trailing_semicolon_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command",
+            "Start-Process('https://example.com');"
         ])));
     }
 
