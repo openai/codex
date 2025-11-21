@@ -157,12 +157,13 @@ fn requirement_from_decision(
 /// Return an allow-prefix option when a single plain command needs approval without
 /// any matching policy rule. We only surface the prefix opt-in when execpolicy did
 /// not already drive the decision (NoMatch) and when the command is a single
-/// unrolled command (multi-part scripts shouldn’t be whitelisted via prefix).
+/// unrolled command (multi-part scripts shouldn’t be whitelisted via prefix) and
+/// when execpolicy feature is enabled.
 fn allow_prefix_if_applicable(
     commands: &[Vec<String>],
-    evaluation: &Evaluation,
+    features: &Features,
 ) -> Option<Vec<String>> {
-    if matches!(evaluation, Evaluation::NoMatch) && commands.len() == 1 {
+    if features.enabled(Feature::ExecPolicy) && commands.len() == 1 {
         return Some(commands[0].clone());
     }
 
@@ -173,6 +174,7 @@ pub(crate) fn create_approval_requirement_for_command(
     policy: &Policy,
     command: &[String],
     approval_policy: AskForApproval,
+    features: &Features,
     sandbox_policy: &SandboxPolicy,
     sandbox_permissions: SandboxPermissions,
 ) -> ApprovalRequirement {
@@ -190,7 +192,7 @@ pub(crate) fn create_approval_requirement_for_command(
             ) {
                 ApprovalRequirement::NeedsApproval {
                     reason: None,
-                    allow_prefix: allow_prefix_if_applicable(&commands, &evaluation),
+                    allow_prefix: allow_prefix_if_applicable(&commands, features),
                 }
             } else {
                 ApprovalRequirement::Skip {
@@ -350,6 +352,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             &policy,
             &forbidden_script,
             AskForApproval::OnRequest,
+            &Features::with_defaults(),
             &SandboxPolicy::DangerFullAccess,
             SandboxPermissions::UseDefault,
         );
@@ -376,6 +379,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             &policy,
             &command,
             AskForApproval::OnRequest,
+            &Features::with_defaults(),
             &SandboxPolicy::DangerFullAccess,
             SandboxPermissions::UseDefault,
         );
@@ -403,6 +407,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             &policy,
             &command,
             AskForApproval::Never,
+            &Features::with_defaults(),
             &SandboxPolicy::DangerFullAccess,
             SandboxPermissions::UseDefault,
         );
@@ -424,6 +429,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             &empty_policy,
             &command,
             AskForApproval::UnlessTrusted,
+            &Features::with_defaults(),
             &SandboxPolicy::ReadOnly,
             SandboxPermissions::UseDefault,
         );
@@ -494,6 +500,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             &empty_policy,
             &command,
             AskForApproval::UnlessTrusted,
+            &Features::with_defaults(),
             &SandboxPolicy::ReadOnly,
             SandboxPermissions::UseDefault,
         );
@@ -503,6 +510,31 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             ApprovalRequirement::NeedsApproval {
                 reason: None,
                 allow_prefix: Some(command)
+            }
+        );
+    }
+
+    #[test]
+    fn allow_prefix_is_disabled_when_execpolicy_feature_disabled() {
+        let command = vec!["python".to_string()];
+
+        let mut features = Features::with_defaults();
+        features.disable(Feature::ExecPolicy);
+
+        let requirement = create_approval_requirement_for_command(
+            &Policy::empty(),
+            &command,
+            AskForApproval::UnlessTrusted,
+            &features,
+            &SandboxPolicy::ReadOnly,
+            SandboxPermissions::UseDefault,
+        );
+
+        assert_eq!(
+            requirement,
+            ApprovalRequirement::NeedsApproval {
+                reason: None,
+                allow_prefix: None,
             }
         );
     }
@@ -521,6 +553,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             &policy,
             &command,
             AskForApproval::OnRequest,
+            &Features::with_defaults(),
             &SandboxPolicy::DangerFullAccess,
             SandboxPermissions::UseDefault,
         );
@@ -545,6 +578,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             &Policy::empty(),
             &command,
             AskForApproval::UnlessTrusted,
+            &Features::with_defaults(),
             &SandboxPolicy::ReadOnly,
             SandboxPermissions::UseDefault,
         );

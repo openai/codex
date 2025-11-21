@@ -231,6 +231,7 @@ impl ShellHandler {
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
         emitter.begin(event_ctx).await;
 
+        let features = session.features().await;
         let exec_policy = session.current_exec_policy().await;
         let exec_policy = exec_policy.read().await;
         let req = ShellRequest {
@@ -244,6 +245,7 @@ impl ShellHandler {
                 &exec_policy,
                 &exec_params.command,
                 turn.approval_policy,
+                &features,
                 &turn.sandbox_policy,
                 SandboxPermissions::from(exec_params.with_escalated_permissions.unwrap_or(false)),
             ),

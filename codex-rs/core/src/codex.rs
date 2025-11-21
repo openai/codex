@@ -1116,6 +1116,15 @@ impl Session {
             .enabled(feature)
     }
 
+    pub(crate) async fn features(&self) -> Features {
+        self.state
+            .lock()
+            .await
+            .session_configuration
+            .features
+            .clone()
+    }
+
     async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {
         for item in items {
             self.send_event(
