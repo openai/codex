@@ -861,7 +861,7 @@ mod tests {
         });
         let result = process_exec_tool_call(
             params,
-            SandboxType::None,
+            false,
             &SandboxPolicy::DangerFullAccess,
             cwd.as_path(),
             &None,
