@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use crate::AuthManager;
+use crate::SandboxState;
 use crate::client_common::REVIEW_PROMPT;
 use crate::compact;
 use crate::compact::run_inline_auto_compact_task;
@@ -613,6 +614,22 @@ impl Session {
                 sess.services.mcp_startup_cancellation_token.clone(),
             )
             .await;
+
+        let sandbox_state = SandboxState {
+            sandbox_policy: session_configuration.sandbox_policy.clone(),
+            codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
+            sandbox_cwd: session_configuration.cwd.clone(),
+        };
+        if let Err(e) = sess
+            .services
+            .mcp_connection_manager
+            .read()
+            .await
+            .notify_sandbox_state_change(&sandbox_state)
+            .await
+        {
+            tracing::error!("Failed to notify sandbox state change: {e}");
+        }
 
         // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
         sess.record_initial_history(initial_history).await;

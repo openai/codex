@@ -25,8 +25,11 @@ use mcp_types::ReadResourceResult;
 use mcp_types::RequestId;
 use reqwest::header::HeaderMap;
 use rmcp::model::CallToolRequestParam;
+use rmcp::model::ClientNotification;
 use rmcp::model::CreateElicitationRequestParam;
 use rmcp::model::CreateElicitationResult;
+use rmcp::model::CustomClientNotification;
+use rmcp::model::Extensions;
 use rmcp::model::InitializeRequestParam;
 use rmcp::model::PaginatedRequestParam;
 use rmcp::model::ReadResourceRequestParam;
@@ -359,6 +362,25 @@ impl RmcpClient {
         let converted = convert_call_tool_result(rmcp_result)?;
         self.persist_oauth_tokens().await;
         Ok(converted)
+    }
+
+    pub async fn send_custom_notification(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<()> {
+        let service: Arc<RunningService<RoleClient, LoggingClientHandler>> = self.service().await?;
+        service.service();
+        service
+            .send_notification(ClientNotification::CustomClientNotification(
+                CustomClientNotification {
+                    method: method.to_string(),
+                    params,
+                    extensions: Extensions::new(),
+                },
+            ))
+            .await?;
+        Ok(())
     }
 
     async fn service(&self) -> Result<Arc<RunningService<RoleClient, LoggingClientHandler>>> {
