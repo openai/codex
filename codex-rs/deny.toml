@@ -70,10 +70,9 @@ feature-depth = 1
 # A list of advisory IDs to ignore. Note that ignored advisories will still
 # output a note when they are encountered.
 ignore = [
-    #"RUSTSEC-0000-0000",
-    #{ id = "RUSTSEC-0000-0000", reason = "you can specify a reason the advisory is ignored" },
-    #"a-crate-that-is-yanked@0.1.1", # you can also ignore yanked crate versions if you wish
-    #{ crate = "a-crate-that-is-yanked@0.1.1", reason = "you can specify why you are ignoring the yanked crate" },
+    { id = "RUSTSEC-2024-0388", reason = "derivative is unmaintained; pulled in via starlark v0.13.0 used by execpolicy/cli/core; no fixed release yet" },
+    { id = "RUSTSEC-2025-0057", reason = "fxhash is unmaintained; pulled in via starlark_map/starlark v0.13.0 used by execpolicy/cli/core; no fixed release yet" },
+    { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained; pulled in via ratatui/rmcp/starlark used by tui/execpolicy; no fixed release yet" },
 ]
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
 # If this is false, then it uses a built-in git library.
@@ -89,9 +88,45 @@ ignore = [
 # See https://spdx.org/licenses/ for list of possible licenses
 # [possible values: any SPDX 3.11 short identifier (+ optional exception)].
 allow = [
-    #"MIT",
-    #"Apache-2.0",
-    #"Apache-2.0 WITH LLVM-exception",
+    # Apache-2.0 - https://www.apache.org/licenses/LICENSE-2.0
+    # Used by: allocative, anyhow, arboard, askama, assert_cmd, assert_matches, async-channel, async-trait, base64, chardetng, chrono, clap, clap_complete, color-eyre, ctor, diffy, dirs, dunce, encoding_rs, env_logger, escargot, eventsource-stream, futures, http, image, indexmap, insta, itertools, keyring, landlock, lazy_static, libc, log, maplit, multimap, once_cell, opentelemetry, opentelemetry-appender-tracing, opentelemetry-otlp, opentelemetry-semantic-conventions, opentelemetry_sdk, pathdiff, predicates, pretty_assertions, rand, regex-lite, reqwest, seccompiler, serde, serde_json, serde_with, sha1, sha2, shlex, similar, socket2, starlark, supports-color, sys-locale, tempfile, test-log, thiserror, time, tiny_http, toml, toml_edit, unicode-segmentation, unicode-width, url, uuid, webbrowser, wiremock, zeroize
+    "Apache-2.0",
+    # BSD-2-Clause - https://opensource.org/license/bsd-2-clause
+    # Used by: transitive only
+    "BSD-2-Clause",
+    # BSD-3-Clause - https://opensource.org/license/bsd-3-clause
+    # Used by: encoding_rs, seccompiler
+    "BSD-3-Clause",
+    # BSL-1.0 - https://www.boost.org/users/license.html
+    # Used by: transitive only
+    "BSL-1.0",
+    # CC0-1.0 - https://creativecommons.org/publicdomain/zero/1.0/
+    # Used by: dunce, notify
+    "CC0-1.0",
+    # CDLA-Permissive-2.0 - https://cdla.dev/permissive-2-0/
+    # Used by: transitive only
+    "CDLA-Permissive-2.0",
+    # ISC - https://opensource.org/license/isc-license-txt
+    # Used by: transitive only
+    "ISC",
+    # MIT - https://opensource.org/license/mit
+    # Used by: allocative, ansi-to-tui, anyhow, arboard, askama, assert_cmd, assert_matches, async-channel, async-stream, async-trait, axum, base64, bytes, chardetng, chrono, clap, clap_complete, color-eyre, crossterm, ctor, derive_more, diffy, dirs, dotenvy, encoding_rs, env-flags, env_logger, escargot, eventsource-stream, futures, http, ignore, image, indexmap, itertools, keyring, landlock, lazy_static, libc, log, lru, maplit, mime_guess, multimap, once_cell, openssl-sys, os_info, owo-colors, path-absolutize, pathdiff, portable-pty, predicates, pretty_assertions, pulldown-cmark, rand, ratatui, ratatui-macros, regex-lite, reqwest, rmcp, schemars, serde, serde_json, serde_with, serial_test, sha1, sha2, shlex, socket2, strum, strum_macros, sys-locale, tempfile, test-log, textwrap, thiserror, time, tiny_http, tokio, tokio-stream, tokio-test, tokio-util, toml, toml_edit, tonic, tracing, tracing-appender, tracing-subscriber, tracing-test, tree-sitter, tree-sitter-bash, tree-sitter-highlight, ts-rs, uds_windows, unicode-segmentation, unicode-width, url, urlencoding, uuid, vt100, walkdir, webbrowser, which, wildmatch, wiremock, zeroize
+    "MIT",
+    # MIT-0 - https://opensource.org/license/mit-0
+    # Used by: dunce
+    "MIT-0",
+    # MPL-2.0 - https://www.mozilla.org/MPL/2.0/
+    # Used by: nucleo-matcher
+    "MPL-2.0",
+    # Unicode-3.0 - https://opensource.org/license/unicode
+    # Used by: icu_decimal, icu_locale_core, icu_provider
+    "Unicode-3.0",
+    # Unlicense - https://opensource.org/license/unlicense/
+    # Used by: ignore, walkdir
+    "Unlicense",
+    # Zlib - https://opensource.org/license/zlib
+    # Used by: transitive only
+    "Zlib",
 ]
 # The confidence threshold for detecting a license from license text.
 # The higher the value, the more closely the license text must be to the
@@ -228,7 +263,9 @@ allow-git = []
 
 [sources.allow-org]
 # github.com organizations to allow git sources for
-github = []
+github = [
+    "nornagon", # ratatui and crossterm forks
+]
 # gitlab.com organizations to allow git sources for
 gitlab = []
 # bitbucket.org organizations to allow git sources for
