@@ -23,6 +23,8 @@ use super::UNIFIED_EXEC_OUTPUT_MAX_BYTES;
 use super::UNIFIED_EXEC_OUTPUT_MAX_TOKENS;
 use super::UnifiedExecError;
 
+use codex_utils_pty::ExitStatus;
+
 #[derive(Debug, Default)]
 pub(crate) struct OutputBufferState {
     chunks: VecDeque<Vec<u8>>,
@@ -79,6 +81,7 @@ pub(crate) type OutputBuffer = Arc<Mutex<OutputBufferState>>;
 pub(crate) struct OutputHandles {
     pub(crate) output_buffer: OutputBuffer,
     pub(crate) output_notify: Arc<Notify>,
+    pub(crate) exit_status: Arc<ExitStatus>,
     pub(crate) cancellation_token: CancellationToken,
 }
 
@@ -87,7 +90,7 @@ pub(crate) struct UnifiedExecSession {
     session: ExecCommandSession,
     output_buffer: OutputBuffer,
     output_notify: Arc<Notify>,
-    exit_notify: Arc<Notify>,
+    exit_status: Arc<ExitStatus>,
     cancellation_token: CancellationToken,
     output_task: JoinHandle<()>,
     sandbox_type: SandboxType,
@@ -98,7 +101,7 @@ impl UnifiedExecSession {
         session: ExecCommandSession,
         initial_output_rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
         sandbox_type: SandboxType,
-        exit_notify: Arc<Notify>,
+        exit_status: Arc<ExitStatus>,
     ) -> Self {
         let output_buffer = Arc::new(Mutex::new(OutputBufferState::default()));
         let output_notify = Arc::new(Notify::new());
@@ -138,7 +141,7 @@ impl UnifiedExecSession {
             session,
             output_buffer,
             output_notify,
-            exit_notify,
+            exit_status,
             cancellation_token,
             output_task,
             sandbox_type,
@@ -153,30 +156,17 @@ impl UnifiedExecSession {
         OutputHandles {
             output_buffer: Arc::clone(&self.output_buffer),
             output_notify: Arc::clone(&self.output_notify),
+            exit_status: Arc::clone(&self.exit_status),
             cancellation_token: self.cancellation_token.clone(),
         }
     }
 
     pub(super) fn has_exited(&self) -> bool {
-        self.session.has_exited()
+        self.session.exit_status().signal_received()
     }
 
     pub(super) fn exit_code(&self) -> Option<i32> {
         self.session.exit_code()
-    }
-
-    pub(super) async fn wait_for_exited_until(&self, deadline: tokio::time::Instant) -> bool {
-        if self.has_exited() {
-            return true;
-        }
-
-        let sleep = tokio::time::sleep_until(deadline);
-        tokio::pin!(sleep);
-
-        tokio::select! {
-            _ = self.exit_notify.notified() => true,
-            _ = &mut sleep => false,
-        }
     }
 
     async fn snapshot_output(&self) -> Vec<Vec<u8>> {
@@ -189,7 +179,7 @@ impl UnifiedExecSession {
     }
 
     pub(super) async fn check_for_sandbox_denial(&self) -> Result<(), UnifiedExecError> {
-        if self.sandbox_type() == SandboxType::None || !self.has_exited() {
+        if self.sandbox_type() == SandboxType::None || !self.exit_status.signal_received() {
             return Ok(());
         }
 
@@ -237,9 +227,9 @@ impl UnifiedExecSession {
             session,
             output_rx,
             mut exit_rx,
-            exit_notify,
+            exit_status,
         } = spawned;
-        let managed = Self::new(session, output_rx, sandbox_type, exit_notify);
+        let managed = Self::new(session, output_rx, sandbox_type, exit_status);
 
         let exit_ready = match exit_rx.try_recv() {
             Ok(_) | Err(TryRecvError::Closed) => true,

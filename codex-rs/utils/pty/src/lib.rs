@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
@@ -16,6 +17,55 @@ use tokio::sync::oneshot;
 use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
+use tokio::time::sleep_until;
+use tokio::time::Instant;
+
+#[derive(Debug)]
+pub struct ExitStatus {
+    exited: AtomicBool, // Sticky boolean: once true always true.
+    notify: Notify,
+}
+
+impl ExitStatus {
+    fn new() -> Self {
+        Self {
+            exited: AtomicBool::new(false),
+            notify: Notify::new(),
+        }
+    }
+
+    fn signal(&self) {
+        self.exited.store(true, Ordering::Release);
+        self.notify.notify_waiters();
+    }
+
+    pub fn signal_received(&self) -> bool {
+        self.exited.load(Ordering::Acquire)
+    }
+
+    pub async fn wait_for_exit_until(&self, deadline: Instant) -> bool {
+        if self.exited.load(Ordering::Acquire) {
+            return true;
+        }
+
+        let notified = self.notify.notified();
+        let sleep = sleep_until(deadline);
+
+        // Re-check after creating the future (notified) in case we raced with the call to signal().
+        if self.exited.load(Ordering::Acquire) {
+            return true;
+        }
+
+        tokio::pin!(notified);
+        tokio::pin!(sleep);
+        tokio::select! {
+            _ = &mut notified => {},
+            _ = &mut sleep => {},
+        }
+
+        self.exited.load(Ordering::Acquire)
+    }
+}
 
 #[derive(Debug)]
 pub struct ExecCommandSession {
@@ -25,9 +75,8 @@ pub struct ExecCommandSession {
     reader_handle: StdMutex<Option<JoinHandle<()>>>,
     writer_handle: StdMutex<Option<JoinHandle<()>>>,
     wait_handle: StdMutex<Option<JoinHandle<()>>>,
-    exit_status: Arc<AtomicBool>,
+    exit_status: Arc<ExitStatus>,
     exit_code: Arc<StdMutex<Option<i32>>>,
-    exit_notify: Arc<Notify>,
 }
 
 impl ExecCommandSession {
@@ -39,9 +88,8 @@ impl ExecCommandSession {
         reader_handle: JoinHandle<()>,
         writer_handle: JoinHandle<()>,
         wait_handle: JoinHandle<()>,
-        exit_status: Arc<AtomicBool>,
+        exit_status: Arc<ExitStatus>,
         exit_code: Arc<StdMutex<Option<i32>>>,
-        exit_notify: Arc<Notify>,
     ) -> (Self, broadcast::Receiver<Vec<u8>>) {
         let initial_output_rx = output_tx.subscribe();
         (
@@ -54,7 +102,6 @@ impl ExecCommandSession {
                 wait_handle: StdMutex::new(Some(wait_handle)),
                 exit_status,
                 exit_code,
-                exit_notify,
             },
             initial_output_rx,
         )
@@ -68,16 +115,12 @@ impl ExecCommandSession {
         self.output_tx.subscribe()
     }
 
-    pub fn has_exited(&self) -> bool {
-        self.exit_status.load(std::sync::atomic::Ordering::SeqCst)
-    }
-
     pub fn exit_code(&self) -> Option<i32> {
         self.exit_code.lock().ok().and_then(|guard| *guard)
     }
 
-    pub fn exit_notify(&self) -> Arc<Notify> {
-        Arc::clone(&self.exit_notify)
+    pub fn exit_status(&self) -> Arc<ExitStatus> {
+        Arc::clone(&self.exit_status)
     }
 }
 
@@ -112,7 +155,7 @@ pub struct SpawnedPty {
     pub session: ExecCommandSession,
     pub output_rx: broadcast::Receiver<Vec<u8>>,
     pub exit_rx: oneshot::Receiver<i32>,
-    pub exit_notify: Arc<Notify>,
+    pub exit_status: Arc<ExitStatus>,
 }
 
 pub async fn spawn_pty_process(
@@ -187,12 +230,10 @@ pub async fn spawn_pty_process(
     });
 
     let (exit_tx, exit_rx) = oneshot::channel::<i32>();
-    let exit_status = Arc::new(AtomicBool::new(false));
+    let exit_status = Arc::new(ExitStatus::new());
     let wait_exit_status = Arc::clone(&exit_status);
     let exit_code = Arc::new(StdMutex::new(None));
     let wait_exit_code = Arc::clone(&exit_code);
-    let exit_notify = Arc::new(Notify::new());
-    let wait_exit_notify = Arc::clone(&exit_notify);
     let wait_handle: JoinHandle<()> = tokio::task::spawn_blocking(move || {
         let code = match child.wait() {
             Ok(status) => status.exit_code() as i32,
@@ -201,9 +242,9 @@ pub async fn spawn_pty_process(
         if let Ok(mut guard) = wait_exit_code.lock() {
             *guard = Some(code);
         }
-        wait_exit_status.store(true, std::sync::atomic::Ordering::SeqCst);
         let _ = exit_tx.send(code);
-        wait_exit_notify.notify_waiters();
+        // The process has exited.
+        wait_exit_status.signal();
     });
 
     let (session, output_rx) = ExecCommandSession::new(
@@ -215,14 +256,13 @@ pub async fn spawn_pty_process(
         wait_handle,
         exit_status,
         exit_code,
-        exit_notify,
     );
-    let session_exit_notify = session.exit_notify();
+    let session_exit_status = session.exit_status();
 
     Ok(SpawnedPty {
         session,
         output_rx,
         exit_rx,
-        exit_notify: session_exit_notify,
+        exit_status: session_exit_status,
     })
 }

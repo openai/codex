@@ -44,10 +44,13 @@ use super::session::OutputBuffer;
 use super::session::OutputHandles;
 use super::session::UnifiedExecSession;
 
+use codex_utils_pty::ExitStatus;
+
 struct PreparedSessionHandles {
     writer_tx: mpsc::Sender<Vec<u8>>,
     output_buffer: OutputBuffer,
     output_notify: Arc<Notify>,
+    exit_status: Arc<ExitStatus>,
     cancellation_token: CancellationToken,
     session_ref: Arc<Session>,
     turn_ref: Arc<TurnContext>,
@@ -83,6 +86,7 @@ impl UnifiedExecSessionManager {
         let OutputHandles {
             output_buffer,
             output_notify,
+            exit_status,
             cancellation_token,
         } = session.output_handles();
         let deadline = start + Duration::from_millis(yield_time_ms);
@@ -107,7 +111,7 @@ impl UnifiedExecSessionManager {
                 .saturating_duration_since(now)
                 .max(Duration::from_millis(1000));
             let deadline = now + remaining;
-            has_exited = Self::wait_for_exited_until_deadline(&session, deadline).await;
+            has_exited = exit_status.wait_for_exit_until(deadline).await;
             if has_exited {
                 exit_code = session.exit_code();
             }
@@ -177,6 +181,7 @@ impl UnifiedExecSessionManager {
             writer_tx,
             output_buffer,
             output_notify,
+            exit_status,
             cancellation_token,
             session_ref,
             turn_ref,
@@ -240,9 +245,7 @@ impl UnifiedExecSessionManager {
                 .saturating_duration_since(now)
                 .max(Duration::from_millis(1000));
             let deadline = now + remaining;
-            if let Some(entry) = self.sessions.lock().await.get(&session_id) {
-                Self::wait_for_exited_until_deadline(&entry.session, deadline).await;
-            }
+            exit_status.wait_for_exit_until(deadline).await;
         }
         let wall_time = Instant::now().saturating_duration_since(start);
 
@@ -339,6 +342,7 @@ impl UnifiedExecSessionManager {
         let OutputHandles {
             output_buffer,
             output_notify,
+            exit_status,
             cancellation_token,
         } = entry.session.output_handles();
 
@@ -346,6 +350,7 @@ impl UnifiedExecSessionManager {
             writer_tx: entry.session.writer_sender(),
             output_buffer,
             output_notify,
+            exit_status,
             cancellation_token,
             session_ref: Arc::clone(&entry.session_ref),
             turn_ref: Arc::clone(&entry.turn_ref),
@@ -535,7 +540,7 @@ impl UnifiedExecSessionManager {
         const POST_EXIT_OUTPUT_GRACE: Duration = Duration::from_millis(25);
 
         let mut collected: Vec<u8> = Vec::with_capacity(4096);
-        let mut exit_signal_received = cancellation_token.is_cancelled();
+        let mut cancel_signal_received = cancellation_token.is_cancelled();
         loop {
             let (drained_chunks, completed) = {
                 let mut guard = output_buffer.lock().await;
@@ -543,7 +548,7 @@ impl UnifiedExecSessionManager {
             };
 
             if drained_chunks.is_empty() {
-                exit_signal_received |= cancellation_token.is_cancelled();
+                cancel_signal_received |= cancellation_token.is_cancelled();
 
                 if completed {
                     break;
@@ -555,7 +560,7 @@ impl UnifiedExecSessionManager {
                 }
 
                 let notified = output_notify.notified();
-                if exit_signal_received {
+                if cancel_signal_received {
                     let grace = remaining.min(POST_EXIT_OUTPUT_GRACE);
                     if tokio::time::timeout(grace, notified).await.is_err() {
                         break;
@@ -564,11 +569,11 @@ impl UnifiedExecSessionManager {
                 }
 
                 tokio::pin!(notified);
-                let exit_notified = cancellation_token.cancelled();
-                tokio::pin!(exit_notified);
+                let cancel_notified = cancellation_token.cancelled();
+                tokio::pin!(cancel_notified);
                 tokio::select! {
                     _ = &mut notified => {}
-                    _ = &mut exit_notified => exit_signal_received = true,
+                    _ = &mut cancel_notified => cancel_signal_received = true,
                     _ = tokio::time::sleep(remaining) => break,
                 }
                 continue;
@@ -578,20 +583,13 @@ impl UnifiedExecSessionManager {
                 collected.extend_from_slice(&chunk);
             }
 
-            exit_signal_received |= cancellation_token.is_cancelled();
+            cancel_signal_received |= cancellation_token.is_cancelled();
             if Instant::now() >= deadline {
                 break;
             }
         }
 
         collected
-    }
-
-    async fn wait_for_exited_until_deadline(
-        session: &UnifiedExecSession,
-        deadline: Instant,
-    ) -> bool {
-        session.wait_for_exited_until(deadline).await
     }
 }
 
