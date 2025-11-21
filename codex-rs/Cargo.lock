@@ -860,7 +860,6 @@ dependencies = [
  "codex-login",
  "codex-protocol",
  "codex-utils-json-to-toml",
- "codex-windows-sandbox",
  "core_test_support",
  "mcp-types",
  "opentelemetry-appender-tracing",
