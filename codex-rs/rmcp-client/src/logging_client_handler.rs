@@ -45,7 +45,9 @@ impl ClientHandler for LoggingClientHandler {
             RequestId::String(id) => mcp_types::RequestId::String(id.to_string()),
             RequestId::Number(id) => mcp_types::RequestId::Integer(id),
         };
-        Ok((self.send_elicitation)(id, request).await)
+        (self.send_elicitation)(id, request)
+            .await
+            .map_err(|err| rmcp::ErrorData::internal_error(err.to_string(), None))
     }
 
     async fn on_cancelled(

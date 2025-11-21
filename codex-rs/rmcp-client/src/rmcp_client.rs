@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,6 +9,7 @@ use std::time::Duration;
 use anyhow::Result;
 use anyhow::anyhow;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
 use mcp_types::InitializeRequestParams;
@@ -84,10 +84,9 @@ enum ClientState {
 pub type Elicitation = CreateElicitationRequestParam;
 pub type ElicitationResponse = CreateElicitationResult;
 
+/// Interface for sending elicitation requests to the UI and awaiting a response.
 pub type SendElicitation = Box<
-    dyn Fn(RequestId, Elicitation) -> Pin<Box<dyn Future<Output = ElicitationResponse> + Send>>
-        + Send
-        + Sync,
+    dyn Fn(RequestId, Elicitation) -> BoxFuture<'static, Result<ElicitationResponse>> + Send + Sync,
 >;
 
 /// MCP client implemented on top of the official `rmcp` SDK.

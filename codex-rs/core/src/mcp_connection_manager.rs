@@ -145,7 +145,7 @@ impl ElicitationRequestManager {
             let elicitation_requests = elicitation_requests.clone();
             let tx_event = tx_event.clone();
             let server_name = server_name.clone();
-            Box::pin(async move {
+            async move {
                 let (tx, rx) = oneshot::channel();
                 if let Ok(mut lock) = elicitation_requests.lock() {
                     lock.insert((server_name.clone(), id.clone()), tx);
@@ -160,9 +160,10 @@ impl ElicitationRequestManager {
                         }),
                     })
                     .await;
-                #[expect(clippy::unwrap_used)]
-                rx.await.unwrap()
-            })
+                rx.await
+                    .context("elicitation request channel closed unexpectedly")
+            }
+            .boxed()
         })
     }
 }
