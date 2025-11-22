@@ -310,8 +310,9 @@ async fn run_ratatui_app(
     {
         use crate::update_prompt::UpdatePromptOutcome;
 
+        let allow_auto_update = update_prompt::auto_update_enabled();
         let skip_update_prompt = cli.prompt.as_ref().is_some_and(|prompt| !prompt.is_empty());
-        if !skip_update_prompt {
+        if !skip_update_prompt || allow_auto_update {
             match update_prompt::run_update_prompt_if_needed(&mut tui, &initial_config).await? {
                 UpdatePromptOutcome::Continue => {}
                 UpdatePromptOutcome::RunUpdate(action) => {
