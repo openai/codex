@@ -470,7 +470,7 @@ impl CodexErr {
         ErrorEvent {
             message,
             codex_error_info: Some(self.to_codex_protocol_error()),
-            thread_id: None,
+            conversation_id: None,
             turn_id: None,
         }
     }

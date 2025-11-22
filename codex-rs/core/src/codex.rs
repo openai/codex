@@ -762,7 +762,7 @@ impl Session {
         let legacy_source = msg.clone();
         let msg = match msg {
             EventMsg::Error(mut ev) => {
-                ev.thread_id = self.conversation_id.to_string();
+                ev.conversation_id = self.conversation_id.to_string();
                 ev.turn_id = turn_context.sub_id.clone();
                 EventMsg::Error(ev)
             }
@@ -1704,8 +1704,8 @@ mod handlers {
                 msg: EventMsg::Error(ErrorEvent {
                     message: "Failed to shutdown rollout recorder".to_string(),
                     codex_error_info: Some(CodexErrorInfo::Other),
-                    thread_id: sess.conversation_id.to_string(),
-                    turn_id: sub_id.clone(),
+                    conversation_id: Some(sess.conversation_id.to_string()),
+                    turn_id: Some(sub_id.clone()),
                 }),
             };
             sess.send_event_raw(event).await;
