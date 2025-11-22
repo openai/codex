@@ -258,6 +258,11 @@ fn sanitize_user_agent(candidate: String, fallback: &str) -> String {
 
 /// Create an HTTP client with default `originator` and `User-Agent` headers set.
 pub fn create_client() -> CodexHttpClient {
+    let inner = build_reqwest_client();
+    CodexHttpClient::new(inner)
+}
+
+pub fn build_reqwest_client() -> reqwest::Client {
     use reqwest::header::HeaderMap;
 
     let mut headers = HeaderMap::new();
@@ -272,8 +277,7 @@ pub fn create_client() -> CodexHttpClient {
         builder = builder.no_proxy();
     }
 
-    let inner = builder.build().unwrap_or_else(|_| reqwest::Client::new());
-    CodexHttpClient::new(inner)
+    builder.build().unwrap_or_else(|_| reqwest::Client::new())
 }
 
 fn is_sandboxed() -> bool {

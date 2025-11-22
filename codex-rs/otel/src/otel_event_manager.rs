@@ -131,7 +131,18 @@ impl OtelEventManager {
             Ok(response) => (Some(response.status().as_u16()), None),
             Err(error) => (error.status().map(|s| s.as_u16()), Some(error.to_string())),
         };
+        self.record_api_request(attempt, status, error.as_deref(), duration);
 
+        response
+    }
+
+    pub fn record_api_request(
+        &self,
+        attempt: u64,
+        status: Option<u16>,
+        error: Option<&str>,
+        duration: Duration,
+    ) {
         tracing::event!(
             tracing::Level::INFO,
             event.name = "codex.api_request",
@@ -149,8 +160,6 @@ impl OtelEventManager {
             error.message = error,
             attempt = attempt,
         );
-
-        response
     }
 
     pub fn log_sse_event<E>(
