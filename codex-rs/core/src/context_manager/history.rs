@@ -157,7 +157,7 @@ impl ContextManager {
             .saturating_mul(3)
             .checked_div(4)
             .unwrap_or(0)
-            .saturating_sub(550)
+            .saturating_sub(650)
     }
 
     pub(crate) fn get_total_token_usage(&self) -> i64 {
