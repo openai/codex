@@ -168,7 +168,6 @@ pub(crate) struct TurnSummary {
 
 pub(crate) type TurnSummaryStore = Arc<Mutex<HashMap<ConversationId, TurnSummary>>>;
 
-const CODEX_CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
 // Duration before a ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 struct ActiveLogin {
@@ -460,12 +459,6 @@ impl CodexMessageProcessor {
                 params: _,
             } => {
                 self.get_user_agent(request_id).await;
-            }
-            ClientRequest::GetClientInfo {
-                request_id,
-                params: _,
-            } => {
-                self.get_client_info(request_id).await;
             }
             ClientRequest::UserInfo {
                 request_id,
