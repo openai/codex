@@ -14,6 +14,7 @@ use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ApprovalRequirement;
 use crate::tools::sandboxing::ProvidesSandboxRetryData;
 use crate::tools::sandboxing::SandboxAttempt;
+use crate::tools::sandboxing::SandboxOverride;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
@@ -57,7 +58,7 @@ impl ToolOrchestrator {
             default_approval_requirement(approval_policy, &turn_ctx.sandbox_policy)
         });
         match requirement {
-            ApprovalRequirement::Skip => {
+            ApprovalRequirement::Skip { .. } => {
                 otel.tool_decision(otel_tn, otel_ci, ReviewDecision::Approved, otel_cfg);
             }
             ApprovalRequirement::Forbidden { reason } => {
@@ -100,12 +101,13 @@ impl ToolOrchestrator {
         }
 
         // 2) First attempt under the selected sandbox.
-        let mut initial_sandbox = self
-            .sandbox
-            .select_initial(&turn_ctx.sandbox_policy, tool.sandbox_preference());
-        if tool.wants_escalated_first_attempt(req) {
-            initial_sandbox = crate::exec::SandboxType::None;
-        }
+        let initial_sandbox = match tool.sandbox_mode_for_first_attempt(req) {
+            SandboxOverride::BypassSandboxFirstAttempt => crate::exec::SandboxType::None,
+            SandboxOverride::NoOverride => self
+                .sandbox
+                .select_initial(&turn_ctx.sandbox_policy, tool.sandbox_preference()),
+        };
+
         // Platform-specific flag gating is handled by SandboxManager::select_initial
         // via crate::safety::get_platform_sandbox().
         let initial_attempt = SandboxAttempt {
