@@ -1057,7 +1057,7 @@ impl Config {
         let mut model_providers = built_in_model_providers();
         // Merge user-defined providers into the built-in list.
         for (key, provider) in cfg.model_providers.into_iter() {
-            model_providers.entry(key).or_insert(provider);
+            model_providers.insert(key, provider);
         }
 
         let model_provider_id = model_provider
@@ -3544,6 +3544,60 @@ trust_level = "untrusted"
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod provider_override_tests {
+    use super::*;
+    use crate::model_provider_info::OLLAMA_OSS_PROVIDER_ID;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_user_config_overrides_builtin_provider() -> std::io::Result<()> {
+        let codex_home = TempDir::new().expect("tempdir");
+        let cwd = TempDir::new().expect("tempdir");
+
+        // 1. Define a user config that overrides the built-in "ollama" provider
+        //    with a custom base_url.
+        let custom_base_url = "http://192.168.1.100:11434/v1";
+        let toml = format!(
+            r#"
+[model_providers.{}]
+name = "Ollama"
+base_url = "{}"
+"#,
+            OLLAMA_OSS_PROVIDER_ID, custom_base_url
+        );
+
+        let cfg: ConfigToml = toml::from_str(&toml).expect("TOML deserialization");
+
+        // 2. Load the config
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides {
+                cwd: Some(cwd.path().to_path_buf()),
+                ..Default::default()
+            },
+            codex_home.path().to_path_buf(),
+        )?;
+
+        // 3. Verify that the provider in the loaded config has the CUSTOM base_url,
+        //    not the default localhost one.
+        let provider = config
+            .model_providers
+            .get(OLLAMA_OSS_PROVIDER_ID)
+            .expect("ollama provider should exist");
+
+        assert_eq!(
+            provider.base_url.as_deref(),
+            Some(custom_base_url),
+            "User config should override built-in provider base_url"
+        );
+
+        Ok(())
+    }
+}
+
+
 
 #[cfg(test)]
 mod notifications_tests {
