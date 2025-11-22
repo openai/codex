@@ -35,7 +35,7 @@ Optional and experimental capabilities are toggled via the `[features]` table in
 [features]
 streamable_shell = true          # enable the streamable exec tool
 web_search_request = true        # allow the model to request web searches
-# subagent_tools = true          # expose spawn/fork/list/await/logs/prune subagent tools
+# subagent_tools = true          # expose subagent_* orchestration tools (spawn/fork/send_message/list/await/watchdog/logs/prune/cancel)
 # view_image_tool defaults to true; omit to keep defaults
 ```
 
@@ -49,7 +49,7 @@ Supported features:
 | `apply_patch_freeform`                    |  false  | Beta         | Include the freeform `apply_patch` tool              |
 | `view_image_tool`                         |  true   | Stable       | Include the `view_image` tool                        |
 | `web_search_request`                      |  false  | Stable       | Allow the model to issue web searches                |
-| `subagent_tools`                          |  false  | Experimental | Enable built-in subagent orchestration tools         |
+| `subagent_tools`                          |  false  | Experimental | Enable built-in subagent orchestration tools (spawn/fork/send_message/list/await/watchdog/logs/prune/cancel) |
 | `experimental_sandbox_command_assessment` |  false  | Experimental | Enable model-based sandbox risk assessment           |
 | `ghost_commit`                            |  false  | Experimental | Create a ghost commit each turn                      |
 | `enable_experimental_windows_sandbox`     |  false  | Experimental | Use the Windows restricted-token sandbox             |
@@ -362,9 +362,24 @@ max_active_subagents = 8
 
 When the limit is reached, additional `spawn`/`fork` tool calls immediately return an error telling the model to prune or await existing children before launching new work. Values below 1 are rejected, and values above 64 are clamped to 64 to prevent runaway resource use.
 
+As a rule of thumb:
+
+- Keep the default of `8` for typical workflows with a handful of concurrent workers.
+- Lower the value (for example, `2`–`4`) on resource-constrained machines or when you rarely use subagents and want a tighter bound on memory.
+- Raise it cautiously (for example, `16`–`32`) only if you are intentionally orchestrating many parallel subagents and are confident your machine has CPU and memory headroom.
+
 ### root_agent_uses_user_messages
 
-Controls how the root agent’s messages to a subagent are represented in the subagent’s own history. When `true` (default), root-to-subagent messages are injected as `user` turns in the child. When `false`, every cross-agent message arrives only via `subagent_await` tool results, so the child must explicitly read the tool output to see root instructions.
+Controls how the root agent’s messages to a subagent are represented in the subagent’s own history.
+
+When `true` (default), messages the root sends with `subagent_send_message` are injected as ordinary `user` turns in the child. This keeps the subagent’s prompt simple and matches how models are usually trained to read instructions. For example, the child might see:
+
+```text
+user: Please summarize the last 10 log lines.
+assistant: …
+```
+
+When `false`, cross-agent messages arrive only via `subagent_await` tool results, and the child must explicitly read the tool output to discover what the root said. Only disable this if you are experimenting with fully tool-centric prompting and are prepared to handle the extra plumbing inside the subagent.
 
 ### subagent_root_inbox_autosubmit
 
@@ -386,19 +401,27 @@ and whether it may auto-start a follow-up turn based on those messages. When
 When `false`, the root must call `subagent_await` explicitly to see inbox
 messages during a turn, and no autosubmitted turns are emitted while idle.
 
+Example: if a worker subagent finishes while the root is idle and
+`subagent_root_inbox_autosubmit = true`, Codex will drain the inbox, record a
+synthetic `subagent_await` call/output for the completion in the root
+transcript, and immediately start a new turn so the root can read the result
+and decide what to do next without waiting for fresh user input.
+
 ### subagent_inbox_inject_before_tools
 
 Controls where synthetic `subagent_await` tool calls and outputs derived from
 inbox delivery are injected relative to real tool outputs inside a turn.
 
-- When `false` (default), Codex records the model’s tool call and tool
-  output(s) for a turn first, and only then appends synthetic `subagent_await`
-  calls/outputs derived from inbox messages (Option A). This is closer to
-  training-time patterns where the model generally sees its own tool call and
-  result before extra context.
-- When `true`, Codex records synthetic `subagent_await` calls/outputs first
-  and then appends tool outputs (Option B), which is closer to strict
-  chronological ordering when inbox messages arrive while tools are running.
+- When `false` (default), Codex records the model’s tool call(s) and tool
+  output(s) for a turn first, and then appends any synthetic `subagent_await`
+  calls/outputs derived from inbox messages. This most closely matches common
+  training patterns where the model sees its own tool call and result before
+  additional context, and is recommended for most setups.
+- When `true`, Codex records synthetic `subagent_await` calls/outputs
+  immediately after the model’s messages/tool calls and before the tool
+  outputs. This is closer to strict chronological ordering when inbox
+  messages arrive while tools are running, because the synthetic await
+  appears ahead of the corresponding tool results in the history.
 
 This flag only affects how Codex orders conversation items in history; it
 never splices synthetic items into the middle of an in-flight streaming turn.

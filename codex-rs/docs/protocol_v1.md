@@ -2,7 +2,7 @@ Overview of Protocol Defined in [protocol.rs](../core/src/protocol.rs) and [agen
 
 The goal of this document is to define terminology used in the system and explain the expected behavior of the system.
 
-NOTE: The code might not completely match this spec. There are a few minor changes that need to be made after this spec has been reviewed, which will not alter the existing TUI's functionality.
+NOTE: This document summarizes the protocol at a high level. The Rust types and enums in [protocol.rs](../core/src/protocol.rs) are the source of truth and may occasionally include additional fields or variants beyond what is covered here.
 
 ## Entities
 
@@ -79,11 +79,15 @@ For complete documentation of the `Op` and `EventMsg` variants, refer to [protoc
   - `EventMsg::Error` – A task stopped with an error
   - `EventMsg::Warning` – A non-fatal warning that the client should surface to the user
   - `EventMsg::TurnComplete` – Contains a `response_id` bookmark for last `response_id` executed by the task. This can be used to continue the task at a later point in time, perhaps with additional user input.
-- `EventMsg::SubagentLifecycle` – Emits `SubagentSummary` payloads (now including `agent_id`, `parent_agent_id`, and pending inbox counts) whenever a child session is created, updates status/reasoning headers, or is removed.
-  These lifecycle events now persist in rollout files so `codex resume` can restore prior subagent state (attachments on spawn/fork and detach on cancel/prune).
-- `EventMsg::AgentInbox` – Notifies the UI when a subagent’s inbox depth changes, e.g., after the parent sends an interrupt. Contains the target `agent_id`, `session_id`, and the counts of pending regular vs interrupt messages so UIs can render badges without polling.
+- `EventMsg::SubagentLifecycle` – Emits `SubagentSummary` payloads that describe each child session, including its `agent_id`, `parent_agent_id`, and current pending inbox counts.
+  These lifecycle events are emitted whenever the daemon’s view of a subagent changes (creation, status/reasoning-header updates, or removal). They also persist in rollout files so `codex resume` can rebuild prior subagent state—including attachments on spawn/fork and detach on cancel/prune—before replaying model turns.
+- `EventMsg::AgentInbox` – Notifies the UI when a subagent’s inbox depth changes, for example after the parent sends an interrupt or a watchdog ping arrives. The payload includes the target `agent_id`, `session_id`, and the counts of pending regular vs interrupt messages so UIs can render badges without polling.
+  For example, if the root interrupts child agent `3`, the UI may receive an `AgentInbox` event for `agent_id = 3` showing one pending interrupt message and zero regular messages.
 
-Subagent tool reminders: `subagent_await` accepts an optional `timeout_s` capped at 1,800 s (30 minutes). Omit it or pass 0 to use the 30-minute default; prefer at least 300 s and use backoff (30s → 60s → 120s) so you can check on children, log progress, or deliver interrupts instead of parking for the full cap.
+#### Subagent tool reminders
+
+- `subagent_await` accepts an optional `timeout_s` capped at 1,800 s (30 minutes). Omit it or pass `0` to use the 30-minute default. Each `timeout_s` must be at least 300 s (5 minutes); prefer 5–30 minute timeouts and use backoff (for example, 300s → 600s → 1,200s) so you can check on children, log progress, or deliver interrupts instead of parking for the full cap.
+- `subagent_logs` is read-only and does not change a child’s state; prefer it when you only need to inspect recent activity without advancing the subagent.
 
 The `response_id` returned from each task matches the OpenAI `response_id` stored in the API's `/responses` endpoint. It can be stored and used in future `Sessions` to resume threads of work.
 
