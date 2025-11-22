@@ -59,6 +59,8 @@ struct StatusHistoryCell {
     approval: String,
     sandbox: String,
     agents_summary: String,
+    agents_truncated: bool,
+    agents_limit_bytes: usize,
     account: Option<StatusAccountDisplay>,
     session_id: Option<String>,
     token_usage: StatusTokenUsageData,
@@ -110,7 +112,7 @@ impl StatusHistoryCell {
             SandboxPolicy::ReadOnly => "read-only".to_string(),
             SandboxPolicy::WorkspaceWrite { .. } => "workspace-write".to_string(),
         };
-        let agents_summary = compose_agents_summary(config);
+        let (agents_summary, agents_truncated) = compose_agents_summary(config);
         let account = compose_account_display(auth_manager);
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
         let context_window = config.model_context_window.and_then(|window| {
@@ -136,6 +138,8 @@ impl StatusHistoryCell {
             approval,
             sandbox,
             agents_summary,
+            agents_truncated,
+            agents_limit_bytes: config.project_doc_max_bytes,
             account,
             session_id,
             token_usage,
@@ -282,6 +286,45 @@ impl StatusHistoryCell {
     }
 }
 
+/// Converts a raw byte count into a short human-readable string (for example
+/// `32 KB`) for display inside the `/status` card.
+fn format_byte_limit(bytes: usize) -> String {
+    if bytes == 0 {
+        return "0 B".to_string();
+    }
+
+    const UNITS: [(&str, u64); 5] = [
+        ("B", 1),
+        ("KB", 1024),
+        ("MB", 1024 * 1024),
+        ("GB", 1024 * 1024 * 1024),
+        ("TB", 1024 * 1024 * 1024 * 1024),
+    ];
+
+    let bytes_u64 = bytes as u64;
+    let mut unit = "B";
+    let mut divisor = 1u64;
+    for &(label, size) in &UNITS {
+        if bytes_u64 >= size {
+            unit = label;
+            divisor = size;
+        } else {
+            break;
+        }
+    }
+
+    if unit == "B" {
+        return format!("{bytes} B");
+    }
+
+    let value = (bytes_u64 as f64) / (divisor as f64);
+    let mut text = format!("{value:.1}");
+    if text.ends_with(".0") {
+        text.truncate(text.len() - 2);
+    }
+    format!("{text} {unit}")
+}
+
 impl HistoryCell for StatusHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
@@ -362,7 +405,14 @@ impl HistoryCell for StatusHistoryCell {
         lines.push(formatter.line("Directory", vec![Span::from(directory_value)]));
         lines.push(formatter.line("Approval", vec![Span::from(self.approval.clone())]));
         lines.push(formatter.line("Sandbox", vec![Span::from(self.sandbox.clone())]));
-        lines.push(formatter.line("Agents.md", vec![Span::from(self.agents_summary.clone())]));
+        let mut agents_spans = vec![Span::from(self.agents_summary.clone())];
+        if self.agents_truncated {
+            let limit_label = format_byte_limit(self.agents_limit_bytes);
+            agents_spans.push(Span::from(" (truncated; limit ").yellow());
+            agents_spans.push(Span::from(limit_label).yellow());
+            agents_spans.push(Span::from(")").yellow());
+        }
+        lines.push(formatter.line("Agents.md", agents_spans));
 
         if let Some(account_value) = account_value {
             lines.push(formatter.line("Account", vec![Span::from(account_value)]));

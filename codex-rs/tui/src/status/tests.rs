@@ -17,6 +17,7 @@ use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use insta::assert_snapshot;
 use ratatui::prelude::*;
+use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -689,6 +690,38 @@ fn status_snapshot_cached_limits_hide_credits_without_flag() {
     }
     let sanitized = sanitize_directory(rendered_lines).join("\n");
     assert_snapshot!(sanitized);
+}
+
+#[test]
+fn status_shows_agents_doc_truncation_indicator() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home);
+    config.project_doc_max_bytes = 4;
+    config.cwd = temp_home.path().to_path_buf();
+    fs::write(config.cwd.join("AGENTS.md"), "0123456789").expect("write agents");
+
+    let auth_manager = test_auth_manager(&config);
+    let usage = TokenUsage::default();
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 1, 1, 0, 0, 0)
+        .single()
+        .expect("timestamp");
+
+    let composite = new_status_output(
+        &config,
+        &auth_manager,
+        &usage,
+        None,
+        &None,
+        None,
+        captured_at,
+    );
+    let lines = render_lines(&composite.display_lines(80));
+    let agents_line = lines
+        .into_iter()
+        .find(|line| line.contains("Agents.md:"))
+        .expect("agents line present");
+    assert!(agents_line.contains("truncated; limit 4 B"));
 }
 
 #[test]
