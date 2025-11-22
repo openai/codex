@@ -197,8 +197,6 @@ mod windows_impl {
         ensure_codex_home_exists(codex_home)?;
 
         let current_dir = cwd.to_path_buf();
-        // for now, don't fail if we detect world-writable directories
-        // audit::audit_everyone_writable(&current_dir, &env_map)?;
         let logs_base_dir = Some(codex_home);
         log_start(&command, logs_base_dir);
         let cap_sid_path = cap_sid_file(codex_home);

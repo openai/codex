@@ -88,6 +88,7 @@ pub fn compute_allow_paths(
 #[cfg(test)]
 mod tests {
     use super::compute_allow_paths;
+    use super::AllowDenyPaths;
     use codex_protocol::protocol::SandboxPolicy;
     use std::collections::HashMap;
     use std::collections::HashSet;
@@ -112,12 +113,8 @@ mod tests {
 
         let paths = compute_allow_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
 
-        assert!(paths
-            .allow
-            .contains(&dunce::canonicalize(&command_cwd).unwrap()));
-        assert!(paths
-            .allow
-            .contains(&dunce::canonicalize(&extra_root).unwrap()));
+        assert!(paths.allow.contains(&command_cwd));
+        assert!(paths.allow.contains(&extra_root));
         assert!(paths.deny.is_empty(), "no deny paths expected");
     }
 
@@ -140,19 +137,14 @@ mod tests {
 
         let paths = compute_allow_paths(&policy, &command_cwd, &command_cwd, &env_map);
 
-        assert!(paths
-            .allow
-            .contains(&dunce::canonicalize(&command_cwd).unwrap()));
-        assert!(!paths
-            .allow
-            .contains(&dunce::canonicalize(&temp_dir).unwrap()));
+        assert!(paths.allow.contains(&command_cwd));
+        assert!(!paths.allow.contains(&temp_dir));
         assert!(paths.deny.is_empty(), "no deny paths expected");
     }
 
     #[test]
     fn denies_git_dir_inside_writable_root() {
-        let tmp = TempDir::new().expect("tempdir");
-        let command_cwd = tmp.path().join("workspace");
+        let command_cwd = PathBuf::from(r"C:\Workspace");
         let git_dir = command_cwd.join(".git");
         let _ = fs::create_dir_all(&git_dir);
 
@@ -165,12 +157,9 @@ mod tests {
 
         let paths = compute_allow_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
         let expected_allow: HashSet<PathBuf> =
-            [dunce::canonicalize(&command_cwd).unwrap()]
-                .into_iter()
-                .collect();
-        let expected_deny: HashSet<PathBuf> = [dunce::canonicalize(&git_dir).unwrap()]
-            .into_iter()
-            .collect();
+            [command_cwd.canonicalize().unwrap()].into_iter().collect();
+        let expected_deny: HashSet<PathBuf> =
+            [git_dir.canonicalize().unwrap()].into_iter().collect();
 
         assert_eq!(expected_allow, paths.allow);
         assert_eq!(expected_deny, paths.deny);
@@ -178,8 +167,7 @@ mod tests {
 
     #[test]
     fn skips_git_dir_when_missing() {
-        let tmp = TempDir::new().expect("tempdir");
-        let command_cwd = tmp.path().join("workspace");
+        let command_cwd = PathBuf::from(r"C:\Workspace");
         let _ = fs::create_dir_all(&command_cwd);
 
         let policy = SandboxPolicy::WorkspaceWrite {
