@@ -8,14 +8,9 @@ import { resolveBashPath } from "./bashSelection";
 import { readOsRelease } from "./osRelease";
 import { resolveTargetTriple } from "./platform";
 
-const scriptPath = process.argv[1]
-  ? path.resolve(process.argv[1])
-  : process.cwd();
-const __dirname = path.dirname(scriptPath);
-
 async function main(): Promise<void> {
   const targetTriple = resolveTargetTriple(process.platform, process.arch);
-  const vendorRoot = path.join(__dirname, "..", "vendor");
+  const vendorRoot = path.resolve(__dirname, "..", "vendor");
   const targetRoot = path.join(vendorRoot, targetTriple);
   const execveWrapperPath = path.join(targetRoot, "codex-execve-wrapper");
   const serverPath = path.join(targetRoot, "codex-exec-mcp-server");
