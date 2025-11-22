@@ -3062,7 +3062,10 @@ mod tests {
 
         // Verify placeholder was created
         let placeholder = format!("[Pasted Content {} chars]", large_content.chars().count());
-        assert_eq!(composer.textarea.text(), format!("/prompts:code-review {}", placeholder));
+        assert_eq!(
+            composer.textarea.text(),
+            format!("/prompts:code-review {}", placeholder)
+        );
         assert_eq!(composer.pending_pastes.len(), 1);
         assert_eq!(composer.pending_pastes[0].0, placeholder);
         assert_eq!(composer.pending_pastes[0].1, large_content);
