@@ -1,21 +1,33 @@
 use crate::policy::SandboxPolicy;
 use dunce::canonicalize;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct AllowDenyPaths {
+    pub allow: HashSet<PathBuf>,
+    pub deny: HashSet<PathBuf>,
+}
 
 pub fn compute_allow_paths(
     policy: &SandboxPolicy,
     policy_cwd: &Path,
     command_cwd: &Path,
     env_map: &HashMap<String, String>,
-) -> Vec<PathBuf> {
-    let mut allow: Vec<PathBuf> = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+) -> AllowDenyPaths {
+    let mut allow: HashSet<PathBuf> = HashSet::new();
+    let mut deny: HashSet<PathBuf> = HashSet::new();
 
     let mut add_path = |p: PathBuf| {
-        if seen.insert(p.to_string_lossy().to_string()) && p.exists() {
-            allow.push(p);
+        if p.exists() {
+            allow.insert(p);
+        }
+    };
+    let mut add_deny_path = |p: PathBuf| {
+        if p.exists() {
+            deny.insert(p);
         }
     };
     let include_tmp_env_vars = matches!(
@@ -27,16 +39,39 @@ pub fn compute_allow_paths(
     );
 
     if matches!(policy, SandboxPolicy::WorkspaceWrite { .. }) {
-        add_path(command_cwd.to_path_buf());
+        let add_writable_root = |root: PathBuf,
+                                 policy_cwd: &Path,
+                                 add_allow: &mut dyn FnMut(PathBuf),
+                                 add_deny: &mut dyn FnMut(PathBuf)| {
+            let candidate = if root.is_absolute() {
+                root
+            } else {
+                policy_cwd.join(root)
+            };
+            let canonical = canonicalize(&candidate).unwrap_or(candidate);
+            add_allow(canonical.clone());
+
+            let git_dir = canonical.join(".git");
+            if git_dir.is_dir() {
+                add_deny(git_dir);
+            }
+        };
+
+        add_writable_root(
+            command_cwd.to_path_buf(),
+            policy_cwd,
+            &mut add_path,
+            &mut add_deny_path,
+        );
+
         if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = policy {
             for root in writable_roots {
-                let candidate = if root.is_absolute() {
-                    root.clone()
-                } else {
-                    policy_cwd.join(root)
-                };
-                let canonical = canonicalize(&candidate).unwrap_or(candidate);
-                add_path(canonical);
+                add_writable_root(
+                    root.clone(),
+                    policy_cwd,
+                    &mut add_path,
+                    &mut add_deny_path,
+                );
             }
         }
     }
@@ -51,12 +86,14 @@ pub fn compute_allow_paths(
             }
         }
     }
-    allow
+    AllowDenyPaths { allow, deny }
 }
 
 #[cfg(test)]
 mod tests {
     use super::compute_allow_paths;
+    use super::AllowDenyPaths;
+    use std::collections::HashSet;
     use codex_protocol::protocol::SandboxPolicy;
     use std::collections::HashMap;
     use std::fs;
@@ -76,16 +113,11 @@ mod tests {
             exclude_slash_tmp: false,
         };
 
-        let allow = compute_allow_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
+        let paths = compute_allow_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
 
-        assert!(
-            allow.iter().any(|p| p == &command_cwd),
-            "command cwd should be allowed"
-        );
-        assert!(
-            allow.iter().any(|p| p == &extra_root),
-            "additional writable root should be allowed"
-        );
+        assert!(paths.allow.contains(&command_cwd));
+        assert!(paths.allow.contains(&extra_root));
+        assert!(paths.deny.is_empty(), "no deny paths expected");
     }
 
     #[test]
@@ -104,15 +136,49 @@ mod tests {
         let mut env_map = HashMap::new();
         env_map.insert("TEMP".into(), temp_dir.to_string_lossy().to_string());
 
-        let allow = compute_allow_paths(&policy, &command_cwd, &command_cwd, &env_map);
+        let paths = compute_allow_paths(&policy, &command_cwd, &command_cwd, &env_map);
 
-        assert!(
-            allow.iter().any(|p| p == &command_cwd),
-            "command cwd should be allowed"
-        );
-        assert!(
-            !allow.iter().any(|p| p == &temp_dir),
-            "TEMP should be excluded when exclude_tmpdir_env_var is true"
-        );
+        assert!(paths.allow.contains(&command_cwd));
+        assert!(!paths.allow.contains(&temp_dir));
+        assert!(paths.deny.is_empty(), "no deny paths expected");
+    }
+
+    #[test]
+    fn denies_git_dir_inside_writable_root() {
+        let command_cwd = PathBuf::from(r"C:\Workspace");
+        let git_dir = command_cwd.join(".git");
+        let _ = fs::create_dir_all(&git_dir);
+
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: false,
+        };
+
+        let paths = compute_allow_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
+        let expected_allow: HashSet<PathBuf> =
+            [command_cwd.canonicalize().unwrap()].into_iter().collect();
+        let expected_deny: HashSet<PathBuf> = [git_dir.canonicalize().unwrap()].into_iter().collect();
+
+        assert_eq!(expected_allow, paths.allow);
+        assert_eq!(expected_deny, paths.deny);
+    }
+
+    #[test]
+    fn skips_git_dir_when_missing() {
+        let command_cwd = PathBuf::from(r"C:\Workspace");
+        let _ = fs::create_dir_all(&command_cwd);
+
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: false,
+        };
+
+        let paths = compute_allow_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
+        assert_eq!(paths.allow.len(), 1);
+        assert!(paths.deny.is_empty(), "no deny when .git is absent");
     }
 }

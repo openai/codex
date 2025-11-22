@@ -23,9 +23,11 @@ pub use stub::CaptureResult;
 #[cfg(target_os = "windows")]
 mod windows_impl {
     use super::acl::add_allow_ace;
+    use super::acl::add_deny_write_ace;
     use super::acl::allow_null_device;
     use super::acl::revoke_ace;
     use super::allow::compute_allow_paths;
+    use super::allow::AllowDenyPaths;
     use super::cap::cap_sid_file;
     use super::cap::load_or_create_cap_sids;
     use super::env::apply_no_network_to_env;
@@ -238,7 +240,8 @@ mod windows_impl {
         }
 
         let persist_aces = is_workspace_write;
-        let allow = compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map);
+        let AllowDenyPaths { allow, deny } =
+            compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map);
         let mut guards: Vec<(PathBuf, *mut c_void)> = Vec::new();
         unsafe {
             for p in &allow {
@@ -251,6 +254,13 @@ mod windows_impl {
                         } else {
                             guards.push((p.clone(), psid_to_use));
                         }
+                    }
+                }
+            }
+            for p in &deny {
+                if let Ok(added) = add_deny_write_ace(p, psid_to_use) {
+                    if added && !persist_aces {
+                        guards.push((p.clone(), psid_to_use));
                     }
                 }
             }
