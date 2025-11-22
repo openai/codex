@@ -7,6 +7,7 @@ use codex_core::built_in_model_providers;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
+use codex_core::features::Feature;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::RolloutItem;
@@ -27,6 +28,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::mount_compact_json_once;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
@@ -1915,8 +1917,11 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
         ev_reasoning_item("post-reasoning", &["post"], &[&post_last_reasoning_content]),
         ev_completed_with_tokens("r2", 80),
     ]);
+    let resume_turn = sse(vec![
+        ev_assistant_message("m4", FINAL_REPLY),
+        ev_completed_with_tokens("r4", 1),
+    ]);
 
-    let auto_summary_payload = auto_summary(AUTO_SUMMARY_TEXT);
     let request_log = mount_sse_sequence(
         &server,
         vec![
@@ -1924,31 +1929,35 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
             first_turn,
             // Turn 2: reasoning after last user (should be ignored for compaction).
             second_turn,
-            // Turn 3: auto compact, only if the pre-last reasoning was counted.
-            sse(vec![
-                ev_assistant_message("m3", &auto_summary_payload),
-                ev_completed_with_tokens("r3", 1),
-            ]),
-            // Turn 4: resume after compaction.
-            sse(vec![
-                ev_assistant_message("m4", FINAL_REPLY),
-                ev_completed_with_tokens("r4", 1),
-            ]),
+            // Turn 3: resume after remote compaction.
+            resume_turn,
         ],
     )
     .await;
 
+    let compacted_history = vec![codex_protocol::models::ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![codex_protocol::models::ContentItem::OutputText {
+            text: "REMOTE_COMPACT_SUMMARY".to_string(),
+        }],
+    }];
+    let compact_mock =
+        mount_compact_json_once(&server, serde_json::json!({ "output": compacted_history })).await;
+
     let codex = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
             set_test_compact_prompt(config);
             config.model_auto_compact_token_limit = Some(300);
+            config.features.enable(Feature::RemoteCompaction);
         })
         .build(&server)
         .await
         .expect("build codex")
         .codex;
 
-    for user in [first_user, second_user] {
+    for (idx, user) in [first_user, second_user].into_iter().enumerate() {
         codex
             .submit(Op::UserInput {
                 items: vec![UserInput::Text { text: user.into() }],
@@ -1956,34 +1965,41 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
             .await
             .unwrap();
         wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+        if idx == 0 {
+            assert!(
+                compact_mock.requests().is_empty(),
+                "remote compaction should not run after the first turn"
+            );
+        }
     }
+
+    let compact_requests = compact_mock.requests();
+    assert_eq!(
+        compact_requests.len(),
+        1,
+        "remote compaction should run once after the second turn"
+    );
+    assert_eq!(
+        compact_requests[0].path(),
+        "/v1/responses/compact",
+        "remote compaction should hit the compact endpoint"
+    );
 
     let requests = request_log.requests();
     assert_eq!(
         requests.len(),
-        4,
-        "second turn should trigger an auto compact and follow-up resume"
+        3,
+        "conversation should include two user turns and a post-compaction resume"
     );
-
-    // If we double-counted the post-last reasoning, compaction would fire here.
     let second_request_body = requests[1].body_json().to_string();
     assert!(
-        !body_contains_text(&second_request_body, SUMMARIZATION_PROMPT),
-        "summarization should not be requested before evaluating the second turn's usage"
+        !second_request_body.contains("REMOTE_COMPACT_SUMMARY"),
+        "second turn should not include compacted history"
     );
-
-    // Compaction should happen only after considering pre-last encrypted reasoning.
-    let auto_compact_body = requests[2].body_json().to_string();
+    let resume_body = requests[2].body_json().to_string();
     assert!(
-        body_contains_text(&auto_compact_body, SUMMARIZATION_PROMPT),
-        "auto compact should be the third request (after two user turns)"
-    );
-
-    // Final request resumes normal flow.
-    let resume_body = requests[3].body_json().to_string();
-    assert!(
-        body_contains_text(&resume_body, FINAL_REPLY)
-            || body_contains_text(&resume_body, &auto_summary_payload),
-        "resume request should follow auto compact"
+        resume_body.contains("REMOTE_COMPACT_SUMMARY") || resume_body.contains(FINAL_REPLY),
+        "resume request should follow remote compact and use compacted history"
     );
 }
