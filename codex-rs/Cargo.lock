@@ -1637,7 +1637,7 @@ version = "0.0.0"
 
 [[package]]
 name = "codex-windows-sandbox"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-protocol",

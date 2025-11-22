@@ -2,6 +2,7 @@
 name = "codex-lmstudio"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [lib]
 name = "codex_lmstudio"

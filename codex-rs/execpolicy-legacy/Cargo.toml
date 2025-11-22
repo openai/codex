@@ -1,8 +1,9 @@
 [package]
-edition = "2024"
 name = "codex-execpolicy-legacy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 description = "Legacy exec policy engine for validating proposed exec calls."
-version = { workspace = true }
 
 [[bin]]
 name = "codex-execpolicy-legacy"
