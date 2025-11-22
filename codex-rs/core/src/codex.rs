@@ -1895,7 +1895,7 @@ pub(crate) async fn run_task(
         .await
         {
             Ok(turn_output) => {
-                let TurnRunResult { processed_items } = turn_output;
+                let processed_items = turn_output;
                 let limit = turn_context
                     .client
                     .get_auto_compact_token_limit()
@@ -1958,7 +1958,7 @@ async fn run_turn(
     turn_diff_tracker: SharedTurnDiffTracker,
     input: Vec<ResponseItem>,
     cancellation_token: CancellationToken,
-) -> CodexResult<TurnRunResult> {
+) -> CodexResult<Vec<ProcessedResponseItem>> {
     let mcp_tools = sess
         .services
         .mcp_connection_manager
@@ -2089,11 +2089,6 @@ pub struct ProcessedResponseItem {
     pub response: Option<ResponseInputItem>,
 }
 
-#[derive(Debug)]
-struct TurnRunResult {
-    processed_items: Vec<ProcessedResponseItem>,
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn try_run_turn(
     router: Arc<ToolRouter>,
@@ -2102,7 +2097,7 @@ async fn try_run_turn(
     turn_diff_tracker: SharedTurnDiffTracker,
     prompt: &Prompt,
     cancellation_token: CancellationToken,
-) -> CodexResult<TurnRunResult> {
+) -> CodexResult<Vec<ProcessedResponseItem>> {
     let rollout_item = RolloutItem::TurnContext(TurnContextItem {
         cwd: turn_context.cwd.clone(),
         approval_policy: turn_context.approval_policy,
@@ -2264,9 +2259,7 @@ async fn try_run_turn(
                     sess.send_event(&turn_context, msg).await;
                 }
 
-                let result = TurnRunResult { processed_items };
-
-                return Ok(result);
+                return Ok(processed_items);
             }
             ResponseEvent::OutputTextDelta(delta) => {
                 // In review child threads, suppress assistant text deltas; the

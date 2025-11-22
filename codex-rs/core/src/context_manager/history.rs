@@ -145,17 +145,19 @@ impl ContextManager {
                     None
                 }
             })
-            .fold(0usize, |acc, len| {
-                let decoded_bytes = len
-                    .saturating_mul(3)
-                    .checked_div(4)
-                    .unwrap_or(0)
-                    .saturating_sub(550);
-                acc.saturating_add(decoded_bytes)
-            });
+            .map(Self::estimate_reasoning_length)
+            .fold(0usize, usize::saturating_add);
 
         let token_estimate = approx_tokens_from_byte_count(total_reasoning_bytes);
         token_estimate as usize
+    }
+
+    fn estimate_reasoning_length(encoded_len: usize) -> usize {
+        encoded_len
+            .saturating_mul(3)
+            .checked_div(4)
+            .unwrap_or(0)
+            .saturating_sub(550)
     }
 
     pub(crate) fn get_total_token_usage(&self) -> i64 {
