@@ -39,23 +39,24 @@ pub fn compute_allow_paths(
     );
 
     if matches!(policy, SandboxPolicy::WorkspaceWrite { .. }) {
-        let add_writable_root = |root: PathBuf,
-                                 policy_cwd: &Path,
-                                 add_allow: &mut dyn FnMut(PathBuf),
-                                 add_deny: &mut dyn FnMut(PathBuf)| {
-            let candidate = if root.is_absolute() {
-                root
-            } else {
-                policy_cwd.join(root)
-            };
-            let canonical = canonicalize(&candidate).unwrap_or(candidate);
-            add_allow(canonical.clone());
+        let add_writable_root =
+            |root: PathBuf,
+             policy_cwd: &Path,
+             add_allow: &mut dyn FnMut(PathBuf),
+             add_deny: &mut dyn FnMut(PathBuf)| {
+                let candidate = if root.is_absolute() {
+                    root
+                } else {
+                    policy_cwd.join(root)
+                };
+                let canonical = canonicalize(&candidate).unwrap_or(candidate);
+                add_allow(canonical.clone());
 
-            let git_dir = canonical.join(".git");
-            if git_dir.is_dir() {
-                add_deny(git_dir);
-            }
-        };
+                let git_dir = canonical.join(".git");
+                if git_dir.is_dir() {
+                    add_deny(git_dir);
+                }
+            };
 
         add_writable_root(
             command_cwd.to_path_buf(),
@@ -66,12 +67,7 @@ pub fn compute_allow_paths(
 
         if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = policy {
             for root in writable_roots {
-                add_writable_root(
-                    root.clone(),
-                    policy_cwd,
-                    &mut add_path,
-                    &mut add_deny_path,
-                );
+                add_writable_root(root.clone(), policy_cwd, &mut add_path, &mut add_deny_path);
             }
         }
     }
@@ -92,10 +88,9 @@ pub fn compute_allow_paths(
 #[cfg(test)]
 mod tests {
     use super::compute_allow_paths;
-    use super::AllowDenyPaths;
-    use std::collections::HashSet;
     use codex_protocol::protocol::SandboxPolicy;
     use std::collections::HashMap;
+    use std::collections::HashSet;
     use std::fs;
     use std::path::PathBuf;
 
@@ -159,7 +154,8 @@ mod tests {
         let paths = compute_allow_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
         let expected_allow: HashSet<PathBuf> =
             [command_cwd.canonicalize().unwrap()].into_iter().collect();
-        let expected_deny: HashSet<PathBuf> = [git_dir.canonicalize().unwrap()].into_iter().collect();
+        let expected_deny: HashSet<PathBuf> =
+            [git_dir.canonicalize().unwrap()].into_iter().collect();
 
         assert_eq!(expected_allow, paths.allow);
         assert_eq!(expected_deny, paths.deny);
