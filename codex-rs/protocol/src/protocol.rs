@@ -720,9 +720,9 @@ pub struct ErrorEvent {
     #[serde(default)]
     pub codex_error_info: Option<CodexErrorInfo>,
     #[serde(default)]
-    pub thread_id: String,
+    pub thread_id: Option<String>,
     #[serde(default)]
-    pub turn_id: String,
+    pub turn_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
