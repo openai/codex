@@ -10,6 +10,8 @@ use std::time::Duration;
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_protocol::ConversationId;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use tracing_subscriber::fmt::writer::MakeWriter;
 
 const DEFAULT_MAX_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
@@ -174,6 +176,7 @@ impl CodexLogSnapshot {
         reason: Option<&str>,
         include_logs: bool,
         rollout_path: Option<&std::path::Path>,
+        session_source: Option<SessionSource>,
     ) -> Result<()> {
         use std::collections::BTreeMap;
         use std::fs;
@@ -203,6 +206,12 @@ impl CodexLogSnapshot {
             (String::from("classification"), classification.to_string()),
             (String::from("cli_version"), cli_version.to_string()),
         ]);
+        if let Some(source) = session_source.as_ref() {
+            tags.insert(
+                String::from("session_source"),
+                session_source_tag_value(source),
+            );
+        }
         if let Some(r) = reason {
             tags.insert(String::from("reason"), r.to_string());
         }
@@ -272,6 +281,21 @@ fn display_classification(classification: &str) -> String {
         "bad_result" => "Bad result".to_string(),
         "good_result" => "Good result".to_string(),
         _ => "Other".to_string(),
+    }
+}
+
+fn session_source_tag_value(source: &SessionSource) -> String {
+    match source {
+        SessionSource::Cli => "cli".to_string(),
+        SessionSource::VSCode => "vscode".to_string(),
+        SessionSource::Exec => "exec".to_string(),
+        SessionSource::Mcp => "mcp".to_string(),
+        SessionSource::SubAgent(sub_source) => match sub_source {
+            SubAgentSource::Review => "subagent_review".to_string(),
+            SubAgentSource::Compact => "subagent_compact".to_string(),
+            SubAgentSource::Other(other) => format!("subagent_{other}"),
+        },
+        SessionSource::Unknown => "unknown".to_string(),
     }
 }
 
