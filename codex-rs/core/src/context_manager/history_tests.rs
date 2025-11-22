@@ -133,16 +133,16 @@ fn non_last_reasoning_tokens_return_zero_when_no_user_messages() {
 #[test]
 fn non_last_reasoning_tokens_ignore_entries_after_last_user() {
     let history = create_history_with_items(vec![
-        reasoning_with_encrypted_content(800),
+        reasoning_with_encrypted_content(900),
         user_msg("first"),
         reasoning_with_encrypted_content(1_000),
         user_msg("second"),
         reasoning_with_encrypted_content(2_000),
     ]);
-    // first: (800 * 0.75 - 550) / 4 = 12.5 tokens
-    // second: (1000 * 0.75 - 550) / 4 = 50 tokens
+    // first: (900 * 0.75 - 650) / 4 = 6.25 tokens
+    // second: (1000 * 0.75 - 650) / 4 = 25 tokens
     // first + second = 62.5
-    assert_eq!(history.get_non_last_reasoning_items_tokens(), 63);
+    assert_eq!(history.get_non_last_reasoning_items_tokens(), 32);
 }
 
 #[test]
