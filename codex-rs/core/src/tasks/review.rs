@@ -23,8 +23,18 @@ use codex_protocol::user_input::UserInput;
 use super::SessionTask;
 use super::SessionTaskContext;
 
-#[derive(Clone, Copy, Default)]
-pub(crate) struct ReviewTask;
+#[derive(Clone, Copy)]
+pub(crate) struct ReviewTask {
+    append_to_original_thread: bool,
+}
+
+impl ReviewTask {
+    pub(crate) fn new(append_to_original_thread: bool) -> Self {
+        Self {
+            append_to_original_thread,
+        }
+    }
+}
 
 #[async_trait]
 impl SessionTask for ReviewTask {
@@ -52,13 +62,25 @@ impl SessionTask for ReviewTask {
             None => None,
         };
         if !cancellation_token.is_cancelled() {
-            exit_review_mode(session.clone_session(), output.clone(), ctx.clone()).await;
+            exit_review_mode(
+                session.clone_session(),
+                output.clone(),
+                ctx.clone(),
+                self.append_to_original_thread,
+            )
+            .await;
         }
         None
     }
 
     async fn abort(&self, session: Arc<SessionTaskContext>, ctx: Arc<TurnContext>) {
-        exit_review_mode(session.clone_session(), None, ctx).await;
+        exit_review_mode(
+            session.clone_session(),
+            None,
+            ctx,
+            self.append_to_original_thread,
+        )
+        .await;
     }
 }
 
@@ -175,32 +197,35 @@ pub(crate) async fn exit_review_mode(
     session: Arc<Session>,
     review_output: Option<ReviewOutputEvent>,
     ctx: Arc<TurnContext>,
+    append_to_original_thread: bool,
 ) {
-    let user_message = if let Some(out) = review_output.clone() {
-        let mut findings_str = String::new();
-        let text = out.overall_explanation.trim();
-        if !text.is_empty() {
-            findings_str.push_str(text);
-        }
-        if !out.findings.is_empty() {
-            let block = format_review_findings_block(&out.findings, None);
-            findings_str.push_str(&format!("\n{block}"));
-        }
-        crate::client_common::REVIEW_EXIT_SUCCESS_TMPL.replace("{results}", &findings_str)
-    } else {
-        crate::client_common::REVIEW_EXIT_INTERRUPTED_TMPL.to_string()
-    };
+    if append_to_original_thread {
+        let user_message = if let Some(out) = review_output.clone() {
+            let mut findings_str = String::new();
+            let text = out.overall_explanation.trim();
+            if !text.is_empty() {
+                findings_str.push_str(text);
+            }
+            if !out.findings.is_empty() {
+                let block = format_review_findings_block(&out.findings, None);
+                findings_str.push_str(&format!("\n{block}"));
+            }
+            crate::client_common::REVIEW_EXIT_SUCCESS_TMPL.replace("{results}", &findings_str)
+        } else {
+            crate::client_common::REVIEW_EXIT_INTERRUPTED_TMPL.to_string()
+        };
 
-    session
-        .record_conversation_items(
-            &ctx,
-            &[ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText { text: user_message }],
-            }],
-        )
-        .await;
+        session
+            .record_conversation_items(
+                &ctx,
+                &[ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputText { text: user_message }],
+                }],
+            )
+            .await;
+    }
     session
         .send_event(
             ctx.as_ref(),

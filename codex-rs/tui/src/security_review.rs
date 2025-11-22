@@ -5,6 +5,7 @@ use crate::app_event::SecurityReviewAutoScopeSelection;
 use crate::app_event::SecurityReviewCommandState;
 use crate::app_event_sender::AppEventSender;
 use crate::diff_render::display_path_for;
+use crate::history_cell;
 use crate::mermaid::fix_mermaid_blocks;
 use crate::security_prompts::*;
 use crate::security_report_viewer::build_report_html;
@@ -20,6 +21,9 @@ use codex_core::default_retry_backoff;
 use codex_core::git_info::collect_git_info;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::protocol::TokenUsage;
+use codex_protocol::plan_tool::PlanItemArg;
+use codex_protocol::plan_tool::StepStatus;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 use futures::stream::FuturesUnordered;
 use futures::stream::StreamExt;
 use pathdiff::diff_paths;
@@ -227,6 +231,175 @@ pub(crate) struct SecurityReviewMetadata {
     pub mode: SecurityReviewMode,
     #[serde(default)]
     pub scope_paths: Vec<String>,
+}
+
+fn summarize_scope(scope_paths: &[PathBuf], repo_root: &Path) -> String {
+    if scope_paths.is_empty() {
+        return "entire repository".to_string();
+    }
+
+    let mut display_paths: Vec<String> = scope_paths
+        .iter()
+        .map(|path| display_path_for(path, repo_root))
+        .collect();
+    display_paths.sort();
+    display_paths.dedup();
+    let joined = display_paths.join(", ");
+    truncate_text(joined.as_str(), 120)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SecurityReviewPlanStep {
+    GenerateSpecs,
+    ThreatModel,
+    AnalyzeBugs,
+    PolishFindings,
+    AssembleReport,
+}
+
+#[derive(Clone)]
+struct SecurityReviewPlanItem {
+    kind: SecurityReviewPlanStep,
+    title: String,
+    status: StepStatus,
+}
+
+impl SecurityReviewPlanItem {
+    fn new(kind: SecurityReviewPlanStep, title: &str) -> Self {
+        Self {
+            kind,
+            title: title.to_string(),
+            status: StepStatus::Pending,
+        }
+    }
+}
+
+struct SecurityReviewPlanTracker {
+    sender: Option<AppEventSender>,
+    explanation: String,
+    steps: Vec<SecurityReviewPlanItem>,
+}
+
+impl SecurityReviewPlanTracker {
+    fn new(
+        mode: SecurityReviewMode,
+        scope_paths: &[PathBuf],
+        repo_root: &Path,
+        sender: Option<AppEventSender>,
+    ) -> Self {
+        let steps = plan_steps_for_mode(mode);
+        let scope_summary = summarize_scope(scope_paths, repo_root);
+        let mode_label = mode.as_str();
+        let explanation = format!("Security review plan ({mode_label}; scope: {scope_summary})");
+        let tracker = Self {
+            sender,
+            explanation,
+            steps,
+        };
+        tracker.emit_update();
+        tracker
+    }
+
+    fn complete_and_start_next(
+        &mut self,
+        finished: SecurityReviewPlanStep,
+        next: Option<SecurityReviewPlanStep>,
+    ) {
+        let mut changed = self.set_status_if_present(finished, StepStatus::Completed);
+        if let Some(next_step) = next {
+            changed |= self.set_status_if_present(next_step, StepStatus::InProgress);
+        }
+        if changed {
+            self.emit_update();
+        }
+    }
+
+    fn start_step(&mut self, step: SecurityReviewPlanStep) {
+        if self.set_status_if_present(step, StepStatus::InProgress) {
+            self.emit_update();
+        }
+    }
+
+    fn mark_complete(&mut self, step: SecurityReviewPlanStep) {
+        if self.set_status_if_present(step, StepStatus::Completed) {
+            self.emit_update();
+        }
+    }
+
+    fn set_status_if_present(&mut self, step: SecurityReviewPlanStep, status: StepStatus) -> bool {
+        let Some(entry) = self.steps.iter_mut().find(|item| item.kind == step) else {
+            return false;
+        };
+        if std::mem::discriminant(&entry.status) == std::mem::discriminant(&status) {
+            return false;
+        }
+        entry.status = status;
+        true
+    }
+
+    fn emit_update(&self) {
+        let Some(sender) = self.sender.as_ref() else {
+            return;
+        };
+
+        let plan_items: Vec<PlanItemArg> = self
+            .steps
+            .iter()
+            .map(|step| PlanItemArg {
+                step: step.title.clone(),
+                status: step.status.clone(),
+            })
+            .collect();
+        sender.send(AppEvent::InsertHistoryCell(Box::new(
+            history_cell::new_plan_update(UpdatePlanArgs {
+                explanation: Some(self.explanation.clone()),
+                plan: plan_items,
+            }),
+        )));
+        sender.send(AppEvent::SecurityReviewLog(self.build_log_summary()));
+    }
+
+    fn build_log_summary(&self) -> String {
+        let mut parts: Vec<String> = Vec::with_capacity(self.steps.len());
+        for step in &self.steps {
+            let status = match step.status {
+                StepStatus::Completed => "[done]",
+                StepStatus::InProgress => "[doing]",
+                StepStatus::Pending => "[todo]",
+            };
+            parts.push(format!("{status} {}", step.title));
+        }
+        format!("Plan update: {}", parts.join("; "))
+    }
+}
+
+fn plan_steps_for_mode(mode: SecurityReviewMode) -> Vec<SecurityReviewPlanItem> {
+    let mut steps = Vec::new();
+
+    if matches!(mode, SecurityReviewMode::Full) {
+        steps.push(SecurityReviewPlanItem::new(
+            SecurityReviewPlanStep::GenerateSpecs,
+            "Generate system specifications",
+        ));
+        steps.push(SecurityReviewPlanItem::new(
+            SecurityReviewPlanStep::ThreatModel,
+            "Draft threat model",
+        ));
+    }
+
+    steps.push(SecurityReviewPlanItem::new(
+        SecurityReviewPlanStep::AnalyzeBugs,
+        "Analyze code for bugs",
+    ));
+    steps.push(SecurityReviewPlanItem::new(
+        SecurityReviewPlanStep::PolishFindings,
+        "Polish, dedupe, and rerank findings",
+    ));
+    steps.push(SecurityReviewPlanItem::new(
+        SecurityReviewPlanStep::AssembleReport,
+        "Assemble report and artifacts",
+    ));
+    steps
 }
 
 pub(crate) fn read_security_review_metadata(path: &Path) -> Result<SecurityReviewMetadata, String> {
@@ -861,6 +1034,7 @@ async fn run_grep_files(
 async fn execute_auto_scope_read(
     repo_root: &Path,
     command_path: &Path,
+    command: ReadCommand,
     start: Option<usize>,
     end: Option<usize>,
     metrics: &ReviewMetrics,
@@ -879,6 +1053,16 @@ async fn execute_auto_scope_read(
     let metadata = tokio_fs::metadata(&canonical)
         .await
         .map_err(|err| format!("Failed to inspect {}: {err}", command_path.display()))?;
+
+    if command == ReadCommand::ListDir {
+        if !metadata.is_dir() {
+            return Err(format!(
+                "Path {} is not a directory; LIST_DIR only supports directories.",
+                command_path.display()
+            ));
+        }
+        return build_directory_listing(repo_root, &canonical, command_path).await;
+    }
 
     if metadata.is_dir() {
         return build_directory_listing(repo_root, &canonical, command_path).await;
@@ -1668,6 +1852,12 @@ pub(crate) async fn run_security_review(
         }
     }
 
+    let mut plan_tracker = SecurityReviewPlanTracker::new(
+        request.mode,
+        &include_paths,
+        &request.repo_path,
+        progress_sender.clone(),
+    );
     record("Collecting candidate files...".to_string());
 
     let progress_sender_for_collection = progress_sender.clone();
@@ -1757,6 +1947,12 @@ pub(crate) async fn run_security_review(
         });
     }
 
+    let first_plan_step = if matches!(request.mode, SecurityReviewMode::Full) {
+        SecurityReviewPlanStep::GenerateSpecs
+    } else {
+        SecurityReviewPlanStep::AnalyzeBugs
+    };
+    plan_tracker.start_step(first_plan_step);
     let total_bytes = selected_snippets.iter().map(|s| s.bytes).sum::<usize>();
     let total_size = human_readable_bytes(total_bytes);
     record(format!(
@@ -1823,6 +2019,13 @@ pub(crate) async fn run_security_review(
         None
     };
 
+    if matches!(request.mode, SecurityReviewMode::Full) {
+        plan_tracker.complete_and_start_next(
+            SecurityReviewPlanStep::GenerateSpecs,
+            Some(SecurityReviewPlanStep::ThreatModel),
+        );
+    }
+
     let repository_summary = build_repository_summary(&selected_snippets);
 
     let spec_for_bug_analysis = if request.include_spec_in_bug_analysis {
@@ -1884,6 +2087,13 @@ pub(crate) async fn run_security_review(
     } else {
         None
     };
+
+    if matches!(request.mode, SecurityReviewMode::Full) {
+        plan_tracker.complete_and_start_next(
+            SecurityReviewPlanStep::ThreatModel,
+            Some(SecurityReviewPlanStep::AnalyzeBugs),
+        );
+    }
 
     // Run bug analysis in N full passes across all selected files.
     let total_passes = BUG_FINDING_PASSES.max(1);
@@ -1959,6 +2169,10 @@ pub(crate) async fn run_security_review(
         ));
     }
 
+    plan_tracker.complete_and_start_next(
+        SecurityReviewPlanStep::AnalyzeBugs,
+        Some(SecurityReviewPlanStep::PolishFindings),
+    );
     // Post-process aggregated findings: normalize, filter, dedupe, then risk rerank.
     for summary in all_summaries.iter_mut() {
         if let Some(normalized) = normalize_severity_label(&summary.severity) {
@@ -2180,6 +2394,10 @@ pub(crate) async fn run_security_review(
         findings_summary.as_str()
     ));
     record("Bug analysis complete.".to_string());
+    plan_tracker.complete_and_start_next(
+        SecurityReviewPlanStep::PolishFindings,
+        Some(SecurityReviewPlanStep::AssembleReport),
+    );
 
     let (bugs_for_result, bug_snapshots) = build_bug_records(bug_summaries, bug_details);
     let mut bugs_markdown = bug_markdown.clone();
@@ -2295,6 +2513,7 @@ pub(crate) async fn run_security_review(
             });
         }
     };
+    plan_tracker.mark_complete(SecurityReviewPlanStep::AssembleReport);
 
     let elapsed = overall_start.elapsed();
     let metrics_snapshot = metrics.snapshot();
@@ -3703,6 +3922,7 @@ async fn auto_detect_scope(
                         match execute_auto_scope_read(
                             repo_root,
                             &path,
+                            ReadCommand::Read,
                             start,
                             end,
                             metrics.as_ref(),
@@ -4257,18 +4477,19 @@ async fn generate_spec_for_location(
         let mut executed_command = false;
 
         for request in read_requests {
+            let cmd_label = request.command.label();
             let key = request.dedupe_key();
             if !seen_read_requests.insert(key) {
                 let msg = format!(
-                    "Spec READ `{}` skipped (already provided).",
-                    request.path.display()
+                    "Spec {cmd_label} `{}` skipped (already provided).",
+                    request.path.display(),
                 );
                 if let Some(tx) = progress_sender.as_ref() {
                     tx.send(AppEvent::SecurityReviewLog(msg.clone()));
                 }
                 logs.push(msg.clone());
                 conversation.push(format!(
-                    "Tool READ `{}` already provided earlier.",
+                    "Tool {cmd_label} `{}` already provided earlier.",
                     request.path.display()
                 ));
                 executed_command = true;
@@ -4279,6 +4500,7 @@ async fn generate_spec_for_location(
             match execute_auto_scope_read(
                 &repo_root,
                 &request.path,
+                request.command,
                 request.start,
                 request.end,
                 metrics.as_ref(),
@@ -4286,25 +4508,31 @@ async fn generate_spec_for_location(
             .await
             {
                 Ok(output) => {
-                    let msg = format!("Spec READ `{}` returned content.", request.path.display());
+                    let msg = format!(
+                        "Spec {cmd_label} `{}` returned content.",
+                        request.path.display()
+                    );
                     if let Some(tx) = progress_sender.as_ref() {
                         tx.send(AppEvent::SecurityReviewLog(msg.clone()));
                     }
                     logs.push(msg);
                     conversation.push(format!(
-                        "Tool READ `{}`:\n{}",
+                        "Tool {cmd_label} `{}`:\n{}",
                         request.path.display(),
                         output
                     ));
                 }
                 Err(err) => {
-                    let status = format!("Spec READ `{}` failed: {err}", request.path.display());
+                    let status = format!(
+                        "Spec {cmd_label} `{}` failed: {err}",
+                        request.path.display()
+                    );
                     if let Some(tx) = progress_sender.as_ref() {
                         tx.send(AppEvent::SecurityReviewLog(status.clone()));
                     }
                     logs.push(status);
                     let hint = format!(
-                        "Tool READ `{}` error: {err}. Paths must be relative to the repository root ({}). If this path is wrong, adjust it or use SEARCH/GREP_FILES to locate the right file before retrying READ.",
+                        "Tool {cmd_label} `{}` error: {err}. Paths must be relative to the repository root ({}). If this path is wrong, adjust it or use SEARCH/GREP_FILES to locate the right file before retrying READ.",
                         request.path.display(),
                         repo_root.display()
                     );
@@ -4816,15 +5044,16 @@ async fn combine_spec_markdown(
         let mut executed_command = false;
 
         for request in read_requests {
+            let cmd_label = request.command.label();
             let key = request.dedupe_key();
             if !seen_read_requests.insert(key) {
                 let msg = format!(
-                    "Spec merge READ `{}` skipped (already provided).",
-                    request.path.display()
+                    "Spec merge {cmd_label} `{}` skipped (already provided).",
+                    request.path.display(),
                 );
                 logs.push(msg.clone());
                 conversation.push(format!(
-                    "Tool READ `{}` already provided earlier.",
+                    "Tool {cmd_label} `{}` already provided earlier.",
                     request.path.display()
                 ));
                 executed_command = true;
@@ -4835,6 +5064,7 @@ async fn combine_spec_markdown(
             match execute_auto_scope_read(
                 repo_root,
                 &request.path,
+                request.command,
                 request.start,
                 request.end,
                 metrics.as_ref(),
@@ -4843,21 +5073,23 @@ async fn combine_spec_markdown(
             {
                 Ok(output) => {
                     logs.push(format!(
-                        "Spec merge READ `{}` returned content.",
-                        request.path.display()
+                        "Spec merge {cmd_label} `{}` returned content.",
+                        request.path.display(),
                     ));
                     conversation.push(format!(
-                        "Tool READ `{}`:\n{}",
+                        "Tool {cmd_label} `{}`:\n{}",
                         request.path.display(),
                         output
                     ));
                 }
                 Err(err) => {
-                    let status =
-                        format!("Spec merge READ `{}` failed: {err}", request.path.display());
+                    let status = format!(
+                        "Spec merge {cmd_label} `{}` failed: {err}",
+                        request.path.display()
+                    );
                     logs.push(status);
                     let hint = format!(
-                        "Tool READ `{}` error: {err}. Paths must be relative to the repository root ({}). SEARCH is disabled for this step; retry READ with the correct path or use GREP_FILES to locate the right file.",
+                        "Tool {cmd_label} `{}` error: {err}. Paths must be relative to the repository root ({}). SEARCH is disabled for this step; retry READ with the correct path or use GREP_FILES to locate the right file.",
                         request.path.display(),
                         repo_root.display()
                     );
@@ -5151,15 +5383,16 @@ async fn verify_specification(
         let mut executed_command = false;
 
         for request in read_requests {
+            let cmd_label = request.command.label();
             let key = request.dedupe_key();
             if !seen_read_requests.insert(key) {
                 let msg = format!(
-                    "Spec verification READ `{}` skipped (already provided).",
-                    request.path.display()
+                    "Spec verification {cmd_label} `{}` skipped (already provided).",
+                    request.path.display(),
                 );
                 push_progress_log(&progress_sender, &mut logs, msg.clone());
                 conversation.push(format!(
-                    "Tool READ `{}` already provided earlier.",
+                    "Tool {cmd_label} `{}` already provided earlier.",
                     request.path.display()
                 ));
                 executed_command = true;
@@ -5170,6 +5403,7 @@ async fn verify_specification(
             match execute_auto_scope_read(
                 repo_root,
                 &request.path,
+                request.command,
                 request.start,
                 request.end,
                 metrics.as_ref(),
@@ -5178,24 +5412,24 @@ async fn verify_specification(
             {
                 Ok(output) => {
                     let msg = format!(
-                        "Spec verification READ `{}` returned content.",
-                        request.path.display()
+                        "Spec verification {cmd_label} `{}` returned content.",
+                        request.path.display(),
                     );
                     push_progress_log(&progress_sender, &mut logs, msg);
                     conversation.push(format!(
-                        "Tool READ `{}`:\n{}",
+                        "Tool {cmd_label} `{}`:\n{}",
                         request.path.display(),
                         output
                     ));
                 }
                 Err(err) => {
                     let status = format!(
-                        "Spec verification READ `{}` failed: {err}",
+                        "Spec verification {cmd_label} `{}` failed: {err}",
                         request.path.display()
                     );
                     push_progress_log(&progress_sender, &mut logs, status.clone());
                     let mut guidance = format!(
-                        "Tool READ `{}` error: {err}. Paths must be relative to the repository root ({}). If this path is wrong, adjust it or use SEARCH/GREP_FILES to locate the right file before retrying READ.",
+                        "Tool {cmd_label} `{}` error: {err}. Paths must be relative to the repository root ({}). If this path is wrong, adjust it or use SEARCH/GREP_FILES to locate the right file before retrying READ.",
                         request.path.display(),
                         repo_root.display()
                     );
@@ -7464,14 +7698,15 @@ async fn run_risk_rerank_chunk(
         let mut executed_command = false;
 
         for request in read_requests {
+            let cmd_label = request.command.label();
             let key = request.dedupe_key();
             if !seen_read_requests.insert(key) {
                 logs.push(format!(
-                    "Risk rerank read `{}` skipped (already provided).",
-                    request.path.display()
+                    "Risk rerank {cmd_label} `{}` skipped (already provided).",
+                    request.path.display(),
                 ));
                 conversation.push(format!(
-                    "Tool READ `{}` already provided earlier.",
+                    "Tool {cmd_label} `{}` already provided earlier.",
                     request.path.display()
                 ));
                 executed_command = true;
@@ -7482,6 +7717,7 @@ async fn run_risk_rerank_chunk(
             match execute_auto_scope_read(
                 &repo_root,
                 &request.path,
+                request.command,
                 request.start,
                 request.end,
                 metrics.as_ref(),
@@ -7490,22 +7726,22 @@ async fn run_risk_rerank_chunk(
             {
                 Ok(output) => {
                     logs.push(format!(
-                        "Risk rerank read `{}` returned content.",
-                        request.path.display()
+                        "Risk rerank {cmd_label} `{}` returned content.",
+                        request.path.display(),
                     ));
                     conversation.push(format!(
-                        "Tool READ `{}`:\n{}",
+                        "Tool {cmd_label} `{}`:\n{}",
                         request.path.display(),
                         output
                     ));
                 }
                 Err(err) => {
                     logs.push(format!(
-                        "Risk rerank read `{}` failed: {err}",
-                        request.path.display()
+                        "Risk rerank {cmd_label} `{}` failed: {err}",
+                        request.path.display(),
                     ));
                     conversation.push(format!(
-                        "Tool READ `{}` error: {err}",
+                        "Tool {cmd_label} `{}` error: {err}",
                         request.path.display()
                     ));
                     command_error_count += 1;
@@ -8093,15 +8329,32 @@ impl SearchMode {
 
 #[derive(Debug, Clone)]
 struct ReadRequest {
+    command: ReadCommand,
     path: PathBuf,
     start: Option<usize>,
     end: Option<usize>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReadCommand {
+    Read,
+    ListDir,
+}
+
+impl ReadCommand {
+    fn label(self) -> &'static str {
+        match self {
+            ReadCommand::Read => "READ",
+            ReadCommand::ListDir => "LIST_DIR",
+        }
+    }
+}
+
 impl ReadRequest {
     fn dedupe_key(&self) -> String {
         format!(
-            "{}:{}-{}",
+            "{}:{}:{}-{}",
+            self.command.label(),
             self.path.to_string_lossy().to_ascii_lowercase(),
             self.start.unwrap_or(0),
             self.end.unwrap_or(0)
@@ -8198,66 +8451,68 @@ fn extract_read_requests(response: &str) -> (String, Vec<ReadRequest>) {
 
     for line in response.lines() {
         let trimmed = line.trim();
-        if let Some(rest) = strip_prefix_case_insensitive(trimmed, "READ:") {
-            let spec = rest.trim();
-            if spec.is_empty() {
-                cleaned.push(line);
-                continue;
-            }
+        let (command, rest) = if let Some(rest) = strip_prefix_case_insensitive(trimmed, "READ:") {
+            (ReadCommand::Read, rest)
+        } else if let Some(rest) = strip_prefix_case_insensitive(trimmed, "LIST_DIR:") {
+            (ReadCommand::ListDir, rest)
+        } else {
+            cleaned.push(line);
+            continue;
+        };
 
-            let (path_part, range_part) = spec.split_once('#').unwrap_or((spec, ""));
-            let path_str = path_part.trim();
-            if path_str.is_empty() {
-                cleaned.push(line);
-                continue;
-            }
-
-            let relative = PathBuf::from(path_str);
-            if relative.as_os_str().is_empty() || relative.is_absolute() {
-                cleaned.push(line);
-                continue;
-            }
-
-            let mut start = None;
-            let mut end = None;
-            if let Some(range) = range_part.strip_prefix('L') {
-                let mut parts = range.split('-');
-                if let Some(start_str) = parts.next()
-                    && let Ok(value) = start_str.trim().parse::<usize>()
-                    && value > 0
-                {
-                    start = Some(value);
-                } else if parts.next().is_some() {
-                    cleaned.push(line);
-                    continue;
-                }
-                if let Some(end_str) = parts.next() {
-                    let clean_end = end_str.trim().trim_start_matches('L');
-                    if let Ok(value) = clean_end.parse::<usize>()
-                        && value > 0
-                    {
-                        end = Some(value);
-                    } else {
-                        cleaned.push(line);
-                        continue;
-                    }
-                }
-            }
-
-            requests.push(ReadRequest {
-                path: relative,
-                start,
-                end,
-            });
+        let spec = rest.trim();
+        if spec.is_empty() {
+            cleaned.push(line);
             continue;
         }
 
-        cleaned.push(line);
+        let (path_part, range_part) = spec.split_once('#').unwrap_or((spec, ""));
+        let path_str = path_part.trim();
+        if path_str.is_empty() {
+            cleaned.push(line);
+            continue;
+        }
+
+        let relative = PathBuf::from(path_str);
+        if relative.as_os_str().is_empty() || relative.is_absolute() {
+            cleaned.push(line);
+            continue;
+        }
+
+        let mut start = None;
+        let mut end = None;
+        if command == ReadCommand::Read
+            && let Some(range) = range_part.strip_prefix('L')
+        {
+            let mut parts = range.split('-');
+            if let Some(start_str) = parts.next()
+                && let Ok(value) = start_str.trim().parse::<usize>()
+                && value > 0
+            {
+                start = Some(value);
+            }
+            if let Some(end_str) = parts.next()
+                && let Ok(value) = end_str
+                    .trim()
+                    .trim_start_matches(['l', 'L'])
+                    .parse::<usize>()
+                && value > 0
+                && start.map(|s| value >= s).unwrap_or(true)
+            {
+                end = Some(value);
+            }
+        }
+
+        requests.push(ReadRequest {
+            command,
+            path: relative,
+            start,
+            end,
+        });
     }
 
     (cleaned.join("\n"), requests)
 }
-
 fn emit_command_status(
     progress_sender: &Option<AppEventSender>,
     id: u64,

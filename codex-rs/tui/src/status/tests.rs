@@ -8,6 +8,7 @@ use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
+use codex_core::protocol::CreditsSnapshot;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::RateLimitWindow;
 use codex_core::protocol::SandboxPolicy;
@@ -81,7 +82,7 @@ fn reset_at_from(captured_at: &chrono::DateTime<chrono::Local>, seconds: i64) ->
 fn status_snapshot_includes_reasoning_details() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home);
-    config.model = "gpt-5-codex".to_string();
+    config.model = "gpt-5.1-codex-max".to_string();
     config.model_provider_id = "openai".to_string();
     config.model_reasoning_effort = Some(ReasoningEffort::High);
     config.model_reasoning_summary = ReasoningSummary::Detailed;
@@ -118,6 +119,7 @@ fn status_snapshot_includes_reasoning_details() {
             window_minutes: Some(10080),
             resets_at: Some(reset_at_from(&captured_at, 1_200)),
         }),
+        credits: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
@@ -144,7 +146,7 @@ fn status_snapshot_includes_reasoning_details() {
 fn status_snapshot_includes_monthly_limit() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home);
-    config.model = "gpt-5-codex".to_string();
+    config.model = "gpt-5.1-codex-max".to_string();
     config.model_provider_id = "openai".to_string();
     config.cwd = PathBuf::from("/workspace/tests");
 
@@ -168,6 +170,7 @@ fn status_snapshot_includes_monthly_limit() {
             resets_at: Some(reset_at_from(&captured_at, 86_400)),
         }),
         secondary: None,
+        credits: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
@@ -191,10 +194,158 @@ fn status_snapshot_includes_monthly_limit() {
 }
 
 #[test]
+fn status_snapshot_shows_unlimited_credits() {
+    let temp_home = TempDir::new().expect("temp home");
+    let config = test_config(&temp_home);
+    let auth_manager = test_auth_manager(&config);
+    let usage = TokenUsage::default();
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 2, 3, 4, 5, 6)
+        .single()
+        .expect("timestamp");
+    let snapshot = RateLimitSnapshot {
+        primary: None,
+        secondary: None,
+        credits: Some(CreditsSnapshot {
+            has_credits: true,
+            unlimited: true,
+            balance: None,
+        }),
+    };
+    let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
+    let composite = new_status_output(
+        &config,
+        &auth_manager,
+        &usage,
+        Some(&usage),
+        &None,
+        Some(&rate_display),
+        captured_at,
+    );
+    let rendered = render_lines(&composite.display_lines(120));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Credits:") && line.contains("Unlimited")),
+        "expected Credits: Unlimited line, got {rendered:?}"
+    );
+}
+
+#[test]
+fn status_snapshot_shows_positive_credits() {
+    let temp_home = TempDir::new().expect("temp home");
+    let config = test_config(&temp_home);
+    let auth_manager = test_auth_manager(&config);
+    let usage = TokenUsage::default();
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
+        .single()
+        .expect("timestamp");
+    let snapshot = RateLimitSnapshot {
+        primary: None,
+        secondary: None,
+        credits: Some(CreditsSnapshot {
+            has_credits: true,
+            unlimited: false,
+            balance: Some("12.5".to_string()),
+        }),
+    };
+    let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
+    let composite = new_status_output(
+        &config,
+        &auth_manager,
+        &usage,
+        Some(&usage),
+        &None,
+        Some(&rate_display),
+        captured_at,
+    );
+    let rendered = render_lines(&composite.display_lines(120));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Credits:") && line.contains("13 credits")),
+        "expected Credits line with rounded credits, got {rendered:?}"
+    );
+}
+
+#[test]
+fn status_snapshot_hides_zero_credits() {
+    let temp_home = TempDir::new().expect("temp home");
+    let config = test_config(&temp_home);
+    let auth_manager = test_auth_manager(&config);
+    let usage = TokenUsage::default();
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 4, 5, 6, 7, 8)
+        .single()
+        .expect("timestamp");
+    let snapshot = RateLimitSnapshot {
+        primary: None,
+        secondary: None,
+        credits: Some(CreditsSnapshot {
+            has_credits: true,
+            unlimited: false,
+            balance: Some("0".to_string()),
+        }),
+    };
+    let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
+    let composite = new_status_output(
+        &config,
+        &auth_manager,
+        &usage,
+        Some(&usage),
+        &None,
+        Some(&rate_display),
+        captured_at,
+    );
+    let rendered = render_lines(&composite.display_lines(120));
+    assert!(
+        rendered.iter().all(|line| !line.contains("Credits:")),
+        "expected no Credits line, got {rendered:?}"
+    );
+}
+
+#[test]
+fn status_snapshot_hides_when_has_no_credits_flag() {
+    let temp_home = TempDir::new().expect("temp home");
+    let config = test_config(&temp_home);
+    let auth_manager = test_auth_manager(&config);
+    let usage = TokenUsage::default();
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 5, 6, 7, 8, 9)
+        .single()
+        .expect("timestamp");
+    let snapshot = RateLimitSnapshot {
+        primary: None,
+        secondary: None,
+        credits: Some(CreditsSnapshot {
+            has_credits: false,
+            unlimited: true,
+            balance: None,
+        }),
+    };
+    let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
+    let composite = new_status_output(
+        &config,
+        &auth_manager,
+        &usage,
+        Some(&usage),
+        &None,
+        Some(&rate_display),
+        captured_at,
+    );
+    let rendered = render_lines(&composite.display_lines(120));
+    assert!(
+        rendered.iter().all(|line| !line.contains("Credits:")),
+        "expected no Credits line when has_credits is false, got {rendered:?}"
+    );
+}
+
+#[test]
 fn status_card_token_usage_excludes_cached_tokens() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home);
-    config.model = "gpt-5-codex".to_string();
+    config.model = "gpt-5.1-codex-max".to_string();
     config.cwd = PathBuf::from("/workspace/tests");
 
     let auth_manager = test_auth_manager(&config);
@@ -232,7 +383,7 @@ fn status_card_token_usage_excludes_cached_tokens() {
 fn status_snapshot_truncates_in_narrow_terminal() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home);
-    config.model = "gpt-5-codex".to_string();
+    config.model = "gpt-5.1-codex-max".to_string();
     config.model_provider_id = "openai".to_string();
     config.model_reasoning_effort = Some(ReasoningEffort::High);
     config.model_reasoning_summary = ReasoningSummary::Detailed;
@@ -258,6 +409,7 @@ fn status_snapshot_truncates_in_narrow_terminal() {
             resets_at: Some(reset_at_from(&captured_at, 600)),
         }),
         secondary: None,
+        credits: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
@@ -270,7 +422,7 @@ fn status_snapshot_truncates_in_narrow_terminal() {
         Some(&rate_display),
         captured_at,
     );
-    let mut rendered_lines = render_lines(&composite.display_lines(46));
+    let mut rendered_lines = render_lines(&composite.display_lines(70));
     if cfg!(windows) {
         for line in &mut rendered_lines {
             *line = line.replace('\\', "/");
@@ -285,7 +437,7 @@ fn status_snapshot_truncates_in_narrow_terminal() {
 fn status_snapshot_shows_missing_limits_message() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home);
-    config.model = "gpt-5-codex".to_string();
+    config.model = "gpt-5.1-codex-max".to_string();
     config.cwd = PathBuf::from("/workspace/tests");
 
     let auth_manager = test_auth_manager(&config);
@@ -322,10 +474,68 @@ fn status_snapshot_shows_missing_limits_message() {
 }
 
 #[test]
+fn status_snapshot_includes_credits_and_limits() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home);
+    config.model = "gpt-5.1-codex".to_string();
+    config.cwd = PathBuf::from("/workspace/tests");
+
+    let auth_manager = test_auth_manager(&config);
+    let usage = TokenUsage {
+        input_tokens: 1_500,
+        cached_input_tokens: 100,
+        output_tokens: 600,
+        reasoning_output_tokens: 0,
+        total_tokens: 2_200,
+    };
+
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 7, 8, 9, 10, 11)
+        .single()
+        .expect("timestamp");
+    let snapshot = RateLimitSnapshot {
+        primary: Some(RateLimitWindow {
+            used_percent: 45.0,
+            window_minutes: Some(300),
+            resets_at: Some(reset_at_from(&captured_at, 900)),
+        }),
+        secondary: Some(RateLimitWindow {
+            used_percent: 30.0,
+            window_minutes: Some(10_080),
+            resets_at: Some(reset_at_from(&captured_at, 2_700)),
+        }),
+        credits: Some(CreditsSnapshot {
+            has_credits: true,
+            unlimited: false,
+            balance: Some("37.5".to_string()),
+        }),
+    };
+    let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
+
+    let composite = new_status_output(
+        &config,
+        &auth_manager,
+        &usage,
+        Some(&usage),
+        &None,
+        Some(&rate_display),
+        captured_at,
+    );
+    let mut rendered_lines = render_lines(&composite.display_lines(80));
+    if cfg!(windows) {
+        for line in &mut rendered_lines {
+            *line = line.replace('\\', "/");
+        }
+    }
+    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    assert_snapshot!(sanitized);
+}
+
+#[test]
 fn status_snapshot_shows_empty_limits_message() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home);
-    config.model = "gpt-5-codex".to_string();
+    config.model = "gpt-5.1-codex-max".to_string();
     config.cwd = PathBuf::from("/workspace/tests");
 
     let auth_manager = test_auth_manager(&config);
@@ -340,6 +550,7 @@ fn status_snapshot_shows_empty_limits_message() {
     let snapshot = RateLimitSnapshot {
         primary: None,
         secondary: None,
+        credits: None,
     };
     let captured_at = chrono::Local
         .with_ymd_and_hms(2024, 6, 7, 8, 9, 10)
@@ -370,7 +581,7 @@ fn status_snapshot_shows_empty_limits_message() {
 fn status_snapshot_shows_stale_limits_message() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home);
-    config.model = "gpt-5-codex".to_string();
+    config.model = "gpt-5.1-codex-max".to_string();
     config.cwd = PathBuf::from("/workspace/tests");
 
     let auth_manager = test_auth_manager(&config);
@@ -396,6 +607,66 @@ fn status_snapshot_shows_stale_limits_message() {
             used_percent: 40.0,
             window_minutes: Some(10_080),
             resets_at: Some(reset_at_from(&captured_at, 1_800)),
+        }),
+        credits: None,
+    };
+    let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
+    let now = captured_at + ChronoDuration::minutes(20);
+
+    let composite = new_status_output(
+        &config,
+        &auth_manager,
+        &usage,
+        Some(&usage),
+        &None,
+        Some(&rate_display),
+        now,
+    );
+    let mut rendered_lines = render_lines(&composite.display_lines(80));
+    if cfg!(windows) {
+        for line in &mut rendered_lines {
+            *line = line.replace('\\', "/");
+        }
+    }
+    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    assert_snapshot!(sanitized);
+}
+
+#[test]
+fn status_snapshot_cached_limits_hide_credits_without_flag() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home);
+    config.model = "gpt-5.1-codex".to_string();
+    config.cwd = PathBuf::from("/workspace/tests");
+
+    let auth_manager = test_auth_manager(&config);
+    let usage = TokenUsage {
+        input_tokens: 900,
+        cached_input_tokens: 200,
+        output_tokens: 350,
+        reasoning_output_tokens: 0,
+        total_tokens: 1_450,
+    };
+
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 9, 10, 11, 12, 13)
+        .single()
+        .expect("timestamp");
+    let snapshot = RateLimitSnapshot {
+        primary: Some(RateLimitWindow {
+            used_percent: 60.0,
+            window_minutes: Some(300),
+            resets_at: Some(reset_at_from(&captured_at, 1_200)),
+        }),
+        secondary: Some(RateLimitWindow {
+            used_percent: 35.0,
+            window_minutes: Some(10_080),
+            resets_at: Some(reset_at_from(&captured_at, 2_400)),
+        }),
+        credits: Some(CreditsSnapshot {
+            has_credits: false,
+            unlimited: false,
+            balance: Some("80".to_string()),
         }),
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);

@@ -110,12 +110,7 @@ async fn exec_cli_applies_experimental_instructions_file() {
         "data: {\"type\":\"response.created\",\"response\":{}}\n\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n"
     );
-    let resp_mock = core_test_support::responses::mount_sse_once_match(
-        &server,
-        path("/v1/responses"),
-        sse.to_string(),
-    )
-    .await;
+    let resp_mock = core_test_support::responses::mount_sse_once(&server, sse.to_string()).await;
 
     // Create a temporary instructions file with a unique marker we can assert
     // appears in the outbound request payload.
@@ -504,9 +499,20 @@ async fn integration_git_info_unit_test() {
         "Git info should contain repository_url"
     );
     let repo_url = git_info.repository_url.as_ref().unwrap();
+    // Some hosts rewrite remotes (e.g., github.com → git@github.com), so assert against
+    // the actual remote reported by git instead of a static URL.
+    let expected_remote_url = std::process::Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(&git_repo)
+        .output()
+        .unwrap();
+    let expected_remote_url = String::from_utf8(expected_remote_url.stdout)
+        .unwrap()
+        .trim()
+        .to_string();
     assert_eq!(
-        repo_url, "https://github.com/example/integration-test.git",
-        "Repository URL should match what we configured"
+        repo_url, &expected_remote_url,
+        "Repository URL should match git remote get-url output"
     );
 
     println!("✅ Git info collection test passed!");

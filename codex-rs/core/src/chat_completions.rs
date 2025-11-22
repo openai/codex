@@ -81,6 +81,7 @@ pub(crate) async fn stream_chat_completions(
             ResponseItem::CustomToolCallOutput { .. } => {}
             ResponseItem::WebSearchCall { .. } => {}
             ResponseItem::GhostSnapshot { .. } => {}
+            ResponseItem::CompactionSummary { .. } => {}
         }
     }
 
@@ -320,7 +321,8 @@ pub(crate) async fn stream_chat_completions(
             }
             ResponseItem::Reasoning { .. }
             | ResponseItem::WebSearchCall { .. }
-            | ResponseItem::Other => {
+            | ResponseItem::Other
+            | ResponseItem::CompactionSummary { .. } => {
                 // Omit these items from the conversation history.
                 continue;
             }
@@ -477,10 +479,14 @@ async fn append_reasoning_text(
         ..
     }) = reasoning_item
     {
+        let content_index = content.len() as i64;
         content.push(ReasoningItemContent::ReasoningText { text: text.clone() });
 
         let _ = tx_event
-            .send(Ok(ResponseEvent::ReasoningContentDelta(text.clone())))
+            .send(Ok(ResponseEvent::ReasoningContentDelta {
+                delta: text.clone(),
+                content_index,
+            }))
             .await;
     }
 }
@@ -669,7 +675,9 @@ async fn process_chat_sse<S>(
             }
 
             // Emit end-of-turn when finish_reason signals completion.
-            if let Some(finish_reason) = choice.get("finish_reason").and_then(|v| v.as_str()) {
+            if let Some(finish_reason) = choice.get("finish_reason").and_then(|v| v.as_str())
+                && !finish_reason.is_empty()
+            {
                 match finish_reason {
                     "tool_calls" if fn_call_state.active => {
                         // First, flush the terminal raw reasoning so UIs can finalize
@@ -898,20 +906,26 @@ where
                         continue;
                     }
                 }
-                Poll::Ready(Some(Ok(ResponseEvent::ReasoningContentDelta(delta)))) => {
+                Poll::Ready(Some(Ok(ResponseEvent::ReasoningContentDelta {
+                    delta,
+                    content_index,
+                }))) => {
                     // Always accumulate reasoning deltas so we can emit a final Reasoning item at Completed.
                     this.cumulative_reasoning.push_str(&delta);
                     if matches!(this.mode, AggregateMode::Streaming) {
                         // In streaming mode, also forward the delta immediately.
-                        return Poll::Ready(Some(Ok(ResponseEvent::ReasoningContentDelta(delta))));
+                        return Poll::Ready(Some(Ok(ResponseEvent::ReasoningContentDelta {
+                            delta,
+                            content_index,
+                        })));
                     } else {
                         continue;
                     }
                 }
-                Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryDelta(_)))) => {
+                Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryDelta { .. }))) => {
                     continue;
                 }
-                Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryPartAdded))) => {
+                Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryPartAdded { .. }))) => {
                     continue;
                 }
                 Poll::Ready(Some(Ok(ResponseEvent::OutputItemAdded(item)))) => {

@@ -1,4 +1,5 @@
 use crate::bash::parse_shell_lc_plain_commands;
+use crate::command_safety::windows_safe_commands::is_safe_command_windows;
 
 pub fn is_known_safe_command(command: &[String]) -> bool {
     let command: Vec<String> = command
@@ -11,12 +12,9 @@ pub fn is_known_safe_command(command: &[String]) -> bool {
             }
         })
         .collect();
-    #[cfg(target_os = "windows")]
-    {
-        use super::windows_safe_commands::is_safe_command_windows;
-        if is_safe_command_windows(&command) {
-            return true;
-        }
+
+    if is_safe_command_windows(&command) {
+        return true;
     }
 
     if is_safe_to_call_with_exec(&command) {
@@ -267,6 +265,20 @@ mod tests {
                 "expected {args:?} to be considered unsafe due to external-command flag",
             );
         }
+    }
+
+    #[test]
+    fn windows_powershell_full_path_is_safe() {
+        if !cfg!(windows) {
+            // Windows only because on Linux path splitting doesn't handle `/` separators properly
+            return;
+        }
+
+        assert!(is_known_safe_command(&vec_str(&[
+            r"C:\Program Files\PowerShell\7\pwsh.exe",
+            "-Command",
+            "Get-Location",
+        ])));
     }
 
     #[test]

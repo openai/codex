@@ -25,7 +25,9 @@ use crate::git_info::resolve_root_git_project_for_trust;
 use crate::model_family::ModelFamily;
 use crate::model_family::derive_default_model_family;
 use crate::model_family::find_family_for_model;
+use crate::model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use crate::model_provider_info::ModelProviderInfo;
+use crate::model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use crate::model_provider_info::built_in_model_providers;
 use crate::openai_model_info::get_model_info;
 use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
@@ -38,6 +40,7 @@ use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use dirs::home_dir;
@@ -58,12 +61,9 @@ pub mod edit;
 pub mod profile;
 pub mod types;
 
-#[cfg(target_os = "windows")]
-pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5";
-#[cfg(not(target_os = "windows"))]
-pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5-codex";
-const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5-codex";
-pub const GPT_5_CODEX_MEDIUM_MODEL: &str = "gpt-5-codex";
+pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5.1-codex";
+const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5.1-codex";
+pub const GPT_5_CODEX_MEDIUM_MODEL: &str = "gpt-5.1-codex";
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
@@ -78,16 +78,13 @@ pub struct Config {
     /// Optional override of model selection.
     pub model: String,
 
-    /// Model used specifically for review sessions. Defaults to "gpt-5-codex".
+    /// Model used specifically for review sessions. Defaults to "gpt-5.1-codex-max".
     pub review_model: String,
 
     pub model_family: ModelFamily,
 
     /// Size of the context window for the model, in tokens.
     pub model_context_window: Option<i64>,
-
-    /// Maximum number of output tokens.
-    pub model_max_output_tokens: Option<i64>,
 
     /// Token usage threshold triggering auto-compaction of conversation history.
     pub model_auto_compact_token_limit: Option<i64>,
@@ -160,6 +157,9 @@ pub struct Config {
     /// and turn completions when not focused.
     pub tui_notifications: Notifications,
 
+    /// Enable ASCII animations and shimmer effects in the TUI.
+    pub animations: bool,
+
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
     /// resolved against this path.
@@ -191,6 +191,9 @@ pub struct Config {
 
     /// Additional filenames to try when looking for project-level docs.
     pub project_doc_fallback_filenames: Vec<String>,
+
+    /// Token budget applied when storing tool/function outputs in the context manager.
+    pub tool_output_token_limit: Option<usize>,
 
     /// Directory containing all Codex state (defaults to `~/.codex` but can be
     /// overridden by the `CODEX_HOME` environment variable).
@@ -382,15 +385,16 @@ fn ensure_no_inline_bearer_tokens(value: &TomlValue) -> std::io::Result<()> {
     Ok(())
 }
 
-pub(crate) fn set_project_trusted_inner(
+pub(crate) fn set_project_trust_level_inner(
     doc: &mut DocumentMut,
     project_path: &Path,
+    trust_level: TrustLevel,
 ) -> anyhow::Result<()> {
     // Ensure we render a human-friendly structure:
     //
     // [projects]
     // [projects."/path/to/project"]
-    // trust_level = "trusted"
+    // trust_level = "trusted" or "untrusted"
     //
     // rather than inline tables like:
     //
@@ -446,18 +450,64 @@ pub(crate) fn set_project_trusted_inner(
         return Err(anyhow::anyhow!("project table missing for {project_key}"));
     };
     proj_tbl.set_implicit(false);
-    proj_tbl["trust_level"] = toml_edit::value("trusted");
+    proj_tbl["trust_level"] = toml_edit::value(trust_level.to_string());
     Ok(())
 }
 
-/// Patch `CODEX_HOME/config.toml` project state.
+/// Patch `CODEX_HOME/config.toml` project state to set trust level.
 /// Use with caution.
-pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Result<()> {
+pub fn set_project_trust_level(
+    codex_home: &Path,
+    project_path: &Path,
+    trust_level: TrustLevel,
+) -> anyhow::Result<()> {
     use crate::config::edit::ConfigEditsBuilder;
 
     ConfigEditsBuilder::new(codex_home)
-        .set_project_trusted(project_path)
+        .set_project_trust_level(project_path, trust_level)
         .apply_blocking()
+}
+
+/// Save the default OSS provider preference to config.toml
+pub fn set_default_oss_provider(codex_home: &Path, provider: &str) -> std::io::Result<()> {
+    // Validate that the provider is one of the known OSS providers
+    match provider {
+        LMSTUDIO_OSS_PROVIDER_ID | OLLAMA_OSS_PROVIDER_ID => {
+            // Valid provider, continue
+        }
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "Invalid OSS provider '{provider}'. Must be one of: {LMSTUDIO_OSS_PROVIDER_ID}, {OLLAMA_OSS_PROVIDER_ID}"
+                ),
+            ));
+        }
+    }
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+
+    // Read existing config or create empty string if file doesn't exist
+    let content = match std::fs::read_to_string(&config_path) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e),
+    };
+
+    // Parse as DocumentMut for editing while preserving structure
+    let mut doc = content.parse::<DocumentMut>().map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("failed to parse config.toml: {e}"),
+        )
+    })?;
+
+    // Set the default_oss_provider at root level
+    use toml_edit::value;
+    doc["oss_provider"] = value(provider);
+
+    // Write the modified document back
+    std::fs::write(&config_path, doc.to_string())?;
+    Ok(())
 }
 
 /// Apply a single dotted-path override onto a TOML value.
@@ -516,9 +566,6 @@ pub struct ConfigToml {
 
     /// Size of the context window for the model, in tokens.
     pub model_context_window: Option<i64>,
-
-    /// Maximum number of output tokens.
-    pub model_max_output_tokens: Option<i64>,
 
     /// Token usage threshold triggering auto-compaction of conversation history.
     pub model_auto_compact_token_limit: Option<i64>,
@@ -585,6 +632,9 @@ pub struct ConfigToml {
 
     /// Ordered list of fallback filenames to look for when AGENTS.md is missing.
     pub project_doc_fallback_filenames: Option<Vec<String>>,
+
+    /// Token budget applied when storing tool/function outputs in the context manager.
+    pub tool_output_token_limit: Option<usize>,
 
     /// Profile to use from the `profiles` map.
     pub profile: Option<String>,
@@ -657,6 +707,8 @@ pub struct ConfigToml {
     pub experimental_use_rmcp_client: Option<bool>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
     pub experimental_sandbox_command_assessment: Option<bool>,
+    /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
+    pub oss_provider: Option<String>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -686,15 +738,16 @@ impl From<ConfigToml> for UserSavedConfig {
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ProjectConfig {
-    pub trust_level: Option<String>,
+    pub trust_level: Option<TrustLevel>,
 }
 
 impl ProjectConfig {
     pub fn is_trusted(&self) -> bool {
-        match &self.trust_level {
-            Some(trust_level) => trust_level == "trusted",
-            None => false,
-        }
+        matches!(self.trust_level, Some(TrustLevel::Trusted))
+    }
+
+    pub fn is_untrusted(&self) -> bool {
+        matches!(self.trust_level, Some(TrustLevel::Untrusted))
     }
 }
 
@@ -735,9 +788,9 @@ impl ConfigToml {
             .or(profile_sandbox_mode)
             .or(self.sandbox_mode)
             .or_else(|| {
-                // if no sandbox_mode is set, but user has marked directory as trusted, use WorkspaceWrite
+                // if no sandbox_mode is set, but user has marked directory as trusted or untrusted, use WorkspaceWrite
                 self.get_active_project(resolved_cwd).and_then(|p| {
-                    if p.is_trusted() {
+                    if p.is_trusted() || p.is_untrusted() {
                         Some(SandboxMode::WorkspaceWrite)
                     } else {
                         None
@@ -842,6 +895,34 @@ pub struct ConfigOverrides {
     pub experimental_sandbox_command_assessment: Option<bool>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
+}
+
+/// Resolves the OSS provider from CLI override, profile config, or global config.
+/// Returns `None` if no provider is configured at any level.
+pub fn resolve_oss_provider(
+    explicit_provider: Option<&str>,
+    config_toml: &ConfigToml,
+    config_profile: Option<String>,
+) -> Option<String> {
+    if let Some(provider) = explicit_provider {
+        // Explicit provider specified (e.g., via --local-provider)
+        Some(provider.to_string())
+    } else {
+        // Check profile config first, then global config
+        let profile = config_toml.get_config_profile(config_profile).ok();
+        if let Some(profile) = &profile {
+            // Check if profile has an oss provider
+            if let Some(profile_oss_provider) = &profile.oss_provider {
+                Some(profile_oss_provider.clone())
+            }
+            // If not then check if the toml has an oss provider
+            else {
+                config_toml.oss_provider.clone()
+            }
+        } else {
+            config_toml.oss_provider.clone()
+        }
+    }
 }
 
 impl Config {
@@ -958,6 +1039,9 @@ impl Config {
                 if active_project.is_trusted() {
                     // If no explicit approval policy is set, but we trust cwd, default to OnRequest
                     AskForApproval::OnRequest
+                } else if active_project.is_untrusted() {
+                    // If project is explicitly marked untrusted, require approval for non-safe commands
+                    AskForApproval::UnlessTrusted
                 } else {
                     AskForApproval::default()
                 }
@@ -1032,11 +1116,6 @@ impl Config {
         let model_context_window = cfg
             .model_context_window
             .or_else(|| openai_model_info.as_ref().map(|info| info.context_window));
-        let model_max_output_tokens = cfg.model_max_output_tokens.or_else(|| {
-            openai_model_info
-                .as_ref()
-                .map(|info| info.max_output_tokens)
-        });
         let model_auto_compact_token_limit = cfg.model_auto_compact_token_limit.or_else(|| {
             openai_model_info
                 .as_ref()
@@ -1088,7 +1167,6 @@ impl Config {
             review_model,
             model_family,
             model_context_window,
-            model_max_output_tokens,
             model_auto_compact_token_limit,
             model_provider_id,
             model_provider,
@@ -1125,6 +1203,7 @@ impl Config {
                     }
                 })
                 .collect(),
+            tool_output_token_limit: cfg.tool_output_token_limit,
             codex_home,
             history,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
@@ -1165,6 +1244,7 @@ impl Config {
                 .as_ref()
                 .map(|t| t.notifications.clone())
                 .unwrap_or_default(),
+            animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
@@ -1228,6 +1308,16 @@ impl Config {
         } else {
             Ok(Some(s))
         }
+    }
+
+    pub fn set_windows_sandbox_globally(&mut self, value: bool) {
+        crate::safety::set_windows_sandbox_enabled(value);
+        if value {
+            self.features.enable(Feature::WindowsSandbox);
+        } else {
+            self.features.disable(Feature::WindowsSandbox);
+        }
+        self.forced_auto_mode_downgraded_on_windows = !value;
     }
 }
 
@@ -1323,7 +1413,7 @@ persistence = "none"
     }
 
     #[test]
-    fn tui_config_missing_notifications_field_defaults_to_disabled() {
+    fn tui_config_missing_notifications_field_defaults_to_enabled() {
         let cfg = r#"
 [tui]
 "#;
@@ -1332,7 +1422,7 @@ persistence = "none"
             .expect("TUI config without notifications should succeed");
         let tui = parsed.tui.expect("config should include tui section");
 
-        assert_eq!(tui.notifications, Notifications::Enabled(false));
+        assert_eq!(tui.notifications, Notifications::Enabled(true));
     }
 
     #[test]
@@ -2532,7 +2622,7 @@ url = "https://example.com/mcp"
         let codex_home = TempDir::new()?;
 
         ConfigEditsBuilder::new(codex_home.path())
-            .set_model(Some("gpt-5-codex"), Some(ReasoningEffort::High))
+            .set_model(Some("gpt-5.1-codex"), Some(ReasoningEffort::High))
             .apply()
             .await?;
 
@@ -2540,7 +2630,7 @@ url = "https://example.com/mcp"
             tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
         let parsed: ConfigToml = toml::from_str(&serialized)?;
 
-        assert_eq!(parsed.model.as_deref(), Some("gpt-5-codex"));
+        assert_eq!(parsed.model.as_deref(), Some("gpt-5.1-codex"));
         assert_eq!(parsed.model_reasoning_effort, Some(ReasoningEffort::High));
 
         Ok(())
@@ -2554,7 +2644,7 @@ url = "https://example.com/mcp"
         tokio::fs::write(
             &config_path,
             r#"
-model = "gpt-5-codex"
+model = "gpt-5.1-codex"
 model_reasoning_effort = "medium"
 
 [profiles.dev]
@@ -2590,7 +2680,7 @@ model = "gpt-4.1"
 
         ConfigEditsBuilder::new(codex_home.path())
             .with_profile(Some("dev"))
-            .set_model(Some("gpt-5-codex"), Some(ReasoningEffort::Medium))
+            .set_model(Some("gpt-5.1-codex"), Some(ReasoningEffort::Medium))
             .apply()
             .await?;
 
@@ -2602,7 +2692,7 @@ model = "gpt-4.1"
             .get("dev")
             .expect("profile should be created");
 
-        assert_eq!(profile.model.as_deref(), Some("gpt-5-codex"));
+        assert_eq!(profile.model.as_deref(), Some("gpt-5.1-codex"));
         assert_eq!(
             profile.model_reasoning_effort,
             Some(ReasoningEffort::Medium)
@@ -2624,7 +2714,7 @@ model = "gpt-4"
 model_reasoning_effort = "medium"
 
 [profiles.prod]
-model = "gpt-5-codex"
+model = "gpt-5.1-codex"
 "#,
         )
         .await?;
@@ -2653,7 +2743,7 @@ model = "gpt-5-codex"
                 .profiles
                 .get("prod")
                 .and_then(|profile| profile.model.as_deref()),
-            Some("gpt-5-codex"),
+            Some("gpt-5.1-codex"),
         );
 
         Ok(())
@@ -2768,7 +2858,7 @@ model_provider = "openai"
 approval_policy = "on-failure"
 
 [profiles.gpt5]
-model = "gpt-5"
+model = "gpt-5.1"
 model_provider = "openai"
 approval_policy = "on-failure"
 model_reasoning_effort = "high"
@@ -2859,7 +2949,6 @@ model_verbosity = "high"
                 review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
                 model_family: find_family_for_model("o3").expect("known model slug"),
                 model_context_window: Some(200_000),
-                model_max_output_tokens: Some(100_000),
                 model_auto_compact_token_limit: Some(180_000),
                 model_provider_id: "openai".to_string(),
                 model_provider: fixture.openai_provider.clone(),
@@ -2877,6 +2966,7 @@ model_verbosity = "high"
                 model_providers: fixture.model_provider_map.clone(),
                 project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
                 project_doc_fallback_filenames: Vec::new(),
+                tool_output_token_limit: None,
                 codex_home: fixture.codex_home(),
                 history: History::default(),
                 file_opener: UriBasedFileOpener::VsCode,
@@ -2904,6 +2994,7 @@ model_verbosity = "high"
                 notices: Default::default(),
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
+                animations: true,
                 otel: OtelConfig::default(),
             },
             o3_profile_config
@@ -2930,7 +3021,6 @@ model_verbosity = "high"
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
             model_family: find_family_for_model("gpt-3.5-turbo").expect("known model slug"),
             model_context_window: Some(16_385),
-            model_max_output_tokens: Some(4_096),
             model_auto_compact_token_limit: Some(14_746),
             model_provider_id: "openai-chat-completions".to_string(),
             model_provider: fixture.openai_chat_completions_provider.clone(),
@@ -2948,6 +3038,7 @@ model_verbosity = "high"
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
+            tool_output_token_limit: None,
             codex_home: fixture.codex_home(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
@@ -2975,6 +3066,7 @@ model_verbosity = "high"
             notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            animations: true,
             otel: OtelConfig::default(),
         };
 
@@ -3016,7 +3108,6 @@ model_verbosity = "high"
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
             model_family: find_family_for_model("o3").expect("known model slug"),
             model_context_window: Some(200_000),
-            model_max_output_tokens: Some(100_000),
             model_auto_compact_token_limit: Some(180_000),
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
@@ -3034,6 +3125,7 @@ model_verbosity = "high"
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
+            tool_output_token_limit: None,
             codex_home: fixture.codex_home(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
@@ -3061,6 +3153,7 @@ model_verbosity = "high"
             notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            animations: true,
             otel: OtelConfig::default(),
         };
 
@@ -3084,11 +3177,10 @@ model_verbosity = "high"
             fixture.codex_home(),
         )?;
         let expected_gpt5_profile_config = Config {
-            model: "gpt-5".to_string(),
+            model: "gpt-5.1".to_string(),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-            model_family: find_family_for_model("gpt-5").expect("known model slug"),
+            model_family: find_family_for_model("gpt-5.1").expect("known model slug"),
             model_context_window: Some(272_000),
-            model_max_output_tokens: Some(128_000),
             model_auto_compact_token_limit: Some(244_800),
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
@@ -3106,6 +3198,7 @@ model_verbosity = "high"
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
+            tool_output_token_limit: None,
             codex_home: fixture.codex_home(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
@@ -3133,6 +3226,7 @@ model_verbosity = "high"
             notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            animations: true,
             otel: OtelConfig::default(),
         };
 
@@ -3164,7 +3258,7 @@ model_verbosity = "high"
         let project_dir = Path::new("/some/path");
         let mut doc = DocumentMut::new();
 
-        set_project_trusted_inner(&mut doc, project_dir)?;
+        set_project_trust_level_inner(&mut doc, project_dir, TrustLevel::Trusted)?;
 
         let contents = doc.to_string();
 
@@ -3204,7 +3298,7 @@ trust_level = "trusted"
         let mut doc = initial.parse::<DocumentMut>()?;
 
         // Run the function; it should convert to explicit tables and set trusted
-        set_project_trusted_inner(&mut doc, project_dir)?;
+        set_project_trust_level_inner(&mut doc, project_dir, TrustLevel::Trusted)?;
 
         let contents = doc.to_string();
 
@@ -3231,7 +3325,7 @@ model = "foo""#;
 
         // Approve a new directory
         let new_project = Path::new("/Users/mbolin/code/codex2");
-        set_project_trusted_inner(&mut doc, new_project)?;
+        set_project_trust_level_inner(&mut doc, new_project, TrustLevel::Trusted)?;
 
         let contents = doc.to_string();
 
@@ -3251,6 +3345,201 @@ trust_level = "trusted"
 trust_level = "trusted"
 "#;
         assert_eq!(contents, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_set_default_oss_provider() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let codex_home = temp_dir.path();
+        let config_path = codex_home.join(CONFIG_TOML_FILE);
+
+        // Test setting valid provider on empty config
+        set_default_oss_provider(codex_home, OLLAMA_OSS_PROVIDER_ID)?;
+        let content = std::fs::read_to_string(&config_path)?;
+        assert!(content.contains("oss_provider = \"ollama\""));
+
+        // Test updating existing config
+        std::fs::write(&config_path, "model = \"gpt-4\"\n")?;
+        set_default_oss_provider(codex_home, LMSTUDIO_OSS_PROVIDER_ID)?;
+        let content = std::fs::read_to_string(&config_path)?;
+        assert!(content.contains("oss_provider = \"lmstudio\""));
+        assert!(content.contains("model = \"gpt-4\""));
+
+        // Test overwriting existing oss_provider
+        set_default_oss_provider(codex_home, OLLAMA_OSS_PROVIDER_ID)?;
+        let content = std::fs::read_to_string(&config_path)?;
+        assert!(content.contains("oss_provider = \"ollama\""));
+        assert!(!content.contains("oss_provider = \"lmstudio\""));
+
+        // Test invalid provider
+        let result = set_default_oss_provider(codex_home, "invalid_provider");
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("Invalid OSS provider"));
+        assert!(error.to_string().contains("invalid_provider"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_untrusted_project_gets_workspace_write_sandbox() -> anyhow::Result<()> {
+        let config_with_untrusted = r#"
+[projects."/tmp/test"]
+trust_level = "untrusted"
+"#;
+
+        let cfg = toml::from_str::<ConfigToml>(config_with_untrusted)
+            .expect("TOML deserialization should succeed");
+
+        let resolution = cfg.derive_sandbox_policy(None, None, &PathBuf::from("/tmp/test"));
+
+        // Verify that untrusted projects get WorkspaceWrite (or ReadOnly on Windows due to downgrade)
+        if cfg!(target_os = "windows") {
+            assert!(
+                matches!(resolution.policy, SandboxPolicy::ReadOnly),
+                "Expected ReadOnly on Windows, got {:?}",
+                resolution.policy
+            );
+        } else {
+            assert!(
+                matches!(resolution.policy, SandboxPolicy::WorkspaceWrite { .. }),
+                "Expected WorkspaceWrite for untrusted project, got {:?}",
+                resolution.policy
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_oss_provider_explicit_override() {
+        let config_toml = ConfigToml::default();
+        let result = resolve_oss_provider(Some("custom-provider"), &config_toml, None);
+        assert_eq!(result, Some("custom-provider".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_oss_provider_from_profile() {
+        let mut profiles = std::collections::HashMap::new();
+        let profile = ConfigProfile {
+            oss_provider: Some("profile-provider".to_string()),
+            ..Default::default()
+        };
+        profiles.insert("test-profile".to_string(), profile);
+        let config_toml = ConfigToml {
+            profiles,
+            ..Default::default()
+        };
+
+        let result = resolve_oss_provider(None, &config_toml, Some("test-profile".to_string()));
+        assert_eq!(result, Some("profile-provider".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_oss_provider_from_global_config() {
+        let config_toml = ConfigToml {
+            oss_provider: Some("global-provider".to_string()),
+            ..Default::default()
+        };
+
+        let result = resolve_oss_provider(None, &config_toml, None);
+        assert_eq!(result, Some("global-provider".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_oss_provider_profile_fallback_to_global() {
+        let mut profiles = std::collections::HashMap::new();
+        let profile = ConfigProfile::default(); // No oss_provider set
+        profiles.insert("test-profile".to_string(), profile);
+        let config_toml = ConfigToml {
+            oss_provider: Some("global-provider".to_string()),
+            profiles,
+            ..Default::default()
+        };
+
+        let result = resolve_oss_provider(None, &config_toml, Some("test-profile".to_string()));
+        assert_eq!(result, Some("global-provider".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_oss_provider_none_when_not_configured() {
+        let config_toml = ConfigToml::default();
+        let result = resolve_oss_provider(None, &config_toml, None);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_resolve_oss_provider_explicit_overrides_all() {
+        let mut profiles = std::collections::HashMap::new();
+        let profile = ConfigProfile {
+            oss_provider: Some("profile-provider".to_string()),
+            ..Default::default()
+        };
+        profiles.insert("test-profile".to_string(), profile);
+        let config_toml = ConfigToml {
+            oss_provider: Some("global-provider".to_string()),
+            profiles,
+            ..Default::default()
+        };
+
+        let result = resolve_oss_provider(
+            Some("explicit-provider"),
+            &config_toml,
+            Some("test-profile".to_string()),
+        );
+        assert_eq!(result, Some("explicit-provider".to_string()));
+    }
+
+    #[test]
+    fn test_untrusted_project_gets_unless_trusted_approval_policy() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let test_project_dir = TempDir::new()?;
+        let test_path = test_project_dir.path();
+
+        let mut projects = std::collections::HashMap::new();
+        projects.insert(
+            test_path.to_string_lossy().to_string(),
+            ProjectConfig {
+                trust_level: Some(TrustLevel::Untrusted),
+            },
+        );
+
+        let cfg = ConfigToml {
+            projects: Some(projects),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides {
+                cwd: Some(test_path.to_path_buf()),
+                ..Default::default()
+            },
+            codex_home.path().to_path_buf(),
+        )?;
+
+        // Verify that untrusted projects get UnlessTrusted approval policy
+        assert_eq!(
+            config.approval_policy,
+            AskForApproval::UnlessTrusted,
+            "Expected UnlessTrusted approval policy for untrusted project"
+        );
+
+        // Verify that untrusted projects still get WorkspaceWrite sandbox (or ReadOnly on Windows)
+        if cfg!(target_os = "windows") {
+            assert!(
+                matches!(config.sandbox_policy, SandboxPolicy::ReadOnly),
+                "Expected ReadOnly on Windows"
+            );
+        } else {
+            assert!(
+                matches!(config.sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }),
+                "Expected WorkspaceWrite sandbox for untrusted project"
+            );
+        }
 
         Ok(())
     }

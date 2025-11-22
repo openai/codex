@@ -14,6 +14,7 @@ In the codex-rs folder where the rust code lives:
 - Do not use unsigned integer even if the number cannot be negative.
 - When writing tests, prefer comparing the equality of entire objects over fields one by one.
 - When making a change that adds or changes an API, ensure that the documentation in the `docs/` folder is up to date if applicable.
+- Always rebuild both the TUI and the regular CLI after making changes (for example, `cargo build -p codex-tui` and `cargo build -p codex-cli`).
 
 Run `just fmt` (in `codex-rs` directory) automatically after making Rust code changes; do not ask for approval to run it. Before finalizing a change to `codex-rs`, run `just fix -p <project>` (in `codex-rs` directory) to fix any linter issues in the code. Prefer scoping with `-p` to avoid slow workspace‑wide Clippy builds; only run `just fix` without `-p` if you changed shared crates. Additionally, run the tests:
 

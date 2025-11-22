@@ -13,10 +13,7 @@ use crate::export_server_responses;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
-use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::FileChange;
-use codex_protocol::protocol::SandboxPolicy;
 use schemars::JsonSchema;
 use schemars::schema_for;
 use serde::Serialize;
@@ -64,7 +61,32 @@ pub fn generate_types(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct GenerateTsOptions {
+    pub generate_indices: bool,
+    pub ensure_headers: bool,
+    pub run_prettier: bool,
+}
+
+impl Default for GenerateTsOptions {
+    fn default() -> Self {
+        Self {
+            generate_indices: true,
+            ensure_headers: true,
+            run_prettier: true,
+        }
+    }
+}
+
 pub fn generate_ts(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
+    generate_ts_with_options(out_dir, prettier, GenerateTsOptions::default())
+}
+
+pub fn generate_ts_with_options(
+    out_dir: &Path,
+    prettier: Option<&Path>,
+    options: GenerateTsOptions,
+) -> Result<()> {
     let v2_out_dir = out_dir.join("v2");
     ensure_dir(out_dir)?;
     ensure_dir(&v2_out_dir)?;
@@ -77,17 +99,28 @@ pub fn generate_ts(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
     export_server_responses(out_dir)?;
     ServerNotification::export_all_to(out_dir)?;
 
-    generate_index_ts(out_dir)?;
-    generate_index_ts(&v2_out_dir)?;
+    if options.generate_indices {
+        generate_index_ts(out_dir)?;
+        generate_index_ts(&v2_out_dir)?;
+    }
 
     // Ensure our header is present on all TS files (root + subdirs like v2/).
-    let ts_files = ts_files_in_recursive(out_dir)?;
-    for file in &ts_files {
-        prepend_header_if_missing(file)?;
+    let mut ts_files = Vec::new();
+    let should_collect_ts_files =
+        options.ensure_headers || (options.run_prettier && prettier.is_some());
+    if should_collect_ts_files {
+        ts_files = ts_files_in_recursive(out_dir)?;
+    }
+
+    if options.ensure_headers {
+        for file in &ts_files {
+            prepend_header_if_missing(file)?;
+        }
     }
 
     // Optionally run Prettier on all generated TS files.
-    if let Some(prettier_bin) = prettier
+    if options.run_prettier
+        && let Some(prettier_bin) = prettier
         && !ts_files.is_empty()
     {
         let status = Command::new(prettier_bin)
@@ -120,10 +153,6 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
         |d| write_json_schema_with_return::<crate::ClientNotification>(d, "ClientNotification"),
         |d| write_json_schema_with_return::<crate::ServerNotification>(d, "ServerNotification"),
         |d| write_json_schema_with_return::<EventMsg>(d, "EventMsg"),
-        |d| write_json_schema_with_return::<FileChange>(d, "FileChange"),
-        |d| write_json_schema_with_return::<crate::protocol::v1::InputItem>(d, "InputItem"),
-        |d| write_json_schema_with_return::<ParsedCommand>(d, "ParsedCommand"),
-        |d| write_json_schema_with_return::<SandboxPolicy>(d, "SandboxPolicy"),
     ];
 
     let mut schemas: Vec<GeneratedSchema> = Vec::new();
@@ -152,13 +181,10 @@ fn build_schema_bundle(schemas: Vec<GeneratedSchema>) -> Result<Value> {
         "ClientNotification",
         "ClientRequest",
         "EventMsg",
-        "FileChange",
-        "InputItem",
-        "ParsedCommand",
-        "SandboxPolicy",
         "ServerNotification",
         "ServerRequest",
     ];
+    const IGNORED_DEFINITIONS: &[&str] = &["Option<()>"];
 
     let namespaced_types = collect_namespaced_types(&schemas);
     let mut definitions = Map::new();
@@ -171,6 +197,10 @@ fn build_schema_bundle(schemas: Vec<GeneratedSchema>) -> Result<Value> {
             in_v1_dir,
         } = schema;
 
+        if IGNORED_DEFINITIONS.contains(&logical_name.as_str()) {
+            continue;
+        }
+
         if let Some(ref ns) = namespace {
             rewrite_refs_to_namespace(&mut value, ns);
         }
@@ -181,6 +211,9 @@ fn build_schema_bundle(schemas: Vec<GeneratedSchema>) -> Result<Value> {
             && let Value::Object(defs_obj) = defs
         {
             for (def_name, mut def_schema) in defs_obj {
+                if IGNORED_DEFINITIONS.contains(&def_name.as_str()) {
+                    continue;
+                }
                 if SPECIAL_DEFINITIONS.contains(&def_name.as_str()) {
                     continue;
                 }
@@ -382,14 +415,6 @@ fn variant_definition_name(base: &str, variant: &Value) -> Option<String> {
             let pascal = to_pascal_case(type_literal);
             return Some(match base {
                 "EventMsg" => format!("{pascal}EventMsg"),
-                _ => format!("{pascal}{base}"),
-            });
-        }
-
-        if let Some(mode_literal) = literal_from_property(props, "mode") {
-            let pascal = to_pascal_case(mode_literal);
-            return Some(match base {
-                "SandboxPolicy" => format!("{pascal}SandboxPolicy"),
                 _ => format!("{pascal}{base}"),
             });
         }
@@ -734,7 +759,13 @@ mod tests {
 
         let _guard = TempDirGuard(output_dir.clone());
 
-        generate_ts(&output_dir, None)?;
+        // Avoid doing more work than necessary to keep the test from timing out.
+        let options = GenerateTsOptions {
+            generate_indices: false,
+            ensure_headers: false,
+            run_prettier: false,
+        };
+        generate_ts_with_options(&output_dir, None, options)?;
 
         let mut undefined_offenders = Vec::new();
         let mut optional_nullable_offenders = BTreeSet::new();

@@ -8,6 +8,7 @@
 use crate::CodexAuth;
 use crate::default_client::CodexHttpClient;
 use crate::default_client::CodexRequestBuilder;
+use crate::error::CodexErr;
 use codex_app_server_protocol::AuthMode;
 use serde::Deserialize;
 use serde::Serialize;
@@ -109,21 +110,7 @@ impl ModelProviderInfo {
         client: &'a CodexHttpClient,
         auth: &Option<CodexAuth>,
     ) -> crate::error::Result<CodexRequestBuilder> {
-        let effective_auth = if let Some(secret_key) = &self.experimental_bearer_token {
-            Some(CodexAuth::from_api_key(secret_key))
-        } else {
-            match self.api_key() {
-                Ok(Some(key)) => Some(CodexAuth::from_api_key(&key)),
-                Ok(None) => auth.clone(),
-                Err(err) => {
-                    if auth.is_some() {
-                        auth.clone()
-                    } else {
-                        return Err(err);
-                    }
-                }
-            }
-        };
+        let effective_auth = self.effective_auth(auth)?;
 
         let url = self.get_full_url(&effective_auth);
 
@@ -134,6 +121,51 @@ impl ModelProviderInfo {
         }
 
         Ok(self.apply_http_headers(builder))
+    }
+
+    pub async fn create_compact_request_builder<'a>(
+        &'a self,
+        client: &'a CodexHttpClient,
+        auth: &Option<CodexAuth>,
+    ) -> crate::error::Result<CodexRequestBuilder> {
+        if self.wire_api != WireApi::Responses {
+            return Err(CodexErr::UnsupportedOperation(
+                "Compaction endpoint requires Responses API providers".to_string(),
+            ));
+        }
+        let effective_auth = self.effective_auth(auth)?;
+
+        let url = self.get_compact_url(&effective_auth).ok_or_else(|| {
+            CodexErr::UnsupportedOperation(
+                "Compaction endpoint requires Responses API providers".to_string(),
+            )
+        })?;
+
+        let mut builder = client.post(url);
+
+        if let Some(auth) = effective_auth.as_ref() {
+            builder = builder.bearer_auth(auth.get_token().await?);
+        }
+
+        Ok(self.apply_http_headers(builder))
+    }
+
+    fn effective_auth(&self, auth: &Option<CodexAuth>) -> crate::error::Result<Option<CodexAuth>> {
+        if let Some(secret_key) = &self.experimental_bearer_token {
+            return Ok(Some(CodexAuth::from_api_key(secret_key)));
+        }
+
+        match self.api_key() {
+            Ok(Some(key)) => Ok(Some(CodexAuth::from_api_key(&key))),
+            Ok(None) => Ok(auth.clone()),
+            Err(err) => {
+                if auth.is_some() {
+                    Ok(auth.clone())
+                } else {
+                    Err(err)
+                }
+            }
+        }
     }
 
     fn get_query_string(&self) -> String {
@@ -170,6 +202,18 @@ impl ModelProviderInfo {
         match self.wire_api {
             WireApi::Responses => format!("{base_url}/responses{query_string}"),
             WireApi::Chat => format!("{base_url}/chat/completions{query_string}"),
+        }
+    }
+
+    pub(crate) fn get_compact_url(&self, auth: &Option<CodexAuth>) -> Option<String> {
+        if self.wire_api != WireApi::Responses {
+            return None;
+        }
+        let full = self.get_full_url(auth);
+        if let Some((path, query)) = full.split_once('?') {
+            Some(format!("{path}/compact?{query}"))
+        } else {
+            Some(format!("{full}/compact"))
         }
     }
 
@@ -258,9 +302,11 @@ impl ModelProviderInfo {
     }
 }
 
-const DEFAULT_OLLAMA_PORT: u32 = 11434;
+pub const DEFAULT_LMSTUDIO_PORT: u16 = 1234;
+pub const DEFAULT_OLLAMA_PORT: u16 = 11434;
 
-pub const BUILT_IN_OSS_MODEL_PROVIDER_ID: &str = "oss";
+pub const LMSTUDIO_OSS_PROVIDER_ID: &str = "lmstudio";
+pub const OLLAMA_OSS_PROVIDER_ID: &str = "ollama";
 
 /// Built-in default provider list.
 pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
@@ -311,14 +357,21 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 requires_openai_auth: true,
             },
         ),
-        (BUILT_IN_OSS_MODEL_PROVIDER_ID, create_oss_provider()),
+        (
+            OLLAMA_OSS_PROVIDER_ID,
+            create_oss_provider(DEFAULT_OLLAMA_PORT, WireApi::Chat),
+        ),
+        (
+            LMSTUDIO_OSS_PROVIDER_ID,
+            create_oss_provider(DEFAULT_LMSTUDIO_PORT, WireApi::Responses),
+        ),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
     .collect()
 }
 
-pub fn create_oss_provider() -> ModelProviderInfo {
+pub fn create_oss_provider(default_provider_port: u16, wire_api: WireApi) -> ModelProviderInfo {
     // These CODEX_OSS_ environment variables are experimental: we may
     // switch to reading values from config.toml instead.
     let codex_oss_base_url = match std::env::var("CODEX_OSS_BASE_URL")
@@ -331,22 +384,21 @@ pub fn create_oss_provider() -> ModelProviderInfo {
             port = std::env::var("CODEX_OSS_PORT")
                 .ok()
                 .filter(|v| !v.trim().is_empty())
-                .and_then(|v| v.parse::<u32>().ok())
-                .unwrap_or(DEFAULT_OLLAMA_PORT)
+                .and_then(|v| v.parse::<u16>().ok())
+                .unwrap_or(default_provider_port)
         ),
     };
-
-    create_oss_provider_with_base_url(&codex_oss_base_url)
+    create_oss_provider_with_base_url(&codex_oss_base_url, wire_api)
 }
 
-pub fn create_oss_provider_with_base_url(base_url: &str) -> ModelProviderInfo {
+pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> ModelProviderInfo {
     ModelProviderInfo {
         name: "gpt-oss".into(),
         base_url: Some(base_url.into()),
         env_key: None,
         env_key_instructions: None,
         experimental_bearer_token: None,
-        wire_api: WireApi::Chat,
+        wire_api,
         query_params: None,
         http_headers: None,
         env_http_headers: None,

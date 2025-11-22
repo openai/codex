@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_core::bash::extract_bash_command;
+use codex_core::parse_command::extract_shell_command;
 use dirs::home_dir;
 use shlex::try_join;
 
@@ -10,7 +10,7 @@ pub(crate) fn escape_command(command: &[String]) -> String {
 }
 
 pub(crate) fn strip_bash_lc_and_escape(command: &[String]) -> String {
-    if let Some((_, script)) = extract_bash_command(command) {
+    if let Some((_, script)) = extract_shell_command(command) {
         return script.to_string();
     }
     escape_command(command)

@@ -14,6 +14,7 @@ import {
   sse,
   responseFailed,
   startResponsesTestProxy,
+  SseResponseBody,
 } from "./responsesProxy";
 
 const codexExecPath = path.join(process.cwd(), "..", "..", "codex-rs", "target", "debug", "codex");
@@ -347,6 +348,91 @@ describe("Codex", () => {
     }
   });
 
+  it("allows overriding the env passed to the Codex CLI", async () => {
+    const { url, close } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("Custom env", "item_1"),
+          responseCompleted("response_1"),
+        ),
+      ],
+    });
+
+    const { envs: spawnEnvs, restore } = codexExecSpy();
+    process.env.CODEX_ENV_SHOULD_NOT_LEAK = "leak";
+
+    try {
+      const client = new Codex({
+        codexPathOverride: codexExecPath,
+        baseUrl: url,
+        apiKey: "test",
+        env: { CUSTOM_ENV: "custom" },
+      });
+
+      const thread = client.startThread();
+      await thread.run("custom env");
+
+      const spawnEnv = spawnEnvs[0];
+      expect(spawnEnv).toBeDefined();
+      if (!spawnEnv) {
+        throw new Error("Spawn env missing");
+      }
+      expect(spawnEnv.CUSTOM_ENV).toBe("custom");
+      expect(spawnEnv.CODEX_ENV_SHOULD_NOT_LEAK).toBeUndefined();
+      expect(spawnEnv.OPENAI_BASE_URL).toBe(url);
+      expect(spawnEnv.CODEX_API_KEY).toBe("test");
+      expect(spawnEnv.CODEX_INTERNAL_ORIGINATOR_OVERRIDE).toBeDefined();
+    } finally {
+      delete process.env.CODEX_ENV_SHOULD_NOT_LEAK;
+      restore();
+      await close();
+    }
+  });
+
+  it("passes additionalDirectories as repeated flags", async () => {
+    const { url, close } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("Additional directories applied", "item_1"),
+          responseCompleted("response_1"),
+        ),
+      ],
+    });
+
+    const { args: spawnArgs, restore } = codexExecSpy();
+
+    try {
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+
+      const thread = client.startThread({
+        additionalDirectories: ["../backend", "/tmp/shared"],
+      });
+      await thread.run("test additional dirs");
+
+      const commandArgs = spawnArgs[0];
+      expect(commandArgs).toBeDefined();
+      if (!commandArgs) {
+        throw new Error("Command args missing");
+      }
+
+      // Find the --add-dir flags
+      const addDirArgs: string[] = [];
+      for (let i = 0; i < commandArgs.length; i += 1) {
+        if (commandArgs[i] === "--add-dir") {
+          addDirArgs.push(commandArgs[i + 1] ?? "");
+        }
+      }
+      expect(addDirArgs).toEqual(["../backend", "/tmp/shared"]);
+    } finally {
+      restore();
+      await close();
+    }
+  });
+
   it("writes output schema to a temporary file and forwards it", async () => {
     const { url, close, requests } = await startResponsesTestProxy({
       statusCode: 200,
@@ -572,10 +658,12 @@ describe("Codex", () => {
   it("throws ThreadRunError on turn failures", async () => {
     const { url, close } = await startResponsesTestProxy({
       statusCode: 200,
-      responseBodies: [
-        sse(responseStarted("response_1")),
-        sse(responseFailed("rate limit exceeded")),
-      ],
+      responseBodies: (function* (): Generator<SseResponseBody> {
+        yield sse(responseStarted("response_1"));
+        while (true) {
+          yield sse(responseFailed("rate limit exceeded"));
+        }
+      })(),
     });
 
     try {
