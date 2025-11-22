@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,6 +16,7 @@ use codex_protocol::config_types::SandboxMode;
 use codex_protocol::protocol::ExecCommandSource;
 use serde::Deserialize;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::json;
 
 use crate::codex::Session;
@@ -54,6 +56,88 @@ const MAX_AWAIT_TIMEOUT_SECS: u64 = 30 * 60;
 const DEFAULT_WATCHDOG_INTERVAL_SECS: u64 = 300;
 
 const ROOT_AGENT_ID: AgentId = 0;
+
+#[derive(Clone)]
+struct InvocationContext {
+    session: Arc<Session>,
+    turn: Arc<TurnContext>,
+    call_id: String,
+    tool_name: String,
+    arguments: String,
+    caller_id: ConversationId,
+    registry_entries: Vec<SubagentMetadata>,
+    registry_by_agent: HashMap<AgentId, SubagentMetadata>,
+    manager: Arc<crate::subagents::SubagentManager>,
+    is_root_agent: bool,
+}
+
+impl InvocationContext {
+    fn new(
+        session: Arc<Session>,
+        turn: Arc<TurnContext>,
+        call_id: String,
+        tool_name: String,
+        arguments: String,
+        caller_id: ConversationId,
+        registry_entries: Vec<SubagentMetadata>,
+        registry_by_agent: HashMap<AgentId, SubagentMetadata>,
+        manager: Arc<crate::subagents::SubagentManager>,
+        is_root_agent: bool,
+    ) -> Self {
+        Self {
+            session,
+            turn,
+            call_id,
+            tool_name,
+            arguments,
+            caller_id,
+            registry_entries,
+            registry_by_agent,
+            manager,
+            is_root_agent,
+        }
+    }
+
+    fn agent_session(&self, agent_id: AgentId) -> Result<ConversationId, FunctionCallError> {
+        require_agent_session(&self.registry_by_agent, agent_id)
+    }
+
+    fn sender_metadata(&self) -> Option<SubagentMetadata> {
+        self.registry_entries
+            .iter()
+            .find(|meta| meta.session_id == self.caller_id)
+            .cloned()
+    }
+
+    fn sender_agent_id(&self) -> AgentId {
+        self.sender_metadata()
+            .map(|meta| meta.agent_id)
+            .unwrap_or(ROOT_AGENT_ID)
+    }
+
+    fn root_session_id(&self) -> ConversationId {
+        let mut root_session_id = self.caller_id;
+        loop {
+            if let Some(meta) = self
+                .registry_entries
+                .iter()
+                .find(|m| m.session_id == root_session_id)
+                && let Some(parent) = meta.parent_session_id
+            {
+                root_session_id = parent;
+                continue;
+            }
+            break;
+        }
+        root_session_id
+    }
+}
+
+enum LogStrategy {
+    Always(Vec<String>),
+    OnSuccess(Vec<String>),
+    None,
+}
 
 struct ExecEventLogger {
     session: Arc<Session>,
@@ -399,6 +483,88 @@ fn summarize_tool_output(tool_name: &str, _arguments: &str, output: &ToolOutput)
         .unwrap_or_else(|_| content.clone())
 }
 
+fn parse_args<T: DeserializeOwned>(
+    arguments: &str,
+    tool_name: &str,
+) -> Result<T, FunctionCallError> {
+    serde_json::from_str(arguments).map_err(|err| {
+        FunctionCallError::RespondToModel(format!("failed to parse {tool_name} arguments: {err}"))
+    })
+}
+
+fn display_label(label: &Option<String>) -> String {
+    label.clone().unwrap_or_else(|| "<unlabeled>".to_string())
+}
+
+fn display_label_or_metadata(label: &Option<String>, meta: Option<&SubagentMetadata>) -> String {
+    label
+        .clone()
+        .or_else(|| meta.and_then(|m| m.label.clone()))
+        .unwrap_or_else(|| "<unlabeled>".to_string())
+}
+
+async fn run_with_logging<F, Fut>(
+    ctx: &InvocationContext,
+    strategy: LogStrategy,
+    op: F,
+) -> Result<ToolOutput, FunctionCallError>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<ToolOutput, FunctionCallError>>,
+{
+    match strategy {
+        LogStrategy::None => op().await,
+        LogStrategy::Always(command) => {
+            let logger = if ctx.is_root_agent {
+                Some(
+                    ExecEventLogger::new(
+                        ctx.session.clone(),
+                        ctx.turn.clone(),
+                        ctx.call_id.clone(),
+                        command,
+                    )
+                    .await,
+                )
+            } else {
+                None
+            };
+
+            let result = op().await;
+
+            if let Some(ref logger) = logger {
+                match &result {
+                    Ok(out) => {
+                        let summary = summarize_tool_output(&ctx.tool_name, &ctx.arguments, out);
+                        logger.success(&summary).await;
+                    }
+                    Err(err) => logger.failure(&err.to_string()).await,
+                }
+            }
+
+            result
+        }
+        LogStrategy::OnSuccess(command) => {
+            let result = op().await;
+
+            if let Ok(out) = &result {
+                if ctx.is_root_agent {
+                    let logger = ExecEventLogger::new(
+                        ctx.session.clone(),
+                        ctx.turn.clone(),
+                        ctx.call_id.clone(),
+                        command,
+                    )
+                    .await;
+                    let summary = summarize_tool_output(&ctx.tool_name, &ctx.arguments, out);
+                    logger.success(&summary).await;
+                }
+            }
+
+            result
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct ListEntry {
     agent_id: AgentId,
@@ -516,6 +682,633 @@ enum PruneArgs {
     },
 }
 
+async fn handle_spawn(ctx: &InvocationContext) -> Result<ToolOutput, FunctionCallError> {
+    let SpawnArgsRaw {
+        prompt,
+        label: raw_label,
+        sandbox_mode,
+        model,
+    } = parse_args(&ctx.arguments, "subagent_spawn")?;
+
+    let sandbox_mode = parse_sandbox_mode(sandbox_mode)?;
+    let label = normalize_label(raw_label);
+    let summary = summarize_prompt(&prompt);
+    let log_command =
+        LogStrategy::Always(vec![format!("Spawned subagent {}", display_label(&label))]);
+
+    let manager = ctx.manager.clone();
+    let session = ctx.session.clone();
+    let turn = ctx.turn.clone();
+
+    run_with_logging(ctx, log_command, move || {
+        let manager = manager.clone();
+        let session = session.clone();
+        let turn = turn.clone();
+        let label = label.clone();
+        let summary = summary.clone();
+        let prompt = prompt.clone();
+        let model = model.clone();
+        async move {
+            let metadata = manager
+                .spawn(
+                    session,
+                    turn,
+                    SpawnRequest {
+                        prompt,
+                        label,
+                        summary,
+                        sandbox_mode,
+                        model: model.clone(),
+                    },
+                )
+                .await
+                .map_err(|err| map_manager_error(err, None))?;
+
+            let response = json!({
+                "session_id": metadata.session_id,
+                "agent_id": metadata.agent_id,
+                "parent_agent_id": metadata.parent_agent_id,
+                "origin": metadata.origin,
+                "status": metadata.status,
+                "model": model,
+                "label": metadata.label,
+                "summary": metadata.summary,
+                "parent_session_id": metadata.parent_session_id,
+                "started_at_ms": metadata.created_at_ms,
+                "initial_message_count": metadata.initial_message_count,
+                "pending_messages": metadata.pending_messages,
+                "pending_interrupts": metadata.pending_interrupts,
+            });
+
+            Ok(ToolOutput::Function {
+                content: response.to_string(),
+                content_items: None,
+                success: Some(true),
+            })
+        }
+    })
+    .await
+}
+
+async fn handle_fork(ctx: &InvocationContext) -> Result<ToolOutput, FunctionCallError> {
+    let ForkArgsRaw {
+        prompt,
+        label: raw_label,
+        sandbox_mode,
+        model,
+    } = parse_args(&ctx.arguments, "subagent_fork")?;
+
+    let sandbox_mode = parse_sandbox_mode(sandbox_mode)?;
+    let label = normalize_label(raw_label);
+    let summary = summarize_optional_prompt(&prompt);
+    let initial_message_count = ctx.session.history_len().await;
+    let parent_session_id = ctx.caller_id;
+    let prompt_clone = prompt.clone();
+    let model_clone = model.clone();
+    let call_id = ctx.call_id.clone();
+    let arguments = ctx.arguments.clone();
+
+    let log_command =
+        LogStrategy::Always(vec![format!("Forked subagent {}", display_label(&label))]);
+
+    let manager = ctx.manager.clone();
+    let session = ctx.session.clone();
+    let turn = ctx.turn.clone();
+
+    run_with_logging(ctx, log_command, move || {
+        let manager = manager.clone();
+        let session = session.clone();
+        let turn = turn.clone();
+        let label = label.clone();
+        let summary = summary.clone();
+        let prompt = prompt.clone();
+        let model = model.clone();
+        async move {
+            let metadata = manager
+                .fork(
+                    session,
+                    turn,
+                    ForkRequest {
+                        parent_session_id,
+                        initial_message_count,
+                        label,
+                        summary,
+                        call_id,
+                        arguments,
+                        prompt,
+                        sandbox_mode,
+                        model: model.clone(),
+                    },
+                )
+                .await
+                .map_err(|err| map_manager_error(err, None))?;
+
+            let child_id = metadata.session_id;
+            let parent_payload = json!({
+                "role": "parent",
+                "child_session_id": child_id,
+                "parent_session_id": parent_session_id,
+                "label": metadata.label,
+                "summary": metadata.summary,
+                "prompt": prompt_clone,
+            });
+
+            let response = json!({
+                "session_id": metadata.session_id,
+                "agent_id": metadata.agent_id,
+                "parent_agent_id": metadata.parent_agent_id,
+                "origin": metadata.origin,
+                "status": metadata.status,
+                "model": model_clone,
+                "label": metadata.label,
+                "summary": metadata.summary,
+                "parent_session_id": metadata.parent_session_id,
+                "started_at_ms": metadata.created_at_ms,
+                "initial_message_count": metadata.initial_message_count,
+                "pending_messages": metadata.pending_messages,
+                "pending_interrupts": metadata.pending_interrupts,
+                "payload": parent_payload,
+            });
+
+            Ok(ToolOutput::Function {
+                content: response.to_string(),
+                content_items: None,
+                success: Some(true),
+            })
+        }
+    })
+    .await
+}
+
+async fn handle_send_message(ctx: &InvocationContext) -> Result<ToolOutput, FunctionCallError> {
+    let SendMessageArgs {
+        prompt,
+        label: raw_label,
+        agent_id,
+        interrupt,
+    } = parse_args(&ctx.arguments, "subagent_send_message")?;
+
+    if agent_id == 0 && interrupt {
+        return Err(FunctionCallError::RespondToModel(
+            "cannot send an interrupt to agent 0 (the root UI thread)".to_string(),
+        ));
+    }
+
+    let label = normalize_label(raw_label);
+    let summary = summarize_optional_prompt(&prompt);
+    let sender_metadata = ctx.sender_metadata();
+    let sender_agent_id = ctx.sender_agent_id();
+
+    if agent_id == 0 {
+        if sender_agent_id == ROOT_AGENT_ID {
+            return Err(FunctionCallError::RespondToModel(
+                "root agent cannot target agent 0; send a normal user message instead".to_string(),
+            ));
+        }
+
+        let sender_metadata = sender_metadata.ok_or_else(|| {
+            FunctionCallError::RespondToModel(
+                "cannot send a message to agent 0 from an unknown subagent".to_string(),
+            )
+        })?;
+
+        let root_session_id = ctx.root_session_id();
+        let caller_id = ctx.caller_id;
+        let log_command = LogStrategy::Always(vec![format!(
+            "Sent message to root from subagent {}",
+            display_label(&label)
+        )]);
+
+        let manager = ctx.manager.clone();
+
+        run_with_logging(ctx, log_command, move || {
+            let manager = manager.clone();
+            let label = label.clone();
+            let summary = summary.clone();
+            let prompt = prompt.clone();
+            let sender_metadata = sender_metadata.clone();
+            async move {
+                manager
+                    .send_message_to_root(root_session_id, caller_id, prompt, sender_metadata)
+                    .await
+                    .map_err(|err| map_manager_error(err, Some(agent_id)))?;
+
+                let response = json!({
+                    "session_id": root_session_id,
+                    "agent_id": agent_id,
+                    "label": label,
+                    "summary": summary,
+                });
+
+                Ok(ToolOutput::Function {
+                    content: response.to_string(),
+                    content_items: None,
+                    success: Some(true),
+                })
+            }
+        })
+        .await
+    } else {
+        let session_id = ctx.agent_session(agent_id)?;
+        let display_label = display_label_or_metadata(&label, ctx.registry_by_agent.get(&agent_id));
+        let log_command =
+            LogStrategy::Always(vec![format!("Sent message to subagent {display_label}")]);
+
+        let manager = ctx.manager.clone();
+
+        run_with_logging(ctx, log_command, move || {
+            let manager = manager.clone();
+            let label = label.clone();
+            let summary = summary.clone();
+            let prompt = prompt.clone();
+            async move {
+                let metadata = manager
+                    .send_message(SendMessageRequest {
+                        session_id,
+                        label,
+                        summary,
+                        prompt,
+                        agent_id,
+                        sender_agent_id,
+                        interrupt,
+                    })
+                    .await
+                    .map_err(|err| map_manager_error(err, Some(agent_id)))?;
+
+                let response = json!({
+                    "session_id": metadata.session_id,
+                    "agent_id": metadata.agent_id,
+                    "parent_agent_id": metadata.parent_agent_id,
+                    "origin": metadata.origin,
+                    "status": metadata.status,
+                    "label": metadata.label,
+                    "summary": metadata.summary,
+                    "parent_session_id": metadata.parent_session_id,
+                    "started_at_ms": metadata.created_at_ms,
+                    "initial_message_count": metadata.initial_message_count,
+                    "pending_messages": metadata.pending_messages,
+                    "pending_interrupts": metadata.pending_interrupts,
+                });
+
+                Ok(ToolOutput::Function {
+                    content: response.to_string(),
+                    content_items: None,
+                    success: Some(true),
+                })
+            }
+        })
+        .await
+    }
+}
+
+async fn handle_watchdog(ctx: &InvocationContext) -> Result<ToolOutput, FunctionCallError> {
+    let args: WatchdogArgs = parse_args(&ctx.arguments, "subagent_watchdog")?;
+
+    let interval_raw = args.interval_s.unwrap_or(DEFAULT_WATCHDOG_INTERVAL_SECS);
+    if interval_raw < MIN_WATCHDOG_INTERVAL_SECS {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "interval_s must be at least {MIN_WATCHDOG_INTERVAL_SECS} seconds"
+        )));
+    }
+    let message = args
+        .message
+        .clone()
+        .filter(|m| !m.trim().is_empty())
+        .unwrap_or_else(|| {
+            "Watchdog ping — report current status, next step, and PLAN.md progress.".to_string()
+        });
+    let cancel = args.cancel.unwrap_or(false);
+
+    let caller_agent_id = if ctx.is_root_agent {
+        ROOT_AGENT_ID
+    } else {
+        ctx.registry_by_agent
+            .iter()
+            .find(|(_, meta)| meta.session_id == ctx.caller_id)
+            .map(|(id, _)| *id)
+            .unwrap_or(ROOT_AGENT_ID)
+    };
+
+    let action = ctx
+        .manager
+        .watchdog_action(
+            ctx.session.conversation_id(),
+            caller_agent_id,
+            args.agent_id,
+            interval_raw,
+            message.clone(),
+            cancel,
+        )
+        .await
+        .map_err(|err| map_manager_error(err, Some(args.agent_id)))?;
+
+    let response = json!({
+        "agent_id": args.agent_id,
+        "interval_s": interval_raw,
+        "message": message,
+        "action": action,
+    });
+
+    let output = ToolOutput::Function {
+        content: response.to_string(),
+        content_items: None,
+        success: Some(action != WatchdogAction::NotFound),
+    };
+
+    if ctx.is_root_agent {
+        let verb = match action {
+            WatchdogAction::Started => "Started",
+            WatchdogAction::Replaced => "Replaced",
+            WatchdogAction::Canceled => "Canceled",
+            WatchdogAction::NotFound => "No watchdog",
+        };
+        let logger = ExecEventLogger::new(
+            ctx.session.clone(),
+            ctx.turn.clone(),
+            ctx.call_id.clone(),
+            vec![format!("{verb} watchdog for agent {}", args.agent_id)],
+        )
+        .await;
+        let summary = summarize_tool_output(&ctx.tool_name, &ctx.arguments, &output);
+        logger.success(&summary).await;
+    }
+
+    Ok(output)
+}
+
+async fn handle_list(ctx: &InvocationContext) -> Result<ToolOutput, FunctionCallError> {
+    let entries = ctx
+        .registry_entries
+        .iter()
+        .filter(|m| m.parent_session_id == Some(ctx.caller_id))
+        .map(|entry| ListEntry {
+            agent_id: entry.agent_id,
+            parent_agent_id: Some(entry.parent_agent_id.unwrap_or(ROOT_AGENT_ID)),
+            session_id: entry.session_id,
+            parent_session_id: entry.parent_session_id,
+            origin: entry.origin,
+            status: entry.status,
+            label: entry.label.clone(),
+            summary: entry.summary.clone(),
+            reasoning_header: entry.reasoning_header.clone(),
+            started_at_ms: entry.created_at_ms,
+            initial_message_count: entry.initial_message_count,
+            pending_messages: entry.pending_messages,
+            pending_interrupts: entry.pending_interrupts,
+        })
+        .collect::<Vec<_>>();
+
+    let payload = json!({ "sessions": entries });
+
+    run_with_logging(
+        ctx,
+        LogStrategy::Always(vec!["Listed subagents".to_string()]),
+        || async move {
+            Ok(ToolOutput::Function {
+                content: payload.to_string(),
+                content_items: None,
+                success: Some(true),
+            })
+        },
+    )
+    .await
+}
+
+async fn handle_await(ctx: &InvocationContext) -> Result<ToolOutput, FunctionCallError> {
+    let args: AwaitArgs = parse_args(&ctx.arguments, "subagent_await")?;
+    let timeout = resolve_await_timeout(args.timeout_s)?;
+
+    let target_session = ctx
+        .registry_entries
+        .iter()
+        .filter(|m| m.parent_session_id == Some(ctx.caller_id))
+        .max_by_key(|m| m.pending_messages)
+        .map(|m| m.session_id);
+
+    let Some(session_id) = target_session else {
+        return Err(FunctionCallError::RespondToModel(
+            "no active subagents to await; start one with subagent_spawn first".to_string(),
+        ));
+    };
+
+    let display_label = ctx
+        .registry_entries
+        .iter()
+        .find(|m| m.session_id == session_id)
+        .and_then(|m| m.label.clone())
+        .unwrap_or_else(|| "subagent".to_string());
+
+    let manager = ctx.manager.clone();
+
+    run_with_logging(
+        ctx,
+        LogStrategy::Always(vec![format!("Awaited subagent {display_label}")]),
+        move || {
+            let manager = manager.clone();
+            async move {
+                match manager
+                    .await_inbox_and_completion(&session_id, Some(timeout))
+                    .await
+                {
+                    Ok(result) => {
+                        let completion_status = result.completion.as_ref().map(completion_status);
+                        let lifecycle_status = result.metadata.status;
+                        let started_at_ms = result.metadata.created_at_ms;
+                        let response = json!({
+                            "session_id": result.metadata.session_id,
+                            "completion_status": completion_status,
+                            "lifecycle_status": lifecycle_status,
+                            "started_at_ms": started_at_ms,
+                            "timed_out": false,
+                            "messages": result.messages,
+                            "completion": result.completion,
+                            "metadata": result.metadata,
+                            "injected": false,
+                        });
+                        Ok(ToolOutput::Function {
+                            content: response.to_string(),
+                            content_items: None,
+                            success: Some(true),
+                        })
+                    }
+                    Err(SubagentManagerError::AwaitTimedOut {
+                        session_id: sid, ..
+                    }) => {
+                        let metadata = manager.metadata(&sid).await;
+                        let lifecycle_status = metadata.as_ref().map(|meta| meta.status);
+                        let started_at_ms = metadata.as_ref().map(|meta| meta.created_at_ms);
+                        let response = json!({
+                            "session_id": sid,
+                            "completion_status": None::<SubagentCompletion>,
+                            "lifecycle_status": lifecycle_status,
+                            "started_at_ms": started_at_ms,
+                            "timed_out": true,
+                            "messages": Vec::<String>::new(),
+                            "completion": None::<SubagentCompletion>,
+                            "metadata": metadata,
+                            "injected": false,
+                        });
+                        Ok(ToolOutput::Function {
+                            content: response.to_string(),
+                            content_items: None,
+                            success: Some(false),
+                        })
+                    }
+                    Err(err) => Err(map_manager_error(err, None)),
+                }
+            }
+        },
+    )
+    .await
+}
+
+async fn handle_prune(ctx: &InvocationContext) -> Result<ToolOutput, FunctionCallError> {
+    let args: PruneArgs = parse_args(&ctx.arguments, "subagent_prune")?;
+    let request = match args {
+        PruneArgs::ByIds {
+            agent_ids,
+            completed_only,
+        } => {
+            let session_ids = agent_ids
+                .into_iter()
+                .filter_map(|id| ctx.registry_by_agent.get(&id).map(|m| m.session_id))
+                .collect::<Vec<_>>();
+            PruneRequest {
+                session_ids: Some(session_ids),
+                all: false,
+                completed_only: completed_only.unwrap_or(true),
+            }
+        }
+        PruneArgs::All {
+            all,
+            completed_only,
+        } => PruneRequest {
+            session_ids: None,
+            all,
+            completed_only: completed_only.unwrap_or(true),
+        },
+    };
+
+    let request_echo =
+        serde_json::from_str::<serde_json::Value>(&ctx.arguments).unwrap_or_default();
+    let manager = ctx.manager.clone();
+
+    run_with_logging(
+        ctx,
+        LogStrategy::Always(vec!["Pruned subagents".to_string()]),
+        move || {
+            let manager = manager.clone();
+            async move {
+                let report = manager
+                    .prune(request)
+                    .await
+                    .map_err(|err| map_manager_error(err, None))?;
+
+                let response = json!({
+                    "request": request_echo,
+                    "pruned": report.pruned,
+                    "skipped_active": report.skipped_active,
+                    "unknown": report.unknown,
+                    "errors": report.errors,
+                    "counts": {
+                        "pruned": report.pruned.len(),
+                        "skipped_active": report.skipped_active.len(),
+                        "unknown": report.unknown.len(),
+                        "errors": report.errors.len(),
+                    }
+                });
+
+                Ok(ToolOutput::Function {
+                    content: response.to_string(),
+                    content_items: None,
+                    success: Some(report.errors.is_empty()),
+                })
+            }
+        },
+    )
+    .await
+}
+
+async fn handle_logs(ctx: &InvocationContext) -> Result<ToolOutput, FunctionCallError> {
+    let LogsArgs {
+        agent_id,
+        limit,
+        max_bytes,
+        since_ms,
+        before_ms,
+    } = parse_args(&ctx.arguments, "subagent_logs")?;
+
+    let session_id = ctx.agent_session(agent_id)?;
+    let display_label = display_label_or_metadata(&None, ctx.registry_by_agent.get(&agent_id));
+
+    let manager = ctx.manager.clone();
+
+    run_with_logging(
+        ctx,
+        LogStrategy::Always(vec![format!("Fetched subagent logs {display_label}")]),
+        move || {
+            let manager = manager.clone();
+            async move {
+                let snapshot = manager
+                    .snapshot_logs(&session_id)
+                    .await
+                    .map_err(|err| map_manager_error(err, Some(agent_id)))?;
+
+                let response = render_logs_payload(
+                    session_id, snapshot, limit, max_bytes, since_ms, before_ms,
+                );
+
+                Ok(ToolOutput::Function {
+                    content: response.to_string(),
+                    content_items: None,
+                    success: Some(true),
+                })
+            }
+        },
+    )
+    .await
+}
+
+async fn handle_cancel(ctx: &InvocationContext) -> Result<ToolOutput, FunctionCallError> {
+    let CancelArgs { agent_id } = parse_args(&ctx.arguments, "subagent_cancel")?;
+    let session_id = ctx.agent_session(agent_id)?;
+    let display_label = display_label_or_metadata(&None, ctx.registry_by_agent.get(&agent_id));
+
+    let manager = ctx.manager.clone();
+
+    run_with_logging(
+        ctx,
+        LogStrategy::Always(vec![format!("Canceled subagent {display_label}")]),
+        move || {
+            let manager = manager.clone();
+            async move {
+                let metadata = manager
+                    .cancel(session_id)
+                    .await
+                    .map_err(|err| map_manager_error(err, Some(agent_id)))?;
+
+                let response = json!({
+                    "session_id": metadata.session_id,
+                    "origin": metadata.origin,
+                    "status": metadata.status,
+                    "label": metadata.label,
+                    "summary": metadata.summary,
+                    "parent_session_id": metadata.parent_session_id,
+                    "started_at_ms": metadata.created_at_ms,
+                    "initial_message_count": metadata.initial_message_count,
+                });
+
+                Ok(ToolOutput::Function {
+                    content: response.to_string(),
+                    content_items: None,
+                    success: Some(true),
+                })
+            }
+        },
+    )
+    .await
+}
+
 pub struct SubagentToolHandler;
 
 #[async_trait]
@@ -544,7 +1337,7 @@ impl ToolHandler for SubagentToolHandler {
         };
 
         let registry = session.services.subagents.clone();
-        let manager = session.services.subagent_manager.clone();
+        let manager = Arc::new(session.services.subagent_manager.clone());
         let caller_id = session.conversation_id();
         let registry_entries = registry.list().await;
         let registry_by_agent: HashMap<AgentId, SubagentMetadata> = registry_entries
@@ -552,702 +1345,34 @@ impl ToolHandler for SubagentToolHandler {
             .map(|entry| (entry.agent_id, entry.clone()))
             .collect();
         let is_root_agent = is_root_session(caller_id, &registry_by_agent);
-        let mut exec_logger: Option<ExecEventLogger> = None;
 
-        let result: Result<ToolOutput, FunctionCallError> = async {
-            match tool_name.as_str() {
-                "subagent_spawn" => {
-                    let args: SpawnArgsRaw = serde_json::from_str(&arguments).map_err(|err| {
-                        FunctionCallError::RespondToModel(format!(
-                            "failed to parse subagent_spawn arguments: {err}"
-                        ))
-                    })?;
-                let SpawnArgsRaw {
-                    prompt,
-                    label: raw_label,
-                    sandbox_mode,
-                    model,
-                } = args;
-                let sandbox_mode = parse_sandbox_mode(sandbox_mode)?;
-                let model_clone = model.clone();
-                let label = normalize_label(raw_label);
-                let summary = summarize_prompt(&prompt);
-                if is_root_agent {
-                    let display_label =
-                        label.clone().unwrap_or_else(|| "<unlabeled>".to_string());
-                        exec_logger = Some(
-                            ExecEventLogger::new(
-                                session.clone(),
-                                turn.clone(),
-                                call_id.clone(),
-                                vec![format!("Spawned subagent {display_label}")],
-                            )
-                            .await,
-                        );
-                    }
-                    let metadata = manager
-                        .spawn(
-                            session.clone(),
-                            turn.clone(),
-                            SpawnRequest {
-                                prompt,
-                                label,
-                                summary,
-                                sandbox_mode,
-                                model,
-                            },
-                        )
-                        .await
-                        .map_err(|err| map_manager_error(err, None))?;
-                    let response = json!({
-                        "session_id": metadata.session_id,
-                        "agent_id": metadata.agent_id,
-                        "parent_agent_id": metadata.parent_agent_id,
-                        "origin": metadata.origin,
-                        "status": metadata.status,
-                        "model": model_clone,
-                        "label": metadata.label,
-                        "summary": metadata.summary,
-                    "parent_session_id": metadata.parent_session_id,
-                    "started_at_ms": metadata.created_at_ms,
-                    "initial_message_count": metadata.initial_message_count,
-                        "pending_messages": metadata.pending_messages,
-                        "pending_interrupts": metadata.pending_interrupts,
-                    });
-                    Ok(ToolOutput::Function {
-                        content: response.to_string(),
-                        content_items: None,
-                        success: Some(true),
-                    })
-                }
-                "subagent_fork" => {
-                    let args: ForkArgsRaw = serde_json::from_str(&arguments).map_err(|err| {
-                        FunctionCallError::RespondToModel(format!(
-                            "failed to parse subagent_fork arguments: {err}"
-                        ))
-                    })?;
-                let ForkArgsRaw {
-                    prompt,
-                    label: raw_label,
-                    sandbox_mode,
-                    model,
-                } = args;
-                let sandbox_mode = parse_sandbox_mode(sandbox_mode)?;
-                let model_clone = model.clone();
-                let prompt_clone = prompt.clone();
-                let parent_session_id = caller_id;
-                let label = normalize_label(raw_label);
-                let summary = summarize_optional_prompt(&prompt);
-                let initial_message_count = session.history_len().await;
-                    if is_root_agent {
-                        let display_label =
-                            label.clone().unwrap_or_else(|| "<unlabeled>".to_string());
-                        exec_logger = Some(
-                            ExecEventLogger::new(
-                                session.clone(),
-                                turn.clone(),
-                                call_id.clone(),
-                                vec![format!("Forked subagent {display_label}")],
-                            )
-                            .await,
-                        );
-                    }
+        let ctx = InvocationContext::new(
+            session,
+            turn,
+            call_id,
+            tool_name.clone(),
+            arguments.clone(),
+            caller_id,
+            registry_entries,
+            registry_by_agent,
+            manager,
+            is_root_agent,
+        );
 
-                    let metadata = manager
-                        .fork(
-                            session.clone(),
-                            turn.clone(),
-                            ForkRequest {
-                                parent_session_id,
-                                initial_message_count,
-                                label,
-                                summary,
-                                call_id: call_id.clone(),
-                                arguments: arguments.clone(),
-                                prompt,
-                                sandbox_mode,
-                                model,
-                            },
-                        )
-                        .await
-                        .map_err(|err| map_manager_error(err, None))?;
-
-                    let child_id = metadata.session_id;
-                    let parent_payload = json!({
-                        "role": "parent",
-                        "child_session_id": child_id,
-                        "parent_session_id": parent_session_id,
-                        "label": metadata.label,
-                        "summary": metadata.summary,
-                        "prompt": prompt_clone,
-                    });
-
-                    let response = json!({
-                        "session_id": metadata.session_id,
-                        "agent_id": metadata.agent_id,
-                        "parent_agent_id": metadata.parent_agent_id,
-                        "origin": metadata.origin,
-                        "status": metadata.status,
-                        "model": model_clone,
-                        "label": metadata.label,
-                        "summary": metadata.summary,
-                    "parent_session_id": metadata.parent_session_id,
-                    "started_at_ms": metadata.created_at_ms,
-                    "initial_message_count": metadata.initial_message_count,
-                        "pending_messages": metadata.pending_messages,
-                        "pending_interrupts": metadata.pending_interrupts,
-                        "payload": parent_payload,
-                    });
-                    Ok(ToolOutput::Function {
-                        content: response.to_string(),
-                        content_items: None,
-                        success: Some(true),
-                    })
-                }
-                "subagent_send_message" => {
-                    let args: SendMessageArgs =
-                        serde_json::from_str(&arguments).map_err(|err| {
-                            FunctionCallError::RespondToModel(format!(
-                                "failed to parse subagent_send_message arguments: {err}"
-                            ))
-                        })?;
-                    let SendMessageArgs {
-                        prompt,
-                        label: raw_label,
-                        agent_id,
-                        interrupt,
-                    } = args;
-                    if agent_id == 0 && interrupt {
-                        return Err(FunctionCallError::RespondToModel(
-                            "cannot send an interrupt to agent 0 (the root UI thread)".to_string(),
-                        ));
-                    }
-
-                    let label = normalize_label(raw_label);
-                    let summary = summarize_optional_prompt(&prompt);
-
-                    let sender_metadata = registry_by_agent
-                        .values()
-                        .find(|meta| meta.session_id == caller_id)
-                        .cloned();
-                    let sender_agent_id = sender_metadata
-                        .as_ref()
-                        .map(|meta| meta.agent_id)
-                        .unwrap_or(ROOT_AGENT_ID);
-
-                    if agent_id == 0 {
-                        // Root-directed message from a subagent. Treat this as a
-                        // lightweight inbox entry for the root session so UIs can
-                        // autosubmit follow-ups when idle.
-                        if sender_agent_id == ROOT_AGENT_ID {
-                            return Err(FunctionCallError::RespondToModel(
-                                    "root agent cannot target agent 0; send a normal user message instead"
-                                        .to_string(),
-                            ));
-                        }
-
-                        let sender_metadata = match sender_metadata {
-                            Some(meta) => meta,
-                            None => {
-                                return Err(FunctionCallError::RespondToModel(
-                                    "cannot send a message to agent 0 from an unknown subagent"
-                                        .to_string(),
-                                ));
-                            }
-                        };
-
-                        // Walk up the parent_session_id chain to find the root session id.
-                        let mut root_session_id = caller_id;
-                        loop {
-                            if let Some(meta) = registry_entries
-                                .iter()
-                                .find(|m| m.session_id == root_session_id)
-                                && let Some(parent) = meta.parent_session_id {
-                                    root_session_id = parent;
-                                    continue;
-                                }
-                            break;
-                        }
-
-                        let display_label = label
-                            .clone()
-                            .unwrap_or_else(|| "<unlabeled>".to_string());
-                        if is_root_agent {
-                            exec_logger = Some(
-                                ExecEventLogger::new(
-                                    session.clone(),
-                                    turn.clone(),
-                                    call_id.clone(),
-                                    vec![format!("Sent message to root from subagent {display_label}")],
-                                )
-                                .await,
-                            );
-                        }
-
-                        manager.send_message_to_root(
-                            root_session_id,
-                            caller_id,
-                            prompt,
-                            sender_metadata,
-                        )
-                        .await
-                        .map_err(|err| map_manager_error(err, Some(agent_id)))?;
-
-                        let response = json!({
-                            "session_id": root_session_id,
-                            "agent_id": agent_id,
-                            "label": label,
-                            "summary": summary,
-                        });
-                        Ok(ToolOutput::Function {
-                            content: response.to_string(),
-                            content_items: None,
-                            success: Some(true),
-                        })
-                    } else {
-                        let session_id = require_agent_session(&registry_by_agent, agent_id)?;
-                        let display_label = label
-                            .clone()
-                            .or_else(|| {
-                                registry_by_agent
-                                    .get(&agent_id)
-                                    .and_then(|m| m.label.clone())
-                            })
-                            .unwrap_or_else(|| "<unlabeled>".to_string());
-
-                        if is_root_agent {
-                            exec_logger = Some(
-                                ExecEventLogger::new(
-                                    session.clone(),
-                                    turn.clone(),
-                                    call_id.clone(),
-                                    vec![format!("Sent message to subagent {display_label}")],
-                                )
-                                .await,
-                            );
-                        }
-
-                        let metadata = manager
-                            .send_message(SendMessageRequest {
-                                session_id,
-                                label,
-                                summary,
-                                prompt,
-                                agent_id,
-                                sender_agent_id,
-                                interrupt,
-                            })
-                            .await
-                            .map_err(|err| map_manager_error(err, Some(agent_id)))?;
-
-                        let response = json!({
-                            "session_id": metadata.session_id,
-                            "agent_id": metadata.agent_id,
-                            "parent_agent_id": metadata.parent_agent_id,
-                            "origin": metadata.origin,
-                            "status": metadata.status,
-                            "label": metadata.label,
-                            "summary": metadata.summary,
-                            "parent_session_id": metadata.parent_session_id,
-                            "started_at_ms": metadata.created_at_ms,
-                            "initial_message_count": metadata.initial_message_count,
-                            "pending_messages": metadata.pending_messages,
-                            "pending_interrupts": metadata.pending_interrupts,
-                        });
-                        Ok(ToolOutput::Function {
-                            content: response.to_string(),
-                            content_items: None,
-                            success: Some(true),
-                        })
-                    }
-                }
-                "subagent_watchdog" => {
-                    let args: WatchdogArgs = serde_json::from_str(&arguments).map_err(|err| {
-                        FunctionCallError::RespondToModel(format!(
-                            "failed to parse subagent_watchdog arguments: {err}"
-                        ))
-                    })?;
-
-                    let interval_raw = args.interval_s.unwrap_or(DEFAULT_WATCHDOG_INTERVAL_SECS);
-                    if interval_raw < MIN_WATCHDOG_INTERVAL_SECS {
-                        return Err(FunctionCallError::RespondToModel(format!(
-                            "interval_s must be at least {MIN_WATCHDOG_INTERVAL_SECS} seconds"
-                        )));
-                    }
-                    let message = args
-                        .message
-                        .clone()
-                        .filter(|m| !m.trim().is_empty())
-                        .unwrap_or_else(|| {
-                            "Watchdog ping — report current status, next step, and PLAN.md progress.".to_string()
-                        });
-                    let cancel = args.cancel.unwrap_or(false);
-
-                    let caller_agent_id = if is_root_agent {
-                        ROOT_AGENT_ID
-                    } else {
-                        registry_by_agent
-                            .iter()
-                            .find(|(_, meta)| meta.session_id == caller_id)
-                            .map(|(id, _)| *id)
-                            .unwrap_or(ROOT_AGENT_ID)
-                    };
-
-                    let action = manager
-                        .watchdog_action(
-                            session.conversation_id(),
-                            caller_agent_id,
-                            args.agent_id,
-                            interval_raw,
-                            message.clone(),
-                            cancel,
-                        )
-                        .await
-                        .map_err(|err| map_manager_error(err, Some(args.agent_id)))?;
-
-                    if is_root_agent {
-                        let verb = match action {
-                            WatchdogAction::Started => "Started",
-                            WatchdogAction::Replaced => "Replaced",
-                            WatchdogAction::Canceled => "Canceled",
-                            WatchdogAction::NotFound => "No watchdog",
-                        };
-                        exec_logger = Some(
-                            ExecEventLogger::new(
-                                session.clone(),
-                                turn.clone(),
-                                call_id.clone(),
-                                vec![format!("{verb} watchdog for agent {}", args.agent_id)],
-                            )
-                            .await,
-                        );
-                    }
-
-                    let response = json!({
-                        "agent_id": args.agent_id,
-                        "interval_s": interval_raw,
-                        "message": message,
-                        "action": action,
-                    });
-
-                    Ok(ToolOutput::Function {
-                        content: response.to_string(),
-                        content_items: None,
-                        success: Some(action != WatchdogAction::NotFound),
-                    })
-                },
-
-                "subagent_list" => {
-                    let entries = registry_entries
-                        .iter()
-                        .filter(|m| m.parent_session_id == Some(caller_id))
-                        .map(|entry| ListEntry {
-                            agent_id: entry.agent_id,
-                            parent_agent_id: Some(entry.parent_agent_id.unwrap_or(ROOT_AGENT_ID)),
-                            session_id: entry.session_id,
-                            parent_session_id: entry.parent_session_id,
-                            origin: entry.origin,
-                            status: entry.status,
-                            label: entry.label.clone(),
-                            summary: entry.summary.clone(),
-                            reasoning_header: entry.reasoning_header.clone(),
-                            started_at_ms: entry.created_at_ms,
-                            initial_message_count: entry.initial_message_count,
-                            pending_messages: entry.pending_messages,
-                            pending_interrupts: entry.pending_interrupts,
-                        })
-                        .collect::<Vec<_>>();
-                    let payload = json!({
-                        "sessions": entries
-                    });
-                    if is_root_agent {
-                        exec_logger = Some(
-                            ExecEventLogger::new(
-                                session.clone(),
-                                turn.clone(),
-                                call_id.clone(),
-                                vec!["Listed subagents".to_string()],
-                            )
-                            .await,
-                        );
-                    }
-                    Ok(ToolOutput::Function {
-                        content: payload.to_string(),
-                        content_items: None,
-                        success: Some(true),
-                    })
-                }
-                "subagent_await" => {
-                    let args: AwaitArgs = serde_json::from_str(&arguments).map_err(|err| {
-                        FunctionCallError::RespondToModel(format!(
-                            "failed to parse subagent_await arguments: {err}"
-                        ))
-                    })?;
-                    let timeout = resolve_await_timeout(
-                        args.timeout_s,
-                    )?;
-
-                    let target_session = registry_entries
-                        .iter()
-                        .filter(|m| m.parent_session_id == Some(caller_id))
-                        .max_by_key(|m| m.pending_messages)
-                        .map(|m| m.session_id);
-
-                    let Some(session_id) = target_session else {
-                        return Err(FunctionCallError::RespondToModel(
-                            "no active subagents to await; start one with subagent_spawn first"
-                                .to_string(),
-                        ));
-                    };
-
-                    if is_root_agent {
-                        let display_label = registry_entries
-                            .iter()
-                            .find(|m| m.session_id == session_id)
-                            .and_then(|m| m.label.clone())
-                            .unwrap_or_else(|| "subagent".to_string());
-                        exec_logger = Some(
-                            ExecEventLogger::new(
-                                session.clone(),
-                                turn.clone(),
-                                call_id.clone(),
-                                vec![format!("Awaited subagent {display_label}")],
-                            )
-                            .await,
-                        );
-                    }
-
-                    match manager
-                        .await_inbox_and_completion(&session_id, Some(timeout))
-                        .await
-                    {
-                        Ok(result) => {
-                            let completion_status =
-                                result.completion.as_ref().map(completion_status);
-                            let lifecycle_status = result.metadata.status;
-                            let started_at_ms = result.metadata.created_at_ms;
-                            let response = json!({
-                                "session_id": result.metadata.session_id,
-                                "completion_status": completion_status,
-                                "lifecycle_status": lifecycle_status,
-                                "started_at_ms": started_at_ms,
-                                "timed_out": false,
-                                "messages": result.messages,
-                                "completion": result.completion,
-                                "metadata": result.metadata,
-                                "injected": false,
-                            });
-                            Ok(ToolOutput::Function {
-                                content: response.to_string(),
-                                content_items: None,
-                                success: Some(true),
-                            })
-                        }
-                        Err(SubagentManagerError::AwaitTimedOut {
-                            session_id: sid,
-                            agent_id: _timed_agent,
-                            timeout_ms: _waited_ms,
-                        }) => {
-                            let metadata = manager.metadata(&sid).await;
-                            let lifecycle_status = metadata.as_ref().map(|meta| meta.status);
-                            let started_at_ms = metadata.as_ref().map(|meta| meta.created_at_ms);
-                            let response = json!({
-                                "session_id": sid,
-                                "completion_status": None::<SubagentCompletion>,
-                                "lifecycle_status": lifecycle_status,
-                                "started_at_ms": started_at_ms,
-                                "timed_out": true,
-                                "messages": Vec::<String>::new(),
-                                "completion": None::<SubagentCompletion>,
-                                "metadata": metadata,
-                                "injected": false,
-                            });
-                            Ok(ToolOutput::Function {
-                                content: response.to_string(),
-                                content_items: None,
-                                success: Some(false),
-                            })
-                        }
-                        Err(err) => Err(map_manager_error(err, None)),
-                    }
-                }
-                "subagent_prune" => {
-                    let args: PruneArgs = serde_json::from_str(&arguments).map_err(|err| {
-                        FunctionCallError::RespondToModel(format!(
-                            "failed to parse subagent_prune arguments: {err}"
-                        ))
-                    })?;
-                    let request = match args {
-                        PruneArgs::ByIds {
-                            agent_ids,
-                            completed_only,
-                        } => {
-                            let session_ids = agent_ids
-                                .into_iter()
-                                .filter_map(|id| registry_by_agent.get(&id).map(|m| m.session_id))
-                                .collect::<Vec<_>>();
-                            PruneRequest {
-                                session_ids: Some(session_ids),
-                                all: false,
-                                completed_only: completed_only.unwrap_or(true),
-                            }
-                        }
-                        PruneArgs::All {
-                            all,
-                            completed_only,
-                        } => PruneRequest {
-                            session_ids: None,
-                            all,
-                            completed_only: completed_only.unwrap_or(true),
-                        },
-                    };
-                    if is_root_agent {
-                        exec_logger = Some(
-                            ExecEventLogger::new(
-                                session.clone(),
-                                turn.clone(),
-                                call_id.clone(),
-                                vec!["Pruned subagents".to_string()],
-                            )
-                            .await,
-                        );
-                    }
-                    let request_echo =
-                        serde_json::from_str::<serde_json::Value>(&arguments).unwrap_or_default();
-                    let report = manager
-                        .prune(request)
-                        .await
-                        .map_err(|err| map_manager_error(err, None))?;
-
-                    let response = json!({
-                        "request": request_echo,
-                        "pruned": report.pruned,
-                        "skipped_active": report.skipped_active,
-                        "unknown": report.unknown,
-                        "errors": report.errors,
-                        "counts": {
-                            "pruned": report.pruned.len(),
-                            "skipped_active": report.skipped_active.len(),
-                            "unknown": report.unknown.len(),
-                            "errors": report.errors.len(),
-                        }
-                    });
-                    Ok(ToolOutput::Function {
-                        content: response.to_string(),
-                        content_items: None,
-                        success: Some(report.errors.is_empty()),
-                    })
-                }
-                "subagent_logs" => {
-                    let args: LogsArgs = serde_json::from_str(&arguments).map_err(|err| {
-                        FunctionCallError::RespondToModel(format!(
-                            "failed to parse subagent_logs arguments: {err}"
-                        ))
-                    })?;
-                    let LogsArgs {
-                        agent_id,
-                        limit,
-                        max_bytes,
-                        since_ms,
-                        before_ms,
-                    } = args;
-                    let session_id = require_agent_session(&registry_by_agent, agent_id)?;
-
-                    if is_root_agent {
-                        let display_label = registry_by_agent
-                            .get(&agent_id)
-                            .and_then(|m| m.label.clone())
-                            .unwrap_or_else(|| "<unlabeled>".to_string());
-                        exec_logger = Some(
-                            ExecEventLogger::new(
-                                session.clone(),
-                                turn.clone(),
-                                call_id.clone(),
-                                vec![format!("Fetched subagent logs {display_label}")],
-                            )
-                            .await,
-                        );
-                    }
-
-                    let snapshot = manager
-                        .snapshot_logs(&session_id)
-                        .await
-                        .map_err(|err| map_manager_error(err, Some(agent_id)))?;
-
-                    let response = render_logs_payload(
-                        session_id, snapshot, limit, max_bytes, since_ms, before_ms,
-                    );
-
-                    Ok(ToolOutput::Function {
-                        content: response.to_string(),
-                        content_items: None,
-                        success: Some(true),
-                    })
-                }
-                "subagent_cancel" => {
-                    let args: CancelArgs = serde_json::from_str(&arguments).map_err(|err| {
-                        FunctionCallError::RespondToModel(format!(
-                            "failed to parse subagent_cancel arguments: {err}"
-                        ))
-                    })?;
-                    let CancelArgs { agent_id } = args;
-                    let session_id = require_agent_session(&registry_by_agent, agent_id)?;
-
-                    if is_root_agent {
-                        let display_label = registry_by_agent
-                            .get(&agent_id)
-                            .and_then(|m| m.label.clone())
-                            .unwrap_or_else(|| "<unlabeled>".to_string());
-                        exec_logger = Some(
-                            ExecEventLogger::new(
-                                session.clone(),
-                                turn.clone(),
-                                call_id.clone(),
-                                vec![format!("Canceled subagent {display_label}")],
-                            )
-                            .await,
-                        );
-                    }
-
-                    let metadata = manager
-                        .cancel(session_id)
-                        .await
-                        .map_err(|err| map_manager_error(err, Some(agent_id)))?;
-
-                    let response = json!({
-                        "session_id": metadata.session_id,
-                        "origin": metadata.origin,
-                        "status": metadata.status,
-                        "label": metadata.label,
-                        "summary": metadata.summary,
-                        "parent_session_id": metadata.parent_session_id,
-                        "started_at_ms": metadata.created_at_ms,
-                        "initial_message_count": metadata.initial_message_count,
-                    });
-
-                    Ok(ToolOutput::Function {
-                        content: response.to_string(),
-                        content_items: None,
-                        success: Some(true),
-                    })
-                }
-                _ => Err(FunctionCallError::RespondToModel(
-                    "unknown subagent tool".to_string(),
-                )),
-            }
+        match tool_name.as_str() {
+            "subagent_spawn" => handle_spawn(&ctx).await,
+            "subagent_fork" => handle_fork(&ctx).await,
+            "subagent_send_message" => handle_send_message(&ctx).await,
+            "subagent_watchdog" => handle_watchdog(&ctx).await,
+            "subagent_list" => handle_list(&ctx).await,
+            "subagent_await" => handle_await(&ctx).await,
+            "subagent_prune" => handle_prune(&ctx).await,
+            "subagent_logs" => handle_logs(&ctx).await,
+            "subagent_cancel" => handle_cancel(&ctx).await,
+            _ => Err(FunctionCallError::RespondToModel(
+                "unknown subagent tool".to_string(),
+            )),
         }
-        .await;
-        if let Some(logger) = &exec_logger {
-            match &result {
-                Ok(out) => {
-                    let summary = summarize_tool_output(&tool_name, &arguments, out);
-                    logger.success(&summary).await;
-                }
-                Err(err) => logger.failure(&err.to_string()).await,
-            }
-        }
-
-        result
     }
 }
 
