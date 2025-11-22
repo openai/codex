@@ -2,9 +2,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::Result;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecCommandBeginEvent;
-use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
@@ -16,28 +13,10 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event_with_timeout;
+use core_test_support::wait_for_exec_command_pair;
 use serde_json::json;
-use tokio::time::Duration;
-
-fn is_exec_begin(ev: &EventMsg) -> Option<ExecCommandBeginEvent> {
-    if let EventMsg::ExecCommandBegin(ev) = ev {
-        Some(ev.clone())
-    } else {
-        None
-    }
-}
-
-fn is_exec_end(ev: &EventMsg) -> Option<ExecCommandEndEvent> {
-    if let EventMsg::ExecCommandEnd(ev) = ev {
-        Some(ev.clone())
-    } else {
-        None
-    }
-}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "relies on streaming timing; kept for manual verification"]
 async fn root_subagent_tool_emits_exec_events() -> Result<()> {
     let server = start_mock_server().await;
     let mut builder = test_codex();
@@ -82,27 +61,12 @@ async fn root_subagent_tool_emits_exec_events() -> Result<()> {
         })
         .await?;
 
-    let mut begin: Option<ExecCommandBeginEvent> = None;
-    let mut end: Option<ExecCommandEndEvent> = None;
-    for _ in 0..40 {
-        let ev = wait_for_event_with_timeout(&test.codex, |_| true, Duration::from_secs(20)).await;
-        if begin.is_none() {
-            begin = is_exec_begin(&ev);
-        }
-        if end.is_none() {
-            end = is_exec_end(&ev);
-        }
-        if matches!(ev, EventMsg::TaskComplete(_)) && begin.is_some() && end.is_some() {
-            break;
-        }
-    }
+    let (begin, end) = wait_for_exec_command_pair(&test.codex, call_id).await;
 
-    let begin = begin.expect("exec begin");
     assert_eq!(
         begin.command.first().map(String::as_str),
-        Some("subagent_list")
+        Some("Listed subagents"),
     );
-    let end = end.expect("exec end");
     assert_eq!(end.call_id, begin.call_id);
     assert_eq!(end.exit_code, 0);
 

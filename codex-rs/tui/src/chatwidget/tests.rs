@@ -1040,6 +1040,143 @@ fn exec_history_cell_shows_working_then_completed() {
     );
 }
 
+struct SummaryBuilder {
+    summary: SubagentSummary,
+}
+
+impl SummaryBuilder {
+    fn new(agent_id: u64, parent_session_id: ConversationId, session_id: ConversationId) -> Self {
+        Self {
+            summary: SubagentSummary {
+                agent_id,
+                parent_agent_id: Some(0),
+                session_id,
+                parent_session_id: Some(parent_session_id),
+                origin: SubagentLifecycleOrigin::Spawn,
+                status: SubagentLifecycleStatus::Running,
+                label: None,
+                summary: None,
+                reasoning_header: None,
+                started_at_ms: 0,
+                pending_messages: 0,
+                pending_interrupts: 0,
+            },
+        }
+    }
+
+    fn origin(mut self, origin: SubagentLifecycleOrigin) -> Self {
+        self.summary.origin = origin;
+        self
+    }
+
+    fn status(mut self, status: SubagentLifecycleStatus) -> Self {
+        self.summary.status = status;
+        self
+    }
+
+    fn label(mut self, label: impl Into<String>) -> Self {
+        self.summary.label = Some(label.into());
+        self
+    }
+
+    fn summary_text(mut self, summary: impl Into<String>) -> Self {
+        self.summary.summary = Some(summary.into());
+        self
+    }
+
+    fn reasoning_header(mut self, header: impl Into<String>) -> Self {
+        self.summary.reasoning_header = Some(header.into());
+        self
+    }
+
+    fn started_at(mut self, started_at_ms: i64) -> Self {
+        self.summary.started_at_ms = started_at_ms;
+        self
+    }
+
+    fn pending(mut self, pending_messages: usize, pending_interrupts: usize) -> Self {
+        self.summary.pending_messages = pending_messages;
+        self.summary.pending_interrupts = pending_interrupts;
+        self
+    }
+
+    fn build(self) -> SubagentSummary {
+        self.summary
+    }
+}
+
+fn dispatch_created(
+    chat: &mut ChatWidget,
+    id: Option<&str>,
+    summary: SubagentSummary,
+    replayed: bool,
+) {
+    chat.dispatch_event_msg(
+        id.map(str::to_string),
+        EventMsg::SubagentLifecycle(SubagentLifecycleEvent::Created(SubagentCreatedEvent {
+            subagent: summary,
+        })),
+        replayed,
+    );
+}
+
+fn dispatch_reasoning_header(
+    chat: &mut ChatWidget,
+    id: Option<&str>,
+    agent_id: u64,
+    session_id: ConversationId,
+    header: impl Into<String>,
+    replayed: bool,
+) {
+    chat.dispatch_event_msg(
+        id.map(str::to_string),
+        EventMsg::SubagentLifecycle(SubagentLifecycleEvent::ReasoningHeader(
+            SubagentReasoningHeaderEvent {
+                agent_id,
+                session_id,
+                reasoning_header: header.into(),
+            },
+        )),
+        replayed,
+    );
+}
+
+fn dispatch_status(
+    chat: &mut ChatWidget,
+    id: Option<&str>,
+    agent_id: u64,
+    session_id: ConversationId,
+    status: SubagentLifecycleStatus,
+    replayed: bool,
+) {
+    chat.dispatch_event_msg(
+        id.map(str::to_string),
+        EventMsg::SubagentLifecycle(SubagentLifecycleEvent::Status(SubagentStatusEvent {
+            agent_id,
+            session_id,
+            status,
+        })),
+        replayed,
+    );
+}
+
+fn dispatch_deleted(
+    chat: &mut ChatWidget,
+    id: Option<&str>,
+    agent_id: u64,
+    session_id: ConversationId,
+    replayed: bool,
+) {
+    chat.dispatch_event_msg(
+        id.map(str::to_string),
+        EventMsg::SubagentLifecycle(SubagentLifecycleEvent::Deleted(SubagentRemovedEvent {
+            agent_id,
+            session_id,
+        })),
+        replayed,
+    );
+}
+
 #[test]
 fn subagent_lifecycle_updates_bottom_pane() {
     let (mut chat, mut _rx, _ops) = make_chatwidget_manual();
@@ -1048,65 +1185,43 @@ fn subagent_lifecycle_updates_bottom_pane() {
     chat.on_task_started();
 
     let child_id = ConversationId::new();
-    let summary = SubagentSummary {
-        agent_id: 1,
-        parent_agent_id: Some(0),
-        session_id: child_id,
-        parent_session_id: Some(parent_id),
-        origin: SubagentLifecycleOrigin::Fork,
-        status: SubagentLifecycleStatus::Running,
-        label: Some("Docs sweep".to_string()),
-        summary: Some("Rewrite md files".to_string()),
-        reasoning_header: None,
-        started_at_ms: 42,
-        pending_messages: 0,
-        pending_interrupts: 0,
-    };
+    let summary = SummaryBuilder::new(1, parent_id, child_id)
+        .origin(SubagentLifecycleOrigin::Fork)
+        .status(SubagentLifecycleStatus::Running)
+        .label("Docs sweep")
+        .summary_text("Rewrite md files")
+        .started_at(42)
+        .build();
 
-    chat.dispatch_event_msg(
-        Some("created".into()),
-        EventMsg::SubagentLifecycle(SubagentLifecycleEvent::Created(SubagentCreatedEvent {
-            subagent: summary,
-        })),
-        false,
-    );
+    dispatch_created(&mut chat, Some("created"), summary, false);
 
     assert_eq!(chat.bottom_pane.subagent_count(), 1);
     assert_eq!(chat.bottom_pane.subagent_entries().len(), 2);
 
-    chat.dispatch_event_msg(
-        Some("header".into()),
-        EventMsg::SubagentLifecycle(SubagentLifecycleEvent::ReasoningHeader(
-            SubagentReasoningHeaderEvent {
-                agent_id: 1,
-                session_id: child_id,
-                reasoning_header: "Scanning tests".to_string(),
-            },
-        )),
+    dispatch_reasoning_header(
+        &mut chat,
+        Some("header"),
+        1,
+        child_id,
+        "Scanning tests",
         false,
     );
     let entries = chat.bottom_pane.subagent_entries();
     assert_eq!(entries[1].detail.as_deref(), Some("Scanning tests"));
 
-    chat.dispatch_event_msg(
-        Some("status".into()),
-        EventMsg::SubagentLifecycle(SubagentLifecycleEvent::Status(SubagentStatusEvent {
-            agent_id: 1,
-            session_id: child_id,
-            status: SubagentLifecycleStatus::Idle,
-        })),
+    dispatch_status(
+        &mut chat,
+        Some("status"),
+        1,
+        child_id,
+        SubagentLifecycleStatus::Idle,
         false,
     );
     assert_eq!(chat.bottom_pane.subagent_count(), 0);
+    let entries = chat.bottom_pane.subagent_entries();
+    assert_eq!(entries[1].detail.as_deref(), Some("Scanning tests"));
 
-    chat.dispatch_event_msg(
-        Some("deleted".into()),
-        EventMsg::SubagentLifecycle(SubagentLifecycleEvent::Deleted(SubagentRemovedEvent {
-            agent_id: 1,
-            session_id: child_id,
-        })),
-        false,
-    );
+    dispatch_deleted(&mut chat, Some("deleted"), 1, child_id, false);
     assert!(chat.bottom_pane.subagent_entries().is_empty());
 }
 
@@ -1117,28 +1232,13 @@ fn replayed_subagent_events_are_ignored() {
     chat.conversation_id = Some(parent_id);
 
     let child_id = ConversationId::new();
-    let summary = SubagentSummary {
-        agent_id: 1,
-        parent_agent_id: Some(0),
-        session_id: child_id,
-        parent_session_id: Some(parent_id),
-        origin: SubagentLifecycleOrigin::Spawn,
-        status: SubagentLifecycleStatus::Running,
-        label: None,
-        summary: None,
-        reasoning_header: None,
-        started_at_ms: 100,
-        pending_messages: 0,
-        pending_interrupts: 0,
-    };
+    let summary = SummaryBuilder::new(1, parent_id, child_id)
+        .origin(SubagentLifecycleOrigin::Spawn)
+        .status(SubagentLifecycleStatus::Running)
+        .started_at(100)
+        .build();
 
-    chat.dispatch_event_msg(
-        None,
-        EventMsg::SubagentLifecycle(SubagentLifecycleEvent::Created(SubagentCreatedEvent {
-            subagent: summary,
-        })),
-        true,
-    );
+    dispatch_created(&mut chat, None, summary, true);
 
     assert!(chat.bottom_pane.subagent_entries().is_empty());
     assert_eq!(chat.bottom_pane.subagent_count(), 0);
@@ -1151,28 +1251,14 @@ fn agent_inbox_updates_pending_counts() {
     chat.conversation_id = Some(parent_id);
 
     let child_id = ConversationId::new();
-    let summary = SubagentSummary {
-        agent_id: 1,
-        parent_agent_id: Some(0),
-        session_id: child_id,
-        parent_session_id: Some(parent_id),
-        origin: SubagentLifecycleOrigin::Spawn,
-        status: SubagentLifecycleStatus::Running,
-        label: Some("Docs sweep".to_string()),
-        summary: None,
-        reasoning_header: None,
-        started_at_ms: 100,
-        pending_messages: 0,
-        pending_interrupts: 0,
-    };
+    let summary = SummaryBuilder::new(1, parent_id, child_id)
+        .origin(SubagentLifecycleOrigin::Spawn)
+        .status(SubagentLifecycleStatus::Running)
+        .label("Docs sweep")
+        .started_at(100)
+        .build();
 
-    chat.dispatch_event_msg(
-        None,
-        EventMsg::SubagentLifecycle(SubagentLifecycleEvent::Created(SubagentCreatedEvent {
-            subagent: summary,
-        })),
-        false,
-    );
+    dispatch_created(&mut chat, None, summary, false);
 
     chat.dispatch_event_msg(
         None,

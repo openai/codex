@@ -48,16 +48,18 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex_delegate::run_codex_conversation_interactive;
 use crate::error::CodexErr;
+use crate::model_family::derive_default_model_family;
+use crate::model_family::find_family_for_model;
 use crate::protocol::SandboxPolicy;
-use crate::model_family::{derive_default_model_family, find_family_for_model};
-use codex_protocol::config_types::ReasoningEffort;
 use crate::subagents::SubagentMetadata;
 use crate::subagents::SubagentOrigin;
 use crate::subagents::SubagentRegistry;
 use crate::subagents::SubagentStatus;
+use codex_protocol::config_types::ReasoningEffort;
 
 const LOG_CAPACITY: usize = 200;
 const ROOT_AGENT_ID: AgentId = 0;
+pub(crate) const MIN_WATCHDOG_INTERVAL_SECS: u64 = 30;
 
 #[derive(Clone)]
 struct RootInboxItem {
@@ -1068,6 +1070,13 @@ impl SubagentManager {
             return Ok(self
                 .cancel_watchdog(&caller_session_id, target_agent_id)
                 .await);
+        }
+
+        if interval_s < MIN_WATCHDOG_INTERVAL_SECS {
+            return Err(SubagentManagerError::InvalidWatchdogInterval {
+                requested: interval_s,
+                min: MIN_WATCHDOG_INTERVAL_SECS,
+            });
         }
 
         let root_session_id = if target_agent_id == ROOT_AGENT_ID {
@@ -2258,6 +2267,8 @@ pub enum SubagentManagerError {
         requested: SandboxMode,
         parent: SandboxMode,
     },
+    #[error("watchdog interval_s {requested}s is below the minimum supported interval of {min}s")]
+    InvalidWatchdogInterval { requested: u64, min: u64 },
 }
 
 #[derive(Debug, Clone)]
@@ -3076,5 +3087,455 @@ mod tests {
         }
 
         assert_eq!(order, vec![2, 1]);
+    }
+
+    #[tokio::test]
+    async fn drain_root_inbox_sorts_messages_per_sender() {
+        let registry = Arc::new(SubagentRegistry::new());
+        let manager = SubagentManager::new(Arc::clone(&registry), 4, false, true, false);
+        let root_session = ConversationId::new();
+        let child_session = ConversationId::new();
+
+        let meta = registry
+            .register_spawn(
+                child_session,
+                Some(root_session),
+                Some(ROOT_AGENT_ID),
+                3,
+                0,
+                Some("sort-me".to_string()),
+                None,
+            )
+            .await;
+
+        {
+            let mut inbox = manager.root_inbox.write().await;
+            inbox.insert(
+                root_session,
+                vec![
+                    RootInboxItem {
+                        sender_agent_id: meta.agent_id,
+                        timestamp_ms: 20,
+                        payload: RootInboxPayload::Message(InboxMessage {
+                            sender_agent_id: meta.agent_id,
+                            recipient_agent_id: ROOT_AGENT_ID,
+                            interrupt: false,
+                            prompt: Some("later".to_string()),
+                            timestamp_ms: 20,
+                        }),
+                        metadata: Some(meta.clone()),
+                    },
+                    RootInboxItem {
+                        sender_agent_id: meta.agent_id,
+                        timestamp_ms: 5,
+                        payload: RootInboxPayload::Message(InboxMessage {
+                            sender_agent_id: meta.agent_id,
+                            recipient_agent_id: ROOT_AGENT_ID,
+                            interrupt: false,
+                            prompt: Some("earlier".to_string()),
+                            timestamp_ms: 5,
+                        }),
+                        metadata: Some(meta.clone()),
+                    },
+                ],
+            );
+        }
+
+        let items = manager.drain_root_inbox_to_items(&root_session).await;
+        assert_eq!(items.len(), 2);
+
+        let payload: serde_json::Value = match &items[1] {
+            ResponseItem::FunctionCallOutput { output, .. } => {
+                serde_json::from_str(&output.content).expect("payload json")
+            }
+            other => panic!("unexpected item layout: {other:?}"),
+        };
+
+        let prompts = payload["messages"]
+            .as_array()
+            .expect("messages array")
+            .iter()
+            .map(|entry| entry["prompt"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(prompts, vec!["earlier".to_string(), "later".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn drain_root_inbox_uses_registry_metadata_when_missing() {
+        let registry = Arc::new(SubagentRegistry::new());
+        let manager = SubagentManager::new(Arc::clone(&registry), 4, false, true, false);
+        let root_session = ConversationId::new();
+        let child_session = ConversationId::new();
+
+        registry
+            .register_spawn(
+                child_session,
+                Some(root_session),
+                Some(ROOT_AGENT_ID),
+                7,
+                0,
+                Some("from-registry".to_string()),
+                Some("registry summary".to_string()),
+            )
+            .await;
+
+        manager
+            .enqueue_root_inbox_message(
+                &root_session,
+                &child_session,
+                InboxMessage {
+                    sender_agent_id: 7,
+                    recipient_agent_id: ROOT_AGENT_ID,
+                    interrupt: false,
+                    prompt: Some("hello from child".to_string()),
+                    timestamp_ms: 5,
+                },
+            )
+            .await;
+
+        let items = manager.drain_root_inbox_to_items(&root_session).await;
+        assert_eq!(items.len(), 2);
+
+        let payload: serde_json::Value = match &items[1] {
+            ResponseItem::FunctionCallOutput { output, .. } => {
+                serde_json::from_str(&output.content).expect("payload json")
+            }
+            other => panic!("unexpected item layout: {other:?}"),
+        };
+
+        assert_eq!(
+            payload["metadata"]["session_id"],
+            serde_json::Value::String(child_session.to_string())
+        );
+        assert_eq!(payload["metadata"]["label"], "from-registry");
+        assert_eq!(payload["metadata"]["summary"], "registry summary");
+
+        let messages = payload["messages"]
+            .as_array()
+            .expect("messages array from payload");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["prompt"], "hello from child");
+    }
+
+    #[tokio::test]
+    async fn drain_root_inbox_falls_back_to_root_metadata() {
+        let registry = Arc::new(SubagentRegistry::new());
+        let manager = SubagentManager::new(Arc::clone(&registry), 2, false, true, false);
+        let root_session = ConversationId::new();
+
+        {
+            let mut inbox = manager.root_inbox.write().await;
+            inbox.insert(
+                root_session,
+                vec![RootInboxItem {
+                    sender_agent_id: ROOT_AGENT_ID,
+                    timestamp_ms: 1,
+                    payload: RootInboxPayload::Message(InboxMessage {
+                        sender_agent_id: ROOT_AGENT_ID,
+                        recipient_agent_id: ROOT_AGENT_ID,
+                        interrupt: false,
+                        prompt: Some("hello root".to_string()),
+                        timestamp_ms: 1,
+                    }),
+                    metadata: None,
+                }],
+            );
+        }
+
+        let items = manager.drain_root_inbox_to_items(&root_session).await;
+        assert_eq!(items.len(), 2);
+
+        let payload: serde_json::Value = match &items[1] {
+            ResponseItem::FunctionCallOutput { output, .. } => {
+                serde_json::from_str(&output.content).expect("payload json")
+            }
+            other => panic!("unexpected output item: {other:?}"),
+        };
+
+        assert_eq!(
+            payload["metadata"]["session_id"],
+            serde_json::Value::String(root_session.to_string())
+        );
+        assert_eq!(payload["metadata"]["label"], "root");
+        assert_eq!(
+            payload["metadata"]["agent_id"].as_u64(),
+            Some(ROOT_AGENT_ID)
+        );
+
+        let messages = payload["messages"]
+            .as_array()
+            .expect("messages array from payload");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["prompt"], "hello root");
+    }
+
+    #[tokio::test]
+    async fn drain_root_inbox_merges_messages_and_completion() {
+        let registry = Arc::new(SubagentRegistry::new());
+        let manager = SubagentManager::new(Arc::clone(&registry), 4, false, true, false);
+        let root_session = ConversationId::new();
+        let first_session = ConversationId::new();
+        let second_session = ConversationId::new();
+
+        let first_meta = registry
+            .register_spawn(
+                first_session,
+                Some(root_session),
+                Some(ROOT_AGENT_ID),
+                1,
+                0,
+                Some("first".to_string()),
+                None,
+            )
+            .await;
+        let second_meta = registry
+            .register_spawn(
+                second_session,
+                Some(root_session),
+                Some(ROOT_AGENT_ID),
+                2,
+                0,
+                Some("second".to_string()),
+                None,
+            )
+            .await;
+
+        {
+            let mut inbox = manager.root_inbox.write().await;
+            inbox.insert(
+                root_session,
+                vec![
+                    RootInboxItem {
+                        sender_agent_id: first_meta.agent_id,
+                        timestamp_ms: 1,
+                        payload: RootInboxPayload::Message(InboxMessage {
+                            sender_agent_id: first_meta.agent_id,
+                            recipient_agent_id: ROOT_AGENT_ID,
+                            interrupt: false,
+                            prompt: Some("first message".to_string()),
+                            timestamp_ms: 1,
+                        }),
+                        metadata: Some(first_meta.clone()),
+                    },
+                    RootInboxItem {
+                        sender_agent_id: first_meta.agent_id,
+                        timestamp_ms: 5,
+                        payload: RootInboxPayload::Completion(SubagentCompletion::Completed {
+                            last_message: Some("done".to_string()),
+                        }),
+                        metadata: Some(first_meta.clone()),
+                    },
+                    RootInboxItem {
+                        sender_agent_id: second_meta.agent_id,
+                        timestamp_ms: 3,
+                        payload: RootInboxPayload::Message(InboxMessage {
+                            sender_agent_id: second_meta.agent_id,
+                            recipient_agent_id: ROOT_AGENT_ID,
+                            interrupt: false,
+                            prompt: Some("second message".to_string()),
+                            timestamp_ms: 3,
+                        }),
+                        metadata: Some(second_meta.clone()),
+                    },
+                ],
+            );
+        }
+
+        let items = manager.drain_root_inbox_to_items(&root_session).await;
+        assert_eq!(items.len(), 4, "expected two call/output pairs");
+
+        let mut payloads = Vec::new();
+        for chunk in items.chunks(2) {
+            if let [
+                ResponseItem::FunctionCall { call_id, .. },
+                ResponseItem::FunctionCallOutput { output, .. },
+            ] = chunk
+            {
+                let parsed: serde_json::Value =
+                    serde_json::from_str(&output.content).expect("payload json");
+                payloads.push((call_id.clone(), parsed));
+            } else {
+                panic!("unexpected chunk layout: {chunk:?}");
+            }
+        }
+
+        assert_eq!(payloads.len(), 2);
+        assert_eq!(payloads[0].0, "await-1");
+        assert_eq!(payloads[1].0, "await-2");
+
+        let first_payload = &payloads[0].1;
+        let messages = first_payload["messages"]
+            .as_array()
+            .expect("messages array");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["prompt"], "first message");
+
+        let completion = first_payload["completion"]
+            .get("Completed")
+            .and_then(|v| v.get("last_message"))
+            .and_then(|v| v.as_str());
+        assert_eq!(completion, Some("done"));
+
+        assert_eq!(first_payload["completion_status"], "completed");
+
+        let second_payload = &payloads[1].1;
+        let second_messages = second_payload["messages"]
+            .as_array()
+            .expect("messages array");
+        assert_eq!(second_messages.len(), 1);
+        assert_eq!(second_messages[0]["prompt"], "second message");
+        assert!(second_payload["completion"].is_null());
+    }
+
+    #[tokio::test]
+    async fn drain_root_inbox_merges_completion_then_message() {
+        let registry = Arc::new(SubagentRegistry::new());
+        let manager = SubagentManager::new(Arc::clone(&registry), 4, false, true, false);
+        let root_session = ConversationId::new();
+        let child_session = ConversationId::new();
+
+        let meta = registry
+            .register_spawn(
+                child_session,
+                Some(root_session),
+                Some(ROOT_AGENT_ID),
+                3,
+                0,
+                Some("has-completion".to_string()),
+                None,
+            )
+            .await;
+
+        {
+            let mut inbox = manager.root_inbox.write().await;
+            inbox.insert(
+                root_session,
+                vec![
+                    RootInboxItem {
+                        sender_agent_id: meta.agent_id,
+                        timestamp_ms: 7,
+                        payload: RootInboxPayload::Completion(SubagentCompletion::Failed {
+                            message: "boom".to_string(),
+                        }),
+                        metadata: Some(meta.clone()),
+                    },
+                    RootInboxItem {
+                        sender_agent_id: meta.agent_id,
+                        timestamp_ms: 8,
+                        payload: RootInboxPayload::Message(InboxMessage {
+                            sender_agent_id: meta.agent_id,
+                            recipient_agent_id: ROOT_AGENT_ID,
+                            interrupt: false,
+                            prompt: Some("after completion".to_string()),
+                            timestamp_ms: 8,
+                        }),
+                        metadata: Some(meta.clone()),
+                    },
+                ],
+            );
+        }
+
+        let items = manager.drain_root_inbox_to_items(&root_session).await;
+        assert_eq!(items.len(), 2, "expected a single call/output pair");
+
+        let payload: serde_json::Value = match &items[1] {
+            ResponseItem::FunctionCallOutput { output, .. } => {
+                serde_json::from_str(&output.content).expect("payload json")
+            }
+            other => panic!("unexpected output item: {other:?}"),
+        };
+
+        assert_eq!(payload["completion_status"], "failed");
+        assert_eq!(payload["completion"]["Failed"]["message"], "boom");
+
+        let prompts = payload["messages"]
+            .as_array()
+            .expect("messages array")
+            .iter()
+            .map(|entry| entry["prompt"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(prompts, vec!["after completion".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn watchdog_action_rejects_short_intervals() {
+        let registry = Arc::new(SubagentRegistry::new());
+        let manager = SubagentManager::new(Arc::clone(&registry), 1, false, false, false);
+        let root_session = ConversationId::new();
+
+        let result = manager
+            .watchdog_action(
+                root_session,
+                ROOT_AGENT_ID,
+                ROOT_AGENT_ID,
+                MIN_WATCHDOG_INTERVAL_SECS - 1,
+                "ping".to_string(),
+                false,
+            )
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(SubagentManagerError::InvalidWatchdogInterval { .. })
+        ));
+        assert!(manager.watchdogs.read().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn watchdog_action_cancel_returns_not_found() {
+        let registry = Arc::new(SubagentRegistry::new());
+        let manager = SubagentManager::new(Arc::clone(&registry), 1, false, false, false);
+        let root_session = ConversationId::new();
+
+        let action = manager
+            .watchdog_action(
+                root_session,
+                ROOT_AGENT_ID,
+                42,
+                MIN_WATCHDOG_INTERVAL_SECS,
+                "ping".to_string(),
+                true,
+            )
+            .await
+            .expect("cancel result");
+
+        assert_eq!(action, WatchdogAction::NotFound);
+        assert!(manager.watchdogs.read().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn watchdog_action_cancel_stops_existing_watchdog() {
+        let registry = Arc::new(SubagentRegistry::new());
+        let manager = SubagentManager::new(Arc::clone(&registry), 1, false, false, false);
+        let root_session = ConversationId::new();
+
+        let started = manager
+            .watchdog_action(
+                root_session,
+                ROOT_AGENT_ID,
+                ROOT_AGENT_ID,
+                MIN_WATCHDOG_INTERVAL_SECS,
+                "ping".to_string(),
+                false,
+            )
+            .await
+            .expect("start watchdog");
+        assert_eq!(started, WatchdogAction::Started);
+        assert_eq!(manager.watchdogs.read().await.len(), 1);
+
+        let canceled = manager
+            .watchdog_action(
+                root_session,
+                ROOT_AGENT_ID,
+                ROOT_AGENT_ID,
+                MIN_WATCHDOG_INTERVAL_SECS,
+                "ping".to_string(),
+                true,
+            )
+            .await
+            .expect("cancel watchdog");
+
+        assert_eq!(canceled, WatchdogAction::Canceled);
+        assert!(manager.watchdogs.read().await.is_empty());
     }
 }

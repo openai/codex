@@ -6,6 +6,7 @@ pub use manager::AwaitResult;
 pub use manager::ForkRequest;
 pub use manager::InboxMessage;
 pub use manager::LogEntry;
+pub(crate) use manager::MIN_WATCHDOG_INTERVAL_SECS;
 pub use manager::PruneErrorEntry;
 pub use manager::PruneReport;
 pub use manager::PruneRequest;

@@ -23,6 +23,7 @@ use crate::function_tool::FunctionCallError;
 use crate::parse_command::parse_command;
 use crate::subagents::ForkRequest;
 use crate::subagents::LogEntry;
+use crate::subagents::MIN_WATCHDOG_INTERVAL_SECS;
 use crate::subagents::PruneRequest;
 use crate::subagents::SendMessageRequest;
 use crate::subagents::SpawnRequest;
@@ -50,7 +51,6 @@ use codex_protocol::protocol::TaskCompleteEvent;
 use codex_protocol::protocol::TokenCountEvent;
 
 const MAX_AWAIT_TIMEOUT_SECS: u64 = 30 * 60;
-const MIN_WATCHDOG_INTERVAL_SECS: u64 = 30;
 const DEFAULT_WATCHDOG_INTERVAL_SECS: u64 = 300;
 
 const ROOT_AGENT_ID: AgentId = 0;
@@ -1706,6 +1706,11 @@ fn map_manager_error(
         SubagentManagerError::SandboxOverrideForbidden { requested, parent } => {
             FunctionCallError::RespondToModel(format!(
                 "sandbox_mode {requested:?} not permitted; parent session runs in {parent:?}"
+            ))
+        }
+        SubagentManagerError::InvalidWatchdogInterval { requested, min } => {
+            FunctionCallError::RespondToModel(format!(
+                "watchdog interval_s {requested}s is below the minimum supported interval of {min}s"
             ))
         }
         SubagentManagerError::AgentIdMismatch {

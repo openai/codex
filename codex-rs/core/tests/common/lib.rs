@@ -6,6 +6,9 @@ use codex_core::CodexConversation;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
+use codex_core::protocol::EventMsg;
+use codex_core::protocol::ExecCommandBeginEvent;
+use codex_core::protocol::ExecCommandEndEvent;
 use regex_lite::Regex;
 
 #[cfg(target_os = "linux")]
@@ -140,6 +143,64 @@ where
 {
     let ev = wait_for_event(codex, |ev| matcher(ev).is_some()).await;
     matcher(&ev).unwrap()
+}
+
+#[allow(dead_code)]
+pub async fn wait_for_exec_command_begin(
+    codex: &CodexConversation,
+    call_id: &str,
+) -> ExecCommandBeginEvent {
+    wait_for_event_match(codex, |msg| match msg {
+        EventMsg::ExecCommandBegin(ev) if ev.call_id == call_id => Some(ev.clone()),
+        _ => None,
+    })
+    .await
+}
+
+#[allow(dead_code)]
+pub async fn wait_for_exec_command_end(
+    codex: &CodexConversation,
+    call_id: &str,
+) -> ExecCommandEndEvent {
+    wait_for_event_match(codex, |msg| match msg {
+        EventMsg::ExecCommandEnd(ev) if ev.call_id == call_id => Some(ev.clone()),
+        _ => None,
+    })
+    .await
+}
+
+pub async fn wait_for_exec_command_pair(
+    codex: &CodexConversation,
+    call_id: &str,
+) -> (ExecCommandBeginEvent, ExecCommandEndEvent) {
+    use tokio::time::Duration;
+    use tokio::time::Instant;
+    use tokio::time::timeout;
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut begin: Option<ExecCommandBeginEvent> = None;
+    let mut end: Option<ExecCommandEndEvent> = None;
+
+    while begin.is_none() || end.is_none() {
+        let now = Instant::now();
+        if now >= deadline {
+            panic!("timeout waiting for exec events");
+        }
+        let remaining = deadline.saturating_duration_since(now);
+        let wait_for = remaining.max(Duration::from_secs(1));
+        let event = timeout(wait_for, codex.next_event())
+            .await
+            .expect("timeout waiting for exec events")
+            .expect("stream ended unexpectedly");
+
+        match event.msg {
+            EventMsg::ExecCommandBegin(ev) if ev.call_id == call_id => begin = Some(ev),
+            EventMsg::ExecCommandEnd(ev) if ev.call_id == call_id => end = Some(ev),
+            _ => {}
+        }
+    }
+
+    (begin.expect("missing begin"), end.expect("missing end"))
 }
 
 pub async fn wait_for_event_with_timeout<F>(
