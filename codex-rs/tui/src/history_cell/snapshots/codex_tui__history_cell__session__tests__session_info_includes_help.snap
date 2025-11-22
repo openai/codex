@@ -1,0 +1,18 @@
+---
+source: tui/src/history_cell/session.rs
+expression: cell.display_string(70)
+---
+╭─────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.0.0)                    │
+│                                             │
+│ model:     gpt-4o medium   /model to change │
+│ directory: ~/code/codex3/codex-rs/tui       │
+╰─────────────────────────────────────────────╯
+
+  To get started, describe a task or try one of these commands:
+
+  /init - create an AGENTS.md file with instructions for Codex
+  /status - show current session configuration
+  /approvals - choose what Codex can do without approval
+  /model - choose what model and reasoning effort to use
+  /review - review any changes and find issues

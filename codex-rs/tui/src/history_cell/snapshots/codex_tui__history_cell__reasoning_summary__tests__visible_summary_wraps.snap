@@ -1,0 +1,7 @@
+---
+source: tui/src/history_cell/reasoning_summary.rs
+expression: cell.display_string(46)
+---
+• We should refactor the history cells into
+  modules and add snapshot coverage to lock
+  rendering behavior.

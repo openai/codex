@@ -1,0 +1,5 @@
+---
+source: tui/src/history_cell/review_status.rs
+expression: cell.display_string(64)
+---
+Review in progress: applying feedback and rerunning checks

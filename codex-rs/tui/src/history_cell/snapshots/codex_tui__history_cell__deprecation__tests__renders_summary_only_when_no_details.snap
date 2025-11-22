@@ -1,0 +1,6 @@
+---
+source: tui/src/history_cell/deprecation.rs
+assertion_line: 102
+expression: rendered
+---
+⚠ Old endpoint deprecated
