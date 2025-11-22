@@ -250,10 +250,6 @@ client_request_definitions! {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         response: v1::GetUserAgentResponse,
     },
-    GetClientInfo {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
-        response: v1::GetClientInfoResponse,
-    },
     UserInfo {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         response: v1::UserInfoResponse,

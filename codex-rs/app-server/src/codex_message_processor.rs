@@ -34,7 +34,6 @@ use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::GetAuthStatusParams;
 use codex_app_server_protocol::GetAuthStatusResponse;
-use codex_app_server_protocol::GetClientInfoResponse;
 use codex_app_server_protocol::GetConversationSummaryParams;
 use codex_app_server_protocol::GetConversationSummaryResponse;
 use codex_app_server_protocol::GetUserAgentResponse;
@@ -1037,13 +1036,6 @@ impl CodexMessageProcessor {
     async fn get_user_agent(&self, request_id: RequestId) {
         let user_agent = get_codex_user_agent();
         let response = GetUserAgentResponse { user_agent };
-        self.outgoing.send_response(request_id, response).await;
-    }
-
-    async fn get_client_info(&self, request_id: RequestId) {
-        let response = GetClientInfoResponse {
-            client_version: CODEX_CLI_VERSION.to_string(),
-        };
         self.outgoing.send_response(request_id, response).await;
     }
 
