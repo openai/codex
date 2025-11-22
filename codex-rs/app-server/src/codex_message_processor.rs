@@ -270,6 +270,7 @@ impl CodexMessageProcessor {
                     prompt: "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.".to_string(),
                     user_facing_hint: "current changes".to_string(),
                     append_to_original_thread,
+                    turn_id: String::new(),
                 },
                 "Review uncommitted changes".to_string(),
             )),
@@ -286,6 +287,7 @@ impl CodexMessageProcessor {
                         prompt,
                         user_facing_hint: hint,
                         append_to_original_thread,
+                        turn_id: String::new(),
                     },
                     display,
                 ))
@@ -315,6 +317,7 @@ impl CodexMessageProcessor {
                         prompt,
                         user_facing_hint: hint,
                         append_to_original_thread,
+                        turn_id: String::new(),
                     },
                     display,
                 ))
@@ -329,6 +332,7 @@ impl CodexMessageProcessor {
                         prompt: trimmed.clone(),
                         user_facing_hint: trimmed.clone(),
                         append_to_original_thread,
+                        turn_id: String::new(),
                     },
                     trimmed,
                 ))

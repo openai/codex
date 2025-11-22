@@ -50,6 +50,7 @@ pub(crate) async fn handle_mcp_tool_call(
 
     let tool_call_begin_event = EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
         call_id: call_id.clone(),
+        turn_id: turn_context.sub_id.clone(),
         invocation: invocation.clone(),
     });
     notify_mcp_tool_call_event(sess, turn_context, tool_call_begin_event).await;
@@ -65,6 +66,7 @@ pub(crate) async fn handle_mcp_tool_call(
     }
     let tool_call_end_event = EventMsg::McpToolCallEnd(McpToolCallEndEvent {
         call_id: call_id.clone(),
+        turn_id: turn_context.sub_id.clone(),
         invocation,
         duration: start.elapsed(),
         result: result.clone(),

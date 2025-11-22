@@ -722,6 +722,8 @@ impl HasLegacyEvent for EventMsg {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ExitedReviewModeEvent {
+    #[serde(default)]
+    pub turn_id: String,
     pub review_output: Option<ReviewOutputEvent>,
 }
 
@@ -732,6 +734,10 @@ pub struct ErrorEvent {
     pub message: String,
     #[serde(default)]
     pub codex_error_info: Option<CodexErrorInfo>,
+    #[serde(default)]
+    pub conversation_id: Option<String>,
+    #[serde(default)]
+    pub turn_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1017,6 +1023,8 @@ pub struct McpInvocation {
 pub struct McpToolCallBeginEvent {
     /// Identifier so this can be paired with the McpToolCallEnd event.
     pub call_id: String,
+    #[serde(default)]
+    pub turn_id: String,
     pub invocation: McpInvocation,
 }
 
@@ -1024,6 +1032,8 @@ pub struct McpToolCallBeginEvent {
 pub struct McpToolCallEndEvent {
     /// Identifier for the corresponding McpToolCallBegin that finished.
     pub call_id: String,
+    #[serde(default)]
+    pub turn_id: String,
     pub invocation: McpInvocation,
     #[ts(type = "string")]
     pub duration: Duration,
@@ -1234,6 +1244,8 @@ pub struct ReviewRequest {
     pub user_facing_hint: String,
     #[serde(default)]
     pub append_to_original_thread: bool,
+    #[serde(default)]
+    pub turn_id: String,
 }
 
 /// Structured review result produced by a child review session.
@@ -1411,6 +1423,10 @@ pub struct StreamErrorEvent {
     pub message: String,
     #[serde(default)]
     pub codex_error_info: Option<CodexErrorInfo>,
+    #[serde(default)]
+    pub conversation_id: String,
+    #[serde(default)]
+    pub turn_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

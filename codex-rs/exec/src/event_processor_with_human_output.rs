@@ -313,6 +313,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             }
             EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
                 call_id: _,
+                turn_id: _,
                 invocation,
             }) => {
                 ts_msg!(
@@ -326,6 +327,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 let is_success = tool_call_end_event.is_success();
                 let McpToolCallEndEvent {
                     call_id: _,
+                    turn_id: _,
                     result,
                     invocation,
                     duration,

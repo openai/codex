@@ -267,10 +267,12 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
     let EventMsg::McpToolCallBegin(begin) = begin_event else {
         unreachable!("begin");
     };
+    assert!(!begin.turn_id.is_empty());
     assert_eq!(
         begin,
         McpToolCallBeginEvent {
             call_id: call_id.to_string(),
+            turn_id: begin.turn_id.clone(),
             invocation: McpInvocation {
                 server: server_name.to_string(),
                 tool: "image".to_string(),
@@ -286,6 +288,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
     let EventMsg::McpToolCallEnd(end) = end_event else {
         unreachable!("end");
     };
+    assert!(!end.turn_id.is_empty());
     assert_eq!(end.call_id, call_id);
     assert_eq!(
         end.invocation,
@@ -462,10 +465,12 @@ async fn stdio_image_completions_round_trip() -> anyhow::Result<()> {
     let EventMsg::McpToolCallBegin(begin) = begin_event else {
         unreachable!("begin");
     };
+    assert!(!begin.turn_id.is_empty());
     assert_eq!(
         begin,
         McpToolCallBeginEvent {
             call_id: call_id.to_string(),
+            turn_id: begin.turn_id.clone(),
             invocation: McpInvocation {
                 server: server_name.to_string(),
                 tool: "image".to_string(),
@@ -481,6 +486,7 @@ async fn stdio_image_completions_round_trip() -> anyhow::Result<()> {
     let EventMsg::McpToolCallEnd(end) = end_event else {
         unreachable!("end");
     };
+    assert!(!end.turn_id.is_empty());
     assert!(end.result.as_ref().is_ok(), "tool call should succeed");
 
     wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;

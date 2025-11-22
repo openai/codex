@@ -784,6 +784,19 @@ impl Session {
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
         let legacy_source = msg.clone();
+        let msg = match msg {
+            EventMsg::Error(mut ev) => {
+                ev.conversation_id = self.conversation_id.to_string();
+                ev.turn_id = turn_context.sub_id.clone();
+                EventMsg::Error(ev)
+            }
+            EventMsg::StreamError(mut ev) => {
+                ev.conversation_id = self.conversation_id.to_string();
+                ev.turn_id = turn_context.sub_id.clone();
+                EventMsg::StreamError(ev)
+            }
+            other => other,
+        };
         let event = Event {
             id: turn_context.sub_id.clone(),
             msg,
@@ -1233,6 +1246,8 @@ impl Session {
         let event = EventMsg::StreamError(StreamErrorEvent {
             message: message.into(),
             codex_error_info: Some(codex_error_info),
+            conversation_id: self.conversation_id.to_string(),
+            turn_id: turn_context.sub_id.clone(),
         });
         self.send_event(turn_context, event).await;
     }
@@ -1762,6 +1777,8 @@ mod handlers {
                 msg: EventMsg::Error(ErrorEvent {
                     message: "Failed to shutdown rollout recorder".to_string(),
                     codex_error_info: Some(CodexErrorInfo::Other),
+                    conversation_id: Some(sess.conversation_id.to_string()),
+                    turn_id: Some(sub_id.clone()),
                 }),
             };
             sess.send_event_raw(event).await;
@@ -1876,6 +1893,8 @@ async fn spawn_review_thread(
         text: review_prompt,
     }];
     let tc = Arc::new(review_turn_context);
+    let mut review_request = review_request;
+    review_request.turn_id = tc.sub_id.clone();
     sess.spawn_task(
         tc.clone(),
         input,

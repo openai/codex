@@ -1119,6 +1119,7 @@ impl ChatWidget {
 
         let McpToolCallEndEvent {
             call_id,
+            turn_id: _,
             invocation,
             duration,
             result,
@@ -2817,6 +2818,7 @@ impl ChatWidget {
                             prompt: "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.".to_string(),
                             user_facing_hint: "current changes".to_string(),
                             append_to_original_thread: true,
+                            turn_id: String::new(),
                         },
                     }));
                 },
@@ -2874,6 +2876,7 @@ impl ChatWidget {
                             ),
                             user_facing_hint: format!("changes against '{branch}'"),
                             append_to_original_thread: true,
+                            turn_id: String::new(),
                         },
                     }));
                 })],
@@ -2915,6 +2918,7 @@ impl ChatWidget {
                             prompt,
                             user_facing_hint: hint,
                             append_to_original_thread: true,
+                            turn_id: String::new(),
                         },
                     }));
                 })],
@@ -2950,6 +2954,7 @@ impl ChatWidget {
                         prompt: trimmed.clone(),
                         user_facing_hint: trimmed,
                         append_to_original_thread: true,
+                        turn_id: String::new(),
                     },
                 }));
             }),
@@ -3166,6 +3171,7 @@ pub(crate) fn show_review_commit_picker_with_entries(
                         prompt,
                         user_facing_hint: hint,
                         append_to_original_thread: true,
+                        turn_id: String::new(),
                     },
                 }));
             })],

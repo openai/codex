@@ -71,6 +71,7 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
                 prompt: "Please review".to_string(),
                 user_facing_hint: "review".to_string(),
                 append_to_original_thread: true,
+                turn_id: String::new(),
             },
         })
         .await
@@ -147,6 +148,7 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
                 prompt: "Please review".to_string(),
                 user_facing_hint: "review".to_string(),
                 append_to_original_thread: true,
+                turn_id: String::new(),
             },
         })
         .await
@@ -202,6 +204,7 @@ async fn codex_delegate_ignores_legacy_deltas() {
                 prompt: "Please review".to_string(),
                 user_facing_hint: "review".to_string(),
                 append_to_original_thread: true,
+                turn_id: String::new(),
             },
         })
         .await
