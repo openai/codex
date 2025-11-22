@@ -33,7 +33,7 @@ const nextTurn = await thread.run("Implement the fix");
 
 ### Streaming responses
 
-`run()` buffers events until the turn finishes. To react to intermediate progress—tool calls, streaming responses, and file diffs—use `runStreamed()` instead, which returns an async generator of structured events.
+`run()` buffers events until the turn finishes. To react to intermediate progress—tool calls, streaming responses, and file change notifications—use `runStreamed()` instead, which returns an async generator of structured events.
 
 ```typescript
 const { events } = await thread.runStreamed("Diagnose the test failure and propose a fix");
@@ -115,3 +115,19 @@ const thread = codex.startThread({
   skipGitRepoCheck: true,
 });
 ```
+
+### Controlling the Codex CLI environment
+
+By default, the Codex CLI inherits the Node.js process environment. Provide the optional `env` parameter when instantiating the
+`Codex` client to fully control which variables the CLI receives—useful for sandboxed hosts like Electron apps.
+
+```typescript
+const codex = new Codex({
+  env: {
+    PATH: "/usr/local/bin",
+  },
+});
+```
+
+The SDK still injects its required variables (such as `OPENAI_BASE_URL` and `CODEX_API_KEY`) on top of the environment you
+provide.

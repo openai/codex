@@ -2,13 +2,16 @@ use crate::codex::ProcessedResponseItem;
 use crate::exec::ExecToolCallOutput;
 use crate::token_data::KnownPlan;
 use crate::token_data::PlanType;
-use crate::truncate::truncate_middle;
+use crate::truncate::TruncationPolicy;
+use crate::truncate::truncate_text;
 use chrono::DateTime;
 use chrono::Datelike;
 use chrono::Local;
 use chrono::Utc;
 use codex_async_utils::CancelErr;
 use codex_protocol::ConversationId;
+use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
 use reqwest::StatusCode;
 use serde_json;
@@ -238,18 +241,44 @@ pub struct UnexpectedResponseError {
     pub request_id: Option<String>,
 }
 
+const CLOUDFLARE_BLOCKED_MESSAGE: &str =
+    "Access blocked by Cloudflare. This usually happens when connecting from a restricted region";
+
+impl UnexpectedResponseError {
+    fn friendly_message(&self) -> Option<String> {
+        if self.status != StatusCode::FORBIDDEN {
+            return None;
+        }
+
+        if !self.body.contains("Cloudflare") || !self.body.contains("blocked") {
+            return None;
+        }
+
+        let mut message = format!("{CLOUDFLARE_BLOCKED_MESSAGE} (status {})", self.status);
+        if let Some(id) = &self.request_id {
+            message.push_str(&format!(", request id: {id}"));
+        }
+
+        Some(message)
+    }
+}
+
 impl std::fmt::Display for UnexpectedResponseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "unexpected status {}: {}{}",
-            self.status,
-            self.body,
-            self.request_id
-                .as_ref()
-                .map(|id| format!(", request id: {id}"))
-                .unwrap_or_default()
-        )
+        if let Some(friendly) = self.friendly_message() {
+            write!(f, "{friendly}")
+        } else {
+            write!(
+                f,
+                "unexpected status {}: {}{}",
+                self.status,
+                self.body,
+                self.request_id
+                    .as_ref()
+                    .map(|id| format!(", request id: {id}"))
+                    .unwrap_or_default()
+            )
+        }
     }
 }
 
@@ -403,6 +432,57 @@ impl CodexErr {
     pub fn downcast_ref<T: std::any::Any>(&self) -> Option<&T> {
         (self as &dyn std::any::Any).downcast_ref::<T>()
     }
+
+    /// Translate core error to client-facing protocol error.
+    pub fn to_codex_protocol_error(&self) -> CodexErrorInfo {
+        match self {
+            CodexErr::ContextWindowExceeded => CodexErrorInfo::ContextWindowExceeded,
+            CodexErr::UsageLimitReached(_)
+            | CodexErr::QuotaExceeded
+            | CodexErr::UsageNotIncluded => CodexErrorInfo::UsageLimitExceeded,
+            CodexErr::RetryLimit(_) => CodexErrorInfo::ResponseTooManyFailedAttempts {
+                http_status_code: self.http_status_code_value(),
+            },
+            CodexErr::ConnectionFailed(_) => CodexErrorInfo::HttpConnectionFailed {
+                http_status_code: self.http_status_code_value(),
+            },
+            CodexErr::ResponseStreamFailed(_) => CodexErrorInfo::ResponseStreamConnectionFailed {
+                http_status_code: self.http_status_code_value(),
+            },
+            CodexErr::RefreshTokenFailed(_) => CodexErrorInfo::Unauthorized,
+            CodexErr::SessionConfiguredNotFirstEvent
+            | CodexErr::InternalServerError
+            | CodexErr::InternalAgentDied => CodexErrorInfo::InternalServerError,
+            CodexErr::UnsupportedOperation(_) | CodexErr::ConversationNotFound(_) => {
+                CodexErrorInfo::BadRequest
+            }
+            CodexErr::Sandbox(_) => CodexErrorInfo::SandboxError,
+            _ => CodexErrorInfo::Other,
+        }
+    }
+
+    pub fn to_error_event(&self, message_prefix: Option<String>) -> ErrorEvent {
+        let error_message = self.to_string();
+        let message: String = match message_prefix {
+            Some(prefix) => format!("{prefix}: {error_message}"),
+            None => error_message,
+        };
+        ErrorEvent {
+            message,
+            codex_error_info: Some(self.to_codex_protocol_error()),
+        }
+    }
+
+    pub fn http_status_code_value(&self) -> Option<u16> {
+        let http_status_code = match self {
+            CodexErr::RetryLimit(err) => Some(err.status),
+            CodexErr::UnexpectedStatus(err) => Some(err.status),
+            CodexErr::ConnectionFailed(err) => err.source.status(),
+            CodexErr::ResponseStreamFailed(err) => err.source.status(),
+            _ => None,
+        };
+        http_status_code.as_ref().map(StatusCode::as_u16)
+    }
 }
 
 pub fn get_error_message_ui(e: &CodexErr) -> String {
@@ -435,7 +515,10 @@ pub fn get_error_message_ui(e: &CodexErr) -> String {
         _ => e.to_string(),
     };
 
-    truncate_middle(&message, ERROR_MESSAGE_UI_MAX_BYTES).0
+    truncate_text(
+        &message,
+        TruncationPolicy::Bytes(ERROR_MESSAGE_UI_MAX_BYTES),
+    )
 }
 
 #[cfg(test)]
@@ -448,6 +531,10 @@ mod tests {
     use chrono::Utc;
     use codex_protocol::protocol::RateLimitWindow;
     use pretty_assertions::assert_eq;
+    use reqwest::Response;
+    use reqwest::ResponseBuilderExt;
+    use reqwest::StatusCode;
+    use reqwest::Url;
 
     fn rate_limit_snapshot() -> RateLimitSnapshot {
         let primary_reset_at = Utc
@@ -469,6 +556,7 @@ mod tests {
                 window_minutes: Some(120),
                 resets_at: Some(secondary_reset_at),
             }),
+            credits: None,
         }
     }
 
@@ -540,6 +628,33 @@ mod tests {
             output: Box::new(output),
         });
         assert_eq!(get_error_message_ui(&err), "stdout only");
+    }
+
+    #[test]
+    fn to_error_event_handles_response_stream_failed() {
+        let response = http::Response::builder()
+            .status(StatusCode::TOO_MANY_REQUESTS)
+            .url(Url::parse("http://example.com").unwrap())
+            .body("")
+            .unwrap();
+        let source = Response::from(response).error_for_status_ref().unwrap_err();
+        let err = CodexErr::ResponseStreamFailed(ResponseStreamFailed {
+            source,
+            request_id: Some("req-123".to_string()),
+        });
+
+        let event = err.to_error_event(Some("prefix".to_string()));
+
+        assert_eq!(
+            event.message,
+            "prefix: Error while reading the server response: HTTP status client error (429 Too Many Requests) for url (http://example.com/), request id: req-123"
+        );
+        assert_eq!(
+            event.codex_error_info,
+            Some(CodexErrorInfo::ResponseStreamConnectionFailed {
+                http_status_code: Some(429)
+            })
+        );
     }
 
     #[test]
@@ -663,6 +778,35 @@ mod tests {
             let expected = format!("You've hit your usage limit. Try again at {expected_time}.");
             assert_eq!(err.to_string(), expected);
         });
+    }
+
+    #[test]
+    fn unexpected_status_cloudflare_html_is_simplified() {
+        let err = UnexpectedResponseError {
+            status: StatusCode::FORBIDDEN,
+            body: "<html><body>Cloudflare error: Sorry, you have been blocked</body></html>"
+                .to_string(),
+            request_id: Some("ray-id".to_string()),
+        };
+        let status = StatusCode::FORBIDDEN.to_string();
+        assert_eq!(
+            err.to_string(),
+            format!("{CLOUDFLARE_BLOCKED_MESSAGE} (status {status}), request id: ray-id")
+        );
+    }
+
+    #[test]
+    fn unexpected_status_non_html_is_unchanged() {
+        let err = UnexpectedResponseError {
+            status: StatusCode::FORBIDDEN,
+            body: "plain text error".to_string(),
+            request_id: None,
+        };
+        let status = StatusCode::FORBIDDEN.to_string();
+        assert_eq!(
+            err.to_string(),
+            format!("unexpected status {status}: plain text error")
+        );
     }
 
     #[test]

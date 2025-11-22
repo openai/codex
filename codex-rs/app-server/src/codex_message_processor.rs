@@ -1,16 +1,17 @@
+use crate::bespoke_event_handling::apply_bespoke_event_handling;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::fuzzy_file_search::run_fuzzy_file_search;
 use crate::models::supported_models;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
+use chrono::DateTime;
+use chrono::Utc;
+use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AccountLoginCompletedNotification;
-use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
-use codex_app_server_protocol::ApplyPatchApprovalParams;
-use codex_app_server_protocol::ApplyPatchApprovalResponse;
 use codex_app_server_protocol::ArchiveConversationParams;
 use codex_app_server_protocol::ArchiveConversationResponse;
 use codex_app_server_protocol::AskForApproval;
@@ -22,15 +23,15 @@ use codex_app_server_protocol::CancelLoginChatGptResponse;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConversationGitInfo;
 use codex_app_server_protocol::ConversationSummary;
-use codex_app_server_protocol::ExecCommandApprovalParams;
-use codex_app_server_protocol::ExecCommandApprovalResponse;
 use codex_app_server_protocol::ExecOneOffCommandParams;
 use codex_app_server_protocol::ExecOneOffCommandResponse;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FeedbackUploadResponse;
 use codex_app_server_protocol::FuzzyFileSearchParams;
 use codex_app_server_protocol::FuzzyFileSearchResponse;
+use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
+use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::GetAuthStatusParams;
 use codex_app_server_protocol::GetAuthStatusResponse;
 use codex_app_server_protocol::GetClientInfoResponse;
@@ -39,9 +40,9 @@ use codex_app_server_protocol::GetConversationSummaryResponse;
 use codex_app_server_protocol::GetUserAgentResponse;
 use codex_app_server_protocol::GetUserSavedConfigResponse;
 use codex_app_server_protocol::GitDiffToRemoteResponse;
+use codex_app_server_protocol::GitInfo as ApiGitInfo;
 use codex_app_server_protocol::InputItem as WireInputItem;
 use codex_app_server_protocol::InterruptConversationParams;
-use codex_app_server_protocol::InterruptConversationResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ListConversationsParams;
 use codex_app_server_protocol::ListConversationsResponse;
@@ -59,16 +60,16 @@ use codex_app_server_protocol::NewConversationResponse;
 use codex_app_server_protocol::RemoveConversationListenerParams;
 use codex_app_server_protocol::RemoveConversationSubscriptionResponse;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::Result as JsonRpcResult;
 use codex_app_server_protocol::ResumeConversationParams;
 use codex_app_server_protocol::ResumeConversationResponse;
+use codex_app_server_protocol::ReviewStartParams;
+use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserMessageResponse;
 use codex_app_server_protocol::SendUserTurnParams;
 use codex_app_server_protocol::SendUserTurnResponse;
 use codex_app_server_protocol::ServerNotification;
-use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::SessionConfiguredNotification;
 use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::SetDefaultModelResponse;
@@ -84,8 +85,8 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::Turn;
+use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptParams;
-use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
@@ -93,6 +94,7 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInfoResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_app_server_protocol::UserSavedConfig;
+use codex_app_server_protocol::build_turns_from_event_msgs;
 use codex_backend_client::Client as BackendClient;
 use codex_core::AuthManager;
 use codex_core::CodexConversation;
@@ -113,16 +115,14 @@ use codex_core::config_loader::load_config_as_toml;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
+use codex_core::features::Feature;
 use codex_core::find_conversation_path_by_id_str;
-use codex_core::get_platform_sandbox;
 use codex_core::git_info::git_diff_to_remote;
 use codex_core::parse_cursor;
-use codex_core::protocol::ApplyPatchApprovalRequestEvent;
-use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::Op;
-use codex_core::protocol::ReviewDecision;
+use codex_core::protocol::ReviewRequest;
+use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::read_head_for_summary;
 use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
@@ -132,7 +132,7 @@ use codex_protocol::ConversationId;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::GitInfo;
+use codex_protocol::protocol::GitInfo as CoreGitInfo;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionMetaLine;
@@ -140,6 +140,7 @@ use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_utils_json_to_toml::json_to_toml;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::io::Error as IoError;
 use std::path::Path;
@@ -157,7 +158,16 @@ use tracing::warn;
 use uuid::Uuid;
 
 type PendingInterruptQueue = Vec<(RequestId, ApiVersion)>;
-type PendingInterrupts = Arc<Mutex<HashMap<ConversationId, PendingInterruptQueue>>>;
+pub(crate) type PendingInterrupts = Arc<Mutex<HashMap<ConversationId, PendingInterruptQueue>>>;
+
+/// Per-conversation accumulation of the latest states e.g. error message while a turn runs.
+#[derive(Default, Clone)]
+pub(crate) struct TurnSummary {
+    pub(crate) file_change_started: HashSet<String>,
+    pub(crate) last_error: Option<TurnError>,
+}
+
+pub(crate) type TurnSummaryStore = Arc<Mutex<HashMap<ConversationId, TurnSummary>>>;
 
 const CODEX_CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
 // Duration before a ChatGPT login attempt is abandoned.
@@ -167,8 +177,8 @@ struct ActiveLogin {
     login_id: Uuid,
 }
 
-impl ActiveLogin {
-    fn drop(&self) {
+impl Drop for ActiveLogin {
+    fn drop(&mut self) {
         self.shutdown_handle.shutdown();
     }
 }
@@ -184,17 +194,42 @@ pub(crate) struct CodexMessageProcessor {
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
     pending_interrupts: PendingInterrupts,
+    turn_summary_store: TurnSummaryStore,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     feedback: CodexFeedback,
 }
 
 #[derive(Clone, Copy, Debug)]
-enum ApiVersion {
+pub(crate) enum ApiVersion {
     V1,
     V2,
 }
 
 impl CodexMessageProcessor {
+    async fn conversation_from_thread_id(
+        &self,
+        thread_id: &str,
+    ) -> Result<(ConversationId, Arc<CodexConversation>), JSONRPCErrorError> {
+        // Resolve conversation id from v2 thread id string.
+        let conversation_id =
+            ConversationId::from_string(thread_id).map_err(|err| JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("invalid thread id: {err}"),
+                data: None,
+            })?;
+
+        let conversation = self
+            .conversation_manager
+            .get_conversation(conversation_id)
+            .await
+            .map_err(|_| JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("conversation not found: {conversation_id}"),
+                data: None,
+            })?;
+
+        Ok((conversation_id, conversation))
+    }
     pub fn new(
         auth_manager: Arc<AuthManager>,
         conversation_manager: Arc<ConversationManager>,
@@ -212,8 +247,94 @@ impl CodexMessageProcessor {
             conversation_listeners: HashMap::new(),
             active_login: Arc::new(Mutex::new(None)),
             pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
+            turn_summary_store: Arc::new(Mutex::new(HashMap::new())),
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
             feedback,
+        }
+    }
+
+    fn review_request_from_target(
+        target: ReviewTarget,
+        append_to_original_thread: bool,
+    ) -> Result<(ReviewRequest, String), JSONRPCErrorError> {
+        fn invalid_request(message: String) -> JSONRPCErrorError {
+            JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message,
+                data: None,
+            }
+        }
+
+        match target {
+            // TODO(jif) those messages will be extracted in a follow-up PR.
+            ReviewTarget::UncommittedChanges => Ok((
+                ReviewRequest {
+                    prompt: "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.".to_string(),
+                    user_facing_hint: "current changes".to_string(),
+                    append_to_original_thread,
+                },
+                "Review uncommitted changes".to_string(),
+            )),
+            ReviewTarget::BaseBranch { branch } => {
+                let branch = branch.trim().to_string();
+                if branch.is_empty() {
+                    return Err(invalid_request("branch must not be empty".to_string()));
+                }
+                let prompt = format!("Review the code changes against the base branch '{branch}'. Start by finding the merge diff between the current branch and {branch}'s upstream e.g. (`git merge-base HEAD \"$(git rev-parse --abbrev-ref \"{branch}@{{upstream}}\")\"`), then run `git diff` against that SHA to see what changes we would merge into the {branch} branch. Provide prioritized, actionable findings.");
+                let hint = format!("changes against '{branch}'");
+                let display = format!("Review changes against base branch '{branch}'");
+                Ok((
+                    ReviewRequest {
+                        prompt,
+                        user_facing_hint: hint,
+                        append_to_original_thread,
+                    },
+                    display,
+                ))
+            }
+            ReviewTarget::Commit { sha, title } => {
+                let sha = sha.trim().to_string();
+                if sha.is_empty() {
+                    return Err(invalid_request("sha must not be empty".to_string()));
+                }
+                let brief_title = title
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty());
+                let prompt = if let Some(title) = brief_title.clone() {
+                    format!("Review the code changes introduced by commit {sha} (\"{title}\"). Provide prioritized, actionable findings.")
+                } else {
+                    format!("Review the code changes introduced by commit {sha}. Provide prioritized, actionable findings.")
+                };
+                let short_sha = sha.chars().take(7).collect::<String>();
+                let hint = format!("commit {short_sha}");
+                let display = if let Some(title) = brief_title {
+                    format!("Review commit {short_sha}: {title}")
+                } else {
+                    format!("Review commit {short_sha}")
+                };
+                Ok((
+                    ReviewRequest {
+                        prompt,
+                        user_facing_hint: hint,
+                        append_to_original_thread,
+                    },
+                    display,
+                ))
+            }
+            ReviewTarget::Custom { instructions } => {
+                let trimmed = instructions.trim().to_string();
+                if trimmed.is_empty() {
+                    return Err(invalid_request("instructions must not be empty".to_string()));
+                }
+                Ok((
+                    ReviewRequest {
+                        prompt: trimmed.clone(),
+                        user_facing_hint: trimmed.clone(),
+                        append_to_original_thread,
+                    },
+                    trimmed,
+                ))
+            }
         }
     }
 
@@ -248,6 +369,9 @@ impl CodexMessageProcessor {
             ClientRequest::TurnInterrupt { request_id, params } => {
                 self.turn_interrupt(request_id, params).await;
             }
+            ClientRequest::ReviewStart { request_id, params } => {
+                self.review_start(request_id, params).await;
+            }
             ClientRequest::NewConversation { request_id, params } => {
                 // Do not tokio::spawn() to process new_conversation()
                 // asynchronously because we need to ensure the conversation is
@@ -275,12 +399,8 @@ impl CodexMessageProcessor {
             ClientRequest::CancelLoginAccount { request_id, params } => {
                 self.cancel_login_v2(request_id, params).await;
             }
-            ClientRequest::GetAccount {
-                request_id,
-                params: _,
-            } => {
-                self.send_unimplemented_error(request_id, "account/read")
-                    .await;
+            ClientRequest::GetAccount { request_id, params } => {
+                self.get_account(request_id, params).await;
             }
             ClientRequest::ResumeConversation { request_id, params } => {
                 self.handle_resume_conversation(request_id, params).await;
@@ -412,7 +532,7 @@ impl CodexMessageProcessor {
         {
             let mut guard = self.active_login.lock().await;
             if let Some(active) = guard.take() {
-                active.drop();
+                drop(active);
             }
         }
 
@@ -520,7 +640,7 @@ impl CodexMessageProcessor {
                     {
                         let mut guard = self.active_login.lock().await;
                         if let Some(existing) = guard.take() {
-                            existing.drop();
+                            drop(existing);
                         }
                         *guard = Some(ActiveLogin {
                             shutdown_handle: shutdown_handle.clone(),
@@ -610,7 +730,7 @@ impl CodexMessageProcessor {
                     {
                         let mut guard = self.active_login.lock().await;
                         if let Some(existing) = guard.take() {
-                            existing.drop();
+                            drop(existing);
                         }
                         *guard = Some(ActiveLogin {
                             shutdown_handle: shutdown_handle.clone(),
@@ -699,7 +819,7 @@ impl CodexMessageProcessor {
         let mut guard = self.active_login.lock().await;
         if guard.as_ref().map(|l| l.login_id) == Some(login_id) {
             if let Some(active) = guard.take() {
-                active.drop();
+                drop(active);
             }
             Ok(())
         } else {
@@ -753,7 +873,7 @@ impl CodexMessageProcessor {
         {
             let mut guard = self.active_login.lock().await;
             if let Some(active) = guard.take() {
-                active.drop();
+                drop(active);
             }
         }
 
@@ -809,13 +929,17 @@ impl CodexMessageProcessor {
         }
     }
 
+    async fn refresh_token_if_requested(&self, do_refresh: bool) {
+        if do_refresh && let Err(err) = self.auth_manager.refresh_token().await {
+            tracing::warn!("failed to refresh token whilte getting account: {err}");
+        }
+    }
+
     async fn get_auth_status(&self, request_id: RequestId, params: GetAuthStatusParams) {
         let include_token = params.include_token.unwrap_or(false);
         let do_refresh = params.refresh_token.unwrap_or(false);
 
-        if do_refresh && let Err(err) = self.auth_manager.refresh_token().await {
-            tracing::warn!("failed to refresh token while getting auth status: {err}");
-        }
+        self.refresh_token_if_requested(do_refresh).await;
 
         // Determine whether auth is required based on the active model provider.
         // If a custom provider is configured with `requires_openai_auth == false`,
@@ -857,6 +981,56 @@ impl CodexMessageProcessor {
             }
         };
 
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn get_account(&self, request_id: RequestId, params: GetAccountParams) {
+        let do_refresh = params.refresh_token;
+
+        self.refresh_token_if_requested(do_refresh).await;
+
+        // Whether auth is required for the active model provider.
+        let requires_openai_auth = self.config.model_provider.requires_openai_auth;
+
+        if !requires_openai_auth {
+            let response = GetAccountResponse {
+                account: None,
+                requires_openai_auth,
+            };
+            self.outgoing.send_response(request_id, response).await;
+            return;
+        }
+
+        let account = match self.auth_manager.auth() {
+            Some(auth) => Some(match auth.mode {
+                AuthMode::ApiKey => Account::ApiKey {},
+                AuthMode::ChatGPT => {
+                    let email = auth.get_account_email();
+                    let plan_type = auth.account_plan_type();
+
+                    match (email, plan_type) {
+                        (Some(email), Some(plan_type)) => Account::Chatgpt { email, plan_type },
+                        _ => {
+                            let error = JSONRPCErrorError {
+                                code: INVALID_REQUEST_ERROR_CODE,
+                                message:
+                                    "email and plan type are required for chatgpt authentication"
+                                        .to_string(),
+                                data: None,
+                            };
+                            self.outgoing.send_error(request_id, error).await;
+                            return;
+                        }
+                    }
+                }
+            }),
+            None => None,
+        };
+
+        let response = GetAccountResponse {
+            account,
+            requires_openai_auth,
+        };
         self.outgoing.send_response(request_id, response).await;
     }
 
@@ -1011,7 +1185,7 @@ impl CodexMessageProcessor {
         let exec_params = ExecParams {
             command: params.command,
             cwd,
-            timeout_ms,
+            expiration: timeout_ms.into(),
             env,
             with_escalated_permissions: None,
             justification: None,
@@ -1022,13 +1196,6 @@ impl CodexMessageProcessor {
             .sandbox_policy
             .unwrap_or_else(|| self.config.sandbox_policy.clone());
 
-        let sandbox_type = match &effective_policy {
-            codex_core::protocol::SandboxPolicy::DangerFullAccess => {
-                codex_core::exec::SandboxType::None
-            }
-            _ => get_platform_sandbox().unwrap_or(codex_core::exec::SandboxType::None),
-        };
-        tracing::debug!("Sandbox type: {sandbox_type:?}");
         let codex_linux_sandbox_exe = self.config.codex_linux_sandbox_exe.clone();
         let outgoing = self.outgoing.clone();
         let req_id = request_id;
@@ -1037,7 +1204,6 @@ impl CodexMessageProcessor {
         tokio::spawn(async move {
             match codex_core::exec::process_exec_tool_call(
                 exec_params,
-                sandbox_type,
                 &effective_policy,
                 sandbox_cwd.as_path(),
                 &codex_linux_sandbox_exe,
@@ -1083,7 +1249,7 @@ impl CodexMessageProcessor {
         let overrides = ConfigOverrides {
             model,
             config_profile: profile,
-            cwd: cwd.map(PathBuf::from),
+            cwd: cwd.clone().map(PathBuf::from),
             approval_policy,
             sandbox_mode,
             model_provider,
@@ -1095,7 +1261,17 @@ impl CodexMessageProcessor {
             ..Default::default()
         };
 
-        let config = match derive_config_from_params(overrides, cli_overrides).await {
+        // Persist windows sandbox feature.
+        // TODO: persist default config in general.
+        let mut cli_overrides = cli_overrides.unwrap_or_default();
+        if cfg!(windows) && self.config.features.enabled(Feature::WindowsSandbox) {
+            cli_overrides.insert(
+                "features.enable_experimental_windows_sandbox".to_string(),
+                serde_json::json!(true),
+            );
+        }
+
+        let config = match derive_config_from_params(overrides, Some(cli_overrides)).await {
             Ok(config) => config,
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -1135,21 +1311,17 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_start(&mut self, request_id: RequestId, params: ThreadStartParams) {
-        // Build ConfigOverrides directly from ThreadStartParams for config derivation.
-        let cli_overrides = params.config;
-        let overrides = ConfigOverrides {
-            model: params.model,
-            cwd: params.cwd.map(PathBuf::from),
-            approval_policy: params.approval_policy.map(AskForApproval::to_core),
-            sandbox_mode: params.sandbox.map(SandboxMode::to_core),
-            model_provider: params.model_provider,
-            codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
-            base_instructions: params.base_instructions,
-            developer_instructions: params.developer_instructions,
-            ..Default::default()
-        };
+        let overrides = self.build_thread_config_overrides(
+            params.model,
+            params.model_provider,
+            params.cwd,
+            params.approval_policy,
+            params.sandbox,
+            params.base_instructions,
+            params.developer_instructions,
+        );
 
-        let config = match derive_config_from_params(overrides, cli_overrides).await {
+        let config = match derive_config_from_params(overrides, params.config).await {
             Ok(config) => config,
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -1164,23 +1336,63 @@ impl CodexMessageProcessor {
 
         match self.conversation_manager.new_conversation(config).await {
             Ok(new_conv) => {
-                let thread = Thread {
-                    id: new_conv.conversation_id.to_string(),
+                let NewConversation {
+                    conversation_id,
+                    session_configured,
+                    ..
+                } = new_conv;
+                let rollout_path = session_configured.rollout_path.clone();
+                let fallback_provider = self.config.model_provider_id.as_str();
+
+                // A bit hacky, but the summary contains a lot of useful information for the thread
+                // that unfortunately does not get returned from conversation_manager.new_conversation().
+                let thread = match read_summary_from_rollout(
+                    rollout_path.as_path(),
+                    fallback_provider,
+                )
+                .await
+                {
+                    Ok(summary) => summary_to_thread(summary),
+                    Err(err) => {
+                        self.send_internal_error(
+                            request_id,
+                            format!(
+                                "failed to load rollout `{}` for conversation {conversation_id}: {err}",
+                                rollout_path.display()
+                            ),
+                        )
+                        .await;
+                        return;
+                    }
                 };
 
+                let SessionConfiguredEvent {
+                    model,
+                    model_provider_id,
+                    cwd,
+                    approval_policy,
+                    sandbox_policy,
+                    ..
+                } = session_configured;
                 let response = ThreadStartResponse {
                     thread: thread.clone(),
+                    model,
+                    model_provider: model_provider_id,
+                    cwd,
+                    approval_policy: approval_policy.into(),
+                    sandbox: sandbox_policy.into(),
+                    reasoning_effort: session_configured.reasoning_effort,
                 };
 
                 // Auto-attach a conversation listener when starting a thread.
                 // Use the same behavior as the v1 API with experimental_raw_events=false.
                 if let Err(err) = self
-                    .attach_conversation_listener(new_conv.conversation_id, false)
+                    .attach_conversation_listener(conversation_id, false, ApiVersion::V2)
                     .await
                 {
                     tracing::warn!(
                         "failed to attach listener for conversation {}: {}",
-                        new_conv.conversation_id,
+                        conversation_id,
                         err.message
                     );
                 }
@@ -1200,6 +1412,31 @@ impl CodexMessageProcessor {
                 };
                 self.outgoing.send_error(request_id, error).await;
             }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_thread_config_overrides(
+        &self,
+        model: Option<String>,
+        model_provider: Option<String>,
+        cwd: Option<String>,
+        approval_policy: Option<codex_app_server_protocol::AskForApproval>,
+        sandbox: Option<SandboxMode>,
+        base_instructions: Option<String>,
+        developer_instructions: Option<String>,
+    ) -> ConfigOverrides {
+        ConfigOverrides {
+            model,
+            model_provider,
+            cwd: cwd.map(PathBuf::from),
+            approval_policy: approval_policy
+                .map(codex_app_server_protocol::AskForApproval::to_core),
+            sandbox_mode: sandbox.map(SandboxMode::to_core),
+            codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
+            base_instructions,
+            developer_instructions,
+            ..Default::default()
         }
     }
 
@@ -1278,101 +1515,162 @@ impl CodexMessageProcessor {
             }
         };
 
-        let data = summaries
-            .into_iter()
-            .map(|s| Thread {
-                id: s.conversation_id.to_string(),
-            })
-            .collect();
+        let data = summaries.into_iter().map(summary_to_thread).collect();
 
         let response = ThreadListResponse { data, next_cursor };
         self.outgoing.send_response(request_id, response).await;
     }
 
     async fn thread_resume(&mut self, request_id: RequestId, params: ThreadResumeParams) {
-        let conversation_id = match ConversationId::from_string(&params.thread_id) {
-            Ok(id) => id,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("invalid thread id: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
+        let ThreadResumeParams {
+            thread_id,
+            history,
+            path,
+            model,
+            model_provider,
+            cwd,
+            approval_policy,
+            sandbox,
+            config: cli_overrides,
+            base_instructions,
+            developer_instructions,
+        } = params;
+
+        let overrides_requested = model.is_some()
+            || model_provider.is_some()
+            || cwd.is_some()
+            || approval_policy.is_some()
+            || sandbox.is_some()
+            || cli_overrides.is_some()
+            || base_instructions.is_some()
+            || developer_instructions.is_some();
+
+        let config = if overrides_requested {
+            let overrides = self.build_thread_config_overrides(
+                model,
+                model_provider,
+                cwd,
+                approval_policy,
+                sandbox,
+                base_instructions,
+                developer_instructions,
+            );
+            match derive_config_from_params(overrides, cli_overrides).await {
+                Ok(config) => config,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("error deriving config: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            }
+        } else {
+            self.config.as_ref().clone()
+        };
+
+        let conversation_history = if let Some(history) = history {
+            if history.is_empty() {
+                self.send_invalid_request_error(
+                    request_id,
+                    "history must not be empty".to_string(),
+                )
+                .await;
                 return;
+            }
+            InitialHistory::Forked(history.into_iter().map(RolloutItem::ResponseItem).collect())
+        } else if let Some(path) = path {
+            match RolloutRecorder::get_rollout_history(&path).await {
+                Ok(initial_history) => initial_history,
+                Err(err) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("failed to load rollout `{}`: {err}", path.display()),
+                    )
+                    .await;
+                    return;
+                }
+            }
+        } else {
+            let existing_conversation_id = match ConversationId::from_string(&thread_id) {
+                Ok(id) => id,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid thread id: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
+
+            let path = match find_conversation_path_by_id_str(
+                &self.config.codex_home,
+                &existing_conversation_id.to_string(),
+            )
+            .await
+            {
+                Ok(Some(p)) => p,
+                Ok(None) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("no rollout found for conversation id {existing_conversation_id}"),
+                    )
+                    .await;
+                    return;
+                }
+                Err(err) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!(
+                            "failed to locate conversation id {existing_conversation_id}: {err}"
+                        ),
+                    )
+                    .await;
+                    return;
+                }
+            };
+
+            match RolloutRecorder::get_rollout_history(&path).await {
+                Ok(initial_history) => initial_history,
+                Err(err) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("failed to load rollout `{}`: {err}", path.display()),
+                    )
+                    .await;
+                    return;
+                }
             }
         };
 
-        let path = match find_conversation_path_by_id_str(
-            &self.config.codex_home,
-            &conversation_id.to_string(),
-        )
-        .await
-        {
-            Ok(Some(p)) => p,
-            Ok(None) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("no rollout found for conversation id {conversation_id}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("failed to locate conversation id {conversation_id}: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
-
-        let fallback_provider = self.config.model_provider_id.as_str();
-        let summary = match read_summary_from_rollout(&path, fallback_provider).await {
-            Ok(s) => s,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("failed to load rollout `{}`: {err}", path.display()),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
-
-        let initial_history = match RolloutRecorder::get_rollout_history(&summary.path).await {
-            Ok(initial_history) => initial_history,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!(
-                        "failed to load rollout `{}` for conversation {conversation_id}: {err}",
-                        summary.path.display()
-                    ),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
+        let fallback_model_provider = config.model_provider_id.clone();
 
         match self
             .conversation_manager
             .resume_conversation_with_history(
-                self.config.as_ref().clone(),
-                initial_history,
+                config,
+                conversation_history,
                 self.auth_manager.clone(),
             )
             .await
         {
-            Ok(_) => {
+            Ok(NewConversation {
+                conversation_id,
+                session_configured,
+                ..
+            }) => {
+                let SessionConfiguredEvent {
+                    rollout_path,
+                    initial_messages,
+                    ..
+                } = session_configured;
                 // Auto-attach a conversation listener when resuming a thread.
                 if let Err(err) = self
-                    .attach_conversation_listener(conversation_id, false)
+                    .attach_conversation_listener(conversation_id, false, ApiVersion::V2)
                     .await
                 {
                     tracing::warn!(
@@ -1382,11 +1680,39 @@ impl CodexMessageProcessor {
                     );
                 }
 
-                let response = ThreadResumeResponse {
-                    thread: Thread {
-                        id: conversation_id.to_string(),
-                    },
+                let mut thread = match read_summary_from_rollout(
+                    rollout_path.as_path(),
+                    fallback_model_provider.as_str(),
+                )
+                .await
+                {
+                    Ok(summary) => summary_to_thread(summary),
+                    Err(err) => {
+                        self.send_internal_error(
+                            request_id,
+                            format!(
+                                "failed to load rollout `{}` for conversation {conversation_id}: {err}",
+                                rollout_path.display()
+                            ),
+                        )
+                        .await;
+                        return;
+                    }
                 };
+                thread.turns = initial_messages
+                    .as_deref()
+                    .map_or_else(Vec::new, build_turns_from_event_msgs);
+
+                let response = ThreadResumeResponse {
+                    thread,
+                    model: session_configured.model,
+                    model_provider: session_configured.model_provider_id,
+                    cwd: session_configured.cwd,
+                    approval_policy: session_configured.approval_policy.into(),
+                    sandbox: session_configured.sandbox_policy.into(),
+                    reasoning_effort: session_configured.reasoning_effort,
+                };
+
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(err) => {
@@ -1637,6 +1963,15 @@ impl CodexMessageProcessor {
                     include_apply_patch_tool,
                 } = overrides;
 
+                // Persist windows sandbox feature.
+                let mut cli_overrides = cli_overrides.unwrap_or_default();
+                if cfg!(windows) && self.config.features.enabled(Feature::WindowsSandbox) {
+                    cli_overrides.insert(
+                        "features.enable_experimental_windows_sandbox".to_string(),
+                        serde_json::json!(true),
+                    );
+                }
+
                 let overrides = ConfigOverrides {
                     model,
                     config_profile: profile,
@@ -1652,7 +1987,7 @@ impl CodexMessageProcessor {
                     ..Default::default()
                 };
 
-                derive_config_from_params(overrides, cli_overrides).await
+                derive_config_from_params(overrides, Some(cli_overrides)).await
             }
             None => Ok(self.config.as_ref().clone()),
         };
@@ -1790,6 +2125,15 @@ impl CodexMessageProcessor {
     async fn send_invalid_request_error(&self, request_id: RequestId, message: String) {
         let error = JSONRPCErrorError {
             code: INVALID_REQUEST_ERROR_CODE,
+            message,
+            data: None,
+        };
+        self.outgoing.send_error(request_id, error).await;
+    }
+
+    async fn send_internal_error(&self, request_id: RequestId, message: String) {
+        let error = JSONRPCErrorError {
+            code: INTERNAL_ERROR_CODE,
             message,
             data: None,
         };
@@ -2089,36 +2433,13 @@ impl CodexMessageProcessor {
     }
 
     async fn turn_start(&self, request_id: RequestId, params: TurnStartParams) {
-        // Resolve conversation id from v2 thread id string.
-        let conversation_id = match ConversationId::from_string(&params.thread_id) {
-            Ok(id) => id,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("invalid thread id: {err}"),
-                    data: None,
-                };
+        let (_, conversation) = match self.conversation_from_thread_id(&params.thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
                 return;
             }
         };
-
-        let Ok(conversation) = self
-            .conversation_manager
-            .get_conversation(conversation_id)
-            .await
-        else {
-            let error = JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("conversation not found: {conversation_id}"),
-                data: None,
-            };
-            self.outgoing.send_error(request_id, error).await;
-            return;
-        };
-
-        // Keep a copy of v2 inputs for the notification payload.
-        let v2_inputs_for_notif = params.input.clone();
 
         // Map v2 input items to core input items.
         let mapped_items: Vec<CoreInputItem> = params
@@ -2159,12 +2480,8 @@ impl CodexMessageProcessor {
             Ok(turn_id) => {
                 let turn = Turn {
                     id: turn_id.clone(),
-                    items: vec![ThreadItem::UserMessage {
-                        id: turn_id,
-                        content: v2_inputs_for_notif,
-                    }],
+                    items: vec![],
                     status: TurnStatus::InProgress,
-                    error: None,
                 };
 
                 let response = TurnStartResponse { turn: turn.clone() };
@@ -2187,36 +2504,75 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn turn_interrupt(&mut self, request_id: RequestId, params: TurnInterruptParams) {
-        let TurnInterruptParams { thread_id, .. } = params;
-
-        // Resolve conversation id from v2 thread id string.
-        let conversation_id = match ConversationId::from_string(&thread_id) {
-            Ok(id) => id,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("invalid thread id: {err}"),
-                    data: None,
-                };
+    async fn review_start(&self, request_id: RequestId, params: ReviewStartParams) {
+        let ReviewStartParams {
+            thread_id,
+            target,
+            append_to_original_thread,
+        } = params;
+        let (_, conversation) = match self.conversation_from_thread_id(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
                 return;
             }
         };
 
-        let Ok(conversation) = self
-            .conversation_manager
-            .get_conversation(conversation_id)
-            .await
-        else {
-            let error = JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("conversation not found: {conversation_id}"),
-                data: None,
+        let (review_request, display_text) =
+            match Self::review_request_from_target(target, append_to_original_thread) {
+                Ok(value) => value,
+                Err(err) => {
+                    self.outgoing.send_error(request_id, err).await;
+                    return;
+                }
             };
-            self.outgoing.send_error(request_id, error).await;
-            return;
-        };
+
+        let turn_id = conversation.submit(Op::Review { review_request }).await;
+
+        match turn_id {
+            Ok(turn_id) => {
+                let mut items = Vec::new();
+                if !display_text.is_empty() {
+                    items.push(ThreadItem::UserMessage {
+                        id: turn_id.clone(),
+                        content: vec![V2UserInput::Text { text: display_text }],
+                    });
+                }
+                let turn = Turn {
+                    id: turn_id.clone(),
+                    items,
+                    status: TurnStatus::InProgress,
+                };
+                let response = TurnStartResponse { turn: turn.clone() };
+                self.outgoing.send_response(request_id, response).await;
+
+                let notif = TurnStartedNotification { turn };
+                self.outgoing
+                    .send_server_notification(ServerNotification::TurnStarted(notif))
+                    .await;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to start review: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn turn_interrupt(&mut self, request_id: RequestId, params: TurnInterruptParams) {
+        let TurnInterruptParams { thread_id, .. } = params;
+
+        let (conversation_id, conversation) =
+            match self.conversation_from_thread_id(&thread_id).await {
+                Ok(v) => v,
+                Err(error) => {
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
 
         // Record the pending interrupt so we can reply when TurnAborted arrives.
         {
@@ -2240,7 +2596,7 @@ impl CodexMessageProcessor {
             experimental_raw_events,
         } = params;
         match self
-            .attach_conversation_listener(conversation_id, experimental_raw_events)
+            .attach_conversation_listener(conversation_id, experimental_raw_events, ApiVersion::V1)
             .await
         {
             Ok(subscription_id) => {
@@ -2281,6 +2637,7 @@ impl CodexMessageProcessor {
         &mut self,
         conversation_id: ConversationId,
         experimental_raw_events: bool,
+        api_version: ApiVersion,
     ) -> Result<Uuid, JSONRPCErrorError> {
         let conversation = match self
             .conversation_manager
@@ -2304,6 +2661,8 @@ impl CodexMessageProcessor {
 
         let outgoing_for_task = self.outgoing.clone();
         let pending_interrupts = self.pending_interrupts.clone();
+        let turn_summary_store = self.turn_summary_store.clone();
+        let api_version_for_task = api_version;
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -2359,6 +2718,8 @@ impl CodexMessageProcessor {
                             conversation.clone(),
                             outgoing_for_task.clone(),
                             pending_interrupts.clone(),
+                            turn_summary_store.clone(),
+                            api_version_for_task,
                         )
                         .await;
                     }
@@ -2501,101 +2862,6 @@ impl CodexMessageProcessor {
     }
 }
 
-async fn apply_bespoke_event_handling(
-    event: Event,
-    conversation_id: ConversationId,
-    conversation: Arc<CodexConversation>,
-    outgoing: Arc<OutgoingMessageSender>,
-    pending_interrupts: PendingInterrupts,
-) {
-    let Event { id: event_id, msg } = event;
-    match msg {
-        EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
-            call_id,
-            changes,
-            reason,
-            grant_root,
-        }) => {
-            let params = ApplyPatchApprovalParams {
-                conversation_id,
-                call_id,
-                file_changes: changes,
-                reason,
-                grant_root,
-            };
-            let rx = outgoing
-                .send_request(ServerRequestPayload::ApplyPatchApproval(params))
-                .await;
-            // TODO(mbolin): Enforce a timeout so this task does not live indefinitely?
-            tokio::spawn(async move {
-                on_patch_approval_response(event_id, rx, conversation).await;
-            });
-        }
-        EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
-            call_id,
-            command,
-            cwd,
-            reason,
-            risk,
-            parsed_cmd,
-        }) => {
-            let params = ExecCommandApprovalParams {
-                conversation_id,
-                call_id,
-                command,
-                cwd,
-                reason,
-                risk,
-                parsed_cmd,
-            };
-            let rx = outgoing
-                .send_request(ServerRequestPayload::ExecCommandApproval(params))
-                .await;
-
-            // TODO(mbolin): Enforce a timeout so this task does not live indefinitely?
-            tokio::spawn(async move {
-                on_exec_approval_response(event_id, rx, conversation).await;
-            });
-        }
-        EventMsg::TokenCount(token_count_event) => {
-            if let Some(rate_limits) = token_count_event.rate_limits {
-                outgoing
-                    .send_server_notification(ServerNotification::AccountRateLimitsUpdated(
-                        AccountRateLimitsUpdatedNotification {
-                            rate_limits: rate_limits.into(),
-                        },
-                    ))
-                    .await;
-            }
-        }
-        // If this is a TurnAborted, reply to any pending interrupt requests.
-        EventMsg::TurnAborted(turn_aborted_event) => {
-            let pending = {
-                let mut map = pending_interrupts.lock().await;
-                map.remove(&conversation_id).unwrap_or_default()
-            };
-            if !pending.is_empty() {
-                for (rid, ver) in pending {
-                    match ver {
-                        ApiVersion::V1 => {
-                            let response = InterruptConversationResponse {
-                                abort_reason: turn_aborted_event.reason.clone(),
-                            };
-                            outgoing.send_response(rid, response).await;
-                        }
-                        ApiVersion::V2 => {
-                            let response = TurnInterruptResponse {};
-                            outgoing.send_response(rid, response).await;
-                        }
-                    }
-                }
-            }
-        }
-
-        _ => {}
-    }
-}
-
 async fn derive_config_from_params(
     overrides: ConfigOverrides,
     cli_overrides: Option<std::collections::HashMap<String, serde_json::Value>>,
@@ -2607,84 +2873,6 @@ async fn derive_config_from_params(
         .collect();
 
     Config::load_with_cli_overrides(cli_overrides, overrides).await
-}
-
-async fn on_patch_approval_response(
-    event_id: String,
-    receiver: oneshot::Receiver<JsonRpcResult>,
-    codex: Arc<CodexConversation>,
-) {
-    let response = receiver.await;
-    let value = match response {
-        Ok(value) => value,
-        Err(err) => {
-            error!("request failed: {err:?}");
-            if let Err(submit_err) = codex
-                .submit(Op::PatchApproval {
-                    id: event_id.clone(),
-                    decision: ReviewDecision::Denied,
-                })
-                .await
-            {
-                error!("failed to submit denied PatchApproval after request failure: {submit_err}");
-            }
-            return;
-        }
-    };
-
-    let response =
-        serde_json::from_value::<ApplyPatchApprovalResponse>(value).unwrap_or_else(|err| {
-            error!("failed to deserialize ApplyPatchApprovalResponse: {err}");
-            ApplyPatchApprovalResponse {
-                decision: ReviewDecision::Denied,
-            }
-        });
-
-    if let Err(err) = codex
-        .submit(Op::PatchApproval {
-            id: event_id,
-            decision: response.decision,
-        })
-        .await
-    {
-        error!("failed to submit PatchApproval: {err}");
-    }
-}
-
-async fn on_exec_approval_response(
-    event_id: String,
-    receiver: oneshot::Receiver<JsonRpcResult>,
-    conversation: Arc<CodexConversation>,
-) {
-    let response = receiver.await;
-    let value = match response {
-        Ok(value) => value,
-        Err(err) => {
-            error!("request failed: {err:?}");
-            return;
-        }
-    };
-
-    // Try to deserialize `value` and then make the appropriate call to `codex`.
-    let response =
-        serde_json::from_value::<ExecCommandApprovalResponse>(value).unwrap_or_else(|err| {
-            error!("failed to deserialize ExecCommandApprovalResponse: {err}");
-            // If we cannot deserialize the response, we deny the request to be
-            // conservative.
-            ExecCommandApprovalResponse {
-                decision: ReviewDecision::Denied,
-            }
-        });
-
-    if let Err(err) = conversation
-        .submit(Op::ExecApproval {
-            id: event_id,
-            decision: response.decision,
-        })
-        .await
-    {
-        error!("failed to submit ExecApproval: {err}");
-    }
 }
 
 async fn read_summary_from_rollout(
@@ -2750,7 +2938,7 @@ fn extract_conversation_summary(
     path: PathBuf,
     head: &[serde_json::Value],
     session_meta: &SessionMeta,
-    git: Option<&GitInfo>,
+    git: Option<&CoreGitInfo>,
     fallback_provider: &str,
 ) -> Option<ConversationSummary> {
     let preview = head
@@ -2791,11 +2979,53 @@ fn extract_conversation_summary(
     })
 }
 
-fn map_git_info(git_info: &GitInfo) -> ConversationGitInfo {
+fn map_git_info(git_info: &CoreGitInfo) -> ConversationGitInfo {
     ConversationGitInfo {
         sha: git_info.commit_hash.clone(),
         branch: git_info.branch.clone(),
         origin_url: git_info.repository_url.clone(),
+    }
+}
+
+fn parse_datetime(timestamp: Option<&str>) -> Option<DateTime<Utc>> {
+    timestamp.and_then(|ts| {
+        chrono::DateTime::parse_from_rfc3339(ts)
+            .ok()
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+    })
+}
+
+fn summary_to_thread(summary: ConversationSummary) -> Thread {
+    let ConversationSummary {
+        conversation_id,
+        path,
+        preview,
+        timestamp,
+        model_provider,
+        cwd,
+        cli_version,
+        source,
+        git_info,
+    } = summary;
+
+    let created_at = parse_datetime(timestamp.as_deref());
+    let git_info = git_info.map(|info| ApiGitInfo {
+        sha: info.sha,
+        branch: info.branch,
+        origin_url: info.origin_url,
+    });
+
+    Thread {
+        id: conversation_id.to_string(),
+        preview,
+        model_provider,
+        created_at: created_at.map(|dt| dt.timestamp()).unwrap_or(0),
+        path,
+        cwd,
+        cli_version,
+        source: source.into(),
+        git_info,
+        turns: Vec::new(),
     }
 }
 

@@ -19,6 +19,7 @@ use codex_app_server_protocol::CancelLoginChatGptParams;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::FeedbackUploadParams;
+use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAuthStatusParams;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::InterruptConversationParams;
@@ -34,6 +35,7 @@ use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::RemoveConversationListenerParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ResumeConversationParams;
+use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserTurnParams;
 use codex_app_server_protocol::ServerRequest;
@@ -249,6 +251,15 @@ impl McpProcess {
         self.send_request("account/rateLimits/read", None).await
     }
 
+    /// Send an `account/read` JSON-RPC request.
+    pub async fn send_get_account_request(
+        &mut self,
+        params: GetAccountParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("account/read", params).await
+    }
+
     /// Send a `feedback/upload` JSON-RPC request.
     pub async fn send_feedback_upload_request(
         &mut self,
@@ -365,6 +376,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("turn/interrupt", params).await
+    }
+
+    /// Send a `review/start` JSON-RPC request (v2).
+    pub async fn send_review_start_request(
+        &mut self,
+        params: ReviewStartParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("review/start", params).await
     }
 
     /// Send a `cancelLoginChatGpt` JSON-RPC request.

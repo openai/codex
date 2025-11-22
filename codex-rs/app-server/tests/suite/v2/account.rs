@@ -2,11 +2,15 @@ use anyhow::Result;
 use anyhow::bail;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
+
+use app_test_support::ChatGptAuthFixture;
+use app_test_support::write_chatgpt_auth;
+use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginAccountResponse;
-use codex_app_server_protocol::GetAuthStatusParams;
-use codex_app_server_protocol::GetAuthStatusResponse;
+use codex_app_server_protocol::GetAccountParams;
+use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginAccountResponse;
@@ -15,6 +19,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_login::login_with_api_key;
+use codex_protocol::account::PlanType as AccountPlanType;
 use pretty_assertions::assert_eq;
 use serial_test::serial;
 use std::path::Path;
@@ -25,21 +30,29 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 // Helper to create a minimal config.toml for the app server
-fn create_config_toml(
-    codex_home: &Path,
-    forced_method: Option<&str>,
-    forced_workspace_id: Option<&str>,
-) -> std::io::Result<()> {
+#[derive(Default)]
+struct CreateConfigTomlParams {
+    forced_method: Option<String>,
+    forced_workspace_id: Option<String>,
+    requires_openai_auth: Option<bool>,
+}
+
+fn create_config_toml(codex_home: &Path, params: CreateConfigTomlParams) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");
-    let forced_line = if let Some(method) = forced_method {
+    let forced_line = if let Some(method) = params.forced_method {
         format!("forced_login_method = \"{method}\"\n")
     } else {
         String::new()
     };
-    let forced_workspace_line = if let Some(ws) = forced_workspace_id {
+    let forced_workspace_line = if let Some(ws) = params.forced_workspace_id {
         format!("forced_chatgpt_workspace_id = \"{ws}\"\n")
     } else {
         String::new()
+    };
+    let requires_line = match params.requires_openai_auth {
+        Some(true) => "requires_openai_auth = true\n".to_string(),
+        Some(false) => String::new(),
+        None => String::new(),
     };
     let contents = format!(
         r#"
@@ -57,6 +70,7 @@ base_url = "http://127.0.0.1:0/v1"
 wire_api = "chat"
 request_max_retries = 0
 stream_max_retries = 0
+{requires_line}
 "#
     );
     std::fs::write(config_toml, contents)
@@ -65,7 +79,7 @@ stream_max_retries = 0
 #[tokio::test]
 async fn logout_account_removes_auth_and_notifies() -> Result<()> {
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), None, None)?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
 
     login_with_api_key(
         codex_home.path(),
@@ -104,27 +118,25 @@ async fn logout_account_removes_auth_and_notifies() -> Result<()> {
         "auth.json should be deleted"
     );
 
-    let status_id = mcp
-        .send_get_auth_status_request(GetAuthStatusParams {
-            include_token: Some(true),
-            refresh_token: Some(false),
+    let get_id = mcp
+        .send_get_account_request(GetAccountParams {
+            refresh_token: false,
         })
         .await?;
-    let status_resp: JSONRPCResponse = timeout(
+    let get_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(status_id)),
+        mcp.read_stream_until_response_message(RequestId::Integer(get_id)),
     )
     .await??;
-    let status: GetAuthStatusResponse = to_response(status_resp)?;
-    assert_eq!(status.auth_method, None);
-    assert_eq!(status.auth_token, None);
+    let account: GetAccountResponse = to_response(get_resp)?;
+    assert_eq!(account.account, None);
     Ok(())
 }
 
 #[tokio::test]
 async fn login_account_api_key_succeeds_and_notifies() -> Result<()> {
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), None, None)?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -171,7 +183,13 @@ async fn login_account_api_key_succeeds_and_notifies() -> Result<()> {
 #[tokio::test]
 async fn login_account_api_key_rejected_when_forced_chatgpt() -> Result<()> {
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), Some("chatgpt"), None)?;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            forced_method: Some("chatgpt".to_string()),
+            ..Default::default()
+        },
+    )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -195,7 +213,13 @@ async fn login_account_api_key_rejected_when_forced_chatgpt() -> Result<()> {
 #[tokio::test]
 async fn login_account_chatgpt_rejected_when_forced_api() -> Result<()> {
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), Some("api"), None)?;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            forced_method: Some("api".to_string()),
+            ..Default::default()
+        },
+    )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -219,7 +243,7 @@ async fn login_account_chatgpt_rejected_when_forced_api() -> Result<()> {
 #[serial(login_port)]
 async fn login_account_chatgpt_start() -> Result<()> {
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), None, None)?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -285,7 +309,13 @@ async fn login_account_chatgpt_start() -> Result<()> {
 #[serial(login_port)]
 async fn login_account_chatgpt_includes_forced_workspace_query_param() -> Result<()> {
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), None, Some("ws-forced"))?;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            forced_workspace_id: Some("ws-forced".to_string()),
+            ..Default::default()
+        },
+    )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -305,5 +335,158 @@ async fn login_account_chatgpt_includes_forced_workspace_query_param() -> Result
         auth_url.contains("allowed_workspace_id=ws-forced"),
         "auth URL should include forced workspace"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_account_no_auth() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            requires_openai_auth: Some(true),
+            ..Default::default()
+        },
+    )?;
+
+    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let params = GetAccountParams {
+        refresh_token: false,
+    };
+    let request_id = mcp.send_get_account_request(params).await?;
+
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let account: GetAccountResponse = to_response(resp)?;
+
+    assert_eq!(account.account, None, "expected no account");
+    assert_eq!(account.requires_openai_auth, true);
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_account_with_api_key() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            requires_openai_auth: Some(true),
+            ..Default::default()
+        },
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_login_account_api_key_request("sk-test-key")
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let _login_ok = to_response::<LoginAccountResponse>(resp)?;
+
+    let params = GetAccountParams {
+        refresh_token: false,
+    };
+    let request_id = mcp.send_get_account_request(params).await?;
+
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let received: GetAccountResponse = to_response(resp)?;
+
+    let expected = GetAccountResponse {
+        account: Some(Account::ApiKey {}),
+        requires_openai_auth: true,
+    };
+    assert_eq!(received, expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_account_when_auth_not_required() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            requires_openai_auth: Some(false),
+            ..Default::default()
+        },
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let params = GetAccountParams {
+        refresh_token: false,
+    };
+    let request_id = mcp.send_get_account_request(params).await?;
+
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let received: GetAccountResponse = to_response(resp)?;
+
+    let expected = GetAccountResponse {
+        account: None,
+        requires_openai_auth: false,
+    };
+    assert_eq!(received, expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_account_with_chatgpt() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            requires_openai_auth: Some(true),
+            ..Default::default()
+        },
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("access-chatgpt")
+            .email("user@example.com")
+            .plan_type("pro"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let params = GetAccountParams {
+        refresh_token: false,
+    };
+    let request_id = mcp.send_get_account_request(params).await?;
+
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let received: GetAccountResponse = to_response(resp)?;
+
+    let expected = GetAccountResponse {
+        account: Some(Account::Chatgpt {
+            email: "user@example.com".to_string(),
+            plan_type: AccountPlanType::Pro,
+        }),
+        requires_openai_auth: true,
+    };
+    assert_eq!(received, expected);
     Ok(())
 }
