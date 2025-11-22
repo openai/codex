@@ -94,6 +94,21 @@ impl MermaidLinter {
                 continue;
             }
 
+            if in_diagram
+                && (lowered.starts_with("title ")
+                    || lowered == "title"
+                    || lowered.starts_with("title:"))
+            {
+                issues.push(Issue::new(
+                    line_no,
+                    0,
+                    line.len(),
+                    "Mermaid titles are not supported; removing line.",
+                    Box::new(|_| String::new()),
+                ));
+                continue;
+            }
+
             for (pos, _) in line.match_indices('\t') {
                 issues.push(Issue::new(
                     line_no,
@@ -569,8 +584,7 @@ fn normalize_header_titles(source: &str) -> String {
                 .map(|m| m.as_str())
                 .unwrap_or("flowchart");
             let dir = caps.name("dir").map(|m| m.as_str()).unwrap_or("TD");
-            let title = caps.name("title").map(|m| m.as_str()).unwrap_or("");
-            format!("{indent}{keyword} {dir}\n{indent}  title {title}")
+            format!("{indent}{keyword} {dir}")
         })
         .into_owned()
 }
@@ -853,15 +867,40 @@ sequenceDiagram
     }
 
     #[test]
-    fn header_title_on_same_line_is_split() {
+    fn header_title_on_same_line_is_removed() {
         let raw = "```mermaid\nflowchart TD title Component request flow - end-to-end platform\n  Client[\"Tenant client / automation workflow\"] --> ChatService[\"packages/chat-service\"]\n```";
         let fixed = fix_mermaid_blocks(raw);
-        // Ensure we no longer have a single line with both the direction and title.
-        assert!(!fixed.contains("flowchart TD  title"));
-
-        // We expect a header line followed by a separate title directive line.
+        assert!(fixed.contains("flowchart TD"));
         assert!(
-            fixed.contains("flowchart TD\n  title Component request flow - end-to-end platform")
+            fixed.contains(
+                r#"Client["Tenant client / automation workflow"] --> ChatService["packages/chat-service"]"#
+            )
+        );
+        assert!(
+            !fixed
+                .to_lowercase()
+                .contains("title component request flow - end-to-end platform")
+        );
+    }
+
+    #[test]
+    fn standalone_title_directive_is_removed() {
+        let raw = [
+            "flowchart LR",
+            "title Planner service data flow",
+            "  User -->|HTTP + Authorization| Fastify",
+            r#"  Fastify -->|auth hook| APIGateway["/API Gateway /auth/me/"]"#,
+            r#"  Fastify -->|handlers| Supabase["\(Postgres\)"]"#,
+            "  Fastify -->|AI prompts| OpenAI",
+            "  Supabase --> Supabase",
+        ]
+        .join("\n");
+        let fixed = fix_mermaid_blocks(&raw);
+        assert!(fixed.contains("flowchart LR"));
+        assert!(
+            !fixed
+                .to_lowercase()
+                .contains("title planner service data flow")
         );
     }
 

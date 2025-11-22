@@ -551,6 +551,7 @@ struct SecurityReviewArtifactsState {
     api_overview_path: Option<PathBuf>,
     classification_json_path: Option<PathBuf>,
     classification_table_path: Option<PathBuf>,
+    spec_verification_path: Option<PathBuf>,
 }
 
 impl ChatWidget {
@@ -688,6 +689,10 @@ impl ChatWidget {
         let classification_table_path = classification_table_candidate
             .exists()
             .then_some(classification_table_candidate);
+        let spec_verification_candidate = output_root.join("specs").join("verification.md");
+        let spec_verification_path = spec_verification_candidate
+            .exists()
+            .then_some(spec_verification_candidate);
 
         self.clear_security_review_follow_up();
         self.security_review_task = None;
@@ -702,6 +707,7 @@ impl ChatWidget {
             api_overview_path,
             classification_json_path,
             classification_table_path,
+            spec_verification_path,
         });
 
         let follow_up_path = match metadata.mode {
@@ -1883,6 +1889,7 @@ impl ChatWidget {
                             api_overview_path: artifacts.api_overview_path,
                             classification_json_path: artifacts.classification_json_path,
                             classification_table_path: artifacts.classification_table_path,
+                            spec_verification_path: artifacts.spec_verification_path,
                             logs: vec![],
                             token_usage: codex_core::protocol::TokenUsage::default(),
                         },
@@ -3942,6 +3949,19 @@ impl ChatWidget {
                 .into(),
             );
         }
+        if let Some(verification_path) = result
+            .spec_verification_path
+            .as_ref()
+            .map(|path| display_path_for(path, &repo_path))
+        {
+            summary_lines.push(
+                vec![
+                    "  • ".into(),
+                    format!("Spec verification: {}", verification_path.as_str()).into(),
+                ]
+                .into(),
+            );
+        }
         if let Some(last_log) = last_log {
             summary_lines
                 .push(vec!["  • ".into(), format!("Last update: {last_log}").dim()].into());
@@ -3976,6 +3996,7 @@ impl ChatWidget {
             api_overview_path: result.api_overview_path.clone(),
             classification_json_path: result.classification_json_path.clone(),
             classification_table_path: result.classification_table_path.clone(),
+            spec_verification_path: result.spec_verification_path.clone(),
         });
 
         let follow_up_path = match mode {

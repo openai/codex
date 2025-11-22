@@ -93,6 +93,7 @@ const BUG_RERANK_MAX_TOOL_ROUNDS: usize = 4;
 const BUG_RERANK_MAX_COMMAND_ERRORS: usize = 5;
 const SPEC_COMBINE_MAX_TOOL_ROUNDS: usize = 6;
 const SPEC_COMBINE_MAX_COMMAND_ERRORS: usize = 5;
+const SPEC_VERIFICATION_MAX_TOOL_ROUNDS: usize = 4;
 // see BUG_RERANK_PROMPT_TEMPLATE in security_prompts
 const SPEC_DIR_FILTER_TARGET: usize = 8;
 // see SPEC_DIR_FILTER_SYSTEM_PROMPT in security_prompts
@@ -102,6 +103,7 @@ const AUTO_SCOPE_MAX_KEYWORDS: usize = 6;
 const AUTO_SCOPE_MAX_AGENT_STEPS: usize = 10;
 const AUTO_SCOPE_INITIAL_KEYWORD_PROBES: usize = 4;
 const AUTO_SCOPE_DEFAULT_READ_WINDOW: usize = 120;
+const AUTO_SCOPE_DIRECTORY_LIST_LIMIT: usize = 200;
 const AUTO_SCOPE_KEYWORD_STOPWORDS: &[&str] = &[
     "the", "and", "for", "with", "that", "this", "from", "into", "when", "where", "which", "while",
     "using", "use", "need", "please", "should", "scope", "scoped", "bug", "bugs", "review",
@@ -209,6 +211,7 @@ pub(crate) struct SecurityReviewResult {
     pub api_overview_path: Option<PathBuf>,
     pub classification_json_path: Option<PathBuf>,
     pub classification_table_path: Option<PathBuf>,
+    pub spec_verification_path: Option<PathBuf>,
     pub logs: Vec<String>,
     pub token_usage: TokenUsage,
 }
@@ -455,6 +458,13 @@ struct SpecGenerationOutcome {
     api_entries: Vec<ApiEntry>,
     classification_rows: Vec<DataClassificationRow>,
     classification_table: Option<String>,
+    verification: Option<SpecVerificationOutcome>,
+}
+
+struct SpecVerificationOutcome {
+    markdown: String,
+    path: PathBuf,
+    logs: Vec<String>,
 }
 
 struct AutoScopeSelection {
@@ -866,7 +876,15 @@ async fn execute_auto_scope_read(
             command_path.display()
         ));
     }
-    if !canonical.is_file() {
+    let metadata = tokio_fs::metadata(&canonical)
+        .await
+        .map_err(|err| format!("Failed to inspect {}: {err}", command_path.display()))?;
+
+    if metadata.is_dir() {
+        return build_directory_listing(repo_root, &canonical, command_path).await;
+    }
+
+    if !metadata.is_file() {
         return Err(format!(
             "Path {} is not a regular file.",
             command_path.display()
@@ -901,6 +919,81 @@ async fn execute_auto_scope_read(
         }
     }
     Ok(formatted.trim_end().to_string())
+}
+
+async fn build_directory_listing(
+    repo_root: &Path,
+    canonical: &Path,
+    command_path: &Path,
+) -> Result<String, String> {
+    let mut reader = tokio_fs::read_dir(canonical)
+        .await
+        .map_err(|err| format!("Failed to read directory {}: {err}", command_path.display()))?;
+    let mut entries: Vec<(bool, String)> = Vec::new();
+
+    while let Some(entry) = reader
+        .next_entry()
+        .await
+        .map_err(|err| format!("Failed to read directory {}: {err}", command_path.display()))?
+    {
+        let file_type = entry
+            .file_type()
+            .await
+            .map_err(|err| format!("Failed to inspect {}: {err}", entry.path().display()))?;
+        let mut label = display_path_for(&entry.path(), repo_root);
+        if file_type.is_dir() {
+            label.push('/');
+        } else if file_type.is_symlink() {
+            label.push('@');
+        }
+        entries.push((file_type.is_dir(), label));
+    }
+
+    entries.sort_by(|a, b| match b.0.cmp(&a.0) {
+        CmpOrdering::Equal => a.1.cmp(&b.1),
+        other => other,
+    });
+
+    let directory_label = display_path_for(canonical, repo_root);
+    if entries.is_empty() {
+        return Ok(format!(
+            "{directory_label} is a directory with no entries. Use READ on specific files or run `ls {directory_label}` as needed."
+        ));
+    }
+
+    let mut limited = entries
+        .into_iter()
+        .map(|(_, label)| label)
+        .collect::<Vec<String>>();
+    let omitted = limited
+        .len()
+        .saturating_sub(AUTO_SCOPE_DIRECTORY_LIST_LIMIT);
+    if omitted > 0 {
+        limited.truncate(AUTO_SCOPE_DIRECTORY_LIST_LIMIT);
+    }
+
+    let mut message = format!(
+        "{directory_label} is a directory. Use READ on specific files or run `ls {directory_label}` to explore. Entries:\n"
+    );
+    for entry in &limited {
+        let _ = writeln!(message, "- {entry}");
+    }
+    if omitted > 0 {
+        let _ = writeln!(
+            message,
+            "… {omitted} more entr{} not shown.",
+            if omitted == 1 { "y" } else { "ies" }
+        );
+    }
+
+    Ok(message.trim_end().to_string())
+}
+
+fn is_path_lookup_error(err: &str) -> bool {
+    err.starts_with("Failed to resolve path")
+        || err.starts_with("Failed to inspect")
+        || err.starts_with("Failed to read")
+        || err.contains("escapes the repository root")
 }
 
 fn build_auto_scope_prompt(
@@ -1029,6 +1122,7 @@ struct PersistedArtifacts {
     api_overview_path: Option<PathBuf>,
     classification_json_path: Option<PathBuf>,
     classification_table_path: Option<PathBuf>,
+    spec_verification_path: Option<PathBuf>,
 }
 
 struct BugCommandPlan {
@@ -2224,6 +2318,7 @@ pub(crate) async fn run_security_review(
         api_overview_path: artifacts.api_overview_path,
         classification_json_path: artifacts.classification_json_path,
         classification_table_path: artifacts.classification_table_path,
+        spec_verification_path: artifacts.spec_verification_path,
         logs,
         token_usage: metrics.snapshot_usage(),
     })
@@ -2264,6 +2359,17 @@ where
             }
         }
     }
+}
+
+fn push_progress_log(
+    progress_sender: &Option<AppEventSender>,
+    logs: &mut Vec<String>,
+    message: String,
+) {
+    if let Some(tx) = progress_sender.as_ref() {
+        tx.send(AppEvent::SecurityReviewLog(message.clone()));
+    }
+    logs.push(message);
 }
 
 fn collect_snippets_blocking(
@@ -2553,12 +2659,11 @@ async fn triage_chunk(
         Ok(output) => output,
         Err(err) => {
             let message = format!("File triage failed: {err}");
-            if let Some(tx) = progress_sender.as_ref() {
-                tx.send(AppEvent::SecurityReviewLog(message.clone()));
-            }
+            let mut failure_logs = Vec::new();
+            push_progress_log(&progress_sender, &mut failure_logs, message.clone());
             return Err(SecurityReviewFailure {
                 message,
-                logs: vec![],
+                logs: failure_logs,
             });
         }
     };
@@ -2774,6 +2879,7 @@ async fn generate_specs(
     let raw_dir = specs_root.join("raw");
     let combined_dir = specs_root.join("combined");
     let apis_dir = specs_root.join("apis");
+    let verification_path = specs_root.join("verification.md");
 
     tokio_fs::create_dir_all(&raw_dir)
         .await
@@ -2951,6 +3057,44 @@ async fn generate_specs(
         }
     }
 
+    let mut verification: Option<SpecVerificationOutcome> = None;
+    if !combined_markdown.trim().is_empty() {
+        match verify_specification(
+            client,
+            provider,
+            auth,
+            repo_root,
+            &display_locations,
+            &combined_markdown,
+            &verification_path,
+            progress_sender.clone(),
+            metrics.clone(),
+        )
+        .await
+        {
+            Ok(outcome) => {
+                logs.extend(outcome.logs.clone());
+                verification = Some(outcome);
+            }
+            Err(err) => {
+                if let Some(tx) = progress_sender.as_ref() {
+                    for line in &err.logs {
+                        tx.send(AppEvent::SecurityReviewLog(line.clone()));
+                    }
+                }
+                logs.extend(err.logs);
+                let message = format!(
+                    "Specification verification failed; continuing without a verification report. {}",
+                    err.message
+                );
+                if let Some(tx) = progress_sender.as_ref() {
+                    tx.send(AppEvent::SecurityReviewLog(message.clone()));
+                }
+                logs.push(message);
+            }
+        }
+    }
+
     Ok(Some(SpecGenerationOutcome {
         combined_markdown,
         locations: display_locations,
@@ -2958,6 +3102,7 @@ async fn generate_specs(
         api_entries,
         classification_rows,
         classification_table,
+        verification,
     }))
 }
 
@@ -3941,7 +4086,7 @@ Return ALL to keep every directory.",
     .await
     .map_err(|err| SecurityReviewFailure {
         message: format!("Directory filter model request failed: {err}"),
-        logs: Vec::new(),
+        logs: vec![format!("Directory filter model request failed: {err}")],
     })?;
 
     let mut selected_indices: Vec<usize> = Vec::new();
@@ -4077,10 +4222,10 @@ async fn generate_spec_for_location(
         {
             Ok(output) => output,
             Err(err) => {
-                return Err(SecurityReviewFailure {
-                    message: format!("Specification generation failed for {location_label}: {err}"),
-                    logs,
-                });
+                let message =
+                    format!("Specification generation failed for {location_label}: {err}");
+                push_progress_log(&progress_sender, &mut logs, message.clone());
+                return Err(SecurityReviewFailure { message, logs });
             }
         };
 
@@ -4153,15 +4298,24 @@ async fn generate_spec_for_location(
                     ));
                 }
                 Err(err) => {
-                    let msg = format!("Spec READ `{}` failed: {err}", request.path.display());
+                    let status = format!("Spec READ `{}` failed: {err}", request.path.display());
                     if let Some(tx) = progress_sender.as_ref() {
-                        tx.send(AppEvent::SecurityReviewLog(msg.clone()));
+                        tx.send(AppEvent::SecurityReviewLog(status.clone()));
                     }
-                    logs.push(msg.clone());
-                    conversation.push(format!(
-                        "Tool READ `{}` error: {err}",
-                        request.path.display()
-                    ));
+                    logs.push(status);
+                    let hint = format!(
+                        "Tool READ `{}` error: {err}. Paths must be relative to the repository root ({}). If this path is wrong, adjust it or use SEARCH/GREP_FILES to locate the right file before retrying READ.",
+                        request.path.display(),
+                        repo_root.display()
+                    );
+                    let mut guidance = hint;
+                    if is_path_lookup_error(&err) {
+                        let _ = write!(
+                            guidance,
+                            " This still counts toward the {SPEC_COMBINE_MAX_COMMAND_ERRORS}-error limit; fix the path and retry."
+                        );
+                    }
+                    conversation.push(guidance);
                     command_error_count += 1;
                 }
             }
@@ -4628,10 +4782,9 @@ async fn combine_spec_markdown(
         {
             Ok(output) => output,
             Err(err) => {
-                return Err(SecurityReviewFailure {
-                    message: format!("Failed to combine specifications: {err}"),
-                    logs,
-                });
+                let message = format!("Failed to combine specifications: {err}");
+                push_progress_log(&progress_sender, &mut logs, message.clone());
+                return Err(SecurityReviewFailure { message, logs });
             }
         };
 
@@ -4700,14 +4853,22 @@ async fn combine_spec_markdown(
                     ));
                 }
                 Err(err) => {
-                    logs.push(format!(
-                        "Spec merge READ `{}` failed: {err}",
-                        request.path.display()
-                    ));
-                    conversation.push(format!(
-                        "Tool READ `{}` error: {err}",
-                        request.path.display()
-                    ));
+                    let status =
+                        format!("Spec merge READ `{}` failed: {err}", request.path.display());
+                    logs.push(status);
+                    let hint = format!(
+                        "Tool READ `{}` error: {err}. Paths must be relative to the repository root ({}). SEARCH is disabled for this step; retry READ with the correct path or use GREP_FILES to locate the right file.",
+                        request.path.display(),
+                        repo_root.display()
+                    );
+                    let mut guidance = hint;
+                    if is_path_lookup_error(&err) {
+                        let _ = write!(
+                            guidance,
+                            " This still counts toward the {SPEC_COMBINE_MAX_COMMAND_ERRORS}-error limit; fix the path and retry."
+                        );
+                    }
+                    conversation.push(guidance);
                     command_error_count += 1;
                 }
             }
@@ -4863,10 +5024,7 @@ async fn combine_spec_markdown(
         }
         Err(err) => {
             let message = format!("Failed to polish combined specification markdown: {err}");
-            if let Some(tx) = progress_sender.as_ref() {
-                tx.send(AppEvent::SecurityReviewLog(message.clone()));
-            }
-            logs.push(message.clone());
+            push_progress_log(&progress_sender, &mut logs, message.clone());
             return Err(SecurityReviewFailure { message, logs });
         }
     };
@@ -4892,6 +5050,338 @@ async fn combine_spec_markdown(
     logs.push(done_message);
 
     Ok((polished, logs))
+}
+
+fn build_spec_verification_prompt(project_locations: &[String], spec_markdown: &str) -> String {
+    let locations_block = if project_locations.is_empty() {
+        "repository root".to_string()
+    } else {
+        project_locations.join("\n")
+    };
+    let truncated_spec = clamp_prompt_text(spec_markdown, MAX_PROMPT_BYTES);
+    SPEC_VERIFICATION_PROMPT_TEMPLATE
+        .replace("{project_locations}", &locations_block)
+        .replace("{spec_markdown}", &truncated_spec)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn verify_specification(
+    client: &CodexHttpClient,
+    provider: &ModelProviderInfo,
+    auth: &Option<CodexAuth>,
+    repo_root: &Path,
+    project_locations: &[String],
+    spec_markdown: &str,
+    verification_path: &Path,
+    progress_sender: Option<AppEventSender>,
+    metrics: Arc<ReviewMetrics>,
+) -> Result<SpecVerificationOutcome, SecurityReviewFailure> {
+    let mut logs: Vec<String> = Vec::new();
+    push_progress_log(
+        &progress_sender,
+        &mut logs,
+        "Verifying combined specification against repository code for hallucinations..."
+            .to_string(),
+    );
+    let base_prompt = build_spec_verification_prompt(project_locations, spec_markdown);
+    let mut conversation: Vec<String> = Vec::new();
+    let mut seen_search_requests: HashSet<String> = HashSet::new();
+    let mut seen_read_requests: HashSet<String> = HashSet::new();
+    let mut tool_rounds = 0usize;
+    let mut command_error_count = 0usize;
+
+    let verification_raw = loop {
+        if tool_rounds > SPEC_VERIFICATION_MAX_TOOL_ROUNDS {
+            return Err(SecurityReviewFailure {
+                message: format!(
+                    "Specification verification exceeded {SPEC_VERIFICATION_MAX_TOOL_ROUNDS} tool rounds."
+                ),
+                logs,
+            });
+        }
+
+        let mut prompt = base_prompt.clone();
+        if !conversation.is_empty() {
+            prompt.push_str("\n\n# Conversation history\n");
+            prompt.push_str(&conversation.join("\n\n"));
+        }
+
+        let response = match call_model(
+            client,
+            provider,
+            auth,
+            SPEC_GENERATION_MODEL,
+            SPEC_VERIFICATION_SYSTEM_PROMPT,
+            &prompt,
+            metrics.clone(),
+            0.0,
+        )
+        .await
+        {
+            Ok(output) => output,
+            Err(err) => {
+                let message = format!("Specification verification failed: {err}");
+                push_progress_log(&progress_sender, &mut logs, message.clone());
+                return Err(SecurityReviewFailure { message, logs });
+            }
+        };
+
+        if let Some(reasoning) = response.reasoning.as_ref() {
+            for line in reasoning
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+            {
+                let truncated = truncate_text(line, MODEL_REASONING_LOG_MAX_GRAPHEMES);
+                let msg = format!("Spec verification reasoning: {truncated}");
+                push_progress_log(&progress_sender, &mut logs, msg);
+            }
+        }
+
+        let assistant_reply = response.text.trim().to_string();
+        if assistant_reply.is_empty() {
+            conversation.push("Assistant:".to_string());
+        } else {
+            conversation.push(format!("Assistant:\n{assistant_reply}"));
+        }
+
+        let (after_read, read_requests) = extract_read_requests(&response.text);
+        let (cleaned_text, search_requests) = parse_search_requests(&after_read);
+
+        let mut executed_command = false;
+
+        for request in read_requests {
+            let key = request.dedupe_key();
+            if !seen_read_requests.insert(key) {
+                let msg = format!(
+                    "Spec verification READ `{}` skipped (already provided).",
+                    request.path.display()
+                );
+                push_progress_log(&progress_sender, &mut logs, msg.clone());
+                conversation.push(format!(
+                    "Tool READ `{}` already provided earlier.",
+                    request.path.display()
+                ));
+                executed_command = true;
+                continue;
+            }
+
+            executed_command = true;
+            match execute_auto_scope_read(
+                repo_root,
+                &request.path,
+                request.start,
+                request.end,
+                metrics.as_ref(),
+            )
+            .await
+            {
+                Ok(output) => {
+                    let msg = format!(
+                        "Spec verification READ `{}` returned content.",
+                        request.path.display()
+                    );
+                    push_progress_log(&progress_sender, &mut logs, msg);
+                    conversation.push(format!(
+                        "Tool READ `{}`:\n{}",
+                        request.path.display(),
+                        output
+                    ));
+                }
+                Err(err) => {
+                    let status = format!(
+                        "Spec verification READ `{}` failed: {err}",
+                        request.path.display()
+                    );
+                    push_progress_log(&progress_sender, &mut logs, status.clone());
+                    let mut guidance = format!(
+                        "Tool READ `{}` error: {err}. Paths must be relative to the repository root ({}). If this path is wrong, adjust it or use SEARCH/GREP_FILES to locate the right file before retrying READ.",
+                        request.path.display(),
+                        repo_root.display()
+                    );
+                    if is_path_lookup_error(&err) {
+                        let _ = write!(
+                            guidance,
+                            " This still counts toward the {SPEC_COMBINE_MAX_COMMAND_ERRORS}-error limit; fix the path and retry."
+                        );
+                    }
+                    conversation.push(guidance);
+                    command_error_count += 1;
+                }
+            }
+        }
+
+        for request in search_requests {
+            let key = request.dedupe_key();
+            if !seen_search_requests.insert(key) {
+                match &request {
+                    ToolRequest::Content { term, mode, .. } => {
+                        let display_term = summarize_search_term(term, 80);
+                        let msg = format!(
+                            "Spec verification SEARCH `{display_term}` ({}) skipped (already provided).",
+                            mode.as_str()
+                        );
+                        push_progress_log(&progress_sender, &mut logs, msg.clone());
+                        conversation.push(format!(
+                            "Tool SEARCH `{display_term}` ({}) already provided earlier.",
+                            mode.as_str()
+                        ));
+                    }
+                    ToolRequest::GrepFiles { args, .. } => {
+                        let mut shown = serde_json::json!({ "pattern": args.pattern });
+                        if let Some(ref inc) = args.include {
+                            shown["include"] = serde_json::Value::String(inc.clone());
+                        }
+                        if let Some(ref path) = args.path {
+                            shown["path"] = serde_json::Value::String(path.clone());
+                        }
+                        if let Some(limit) = args.limit {
+                            shown["limit"] =
+                                serde_json::Value::Number(serde_json::Number::from(limit as u64));
+                        }
+                        let msg = format!(
+                            "Spec verification GREP_FILES {shown} skipped (already provided)."
+                        );
+                        push_progress_log(&progress_sender, &mut logs, msg.clone());
+                        conversation
+                            .push(format!("Tool GREP_FILES {shown} already provided earlier."));
+                    }
+                }
+                executed_command = true;
+                continue;
+            }
+
+            executed_command = true;
+            match request {
+                ToolRequest::Content { term, mode, .. } => {
+                    let display_term = summarize_search_term(&term, 80);
+                    let (log_line, output) = match run_content_search(
+                        repo_root, &term, mode, &metrics,
+                    )
+                    .await
+                    {
+                        SearchResult::Matches(text) => (
+                            format!(
+                                "Spec verification SEARCH `{display_term}` ({}) returned matches.",
+                                mode.as_str()
+                            ),
+                            text,
+                        ),
+                        SearchResult::NoMatches => (
+                            format!(
+                                "Spec verification SEARCH `{display_term}` ({}) returned no matches.",
+                                mode.as_str()
+                            ),
+                            "No matches found.".to_string(),
+                        ),
+                        SearchResult::Error(err) => (
+                            format!(
+                                "Spec verification SEARCH `{display_term}` ({}) failed: {err}",
+                                mode.as_str()
+                            ),
+                            format!("Search error: {err}"),
+                        ),
+                    };
+                    push_progress_log(&progress_sender, &mut logs, log_line);
+                    conversation.push(format!(
+                        "Tool SEARCH `{display_term}` ({}) results:\n{}",
+                        mode.as_str(),
+                        output
+                    ));
+                }
+                ToolRequest::GrepFiles { args, .. } => {
+                    let mut shown = serde_json::json!({ "pattern": args.pattern });
+                    if let Some(ref inc) = args.include {
+                        shown["include"] = serde_json::Value::String(inc.clone());
+                    }
+                    if let Some(ref path) = args.path {
+                        shown["path"] = serde_json::Value::String(path.clone());
+                    }
+                    if let Some(limit) = args.limit {
+                        shown["limit"] =
+                            serde_json::Value::Number(serde_json::Number::from(limit as u64));
+                    }
+                    let (log_line, output) = match run_grep_files(repo_root, &args, &metrics).await
+                    {
+                        SearchResult::Matches(text) => (
+                            format!("Spec verification GREP_FILES {shown} returned results."),
+                            text,
+                        ),
+                        SearchResult::NoMatches => (
+                            format!("Spec verification GREP_FILES {shown} returned no matches.",),
+                            "No matches found.".to_string(),
+                        ),
+                        SearchResult::Error(err) => (
+                            format!("Spec verification GREP_FILES {shown} failed: {err}"),
+                            format!("Search error: {err}"),
+                        ),
+                    };
+                    push_progress_log(&progress_sender, &mut logs, log_line);
+                    conversation.push(format!("Tool GREP_FILES {shown}:\n{output}"));
+                    if matches!(output.as_str(), o if o.starts_with("Search error:")) {
+                        command_error_count += 1;
+                    }
+                }
+            }
+        }
+
+        if command_error_count >= SPEC_COMBINE_MAX_COMMAND_ERRORS {
+            return Err(SecurityReviewFailure {
+                message: format!(
+                    "Specification verification hit {SPEC_COMBINE_MAX_COMMAND_ERRORS} tool errors."
+                ),
+                logs,
+            });
+        }
+
+        if executed_command {
+            tool_rounds = tool_rounds.saturating_add(1);
+            continue;
+        }
+
+        let final_text = cleaned_text.trim();
+        if final_text.is_empty() {
+            return Err(SecurityReviewFailure {
+                message: "Specification verification produced an empty response.".to_string(),
+                logs,
+            });
+        }
+
+        break final_text.to_string();
+    };
+
+    let sanitized = fix_mermaid_blocks(&verification_raw);
+
+    if let Some(parent) = verification_path.parent() {
+        tokio_fs::create_dir_all(parent)
+            .await
+            .map_err(|e| SecurityReviewFailure {
+                message: format!("Failed to create {}: {e}", parent.display()),
+                logs: Vec::new(),
+            })?;
+    }
+
+    tokio_fs::write(verification_path, sanitized.as_bytes())
+        .await
+        .map_err(|e| SecurityReviewFailure {
+            message: format!(
+                "Failed to write specification verification to {}: {e}",
+                verification_path.display()
+            ),
+            logs: Vec::new(),
+        })?;
+
+    let done_message = format!(
+        "Specification verification saved to {}.",
+        display_path_for(verification_path, repo_root)
+    );
+    push_progress_log(&progress_sender, &mut logs, done_message);
+
+    Ok(SpecVerificationOutcome {
+        markdown: sanitized,
+        path: verification_path.to_path_buf(),
+        logs,
+    })
 }
 
 fn build_spec_prompt_text(
@@ -4949,8 +5439,7 @@ fn build_combine_specs_prompt(project_locations: &[String], specs: &[SpecEntry])
 
     let mut spec_block = String::new();
     for entry in specs {
-        spec_block.push_str("## Draft\n");
-        spec_block.push_str(&format!("Location: {}\n\n", entry.location_label));
+        spec_block.push_str(&format!("## {}\n\n", entry.location_label));
         spec_block.push_str(entry.markdown.trim());
         spec_block.push_str("\n\n---\n\n");
     }
@@ -8515,6 +9004,11 @@ async fn persist_artifacts(
         .await
         .map_err(|e| format!("Failed to write {}: {e}", metadata_path.display()))?;
 
+    let verification_candidate = output_root.join("specs").join("verification.md");
+    let spec_verification_path = verification_candidate
+        .exists()
+        .then_some(verification_candidate);
+
     Ok(PersistedArtifacts {
         bugs_path,
         snapshot_path,
@@ -8524,6 +9018,7 @@ async fn persist_artifacts(
         api_overview_path,
         classification_json_path,
         classification_table_path,
+        spec_verification_path,
     })
 }
 
