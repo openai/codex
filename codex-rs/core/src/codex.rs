@@ -2007,6 +2007,19 @@ pub(crate) async fn run_task(
                 // Aborted turn is reported via a different event.
                 break;
             }
+            Err(CodexErr::InvalidRequest(error)) => {
+                if error.contains("The image data you provided does not represent a valid image") {
+                    let mut state = sess.state.lock().await;
+                    state.history.replace_last_turn_images("Invalid image");
+                } else {
+                    info!("Invalid data error: {}", error);
+                    let event = EventMsg::Error(ErrorEvent {
+                        message: error.to_string(),
+                    });
+                    sess.send_event(&turn_context, event).await;
+                    break;
+                }
+            }
             Err(e) => {
                 info!("Turn error: {e:#}");
                 let event = EventMsg::Error(e.to_error_event(None));
@@ -2114,6 +2127,7 @@ async fn run_turn(
             }
             Err(CodexErr::UsageNotIncluded) => return Err(CodexErr::UsageNotIncluded),
             Err(e @ CodexErr::QuotaExceeded) => return Err(e),
+            Err(e @ CodexErr::InvalidRequest(_)) => return Err(e),
             Err(e @ CodexErr::RefreshTokenFailed(_)) => return Err(e),
             Err(e) => {
                 // Use the configured provider-specific stream retry budget.
