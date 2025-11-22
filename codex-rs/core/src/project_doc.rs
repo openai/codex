@@ -15,6 +15,7 @@
 
 use crate::config::Config;
 use dunce::canonicalize as normalize_path;
+use std::fs;
 use std::path::PathBuf;
 use tokio::io::AsyncReadExt;
 use tracing::error;
@@ -176,6 +177,36 @@ pub fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<PathBu
     }
 
     Ok(found)
+}
+
+/// Returns `true` when the concatenated docs would exceed `max_bytes`, matching
+/// the truncation logic used while embedding project documentation.
+pub fn docs_truncated(paths: &[PathBuf], max_bytes: usize) -> bool {
+    if paths.is_empty() {
+        return false;
+    }
+    if max_bytes == 0 {
+        return true;
+    }
+
+    let mut remaining = max_bytes as u64;
+    for path in paths {
+        if remaining == 0 {
+            return true;
+        }
+        let size = match fs::metadata(path) {
+            Ok(meta) => meta.len(),
+            Err(_) => continue,
+        };
+        if size == 0 {
+            continue;
+        }
+        if size > remaining {
+            return true;
+        }
+        remaining = remaining.saturating_sub(size);
+    }
+    false
 }
 
 fn candidate_filenames<'a>(config: &'a Config) -> Vec<&'a str> {

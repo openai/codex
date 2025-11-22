@@ -6,9 +6,8 @@ use codex_app_server_protocol::AuthMode;
 use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::project_doc::discover_project_doc_paths;
-use std::fs;
+use codex_core::project_doc::docs_truncated;
 use std::path::Path;
-use std::path::PathBuf;
 use unicode_width::UnicodeWidthStr;
 
 use super::account::StatusAccountDisplay;
@@ -87,40 +86,6 @@ pub(crate) fn compose_agents_summary(config: &Config) -> (String, bool) {
         }
         Err(_) => ("<none>".to_string(), false),
     }
-}
-
-/// Replicates the truncation logic in `project_doc::read_project_docs` by
-/// walking the resolved doc paths and tracking how much of the configured
-/// budget remains. Returns `true` when any file would exceed the budget (or
-/// when the budget is zero but docs exist), signaling that the TUI should warn
-/// the user in `/status`.
-fn docs_truncated(paths: &[PathBuf], max_bytes: usize) -> bool {
-    if paths.is_empty() {
-        return false;
-    }
-    if max_bytes == 0 {
-        // Docs exist but embedding disabled entirely.
-        return true;
-    }
-
-    let mut remaining = max_bytes as u64;
-    for path in paths {
-        if remaining == 0 {
-            return true;
-        }
-        let size = match fs::metadata(path) {
-            Ok(meta) => meta.len(),
-            Err(_) => continue,
-        };
-        if size == 0 {
-            continue;
-        }
-        if size > remaining {
-            return true;
-        }
-        remaining = remaining.saturating_sub(size);
-    }
-    false
 }
 
 pub(crate) fn compose_account_display(auth_manager: &AuthManager) -> Option<StatusAccountDisplay> {
