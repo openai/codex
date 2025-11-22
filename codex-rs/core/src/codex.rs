@@ -2437,6 +2437,9 @@ use crate::features::Features;
 pub(crate) use tests::make_session_and_context;
 
 #[cfg(test)]
+pub(crate) use tests::make_session_and_context_with_rx;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::ConfigOverrides;
@@ -2712,7 +2715,7 @@ mod tests {
 
     // Like make_session_and_context, but returns Arc<Session> and the event receiver
     // so tests can assert on emitted events.
-    fn make_session_and_context_with_rx() -> (
+    pub(crate) fn make_session_and_context_with_rx() -> (
         Arc<Session>,
         Arc<TurnContext>,
         async_channel::Receiver<Event>,
