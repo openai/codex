@@ -56,6 +56,10 @@ impl ConversationManager {
         )
     }
 
+    pub fn session_source(&self) -> SessionSource {
+        self.session_source.clone()
+    }
+
     pub async fn new_conversation(&self, config: Config) -> CodexResult<NewConversation> {
         self.spawn_conversation(config, self.auth_manager.clone())
             .await
