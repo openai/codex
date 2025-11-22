@@ -408,9 +408,9 @@ impl HistoryCell for StatusHistoryCell {
         let mut agents_spans = vec![Span::from(self.agents_summary.clone())];
         if self.agents_truncated {
             let limit_label = format_byte_limit(self.agents_limit_bytes);
-            agents_spans.push(Span::from(" (truncated; limit ").magenta());
-            agents_spans.push(Span::from(limit_label).magenta());
-            agents_spans.push(Span::from(")").magenta());
+            agents_spans.push(Span::from(" (truncated; limit ").dim());
+            agents_spans.push(Span::from(limit_label).dim());
+            agents_spans.push(Span::from(")").dim());
         }
         lines.push(formatter.line("Agents.md", agents_spans));
 
