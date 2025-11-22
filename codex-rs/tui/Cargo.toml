@@ -91,6 +91,9 @@ url = { workspace = true }
 
 codex-windows-sandbox = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+terminal-colorsaurus = "1"
+
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
 

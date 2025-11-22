@@ -1,12 +1,18 @@
 use crate::color::perceptual_distance;
 use ratatui::style::Color;
+#[cfg(not(test))]
+use std::sync::LazyLock;
+#[cfg(not(test))]
+use std::sync::Mutex;
+#[cfg(windows)]
+use std::sync::OnceLock;
 
 /// Returns the closest color to the target color that the terminal can display.
 pub fn best_color(target: (u8, u8, u8)) -> Color {
     let Some(color_level) = supports_color::on_cached(supports_color::Stream::Stdout) else {
         return Color::default();
     };
-    if color_level.has_16m {
+    if stdout_supports_truecolor() {
         let (r, g, b) = target;
         #[allow(clippy::disallowed_methods)]
         Color::Rgb(r, g, b)
@@ -25,8 +31,37 @@ pub fn best_color(target: (u8, u8, u8)) -> Color {
     }
 }
 
+/// Returns true if stdout supports truecolor (24-bit), using a single shared decision.
+///
+/// - On non-Windows, this is simply `supports_color`'s 16m capability.
+/// - On Windows, we upgrade to truecolor on Windows Terminal if Virtual Terminal
+///   Processing can be enabled successfully via crossterm. This probing happens once and is cached.
+pub fn stdout_supports_truecolor() -> bool {
+    #[cfg(windows)]
+    {
+        static TRUECOLOR: OnceLock<bool> = OnceLock::new();
+        *TRUECOLOR.get_or_init(|| {
+            let has = supports_color::on_cached(supports_color::Stream::Stdout)
+                .map(|level| level.has_16m)
+                .unwrap_or(false);
+            if has {
+                return true;
+            }
+            // Upgrade to truecolor on Windows Terminal when VT processing is available.
+            // We only attempt to enable VT once per process to avoid per-frame overhead.
+            std::env::var_os("WT_SESSION").is_some() && crossterm::ansi_support::supports_ansi()
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        supports_color::on_cached(supports_color::Stream::Stdout)
+            .map(|level| level.has_16m)
+            .unwrap_or(false)
+    }
+}
+
 pub fn requery_default_colors() {
-    imp::requery_default_colors();
+    imp::refresh_cached_default_colors();
 }
 
 #[derive(Clone, Copy)]
@@ -36,7 +71,7 @@ pub struct DefaultColors {
 }
 
 pub fn default_colors() -> Option<DefaultColors> {
-    imp::default_colors()
+    imp::cached_default_colors()
 }
 
 pub fn default_fg() -> Option<(u8, u8, u8)> {
@@ -47,67 +82,87 @@ pub fn default_bg() -> Option<(u8, u8, u8)> {
     default_colors().map(|c| c.bg)
 }
 
+// -------------------------------------------------------------------------------------------------
+// Shared cache utility for default terminal colors
+// -------------------------------------------------------------------------------------------------
+
+/// Small helper cache that remembers whether initialization was attempted and stores a value.
+///
+/// Used to memoize the terminal's default foreground/background colors. We expose both
+/// `get_or_init_with` for the first successful query and `refresh_with` for a manual re-query.
+/// If a first query fails, we remember the failure to avoid repeated failed probes, unless
+/// a subsequent explicit refresh is performed.
+#[cfg(not(test))]
+struct Cache<T> {
+    attempted: bool,
+    value: Option<T>,
+}
+
+#[cfg(not(test))]
+impl<T> Default for Cache<T> {
+    fn default() -> Self {
+        Self {
+            attempted: false,
+            value: None,
+        }
+    }
+}
+
+#[cfg(not(test))]
+impl<T: Copy> Cache<T> {
+    /// Returns the cached value if available; otherwise runs `init` once and caches its result.
+    fn get_or_init_with(&mut self, mut init: impl FnMut() -> Option<T>) -> Option<T> {
+        if !self.attempted {
+            self.value = init();
+            self.attempted = true;
+        }
+        self.value
+    }
+
+    /// Re-runs `init` and replaces the cached value. Marks the cache as attempted.
+    fn refresh_with(&mut self, mut init: impl FnMut() -> Option<T>) -> Option<T> {
+        self.value = init();
+        self.attempted = true;
+        self.value
+    }
+}
+
+#[cfg(not(test))]
+fn default_terminal_colors_cache() -> &'static Mutex<Cache<DefaultColors>> {
+    // LazyLock creates the single cache instance; the Mutex guards concurrent refreshes/reads.
+    static CACHE: LazyLock<Mutex<Cache<DefaultColors>>> =
+        LazyLock::new(|| Mutex::new(Cache::default()));
+    &CACHE
+}
+
 #[cfg(all(unix, not(test)))]
 mod imp {
     use super::DefaultColors;
+    use super::default_terminal_colors_cache;
     use crossterm::style::Color as CrosstermColor;
     use crossterm::style::query_background_color;
     use crossterm::style::query_foreground_color;
-    use std::sync::Mutex;
-    use std::sync::OnceLock;
 
-    struct Cache<T> {
-        attempted: bool,
-        value: Option<T>,
-    }
-
-    impl<T> Default for Cache<T> {
-        fn default() -> Self {
-            Self {
-                attempted: false,
-                value: None,
-            }
-        }
-    }
-
-    impl<T: Copy> Cache<T> {
-        fn get_or_init_with(&mut self, mut init: impl FnMut() -> Option<T>) -> Option<T> {
-            if !self.attempted {
-                self.value = init();
-                self.attempted = true;
-            }
-            self.value
-        }
-
-        fn refresh_with(&mut self, mut init: impl FnMut() -> Option<T>) -> Option<T> {
-            self.value = init();
-            self.attempted = true;
-            self.value
-        }
-    }
-
-    fn default_colors_cache() -> &'static Mutex<Cache<DefaultColors>> {
-        static CACHE: OnceLock<Mutex<Cache<DefaultColors>>> = OnceLock::new();
-        CACHE.get_or_init(|| Mutex::new(Cache::default()))
-    }
-
-    pub(super) fn default_colors() -> Option<DefaultColors> {
-        let cache = default_colors_cache();
+    // Returns cached terminal defaults, probing once on first use.
+    pub(super) fn cached_default_colors() -> Option<DefaultColors> {
+        let cache = default_terminal_colors_cache();
         let mut cache = cache.lock().ok()?;
-        cache.get_or_init_with(|| query_default_colors().unwrap_or_default())
+        cache.get_or_init_with(|| probe_default_terminal_colors().unwrap_or_default())
     }
 
-    pub(super) fn requery_default_colors() {
-        if let Ok(mut cache) = default_colors_cache().lock() {
+    // Refreshes cached defaults unless we already know probing fails.
+    pub(super) fn refresh_cached_default_colors() {
+        if let Ok(mut cache) = default_terminal_colors_cache().lock() {
             // Don't try to refresh if the cache is already attempted and failed.
             if cache.attempted && cache.value.is_none() {
                 return;
             }
-            cache.refresh_with(|| query_default_colors().unwrap_or_default());
+            cache.refresh_with(|| probe_default_terminal_colors().unwrap_or_default());
         }
     }
 
-    fn query_default_colors() -> std::io::Result<Option<DefaultColors>> {
+    // Probes the terminal for default colors; returns None when unsupported/unavailable.
+    fn probe_default_terminal_colors() -> std::io::Result<Option<DefaultColors>> {
         let fg = query_foreground_color()?.and_then(color_to_tuple);
         let bg = query_background_color()?.and_then(color_to_tuple);
         Ok(fg.zip(bg).map(|(fg, bg)| DefaultColors { fg, bg }))
@@ -121,15 +176,53 @@ mod imp {
     }
 }
 
-#[cfg(not(all(unix, not(test))))]
+#[cfg(all(windows, not(test)))]
 mod imp {
     use super::DefaultColors;
+    use super::default_terminal_colors_cache;
 
-    pub(super) fn default_colors() -> Option<DefaultColors> {
+    // Returns cached terminal defaults, probing once on first use.
+    pub(super) fn cached_default_colors() -> Option<DefaultColors> {
+        let cache = default_terminal_colors_cache();
+        let mut cache = cache.lock().ok()?;
+        cache.get_or_init_with(|| probe_default_terminal_colors().unwrap_or_default())
+    }
+
+    // Refreshes cached defaults unless we already know probing fails.
+    pub(super) fn refresh_cached_default_colors() {
+        if let Ok(mut cache) = default_terminal_colors_cache().lock() {
+            // Don't try to refresh if the cache is already attempted and failed.
+            if cache.attempted && cache.value.is_none() {
+                return;
+            }
+            cache.refresh_with(|| probe_default_terminal_colors().unwrap_or_default());
+        }
+    }
+
+    // Probes the terminal for default colors; returns None when unsupported/unavailable.
+    fn probe_default_terminal_colors() -> std::io::Result<Option<DefaultColors>> {
+        match terminal_colorsaurus::color_palette(terminal_colorsaurus::QueryOptions::default()) {
+            Ok(p) => {
+                let (fr, fg, fb) = p.foreground.scale_to_8bit();
+                let (br, bg, bb) = p.background.scale_to_8bit();
+                Ok(Some(DefaultColors {
+                    fg: (fr, fg, fb),
+                    bg: (br, bg, bb),
+                }))
+            }
+            Err(_) => Ok(None),
+        }
+    }
+}
+
+#[cfg(not(any(all(unix, not(test)), all(windows, not(test)))))]
+mod imp {
+    use super::DefaultColors;
+    pub(super) fn cached_default_colors() -> Option<DefaultColors> {
         None
     }
 
-    pub(super) fn requery_default_colors() {}
+    pub(super) fn refresh_cached_default_colors() {}
 }
 
 /// The subset of Xterm colors that are usually consistent across terminals.
