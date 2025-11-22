@@ -329,6 +329,65 @@ impl Default for OtelConfig {
     }
 }
 
+/// Lua scripting configuration loaded from config.toml.
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct LuaConfigToml {
+    /// Enable Lua scripting support
+    pub enabled: Option<bool>,
+
+    /// Directory containing Lua scripts
+    pub scripts_dir: Option<String>,
+
+    /// Allow file I/O operations in Lua scripts
+    pub allow_file_io: Option<bool>,
+
+    /// Allow network operations in Lua scripts
+    pub allow_network: Option<bool>,
+
+    /// Maximum execution time in milliseconds
+    pub max_execution_time_ms: Option<u64>,
+
+    /// Maximum memory usage in bytes (0 = unlimited)
+    pub max_memory_bytes: Option<usize>,
+}
+
+/// Effective Lua settings after defaults are applied.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LuaConfig {
+    pub enabled: bool,
+    pub scripts_dir: Option<String>,
+    pub allow_file_io: bool,
+    pub allow_network: bool,
+    pub max_execution_time_ms: u64,
+    pub max_memory_bytes: usize,
+}
+
+impl Default for LuaConfig {
+    fn default() -> Self {
+        LuaConfig {
+            enabled: false,
+            scripts_dir: None,
+            allow_file_io: false,
+            allow_network: false,
+            max_execution_time_ms: 5000,
+            max_memory_bytes: 0,
+        }
+    }
+}
+
+impl From<LuaConfigToml> for LuaConfig {
+    fn from(toml: LuaConfigToml) -> Self {
+        LuaConfig {
+            enabled: toml.enabled.unwrap_or(false),
+            scripts_dir: toml.scripts_dir,
+            allow_file_io: toml.allow_file_io.unwrap_or(false),
+            allow_network: toml.allow_network.unwrap_or(false),
+            max_execution_time_ms: toml.max_execution_time_ms.unwrap_or(5000),
+            max_memory_bytes: toml.max_memory_bytes.unwrap_or(0),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(untagged)]
 pub enum Notifications {

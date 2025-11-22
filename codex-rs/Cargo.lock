@@ -1065,6 +1065,7 @@ dependencies = [
  "codex-file-search",
  "codex-git",
  "codex-keyring-store",
+ "codex-lua-runtime",
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
@@ -1260,6 +1261,18 @@ dependencies = [
  "urlencoding",
  "webbrowser",
  "wiremock",
+]
+
+[[package]]
+name = "codex-lua-runtime"
+version = "0.0.0"
+dependencies = [
+ "mlua",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.16",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -3730,6 +3743,33 @@ dependencies = [
  "log",
  "wasi 0.11.1+wasi-snapshot-preview1",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "mlua"
+version = "0.11.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9be1c2bfc684b8a228fbaebf954af7a47a98ec27721986654a4cc2c40a20cc7e"
+dependencies = [
+ "bstr",
+ "either",
+ "futures-util",
+ "mlua-sys",
+ "num-traits",
+ "parking_lot",
+ "rustc-hash 2.1.1",
+ "rustversion",
+]
+
+[[package]]
+name = "mlua-sys"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d4dc9cfc5a7698899802e97480617d9726f7da78c910db989d4d0fd4991d900"
+dependencies = [
+ "cc",
+ "cfg-if",
+ "pkg-config",
 ]
 
 [[package]]

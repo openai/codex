@@ -161,6 +161,12 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             support_verbosity: true,
+            experimental_supported_tools: vec![
+                "grep_files".to_string(),
+                "list_dir".to_string(),
+                "read_file".to_string(),
+                "lua_execute".to_string(),
+            ],
         )
     } else if slug.starts_with("gpt-5") {
         model_family!(

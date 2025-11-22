@@ -1,0 +1,19 @@
+[package]
+edition = "2024"
+name = "codex-lua-runtime"
+version = { workspace = true }
+
+[lib]
+name = "codex_lua_runtime"
+path = "src/lib.rs"
+
+[dependencies]
+mlua = { workspace = true }
+serde_json = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time", "rt"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

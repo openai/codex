@@ -1,6 +1,7 @@
 pub mod apply_patch;
 mod grep_files;
 mod list_dir;
+mod lua;
 mod mcp;
 mod mcp_resource;
 mod plan;
@@ -15,6 +16,7 @@ pub use plan::PLAN_TOOL;
 pub use apply_patch::ApplyPatchHandler;
 pub use grep_files::GrepFilesHandler;
 pub use list_dir::ListDirHandler;
+pub use lua::LuaHandler;
 pub use mcp::McpHandler;
 pub use mcp_resource::McpResourceHandler;
 pub use plan::PlanHandler;

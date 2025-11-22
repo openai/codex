@@ -43,6 +43,8 @@ pub enum Feature {
     SandboxCommandAssessment,
     /// Create a ghost commit at each turn.
     GhostCommit,
+    /// Include the lua_execute tool.
+    LuaExecute,
 }
 
 impl Feature {
@@ -293,6 +295,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::GhostCommit,
         key: "ghost_commit",
         stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::LuaExecute,
+        key: "lua_execute",
+        stage: Stage::Beta,
         default_enabled: false,
     },
 ];

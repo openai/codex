@@ -20,6 +20,7 @@ members = [
     "file-search",
     "linux-sandbox",
     "login",
+    "lua-runtime",
     "mcp-server",
     "mcp-types",
     "ollama",
@@ -70,6 +71,7 @@ codex-git = { path = "utils/git" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-login = { path = "login" }
+codex-lua-runtime = { path = "lua-runtime" }
 codex-mcp-server = { path = "mcp-server" }
 codex-ollama = { path = "ollama" }
 codex-otel = { path = "otel" }
@@ -138,6 +140,7 @@ log = "0.4"
 lru = "0.12.5"
 maplit = "1.0.2"
 mime_guess = "2.0.5"
+mlua = { version = "0.11", features = ["lua54", "async", "send"] }
 multimap = "0.10.0"
 notify = "8.2.0"
 nucleo-matcher = "0.3.1"

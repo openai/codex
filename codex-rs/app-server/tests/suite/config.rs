@@ -94,6 +94,7 @@ async fn get_config_toml_parses_all_fields() -> Result<()> {
             tools: Some(Tools {
                 web_search: Some(false),
                 view_image: Some(true),
+                experimental_supported_tools: None,
             }),
             profile: Some("test".to_string()),
             profiles: HashMap::from([(

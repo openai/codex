@@ -235,6 +235,8 @@ pub struct Config {
 
     pub tools_web_search_request: bool,
 
+    pub experimental_supported_tools: Vec<String>,
+
     /// When `true`, run a model-based assessment for commands denied by the sandbox.
     pub experimental_sandbox_command_assessment: bool,
 
@@ -273,6 +275,9 @@ pub struct Config {
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: crate::config::types::OtelConfig,
+
+    /// Lua scripting configuration.
+    pub lua: crate::config::types::LuaConfig,
 }
 
 impl Config {
@@ -640,6 +645,9 @@ pub struct ConfigToml {
     /// OTEL configuration.
     pub otel: Option<crate::config::types::OtelConfigToml>,
 
+    /// Lua scripting configuration.
+    pub lua: Option<crate::config::types::LuaConfigToml>,
+
     /// Tracks whether the Windows onboarding screen has been acknowledged.
     pub windows_wsl_setup_acknowledged: Option<bool>,
 
@@ -704,6 +712,10 @@ pub struct ToolsToml {
     /// Enable the `view_image` tool that lets the agent attach local images.
     #[serde(default)]
     pub view_image: Option<bool>,
+
+    /// Optional list of experimental tool names to expose to tools-aware models.
+    #[serde(default)]
+    pub experimental_supported_tools: Option<Vec<String>>,
 }
 
 impl From<ToolsToml> for Tools {
@@ -711,6 +723,7 @@ impl From<ToolsToml> for Tools {
         Self {
             web_search: tools_toml.web_search,
             view_image: tools_toml.view_image,
+            experimental_supported_tools: tools_toml.experimental_supported_tools,
         }
     }
 }
@@ -990,6 +1003,15 @@ impl Config {
         let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
         let include_view_image_tool_flag = features.enabled(Feature::ViewImageTool);
         let tools_web_search_request = features.enabled(Feature::WebSearchRequest);
+        let experimental_supported_tools = cfg
+            .tools
+            .as_ref()
+            .and_then(|tools| tools.experimental_supported_tools.clone())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|tool| tool.trim().to_string())
+            .filter(|tool| !tool.is_empty())
+            .collect::<Vec<_>>();
         let use_experimental_streamable_shell_tool = features.enabled(Feature::StreamableShell);
         let use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
         let use_experimental_use_rmcp_client = features.enabled(Feature::RmcpClient);
@@ -1144,6 +1166,7 @@ impl Config {
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,
             tools_web_search_request,
+            experimental_supported_tools,
             experimental_sandbox_command_assessment,
             use_experimental_streamable_shell_tool,
             use_experimental_unified_exec_tool,
@@ -1173,6 +1196,7 @@ impl Config {
                     exporter,
                 }
             },
+            lua: cfg.lua.unwrap_or_default().into(),
         };
         Ok(config)
     }
@@ -1275,6 +1299,7 @@ mod tests {
     use crate::config::edit::ConfigEditsBuilder;
     use crate::config::edit::apply_blocking;
     use crate::config::types::HistoryPersistence;
+    use crate::config::types::LuaConfig;
     use crate::config::types::McpServerTransportConfig;
     use crate::config::types::Notifications;
     use crate::features::Feature;
@@ -2891,6 +2916,7 @@ model_verbosity = "high"
                 forced_login_method: None,
                 include_apply_patch_tool: false,
                 tools_web_search_request: false,
+                experimental_supported_tools: Vec::new(),
                 experimental_sandbox_command_assessment: false,
                 use_experimental_streamable_shell_tool: false,
                 use_experimental_unified_exec_tool: false,
@@ -2904,6 +2930,7 @@ model_verbosity = "high"
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
                 otel: OtelConfig::default(),
+                lua: LuaConfig::default(),
             },
             o3_profile_config
         );
@@ -2963,6 +2990,7 @@ model_verbosity = "high"
             forced_login_method: None,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
+            experimental_supported_tools: Vec::new(),
             experimental_sandbox_command_assessment: false,
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
@@ -2976,6 +3004,7 @@ model_verbosity = "high"
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             otel: OtelConfig::default(),
+            lua: LuaConfig::default(),
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -3050,6 +3079,7 @@ model_verbosity = "high"
             forced_login_method: None,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
+            experimental_supported_tools: Vec::new(),
             experimental_sandbox_command_assessment: false,
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
@@ -3063,6 +3093,7 @@ model_verbosity = "high"
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             otel: OtelConfig::default(),
+            lua: LuaConfig::default(),
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
@@ -3123,6 +3154,7 @@ model_verbosity = "high"
             forced_login_method: None,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
+            experimental_supported_tools: Vec::new(),
             experimental_sandbox_command_assessment: false,
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
@@ -3136,6 +3168,7 @@ model_verbosity = "high"
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             otel: OtelConfig::default(),
+            lua: LuaConfig::default(),
         };
 
         assert_eq!(expected_gpt5_profile_config, gpt5_profile_config);

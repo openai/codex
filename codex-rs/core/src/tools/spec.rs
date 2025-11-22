@@ -515,6 +515,55 @@ fn create_read_file_tool() -> ToolSpec {
     })
 }
 
+fn create_lua_execute_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "script".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "The Lua script to execute. The script runs in a sandboxed environment with limited \
+                 access to system resources."
+                    .to_string(),
+            ),
+        },
+    );
+
+    // insert the script as either raw code or a path to a lua file
+    properties.insert(
+        "is_path".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "If true, the 'script' parameter is treated as a filesystem path to a Lua file \
+                 to execute. If false or omitted, 'script' is treated as raw Lua code."
+                    .to_string(),
+            ),
+        },
+    );
+
+    properties.insert(
+        "args".to_string(),
+        JsonSchema::Object {
+            properties: BTreeMap::new(),
+            required: None,
+            additional_properties: Some(true.into()),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "lua_execute".to_string(),
+        description:
+            "Executes a Lua script for data transformation, custom logic, or configuration. \
+             The script runs in a sandboxed environment and returns the result as JSON."
+                .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["script".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 fn create_list_dir_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -866,6 +915,7 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::ApplyPatchHandler;
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::ListDirHandler;
+    use crate::tools::handlers::LuaHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
     use crate::tools::handlers::PlanHandler;
@@ -950,6 +1000,22 @@ pub(crate) fn build_specs(
         let read_file_handler = Arc::new(ReadFileHandler);
         builder.push_spec_with_parallel_support(create_read_file_tool(), true);
         builder.register_handler("read_file", read_file_handler);
+    }
+
+    if config
+        .experimental_supported_tools
+        .contains(&"lua_execute".to_string())
+    {
+        match LuaHandler::new_default() {
+            Ok(lua_handler) => {
+                let lua_handler = Arc::new(lua_handler);
+                builder.push_spec_with_parallel_support(create_lua_execute_tool(), true);
+                builder.register_handler("lua_execute", lua_handler);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to initialize Lua handler: {}", e);
+            }
+        }
     }
 
     if config
