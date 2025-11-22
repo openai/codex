@@ -338,6 +338,10 @@ pub struct ShellToolCallParams {
     pub with_escalated_permissions: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub justification: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_chars: Option<usize>,
 }
 
 /// If the `name` of a `ResponseItem::FunctionCall` is `shell_command`, the
@@ -354,6 +358,10 @@ pub struct ShellCommandToolCallParams {
     pub with_escalated_permissions: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub justification: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_chars: Option<usize>,
 }
 
 /// Responses API compatible content items that can be returned by a tool call.
@@ -732,6 +740,8 @@ mod tests {
                 timeout_ms: Some(1000),
                 with_escalated_permissions: None,
                 justification: None,
+                max_output_tokens: None,
+                max_output_chars: None,
             },
             params
         );

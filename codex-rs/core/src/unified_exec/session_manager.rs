@@ -174,6 +174,7 @@ impl UnifiedExecSessionManager {
                 turn_ref.as_ref(),
                 request.call_id,
                 None,
+                None,
             )
         };
         interaction_emitter
@@ -369,6 +370,7 @@ impl UnifiedExecSessionManager {
             entry.turn_ref.as_ref(),
             &entry.call_id,
             None,
+            None,
         );
         let emitter = ToolEmitter::unified_exec(
             &entry.command,
@@ -401,6 +403,7 @@ impl UnifiedExecSessionManager {
             context.session.as_ref(),
             context.turn.as_ref(),
             &context.call_id,
+            None,
             None,
         );
         let emitter =

@@ -88,6 +88,8 @@ impl EscalateServer {
                 with_escalated_permissions: None,
                 justification: None,
                 arg0: None,
+                max_output_tokens: None,
+                max_output_chars: None,
             },
             &sandbox_state.sandbox_policy,
             &sandbox_state.sandbox_cwd,
