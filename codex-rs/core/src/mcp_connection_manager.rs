@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::env;
 use std::ffi::OsString;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -28,6 +29,7 @@ use codex_protocol::protocol::McpStartupCompleteEvent;
 use codex_protocol::protocol::McpStartupFailure;
 use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpStartupUpdateEvent;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use codex_rmcp_client::RmcpClient;
@@ -48,6 +50,8 @@ use mcp_types::Resource;
 use mcp_types::ResourceTemplate;
 use mcp_types::Tool;
 
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json::json;
 use sha1::Digest;
 use sha1::Sha1;
@@ -174,6 +178,7 @@ struct ManagedClient {
     tools: Vec<ToolInfo>,
     tool_filter: ToolFilter,
     tool_timeout: Option<Duration>,
+    server_supports_sandbox_state_capability: bool,
 }
 
 #[derive(Clone)]
@@ -222,6 +227,35 @@ impl AsyncManagedClient {
     async fn client(&self) -> Result<ManagedClient, StartupOutcomeError> {
         self.client.clone().await
     }
+
+    async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
+        let managed = self.client().await?;
+        if !managed.server_supports_sandbox_state_capability {
+            return Ok(());
+        }
+
+        managed
+            .client
+            .send_custom_notification(
+                MCP_SANDBOX_STATE_NOTIFICATION,
+                Some(serde_json::to_value(sandbox_state)?),
+            )
+            .await
+    }
+}
+
+pub const MCP_SANDBOX_STATE_CAPABILITY: &str = "codex/sandbox-state";
+
+/// Custom MCP notification for sandbox state updates.
+/// When used, the `params` field of the notification is [`SandboxState`].
+pub const MCP_SANDBOX_STATE_NOTIFICATION: &str = "codex/sandbox-state/update";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxState {
+    pub sandbox_policy: SandboxPolicy,
+    pub codex_linux_sandbox_exe: Option<PathBuf>,
+    pub sandbox_cwd: PathBuf,
 }
 
 /// A thin wrapper around a set of running [`RmcpClient`] instances.
@@ -567,6 +601,34 @@ impl McpConnectionManager {
             .get(tool_name)
             .map(|tool| (tool.server_name.clone(), tool.tool_name.clone()))
     }
+
+    pub async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
+        let mut join_set = JoinSet::new();
+
+        for async_managed_client in self.clients.values() {
+            let sandbox_state = sandbox_state.clone();
+            let async_managed_client = async_managed_client.clone();
+            join_set.spawn(async move {
+                async_managed_client
+                    .notify_sandbox_state_change(&sandbox_state)
+                    .await
+            });
+        }
+
+        while let Some(join_res) = join_set.join_next().await {
+            match join_res {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => {
+                    warn!("Failed to notify sandbox state change to MCP server: {err:#}");
+                }
+                Err(err) => {
+                    warn!("Task panic when notifying sandbox state change to MCP server: {err:#}");
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 async fn emit_update(
@@ -700,7 +762,7 @@ async fn start_server_task(
 
     let send_elicitation = elicitation_requests.make_sender(server_name.clone(), tx_event);
 
-    client
+    let initialize_result = client
         .initialize(params, startup_timeout, send_elicitation)
         .await
         .map_err(StartupOutcomeError::from)?;
@@ -709,11 +771,19 @@ async fn start_server_task(
         .await
         .map_err(StartupOutcomeError::from)?;
 
+    let server_supports_sandbox_state_capability = initialize_result
+        .capabilities
+        .experimental
+        .as_ref()
+        .and_then(|exp| exp.get(MCP_SANDBOX_STATE_CAPABILITY))
+        .is_some();
+
     let managed = ManagedClient {
         client: Arc::clone(&client),
         tools,
         tool_timeout: Some(tool_timeout),
         tool_filter,
+        server_supports_sandbox_state_capability,
     };
 
     Ok(managed)
