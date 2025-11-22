@@ -2,7 +2,9 @@ use std::any::Any;
 use std::sync::Arc;
 
 use codex_execpolicy::Decision;
+use codex_execpolicy::Error;
 use codex_execpolicy::Evaluation;
+use codex_execpolicy::Policy;
 use codex_execpolicy::PolicyParser;
 use codex_execpolicy::RuleMatch;
 use codex_execpolicy::RuleRef;
@@ -58,6 +60,49 @@ prefix_rule(
         },
         evaluation
     );
+}
+
+#[test]
+fn add_prefix_rule_extends_policy() {
+    let mut policy = Policy::empty();
+    policy
+        .add_prefix_rule(&tokens(&["ls", "-l"]), Decision::Prompt)
+        .expect("add prefix rule");
+
+    let rules = rule_snapshots(policy.rules().get_vec("ls").expect("ls rules"));
+    assert_eq!(
+        vec![RuleSnapshot::Prefix(PrefixRule {
+            pattern: PrefixPattern {
+                first: Arc::from("ls"),
+                rest: vec![PatternToken::Single(String::from("-l"))].into(),
+            },
+            decision: Decision::Prompt,
+        })],
+        rules
+    );
+
+    let evaluation = policy.check(&tokens(&["ls", "-l", "/tmp"]));
+    assert_eq!(
+        Evaluation::Match {
+            decision: Decision::Prompt,
+            matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                matched_prefix: tokens(&["ls", "-l"]),
+                decision: Decision::Prompt,
+            }],
+        },
+        evaluation
+    );
+}
+
+#[test]
+fn add_prefix_rule_rejects_empty_prefix() {
+    let mut policy = Policy::empty();
+    let result = policy.add_prefix_rule(&[], Decision::Allow);
+
+    assert!(matches!(
+        result,
+        Err(Error::InvalidPattern(message)) if message == "prefix cannot be empty"
+    ));
 }
 
 #[test]
