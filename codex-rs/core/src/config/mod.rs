@@ -270,6 +270,11 @@ pub struct Config {
     /// Collection of various notices we show the user
     pub notices: Notice,
 
+    /// When `true`, skips upgrade checks and suppresses update prompts.
+    /// Only set this to true if your Codex updates are centrally managed.
+    /// Keep Codex up to date for best performance.
+    pub skip_upgrade_check: bool,
+
     /// When true, disables burst-paste detection for typed input entirely.
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
@@ -690,6 +695,12 @@ pub struct ConfigToml {
     /// Centralized feature flags (new). Prefer this over individual toggles.
     #[serde(default)]
     pub features: Option<FeaturesToml>,
+
+    /// When `true`, skips upgrade checks and suppresses update prompts.
+    /// Only set this to true if your Codex updates are centrally managed.
+    /// Keep Codex up to date for best performance.
+    #[serde(alias = "suppress_update_messages")]
+    pub skip_upgrade_check: Option<bool>,
 
     /// When true, disables burst-paste detection for typed input entirely.
     /// All characters are inserted as they are received, and no buffering
@@ -1250,6 +1261,7 @@ impl Config {
             active_project,
             windows_wsl_setup_acknowledged: cfg.windows_wsl_setup_acknowledged.unwrap_or(false),
             notices: cfg.notice.unwrap_or_default(),
+            skip_upgrade_check: cfg.skip_upgrade_check.unwrap_or(false),
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
             tui_notifications: cfg
                 .tui
@@ -3004,6 +3016,7 @@ model_verbosity = "high"
                 active_project: ProjectConfig { trust_level: None },
                 windows_wsl_setup_acknowledged: false,
                 notices: Default::default(),
+                skip_upgrade_check: false,
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
                 otel: OtelConfig::default(),
@@ -3076,6 +3089,7 @@ model_verbosity = "high"
             active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
+            skip_upgrade_check: false,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             otel: OtelConfig::default(),
@@ -3163,6 +3177,7 @@ model_verbosity = "high"
             active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
+            skip_upgrade_check: false,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             otel: OtelConfig::default(),
@@ -3236,6 +3251,7 @@ model_verbosity = "high"
             active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
+            skip_upgrade_check: false,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             otel: OtelConfig::default(),
