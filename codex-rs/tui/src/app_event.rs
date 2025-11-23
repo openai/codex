@@ -26,6 +26,7 @@ pub(crate) struct SecurityReviewAutoScopeSelection {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SecurityReviewCommandState {
+    #[allow(dead_code)]
     Running,
     Matches,
     NoMatches,

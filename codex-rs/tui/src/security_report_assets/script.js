@@ -607,6 +607,7 @@
         const idCell = cells[idIdx];
         const titleCell = cells[titleIdx];
         const bugIdText = (idCell.textContent || '').trim();
+        const titleText = (titleCell.textContent || '').trim();
         const bugNumMatch = bugIdText.match(/\d+/);
         if (!bugNumMatch) return;
         const bugNum = bugNumMatch[0];
@@ -628,7 +629,6 @@
           if (!targetId) return;
         }
 
-        const titleText = (titleCell.textContent || '').trim();
         titleCell.innerHTML = '';
         const a = document.createElement('a');
         a.href = `#${targetId}`;

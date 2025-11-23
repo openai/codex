@@ -151,6 +151,7 @@ use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use strum::IntoEnumIterator;
 
+#[allow(dead_code)]
 const MAX_TRACKED_GHOST_COMMITS: usize = 20;
 const MAX_STATUS_THINKING_LINES: usize = 3;
 const MAX_STATUS_TOOL_CALLS: usize = 4;
@@ -524,6 +525,7 @@ struct SecurityReviewArtifactsState {
 }
 
 impl ChatWidget {
+    #[allow(dead_code)]
     fn model_description_for(slug: &str) -> Option<&'static str> {
         if slug.starts_with("gpt-5-codex") {
             Some("Optimized for coding tasks with many tools.")
@@ -2012,6 +2014,7 @@ impl ChatWidget {
                             logs: vec![],
                             token_usage: codex_core::protocol::TokenUsage::default(),
                             estimated_cost_usd: None,
+                            rate_limit_wait: Duration::ZERO,
                         },
                     });
                 });
@@ -4059,6 +4062,10 @@ impl ChatWidget {
             .report_html_path
             .as_ref()
             .map(|path| display_path_for(path, &repo_path));
+        let output_root_display = result
+            .metadata_path
+            .parent()
+            .map(|path| display_path_for(path, &repo_path));
 
         let mut summary_lines: Vec<Line<'static>> = Vec::new();
         summary_lines.push(vec!["• ".dim(), format!("Mode: {}", mode.as_str()).into()].into());
@@ -4087,6 +4094,19 @@ impl ChatWidget {
         if let Some(cost) = result.estimated_cost_usd {
             summary_lines
                 .push(vec!["  • ".into(), format!("Estimated cost: ${cost:.4}").into()].into());
+        }
+        if result.rate_limit_wait > Duration::ZERO {
+            summary_lines.push(
+                vec![
+                    "  • ".into(),
+                    format!(
+                        "Rate-limit wait: {:.1}s",
+                        result.rate_limit_wait.as_secs_f32()
+                    )
+                    .into(),
+                ]
+                .into(),
+            );
         }
         summary_lines.push(
             vec![
@@ -4205,14 +4225,69 @@ impl ChatWidget {
         };
         let follow_up_display = display_path_for(&follow_up_path, &repo_path);
 
-        // Show bug summary table at the end, just before the follow-up line.
-        if let Some(table) = result.bug_summary_table.as_ref() {
-            let mut table_lines: Vec<Line<'static>> = Vec::new();
-            table_lines.push("Bug summary table".bold().into());
-            for row in table.lines() {
-                table_lines.push(Line::from(row.to_string()));
+        // Show artifact + duration summary at the end, just before the follow-up line.
+        let mut tail_lines: Vec<Line<'static>> = Vec::new();
+
+        if let Some(root) = output_root_display.as_ref() {
+            tail_lines
+                .push(vec!["↳ ".into(), format!("Artifacts written to {root}").into()].into());
+            if let Some(md) = report_markdown_display.as_ref() {
+                tail_lines.push(
+                    vec![
+                        "↳ ".into(),
+                        format!("  • Report markdown: {}", md.as_str()).into(),
+                    ]
+                    .into(),
+                );
             }
-            self.add_to_history(PlainHistoryCell::new(table_lines));
+            if let Some(html) = report_html_display.as_ref() {
+                tail_lines.push(
+                    vec![
+                        "↳ ".into(),
+                        format!("  • Report HTML: {}", html.as_str()).into(),
+                    ]
+                    .into(),
+                );
+            }
+        }
+
+        let find_log_line = |prefix: &str| -> Option<String> {
+            result
+                .logs
+                .iter()
+                .rev()
+                .find(|line| line.starts_with(prefix))
+                .cloned()
+        };
+        if let Some(review_duration) = find_log_line("Security review duration: ") {
+            let formatted =
+                if let Some(rest) = review_duration.strip_prefix("Security review duration: ") {
+                    if let Some((_, tail)) = rest.split_once('(') {
+                        format!("Security review duration: {duration_display} ({tail}")
+                    } else {
+                        format!("Security review duration: {duration_display}")
+                    }
+                } else {
+                    review_duration
+                };
+            tail_lines.push(vec!["↳ ".into(), formatted.into()].into());
+        }
+        let token_usage_line = find_log_line("Token usage: ");
+        let cost_line = find_log_line("Estimated model cost: ");
+        if token_usage_line.is_some() || cost_line.is_some() {
+            let combined = match (token_usage_line, cost_line) {
+                (Some(tokens), Some(cost)) => format!("{tokens}; {cost}"),
+                (Some(tokens), None) => tokens,
+                (None, Some(cost)) => cost,
+                (None, None) => String::new(),
+            };
+            if !combined.is_empty() {
+                tail_lines.push(vec!["↳ ".into(), combined.into()].into());
+            }
+        }
+
+        if !tail_lines.is_empty() {
+            self.add_to_history(PlainHistoryCell::new(tail_lines));
         }
         self.add_info_message(
             format!(

@@ -398,7 +398,9 @@ impl MermaidLinter {
             };
 
             if issues_on_line.len() > 1 {
-                let (first_issue, rest) = issues_on_line.split_first().expect("non-empty slice");
+                let Some((first_issue, rest)) = issues_on_line.split_first() else {
+                    continue;
+                };
                 if let Some(fix) = &first_issue.fix {
                     let fixed = fix(line);
                     if !fixed.is_empty() {
@@ -429,39 +431,34 @@ impl MermaidLinter {
     }
 }
 
+fn must_compile(pattern: &str) -> Regex {
+    Regex::new(pattern).unwrap_or_else(|err| panic!("invalid regex {pattern}: {err}"))
+}
+
 lazy_static! {
-    static ref STYLE_RE: Regex = Regex::new(r"(?i)^\s*style\b").expect("valid regex");
-    static ref ARROW_RE: Regex = Regex::new(r"-{1,}[^-]*>").expect("valid regex");
-    static ref SEQ_ARROW_RE: Regex = Regex::new(r"-{1,2}(?:>>|>)").expect("valid regex");
-    static ref NODE_ID_RE: Regex = Regex::new(r"^\s*([a-zA-Z0-9_]+)\s*[\[(]").expect("valid regex");
-    static ref NODE_ID_VALID_RE: Regex = Regex::new(r"^[A-Za-z0-9_]+$").expect("valid regex");
-    static ref SQUARE_LABEL_RE: Regex =
-        Regex::new(r"[A-Za-z0-9_]+\s*\[(.*?)\]").expect("valid regex");
-    static ref PAR2_LABEL_RE: Regex =
-        Regex::new(r"[A-Za-z0-9_]+\s*\(\((.*?)\)\)").expect("valid regex");
-    static ref PAR1_LABEL_RE: Regex =
-        Regex::new(r"[A-Za-z0-9_]+\s*\(([^()]*?)\)").expect("valid regex");
-    static ref SEQ_SENDER_UNDERSCORE_RE: Regex =
-        Regex::new(r"([A-Za-z0-9_]+)_\s*$").expect("valid regex");
+    static ref STYLE_RE: Regex = must_compile(r"(?i)^\s*style\b");
+    static ref ARROW_RE: Regex = must_compile(r"-{1,}[^-]*>");
+    static ref SEQ_ARROW_RE: Regex = must_compile(r"-{1,2}(?:>>|>)");
+    static ref NODE_ID_RE: Regex = must_compile(r"^\s*([a-zA-Z0-9_]+)\s*[\[(]");
+    static ref NODE_ID_VALID_RE: Regex = must_compile(r"^[A-Za-z0-9_]+$");
+    static ref SQUARE_LABEL_RE: Regex = must_compile(r"[A-Za-z0-9_]+\s*\[(.*?)\]");
+    static ref PAR2_LABEL_RE: Regex = must_compile(r"[A-Za-z0-9_]+\s*\(\((.*?)\)\)");
+    static ref PAR1_LABEL_RE: Regex = must_compile(r"[A-Za-z0-9_]+\s*\(([^()]*?)\)");
+    static ref SEQ_SENDER_UNDERSCORE_RE: Regex = must_compile(r"([A-Za-z0-9_]+)_\s*$");
     static ref SEQ_RECEIVER_UNDERSCORE_RE: Regex =
-        Regex::new(r"^(\s*([A-Za-z0-9_]+))_(\s*)(.*)$").expect("valid regex");
+        must_compile(r"^(\s*([A-Za-z0-9_]+))_(\s*)(.*)$");
     static ref SEQ_RECEIVER_MISSING_COLON_RE: Regex =
-        Regex::new(r"^(\s*([A-Za-z0-9_]+))(\s+)(.*)$").expect("valid regex");
-    static ref PIE_LINE_RE: Regex =
-        Regex::new(r#"^(\s*)"(.+)"\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*$"#).expect("valid regex");
+        must_compile(r"^(\s*([A-Za-z0-9_]+))(\s+)(.*)$");
+    static ref PIE_LINE_RE: Regex = must_compile(r#"^(\s*)"(.+)"\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*$"#);
     static ref PIE_INNER_QUOTE_RE: Regex =
-        Regex::new(r#"([\(\[])\s*['"](\d+(?:\.\d+)?)['"]\s*([\)\]])"#).expect("valid regex");
-    static ref MERMAID_FENCE_RE: Regex =
-        Regex::new(r"(?is)```mermaid(.*?)```").expect("valid regex");
-    static ref GENERIC_FENCE_RE: Regex =
-        Regex::new(r"(?is)```([a-zA-Z0-9_+-]*)\n(.*?)```").expect("valid regex");
+        must_compile(r#"([\(\[])\s*['"](\d+(?:\.\d+)?)['"]\s*([\)\]])"#);
+    static ref MERMAID_FENCE_RE: Regex = must_compile(r"(?is)```mermaid(.*?)```");
+    static ref GENERIC_FENCE_RE: Regex = must_compile(r"(?is)```([a-zA-Z0-9_+-]*)\n(.*?)```");
     static ref HEADER_RE: Regex =
-        Regex::new(r"(?i)^\s*(flowchart|graph|sequenceDiagram|classDiagram|erDiagram|gantt)\b")
-            .expect("valid regex");
-    static ref HEADER_TITLE_SAME_LINE_RE: Regex = Regex::new(
+        must_compile(r"(?i)^\s*(flowchart|graph|sequenceDiagram|classDiagram|erDiagram|gantt)\b");
+    static ref HEADER_TITLE_SAME_LINE_RE: Regex = must_compile(
         r"(?im)^(?P<indent>\s*)(?P<keyword>flowchart|graph)\s+(?P<dir>TB|TD|LR|RL|BT)\s+title\s+(?P<title>.+)$",
-    )
-    .expect("valid regex");
+    );
 }
 
 fn sanitize_node_id(value: &str) -> String {
@@ -592,10 +589,10 @@ fn normalize_header_titles(source: &str) -> String {
 fn ensure_mermaid_header(source: &str) -> String {
     let mut lines = source.lines();
     let first_non_empty = lines.find(|line| !line.trim().is_empty());
-    if let Some(first) = first_non_empty {
-        if HEADER_RE.is_match(first.trim()) {
-            return source.to_string();
-        }
+    if let Some(first) = first_non_empty
+        && HEADER_RE.is_match(first.trim())
+    {
+        return source.to_string();
     }
     if source.trim().is_empty() {
         return "flowchart TD".to_string();
@@ -627,9 +624,9 @@ pub(crate) fn fix_mermaid_blocks(input: &str) -> String {
 
     let after_fenced = MERMAID_FENCE_RE
         .replace_all(input, |caps: &Captures| {
-            let full_match = caps
-                .get(0)
-                .expect("full match is always present for fenced mermaid block");
+            let Some(full_match) = caps.get(0) else {
+                return caps.get(0).map(|m| m.as_str()).unwrap_or("").to_string();
+            };
             let indent = leading_indent(input, &full_match);
             let body = caps
                 .get(1)
@@ -647,9 +644,9 @@ pub(crate) fn fix_mermaid_blocks(input: &str) -> String {
 
     let after_generic = GENERIC_FENCE_RE
         .replace_all(&after_fenced, |caps: &Captures| {
-            let full_match = caps
-                .get(0)
-                .expect("full match is always present for fenced code block");
+            let Some(full_match) = caps.get(0) else {
+                return caps.get(0).map(|m| m.as_str()).unwrap_or("").to_string();
+            };
             let indent = leading_indent(&after_fenced, &full_match);
             let lang = caps
                 .get(1)
