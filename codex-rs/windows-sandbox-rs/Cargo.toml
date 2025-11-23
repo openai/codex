@@ -45,3 +45,5 @@ features = [
     "Win32_System_Com",
     "Win32_Security_Authentication_Identity",
 ]
+[dev-dependencies]
+tempfile = "3"
