@@ -27,6 +27,12 @@ Alternatively, if you use Homebrew:
 brew install --cask codex
 ```
 
+Or if you are an enthusiast user of [mise](https://github.com/jdx/mise), the polyglot tool versions manager:
+
+```shell
+mise use -g codex@latest
+```
+
 Then simply run `codex` to get started:
 
 ```shell
