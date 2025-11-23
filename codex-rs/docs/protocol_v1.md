@@ -1,12 +1,12 @@
-Overview of Protocol Defined in [protocol.rs](../core/src/protocol.rs) and [agent.rs](../core/src/agent.rs).
+Overview of Protocol Defined in [protocol.rs](../protocol/src/protocol.rs) and the Codex engine in [codex.rs](../core/src/codex.rs).
 
 The goal of this document is to define terminology used in the system and explain the expected behavior of the system.
 
-NOTE: This document summarizes the protocol at a high level. The Rust types and enums in [protocol.rs](../core/src/protocol.rs) are the source of truth and may occasionally include additional fields or variants beyond what is covered here.
+NOTE: This document summarizes the protocol at a high level. The Rust types and enums in [protocol.rs](../protocol/src/protocol.rs) are the source of truth and may occasionally include additional fields or variants beyond what is covered here.
 
 ## Entities
 
-These are entities exit on the codex backend. The intent of this section is to establish vocabulary and construct a shared mental model for the `Codex` core system.
+These are entities that exist on the Codex backend. The intent of this section is to establish vocabulary and construct a shared mental model for the `Codex` core system.
 
 0. `Model`
    - In our case, this is the Responses REST API
@@ -48,7 +48,7 @@ Every participant in a session (the root UI thread plus each spawned/forked chil
 
 When a `Turn` completes, the `response_id` from the `Model`'s final `response.completed` message is stored in the `Session` state to resume the thread given the next `Op::UserInput`. The `response_id` is also returned in the `EventMsg::TurnComplete` to the UI, which can be used to fork the thread from an earlier point by providing it in the `Op::UserInput`.
 
-Since only 1 `Task` can be run at a time, for parallel tasks it is recommended that a single `Codex` be run for each thread of work.
+Each `Session` still runs at most one `Task` at a time. For parallel work, you can either run multiple Codex sessions or use subagents (via the `subagent_*` tools) to orchestrate multiple child sessions within a single daemon.
 
 ## Interface
 
@@ -66,7 +66,7 @@ Since only 1 `Task` can be run at a time, for parallel tasks it is recommended t
     - This enum is `non_exhaustive`; variants can be added at future dates
     - It should be expected that new `EventMsg` variants will be added over time to expose more detailed information about the model's actions.
 
-For complete documentation of the `Op` and `EventMsg` variants, refer to [protocol.rs](../core/src/protocol.rs). Some example payload types:
+For complete documentation of the `Op` and `EventMsg` variants, refer to [protocol.rs](../protocol/src/protocol.rs). Some example payload types:
 
 - `Op`
   - `Op::UserInput` – Any input from the user to kick off a `Task`

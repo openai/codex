@@ -386,7 +386,7 @@ When `false`, cross-agent messages arrive only via `subagent_await` tool results
 Controls whether the root agent automatically drains its inbox (and any child
 messages destined for agent `0`) at safe stopping points between model turns,
 and whether it may auto-start a follow-up turn based on those messages. When
-`true`:
+`true` (default):
 
 - At the end of each model turn for the root, Codex drains the root inbox and
   injects synthetic `subagent_await` call/output pairs—complete with
