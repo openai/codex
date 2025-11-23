@@ -17,6 +17,8 @@ use codex_protocol::protocol::ExecCommandSource;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde_json::Map;
+use serde_json::Value;
 use serde_json::json;
 
 use crate::codex::Session;
@@ -131,12 +133,6 @@ impl InvocationContext {
         }
         root_session_id
     }
-}
-
-enum LogStrategy {
-    Always(Vec<String>),
-    OnSuccess(Vec<String>),
-    None,
 }
 
 struct ExecEventLogger {
@@ -505,64 +501,40 @@ fn display_label_or_metadata(label: &Option<String>, meta: Option<&SubagentMetad
 
 async fn run_with_logging<F, Fut>(
     ctx: &InvocationContext,
-    strategy: LogStrategy,
+    command: Vec<String>,
     op: F,
 ) -> Result<ToolOutput, FunctionCallError>
 where
     F: FnOnce() -> Fut,
     Fut: Future<Output = Result<ToolOutput, FunctionCallError>>,
 {
-    match strategy {
-        LogStrategy::None => op().await,
-        LogStrategy::Always(command) => {
-            let logger = if ctx.is_root_agent {
-                Some(
-                    ExecEventLogger::new(
-                        ctx.session.clone(),
-                        ctx.turn.clone(),
-                        ctx.call_id.clone(),
-                        command,
-                    )
-                    .await,
-                )
-            } else {
-                None
-            };
+    let logger = if ctx.is_root_agent {
+        Some(
+            ExecEventLogger::new(
+                ctx.session.clone(),
+                ctx.turn.clone(),
+                ctx.call_id.clone(),
+                command,
+            )
+            .await,
+        )
+    } else {
+        None
+    };
 
-            let result = op().await;
+    let result = op().await;
 
-            if let Some(ref logger) = logger {
-                match &result {
-                    Ok(out) => {
-                        let summary = summarize_tool_output(&ctx.tool_name, &ctx.arguments, out);
-                        logger.success(&summary).await;
-                    }
-                    Err(err) => logger.failure(&err.to_string()).await,
-                }
+    if let Some(ref logger) = logger {
+        match &result {
+            Ok(out) => {
+                let summary = summarize_tool_output(&ctx.tool_name, &ctx.arguments, out);
+                logger.success(&summary).await;
             }
-
-            result
-        }
-        LogStrategy::OnSuccess(command) => {
-            let result = op().await;
-
-            if let Ok(out) = &result {
-                if ctx.is_root_agent {
-                    let logger = ExecEventLogger::new(
-                        ctx.session.clone(),
-                        ctx.turn.clone(),
-                        ctx.call_id.clone(),
-                        command,
-                    )
-                    .await;
-                    let summary = summarize_tool_output(&ctx.tool_name, &ctx.arguments, out);
-                    logger.success(&summary).await;
-                }
-            }
-
-            result
+            Err(err) => logger.failure(&err.to_string()).await,
         }
     }
+
+    result
 }
 
 #[derive(Serialize)]
@@ -693,8 +665,7 @@ async fn handle_spawn(ctx: &InvocationContext) -> Result<ToolOutput, FunctionCal
     let sandbox_mode = parse_sandbox_mode(sandbox_mode)?;
     let label = normalize_label(raw_label);
     let summary = summarize_prompt(&prompt);
-    let log_command =
-        LogStrategy::Always(vec![format!("Spawned subagent {}", display_label(&label))]);
+    let log_command = vec![format!("Spawned subagent {}", display_label(&label))];
 
     let manager = ctx.manager.clone();
     let session = ctx.session.clone();
@@ -724,7 +695,7 @@ async fn handle_spawn(ctx: &InvocationContext) -> Result<ToolOutput, FunctionCal
                 .await
                 .map_err(|err| map_manager_error(err, None))?;
 
-            let response = build_subagent_response(&metadata, Some(json!(model)), None);
+            let response = build_subagent_response(&metadata, [("model", json!(model))]);
 
             Ok(ToolOutput::Function {
                 content: response.to_string(),
@@ -750,12 +721,10 @@ async fn handle_fork(ctx: &InvocationContext) -> Result<ToolOutput, FunctionCall
     let initial_message_count = ctx.session.history_len().await;
     let parent_session_id = ctx.caller_id;
     let prompt_clone = prompt.clone();
-    let model_clone = model.clone();
     let call_id = ctx.call_id.clone();
     let arguments = ctx.arguments.clone();
 
-    let log_command =
-        LogStrategy::Always(vec![format!("Forked subagent {}", display_label(&label))]);
+    let log_command = vec![format!("Forked subagent {}", display_label(&label))];
 
     let manager = ctx.manager.clone();
     let session = ctx.session.clone();
@@ -799,8 +768,10 @@ async fn handle_fork(ctx: &InvocationContext) -> Result<ToolOutput, FunctionCall
                 "prompt": prompt_clone,
             });
 
-            let response =
-                build_subagent_response(&metadata, Some(json!(model_clone)), Some(parent_payload));
+            let response = build_subagent_response(
+                &metadata,
+                [("model", json!(model)), ("payload", parent_payload)],
+            );
 
             Ok(ToolOutput::Function {
                 content: response.to_string(),
@@ -846,10 +817,10 @@ async fn handle_send_message(ctx: &InvocationContext) -> Result<ToolOutput, Func
 
         let root_session_id = ctx.root_session_id();
         let caller_id = ctx.caller_id;
-        let log_command = LogStrategy::Always(vec![format!(
+        let log_command = vec![format!(
             "Sent message to root from subagent {}",
             display_label(&label)
-        )]);
+        )];
 
         let manager = ctx.manager.clone();
 
@@ -883,8 +854,7 @@ async fn handle_send_message(ctx: &InvocationContext) -> Result<ToolOutput, Func
     } else {
         let session_id = ctx.agent_session(agent_id)?;
         let display_label = display_label_or_metadata(&label, ctx.registry_by_agent.get(&agent_id));
-        let log_command =
-            LogStrategy::Always(vec![format!("Sent message to subagent {display_label}")]);
+        let log_command = vec![format!("Sent message to subagent {display_label}")];
 
         let manager = ctx.manager.clone();
 
@@ -907,7 +877,8 @@ async fn handle_send_message(ctx: &InvocationContext) -> Result<ToolOutput, Func
                     .await
                     .map_err(|err| map_manager_error(err, Some(agent_id)))?;
 
-                let response = build_subagent_response(&metadata, None, None);
+                let response =
+                    build_subagent_response(&metadata, std::iter::empty::<(&'static str, Value)>());
 
                 Ok(ToolOutput::Function {
                     content: response.to_string(),
@@ -1019,17 +990,13 @@ async fn handle_list(ctx: &InvocationContext) -> Result<ToolOutput, FunctionCall
 
     let payload = json!({ "sessions": entries });
 
-    run_with_logging(
-        ctx,
-        LogStrategy::Always(vec!["Listed subagents".to_string()]),
-        || async move {
-            Ok(ToolOutput::Function {
-                content: payload.to_string(),
-                content_items: None,
-                success: Some(true),
-            })
-        },
-    )
+    run_with_logging(ctx, vec!["Listed subagents".to_string()], || async move {
+        Ok(ToolOutput::Function {
+            content: payload.to_string(),
+            content_items: None,
+            success: Some(true),
+        })
+    })
     .await
 }
 
@@ -1061,7 +1028,7 @@ async fn handle_await(ctx: &InvocationContext) -> Result<ToolOutput, FunctionCal
 
     run_with_logging(
         ctx,
-        LogStrategy::Always(vec![format!("Awaited subagent {display_label}")]),
+        vec![format!("Awaited subagent {display_label}")],
         move || {
             let manager = manager.clone();
             async move {
@@ -1152,39 +1119,35 @@ async fn handle_prune(ctx: &InvocationContext) -> Result<ToolOutput, FunctionCal
         serde_json::from_str::<serde_json::Value>(&ctx.arguments).unwrap_or_default();
     let manager = ctx.manager.clone();
 
-    run_with_logging(
-        ctx,
-        LogStrategy::Always(vec!["Pruned subagents".to_string()]),
-        move || {
-            let manager = manager.clone();
-            async move {
-                let report = manager
-                    .prune(request)
-                    .await
-                    .map_err(|err| map_manager_error(err, None))?;
+    run_with_logging(ctx, vec!["Pruned subagents".to_string()], move || {
+        let manager = manager.clone();
+        async move {
+            let report = manager
+                .prune(request)
+                .await
+                .map_err(|err| map_manager_error(err, None))?;
 
-                let response = json!({
-                    "request": request_echo,
-                    "pruned": report.pruned,
-                    "skipped_active": report.skipped_active,
-                    "unknown": report.unknown,
-                    "errors": report.errors,
-                    "counts": {
-                        "pruned": report.pruned.len(),
-                        "skipped_active": report.skipped_active.len(),
-                        "unknown": report.unknown.len(),
-                        "errors": report.errors.len(),
-                    }
-                });
+            let response = json!({
+                "request": request_echo,
+                "pruned": report.pruned,
+                "skipped_active": report.skipped_active,
+                "unknown": report.unknown,
+                "errors": report.errors,
+                "counts": {
+                    "pruned": report.pruned.len(),
+                    "skipped_active": report.skipped_active.len(),
+                    "unknown": report.unknown.len(),
+                    "errors": report.errors.len(),
+                }
+            });
 
-                Ok(ToolOutput::Function {
-                    content: response.to_string(),
-                    content_items: None,
-                    success: Some(report.errors.is_empty()),
-                })
-            }
-        },
-    )
+            Ok(ToolOutput::Function {
+                content: response.to_string(),
+                content_items: None,
+                success: Some(report.errors.is_empty()),
+            })
+        }
+    })
     .await
 }
 
@@ -1204,7 +1167,7 @@ async fn handle_logs(ctx: &InvocationContext) -> Result<ToolOutput, FunctionCall
 
     run_with_logging(
         ctx,
-        LogStrategy::Always(vec![format!("Fetched subagent logs {display_label}")]),
+        vec![format!("Fetched subagent logs {display_label}")],
         move || {
             let manager = manager.clone();
             async move {
@@ -1237,7 +1200,7 @@ async fn handle_cancel(ctx: &InvocationContext) -> Result<ToolOutput, FunctionCa
 
     run_with_logging(
         ctx,
-        LogStrategy::Always(vec![format!("Canceled subagent {display_label}")]),
+        vec![format!("Canceled subagent {display_label}")],
         move || {
             let manager = manager.clone();
             async move {
@@ -1337,8 +1300,7 @@ impl ToolHandler for SubagentToolHandler {
 
 fn build_subagent_response(
     metadata: &SubagentMetadata,
-    model_value: Option<Value>,
-    payload: Option<Value>,
+    extras: impl IntoIterator<Item = (&'static str, Value)>,
 ) -> Value {
     let mut map = Map::new();
     map.insert("session_id".to_string(), json!(metadata.session_id));
@@ -1349,11 +1311,8 @@ fn build_subagent_response(
     );
     map.insert("origin".to_string(), json!(metadata.origin));
     map.insert("status".to_string(), json!(metadata.status));
-    if let Some(model) = model_value {
-        map.insert("model".to_string(), model);
-    }
-    if let Some(payload_value) = payload {
-        map.insert("payload".to_string(), payload_value);
+    for (key, value) in extras {
+        map.insert(key.to_string(), value);
     }
     map.insert("label".to_string(), json!(metadata.label));
     map.insert("summary".to_string(), json!(metadata.summary));
