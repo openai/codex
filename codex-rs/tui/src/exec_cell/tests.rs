@@ -154,3 +154,51 @@ fn snapshot_cancel() {
     );
     assert_snapshot!(render(&cell), @r###"• Canceled subagent core-review"###);
 }
+
+#[test]
+fn snapshot_list_subagents() {
+    let cell = make_cell("Listed subagents", SubagentCell::List { count: Some(7) }, 0);
+    assert_snapshot!(render(&cell), @r###"
+• Listed subagents
+  └ listed 7 subagents
+"###);
+}
+
+#[test]
+fn snapshot_list_subagents_without_count() {
+    let cell = make_cell("Listed subagents", SubagentCell::List { count: None }, 0);
+    assert_snapshot!(render(&cell), @r###"• Listed subagents"###);
+}
+
+#[test]
+fn snapshot_watchdog_summary() {
+    let cell = make_cell(
+        "Watchdog replaced interval",
+        SubagentCell::Watchdog {
+            action: Some("Replaced".into()),
+            interval_s: Some(30),
+            message: Some("Heartbeat guard".into()),
+        },
+        0,
+    );
+    assert_snapshot!(render(&cell), @r###"
+• Watchdog Replaced
+  └ action=Replaced
+    interval=30s
+    "Heartbeat guard"
+"###);
+}
+
+#[test]
+fn snapshot_watchdog_missing_fields() {
+    let cell = make_cell(
+        "Watchdog replaced interval",
+        SubagentCell::Watchdog {
+            action: None,
+            interval_s: None,
+            message: None,
+        },
+        0,
+    );
+    assert_snapshot!(render(&cell), @r###"• Watchdog"###);
+}

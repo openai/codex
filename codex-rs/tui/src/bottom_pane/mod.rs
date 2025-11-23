@@ -348,12 +348,15 @@ impl BottomPane {
 
     pub(crate) fn ensure_status_indicator(&mut self) {
         if self.status.is_none() {
-            self.status = Some(StatusIndicatorWidget::new(
+            let mut status = StatusIndicatorWidget::new(
                 self.app_event_tx.clone(),
                 self.frame_requester.clone(),
                 self.animations_enabled,
-            ));
+            );
+            status.set_subagent_count(self.subagent_count);
+            self.status = Some(status);
             self.request_redraw();
+            return;
         }
         if let Some(status) = self.status.as_mut() {
             status.set_subagent_count(self.subagent_count);
@@ -544,8 +547,8 @@ impl BottomPane {
                 flex.push(0, RenderableItem::Owned("".into()));
             }
             let mut flex2 = FlexRenderable::new();
-            flex2.push(1, RenderableItem::Owned(flex.into()));
-            flex2.push(0, RenderableItem::Borrowed(&self.composer));
+            flex2.push(0, RenderableItem::Owned(flex.into()));
+            flex2.push(1, RenderableItem::Borrowed(&self.composer));
             RenderableItem::Owned(Box::new(flex2))
         }
     }
@@ -692,6 +695,16 @@ mod tests {
         snapshot_buffer(&buf)
     }
 
+    fn render_subagent_summaries_widget(entries: Vec<SubagentDisplayEntry>, width: u16) -> String {
+        let mut widget = SubagentSummariesWidget::default();
+        widget.update(entries);
+        let height = widget.desired_height(width).max(1);
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+        snapshot_buffer(&buf)
+    }
+
     fn exec_request() -> ApprovalRequest {
         ApprovalRequest::Exec {
             id: "1".to_string(),
@@ -798,6 +811,53 @@ mod tests {
     }
 
     #[test]
+    fn subagent_summaries_widget_multi_state_snapshot() {
+        let entries = vec![
+            SubagentDisplayEntry {
+                kind: SubagentDisplayEntryKind::Summary,
+                label: "4 subagents".into(),
+                detail: Some("1 queued • 1 running • 1 ready • 1 idle • ".into()),
+                status: None,
+            },
+            SubagentDisplayEntry {
+                kind: SubagentDisplayEntryKind::Item,
+                label: "[#7] Catalog sync".into(),
+                detail: Some("2 pending msgs".into()),
+                status: Some(SubagentLifecycleStatus::Queued),
+            },
+            SubagentDisplayEntry {
+                kind: SubagentDisplayEntryKind::Item,
+                label: "[#3] Dependency fetch".into(),
+                detail: Some("Working on lockfiles".into()),
+                status: Some(SubagentLifecycleStatus::Running),
+            },
+            SubagentDisplayEntry {
+                kind: SubagentDisplayEntryKind::Item,
+                label: "[#2] Lint guard".into(),
+                detail: Some("Ready for review".into()),
+                status: Some(SubagentLifecycleStatus::Ready),
+            },
+            SubagentDisplayEntry {
+                kind: SubagentDisplayEntryKind::Item,
+                label: "[#4] Metrics idle".into(),
+                detail: Some("Waiting on data".into()),
+                status: Some(SubagentLifecycleStatus::Idle),
+            },
+            SubagentDisplayEntry {
+                kind: SubagentDisplayEntryKind::Item,
+                label: "[#5] Watchdog canceled".into(),
+                detail: Some("Task canceled".into()),
+                status: Some(SubagentLifecycleStatus::Canceled),
+            },
+        ];
+
+        assert_snapshot!(
+            "subagent_summaries_widget_multi_state_snapshot",
+            render_subagent_summaries_widget(entries, 60)
+        );
+    }
+
+    #[test]
     fn subagent_count_persists_across_status_hide() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -821,6 +881,64 @@ mod tests {
         assert!(
             snapshot.contains("3 subagents"),
             "subagent count should survive hide/show of status indicator"
+        );
+    }
+
+    #[test]
+    fn ensure_status_indicator_creates_widget_when_missing() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+        });
+
+        assert!(
+            !pane.status_indicator_visible(),
+            "status indicator should start hidden"
+        );
+
+        pane.set_subagent_counts(3);
+        pane.ensure_status_indicator();
+        assert!(pane.status_indicator_visible());
+
+        let area = Rect::new(0, 0, 60, 2);
+        let snapshot = render_snapshot(&pane, area);
+        assert!(snapshot.contains("3 subagents"));
+    }
+
+    #[test]
+    fn set_subagent_counts_updates_visible_status() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+        });
+
+        pane.set_task_running(true);
+        pane.set_subagent_counts(2);
+
+        let area = Rect::new(0, 0, 60, 3);
+        let snapshot = render_snapshot(&pane, area);
+        assert!(snapshot.contains("2 subagents"));
+
+        pane.set_subagent_counts(1);
+        let snapshot = render_snapshot(&pane, area);
+        assert!(snapshot.contains("1 subagent"));
+        assert!(
+            !snapshot.contains("2 subagents"),
+            "updated status should replace the previous count"
         );
     }
 

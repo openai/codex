@@ -33,6 +33,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::RateLimitWindow;
+use codex_core::protocol::RawResponseItemEvent;
 use codex_core::protocol::ReviewCodeLocation;
 use codex_core::protocol::ReviewFinding;
 use codex_core::protocol::ReviewLineRange;
@@ -57,6 +58,8 @@ use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 use codex_protocol::ConversationId;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
@@ -67,6 +70,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
@@ -1733,6 +1737,39 @@ fn view_image_tool_call_adds_history_cell() {
     assert_eq!(cells.len(), 1, "expected a single history cell");
     let combined = lines_to_single_string(&cells[0]);
     assert_snapshot!("local_image_attachment_history_snapshot", combined);
+}
+
+#[test]
+fn subagent_summary_history_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    let payload = json!({
+        "injected": true,
+        "messages": [
+            { "prompt": "subagent summary: 3 active processes" }
+        ]
+    });
+    let event = RawResponseItemEvent {
+        item: ResponseItem::FunctionCallOutput {
+            call_id: "call-subagent-summary".into(),
+            output: FunctionCallOutputPayload {
+                content: payload.to_string(),
+                ..Default::default()
+            },
+        },
+    };
+    chat.handle_codex_event(Event {
+        id: "raw-subagent-summary".into(),
+        msg: EventMsg::RawResponseItem(event),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected a single history cell for the injected subagent summary"
+    );
+    let combined = lines_to_single_string(&cells[0]);
+    assert_snapshot!("subagent_summary_history_snapshot", combined);
 }
 
 // Snapshot test: interrupting a running exec finalizes the active cell with a red ✗

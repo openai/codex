@@ -1,0 +1,11 @@
+---
+source: tui/src/bottom_pane/mod.rs
+assertion_line: 854
+expression: "render_subagent_summaries_widget(entries, 60)"
+---
+  • 4 subagents — 1 queued • 1 running • 1 ready • 1 idle • 
+  • [#7] Catalog sync queued — 2 pending msgs               
+  • [#3] Dependency fetch running — Working on lockfiles    
+  • [#2] Lint guard ready — Ready for review                
+  • [#4] Metrics idle idle — Waiting on data                
+  • [#5] Watchdog canceled canceled — Task canceled

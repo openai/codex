@@ -20,8 +20,7 @@ expression: term.backend().vt100().screen().contents()
   ↳ Hello, world! 14
   ↳ Hello, world! 15
   ↳ Hello, world! 16
-
-
-› Ask Codex to do anything
-
-  100% context left · ? for shortcuts
+  ↳ Hello, world! 17
+  ↳ Hello, world! 18
+  ↳ Hello, world! 19
+  ↳ Hello, world! 20
