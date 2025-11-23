@@ -33,13 +33,20 @@ use codex_core::protocol::SessionSource;
 use codex_protocol::approvals::ElicitationAction;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::user_input::UserInput;
+use codex_tui::SecurityReviewMode;
+use codex_tui::SecurityReviewRequest;
+use codex_tui::prepare_security_review_output_root;
+use codex_tui::run_security_review;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use serde_json::Value;
+use shlex::split;
 use std::io::IsTerminal;
 use std::io::Read;
+use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use supports_color::Stream;
 use tracing::debug;
 use tracing::error;
@@ -322,6 +329,54 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         true,
         config.cli_auth_credentials_store_mode,
     );
+    if let Some(review_args) = parse_security_review_command(&prompt, &default_cwd)? {
+        let output_root = prepare_security_review_output_root(&default_cwd)?;
+        let request = SecurityReviewRequest {
+            repo_path: default_cwd.clone(),
+            include_paths: review_args.include_paths,
+            scope_display_paths: review_args.scope_display_paths,
+            output_root: output_root.clone(),
+            mode: review_args.mode,
+            include_spec_in_bug_analysis: true,
+            triage_model: config.review_model.clone(),
+            model: config.model.clone(),
+            provider: config.model_provider.clone(),
+            auth: auth_manager.auth(),
+            config: config.clone(),
+            auth_manager: auth_manager.clone(),
+            progress_sender: None,
+            log_sink: None,
+            progress_callback: Some(Arc::new(|line| {
+                eprintln!("{line}");
+            })),
+            skip_auto_scope_confirmation: true,
+            auto_scope_prompt: review_args.auto_scope_prompt,
+        };
+
+        match run_security_review(request).await {
+            Ok(result) => {
+                for line in &result.logs {
+                    eprintln!("{line}");
+                }
+                eprintln!(
+                    "Security review succeeded. Bugs: {}, Snapshot: {}, Report: {}, HTML: {}, Output root: {}",
+                    result.bugs_path.display(),
+                    result.snapshot_path.display(),
+                    display_optional_path(&result.report_path),
+                    display_optional_path(&result.report_html_path),
+                    output_root.display()
+                );
+                return Ok(());
+            }
+            Err(error) => {
+                for line in error.logs {
+                    eprintln!("{line}");
+                }
+                eprintln!("Security review failed: {}", error.message);
+                return Err(anyhow::anyhow!(error.message));
+            }
+        }
+    }
     let conversation_manager = ConversationManager::new(auth_manager.clone(), SessionSource::Exec);
 
     // Handle resume subcommand by resolving a rollout path and using explicit resume API.
@@ -446,6 +501,126 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     }
 
     Ok(())
+}
+
+struct SecurityReviewCliArgs {
+    mode: SecurityReviewMode,
+    include_paths: Vec<PathBuf>,
+    scope_display_paths: Vec<String>,
+    auto_scope_prompt: Option<String>,
+}
+
+fn parse_security_review_command(
+    prompt: &str,
+    repo_root: &Path,
+) -> anyhow::Result<Option<SecurityReviewCliArgs>> {
+    let trimmed = prompt.trim();
+    if !trimmed.starts_with("/secreview") {
+        return Ok(None);
+    }
+
+    let tokens =
+        split(trimmed).ok_or_else(|| anyhow::anyhow!("Failed to parse /secreview arguments."))?;
+    if tokens.is_empty() {
+        return Ok(None);
+    }
+    let mut mode = SecurityReviewMode::Full;
+    let mut raw_paths: Vec<String> = Vec::new();
+    let mut auto_scope_prompt: Option<String> = None;
+
+    let mut iter = tokens.into_iter();
+    // Skip the command token.
+    let _ = iter.next();
+
+    while let Some(token) = iter.next() {
+        match token.as_str() {
+            "full" => mode = SecurityReviewMode::Full,
+            "bugs" => mode = SecurityReviewMode::Bugs,
+            "--mode" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--mode requires a value"))?;
+                match value.as_str() {
+                    "full" => mode = SecurityReviewMode::Full,
+                    "bugs" => mode = SecurityReviewMode::Bugs,
+                    other => {
+                        return Err(anyhow::anyhow!(
+                            "Unknown mode `{other}` for /secreview (expected full or bugs)."
+                        ));
+                    }
+                }
+            }
+            "--path" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--path requires a value"))?;
+                raw_paths.push(value);
+            }
+            "--prompt" | "--scope" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--prompt requires a value"))?;
+                let trimmed_prompt = value.trim();
+                if !trimmed_prompt.is_empty() {
+                    auto_scope_prompt = Some(trimmed_prompt.to_string());
+                }
+            }
+            other if other.starts_with("--") => {
+                return Err(anyhow::anyhow!(
+                    "Unknown flag `{other}` for /secreview command."
+                ));
+            }
+            other => raw_paths.push(other.to_string()),
+        }
+    }
+
+    let mut include_paths: Vec<PathBuf> = Vec::new();
+    let mut scope_display_paths: Vec<String> = Vec::new();
+    for raw in raw_paths {
+        let (path, display) = resolve_security_review_path(&raw, repo_root)?;
+        if include_paths.iter().any(|existing| existing == &path) {
+            continue;
+        }
+        include_paths.push(path);
+        scope_display_paths.push(display);
+    }
+
+    Ok(Some(SecurityReviewCliArgs {
+        mode,
+        include_paths,
+        scope_display_paths,
+        auto_scope_prompt,
+    }))
+}
+
+fn resolve_security_review_path(raw: &str, repo_root: &Path) -> anyhow::Result<(PathBuf, String)> {
+    let candidate = if Path::new(raw).is_absolute() {
+        PathBuf::from(raw)
+    } else {
+        repo_root.join(raw)
+    };
+
+    if !candidate.exists() {
+        return Err(anyhow::anyhow!(format!(
+            "Path `{raw}` was not found within {}.",
+            repo_root.display()
+        )));
+    }
+
+    let canonical = candidate.canonicalize().unwrap_or(candidate);
+    let display = canonical
+        .strip_prefix(repo_root)
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|_| canonical.display().to_string());
+
+    Ok((canonical, display))
+}
+
+fn display_optional_path(path: &Option<PathBuf>) -> String {
+    match path {
+        Some(value) => value.display().to_string(),
+        None => "-".to_string(),
+    }
 }
 
 async fn resolve_resume_path(

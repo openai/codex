@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::env;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -8,7 +7,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-use chrono::Utc;
 use codex_app_server_protocol::AuthMode;
 use codex_backend_client::Client as BackendClient;
 use codex_core::config::Config;
@@ -65,7 +63,6 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
-use dirs::home_dir;
 use rand::Rng;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -115,6 +112,7 @@ use crate::render::renderable::RenderableExt;
 use crate::render::renderable::RenderableItem;
 use crate::security_review::SECURITY_REVIEW_FOLLOW_UP_MARKER;
 use crate::security_review::SecurityReviewFailure;
+use crate::security_review::SecurityReviewLogSink;
 use crate::security_review::SecurityReviewMetadata;
 use crate::security_review::SecurityReviewMode;
 use crate::security_review::SecurityReviewRequest;
@@ -144,6 +142,7 @@ use codex_common::model_presets::builtin_model_presets;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ConversationManager;
+use codex_core::config::log_dir;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
@@ -440,46 +439,6 @@ struct SecurityReviewResumeCandidate {
     metadata: SecurityReviewMetadata,
 }
 
-fn sanitize_repo_slug(repo_path: &Path) -> String {
-    let raw = repo_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(std::string::ToString::to_string)
-        .unwrap_or_else(|| repo_path.to_string_lossy().into_owned());
-    let mut slug = String::with_capacity(raw.len());
-    for ch in raw.chars() {
-        let mapped = if ch.is_ascii_alphanumeric() {
-            ch.to_ascii_lowercase()
-        } else if matches!(ch, '-' | '_') {
-            '-'
-        } else {
-            '-'
-        };
-        if mapped == '-' {
-            if !slug.ends_with('-') {
-                slug.push(mapped);
-            }
-        } else {
-            slug.push(mapped);
-        }
-    }
-    let trimmed = slug.trim_matches('-').to_string();
-    if trimmed.is_empty() {
-        "repository".to_string()
-    } else {
-        trimmed
-    }
-}
-
-fn security_review_storage_root(repo_path: &Path) -> PathBuf {
-    let base = env::var_os("CODEXHOME")
-        .map(PathBuf::from)
-        .or_else(|| home_dir().map(|dir| dir.join(".codex")))
-        .unwrap_or_else(|| repo_path.to_path_buf());
-    base.join("appsec_review")
-        .join(sanitize_repo_slug(repo_path))
-}
-
 fn latest_security_review_candidate(storage_root: &Path) -> Option<SecurityReviewResumeCandidate> {
     let entries = fs::read_dir(storage_root).ok()?;
     let mut candidates: Vec<(String, SecurityReviewResumeCandidate)> = Vec::new();
@@ -562,7 +521,6 @@ struct SecurityReviewArtifactsState {
     api_overview_path: Option<PathBuf>,
     classification_json_path: Option<PathBuf>,
     classification_table_path: Option<PathBuf>,
-    spec_verification_path: Option<PathBuf>,
 }
 
 impl ChatWidget {
@@ -700,10 +658,6 @@ impl ChatWidget {
         let classification_table_path = classification_table_candidate
             .exists()
             .then_some(classification_table_candidate);
-        let spec_verification_candidate = output_root.join("specs").join("verification.md");
-        let spec_verification_path = spec_verification_candidate
-            .exists()
-            .then_some(spec_verification_candidate);
 
         self.clear_security_review_follow_up();
         self.security_review_task = None;
@@ -718,7 +672,6 @@ impl ChatWidget {
             api_overview_path,
             classification_json_path,
             classification_table_path,
-            spec_verification_path,
         });
 
         let follow_up_path = match metadata.mode {
@@ -2056,9 +2009,9 @@ impl ChatWidget {
                             api_overview_path: artifacts.api_overview_path,
                             classification_json_path: artifacts.classification_json_path,
                             classification_table_path: artifacts.classification_table_path,
-                            spec_verification_path: artifacts.spec_verification_path,
                             logs: vec![],
                             token_usage: codex_core::protocol::TokenUsage::default(),
+                            estimated_cost_usd: None,
                         },
                     });
                 });
@@ -3628,7 +3581,7 @@ impl ChatWidget {
             return;
         }
 
-        let storage_root = security_review_storage_root(&repo_path);
+        let storage_root = crate::security_review_storage_root(&repo_path);
         if !force_new && let Some(candidate) = latest_security_review_candidate(&storage_root) {
             self.prompt_security_review_resume(mode, include_paths, scope_prompt, candidate);
             return;
@@ -3679,29 +3632,24 @@ impl ChatWidget {
         let context_paths = display_paths.clone();
         // Do not echo the auto-scope prompt into the scope list; keep the header concise.
 
-        if let Err(err) = fs::create_dir_all(&storage_root) {
-            self.add_error_message(format!(
-                "Failed to prepare security review output directory {}: {err}",
-                storage_root.display()
-            ));
-            return;
-        }
+        let output_root = match crate::prepare_security_review_output_root(&repo_path) {
+            Ok(path) => path,
+            Err(err) => {
+                self.add_error_message(format!(
+                    "Failed to prepare security review output directory {}: {err}",
+                    storage_root.display()
+                ));
+                return;
+            }
+        };
 
-        let timestamp = Utc::now().format("%Y%m%d-%H%M%S").to_string();
-        let mut output_root = storage_root.join(&timestamp);
-        let mut collision_counter: usize = 1;
-        while output_root.exists() {
-            let candidate = format!("{timestamp}-{collision_counter:02}");
-            output_root = storage_root.join(candidate);
-            collision_counter = collision_counter.saturating_add(1);
-        }
-        if let Err(err) = fs::create_dir_all(&output_root) {
-            self.add_error_message(format!(
-                "Failed to create security review output directory {}: {err}",
-                output_root.display()
-            ));
-            return;
-        }
+        let log_sink = log_dir(&self.config).ok().and_then(|dir| {
+            if fs::create_dir_all(&dir).is_err() {
+                return None;
+            }
+            let path = dir.join("sec-review.log");
+            SecurityReviewLogSink::new(&path).map(Arc::new).ok()
+        });
 
         self.bottom_pane.set_task_running(true);
         self.bottom_pane
@@ -3757,7 +3705,11 @@ impl ChatWidget {
             model: self.config.model.clone(),
             provider: self.config.model_provider.clone(),
             auth: self.auth_manager.auth(),
+            config: self.config.clone(),
+            auth_manager: self.auth_manager.clone(),
             progress_sender: Some(self.app_event_tx.clone()),
+            log_sink,
+            progress_callback: None,
             skip_auto_scope_confirmation,
             auto_scope_prompt: annotated_scope_prompt,
         };
@@ -4132,6 +4084,10 @@ impl ChatWidget {
             );
             summary_lines.push(vec!["  • ".into(), usage_line.into()].into());
         }
+        if let Some(cost) = result.estimated_cost_usd {
+            summary_lines
+                .push(vec!["  • ".into(), format!("Estimated cost: ${cost:.4}").into()].into());
+        }
         summary_lines.push(
             vec![
                 "  • ".into(),
@@ -4197,19 +4153,6 @@ impl ChatWidget {
                 .into(),
             );
         }
-        if let Some(verification_path) = result
-            .spec_verification_path
-            .as_ref()
-            .map(|path| display_path_for(path, &repo_path))
-        {
-            summary_lines.push(
-                vec![
-                    "  • ".into(),
-                    format!("Spec verification: {}", verification_path.as_str()).into(),
-                ]
-                .into(),
-            );
-        }
         if let Some(last_log) = last_log {
             summary_lines
                 .push(vec!["  • ".into(), format!("Last update: {last_log}").dim()].into());
@@ -4244,7 +4187,6 @@ impl ChatWidget {
             api_overview_path: result.api_overview_path.clone(),
             classification_json_path: result.classification_json_path.clone(),
             classification_table_path: result.classification_table_path.clone(),
-            spec_verification_path: result.spec_verification_path.clone(),
         });
 
         let follow_up_path = match mode {

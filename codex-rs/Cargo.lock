@@ -1189,6 +1189,7 @@ dependencies = [
  "codex-common",
  "codex-core",
  "codex-protocol",
+ "codex-tui",
  "core_test_support",
  "libc",
  "mcp-types",

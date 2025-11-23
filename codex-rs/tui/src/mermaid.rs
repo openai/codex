@@ -589,8 +589,26 @@ fn normalize_header_titles(source: &str) -> String {
         .into_owned()
 }
 
+fn ensure_mermaid_header(source: &str) -> String {
+    let mut lines = source.lines();
+    let first_non_empty = lines.find(|line| !line.trim().is_empty());
+    if let Some(first) = first_non_empty {
+        if HEADER_RE.is_match(first.trim()) {
+            return source.to_string();
+        }
+    }
+    if source.trim().is_empty() {
+        return "flowchart TD".to_string();
+    }
+    let mut out = String::new();
+    out.push_str("flowchart TD\n");
+    out.push_str(source.trim_start_matches('\n'));
+    out
+}
+
 fn lint_and_wrap(code: &str) -> String {
-    let normalized = normalize_header_titles(code);
+    let ensured = ensure_mermaid_header(code);
+    let normalized = normalize_header_titles(&ensured);
     let mut linter = MermaidLinter::new(&normalized);
     let issues = linter.lint();
     linter.apply_fixes(issues);

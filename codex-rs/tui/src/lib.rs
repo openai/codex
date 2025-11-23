@@ -98,6 +98,19 @@ pub use cli::Cli;
 pub use markdown_render::render_markdown_text;
 pub use public_widgets::composer_input::ComposerAction;
 pub use public_widgets::composer_input::ComposerInput;
+pub use security_review::BugValidationState;
+pub use security_review::BugValidationStatus;
+pub use security_review::SecurityReviewBug;
+pub use security_review::SecurityReviewFailure;
+pub use security_review::SecurityReviewLogSink;
+pub use security_review::SecurityReviewMetadata;
+pub use security_review::SecurityReviewMode;
+pub use security_review::SecurityReviewRequest;
+pub use security_review::SecurityReviewResult;
+pub use security_review::prepare_security_review_output_root;
+pub use security_review::run_security_review;
+pub use security_review::sanitize_repo_slug;
+pub use security_review::security_review_storage_root;
 use std::io::Write as _;
 
 // (tests access modules directly within the crate)
