@@ -50,6 +50,9 @@ When a `Turn` completes, the `response_id` from the `Model`'s final `response.co
 
 Each `Session` still runs at most one `Task` at a time. For parallel work, you can either run multiple Codex sessions or use subagents (via the `subagent_*` tools) to orchestrate multiple child sessions within a single daemon.
 
+Subagent sessions run in parallel with the root thread, so you scale overlapping conversations without launching new daemons.
+Enable the `subagent_tools` feature flag (see `../../docs/config.md#feature-flags`) and tune how many child sessions stay active with `max_active_subagents` (`../../docs/config.md#max_active_subagents`).
+
 ## Interface
 
 - `Codex`

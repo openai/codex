@@ -383,6 +383,8 @@ When `false`, cross-agent messages arrive only via `subagent_await` tool results
 
 ### subagent_root_inbox_autosubmit
 
+> **Default:** `true`.
+
 Controls whether the root agent automatically drains its inbox (and any child
 messages destined for agent `0`) at safe stopping points between model turns,
 and whether it may auto-start a follow-up turn based on those messages. When
