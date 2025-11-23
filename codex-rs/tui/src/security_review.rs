@@ -3597,11 +3597,12 @@ async fn generate_specs(
             logs: Vec::new(),
         })?;
 
-    let (mut spec_entries, mut generation_logs) = match generate_specs_single_worker(
+    let (mut spec_entries, mut generation_logs) = match generate_specs_parallel_workers(
         client,
         provider,
         auth,
         repo_root,
+        &normalized,
         &display_locations,
         &raw_dir,
         progress_sender.clone(),
@@ -5224,7 +5225,6 @@ async fn generate_specs_single_worker(
     ))
 }
 
-#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 async fn generate_specs_parallel_workers(
     client: &CodexHttpClient,
