@@ -724,21 +724,7 @@ async fn handle_spawn(ctx: &InvocationContext) -> Result<ToolOutput, FunctionCal
                 .await
                 .map_err(|err| map_manager_error(err, None))?;
 
-            let response = json!({
-                "session_id": metadata.session_id,
-                "agent_id": metadata.agent_id,
-                "parent_agent_id": metadata.parent_agent_id,
-                "origin": metadata.origin,
-                "status": metadata.status,
-                "model": model,
-                "label": metadata.label,
-                "summary": metadata.summary,
-                "parent_session_id": metadata.parent_session_id,
-                "started_at_ms": metadata.created_at_ms,
-                "initial_message_count": metadata.initial_message_count,
-                "pending_messages": metadata.pending_messages,
-                "pending_interrupts": metadata.pending_interrupts,
-            });
+            let response = build_subagent_response(&metadata, Some(json!(model)), None);
 
             Ok(ToolOutput::Function {
                 content: response.to_string(),
@@ -813,22 +799,8 @@ async fn handle_fork(ctx: &InvocationContext) -> Result<ToolOutput, FunctionCall
                 "prompt": prompt_clone,
             });
 
-            let response = json!({
-                "session_id": metadata.session_id,
-                "agent_id": metadata.agent_id,
-                "parent_agent_id": metadata.parent_agent_id,
-                "origin": metadata.origin,
-                "status": metadata.status,
-                "model": model_clone,
-                "label": metadata.label,
-                "summary": metadata.summary,
-                "parent_session_id": metadata.parent_session_id,
-                "started_at_ms": metadata.created_at_ms,
-                "initial_message_count": metadata.initial_message_count,
-                "pending_messages": metadata.pending_messages,
-                "pending_interrupts": metadata.pending_interrupts,
-                "payload": parent_payload,
-            });
+            let response =
+                build_subagent_response(&metadata, Some(json!(model_clone)), Some(parent_payload));
 
             Ok(ToolOutput::Function {
                 content: response.to_string(),
@@ -935,20 +907,7 @@ async fn handle_send_message(ctx: &InvocationContext) -> Result<ToolOutput, Func
                     .await
                     .map_err(|err| map_manager_error(err, Some(agent_id)))?;
 
-                let response = json!({
-                    "session_id": metadata.session_id,
-                    "agent_id": metadata.agent_id,
-                    "parent_agent_id": metadata.parent_agent_id,
-                    "origin": metadata.origin,
-                    "status": metadata.status,
-                    "label": metadata.label,
-                    "summary": metadata.summary,
-                    "parent_session_id": metadata.parent_session_id,
-                    "started_at_ms": metadata.created_at_ms,
-                    "initial_message_count": metadata.initial_message_count,
-                    "pending_messages": metadata.pending_messages,
-                    "pending_interrupts": metadata.pending_interrupts,
-                });
+                let response = build_subagent_response(&metadata, None, None);
 
                 Ok(ToolOutput::Function {
                     content: response.to_string(),
@@ -1374,6 +1333,48 @@ impl ToolHandler for SubagentToolHandler {
             )),
         }
     }
+}
+
+fn build_subagent_response(
+    metadata: &SubagentMetadata,
+    model_value: Option<Value>,
+    payload: Option<Value>,
+) -> Value {
+    let mut map = Map::new();
+    map.insert("session_id".to_string(), json!(metadata.session_id));
+    map.insert("agent_id".to_string(), json!(metadata.agent_id));
+    map.insert(
+        "parent_agent_id".to_string(),
+        json!(metadata.parent_agent_id),
+    );
+    map.insert("origin".to_string(), json!(metadata.origin));
+    map.insert("status".to_string(), json!(metadata.status));
+    if let Some(model) = model_value {
+        map.insert("model".to_string(), model);
+    }
+    if let Some(payload_value) = payload {
+        map.insert("payload".to_string(), payload_value);
+    }
+    map.insert("label".to_string(), json!(metadata.label));
+    map.insert("summary".to_string(), json!(metadata.summary));
+    map.insert(
+        "parent_session_id".to_string(),
+        json!(metadata.parent_session_id),
+    );
+    map.insert("started_at_ms".to_string(), json!(metadata.created_at_ms));
+    map.insert(
+        "initial_message_count".to_string(),
+        json!(metadata.initial_message_count),
+    );
+    map.insert(
+        "pending_messages".to_string(),
+        json!(metadata.pending_messages),
+    );
+    map.insert(
+        "pending_interrupts".to_string(),
+        json!(metadata.pending_interrupts),
+    );
+    Value::Object(map)
 }
 
 /// Build the JSON payload returned by `subagent_logs` for a given log snapshot.

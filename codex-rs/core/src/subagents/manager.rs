@@ -1537,16 +1537,7 @@ impl SubagentManager {
             let completions = self.completions.read().await;
             completions.get(session_id).cloned()
         } {
-            let metadata = self
-                .registry
-                .get(session_id)
-                .await
-                .ok_or(SubagentManagerError::NotFound)?;
-            return Ok(AwaitInboxResult {
-                metadata,
-                completion: Some(completion),
-                messages: Vec::new(),
-            });
+            return self.completion_result(session_id, completion).await;
         }
 
         let runtime = {
@@ -1560,16 +1551,7 @@ impl SubagentManager {
                     let completions = self.completions.read().await;
                     completions.get(session_id).cloned()
                 } {
-                    let metadata = self
-                        .registry
-                        .get(session_id)
-                        .await
-                        .ok_or(SubagentManagerError::NotFound)?;
-                    return Ok(AwaitInboxResult {
-                        metadata,
-                        completion: Some(completion),
-                        messages: Vec::new(),
-                    });
+                    return self.completion_result(session_id, completion).await;
                 }
                 return Err(SubagentManagerError::NotFound);
             }
@@ -1585,13 +1567,8 @@ impl SubagentManager {
         let mut completion_opt = current_completion(&receiver);
         if completion_opt.is_some() || !messages.is_empty() {
             if let Some(ref completion) = completion_opt {
-                let desired_status = status_from_completion(completion);
-                self.update_status_and_emit(session_id, desired_status)
-                    .await;
-                {
-                    let mut completions = self.completions.write().await;
-                    completions.insert(*session_id, completion.clone());
-                }
+                self.ensure_completion_recorded(session_id, completion)
+                    .await?;
             }
             let metadata = self
                 .registry
@@ -1611,58 +1588,35 @@ impl SubagentManager {
         loop {
             let remaining = Self::remaining_timeout(start, timeout_total, session_id, agent_id)?;
 
-            if let Some(rem) = remaining {
-                tokio::select! {
-                    _ = tokio::time::sleep(rem) => {
-                        let timeout_ms = timeout_total
-                            .map(|d| d.as_millis().try_into().unwrap_or(u64::MAX))
-                            .unwrap_or(0);
-                        return Err(SubagentManagerError::AwaitTimedOut {
-                            session_id: *session_id,
-                            agent_id,
-                            timeout_ms,
-                        });
-                    }
-                    _ = inbox_notify.notified() => {
-                        let new_messages = runtime.drain_inbox().await;
-                        if !new_messages.is_empty() {
-                            messages.extend(new_messages);
-                            break;
-                        }
-                        // Spurious wakeup or inbox drained by another waiter;
-                        // loop and wait again.
-                    }
-                    changed = receiver.changed() => {
-                        match changed {
-                            Ok(()) => {
-                                if let Some(completion) = current_completion(&receiver) {
-                                    completion_opt = Some(completion);
-                                    break;
-                                }
-                            }
-                            Err(_) => break,
-                        }
-                    }
+            tokio::select! {
+                _ = Self::timeout_future(remaining) => {
+                    let timeout_ms = timeout_total
+                        .map(|d| d.as_millis().try_into().unwrap_or(u64::MAX))
+                        .unwrap_or(0);
+                    return Err(SubagentManagerError::AwaitTimedOut {
+                        session_id: *session_id,
+                        agent_id,
+                        timeout_ms,
+                    });
                 }
-            } else {
-                tokio::select! {
-                    _ = inbox_notify.notified() => {
-                        let new_messages = runtime.drain_inbox().await;
-                        if !new_messages.is_empty() {
-                            messages.extend(new_messages);
-                            break;
-                        }
+                _ = inbox_notify.notified() => {
+                    let new_messages = runtime.drain_inbox().await;
+                    if !new_messages.is_empty() {
+                        messages.extend(new_messages);
+                        break;
                     }
-                    changed = receiver.changed() => {
-                        match changed {
-                            Ok(()) => {
-                                if let Some(completion) = current_completion(&receiver) {
-                                    completion_opt = Some(completion);
-                                    break;
-                                }
+                    // Spurious wakeup or inbox drained by another waiter;
+                    // loop and wait again.
+                }
+                changed = receiver.changed() => {
+                    match changed {
+                        Ok(()) => {
+                            if let Some(completion) = current_completion(&receiver) {
+                                completion_opt = Some(completion);
+                                break;
                             }
-                            Err(_) => break,
                         }
+                        Err(_) => break,
                     }
                 }
             }
@@ -1670,13 +1624,8 @@ impl SubagentManager {
 
         // Finalize completion state if we observed a terminal result.
         if let Some(ref completion) = completion_opt {
-            let desired_status = status_from_completion(completion);
-            self.update_status_and_emit(session_id, desired_status)
-                .await;
-            {
-                let mut completions = self.completions.write().await;
-                completions.insert(*session_id, completion.clone());
-            }
+            self.ensure_completion_recorded(session_id, completion)
+                .await?;
         }
 
         let metadata = self
@@ -1935,17 +1884,10 @@ impl SubagentManager {
                                     // messages into the parent and child
                                     // histories so callers do not need to
                                     // issue an explicit await.
-                                    if let Ok(result) = self
-                                        .await_inbox_and_completion(
-                                            &session_id,
-                                            Some(Duration::from_millis(0)),
-                                        )
+                                    if let Some(result) = self
+                                        .drain_terminal_inbox(&session_id)
                                         .await
                                     {
-                                        self
-                                            .deliver_inbox_to_threads_at_yield(&result)
-                                            .await;
-
                                         if let Some(completion) = result.completion.clone() {
                                             let status = status_from_completion(&completion);
                                             self
@@ -1969,17 +1911,9 @@ impl SubagentManager {
                                             reason: ev.reason.clone(),
                                         })
                                         .await;
-                                    if let Ok(result) = self
-                                        .await_inbox_and_completion(
-                                            &session_id,
-                                            Some(Duration::from_millis(0)),
-                                        )
-                                        .await
-                                    {
-                                        self
-                                            .deliver_inbox_to_threads_at_yield(&result)
-                                            .await;
-                                    }
+                                    let _ = self
+                                        .drain_terminal_inbox(&session_id)
+                                        .await;
                                     self
                                         .finalize_terminal(
                                             &session_id,
@@ -1998,17 +1932,9 @@ impl SubagentManager {
                                             message: ev.message.clone(),
                                         })
                                         .await;
-                                    if let Ok(result) = self
-                                        .await_inbox_and_completion(
-                                            &session_id,
-                                            Some(Duration::from_millis(0)),
-                                        )
-                                        .await
-                                    {
-                                        self
-                                            .deliver_inbox_to_threads_at_yield(&result)
-                                            .await;
-                                    }
+                                    let _ = self
+                                        .drain_terminal_inbox(&session_id)
+                                        .await;
                                     self
                                         .finalize_terminal(
                                             &session_id,
@@ -2027,17 +1953,9 @@ impl SubagentManager {
                                             message: ev.message.clone(),
                                         })
                                         .await;
-                                    if let Ok(result) = self
-                                        .await_inbox_and_completion(
-                                            &session_id,
-                                            Some(Duration::from_millis(0)),
-                                        )
-                                        .await
-                                    {
-                                        self
-                                            .deliver_inbox_to_threads_at_yield(&result)
-                                            .await;
-                                    }
+                                    let _ = self
+                                        .drain_terminal_inbox(&session_id)
+                                        .await;
                                     self
                                         .finalize_terminal(
                                             &session_id,
@@ -2071,6 +1989,18 @@ impl SubagentManager {
             }
         }
         // Runtime is kept alive after completion so messages can resume; no auto-removal here.
+    }
+
+    async fn drain_terminal_inbox(&self, session_id: &ConversationId) -> Option<AwaitInboxResult> {
+        if let Ok(result) = self
+            .await_inbox_and_completion(session_id, Some(Duration::from_millis(0)))
+            .await
+        {
+            self.deliver_inbox_to_threads_at_yield(&result).await;
+            Some(result)
+        } else {
+            None
+        }
     }
 
     async fn run_pending_ops(&self, session_id: ConversationId, runtime: Arc<ManagedSubagent>) {
