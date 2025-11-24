@@ -88,6 +88,12 @@ pub struct ModelProviderInfo {
     /// the connection as lost.
     pub stream_idle_timeout_ms: Option<u64>,
 
+    /// Connection pool idle timeout (in seconds). How long to keep idle connections alive
+    /// in the connection pool before closing them. Set to 0 to disable connection pooling entirely.
+    /// If not specified, uses reqwest's default behavior (90 seconds).
+    /// Useful for providers that aggressively close connections server-side.
+    pub pool_idle_timeout_secs: Option<u64>,
+
     /// Does this provider require an OpenAI API Key or ChatGPT login token? If true,
     /// user is presented with login screen on first run, and login preference and token/key
     /// are stored in auth.json. If false (which is the default), login screen is skipped,
@@ -299,6 +305,13 @@ impl ModelProviderInfo {
         self.stream_idle_timeout_ms
             .map(Duration::from_millis)
             .unwrap_or(Duration::from_millis(DEFAULT_STREAM_IDLE_TIMEOUT_MS))
+    }
+
+    /// Effective connection pool idle timeout. Returns None if not configured (use reqwest default),
+    /// Some(Duration::ZERO) if pooling should be disabled, or Some(duration) for a specific timeout.
+    pub fn pool_idle_timeout(&self) -> Option<Duration> {
+        self.pool_idle_timeout_secs
+            .map(|secs| Duration::from_secs(secs))
     }
 }
 

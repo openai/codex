@@ -257,7 +257,16 @@ fn sanitize_user_agent(candidate: String, fallback: &str) -> String {
 }
 
 /// Create an HTTP client with default `originator` and `User-Agent` headers set.
+/// Optionally configure connection pool idle timeout.
 pub fn create_client() -> CodexHttpClient {
+    create_client_with_pool_config(None)
+}
+
+/// Create an HTTP client with specified connection pool idle timeout.
+/// - `None`: use reqwest default (90 seconds)
+/// - `Some(Duration::ZERO)`: disable connection pooling entirely
+/// - `Some(duration)`: use specified idle timeout
+pub fn create_client_with_pool_config(pool_idle_timeout: Option<std::time::Duration>) -> CodexHttpClient {
     use reqwest::header::HeaderMap;
 
     let mut headers = HeaderMap::new();
@@ -268,8 +277,20 @@ pub fn create_client() -> CodexHttpClient {
         // Set UA via dedicated helper to avoid header validation pitfalls
         .user_agent(ua)
         .default_headers(headers);
+
     if is_sandboxed() {
         builder = builder.no_proxy();
+    }
+
+    // Apply connection pool configuration if specified
+    if let Some(timeout) = pool_idle_timeout {
+        if timeout.is_zero() {
+            // Disable connection pooling by setting max idle connections to 0
+            builder = builder.pool_max_idle_per_host(0);
+        } else {
+            // Use specified idle timeout
+            builder = builder.pool_idle_timeout(timeout);
+        }
     }
 
     let inner = builder.build().unwrap_or_else(|_| reqwest::Client::new());

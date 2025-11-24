@@ -44,6 +44,7 @@ use crate::client_common::create_text_param_for_request;
 use crate::config::Config;
 use crate::default_client::CodexHttpClient;
 use crate::default_client::create_client;
+use crate::default_client::create_client_with_pool_config;
 use crate::error::CodexErr;
 use crate::error::ConnectionFailedError;
 use crate::error::ResponseStreamFailed;
@@ -117,7 +118,8 @@ impl ModelClient {
         conversation_id: ConversationId,
         session_source: SessionSource,
     ) -> Self {
-        let client = create_client();
+        // Create HTTP client with provider-specific pool idle timeout configuration
+        let client = create_client_with_pool_config(provider.pool_idle_timeout());
 
         Self {
             config,
