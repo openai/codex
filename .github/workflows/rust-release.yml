@@ -371,8 +371,19 @@ jobs:
           path: |
             codex-rs/dist/${{ matrix.target }}/*
 
+  shell-tool-mcp:
+    name: shell-tool-mcp
+    needs: tag-check
+    uses: ./.github/workflows/shell-tool-mcp.yml
+    with:
+      release-tag: ${{ github.ref_name }}
+      publish: true
+    secrets: inherit
+
   release:
-    needs: build
+    needs:
+      - build
+      - shell-tool-mcp
     name: release
     runs-on: ubuntu-latest
     permissions:
@@ -394,6 +405,14 @@ jobs:
 
       - name: List
         run: ls -R dist/
+
+      # This is a temporary fix: we should modify shell-tool-mcp.yml so these
+      # files do not end up in dist/ in the first place.
+      - name: Delete entries from dist/ that should not go in the release
+        run: |
+          rm -rf dist/shell-tool-mcp*
+
+          ls -R dist/
 
       - name: Define release name
         id: release_name

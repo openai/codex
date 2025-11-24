@@ -992,7 +992,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         id: Some("web-search-id".into()),
         status: Some("completed".into()),
         action: WebSearchAction::Search {
-            query: "weather".into(),
+            query: Some("weather".into()),
         },
     });
     prompt.input.push(ResponseItem::FunctionCall {

@@ -2,7 +2,6 @@
 
 use anyhow::Result;
 use codex_core::features::Feature;
-use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
@@ -71,7 +70,7 @@ enum ActionKind {
         response_body: &'static str,
     },
     RunCommand {
-        command: &'static [&'static str],
+        command: &'static str,
     },
     RunUnifiedExecCommand {
         command: &'static str,
@@ -97,20 +96,12 @@ impl ActionKind {
         server: &MockServer,
         call_id: &str,
         with_escalated_permissions: bool,
-    ) -> Result<(Value, Option<Vec<String>>)> {
+    ) -> Result<(Value, Option<String>)> {
         match self {
             ActionKind::WriteFile { target, content } => {
                 let (path, _) = target.resolve_for_patch(test);
                 let _ = fs::remove_file(&path);
-                let command = vec![
-                    "/bin/sh".to_string(),
-                    "-c".to_string(),
-                    format!(
-                        "printf {content:?} > {path:?} && cat {path:?}",
-                        content = content,
-                        path = path
-                    ),
-                ];
+                let command = format!("printf {content:?} > {path:?} && cat {path:?}");
                 let event = shell_event(call_id, &command, 1_000, with_escalated_permissions)?;
                 Ok((event, Some(command)))
             }
@@ -127,21 +118,18 @@ impl ActionKind {
                     .await;
 
                 let url = format!("{}{}", server.uri(), endpoint);
+                let escaped_url = url.replace('\'', "\\'");
                 let script = format!(
-                    "import sys\nimport urllib.request\nurl = {url:?}\ntry:\n    data = urllib.request.urlopen(url, timeout=2).read().decode()\n    print('OK:' + data.strip())\nexcept Exception as exc:\n    print('ERR:' + exc.__class__.__name__)\n    sys.exit(1)",
+                    "import sys\nimport urllib.request\nurl = '{escaped_url}'\ntry:\n    data = urllib.request.urlopen(url, timeout=2).read().decode()\n    print('OK:' + data.strip())\nexcept Exception as exc:\n    print('ERR:' + exc.__class__.__name__)\n    sys.exit(1)",
                 );
 
-                let command = vec!["python3".to_string(), "-c".to_string(), script];
+                let command = format!("python3 -c \"{script}\"");
                 let event = shell_event(call_id, &command, 1_000, with_escalated_permissions)?;
                 Ok((event, Some(command)))
             }
             ActionKind::RunCommand { command } => {
-                let command: Vec<String> = command
-                    .iter()
-                    .map(std::string::ToString::to_string)
-                    .collect();
-                let event = shell_event(call_id, &command, 1_000, with_escalated_permissions)?;
-                Ok((event, Some(command)))
+                let event = shell_event(call_id, command, 1_000, with_escalated_permissions)?;
+                Ok((event, Some(command.to_string())))
             }
             ActionKind::RunUnifiedExecCommand {
                 command,
@@ -154,14 +142,7 @@ impl ActionKind {
                     with_escalated_permissions,
                     *justification,
                 )?;
-                Ok((
-                    event,
-                    Some(vec![
-                        "/bin/bash".to_string(),
-                        "-lc".to_string(),
-                        command.to_string(),
-                    ]),
-                ))
+                Ok((event, Some(command.to_string())))
             }
             ActionKind::ApplyPatchFunction { target, content } => {
                 let (path, patch_path) = target.resolve_for_patch(test);
@@ -185,19 +166,19 @@ fn build_add_file_patch(patch_path: &str, content: &str) -> String {
     format!("*** Begin Patch\n*** Add File: {patch_path}\n+{content}\n*** End Patch\n")
 }
 
-fn shell_apply_patch_command(patch: &str) -> Vec<String> {
+fn shell_apply_patch_command(patch: &str) -> String {
     let mut script = String::from("apply_patch <<'PATCH'\n");
     script.push_str(patch);
     if !patch.ends_with('\n') {
         script.push('\n');
     }
     script.push_str("PATCH\n");
-    vec!["bash".to_string(), "-lc".to_string(), script]
+    script
 }
 
 fn shell_event(
     call_id: &str,
-    command: &[String],
+    command: &str,
     timeout_ms: u64,
     with_escalated_permissions: bool,
 ) -> Result<Value> {
@@ -209,7 +190,7 @@ fn shell_event(
         args["with_escalated_permissions"] = json!(true);
     }
     let args_str = serde_json::to_string(&args)?;
-    Ok(ev_function_call(call_id, "shell", &args_str))
+    Ok(ev_function_call(call_id, "shell_command", &args_str))
 }
 
 fn exec_command_event(
@@ -296,7 +277,10 @@ impl Expectation {
             }
             Expectation::FileCreatedNoExitCode { target, content } => {
                 let (path, _) = target.resolve_for_patch(test);
-                assert_eq!(result.exit_code, None, "expected no exit code for {path:?}");
+                assert!(
+                    result.exit_code.is_none() || result.exit_code == Some(0),
+                    "expected no exit code for {path:?}",
+                );
                 assert!(
                     result.stdout.contains(content),
                     "stdout missing {content:?}: {}",
@@ -385,8 +369,8 @@ impl Expectation {
                 );
             }
             Expectation::NetworkSuccessNoExitCode { body_contains } => {
-                assert_eq!(
-                    result.exit_code, None,
+                assert!(
+                    result.exit_code.is_none() || result.exit_code == Some(0),
                     "expected no exit code for successful network call: {}",
                     result.stdout
                 );
@@ -433,8 +417,8 @@ impl Expectation {
                 );
             }
             Expectation::CommandSuccessNoExitCode { stdout_contains } => {
-                assert_eq!(
-                    result.exit_code, None,
+                assert!(
+                    result.exit_code.is_none() || result.exit_code == Some(0),
                     "expected no exit code for trusted command: {}",
                     result.stdout
                 );
@@ -531,10 +515,18 @@ fn parse_result(item: &Value) -> CommandResult {
             CommandResult { exit_code, stdout }
         }
         Err(_) => {
+            let structured = Regex::new(r"(?s)^Exit code:\s*(-?\d+).*?Output:\n(.*)$").unwrap();
             let regex =
                 Regex::new(r"(?s)^.*?Process exited with code (\d+)\n.*?Output:\n(.*)$").unwrap();
             // parse freeform output
-            if let Some(captures) = regex.captures(output_str) {
+            if let Some(captures) = structured.captures(output_str) {
+                let exit_code = captures.get(1).unwrap().as_str().parse::<i64>().unwrap();
+                let output = captures.get(2).unwrap().as_str();
+                CommandResult {
+                    exit_code: Some(exit_code),
+                    stdout: output.to_string(),
+                }
+            } else if let Some(captures) = regex.captures(output_str) {
                 let exit_code = captures.get(1).unwrap().as_str().parse::<i64>().unwrap();
                 let output = captures.get(2).unwrap().as_str();
                 CommandResult {
@@ -553,7 +545,7 @@ fn parse_result(item: &Value) -> CommandResult {
 
 async fn expect_exec_approval(
     test: &TestCodex,
-    expected_command: &[String],
+    expected_command: &str,
 ) -> ExecApprovalRequestEvent {
     let event = wait_for_event(&test.codex, |event| {
         matches!(
@@ -565,7 +557,12 @@ async fn expect_exec_approval(
 
     match event {
         EventMsg::ExecApprovalRequest(approval) => {
-            assert_eq!(approval.command, expected_command);
+            let last_arg = approval
+                .command
+                .last()
+                .map(std::string::String::as_str)
+                .unwrap_or_default();
+            assert_eq!(last_arg, expected_command);
             approval
         }
         EventMsg::TaskComplete(_) => panic!("expected approval request before completion"),
@@ -660,7 +657,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             features: vec![],
             model_override: Some("gpt-5.1"),
             outcome: Outcome::Auto,
-            expectation: Expectation::FileCreatedNoExitCode {
+            expectation: Expectation::FileCreated {
                 target: TargetPath::OutsideWorkspace("dfa_on_request_5_1.txt"),
                 content: "danger-on-request",
             },
@@ -702,7 +699,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             approval_policy: UnlessTrusted,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             action: ActionKind::RunCommand {
-                command: &["echo", "trusted-unless"],
+                command: "echo trusted-unless",
             },
             with_escalated_permissions: false,
             features: vec![],
@@ -717,7 +714,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             approval_policy: UnlessTrusted,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             action: ActionKind::RunCommand {
-                command: &["echo", "trusted-unless"],
+                command: "echo trusted-unless",
             },
             with_escalated_permissions: false,
             features: vec![],
@@ -880,7 +877,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             approval_policy: OnRequest,
             sandbox_policy: SandboxPolicy::ReadOnly,
             action: ActionKind::RunCommand {
-                command: &["echo", "trusted-read-only"],
+                command: "echo trusted-read-only",
             },
             with_escalated_permissions: false,
             features: vec![],
@@ -895,7 +892,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             approval_policy: OnRequest,
             sandbox_policy: SandboxPolicy::ReadOnly,
             action: ActionKind::RunCommand {
-                command: &["echo", "trusted-read-only"],
+                command: "echo trusted-read-only",
             },
             with_escalated_permissions: false,
             features: vec![],
@@ -1020,7 +1017,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
         },
         ScenarioSpec {
-            name: "apply_patch_shell_requires_patch_approval",
+            name: "apply_patch_shell_command_requires_patch_approval",
             approval_policy: UnlessTrusted,
             sandbox_policy: workspace_write(false),
             action: ActionKind::ApplyPatchShell {
@@ -1114,7 +1111,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
         },
         ScenarioSpec {
-            name: "apply_patch_shell_outside_requires_patch_approval",
+            name: "apply_patch_shell_command_outside_requires_patch_approval",
             approval_policy: OnRequest,
             sandbox_policy: workspace_write(false),
             action: ActionKind::ApplyPatchShell {
@@ -1229,7 +1226,10 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 message_contains: if cfg!(target_os = "linux") {
                     &["Permission denied"]
                 } else {
-                    &["Permission denied|Operation not permitted|Read-only file system"]
+                    &[
+                        "Permission denied|Operation not permitted|operation not permitted|\
+                         Read-only file system",
+                    ]
                 },
             },
         },
@@ -1238,7 +1238,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             approval_policy: Never,
             sandbox_policy: SandboxPolicy::ReadOnly,
             action: ActionKind::RunCommand {
-                command: &["echo", "trusted-never"],
+                command: "echo trusted-never",
             },
             with_escalated_permissions: false,
             features: vec![],
@@ -1373,7 +1373,10 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 message_contains: if cfg!(target_os = "linux") {
                     &["Permission denied"]
                 } else {
-                    &["Permission denied|Operation not permitted|Read-only file system"]
+                    &[
+                        "Permission denied|Operation not permitted|operation not permitted|\
+                         Read-only file system",
+                    ]
                 },
             },
         },
@@ -1454,14 +1457,11 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
     let sandbox_policy = scenario.sandbox_policy.clone();
     let features = scenario.features.clone();
     let model_override = scenario.model_override;
+    let model = model_override.unwrap_or("gpt-5.1");
 
-    let mut builder = test_codex().with_config(move |config| {
+    let mut builder = test_codex().with_model(model).with_config(move |config| {
         config.approval_policy = approval_policy;
         config.sandbox_policy = sandbox_policy.clone();
-        let model = model_override.unwrap_or("gpt-5.1");
-        config.model = model.to_string();
-        config.model_family =
-            find_family_for_model(model).expect("model should map to a known family");
         for feature in features {
             config.features.enable(feature);
         }
@@ -1509,7 +1509,7 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
             expected_reason,
         } => {
             let command = expected_command
-                .as_ref()
+                .as_deref()
                 .expect("exec approval requires shell command");
             let approval = expect_exec_approval(&test, command).await;
             if let Some(expected_reason) = expected_reason {

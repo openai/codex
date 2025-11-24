@@ -30,7 +30,6 @@ model_provider = "openai"
 # Optional manual model metadata. When unset, Codex auto-detects from model.
 # Uncomment to force values.
 # model_context_window = 128000       # tokens; default: auto for model
-# model_max_output_tokens = 8192      # tokens; default: auto for model
 # model_auto_compact_token_limit = 0  # disable/override auto; default: model family specific
 # tool_output_token_limit = 10000  # tokens stored per tool output; default: 10000 for gpt-5.1-codex-max
 
@@ -140,13 +139,16 @@ file_opener = "vscode"
 # Examples: false | ["agent-turn-complete", "approval-requested"]
 notifications = false
 
-# Suppress internal reasoning events from output (default: false)
+# Enables welcome/status/spinner animations. Default: true
+animations = true
+
+# Suppress internal reasoning events from output. Default: false
 hide_agent_reasoning = false
 
-# Show raw reasoning content when available (default: false)
+# Show raw reasoning content when available. Default: false
 show_raw_agent_reasoning = false
 
-# Disable burst-paste detection in the TUI (default: false)
+# Disable burst-paste detection in the TUI. Default: false
 disable_paste_burst = false
 
 # Track Windows onboarding acknowledgement (Windows only). Default: false

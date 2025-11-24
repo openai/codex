@@ -56,109 +56,115 @@
 //!   o<-----x
 //!
 use std::path::Path;
+use std::path::PathBuf;
 
 use clap::Parser;
-use clap::Subcommand;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::{self};
 
-use crate::posix::escalate_protocol::EscalateAction;
-use crate::posix::escalate_server::EscalateServer;
+use crate::posix::mcp_escalation_policy::ExecPolicyOutcome;
 
 mod escalate_client;
 mod escalate_protocol;
 mod escalate_server;
+mod escalation_policy;
 mod mcp;
+mod mcp_escalation_policy;
 mod socket;
+mod stopwatch;
 
-fn dummy_exec_policy(file: &Path, argv: &[String], _workdir: &Path) -> EscalateAction {
-    // TODO: execpolicy
-    if file == Path::new("/opt/homebrew/bin/gh")
-        && let [_, arg1, arg2, ..] = argv
-        && arg1 == "issue"
-        && arg2 == "list"
-    {
-        return EscalateAction::Escalate;
-    }
-    EscalateAction::Run
-}
+/// Default value of --execve option relative to the current executable.
+/// Note this must match the name of the binary as specified in Cargo.toml.
+const CODEX_EXECVE_WRAPPER_EXE_NAME: &str = "codex-execve-wrapper";
 
 #[derive(Parser)]
-#[command(version)]
-pub struct Cli {
-    #[command(subcommand)]
-    subcommand: Option<Commands>,
-}
+struct McpServerCli {
+    /// Executable to delegate execve(2) calls to in Bash.
+    #[arg(long = "execve")]
+    execve_wrapper: Option<PathBuf>,
 
-#[derive(Subcommand)]
-enum Commands {
-    Escalate(EscalateArgs),
-    ShellExec(ShellExecArgs),
-}
-
-/// Invoked from within the sandbox to (potentially) escalate permissions.
-#[derive(Parser, Debug)]
-struct EscalateArgs {
-    file: String,
-
-    #[arg(trailing_var_arg = true)]
-    argv: Vec<String>,
-}
-
-impl EscalateArgs {
-    /// This is the escalate client. It talks to the escalate server to determine whether to exec()
-    /// the command directly or to proxy to the escalate server.
-    async fn run(self) -> anyhow::Result<i32> {
-        let EscalateArgs { file, argv } = self;
-        escalate_client::run(file, argv).await
-    }
-}
-
-/// Debugging command to emulate an MCP "shell" tool call.
-#[derive(Parser, Debug)]
-struct ShellExecArgs {
-    command: String,
+    /// Path to Bash that has been patched to support execve() wrapping.
+    #[arg(long = "bash")]
+    bash_path: Option<PathBuf>,
 }
 
 #[tokio::main]
-pub async fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
+pub async fn main_mcp_server() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .with_writer(std::io::stderr)
         .with_ansi(false)
         .init();
 
-    match cli.subcommand {
-        Some(Commands::Escalate(args)) => {
-            std::process::exit(args.run().await?);
-        }
-        Some(Commands::ShellExec(args)) => {
-            let bash_path = mcp::get_bash_path()?;
-            let escalate_server = EscalateServer::new(bash_path, dummy_exec_policy);
-            let result = escalate_server
-                .exec(
-                    args.command.clone(),
-                    std::env::vars().collect(),
-                    std::env::current_dir()?,
-                    None,
-                )
-                .await?;
-            println!("{result:?}");
-            std::process::exit(result.exit_code);
-        }
+    let cli = McpServerCli::parse();
+    let execve_wrapper = match cli.execve_wrapper {
+        Some(path) => path,
         None => {
-            let bash_path = mcp::get_bash_path()?;
+            let cwd = std::env::current_exe()?;
+            cwd.parent()
+                .map(|p| p.join(CODEX_EXECVE_WRAPPER_EXE_NAME))
+                .ok_or_else(|| {
+                    anyhow::anyhow!("failed to determine execve wrapper path from current exe")
+                })?
+        }
+    };
+    let bash_path = match cli.bash_path {
+        Some(path) => path,
+        None => mcp::get_bash_path()?,
+    };
 
-            tracing::info!("Starting MCP server");
-            let service = mcp::serve(bash_path, dummy_exec_policy)
-                .await
-                .inspect_err(|e| {
-                    tracing::error!("serving error: {:?}", e);
-                })?;
+    tracing::info!("Starting MCP server");
+    let service = mcp::serve(bash_path, execve_wrapper, dummy_exec_policy)
+        .await
+        .inspect_err(|e| {
+            tracing::error!("serving error: {:?}", e);
+        })?;
 
-            service.waiting().await?;
-            Ok(())
+    service.waiting().await?;
+    Ok(())
+}
+
+#[derive(Parser)]
+pub struct ExecveWrapperCli {
+    file: String,
+
+    #[arg(trailing_var_arg = true)]
+    argv: Vec<String>,
+}
+
+#[tokio::main]
+pub async fn main_execve_wrapper() -> anyhow::Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
+        .with_ansi(false)
+        .init();
+
+    let ExecveWrapperCli { file, argv } = ExecveWrapperCli::parse();
+    let exit_code = escalate_client::run(file, argv).await?;
+    std::process::exit(exit_code);
+}
+
+// TODO: replace with execpolicy
+
+fn dummy_exec_policy(file: &Path, argv: &[String], _workdir: &Path) -> ExecPolicyOutcome {
+    if file.ends_with("rm") {
+        ExecPolicyOutcome::Forbidden
+    } else if file.ends_with("git") {
+        ExecPolicyOutcome::Prompt {
+            run_with_escalated_permissions: false,
+        }
+    } else if file == Path::new("/opt/homebrew/bin/gh")
+        && let [_, arg1, arg2, ..] = argv
+        && arg1 == "issue"
+        && arg2 == "list"
+    {
+        ExecPolicyOutcome::Allow {
+            run_with_escalated_permissions: true,
+        }
+    } else {
+        ExecPolicyOutcome::Allow {
+            run_with_escalated_permissions: false,
         }
     }
 }
