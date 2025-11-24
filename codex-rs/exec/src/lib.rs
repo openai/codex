@@ -30,6 +30,8 @@ use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
+use codex_core::review_prompts::review_request_from_target;
+use codex_core::review_prompts::ReviewTarget;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::user_input::UserInput;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
@@ -393,45 +395,55 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     let _initial_prompt_task_id = match &command {
         Some(ExecCommand::Review(args)) => {
-            use codex_core::protocol::ReviewRequest;
-
-            // Compute prompt + hint.
-            let (review_prompt, mut review_hint) = if let Some(custom) = args.prompt.as_deref() {
+            let append_to_original_thread = true;
+            let target = if let Some(custom) = args.prompt.as_deref() {
                 let text = if custom == "-" {
                     read_prompt_from_stdin_or_exit(true)
                 } else {
                     custom.to_string()
                 };
-                codex_core::review_prompts::review_custom_prompt(&text)
+                ReviewTarget::Custom {
+                    instructions: text,
+                }
             } else if let Some(branch) = &args.branch {
-                codex_core::review_prompts::review_branch_prompt(branch)
+                ReviewTarget::BaseBranch {
+                    branch: branch.clone(),
+                }
             } else if let Some(sha) = &args.commit {
                 // Try to enrich with subject; fall back gracefully.
-                let mut subject: Option<String> = None;
+                let mut title: Option<String> = None;
                 let entries = codex_core::git_info::recent_commits(&default_cwd, 200).await;
-                for e in entries {
-                    if e.sha.starts_with(sha) {
-                        if !e.subject.trim().is_empty() {
-                            subject = Some(e.subject);
+                for entry in entries {
+                    if entry.sha.starts_with(sha) {
+                        if !entry.subject.trim().is_empty() {
+                            title = Some(entry.subject);
                         }
                         break;
                     }
                 }
-                codex_core::review_prompts::review_commit_prompt(sha, subject.as_deref())
+                ReviewTarget::Commit {
+                    sha: sha.clone(),
+                    title,
+                }
             } else {
                 // Default to reviewing uncommitted changes if nothing else specified.
-                codex_core::review_prompts::review_uncommitted_prompt()
+                ReviewTarget::UncommittedChanges
             };
+
+            let mut built_request =
+                review_request_from_target(target, append_to_original_thread).map_err(|err| {
+                    anyhow::anyhow!("invalid review target: {err}")
+                })?;
 
             if let Some(hint_override) = &args.hint {
-                review_hint = hint_override.clone();
+                built_request.review_request.user_facing_hint = hint_override.clone();
             }
 
-            let review_request = ReviewRequest {
-                prompt: review_prompt,
-                user_facing_hint: review_hint,
-            };
-            let id = conversation.submit(Op::Review { review_request }).await?;
+            let id = conversation
+                .submit(Op::Review {
+                    review_request: built_request.review_request,
+                })
+                .await?;
             info!("Sent review request with event ID: {id}");
             id
         }

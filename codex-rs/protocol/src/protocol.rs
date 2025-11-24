@@ -1176,6 +1176,8 @@ pub struct GitInfo {
 pub struct ReviewRequest {
     pub prompt: String,
     pub user_facing_hint: String,
+    #[serde(default)]
+    pub append_to_original_thread: bool,
 }
 
 /// Structured review result produced by a child review session.
