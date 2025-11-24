@@ -23,6 +23,7 @@ pub enum SlashCommand {
     Mention,
     Status,
     Mcp,
+    Agents,
     Logout,
     Quit,
     Exit,
@@ -48,6 +49,7 @@ impl SlashCommand {
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::Mcp => "list configured MCP tools",
+            SlashCommand::Agents => "list available AI agents and their descriptions",
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",
             SlashCommand::TestApproval => "test approval request",
@@ -76,9 +78,12 @@ impl SlashCommand {
             | SlashCommand::Status
             | SlashCommand::Mcp
             | SlashCommand::Feedback
+            | SlashCommand::Agents
             | SlashCommand::Quit
             | SlashCommand::Exit => true,
             SlashCommand::Rollout => true,
+
+            #[cfg(debug_assertions)]
             SlashCommand::TestApproval => true,
         }
     }

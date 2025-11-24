@@ -182,6 +182,10 @@ pub enum Op {
     /// Reply is delivered via `EventMsg::McpListToolsResponse`.
     ListMcpTools,
 
+    /// Request the list of available AI agents.
+    /// Reply is delivered via `EventMsg::ListAgentsResponse`.
+    ListAgents,
+
     /// Request the list of available custom prompts.
     ListCustomPrompts,
 
@@ -553,6 +557,18 @@ pub enum EventMsg {
 
     /// List of custom prompts available to the agent.
     ListCustomPromptsResponse(ListCustomPromptsResponseEvent),
+
+    /// List of available AI agents.
+    ListAgentsResponse(ListAgentsResponseEvent),
+
+    /// Agent invocation started.
+    AgentBegin(AgentBeginEvent),
+
+    /// Agent execution progress.
+    AgentProgress(AgentProgressEvent),
+
+    /// Agent completed.
+    AgentEnd(AgentEndEvent),
 
     PlanUpdate(UpdatePlanArgs),
 
@@ -1534,6 +1550,63 @@ impl fmt::Display for McpAuthStatus {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ListCustomPromptsResponseEvent {
     pub custom_prompts: Vec<CustomPrompt>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ListAgentsResponseEvent {
+    pub agents: Vec<AgentInfo>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct AgentInfo {
+    pub name: String,
+    pub description: String,
+    pub is_builtin: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct AgentBeginEvent {
+    pub call_id: String,
+    pub agent_name: String,
+    pub task: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_context: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_item_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct AgentProgressEvent {
+    pub call_id: String,
+    pub agent_name: String,
+    pub step: String,
+    pub progress_type: AgentProgressType,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub enum AgentProgressType {
+    Loop(String),
+    FileChange(PathBuf, FileChange),
+    Output(String),
+    ToolCall(String),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct AgentEndEvent {
+    pub call_id: String,
+    pub agent_name: String,
+    pub summary: String,
+    pub status: AgentStatus,
+    pub duration_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_item_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub enum AgentStatus {
+    Running,
+    Done,
+    Failed,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

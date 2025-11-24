@@ -1,3 +1,4 @@
+mod agent;
 pub mod apply_patch;
 mod grep_files;
 mod list_dir;
@@ -12,6 +13,7 @@ mod view_image;
 
 pub use plan::PLAN_TOOL;
 
+pub use agent::AgentHandler;
 pub use apply_patch::ApplyPatchHandler;
 pub use grep_files::GrepFilesHandler;
 pub use list_dir::ListDirHandler;

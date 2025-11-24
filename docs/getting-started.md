@@ -3,6 +3,7 @@
 Looking for something specific? Jump ahead:
 
 - [Tips & shortcuts](#tips--shortcuts) – hotkeys, resume flow, prompts
+- [Multi-agent quickstart](#multi-agent-quickstart) – @mentions, /agents
 - [Non-interactive runs](./exec.md) – automate with `codex exec`
 - Ready for deeper customization? Head to [`advanced.md`](./advanced.md)
 
@@ -57,8 +58,15 @@ Below are a few bite-size examples you can copy-paste. Replace the text in quote
 | 5   | `codex "Explain what this regex does: ^(?=.*[A-Z]).{8,}$"`                      | Outputs a step-by-step human explanation.                                  |
 | 6   | `codex "Carefully review this repo, and propose 3 high impact well-scoped PRs"` | Suggests impactful PRs in the current codebase.                            |
 | 7   | `codex "Look for vulnerabilities and create a security review report"`          | Finds and explains security bugs.                                          |
+| 8   | `@code-reviewer: audit src/auth`                                                 | Delegates to the `code-reviewer` agent; progress is tracked in the plan.   |
 
 Looking to reuse your own instructions? Create slash commands with [custom prompts](./prompts.md).
+
+### Multi-agent quickstart
+
+- List available agents with `/agents` in the TUI (built-in agents are marked with •, custom ones with ◦).
+- Delegate work using `@agent-name: task`—Codex streams progress and updates the plan item automatically.
+- Configure custom agents in `~/.codex/agents.toml`; see [Multi-Agent System](./subagents.md) for the full schema and examples.
 
 ### Memory with AGENTS.md
 
@@ -71,9 +79,18 @@ For more information on how to use AGENTS.md, see the [official AGENTS.md docume
 
 ### Tips & shortcuts
 
-#### Use `@` for file search
+#### Use `@` for file search and agent invocation
 
-Typing `@` triggers a fuzzy-filename search over the workspace root. Use up/down to select among the results and Tab or Enter to replace the `@` with the selected path. You can use Esc to cancel the search.
+Typing `@` has two powerful uses:
+
+1. **File search**: When followed by a path-like pattern, it triggers a fuzzy-filename search over the workspace root. Use up/down to select among the results and Tab or Enter to replace the `@` with the selected path. You can use Esc to cancel the search.
+
+2. **Agent invocation**: When followed by an agent name and colon, it invokes a specialized AI agent. For example:
+   - `@researcher: find documentation about async Rust`
+   - `@code-reviewer: review the changes in src/`
+   - `@test-writer: create unit tests for utils.js`
+
+   Use `/agents` to see all available agents. Agent tasks are automatically tracked in the plan system.
 
 #### Esc–Esc to edit a previous message
 

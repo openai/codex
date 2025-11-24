@@ -6,6 +6,7 @@ use std::sync::atomic::AtomicU64;
 
 use crate::AuthManager;
 use crate::SandboxState;
+use crate::agent::AgentRegistry;
 use crate::client_common::REVIEW_PROMPT;
 use crate::compact;
 use crate::compact::run_inline_auto_compact_task;
@@ -556,6 +557,10 @@ impl Session {
         // Create the mutable state for the Session.
         let state = SessionState::new(session_configuration.clone());
 
+        let agent_registry = AgentRegistry::new().map_err(|err| {
+            CodexErr::Fatal(format!("failed to initialize agent registry: {err}"))
+        })?;
+
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: CancellationToken::new(),
@@ -567,6 +572,7 @@ impl Session {
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager,
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            agent_registry: Arc::new(agent_registry),
         };
 
         let sess = Arc::new(Session {
@@ -1365,6 +1371,14 @@ impl Session {
         &self.services.notifier
     }
 
+    pub(crate) fn agent_registry(&self) -> &AgentRegistry {
+        &self.services.agent_registry
+    }
+
+    pub(crate) fn conversation_id(&self) -> ConversationId {
+        self.conversation_id
+    }
+
     pub(crate) fn user_shell(&self) -> &shell::Shell {
         &self.services.user_shell
     }
@@ -1432,6 +1446,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::ListMcpTools => {
                 handlers::list_mcp_tools(&sess, &config, sub.id.clone()).await;
             }
+            Op::ListAgents => {
+                handlers::list_agents(&sess, sub.id.clone()).await;
+            }
             Op::ListCustomPrompts => {
                 handlers::list_custom_prompts(&sess, sub.id.clone()).await;
             }
@@ -1489,6 +1506,7 @@ mod handlers {
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::ListAgentsResponseEvent;
     use codex_protocol::protocol::ListCustomPromptsResponseEvent;
     use codex_protocol::protocol::Op;
     use codex_protocol::protocol::ReviewDecision;
@@ -1699,6 +1717,15 @@ mod handlers {
                 resource_templates,
                 auth_statuses,
             }),
+        };
+        sess.send_event_raw(event).await;
+    }
+
+    pub async fn list_agents(sess: &Session, sub_id: String) {
+        let agents = sess.agent_registry().list_agent_details();
+        let event = Event {
+            id: sub_id,
+            msg: EventMsg::ListAgentsResponse(ListAgentsResponseEvent { agents }),
         };
         sess.send_event_raw(event).await;
     }
@@ -2687,6 +2714,7 @@ mod tests {
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager: otel_event_manager.clone(),
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            agent_registry: Arc::new(AgentRegistry::new().expect("agent registry to initialize")),
         };
 
         let turn_context = Session::make_turn_context(
@@ -2765,6 +2793,7 @@ mod tests {
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager: otel_event_manager.clone(),
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            agent_registry: Arc::new(AgentRegistry::new().expect("agent registry to initialize")),
         };
 
         let turn_context = Arc::new(Session::make_turn_context(

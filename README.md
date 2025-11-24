@@ -63,7 +63,7 @@ You can also use Codex with an API key, but this requires [additional setup](./d
 
 ### Model Context Protocol (MCP)
 
-Codex can access MCP servers. To configure them, refer to the [config docs](./docs/config.md#mcp_servers).
+Codex can access MCP servers. See the [config docs](./docs/config.md#mcp_servers) and the [advanced guide](./docs/advanced.md#model-context-protocol-mcp) for setup details; add an `mcp_servers` section to your `~/.codex/config.toml` to enable.
 
 ### Configuration
 
@@ -96,6 +96,10 @@ See the [Execpolicy quickstart](./docs/execpolicy.md) to set up rules that gover
 - [**Advanced**](./docs/advanced.md)
   - [Tracing / verbose logging](./docs/advanced.md#tracing--verbose-logging)
   - [Model Context Protocol (MCP)](./docs/advanced.md#model-context-protocol-mcp)
+- [**Multi-Agent System**](./docs/subagents.md)
+  - [Custom agent configuration](./docs/subagents.md#custom-agent-configuration)
+  - [Agent behavior](./docs/subagents.md#agent-behavior)
+  - [Best practices](./docs/subagents.md#best-practices)
 - [**Zero data retention (ZDR)**](./docs/zdr.md)
 - [**Contributing**](./docs/contributing.md)
 - [**Install & build**](./docs/install.md)

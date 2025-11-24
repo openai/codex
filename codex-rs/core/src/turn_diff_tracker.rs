@@ -219,6 +219,40 @@ impl TurnDiffTracker {
         if s.len() == 40 { Some(s) } else { None }
     }
 
+    /// Merge another TurnDiffTracker into this one.
+    /// This is used to combine changes from parallel tool executions.
+    pub fn merge(&mut self, other: TurnDiffTracker) {
+        // Merge external_to_temp_name mappings
+        for (path, temp_name) in other.external_to_temp_name {
+            // If we already have this path, keep our mapping (first one wins)
+            // Otherwise, add the new mapping
+            self.external_to_temp_name.entry(path).or_insert(temp_name);
+        }
+
+        // Merge baseline_file_info
+        for (temp_name, file_info) in other.baseline_file_info {
+            // If we already have this baseline, keep ours (first baseline wins)
+            // Otherwise, add the new baseline
+            self.baseline_file_info
+                .entry(temp_name)
+                .or_insert(file_info);
+        }
+
+        // Merge temp_name_to_current_path (this tracks renames)
+        for (temp_name, current_path) in other.temp_name_to_current_path {
+            // For renames, the latest mapping should win (last rename wins)
+            self.temp_name_to_current_path
+                .insert(temp_name, current_path);
+        }
+
+        // Merge git_root_cache
+        for root in other.git_root_cache {
+            if !self.git_root_cache.contains(&root) {
+                self.git_root_cache.push(root);
+            }
+        }
+    }
+
     /// Recompute the aggregated unified diff by comparing all of the in-memory snapshots that were
     /// collected before the first time they were touched by apply_patch during this turn with
     /// the current repo state.

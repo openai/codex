@@ -11,7 +11,6 @@ Codex configuration gives you fine-grained control over the model, execution env
 - [Observability and telemetry](#observability-and-telemetry)
 - [Profiles and overrides](#profiles-and-overrides)
 - [Reference table](#config-reference)
-
 Codex supports several mechanisms for setting config values:
 
 - Config-specific command-line flags, such as `--model o3` (highest precedence).
@@ -858,7 +857,75 @@ Note this is **not** a general editor setting (like `$EDITOR`), as it only accep
 
 Currently, `"vscode"` is the default, though Codex does not verify VS Code is installed. As such, `file_opener` may default to `"none"` or something else in the future.
 
-### project_doc_max_bytes
+## Agent Configuration
+
+### Custom Agents File
+
+Create custom specialized agents by adding a configuration file at `~/.codex/agents.toml`:
+
+```toml
+# ~/.codex/agents.toml
+
+[researcher]
+prompt = """
+You are a research specialist. Focus on gathering comprehensive information,
+verifying facts, and providing detailed citations.
+"""
+
+[code-reviewer]
+prompt = """
+You are an expert code reviewer. Identify bugs, suggest improvements,
+and ensure best practices are followed.
+"""
+
+[test-writer]
+prompt_file = "prompts/test-writer.md"  # Load from external file
+```
+
+Each agent inherits tools and permissions from the parent context. Agents can be invoked using:
+
+- `@agent_name: task description` - Natural mention syntax
+- `/agents` command - View all available agents
+- Agent tool - Programmatic invocation
+
+For detailed agent configuration options, see [Multi-Agent System](./subagents.md).
+
+## hide_agent_reasoning
+
+Codex intermittently emits "reasoning" events that show the model's internal "thinking" before it produces a final answer. Some users may find these events distracting, especially in CI logs or minimal terminal output.
+
+Setting `hide_agent_reasoning` to `true` suppresses these events in **both** the TUI as well as the headless `exec` sub-command:
+
+```toml
+hide_agent_reasoning = true   # defaults to false
+```
+
+## show_raw_agent_reasoning
+
+Surfaces the model’s raw chain-of-thought ("raw reasoning content") when available.
+
+Notes:
+
+- Only takes effect if the selected model/provider actually emits raw reasoning content. Many models do not. When unsupported, this option has no visible effect.
+- Raw reasoning may include intermediate thoughts or sensitive context. Enable only if acceptable for your workflow.
+
+Example:
+
+```toml
+show_raw_agent_reasoning = true  # defaults to false
+```
+
+## model_context_window
+
+The size of the context window for the model, in tokens.
+
+In general, Codex knows the context window for the most common OpenAI models, but if you are using a new model with an old version of the Codex CLI, then you can use `model_context_window` to tell Codex what value to use to determine how much context is left during a conversation.
+
+## model_max_output_tokens
+
+This is analogous to `model_context_window`, but for the maximum number of output tokens for the model.
+
+## project_doc_max_bytes
 
 Maximum number of bytes to read from an `AGENTS.md` file to include in the instructions sent with the first turn of a session. Defaults to 32 KiB.
 
@@ -939,6 +1006,7 @@ Valid values:
 | `model`                                          | string                                                            | Model to use (e.g., `gpt-5.1-codex-max`).                                                                                  |
 | `model_provider`                                 | string                                                            | Provider id from `model_providers` (default: `openai`).                                                                    |
 | `model_context_window`                           | number                                                            | Context window tokens.                                                                                                     |
+| `model_max_output_tokens`                        | number                                                            | Max output tokens the model may return.                                                                                    |
 | `tool_output_token_limit`                        | number                                                            | Token budget for stored function/tool outputs in history (default: 2,560 tokens).                                          |
 | `approval_policy`                                | `untrusted` \| `on-failure` \| `on-request` \| `never`            | When to prompt for approval.                                                                                               |
 | `sandbox_mode`                                   | `read-only` \| `workspace-write` \| `danger-full-access`          | OS sandbox policy.                                                                                                         |
@@ -947,6 +1015,7 @@ Valid values:
 | `sandbox_workspace_write.exclude_tmpdir_env_var` | boolean                                                           | Exclude `$TMPDIR` from writable roots (default: false).                                                                    |
 | `sandbox_workspace_write.exclude_slash_tmp`      | boolean                                                           | Exclude `/tmp` from writable roots (default: false).                                                                       |
 | `notify`                                         | array<string>                                                     | External program for notifications.                                                                                        |
+| `disable_response_storage`                       | boolean                                                           | Required for zero-data-retention orgs; skip saving responses.                                                              |
 | `tui.animations`                                 | boolean                                                           | Enable terminal animations (welcome screen, shimmer, spinner). Defaults to true; set to `false` to disable visual motion.  |
 | `instructions`                                   | string                                                            | Currently ignored; use `experimental_instructions_file` or `AGENTS.md`.                                                    |
 | `features.<feature-flag>`                        | boolean                                                           | See [feature flags](#feature-flags) for details                                                                            |
@@ -986,6 +1055,8 @@ Valid values:
 | `model_supports_reasoning_summaries`             | boolean                                                           | Force‑enable reasoning summaries.                                                                                          |
 | `model_reasoning_summary_format`                 | `none` \| `experimental`                                          | Force reasoning summary format.                                                                                            |
 | `chatgpt_base_url`                               | string                                                            | Base URL for ChatGPT auth flow.                                                                                            |
+| `experimental_resume`                            | string (path)                                                     | Resume JSONL path (internal/experimental).                                                                                |
+| `responses_originator_header_internal_override`  | string                                                            | Override `originator` header value (internal/experimental).                                                                |
 | `experimental_instructions_file`                 | string (path)                                                     | Replace built‑in instructions (experimental).                                                                              |
 | `experimental_use_exec_command_tool`             | boolean                                                           | Use experimental exec command tool.                                                                                        |
 | `projects.<path>.trust_level`                    | string                                                            | Mark project/worktree as trusted (only `"trusted"` is recognized).                                                         |

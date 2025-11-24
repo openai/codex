@@ -33,6 +33,7 @@ use tracing_subscriber::filter::Targets;
 use tracing_subscriber::prelude::*;
 
 mod additional_dirs;
+mod agent_mention;
 mod app;
 mod app_backtrack;
 mod app_event;

@@ -126,13 +126,12 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
     let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
     let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
 
-    let TestCodex { codex, config, .. } = test_codex()
+    let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
         })
         .build(&server)
         .await?;
-    let base_instructions = config.model_family.base_instructions.clone();
 
     codex
         .submit(Op::UserInput {
@@ -152,7 +151,10 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    let expected_tools_names = vec![
+    let expected_instructions: &str = include_str!("../../gpt_5_codex_prompt.md");
+    // our internal implementation is responsible for keeping tools in sync
+    // with the OpenAI schema, so we just verify the tool presence here
+    let expected_tools_names: &[&str] = &[
         "shell_command",
         "list_mcp_resources",
         "list_mcp_resource_templates",
@@ -160,31 +162,21 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         "update_plan",
         "apply_patch",
         "view_image",
+        "agent",
     ];
     let body0 = req1.single_request().body_json();
-
-    let expected_instructions = if expected_tools_names.contains(&"apply_patch") {
-        base_instructions
-    } else {
-        [
-            base_instructions.clone(),
-            include_str!("../../../apply-patch/apply_patch_tool_instructions.md").to_string(),
-        ]
-        .join("\n")
-    };
-
     assert_eq!(
         body0["instructions"],
         serde_json::json!(expected_instructions),
     );
-    assert_tool_names(&body0, &expected_tools_names);
+    assert_tool_names(&body0, expected_tools_names);
 
     let body1 = req2.single_request().body_json();
     assert_eq!(
         body1["instructions"],
         serde_json::json!(expected_instructions),
     );
-    assert_tool_names(&body1, &expected_tools_names);
+    assert_tool_names(&body1, expected_tools_names);
 
     Ok(())
 }
