@@ -162,6 +162,13 @@ impl ConfigApi {
             parsed_segments.push(segments);
         }
 
+        validate_config(&user_config).map_err(|err| {
+            config_write_error(
+                ConfigWriteErrorCode::ConfigValidationError,
+                format!("Invalid configuration: {err}"),
+            )
+        })?;
+
         let updated_layers = layers.with_user_config(user_config.clone());
         let effective = updated_layers.effective_config();
         validate_config(&effective).map_err(|err| {
@@ -843,6 +850,50 @@ mod tests {
                 .and_then(serde_json::Value::as_str),
             Some("configVersionConflict")
         );
+    }
+
+    #[tokio::test]
+    async fn invalid_user_value_rejected_even_if_overridden_by_managed() {
+        let tmp = tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join(CONFIG_FILE_NAME), "model = \"user\"").unwrap();
+
+        let managed_path = tmp.path().join("managed_config.toml");
+        std::fs::write(&managed_path, "approval_policy = \"never\"").unwrap();
+
+        let api = ConfigApi::with_overrides(
+            tmp.path().to_path_buf(),
+            vec![],
+            LoaderOverrides {
+                managed_config_path: Some(managed_path),
+                #[cfg(target_os = "macos")]
+                managed_preferences_base64: None,
+            },
+        );
+
+        let error = api
+            .write_value(ConfigValueWriteParams {
+                file_path: tmp.path().join(CONFIG_FILE_NAME).display().to_string(),
+                key_path: "approval_policy".to_string(),
+                value: json!("bogus"),
+                merge_strategy: MergeStrategy::Replace,
+                expected_version: None,
+            })
+            .await
+            .expect_err("should fail validation");
+
+        assert_eq!(error.code, INVALID_REQUEST_ERROR_CODE);
+        assert_eq!(
+            error
+                .data
+                .as_ref()
+                .and_then(|d| d.get("config_write_error_code"))
+                .and_then(serde_json::Value::as_str),
+            Some("configValidationError")
+        );
+
+        let contents =
+            std::fs::read_to_string(tmp.path().join(CONFIG_FILE_NAME)).expect("read config");
+        assert_eq!(contents.trim(), "model = \"user\"");
     }
 
     #[tokio::test]
