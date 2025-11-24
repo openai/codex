@@ -2777,9 +2777,9 @@ impl ChatWidget {
             items.push(SelectionItem {
                 name: format!("{current_branch} -> {branch}"),
                 actions: vec![Box::new(move |tx3: &AppEventSender| {
-                    if let Some(review_request) =
-                        build_review_request(ReviewTarget::BaseBranch { branch: branch.clone() })
-                    {
+                    if let Some(review_request) = build_review_request(ReviewTarget::BaseBranch {
+                        branch: branch.clone(),
+                    }) {
                         tx3.send(AppEvent::CodexOp(Op::Review { review_request }));
                     }
                 })],
@@ -2841,19 +2841,19 @@ impl ChatWidget {
             "Type instructions and press Enter".to_string(),
             None,
             Box::new(move |prompt: String| {
-            let trimmed = prompt.trim().to_string();
-            if trimmed.is_empty() {
-                return;
-            }
-            if let Some(review_request) =
-                build_review_request(ReviewTarget::Custom { instructions: trimmed })
-            {
-                tx.send(AppEvent::CodexOp(Op::Review { review_request }));
-            }
-        }),
-    );
-    self.bottom_pane.show_view(Box::new(view));
-}
+                let trimmed = prompt.trim().to_string();
+                if trimmed.is_empty() {
+                    return;
+                }
+                if let Some(review_request) = build_review_request(ReviewTarget::Custom {
+                    instructions: trimmed,
+                }) {
+                    tx.send(AppEvent::CodexOp(Op::Review { review_request }));
+                }
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+    }
 
     pub(crate) fn token_usage(&self) -> TokenUsage {
         self.token_info

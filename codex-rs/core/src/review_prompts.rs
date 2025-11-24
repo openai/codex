@@ -114,7 +114,9 @@ pub fn review_request_from_target(
             if sha.is_empty() {
                 return Err(ReviewTargetError::EmptySha);
             }
-            let title = title.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+            let title = title
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty());
             let (prompt, hint) = review_commit_prompt(&sha, title.as_deref());
             let short_sha: String = sha.chars().take(min(7, sha.len())).collect();
             let display_text = if let Some(title) = title {

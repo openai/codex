@@ -30,8 +30,8 @@ use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
-use codex_core::review_prompts::review_request_from_target;
 use codex_core::review_prompts::ReviewTarget;
+use codex_core::review_prompts::review_request_from_target;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::user_input::UserInput;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
@@ -402,9 +402,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 } else {
                     custom.to_string()
                 };
-                ReviewTarget::Custom {
-                    instructions: text,
-                }
+                ReviewTarget::Custom { instructions: text }
             } else if let Some(branch) = &args.branch {
                 ReviewTarget::BaseBranch {
                     branch: branch.clone(),
@@ -431,9 +429,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             };
 
             let mut built_request =
-                review_request_from_target(target, append_to_original_thread).map_err(|err| {
-                    anyhow::anyhow!("invalid review target: {err}")
-                })?;
+                review_request_from_target(target, append_to_original_thread)
+                    .map_err(|err| anyhow::anyhow!("invalid review target: {err}"))?;
 
             if let Some(hint_override) = &args.hint {
                 built_request.review_request.user_facing_hint = hint_override.clone();
