@@ -67,8 +67,6 @@ $textNodes.Item(1).AppendChild($doc.CreateTextNode($bodyText)) | Out-Null
 $toast = [Windows.UI.Notifications.ToastNotification]::new($doc)
 [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Codex').Show($toast)
 "#,
-        encoded_title = encoded_title,
-        encoded_body = encoded_body,
     )
 }
 
@@ -102,11 +100,6 @@ pub fn escape_for_xml(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::POWERSHELL_EXE;
-    use super::WindowsToastBackend;
-    use super::build_encoded_command;
-    use super::build_ps_script;
-    use super::encode_argument;
     use super::encode_script_for_powershell;
     use super::escape_for_xml;
     use pretty_assertions::assert_eq;
@@ -128,21 +121,6 @@ mod tests {
 
     #[test]
     fn encodes_utf16le_for_powershell() {
-        assert_eq!(encode_script_for_powershell("A"), "QQAA");
-    }
-
-    fn format_command_line(fixed_args: &[&str], encoded_command: &str) -> String {
-        let mut parts: Vec<String> = fixed_args
-            .iter()
-            .map(|arg| {
-                if arg.chars().any(|c| c.is_whitespace()) {
-                    format!("\"{arg}\"")
-                } else {
-                    (*arg).to_string()
-                }
-            })
-            .collect();
-        parts.push(format!("\"{encoded_command}\""));
-        parts.join(" ")
+        assert_eq!(encode_script_for_powershell("A"), "QQA=");
     }
 }

@@ -22,7 +22,7 @@ pub enum DesktopNotificationBackend {
 
 impl DesktopNotificationBackend {
     pub fn osc9() -> Self {
-        Self::Osc9(Osc9Backend::default())
+        Self::Osc9(Osc9Backend)
     }
 
     pub fn windows_toast() -> Self {
@@ -116,6 +116,7 @@ mod tests {
         assert_eq!(detect_backend().kind(), NotificationBackendKind::Osc9);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     #[serial]
     fn selects_windows_toast_in_wsl_windows_terminal() {
@@ -125,5 +126,14 @@ mod tests {
             detect_backend().kind(),
             NotificationBackendKind::WindowsToast
         );
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    #[serial]
+    fn stays_on_osc9_outside_linux_even_with_wsl_env() {
+        let _wsl_guard = EnvVarGuard::set("WSL_DISTRO_NAME", "Ubuntu");
+        let _wt_guard = EnvVarGuard::set("WT_SESSION", "abc");
+        assert_eq!(detect_backend().kind(), NotificationBackendKind::Osc9);
     }
 }
