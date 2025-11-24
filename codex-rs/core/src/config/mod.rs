@@ -267,10 +267,10 @@ pub struct Config {
     /// Collection of various notices we show the user
     pub notices: Notice,
 
-    /// When `true`, skips upgrade checks and suppresses update prompts.
-    /// Only set this to true if your Codex updates are centrally managed.
-    /// Keep Codex up to date for best performance.
-    pub skip_upgrade_check: bool,
+    /// When `true`, checks for Codex updates on startup and surfaces update prompts.
+    /// Set to `false` only if your Codex updates are centrally managed.
+    /// Defaults to `true`.
+    pub check_for_upgrades_on_startup: bool,
 
     /// When true, disables burst-paste detection for typed input entirely.
     /// All characters are inserted as they are received, and no buffering
@@ -690,11 +690,10 @@ pub struct ConfigToml {
     #[serde(default)]
     pub features: Option<FeaturesToml>,
 
-    /// When `true`, skips upgrade checks and suppresses update prompts.
-    /// Only set this to true if your Codex updates are centrally managed.
-    /// Keep Codex up to date for best performance.
-    #[serde(alias = "suppress_update_messages")]
-    pub skip_upgrade_check: Option<bool>,
+    /// When `true`, checks for Codex updates on startup and surfaces update prompts.
+    /// Set to `false` only if your Codex updates are centrally managed.
+    /// Defaults to `true`.
+    pub check_for_upgrades_on_startup: Option<bool>,
 
     /// When true, disables burst-paste detection for typed input entirely.
     /// All characters are inserted as they are received, and no buffering
@@ -1173,6 +1172,8 @@ impl Config {
             .or(cfg.review_model)
             .unwrap_or_else(default_review_model);
 
+        let check_for_upgrades_on_startup = cfg.check_for_upgrades_on_startup.unwrap_or(true);
+
         let config = Self {
             model,
             review_model,
@@ -1249,7 +1250,7 @@ impl Config {
             active_project,
             windows_wsl_setup_acknowledged: cfg.windows_wsl_setup_acknowledged.unwrap_or(false),
             notices: cfg.notice.unwrap_or_default(),
-            skip_upgrade_check: cfg.skip_upgrade_check.unwrap_or(false),
+            check_for_upgrades_on_startup,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
             tui_notifications: cfg
                 .tui
@@ -3004,7 +3005,7 @@ model_verbosity = "high"
                 active_project: ProjectConfig { trust_level: None },
                 windows_wsl_setup_acknowledged: false,
                 notices: Default::default(),
-                skip_upgrade_check: false,
+                check_for_upgrades_on_startup: true,
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
                 animations: true,
@@ -3077,7 +3078,7 @@ model_verbosity = "high"
             active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
-            skip_upgrade_check: false,
+            check_for_upgrades_on_startup: true,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             animations: true,
@@ -3165,7 +3166,7 @@ model_verbosity = "high"
             active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
-            skip_upgrade_check: false,
+            check_for_upgrades_on_startup: true,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             animations: true,
@@ -3239,7 +3240,7 @@ model_verbosity = "high"
             active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
-            skip_upgrade_check: false,
+            check_for_upgrades_on_startup: true,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             animations: true,
