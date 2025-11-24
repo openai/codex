@@ -165,7 +165,7 @@ rand = "0.9"
 ratatui = "0.29.0"
 ratatui-macros = "0.6.0"
 regex-lite = "0.1.7"
-regex = "1.11.1"
+regex = "1.12.2"
 reqwest = "0.12"
 rmcp = { version = "0.9.0", default-features = false }
 schemars = "0.8.22"
