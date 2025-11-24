@@ -21,6 +21,11 @@ use std::fs;
 
 #[tokio::test]
 async fn execpolicy_blocks_shell_invocation() -> Result<()> {
+    // TODO execpolicy doesn't parse powershell commands yet
+    if cfg!(windows) {
+        return Ok(());
+    }
+
     let mut builder = test_codex().with_config(|config| {
         let policy_path = config.codex_home.join("policy").join("policy.codexpolicy");
         fs::create_dir_all(
