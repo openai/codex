@@ -1943,18 +1943,9 @@ pub(crate) async fn run_task(
                 // Aborted turn is reported via a different event.
                 break;
             }
-            Err(CodexErr::InvalidRequest(error)) => {
-                if error.contains("The image data you provided does not represent a valid image") {
-                    let mut state = sess.state.lock().await;
-                    state.history.replace_last_turn_images("Invalid image");
-                } else {
-                    info!("Invalid data error: {}", error);
-                    let event = EventMsg::Error(ErrorEvent {
-                        message: error.to_string(),
-                    });
-                    sess.send_event(&turn_context, event).await;
-                    break;
-                }
+            Err(CodexErr::InvalidImageRequest()) => {
+                let mut state = sess.state.lock().await;
+                state.history.replace_last_turn_images("Invalid image");
             }
             Err(e) => {
                 info!("Turn error: {e:#}");

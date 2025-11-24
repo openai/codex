@@ -455,6 +455,9 @@ impl ModelClient {
                     let rate_limit_snapshot = parse_rate_limit_snapshot(res.headers());
                     let body = res.json::<ErrorResponse>().await.ok();
                     if let Some(ErrorResponse { error }) = body {
+                        if error.r#type.as_deref() == Some("invalid_data") && error.message.as_ref().map(|msg| msg.contains("The image data you provided does not represent a valid image")).unwrap_or_default() {
+                            return Err(StreamAttemptError::Fatal(CodexErr::InvalidImageRequest()));
+                        }
                         if error.r#type.as_deref() == Some("usage_limit_reached") {
                             // Prefer the plan_type provided in the error message if present
                             // because it's more up to date than the one encoded in the auth
