@@ -36,6 +36,7 @@ use codex_app_server_protocol::SandboxCommandAssessment as V2SandboxCommandAsses
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnDiffUpdatedNotification;
@@ -54,6 +55,7 @@ use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
+use codex_core::protocol::TokenCountEvent;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::review_format::format_review_findings_block;
 use codex_protocol::ConversationId;
@@ -295,15 +297,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::TokenCount(token_count_event) => {
-            if let Some(rate_limits) = token_count_event.rate_limits {
-                outgoing
-                    .send_server_notification(ServerNotification::AccountRateLimitsUpdated(
-                        AccountRateLimitsUpdatedNotification {
-                            rate_limits: rate_limits.into(),
-                        },
-                    ))
-                    .await;
-            }
+            handle_token_count_event(conversation_id, event_id, token_count_event, &outgoing).await;
         }
         EventMsg::Error(ev) => {
             let turn_error = TurnError {
@@ -694,6 +688,33 @@ async fn handle_turn_interrupted(
         .await;
 }
 
+async fn handle_token_count_event(
+    conversation_id: ConversationId,
+    turn_id: String,
+    token_count_event: TokenCountEvent,
+    outgoing: &OutgoingMessageSender,
+) {
+    let TokenCountEvent { info, rate_limits } = token_count_event;
+    let notification = ThreadTokenUsageUpdatedNotification {
+        thread_id: conversation_id.to_string(),
+        turn_id,
+        token_usage: info.map(Into::into),
+    };
+    outgoing
+        .send_server_notification(ServerNotification::ThreadTokenUsageUpdated(notification))
+        .await;
+
+    if let Some(rate_limits) = rate_limits {
+        outgoing
+            .send_server_notification(ServerNotification::AccountRateLimitsUpdated(
+                AccountRateLimitsUpdatedNotification {
+                    rate_limits: rate_limits.into(),
+                },
+            ))
+            .await;
+    }
+}
+
 async fn handle_error(
     conversation_id: ConversationId,
     error: TurnError,
@@ -1059,7 +1080,12 @@ mod tests {
     use anyhow::Result;
     use anyhow::anyhow;
     use anyhow::bail;
+    use codex_core::protocol::CreditsSnapshot;
     use codex_core::protocol::McpInvocation;
+    use codex_core::protocol::RateLimitSnapshot;
+    use codex_core::protocol::RateLimitWindow;
+    use codex_core::protocol::TokenUsage;
+    use codex_core::protocol::TokenUsageInfo;
     use mcp_types::CallToolResult;
     use mcp_types::ContentBlock;
     use mcp_types::TextContent;
@@ -1214,6 +1240,128 @@ mod tests {
                 );
             }
             other => bail!("unexpected message: {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "no extra messages expected");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_token_count_event_emits_usage_and_rate_limits() -> Result<()> {
+        let conversation_id = ConversationId::new();
+        let turn_id = "turn-123".to_string();
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+
+        let info = TokenUsageInfo {
+            total_token_usage: TokenUsage {
+                input_tokens: 100,
+                cached_input_tokens: 25,
+                output_tokens: 50,
+                reasoning_output_tokens: 9,
+                total_tokens: 200,
+            },
+            last_token_usage: TokenUsage {
+                input_tokens: 10,
+                cached_input_tokens: 5,
+                output_tokens: 7,
+                reasoning_output_tokens: 1,
+                total_tokens: 23,
+            },
+            model_context_window: Some(4096),
+        };
+        let rate_limits = RateLimitSnapshot {
+            primary: Some(RateLimitWindow {
+                used_percent: 42.5,
+                window_minutes: Some(15),
+                resets_at: Some(1700000000),
+            }),
+            secondary: None,
+            credits: Some(CreditsSnapshot {
+                has_credits: true,
+                unlimited: false,
+                balance: Some("5".to_string()),
+            }),
+        };
+
+        handle_token_count_event(
+            conversation_id,
+            turn_id.clone(),
+            TokenCountEvent {
+                info: Some(info),
+                rate_limits: Some(rate_limits),
+            },
+            &outgoing,
+        )
+        .await;
+
+        let first = rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("expected usage notification"))?;
+        match first {
+            OutgoingMessage::AppServerNotification(
+                ServerNotification::ThreadTokenUsageUpdated(payload),
+            ) => {
+                assert_eq!(payload.thread_id, conversation_id.to_string());
+                assert_eq!(payload.turn_id, turn_id);
+                let usage = payload
+                    .token_usage
+                    .expect("token usage should be present in notification");
+                assert_eq!(usage.total.total_tokens, 200);
+                assert_eq!(usage.total.cached_input_tokens, 25);
+                assert_eq!(usage.last.output_tokens, 7);
+                assert_eq!(usage.model_context_window, Some(4096));
+            }
+            other => bail!("unexpected notification: {other:?}"),
+        }
+
+        let second = rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("expected rate limit notification"))?;
+        match second {
+            OutgoingMessage::AppServerNotification(
+                ServerNotification::AccountRateLimitsUpdated(payload),
+            ) => {
+                assert!(payload.rate_limits.primary.is_some());
+                assert!(payload.rate_limits.credits.is_some());
+            }
+            other => bail!("unexpected notification: {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_token_count_event_without_usage_info() -> Result<()> {
+        let conversation_id = ConversationId::new();
+        let turn_id = "turn-456".to_string();
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+
+        handle_token_count_event(
+            conversation_id,
+            turn_id.clone(),
+            TokenCountEvent {
+                info: None,
+                rate_limits: None,
+            },
+            &outgoing,
+        )
+        .await;
+
+        let msg = rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("expected usage notification even without info"))?;
+        match msg {
+            OutgoingMessage::AppServerNotification(
+                ServerNotification::ThreadTokenUsageUpdated(payload),
+            ) => {
+                assert_eq!(payload.thread_id, conversation_id.to_string());
+                assert_eq!(payload.turn_id, turn_id);
+                assert!(payload.token_usage.is_none());
+            }
+            other => bail!("unexpected notification: {other:?}"),
         }
         assert!(rx.try_recv().is_err(), "no extra messages expected");
         Ok(())
