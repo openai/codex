@@ -92,6 +92,7 @@ pub struct ModelProviderInfo {
     /// in the connection pool before closing them. Set to 0 to disable connection pooling entirely.
     /// If not specified, uses reqwest's default behavior (90 seconds).
     /// Useful for providers that aggressively close connections server-side.
+    #[serde(default)]
     pub pool_idle_timeout_secs: Option<u64>,
 
     /// Does this provider require an OpenAI API Key or ChatGPT login token? If true,
