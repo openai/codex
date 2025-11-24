@@ -226,19 +226,24 @@ pub enum McpServerTransportConfig {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         args: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         env: Option<HashMap<String, String>>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         env_vars: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         cwd: Option<PathBuf>,
     },
     StreamableHttp {
         url: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         bearer_token_env_var: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         http_headers: Option<HashMap<String, String>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         env_http_headers: Option<HashMap<String, String>>,
     },
 }
@@ -250,12 +255,16 @@ pub struct McpServerConfig {
     pub transport: McpServerTransportConfig,
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub startup_timeout_sec: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub tool_timeout_sec: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub enabled_tools: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub disabled_tools: Option<Vec<String>>,
 }
 
