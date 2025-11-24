@@ -1427,6 +1427,24 @@ mod tests {
     }
 
     #[test]
+    fn test_exp_5_1_defaults() {
+        assert_model_tools(
+            "exp-5.1",
+            &Features::with_defaults(),
+            &[
+                "exec_command",
+                "write_stdin",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "apply_patch",
+                "view_image",
+            ],
+        );
+    }
+
+    #[test]
     fn test_codex_mini_unified_exec_web_search() {
         assert_model_tools(
             "codex-mini-latest",

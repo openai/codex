@@ -7,20 +7,16 @@ macro_rules! windows_modules {
 windows_modules!(acl, allow, audit, cap, env, logging, policy, token, winutil);
 
 #[cfg(target_os = "windows")]
-pub use audit::world_writable_warning_details;
-#[cfg(target_os = "windows")]
-pub use windows_impl::preflight_audit_everyone_writable;
+pub use audit::apply_world_writable_scan_and_denies;
 #[cfg(target_os = "windows")]
 pub use windows_impl::run_windows_sandbox_capture;
 #[cfg(target_os = "windows")]
 pub use windows_impl::CaptureResult;
 
 #[cfg(not(target_os = "windows"))]
-pub use stub::preflight_audit_everyone_writable;
+pub use stub::apply_world_writable_scan_and_denies;
 #[cfg(not(target_os = "windows"))]
 pub use stub::run_windows_sandbox_capture;
-#[cfg(not(target_os = "windows"))]
-pub use stub::world_writable_warning_details;
 #[cfg(not(target_os = "windows"))]
 pub use stub::CaptureResult;
 
@@ -30,7 +26,6 @@ mod windows_impl {
     use super::acl::allow_null_device;
     use super::acl::revoke_ace;
     use super::allow::compute_allow_paths;
-    use super::audit;
     use super::cap::cap_sid_file;
     use super::cap::load_or_create_cap_sids;
     use super::env::apply_no_network_to_env;
@@ -38,7 +33,6 @@ mod windows_impl {
     use super::env::normalize_null_device_env;
     use super::logging::debug_log;
     use super::logging::log_failure;
-    use super::logging::log_note;
     use super::logging::log_start;
     use super::logging::log_success;
     use super::policy::parse_policy;
@@ -70,6 +64,10 @@ mod windows_impl {
     use windows_sys::Win32::System::Threading::STARTUPINFOW;
 
     type PipeHandles = ((HANDLE, HANDLE), (HANDLE, HANDLE), (HANDLE, HANDLE));
+
+    fn should_apply_network_block(policy: &SandboxPolicy) -> bool {
+        !policy.has_full_network_access()
+    }
 
     fn ensure_dir(p: &Path) -> Result<()> {
         if let Some(d) = p.parent() {
@@ -178,32 +176,6 @@ mod windows_impl {
         pub timed_out: bool,
     }
 
-    pub fn preflight_audit_everyone_writable(
-        codex_home: &Path,
-        cwd: &Path,
-        env_map: &HashMap<String, String>,
-        sandbox_policy: &SandboxPolicy,
-        logs_base_dir: Option<&Path>,
-    ) -> Result<Vec<PathBuf>> {
-        let flagged = audit::audit_everyone_writable(cwd, env_map, logs_base_dir)?;
-        if flagged.is_empty() {
-            return Ok(flagged);
-        }
-        if let Err(err) = audit::apply_capability_denies_for_world_writable(
-            codex_home,
-            &flagged,
-            sandbox_policy,
-            cwd,
-            logs_base_dir,
-        ) {
-            log_note(
-                &format!("AUDIT: failed to apply capability deny ACEs: {}", err),
-                logs_base_dir,
-            );
-        }
-        Ok(Vec::new())
-    }
-
     pub fn run_windows_sandbox_capture(
         policy_json_or_preset: &str,
         sandbox_policy_cwd: &Path,
@@ -214,9 +186,12 @@ mod windows_impl {
         timeout_ms: Option<u64>,
     ) -> Result<CaptureResult> {
         let policy = parse_policy(policy_json_or_preset)?;
+        let apply_network_block = should_apply_network_block(&policy);
         normalize_null_device_env(&mut env_map);
         ensure_non_interactive_pager(&mut env_map);
-        apply_no_network_to_env(&mut env_map)?;
+        if apply_network_block {
+            apply_no_network_to_env(&mut env_map)?;
+        }
         ensure_codex_home_exists(codex_home)?;
 
         let current_dir = cwd.to_path_buf();
@@ -447,6 +422,36 @@ mod windows_impl {
             timed_out,
         })
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::should_apply_network_block;
+        use crate::policy::SandboxPolicy;
+
+        fn workspace_policy(network_access: bool) -> SandboxPolicy {
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots: Vec::new(),
+                network_access,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
+            }
+        }
+
+        #[test]
+        fn applies_network_block_when_access_is_disabled() {
+            assert!(should_apply_network_block(&workspace_policy(false)));
+        }
+
+        #[test]
+        fn skips_network_block_when_access_is_allowed() {
+            assert!(!should_apply_network_block(&workspace_policy(true)));
+        }
+
+        #[test]
+        fn applies_network_block_for_read_only() {
+            assert!(should_apply_network_block(&SandboxPolicy::ReadOnly));
+        }
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -465,16 +470,6 @@ mod stub {
         pub timed_out: bool,
     }
 
-    pub fn preflight_audit_everyone_writable(
-        _codex_home: &Path,
-        _cwd: &Path,
-        _env_map: &HashMap<String, String>,
-        _sandbox_policy: &SandboxPolicy,
-        _logs_base_dir: Option<&Path>,
-    ) -> Result<Vec<std::path::PathBuf>> {
-        bail!("Windows sandbox is only available on Windows")
-    }
-
     pub fn run_windows_sandbox_capture(
         _policy_json_or_preset: &str,
         _sandbox_policy_cwd: &Path,
@@ -487,10 +482,13 @@ mod stub {
         bail!("Windows sandbox is only available on Windows")
     }
 
-    pub fn world_writable_warning_details(
-        _codex_home: impl AsRef<Path>,
-        _cwd: impl AsRef<Path>,
-    ) -> Option<(Vec<String>, usize, bool)> {
-        None
+    pub fn apply_world_writable_scan_and_denies(
+        _codex_home: &Path,
+        _cwd: &Path,
+        _env_map: &HashMap<String, String>,
+        _sandbox_policy: &SandboxPolicy,
+        _logs_base_dir: Option<&Path>,
+    ) -> Result<()> {
+        bail!("Windows sandbox is only available on Windows")
     }
 }

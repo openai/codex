@@ -6,9 +6,7 @@ use core_test_support::test_codex::ApplyPatchModelOutput;
 use pretty_assertions::assert_eq;
 use std::fs;
 
-use codex_core::config::Config;
 use codex_core::features::Feature;
-use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -24,23 +22,24 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::TestCodexHarness;
+use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use serde_json::json;
 use test_case::test_case;
 
 pub async fn apply_patch_harness() -> Result<TestCodexHarness> {
-    apply_patch_harness_with(|_| {}).await
+    apply_patch_harness_with(|builder| builder).await
 }
 
 async fn apply_patch_harness_with(
-    configure: impl FnOnce(&mut Config) + Send + 'static,
+    configure: impl FnOnce(TestCodexBuilder) -> TestCodexBuilder,
 ) -> Result<TestCodexHarness> {
-    TestCodexHarness::with_config(|config| {
+    let builder = configure(test_codex()).with_config(|config| {
         config.include_apply_patch_tool = true;
-        configure(config);
-    })
-    .await
+    });
+    TestCodexHarness::with_builder(builder).await
 }
 
 pub async fn mount_apply_patch(
@@ -86,11 +85,7 @@ async fn apply_patch_cli_multiple_operations_integration(
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = apply_patch_harness_with(|config| {
-        config.model = "gpt-5.1".to_string();
-        config.model_family = find_family_for_model("gpt-5.1").expect("gpt-5.1 is valid");
-    })
-    .await?;
+    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
 
     // Seed workspace state
     let modify_path = harness.path("modify.txt");
@@ -645,8 +640,10 @@ async fn apply_patch_cli_verification_failure_has_no_side_effects(
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = apply_patch_harness_with(|config| {
-        config.features.enable(Feature::ApplyPatchFreeform);
+    let harness = apply_patch_harness_with(|builder| {
+        builder.with_config(|config| {
+            config.features.enable(Feature::ApplyPatchFreeform);
+        })
     })
     .await?;
 
@@ -667,14 +664,10 @@ async fn apply_patch_cli_verification_failure_has_no_side_effects(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn apply_patch_shell_heredoc_with_cd_updates_relative_workdir() -> Result<()> {
+async fn apply_patch_shell_command_heredoc_with_cd_updates_relative_workdir() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = apply_patch_harness_with(|config| {
-        config.model = "gpt-5.1".to_string();
-        config.model_family = find_family_for_model("gpt-5.1").expect("gpt-5.1 is valid");
-    })
-    .await?;
+    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
 
     // Prepare a file inside a subdir; update it via cd && apply_patch heredoc form.
     let sub = harness.path("sub");
@@ -684,14 +677,11 @@ async fn apply_patch_shell_heredoc_with_cd_updates_relative_workdir() -> Result<
 
     let script = "cd sub && apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: in_sub.txt\n@@\n-before\n+after\n*** End Patch\nEOF\n";
     let call_id = "shell-heredoc-cd";
-    let args = json!({
-        "command": ["bash", "-lc", script],
-        "timeout_ms": 5_000,
-    });
+    let args = json!({ "command": script, "timeout_ms": 5_000 });
     let bodies = vec![
         sse(vec![
             ev_response_created("resp-1"),
-            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+            ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
             ev_completed("resp-1"),
         ]),
         sse(vec![
@@ -706,21 +696,17 @@ async fn apply_patch_shell_heredoc_with_cd_updates_relative_workdir() -> Result<
     let out = harness.function_call_stdout(call_id).await;
     assert!(
         out.contains("Success."),
-        "expected successful apply_patch invocation via shell: {out}"
+        "expected successful apply_patch invocation via shell_command: {out}"
     );
     assert_eq!(fs::read_to_string(&target)?, "after\n");
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn apply_patch_shell_failure_propagates_error_and_skips_diff() -> Result<()> {
+async fn apply_patch_shell_command_failure_propagates_error_and_skips_diff() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = apply_patch_harness_with(|config| {
-        config.model = "gpt-5.1".to_string();
-        config.model_family = find_family_for_model("gpt-5.1").expect("gpt-5.1 is valid");
-    })
-    .await?;
+    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
     let test = harness.test();
     let codex = test.codex.clone();
     let cwd = test.cwd.clone();
@@ -730,14 +716,11 @@ async fn apply_patch_shell_failure_propagates_error_and_skips_diff() -> Result<(
 
     let script = "apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: invalid.txt\n@@\n-nope\n+changed\n*** End Patch\nEOF\n";
     let call_id = "shell-apply-failure";
-    let args = json!({
-        "command": ["bash", "-lc", script],
-        "timeout_ms": 5_000,
-    });
+    let args = json!({ "command": script, "timeout_ms": 5_000 });
     let bodies = vec![
         sse(vec![
             ev_response_created("resp-1"),
-            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+            ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
             ev_completed("resp-1"),
         ]),
         sse(vec![
@@ -780,10 +763,6 @@ async fn apply_patch_shell_failure_propagates_error_and_skips_diff() -> Result<(
     );
 
     let out = harness.function_call_stdout(call_id).await;
-    assert!(
-        out.contains("apply_patch verification failed"),
-        "expected verification failure message"
-    );
     assert!(
         out.contains("Failed to find expected lines in"),
         "expected failure diagnostics: {out}"

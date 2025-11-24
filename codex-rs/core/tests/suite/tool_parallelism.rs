@@ -4,7 +4,6 @@
 use std::time::Duration;
 use std::time::Instant;
 
-use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -56,11 +55,7 @@ async fn run_turn_and_measure(test: &TestCodex, prompt: &str) -> anyhow::Result<
 
 #[allow(clippy::expect_used)]
 async fn build_codex_with_test_tool(server: &wiremock::MockServer) -> anyhow::Result<TestCodex> {
-    let mut builder = test_codex().with_config(|config| {
-        config.model = "test-gpt-5.1-codex".to_string();
-        config.model_family =
-            find_family_for_model("test-gpt-5.1-codex").expect("test-gpt-5.1-codex model family");
-    });
+    let mut builder = test_codex().with_model("test-gpt-5.1-codex");
     builder.build(server).await
 }
 
@@ -146,10 +141,11 @@ async fn non_parallel_tools_run_serially() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let test = test_codex().build(&server).await?;
+    let mut builder = test_codex().with_model("gpt-5.1");
+    let test = builder.build(&server).await?;
 
     let shell_args = json!({
-        "command": ["/bin/sh", "-c", "sleep 0.3"],
+        "command": "sleep 0.3",
         "timeout_ms": 1_000,
     });
     let args_one = serde_json::to_string(&shell_args)?;
@@ -157,8 +153,8 @@ async fn non_parallel_tools_run_serially() -> anyhow::Result<()> {
 
     let first_response = sse(vec![
         json!({"type": "response.created", "response": {"id": "resp-1"}}),
-        ev_function_call("call-1", "shell", &args_one),
-        ev_function_call("call-2", "shell", &args_two),
+        ev_function_call("call-1", "shell_command", &args_one),
+        ev_function_call("call-2", "shell_command", &args_two),
         ev_completed("resp-1"),
     ]);
     let second_response = sse(vec![
@@ -167,7 +163,7 @@ async fn non_parallel_tools_run_serially() -> anyhow::Result<()> {
     ]);
     mount_sse_sequence(&server, vec![first_response, second_response]).await;
 
-    let duration = run_turn_and_measure(&test, "run shell twice").await?;
+    let duration = run_turn_and_measure(&test, "run shell_command twice").await?;
     assert_serial_duration(duration);
 
     Ok(())
@@ -185,14 +181,14 @@ async fn mixed_tools_fall_back_to_serial() -> anyhow::Result<()> {
     })
     .to_string();
     let shell_args = serde_json::to_string(&json!({
-        "command": ["/bin/sh", "-c", "sleep 0.3"],
+        "command": "sleep 0.3",
         "timeout_ms": 1_000,
     }))?;
 
     let first_response = sse(vec![
         json!({"type": "response.created", "response": {"id": "resp-1"}}),
         ev_function_call("call-1", "test_sync_tool", &sync_args),
-        ev_function_call("call-2", "shell", &shell_args),
+        ev_function_call("call-2", "shell_command", &shell_args),
         ev_completed("resp-1"),
     ]);
     let second_response = sse(vec![
@@ -215,7 +211,7 @@ async fn tool_results_grouped() -> anyhow::Result<()> {
     let test = build_codex_with_test_tool(&server).await?;
 
     let shell_args = serde_json::to_string(&json!({
-        "command": ["/bin/sh", "-c", "echo 'shell output'"],
+        "command": "echo 'shell output'",
         "timeout_ms": 1_000,
     }))?;
 
@@ -223,9 +219,9 @@ async fn tool_results_grouped() -> anyhow::Result<()> {
         &server,
         sse(vec![
             json!({"type": "response.created", "response": {"id": "resp-1"}}),
-            ev_function_call("call-1", "shell", &shell_args),
-            ev_function_call("call-2", "shell", &shell_args),
-            ev_function_call("call-3", "shell", &shell_args),
+            ev_function_call("call-1", "shell_command", &shell_args),
+            ev_function_call("call-2", "shell_command", &shell_args),
+            ev_function_call("call-3", "shell_command", &shell_args),
             ev_completed("resp-1"),
         ]),
     )

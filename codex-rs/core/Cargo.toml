@@ -56,6 +56,9 @@ sha2 = { workspace = true }
 shlex = { workspace = true }
 similar = { workspace = true }
 strum_macros = { workspace = true }
+url = { workspace = true }
+once_cell = { workspace = true }
+regex = { workspace = true }
 tempfile = { workspace = true }
 test-case = "3.3.1"
 test-log = { workspace = true }
