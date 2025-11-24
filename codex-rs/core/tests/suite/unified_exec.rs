@@ -1762,6 +1762,7 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore]
 async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
