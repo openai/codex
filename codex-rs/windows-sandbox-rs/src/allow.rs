@@ -93,7 +93,6 @@ pub fn compute_allow_paths(
 #[cfg(test)]
 mod tests {
     use super::compute_allow_paths;
-    use super::AllowDenyPaths;
     use codex_protocol::protocol::SandboxPolicy;
     use std::collections::HashMap;
     use std::collections::HashSet;
