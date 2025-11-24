@@ -12,6 +12,16 @@
 
 The GitHub Release also contains a [DotSlash](https://dotslash-cli.com/) file for the Codex CLI named `codex`. Using a DotSlash file makes it possible to make a lightweight commit to source control to ensure all contributors use the same version of an executable, regardless of what platform they use for development.
 
+### Arch Linux
+
+Codex is packaged in Arch Linux's `extra` repository. Install it with:
+
+```bash
+sudo pacman -S openai-codex
+```
+
+See the [package page](https://archlinux.org/packages/extra/x86_64/openai-codex/) for details.
+
 ### Build from source
 
 ```bash

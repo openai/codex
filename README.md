@@ -1,4 +1,4 @@
-<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install --cask codex</code></p>
+<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install --cask codex</code><br />or <code>pacman -S openai-codex</code></p>
 
 <p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
 </br>
@@ -25,6 +25,12 @@ Alternatively, if you use Homebrew:
 
 ```shell
 brew install --cask codex
+```
+
+On Arch Linux, install from the official [`extra`](https://archlinux.org/packages/extra/x86_64/openai-codex/) repo:
+
+```shell
+pacman -S openai-codex
 ```
 
 Then simply run `codex` to get started:
