@@ -2794,6 +2794,7 @@ impl CodexMessageProcessor {
         } else {
             None
         };
+        let session_source = self.conversation_manager.session_source();
 
         let upload_result = tokio::task::spawn_blocking(move || {
             let rollout_path_ref = validated_rollout_path.as_deref();
@@ -2802,6 +2803,7 @@ impl CodexMessageProcessor {
                 reason.as_deref(),
                 include_logs,
                 rollout_path_ref,
+                Some(session_source),
             )
         })
         .await;
