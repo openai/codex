@@ -150,7 +150,7 @@ mime_guess = "2.0.5"
 multimap = "0.10.0"
 notify = "8.2.0"
 nucleo-matcher = "0.3.1"
-once_cell = "1"
+once_cell = "1.20.2"
 openssl-sys = "*"
 opentelemetry = "0.30.0"
 opentelemetry-appender-tracing = "0.30.0"
@@ -169,8 +169,9 @@ rand = "0.9"
 ratatui = "0.29.0"
 ratatui-macros = "0.6.0"
 regex-lite = "0.1.7"
+regex = "1.11.1"
 reqwest = "0.12"
-rmcp = { version = "0.8.5", default-features = false }
+rmcp = { version = "0.9.0", default-features = false }
 schemars = "0.8.22"
 seccompiler = "0.5.0"
 sentry = "0.34.0"
@@ -265,11 +266,7 @@ unwrap_used = "deny"
 # cargo-shear cannot see the platform-specific openssl-sys usage, so we
 # silence the false positive here instead of deleting a real dependency.
 [workspace.metadata.cargo-shear]
-ignored = [
-    "icu_provider",
-    "openssl-sys",
-    "codex-utils-readiness",
-]
+ignored = ["icu_provider", "openssl-sys", "codex-utils-readiness"]
 
 [profile.release]
 lto = "fat"
@@ -290,6 +287,7 @@ opt-level = 0
 # ratatui = { path = "../../ratatui" }
 crossterm = { git = "https://github.com/nornagon/crossterm", branch = "nornagon/color-query" }
 ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.29.0-patch" }
+rmcp = { git = "https://github.com/bolinfest/rust-sdk", branch = "pr556" }
 
 # Uncomment to debug local changes.
 # rmcp = { path = "../../rust-sdk/crates/rmcp" }

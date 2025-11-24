@@ -296,7 +296,7 @@ fn approx_bytes_for_tokens(tokens: usize) -> usize {
     tokens.saturating_mul(APPROX_BYTES_PER_TOKEN)
 }
 
-fn approx_tokens_from_byte_count(bytes: usize) -> u64 {
+pub(crate) fn approx_tokens_from_byte_count(bytes: usize) -> u64 {
     let bytes_u64 = bytes as u64;
     bytes_u64.saturating_add((APPROX_BYTES_PER_TOKEN as u64).saturating_sub(1))
         / (APPROX_BYTES_PER_TOKEN as u64)

@@ -208,6 +208,10 @@ async fn run_codex_tool_session_inner(
                     EventMsg::Warning(_) => {
                         continue;
                     }
+                    EventMsg::ElicitationRequest(_) => {
+                        // TODO: forward elicitation requests to the client?
+                        continue;
+                    }
                     EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
                         call_id,
                         turn_id: _,

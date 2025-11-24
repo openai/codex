@@ -1,7 +1,6 @@
 use anyhow::Context;
 use codex_core::ConversationManager;
 use codex_core::NewConversation;
-use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExecCommandSource;
@@ -275,12 +274,11 @@ async fn user_shell_command_is_truncated_only_once() -> anyhow::Result<()> {
 
     let server = start_mock_server().await;
 
-    let mut builder = test_codex().with_config(|config| {
-        config.tool_output_token_limit = Some(100);
-        config.model = "gpt-5.1-codex".to_string();
-        config.model_family =
-            find_family_for_model("gpt-5.1-codex").expect("gpt-5.1-codex is a model family");
-    });
+    let mut builder = test_codex()
+        .with_model("gpt-5.1-codex")
+        .with_config(|config| {
+            config.tool_output_token_limit = Some(100);
+        });
     let fixture = builder.build(&server).await?;
 
     let call_id = "user-shell-double-truncation";
