@@ -107,9 +107,11 @@ fn evaluate_with_policy(
                     })
                 }
             }
-            Decision::Allow => Some(ApprovalRequirement::Skip),
+            Decision::Allow => Some(ApprovalRequirement::Skip {
+                bypass_sandbox: true,
+            }),
         },
-        Evaluation::NoMatch => None,
+        Evaluation::NoMatch { .. } => None,
     }
 }
 
@@ -132,7 +134,9 @@ pub(crate) fn create_approval_requirement_for_command(
     ) {
         ApprovalRequirement::NeedsApproval { reason: None }
     } else {
-        ApprovalRequirement::Skip
+        ApprovalRequirement::Skip {
+            bypass_sandbox: false,
+        }
     }
 }
 
@@ -206,7 +210,7 @@ mod tests {
         let commands = [vec!["rm".to_string()]];
         assert!(matches!(
             policy.check_multiple(commands.iter()),
-            Evaluation::NoMatch
+            Evaluation::NoMatch { .. }
         ));
         assert!(!temp_dir.path().join(POLICY_DIR_NAME).exists());
     }
@@ -259,7 +263,7 @@ mod tests {
         let command = [vec!["ls".to_string()]];
         assert!(matches!(
             policy.check_multiple(command.iter()),
-            Evaluation::NoMatch
+            Evaluation::NoMatch { .. }
         ));
     }
 

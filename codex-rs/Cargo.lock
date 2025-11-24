@@ -187,8 +187,10 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-core",
  "codex-protocol",
+ "core_test_support",
  "serde",
  "serde_json",
+ "shlex",
  "tokio",
  "uuid",
  "wiremock",
@@ -260,7 +262,7 @@ dependencies = [
  "memchr",
  "proc-macro2",
  "quote",
- "rustc-hash 2.1.1",
+ "rustc-hash",
  "serde",
  "serde_derive",
  "syn 2.0.104",
@@ -727,6 +729,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
+name = "chardetng"
+version = "0.1.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "14b8f0b65b7b08ae3c8187e8d77174de20cb6777864c6b832d8ad365999cf1ea"
+dependencies = [
+ "cfg-if",
+ "encoding_rs",
+ "memchr",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -849,7 +862,6 @@ dependencies = [
  "codex-login",
  "codex-protocol",
  "codex-utils-json-to-toml",
- "codex-windows-sandbox",
  "core_test_support",
  "mcp-types",
  "opentelemetry-appender-tracing",
@@ -858,6 +870,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
+ "shlex",
  "tempfile",
  "tokio",
  "toml",
@@ -880,6 +893,7 @@ dependencies = [
  "serde",
  "serde_json",
  "strum_macros 0.27.2",
+ "thiserror 2.0.17",
  "ts-rs",
  "uuid",
 ]
@@ -990,6 +1004,7 @@ dependencies = [
  "codex-common",
  "codex-core",
  "codex-exec",
+ "codex-execpolicy",
  "codex-login",
  "codex-mcp-server",
  "codex-process-hardening",
@@ -1081,6 +1096,7 @@ dependencies = [
  "async-trait",
  "base64",
  "bytes",
+ "chardetng",
  "chrono",
  "codex-app-server-protocol",
  "codex-apply-patch",
@@ -1096,13 +1112,13 @@ dependencies = [
  "codex-utils-pty",
  "codex-utils-readiness",
  "codex-utils-string",
- "codex-utils-tokenizer",
  "codex-windows-sandbox",
  "core-foundation 0.9.4",
  "core_test_support",
  "ctor 0.5.0",
  "dirs",
  "dunce",
+ "encoding_rs",
  "env-flags",
  "escargot",
  "eventsource-stream",
@@ -1115,11 +1131,13 @@ dependencies = [
  "libc",
  "maplit",
  "mcp-types",
+ "once_cell",
  "openssl-sys",
  "os_info",
  "predicates",
  "pretty_assertions",
  "rand 0.9.2",
+ "regex",
  "regex-lite",
  "reqwest",
  "seccompiler",
@@ -1145,6 +1163,7 @@ dependencies = [
  "tracing-test",
  "tree-sitter",
  "tree-sitter-bash",
+ "url",
  "uuid",
  "walkdir",
  "which",
@@ -1202,6 +1221,7 @@ dependencies = [
  "socket2 0.6.0",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]
@@ -1616,18 +1636,6 @@ name = "codex-utils-string"
 version = "0.0.0"
 
 [[package]]
-name = "codex-utils-tokenizer"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "codex-utils-cache",
- "pretty_assertions",
- "thiserror 2.0.17",
- "tiktoken-rs",
- "tokio",
-]
-
-[[package]]
 name = "codex-windows-sandbox"
 version = "0.1.0"
 dependencies = [
@@ -1769,11 +1777,13 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "base64",
  "codex-core",
  "codex-protocol",
  "notify",
  "regex-lite",
  "serde_json",
+ "shlex",
  "tempfile",
  "tokio",
  "walkdir",
@@ -2446,17 +2456,6 @@ checksum = "7cd915d99f24784cdc19fd37ef22b97e3ff0ae756c7e492e9fbfe897d61e2aec"
 dependencies = [
  "indenter",
  "once_cell",
-]
-
-[[package]]
-name = "fancy-regex"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "531e46835a22af56d1e3b66f04844bed63158bc094a628bec1d321d9b4c44bf2"
-dependencies = [
- "bit-set",
- "regex-automata",
- "regex-syntax 0.8.5",
 ]
 
 [[package]]
@@ -3746,11 +3745,13 @@ dependencies = [
  "assert_cmd",
  "codex-core",
  "codex-mcp-server",
+ "core_test_support",
  "mcp-types",
  "os_info",
  "pretty_assertions",
  "serde",
  "serde_json",
+ "shlex",
  "tokio",
  "wiremock",
 ]
@@ -4783,7 +4784,7 @@ dependencies = [
  "pin-project-lite",
  "quinn-proto",
  "quinn-udp",
- "rustc-hash 2.1.1",
+ "rustc-hash",
  "rustls",
  "socket2 0.6.0",
  "thiserror 2.0.17",
@@ -4803,7 +4804,7 @@ dependencies = [
  "lru-slab",
  "rand 0.9.2",
  "ring",
- "rustc-hash 2.1.1",
+ "rustc-hash",
  "rustls",
  "rustls-pki-types",
  "slab",
@@ -5097,10 +5098,10 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "0.8.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5947688160b56fb6c827e3c20a72c90392a1d7e9dec74749197aa1780ac42ca"
+version = "0.9.0"
+source = "git+https://github.com/bolinfest/rust-sdk?branch=pr556#4d9cc16f4c76c84486344f542ed9a3e9364019ba"
 dependencies = [
+ "async-trait",
  "base64",
  "bytes",
  "chrono",
@@ -5131,9 +5132,8 @@ dependencies = [
 
 [[package]]
 name = "rmcp-macros"
-version = "0.8.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01263441d3f8635c628e33856c468b96ebbce1af2d3699ea712ca71432d4ee7a"
+version = "0.9.0"
+source = "git+https://github.com/bolinfest/rust-sdk?branch=pr556#4d9cc16f4c76c84486344f542ed9a3e9364019ba"
 dependencies = [
  "darling 0.21.3",
  "proc-macro2",
@@ -5147,12 +5147,6 @@ name = "rustc-demangle"
 version = "0.1.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "989e6739f80c4ad5b13e0fd7fe89531180375b18520cc8c82080e4dc4035b84f"
-
-[[package]]
-name = "rustc-hash"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
 
 [[package]]
 name = "rustc-hash"
@@ -6372,21 +6366,6 @@ dependencies = [
  "quick-error",
  "weezl",
  "zune-jpeg",
-]
-
-[[package]]
-name = "tiktoken-rs"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a19830747d9034cd9da43a60eaa8e552dfda7712424aebf187b7a60126bae0d"
-dependencies = [
- "anyhow",
- "base64",
- "bstr",
- "fancy-regex",
- "lazy_static",
- "regex",
- "rustc-hash 1.1.0",
 ]
 
 [[package]]

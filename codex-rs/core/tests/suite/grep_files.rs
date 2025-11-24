@@ -1,7 +1,6 @@
 #![cfg(not(target_os = "windows"))]
 
 use anyhow::Result;
-use codex_core::model_family::find_family_for_model;
 use core_test_support::responses::mount_function_call_agent_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
@@ -127,11 +126,7 @@ async fn grep_files_tool_reports_empty_results() -> Result<()> {
 
 #[allow(clippy::expect_used)]
 async fn build_test_codex(server: &wiremock::MockServer) -> Result<TestCodex> {
-    let mut builder = test_codex().with_config(|config| {
-        config.model = MODEL_WITH_TOOL.to_string();
-        config.model_family =
-            find_family_for_model(MODEL_WITH_TOOL).expect("model family for test model");
-    });
+    let mut builder = test_codex().with_model(MODEL_WITH_TOOL);
     builder.build(server).await
 }
 

@@ -25,17 +25,17 @@ use pretty_assertions::assert_eq;
 async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
     skip_if_no_network!();
 
-    // Sub-agent turn 1: emit a shell function_call requiring approval, then complete.
+    // Sub-agent turn 1: emit a shell_command function_call requiring approval, then complete.
     let call_id = "call-exec-1";
     let args = serde_json::json!({
-        "command": ["bash", "-lc", "rm -rf delegated"],
+        "command": "rm -rf delegated",
         "timeout_ms": 1000,
         "with_escalated_permissions": true,
     })
     .to_string();
     let sse1 = sse(vec![
         ev_response_created("resp-1"),
-        ev_function_call(call_id, "shell", &args),
+        ev_function_call(call_id, "shell_command", &args),
         ev_completed("resp-1"),
     ]);
 
@@ -58,7 +58,7 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
 
     // Build a conversation configured to require approvals so the delegate
     // routes ExecApprovalRequest via the parent.
-    let mut builder = test_codex().with_config(|config| {
+    let mut builder = test_codex().with_model("gpt-5.1").with_config(|config| {
         config.approval_policy = AskForApproval::OnRequest;
         config.sandbox_policy = SandboxPolicy::ReadOnly;
     });
@@ -133,7 +133,7 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
     let server = start_mock_server().await;
     mount_sse_sequence(&server, vec![sse1, sse2]).await;
 
-    let mut builder = test_codex().with_config(|config| {
+    let mut builder = test_codex().with_model("gpt-5.1").with_config(|config| {
         config.approval_policy = AskForApproval::OnRequest;
         // Use a restricted sandbox so patch approval is required
         config.sandbox_policy = SandboxPolicy::ReadOnly;

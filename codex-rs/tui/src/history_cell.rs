@@ -806,16 +806,22 @@ pub(crate) struct McpToolCallCell {
     start_time: Instant,
     duration: Option<Duration>,
     result: Option<Result<mcp_types::CallToolResult, String>>,
+    animations_enabled: bool,
 }
 
 impl McpToolCallCell {
-    pub(crate) fn new(call_id: String, invocation: McpInvocation) -> Self {
+    pub(crate) fn new(
+        call_id: String,
+        invocation: McpInvocation,
+        animations_enabled: bool,
+    ) -> Self {
         Self {
             call_id,
             invocation,
             start_time: Instant::now(),
             duration: None,
             result: None,
+            animations_enabled,
         }
     }
 
@@ -877,7 +883,7 @@ impl HistoryCell for McpToolCallCell {
         let bullet = match status {
             Some(true) => "•".green().bold(),
             Some(false) => "•".red().bold(),
-            None => spinner(Some(self.start_time)),
+            None => spinner(Some(self.start_time), self.animations_enabled),
         };
         let header_text = if status.is_some() {
             "Called"
@@ -965,8 +971,9 @@ impl HistoryCell for McpToolCallCell {
 pub(crate) fn new_active_mcp_tool_call(
     call_id: String,
     invocation: McpInvocation,
+    animations_enabled: bool,
 ) -> McpToolCallCell {
-    McpToolCallCell::new(call_id, invocation)
+    McpToolCallCell::new(call_id, invocation, animations_enabled)
 }
 
 pub(crate) fn new_web_search_call(query: String) -> PlainHistoryCell {
@@ -1631,7 +1638,7 @@ mod tests {
             })),
         };
 
-        let cell = new_active_mcp_tool_call("call-1".into(), invocation);
+        let cell = new_active_mcp_tool_call("call-1".into(), invocation, true);
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
 
         insta::assert_snapshot!(rendered);
@@ -1658,7 +1665,7 @@ mod tests {
             structured_content: None,
         };
 
-        let mut cell = new_active_mcp_tool_call("call-2".into(), invocation);
+        let mut cell = new_active_mcp_tool_call("call-2".into(), invocation, true);
         assert!(
             cell.complete(Duration::from_millis(1420), Ok(result))
                 .is_none()
@@ -1680,7 +1687,7 @@ mod tests {
             })),
         };
 
-        let mut cell = new_active_mcp_tool_call("call-3".into(), invocation);
+        let mut cell = new_active_mcp_tool_call("call-3".into(), invocation, true);
         assert!(
             cell.complete(Duration::from_secs(2), Err("network timeout".into()))
                 .is_none()
@@ -1724,7 +1731,7 @@ mod tests {
             structured_content: None,
         };
 
-        let mut cell = new_active_mcp_tool_call("call-4".into(), invocation);
+        let mut cell = new_active_mcp_tool_call("call-4".into(), invocation, true);
         assert!(
             cell.complete(Duration::from_millis(640), Ok(result))
                 .is_none()
@@ -1756,7 +1763,7 @@ mod tests {
             structured_content: None,
         };
 
-        let mut cell = new_active_mcp_tool_call("call-5".into(), invocation);
+        let mut cell = new_active_mcp_tool_call("call-5".into(), invocation, true);
         assert!(
             cell.complete(Duration::from_millis(1280), Ok(result))
                 .is_none()
@@ -1795,7 +1802,7 @@ mod tests {
             structured_content: None,
         };
 
-        let mut cell = new_active_mcp_tool_call("call-6".into(), invocation);
+        let mut cell = new_active_mcp_tool_call("call-6".into(), invocation, true);
         assert!(
             cell.complete(Duration::from_millis(320), Ok(result))
                 .is_none()
@@ -1853,32 +1860,35 @@ mod tests {
     fn coalesces_sequential_reads_within_one_call() {
         // Build one exec cell with a Search followed by two Reads
         let call_id = "c1".to_string();
-        let mut cell = ExecCell::new(ExecCall {
-            call_id: call_id.clone(),
-            command: vec!["bash".into(), "-lc".into(), "echo".into()],
-            parsed: vec![
-                ParsedCommand::Search {
-                    query: Some("shimmer_spans".into()),
-                    path: None,
-                    cmd: "rg shimmer_spans".into(),
-                },
-                ParsedCommand::Read {
-                    name: "shimmer.rs".into(),
-                    cmd: "cat shimmer.rs".into(),
-                    path: "shimmer.rs".into(),
-                },
-                ParsedCommand::Read {
-                    name: "status_indicator_widget.rs".into(),
-                    cmd: "cat status_indicator_widget.rs".into(),
-                    path: "status_indicator_widget.rs".into(),
-                },
-            ],
-            output: None,
-            source: ExecCommandSource::Agent,
-            start_time: Some(Instant::now()),
-            duration: None,
-            interaction_input: None,
-        });
+        let mut cell = ExecCell::new(
+            ExecCall {
+                call_id: call_id.clone(),
+                command: vec!["bash".into(), "-lc".into(), "echo".into()],
+                parsed: vec![
+                    ParsedCommand::Search {
+                        query: Some("shimmer_spans".into()),
+                        path: None,
+                        cmd: "rg shimmer_spans".into(),
+                    },
+                    ParsedCommand::Read {
+                        name: "shimmer.rs".into(),
+                        cmd: "cat shimmer.rs".into(),
+                        path: "shimmer.rs".into(),
+                    },
+                    ParsedCommand::Read {
+                        name: "status_indicator_widget.rs".into(),
+                        cmd: "cat status_indicator_widget.rs".into(),
+                        path: "status_indicator_widget.rs".into(),
+                    },
+                ],
+                output: None,
+                source: ExecCommandSource::Agent,
+                start_time: Some(Instant::now()),
+                duration: None,
+                interaction_input: None,
+            },
+            true,
+        );
         // Mark call complete so markers are ✓
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
 
@@ -1889,20 +1899,23 @@ mod tests {
 
     #[test]
     fn coalesces_reads_across_multiple_calls() {
-        let mut cell = ExecCell::new(ExecCall {
-            call_id: "c1".to_string(),
-            command: vec!["bash".into(), "-lc".into(), "echo".into()],
-            parsed: vec![ParsedCommand::Search {
-                query: Some("shimmer_spans".into()),
-                path: None,
-                cmd: "rg shimmer_spans".into(),
-            }],
-            output: None,
-            source: ExecCommandSource::Agent,
-            start_time: Some(Instant::now()),
-            duration: None,
-            interaction_input: None,
-        });
+        let mut cell = ExecCell::new(
+            ExecCall {
+                call_id: "c1".to_string(),
+                command: vec!["bash".into(), "-lc".into(), "echo".into()],
+                parsed: vec![ParsedCommand::Search {
+                    query: Some("shimmer_spans".into()),
+                    path: None,
+                    cmd: "rg shimmer_spans".into(),
+                }],
+                output: None,
+                source: ExecCommandSource::Agent,
+                start_time: Some(Instant::now()),
+                duration: None,
+                interaction_input: None,
+            },
+            true,
+        );
         // Call 1: Search only
         cell.complete_call("c1", CommandOutput::default(), Duration::from_millis(1));
         // Call 2: Read A
@@ -1943,32 +1956,35 @@ mod tests {
 
     #[test]
     fn coalesced_reads_dedupe_names() {
-        let mut cell = ExecCell::new(ExecCall {
-            call_id: "c1".to_string(),
-            command: vec!["bash".into(), "-lc".into(), "echo".into()],
-            parsed: vec![
-                ParsedCommand::Read {
-                    name: "auth.rs".into(),
-                    cmd: "cat auth.rs".into(),
-                    path: "auth.rs".into(),
-                },
-                ParsedCommand::Read {
-                    name: "auth.rs".into(),
-                    cmd: "cat auth.rs".into(),
-                    path: "auth.rs".into(),
-                },
-                ParsedCommand::Read {
-                    name: "shimmer.rs".into(),
-                    cmd: "cat shimmer.rs".into(),
-                    path: "shimmer.rs".into(),
-                },
-            ],
-            output: None,
-            source: ExecCommandSource::Agent,
-            start_time: Some(Instant::now()),
-            duration: None,
-            interaction_input: None,
-        });
+        let mut cell = ExecCell::new(
+            ExecCall {
+                call_id: "c1".to_string(),
+                command: vec!["bash".into(), "-lc".into(), "echo".into()],
+                parsed: vec![
+                    ParsedCommand::Read {
+                        name: "auth.rs".into(),
+                        cmd: "cat auth.rs".into(),
+                        path: "auth.rs".into(),
+                    },
+                    ParsedCommand::Read {
+                        name: "auth.rs".into(),
+                        cmd: "cat auth.rs".into(),
+                        path: "auth.rs".into(),
+                    },
+                    ParsedCommand::Read {
+                        name: "shimmer.rs".into(),
+                        cmd: "cat shimmer.rs".into(),
+                        path: "shimmer.rs".into(),
+                    },
+                ],
+                output: None,
+                source: ExecCommandSource::Agent,
+                start_time: Some(Instant::now()),
+                duration: None,
+                interaction_input: None,
+            },
+            true,
+        );
         cell.complete_call("c1", CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(80);
         let rendered = render_lines(&lines).join("\n");
@@ -1980,16 +1996,19 @@ mod tests {
         // Create a completed exec cell with a multiline command
         let cmd = "set -o pipefail\ncargo test --all-features --quiet".to_string();
         let call_id = "c1".to_string();
-        let mut cell = ExecCell::new(ExecCall {
-            call_id: call_id.clone(),
-            command: vec!["bash".into(), "-lc".into(), cmd],
-            parsed: Vec::new(),
-            output: None,
-            source: ExecCommandSource::Agent,
-            start_time: Some(Instant::now()),
-            duration: None,
-            interaction_input: None,
-        });
+        let mut cell = ExecCell::new(
+            ExecCall {
+                call_id: call_id.clone(),
+                command: vec!["bash".into(), "-lc".into(), cmd],
+                parsed: Vec::new(),
+                output: None,
+                source: ExecCommandSource::Agent,
+                start_time: Some(Instant::now()),
+                duration: None,
+                interaction_input: None,
+            },
+            true,
+        );
         // Mark call complete so it renders as "Ran"
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
 
@@ -2003,16 +2022,19 @@ mod tests {
     #[test]
     fn single_line_command_compact_when_fits() {
         let call_id = "c1".to_string();
-        let mut cell = ExecCell::new(ExecCall {
-            call_id: call_id.clone(),
-            command: vec!["echo".into(), "ok".into()],
-            parsed: Vec::new(),
-            output: None,
-            source: ExecCommandSource::Agent,
-            start_time: Some(Instant::now()),
-            duration: None,
-            interaction_input: None,
-        });
+        let mut cell = ExecCell::new(
+            ExecCall {
+                call_id: call_id.clone(),
+                command: vec!["echo".into(), "ok".into()],
+                parsed: Vec::new(),
+                output: None,
+                source: ExecCommandSource::Agent,
+                start_time: Some(Instant::now()),
+                duration: None,
+                interaction_input: None,
+            },
+            true,
+        );
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         // Wide enough that it fits inline
         let lines = cell.display_lines(80);
@@ -2024,16 +2046,19 @@ mod tests {
     fn single_line_command_wraps_with_four_space_continuation() {
         let call_id = "c1".to_string();
         let long = "a_very_long_token_without_spaces_to_force_wrapping".to_string();
-        let mut cell = ExecCell::new(ExecCall {
-            call_id: call_id.clone(),
-            command: vec!["bash".into(), "-lc".into(), long],
-            parsed: Vec::new(),
-            output: None,
-            source: ExecCommandSource::Agent,
-            start_time: Some(Instant::now()),
-            duration: None,
-            interaction_input: None,
-        });
+        let mut cell = ExecCell::new(
+            ExecCall {
+                call_id: call_id.clone(),
+                command: vec!["bash".into(), "-lc".into(), long],
+                parsed: Vec::new(),
+                output: None,
+                source: ExecCommandSource::Agent,
+                start_time: Some(Instant::now()),
+                duration: None,
+                interaction_input: None,
+            },
+            true,
+        );
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(24);
         let rendered = render_lines(&lines).join("\n");
@@ -2044,16 +2069,19 @@ mod tests {
     fn multiline_command_without_wrap_uses_branch_then_eight_spaces() {
         let call_id = "c1".to_string();
         let cmd = "echo one\necho two".to_string();
-        let mut cell = ExecCell::new(ExecCall {
-            call_id: call_id.clone(),
-            command: vec!["bash".into(), "-lc".into(), cmd],
-            parsed: Vec::new(),
-            output: None,
-            source: ExecCommandSource::Agent,
-            start_time: Some(Instant::now()),
-            duration: None,
-            interaction_input: None,
-        });
+        let mut cell = ExecCell::new(
+            ExecCall {
+                call_id: call_id.clone(),
+                command: vec!["bash".into(), "-lc".into(), cmd],
+                parsed: Vec::new(),
+                output: None,
+                source: ExecCommandSource::Agent,
+                start_time: Some(Instant::now()),
+                duration: None,
+                interaction_input: None,
+            },
+            true,
+        );
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(80);
         let rendered = render_lines(&lines).join("\n");
@@ -2065,16 +2093,19 @@ mod tests {
         let call_id = "c1".to_string();
         let cmd = "first_token_is_long_enough_to_wrap\nsecond_token_is_also_long_enough_to_wrap"
             .to_string();
-        let mut cell = ExecCell::new(ExecCall {
-            call_id: call_id.clone(),
-            command: vec!["bash".into(), "-lc".into(), cmd],
-            parsed: Vec::new(),
-            output: None,
-            source: ExecCommandSource::Agent,
-            start_time: Some(Instant::now()),
-            duration: None,
-            interaction_input: None,
-        });
+        let mut cell = ExecCell::new(
+            ExecCall {
+                call_id: call_id.clone(),
+                command: vec!["bash".into(), "-lc".into(), cmd],
+                parsed: Vec::new(),
+                output: None,
+                source: ExecCommandSource::Agent,
+                start_time: Some(Instant::now()),
+                duration: None,
+                interaction_input: None,
+            },
+            true,
+        );
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(28);
         let rendered = render_lines(&lines).join("\n");
@@ -2086,16 +2117,19 @@ mod tests {
         // Build an exec cell with a non-zero exit and 10 lines on stderr to exercise
         // the head/tail rendering and gutter prefixes.
         let call_id = "c_err".to_string();
-        let mut cell = ExecCell::new(ExecCall {
-            call_id: call_id.clone(),
-            command: vec!["bash".into(), "-lc".into(), "seq 1 10 1>&2 && false".into()],
-            parsed: Vec::new(),
-            output: None,
-            source: ExecCommandSource::Agent,
-            start_time: Some(Instant::now()),
-            duration: None,
-            interaction_input: None,
-        });
+        let mut cell = ExecCell::new(
+            ExecCall {
+                call_id: call_id.clone(),
+                command: vec!["bash".into(), "-lc".into(), "seq 1 10 1>&2 && false".into()],
+                parsed: Vec::new(),
+                output: None,
+                source: ExecCommandSource::Agent,
+                start_time: Some(Instant::now()),
+                duration: None,
+                interaction_input: None,
+            },
+            true,
+        );
         let stderr: String = (1..=10)
             .map(|n| n.to_string())
             .collect::<Vec<_>>()
@@ -2133,16 +2167,19 @@ mod tests {
         let call_id = "c_wrap_err".to_string();
         let long_cmd =
             "echo this_is_a_very_long_single_token_that_will_wrap_across_the_available_width";
-        let mut cell = ExecCell::new(ExecCall {
-            call_id: call_id.clone(),
-            command: vec!["bash".into(), "-lc".into(), long_cmd.to_string()],
-            parsed: Vec::new(),
-            output: None,
-            source: ExecCommandSource::Agent,
-            start_time: Some(Instant::now()),
-            duration: None,
-            interaction_input: None,
-        });
+        let mut cell = ExecCell::new(
+            ExecCall {
+                call_id: call_id.clone(),
+                command: vec!["bash".into(), "-lc".into(), long_cmd.to_string()],
+                parsed: Vec::new(),
+                output: None,
+                source: ExecCommandSource::Agent,
+                start_time: Some(Instant::now()),
+                duration: None,
+                interaction_input: None,
+            },
+            true,
+        );
 
         let stderr = "error: first line on stderr\nerror: second line on stderr".to_string();
         cell.complete_call(

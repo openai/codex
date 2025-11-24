@@ -6,12 +6,14 @@ the session manager to spawn PTYs once an ExecEnv is prepared.
 */
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
+use crate::exec::ExecExpiration;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ApprovalRequirement;
 use crate::tools::sandboxing::ProvidesSandboxRetryData;
 use crate::tools::sandboxing::SandboxAttempt;
+use crate::tools::sandboxing::SandboxOverride;
 use crate::tools::sandboxing::SandboxRetryData;
 use crate::tools::sandboxing::Sandboxable;
 use crate::tools::sandboxing::SandboxablePreference;
@@ -134,8 +136,19 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         Some(req.approval_requirement.clone())
     }
 
-    fn wants_escalated_first_attempt(&self, req: &UnifiedExecRequest) -> bool {
-        req.with_escalated_permissions.unwrap_or(false)
+    fn sandbox_mode_for_first_attempt(&self, req: &UnifiedExecRequest) -> SandboxOverride {
+        if req.with_escalated_permissions.unwrap_or(false)
+            || matches!(
+                req.approval_requirement,
+                ApprovalRequirement::Skip {
+                    bypass_sandbox: true
+                }
+            )
+        {
+            SandboxOverride::BypassSandboxFirstAttempt
+        } else {
+            SandboxOverride::NoOverride
+        }
     }
 }
 
@@ -150,13 +163,13 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecSession> for UnifiedExecRunt
             &req.command,
             &req.cwd,
             &req.env,
-            None,
+            ExecExpiration::DefaultTimeout,
             req.with_escalated_permissions,
             req.justification.clone(),
         )
         .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
         let exec_env = attempt
-            .env_for(&spec)
+            .env_for(spec)
             .map_err(|err| ToolError::Codex(err.into()))?;
         self.manager
             .open_session_with_exec_env(&exec_env)

@@ -40,17 +40,21 @@ pub(crate) fn new_active_exec_command(
     parsed: Vec<ParsedCommand>,
     source: ExecCommandSource,
     interaction_input: Option<String>,
+    animations_enabled: bool,
 ) -> ExecCell {
-    ExecCell::new(ExecCall {
-        call_id,
-        command,
-        parsed,
-        output: None,
-        source,
-        start_time: Some(Instant::now()),
-        duration: None,
-        interaction_input,
-    })
+    ExecCell::new(
+        ExecCall {
+            call_id,
+            command,
+            parsed,
+            output: None,
+            source,
+            start_time: Some(Instant::now()),
+            duration: None,
+            interaction_input,
+        },
+        animations_enabled,
+    )
 }
 
 fn format_unified_exec_interaction(command: &[String], input: Option<&str>) -> String {
@@ -168,7 +172,10 @@ pub(crate) fn output_lines(
     }
 }
 
-pub(crate) fn spinner(start_time: Option<Instant>) -> Span<'static> {
+pub(crate) fn spinner(start_time: Option<Instant>, animations_enabled: bool) -> Span<'static> {
+    if !animations_enabled {
+        return "•".dim();
+    }
     let elapsed = start_time.map(|st| st.elapsed()).unwrap_or_default();
     if supports_color::on_cached(supports_color::Stream::Stdout)
         .map(|level| level.has_16m)
@@ -239,7 +246,7 @@ impl ExecCell {
         let mut out: Vec<Line<'static>> = Vec::new();
         out.push(Line::from(vec![
             if self.is_active() {
-                spinner(self.active_start_time())
+                spinner(self.active_start_time(), self.animations_enabled())
             } else {
                 "•".dim()
             },
@@ -347,7 +354,7 @@ impl ExecCell {
         let bullet = match success {
             Some(true) => "•".green().bold(),
             Some(false) => "•".red().bold(),
-            None => spinner(call.start_time),
+            None => spinner(call.start_time, self.animations_enabled()),
         };
         let is_interaction = call.is_unified_exec_interaction();
         let title = if is_interaction {

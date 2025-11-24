@@ -30,6 +30,7 @@ use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
+use codex_protocol::approvals::ElicitationAction;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::user_input::UserInput;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
@@ -82,7 +83,21 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     let prompt_arg = match &command {
         // Allow prompt before the subcommand by falling back to the parent-level prompt
         // when the Resume subcommand did not provide its own prompt.
-        Some(ExecCommand::Resume(args)) => args.prompt.clone().or(prompt),
+        Some(ExecCommand::Resume(args)) => {
+            let resume_prompt = args
+                .prompt
+                .clone()
+                // When using `resume --last <PROMPT>`, clap still parses the first positional
+                // as `session_id`. Reinterpret it as the prompt so the flag works with JSON mode.
+                .or_else(|| {
+                    if args.last {
+                        args.session_id.clone()
+                    } else {
+                        None
+                    }
+                });
+            resume_prompt.or(prompt)
+        }
         None => prompt,
     };
 
@@ -401,6 +416,16 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     // exit with a non-zero status for automation-friendly signaling.
     let mut error_seen = false;
     while let Some(event) = rx.recv().await {
+        if let EventMsg::ElicitationRequest(ev) = &event.msg {
+            // Automatically cancel elicitation requests in exec mode.
+            conversation
+                .submit(Op::ResolveElicitation {
+                    server_name: ev.server_name.clone(),
+                    request_id: ev.id.clone(),
+                    decision: ElicitationAction::Cancel,
+                })
+                .await?;
+        }
         if matches!(event.msg, EventMsg::Error(_)) {
             error_seen = true;
         }
