@@ -11,6 +11,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use crate::ConversationId;
+use crate::approvals::ElicitationRequestEvent;
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::custom_prompts::CustomPrompt;
@@ -23,6 +24,7 @@ use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
 use crate::user_input::UserInput;
 use mcp_types::CallToolResult;
+use mcp_types::RequestId;
 use mcp_types::Resource as McpResource;
 use mcp_types::ResourceTemplate as McpResourceTemplate;
 use mcp_types::Tool as McpTool;
@@ -35,6 +37,7 @@ use strum_macros::Display;
 use ts_rs::TS;
 
 pub use crate::approvals::ApplyPatchApprovalRequestEvent;
+pub use crate::approvals::ElicitationAction;
 pub use crate::approvals::ExecApprovalRequestEvent;
 pub use crate::approvals::SandboxCommandAssessment;
 pub use crate::approvals::SandboxRiskLevel;
@@ -151,6 +154,16 @@ pub enum Op {
         id: String,
         /// The user's decision in response to the request.
         decision: ReviewDecision,
+    },
+
+    /// Resolve an MCP elicitation request.
+    ResolveElicitation {
+        /// Name of the MCP server that issued the request.
+        server_name: String,
+        /// Request identifier from the MCP server.
+        request_id: RequestId,
+        /// User's decision for the request.
+        decision: ElicitationAction,
     },
 
     /// Append an entry to the persistent cross-session message history.
@@ -504,6 +517,8 @@ pub enum EventMsg {
     ViewImageToolCall(ViewImageToolCallEvent),
 
     ExecApprovalRequest(ExecApprovalRequestEvent),
+
+    ElicitationRequest(ElicitationRequestEvent),
 
     ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent),
 

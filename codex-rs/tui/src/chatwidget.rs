@@ -53,6 +53,7 @@ use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_protocol::ConversationId;
+use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::user_input::UserInput;
 use crossterm::event::KeyCode;
@@ -733,6 +734,14 @@ impl ChatWidget {
         );
     }
 
+    fn on_elicitation_request(&mut self, ev: ElicitationRequestEvent) {
+        let ev2 = ev.clone();
+        self.defer_or_handle(
+            |q| q.push_elicitation(ev),
+            |s| s.handle_elicitation_request_now(ev2),
+        );
+    }
+
     fn on_exec_command_begin(&mut self, ev: ExecCommandBeginEvent) {
         self.flush_answer_stream_with_separator();
         let ev2 = ev.clone();
@@ -1037,6 +1046,22 @@ impl ChatWidget {
             cwd: self.config.cwd.clone(),
             changes: ev.changes.keys().cloned().collect(),
         });
+    }
+
+    pub(crate) fn handle_elicitation_request_now(&mut self, ev: ElicitationRequestEvent) {
+        self.flush_answer_stream_with_separator();
+
+        self.notify(Notification::ElicitationRequested {
+            server_name: ev.server_name.clone(),
+        });
+
+        let request = ApprovalRequest::McpElicitation {
+            server_name: ev.server_name,
+            request_id: ev.id,
+            message: ev.message,
+        };
+        self.bottom_pane.push_approval_request(request);
+        self.request_redraw();
     }
 
     pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
@@ -1685,6 +1710,9 @@ impl ChatWidget {
             }
             EventMsg::ApplyPatchApprovalRequest(ev) => {
                 self.on_apply_patch_approval_request(id.unwrap_or_default(), ev)
+            }
+            EventMsg::ElicitationRequest(ev) => {
+                self.on_elicitation_request(ev);
             }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::ExecCommandOutputDelta(delta) => self.on_exec_command_output_delta(delta),
@@ -2352,11 +2380,18 @@ impl ChatWidget {
         {
             return None;
         }
-        let cwd = match std::env::current_dir() {
-            Ok(cwd) => cwd,
-            Err(_) => return Some((Vec::new(), 0, true)),
-        };
-        codex_windows_sandbox::world_writable_warning_details(self.config.codex_home.as_path(), cwd)
+        let cwd = self.config.cwd.clone();
+        let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
+        match codex_windows_sandbox::apply_world_writable_scan_and_denies(
+            self.config.codex_home.as_path(),
+            cwd.as_path(),
+            &env_map,
+            &self.config.sandbox_policy,
+            Some(self.config.codex_home.as_path()),
+        ) {
+            Ok(_) => None,
+            Err(_) => Some((Vec::new(), 0, true)),
+        }
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -2994,6 +3029,7 @@ enum Notification {
     AgentTurnComplete { response: String },
     ExecApprovalRequested { command: String },
     EditApprovalRequested { cwd: PathBuf, changes: Vec<PathBuf> },
+    ElicitationRequested { server_name: String },
 }
 
 impl Notification {
@@ -3017,6 +3053,9 @@ impl Notification {
                     }
                 )
             }
+            Notification::ElicitationRequested { server_name } => {
+                format!("Approval requested by {server_name}")
+            }
         }
     }
 
@@ -3024,7 +3063,8 @@ impl Notification {
         match self {
             Notification::AgentTurnComplete { .. } => "agent-turn-complete",
             Notification::ExecApprovalRequested { .. }
-            | Notification::EditApprovalRequested { .. } => "approval-requested",
+            | Notification::EditApprovalRequested { .. }
+            | Notification::ElicitationRequested { .. } => "approval-requested",
         }
     }
 

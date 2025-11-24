@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use anyhow::Result;
+use base64::Engine;
 use serde_json::Value;
 use wiremock::BodyPrintLimit;
 use wiremock::Match;
@@ -297,12 +298,18 @@ pub fn ev_reasoning_item(id: &str, summary: &[&str], raw_content: &[&str]) -> Va
         .map(|text| serde_json::json!({"type": "summary_text", "text": text}))
         .collect();
 
+    let overhead = "b".repeat(550);
+    let raw_content_joined = raw_content.join("");
+    let encrypted_content =
+        base64::engine::general_purpose::STANDARD.encode(overhead + raw_content_joined.as_str());
+
     let mut event = serde_json::json!({
         "type": "response.output_item.done",
         "item": {
             "type": "reasoning",
             "id": id,
             "summary": summary_entries,
+            "encrypted_content": encrypted_content,
         }
     });
 

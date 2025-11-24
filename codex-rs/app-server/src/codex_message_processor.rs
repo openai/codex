@@ -39,6 +39,7 @@ use codex_app_server_protocol::GetConversationSummaryResponse;
 use codex_app_server_protocol::GetUserAgentResponse;
 use codex_app_server_protocol::GetUserSavedConfigResponse;
 use codex_app_server_protocol::GitDiffToRemoteResponse;
+use codex_app_server_protocol::GitInfo as ApiGitInfo;
 use codex_app_server_protocol::InputItem as WireInputItem;
 use codex_app_server_protocol::InterruptConversationParams;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -115,7 +116,6 @@ use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
 use codex_core::features::Feature;
 use codex_core::find_conversation_path_by_id_str;
-use codex_core::get_platform_sandbox;
 use codex_core::git_info::git_diff_to_remote;
 use codex_core::parse_cursor;
 use codex_core::protocol::EventMsg;
@@ -131,7 +131,7 @@ use codex_protocol::ConversationId;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::GitInfo;
+use codex_protocol::protocol::GitInfo as CoreGitInfo;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionMetaLine;
@@ -1181,13 +1181,6 @@ impl CodexMessageProcessor {
             .sandbox_policy
             .unwrap_or_else(|| self.config.sandbox_policy.clone());
 
-        let sandbox_type = match &effective_policy {
-            codex_core::protocol::SandboxPolicy::DangerFullAccess => {
-                codex_core::exec::SandboxType::None
-            }
-            _ => get_platform_sandbox().unwrap_or(codex_core::exec::SandboxType::None),
-        };
-        tracing::debug!("Sandbox type: {sandbox_type:?}");
         let codex_linux_sandbox_exe = self.config.codex_linux_sandbox_exe.clone();
         let outgoing = self.outgoing.clone();
         let req_id = request_id;
@@ -1196,7 +1189,6 @@ impl CodexMessageProcessor {
         tokio::spawn(async move {
             match codex_core::exec::process_exec_tool_call(
                 exec_params,
-                sandbox_type,
                 &effective_policy,
                 sandbox_cwd.as_path(),
                 &codex_linux_sandbox_exe,
@@ -2931,7 +2923,7 @@ fn extract_conversation_summary(
     path: PathBuf,
     head: &[serde_json::Value],
     session_meta: &SessionMeta,
-    git: Option<&GitInfo>,
+    git: Option<&CoreGitInfo>,
     fallback_provider: &str,
 ) -> Option<ConversationSummary> {
     let preview = head
@@ -2972,7 +2964,7 @@ fn extract_conversation_summary(
     })
 }
 
-fn map_git_info(git_info: &GitInfo) -> ConversationGitInfo {
+fn map_git_info(git_info: &CoreGitInfo) -> ConversationGitInfo {
     ConversationGitInfo {
         sha: git_info.commit_hash.clone(),
         branch: git_info.branch.clone(),
@@ -2995,10 +2987,18 @@ fn summary_to_thread(summary: ConversationSummary) -> Thread {
         preview,
         timestamp,
         model_provider,
-        ..
+        cwd,
+        cli_version,
+        source,
+        git_info,
     } = summary;
 
     let created_at = parse_datetime(timestamp.as_deref());
+    let git_info = git_info.map(|info| ApiGitInfo {
+        sha: info.sha,
+        branch: info.branch,
+        origin_url: info.origin_url,
+    });
 
     Thread {
         id: conversation_id.to_string(),
@@ -3006,6 +3006,10 @@ fn summary_to_thread(summary: ConversationSummary) -> Thread {
         model_provider,
         created_at: created_at.map(|dt| dt.timestamp()).unwrap_or(0),
         path,
+        cwd,
+        cli_version,
+        source: source.into(),
+        git_info,
         turns: Vec::new(),
     }
 }

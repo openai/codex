@@ -30,6 +30,7 @@ use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
+use codex_protocol::approvals::ElicitationAction;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::user_input::UserInput;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
@@ -415,6 +416,16 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     // exit with a non-zero status for automation-friendly signaling.
     let mut error_seen = false;
     while let Some(event) = rx.recv().await {
+        if let EventMsg::ElicitationRequest(ev) = &event.msg {
+            // Automatically cancel elicitation requests in exec mode.
+            conversation
+                .submit(Op::ResolveElicitation {
+                    server_name: ev.server_name.clone(),
+                    request_id: ev.id.clone(),
+                    decision: ElicitationAction::Cancel,
+                })
+                .await?;
+        }
         if matches!(event.msg, EventMsg::Error(_)) {
             error_seen = true;
         }
