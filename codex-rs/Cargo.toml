@@ -51,6 +51,7 @@ version = "0.0.0"
 # crates created with `cargo new -w ...` automatically inherit the 2024
 # edition.
 edition = "2024"
+license = "Apache-2.0"
 
 [workspace.dependencies]
 # Internal
@@ -138,7 +139,7 @@ itertools = "0.14.0"
 keyring = { version = "3.6", default-features = false }
 landlock = "0.4.1"
 lazy_static = "1"
-libc = "0.2.175"
+libc = "0.2.177"
 log = "0.4"
 lru = "0.12.5"
 maplit = "1.0.2"
