@@ -1,3 +1,6 @@
+use std::cmp::Reverse;
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -31,6 +34,7 @@ use crate::truncate::approx_token_count;
 use crate::truncate::formatted_truncate_text;
 
 use super::ExecCommandRequest;
+use super::MAX_UNIFIED_EXEC_SESSIONS;
 use super::SessionEntry;
 use super::UnifiedExecContext;
 use super::UnifiedExecError;
@@ -294,10 +298,11 @@ impl UnifiedExecSessionManager {
         &self,
         session_id: i32,
     ) -> Result<PreparedSessionHandles, UnifiedExecError> {
-        let sessions = self.sessions.lock().await;
+        let mut sessions = self.sessions.lock().await;
         let entry = sessions
-            .get(&session_id)
+            .get_mut(&session_id)
             .ok_or(UnifiedExecError::UnknownSessionId { session_id })?;
+        entry.last_used = Instant::now();
         let OutputHandles {
             output_buffer,
             output_notify,
@@ -345,8 +350,11 @@ impl UnifiedExecSessionManager {
             command: command.to_vec(),
             cwd,
             started_at,
+            last_used: started_at,
         };
-        self.sessions.lock().await.insert(session_id, entry);
+        let mut sessions = self.sessions.lock().await;
+        Self::prune_sessions_if_needed(&mut sessions);
+        sessions.insert(session_id, entry);
         session_id
     }
 
@@ -548,6 +556,50 @@ impl UnifiedExecSessionManager {
 
         collected
     }
+
+    fn prune_sessions_if_needed(sessions: &mut HashMap<i32, SessionEntry>) {
+        if sessions.len() < MAX_UNIFIED_EXEC_SESSIONS {
+            return;
+        }
+
+        let meta: Vec<(i32, Instant, bool)> = sessions
+            .iter()
+            .map(|(id, entry)| (*id, entry.last_used, entry.session.has_exited()))
+            .collect();
+
+        if let Some(session_id) = Self::session_id_to_prune_from_meta(&meta) {
+            sessions.remove(&session_id);
+        }
+    }
+
+    // Centralized pruning policy so we can easily swap strategies later.
+    fn session_id_to_prune_from_meta(meta: &[(i32, Instant, bool)]) -> Option<i32> {
+        if meta.is_empty() {
+            return None;
+        }
+
+        let mut by_recency = meta.to_vec();
+        by_recency.sort_by_key(|(_, last_used, _)| Reverse(*last_used));
+        let protected: HashSet<i32> = by_recency
+            .iter()
+            .take(8)
+            .map(|(session_id, _, _)| *session_id)
+            .collect();
+
+        let mut lru = meta.to_vec();
+        lru.sort_by_key(|(_, last_used, _)| *last_used);
+
+        if let Some((session_id, _, _)) = lru
+            .iter()
+            .find(|(session_id, _, exited)| !protected.contains(session_id) && *exited)
+        {
+            return Some(*session_id);
+        }
+
+        lru.into_iter()
+            .find(|(session_id, _, _)| !protected.contains(session_id))
+            .map(|(session_id, _, _)| session_id)
+    }
 }
 
 enum SessionStatus {
@@ -560,4 +612,76 @@ enum SessionStatus {
         entry: Box<SessionEntry>,
     },
     Unknown,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use tokio::time::Duration;
+    use tokio::time::Instant;
+
+    #[test]
+    fn pruning_prefers_exited_sessions_outside_recently_used() {
+        let now = Instant::now();
+        let meta = vec![
+            (1, now - Duration::from_secs(40), false),
+            (2, now - Duration::from_secs(30), true),
+            (3, now - Duration::from_secs(20), false),
+            (4, now - Duration::from_secs(19), false),
+            (5, now - Duration::from_secs(18), false),
+            (6, now - Duration::from_secs(17), false),
+            (7, now - Duration::from_secs(16), false),
+            (8, now - Duration::from_secs(15), false),
+            (9, now - Duration::from_secs(14), false),
+            (10, now - Duration::from_secs(13), false),
+        ];
+
+        let candidate = UnifiedExecSessionManager::session_id_to_prune_from_meta(&meta);
+
+        assert_eq!(candidate, Some(2));
+    }
+
+    #[test]
+    fn pruning_falls_back_to_lru_when_no_exited() {
+        let now = Instant::now();
+        let meta = vec![
+            (1, now - Duration::from_secs(40), false),
+            (2, now - Duration::from_secs(30), false),
+            (3, now - Duration::from_secs(20), false),
+            (4, now - Duration::from_secs(19), false),
+            (5, now - Duration::from_secs(18), false),
+            (6, now - Duration::from_secs(17), false),
+            (7, now - Duration::from_secs(16), false),
+            (8, now - Duration::from_secs(15), false),
+            (9, now - Duration::from_secs(14), false),
+            (10, now - Duration::from_secs(13), false),
+        ];
+
+        let candidate = UnifiedExecSessionManager::session_id_to_prune_from_meta(&meta);
+
+        assert_eq!(candidate, Some(1));
+    }
+
+    #[test]
+    fn pruning_protects_recent_sessions_even_if_exited() {
+        let now = Instant::now();
+        let meta = vec![
+            (1, now - Duration::from_secs(40), false),
+            (2, now - Duration::from_secs(30), false),
+            (3, now - Duration::from_secs(20), true),
+            (4, now - Duration::from_secs(19), false),
+            (5, now - Duration::from_secs(18), false),
+            (6, now - Duration::from_secs(17), false),
+            (7, now - Duration::from_secs(16), false),
+            (8, now - Duration::from_secs(15), false),
+            (9, now - Duration::from_secs(14), false),
+            (10, now - Duration::from_secs(13), true),
+        ];
+
+        let candidate = UnifiedExecSessionManager::session_id_to_prune_from_meta(&meta);
+
+        // (10) is exited but among the last 8; we should drop the LRU outside that set.
+        assert_eq!(candidate, Some(1));
+    }
 }

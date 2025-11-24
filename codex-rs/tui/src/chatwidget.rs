@@ -2380,11 +2380,18 @@ impl ChatWidget {
         {
             return None;
         }
-        let cwd = match std::env::current_dir() {
-            Ok(cwd) => cwd,
-            Err(_) => return Some((Vec::new(), 0, true)),
-        };
-        codex_windows_sandbox::world_writable_warning_details(self.config.codex_home.as_path(), cwd)
+        let cwd = self.config.cwd.clone();
+        let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
+        match codex_windows_sandbox::apply_world_writable_scan_and_denies(
+            self.config.codex_home.as_path(),
+            cwd.as_path(),
+            &env_map,
+            &self.config.sandbox_policy,
+            Some(self.config.codex_home.as_path()),
+        ) {
+            Ok(_) => None,
+            Err(_) => Some((Vec::new(), 0, true)),
+        }
     }
 
     #[cfg(not(target_os = "windows"))]
