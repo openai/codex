@@ -1,7 +1,6 @@
 use std::io;
 use std::process::Command;
 use std::process::Stdio;
-use std::thread;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -41,11 +40,14 @@ fn spawn_powershell(encoded_command: String) -> io::Result<()> {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
 
-    let mut child = command.spawn()?;
-    thread::spawn(move || {
-        let _ = child.wait();
-    });
-    Ok(())
+    let status = command.status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "{POWERSHELL_EXE} exited with status {status}"
+        )))
+    }
 }
 
 fn build_encoded_command(encoded_title: &str, encoded_body: &str) -> String {
