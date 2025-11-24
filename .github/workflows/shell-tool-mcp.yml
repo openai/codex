@@ -91,7 +91,7 @@ jobs:
             install_musl: true
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@1.90
         with:
@@ -196,7 +196,7 @@ jobs:
           fi
 
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Build patched Bash
         shell: bash
@@ -241,7 +241,7 @@ jobs:
             variant: macos-13
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Build patched Bash
         shell: bash
@@ -278,7 +278,7 @@ jobs:
       PACKAGE_VERSION: ${{ needs.metadata.outputs.version }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
