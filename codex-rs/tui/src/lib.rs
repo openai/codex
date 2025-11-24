@@ -58,6 +58,7 @@ mod markdown;
 mod markdown_render;
 mod markdown_stream;
 mod model_migration;
+mod notifications;
 pub mod onboarding;
 mod oss_selection;
 mod pager_overlay;
