@@ -20,7 +20,7 @@ pub fn compute_allow_paths(
     let mut allow: HashSet<PathBuf> = HashSet::new();
     let mut deny: HashSet<PathBuf> = HashSet::new();
 
-    let mut add_path = |p: PathBuf| {
+    let mut add_allow_path = |p: PathBuf| {
         if p.exists() {
             allow.insert(p);
         }
@@ -61,13 +61,18 @@ pub fn compute_allow_paths(
         add_writable_root(
             command_cwd.to_path_buf(),
             policy_cwd,
-            &mut add_path,
+            &mut add_allow_path,
             &mut add_deny_path,
         );
 
         if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = policy {
             for root in writable_roots {
-                add_writable_root(root.clone(), policy_cwd, &mut add_path, &mut add_deny_path);
+                add_writable_root(
+                    root.clone(),
+                    policy_cwd,
+                    &mut add_allow_path,
+                    &mut add_deny_path,
+                );
             }
         }
     }
@@ -75,10 +80,10 @@ pub fn compute_allow_paths(
         for key in ["TEMP", "TMP"] {
             if let Some(v) = env_map.get(key) {
                 let abs = PathBuf::from(v);
-                add_path(abs);
+                add_allow_path(abs);
             } else if let Ok(v) = std::env::var(key) {
                 let abs = PathBuf::from(v);
-                add_path(abs);
+                add_allow_path(abs);
             }
         }
     }
@@ -165,10 +170,9 @@ mod tests {
         };
 
         let paths = compute_allow_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
-        let expected_allow: HashSet<PathBuf> =
-            [dunce::canonicalize(&command_cwd).unwrap()]
-                .into_iter()
-                .collect();
+        let expected_allow: HashSet<PathBuf> = [dunce::canonicalize(&command_cwd).unwrap()]
+            .into_iter()
+            .collect();
         let expected_deny: HashSet<PathBuf> = [dunce::canonicalize(&git_dir).unwrap()]
             .into_iter()
             .collect();
