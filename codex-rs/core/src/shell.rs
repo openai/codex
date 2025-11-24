@@ -328,6 +328,7 @@ mod detect_shell_type_tests {
 #[cfg(unix)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use std::path::PathBuf;
     use std::process::Command;
 
@@ -357,9 +358,9 @@ mod tests {
         let shell_path = bash_shell.shell_path;
 
         assert!(
-            shell_path == PathBuf::from("/bin/bash")
-                || shell_path == PathBuf::from("/usr/bin/bash")
-                || shell_path == PathBuf::from("/usr/local/bin/bash"),
+            ["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"]
+                .iter()
+                .any(|path| shell_path == Path::new(path)),
             "shell path: {shell_path:?}",
         );
     }
@@ -369,7 +370,9 @@ mod tests {
         let sh_shell = get_shell(ShellType::Sh, None).unwrap();
         let shell_path = sh_shell.shell_path;
         assert!(
-            shell_path == PathBuf::from("/bin/sh") || shell_path == PathBuf::from("/usr/bin/sh"),
+            ["/bin/sh", "/usr/bin/sh"]
+                .iter()
+                .any(|path| shell_path == Path::new(path)),
             "shell path: {shell_path:?}",
         );
     }
