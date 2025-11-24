@@ -121,14 +121,36 @@ fn classify_shell(shell: &str, flag: &str) -> Option<ApplyPatchShell> {
     })
 }
 
+fn can_skip_flag(shell: &str, flag: &str) -> bool {
+    classify_shell_name(shell).is_some_and(|name| {
+        matches!(name.as_str(), "pwsh" | "powershell") && flag.eq_ignore_ascii_case("-noprofile")
+    })
+}
+
+fn parse_shell_script(argv: &[String]) -> Option<(ApplyPatchShell, &str)> {
+    match argv {
+        [shell, flag, script] => classify_shell(shell, flag).map(|shell_type| {
+            let script = script.as_str();
+            (shell_type, script)
+        }),
+        [shell, skip_flag, flag, script] if can_skip_flag(shell, skip_flag) => {
+            classify_shell(shell, flag).map(|shell_type| {
+                let script = script.as_str();
+                (shell_type, script)
+            })
+        }
+        _ => None,
+    }
+}
+
 fn extract_apply_patch_from_shell(
-    shell: &str,
-    flag: &str,
+    shell: ApplyPatchShell,
     script: &str,
 ) -> std::result::Result<(String, Option<String>), ExtractHeredocError> {
-    match classify_shell(shell, flag) {
-        Some(_) => extract_apply_patch_from_bash(script),
-        None => Err(ExtractHeredocError::CommandDidNotStartWithApplyPatch),
+    match shell {
+        ApplyPatchShell::Unix | ApplyPatchShell::PowerShell | ApplyPatchShell::Cmd => {
+            extract_apply_patch_from_bash(script)
+        }
     }
 }
 
@@ -139,21 +161,23 @@ pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
             Ok(source) => MaybeApplyPatch::Body(source),
             Err(e) => MaybeApplyPatch::PatchParseError(e),
         },
-        // Bash heredoc form: (optional `cd <path> &&`) apply_patch <<'EOF' ...
-        [shell, flag, script] => match extract_apply_patch_from_shell(shell, flag, script) {
-            Ok((body, workdir)) => match parse_patch(&body) {
-                Ok(mut source) => {
-                    source.workdir = workdir;
-                    MaybeApplyPatch::Body(source)
+        // Shell heredoc form: (optional `cd <path> &&`) apply_patch <<'EOF' ...
+        _ => match parse_shell_script(argv) {
+            Some((shell, script)) => match extract_apply_patch_from_shell(shell, script) {
+                Ok((body, workdir)) => match parse_patch(&body) {
+                    Ok(mut source) => {
+                        source.workdir = workdir;
+                        MaybeApplyPatch::Body(source)
+                    }
+                    Err(e) => MaybeApplyPatch::PatchParseError(e),
+                },
+                Err(ExtractHeredocError::CommandDidNotStartWithApplyPatch) => {
+                    MaybeApplyPatch::NotApplyPatch
                 }
-                Err(e) => MaybeApplyPatch::PatchParseError(e),
+                Err(e) => MaybeApplyPatch::ShellParseError(e),
             },
-            Err(ExtractHeredocError::CommandDidNotStartWithApplyPatch) => {
-                MaybeApplyPatch::NotApplyPatch
-            }
-            Err(e) => MaybeApplyPatch::ShellParseError(e),
+            None => MaybeApplyPatch::NotApplyPatch,
         },
-        _ => MaybeApplyPatch::NotApplyPatch,
     }
 }
 
@@ -250,20 +274,15 @@ impl ApplyPatchAction {
 pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApplyPatchVerified {
     // Detect a raw patch body passed directly as the command or as the body of a shell
     // script. In these cases, report an explicit error rather than applying the patch.
-    match argv {
-        [body] => {
-            if parse_patch(body).is_ok() {
-                return MaybeApplyPatchVerified::CorrectnessError(
-                    ApplyPatchError::ImplicitInvocation,
-                );
-            }
-        }
-        [shell, flag, script]
-            if classify_shell(shell, flag).is_some() && parse_patch(script).is_ok() =>
-        {
-            return MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation);
-        }
-        _ => {}
+    if let [body] = argv
+        && parse_patch(body).is_ok()
+    {
+        return MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation);
+    }
+    if let Some((_, script)) = parse_shell_script(argv)
+        && parse_patch(script).is_ok()
+    {
+        return MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation);
     }
 
     match maybe_parse_apply_patch(argv) {
@@ -895,12 +914,18 @@ mod tests {
         strs_to_strings(&["bash", "-lc", script])
     }
 
-    #[cfg(windows)]
     fn args_powershell(script: &str) -> Vec<String> {
         strs_to_strings(&["powershell.exe", "-Command", script])
     }
 
-    #[cfg(windows)]
+    fn args_powershell_no_profile(script: &str) -> Vec<String> {
+        strs_to_strings(&["powershell.exe", "-NoProfile", "-Command", script])
+    }
+
+    fn args_pwsh(script: &str) -> Vec<String> {
+        strs_to_strings(&["pwsh", "-NoProfile", "-Command", script])
+    }
+
     fn args_cmd(script: &str) -> Vec<String> {
         strs_to_strings(&["cmd.exe", "/c", script])
     }
@@ -1053,14 +1078,22 @@ PATCH"#,
     }
 
     #[test]
-    #[cfg(windows)]
     fn test_powershell_heredoc() {
         let script = heredoc_script("");
         assert_match_args(args_powershell(&script), None);
     }
+    #[test]
+    fn test_powershell_heredoc_no_profile() {
+        let script = heredoc_script("");
+        assert_match_args(args_powershell_no_profile(&script), None);
+    }
+    #[test]
+    fn test_pwsh_heredoc() {
+        let script = heredoc_script("");
+        assert_match_args(args_pwsh(&script), None);
+    }
 
     #[test]
-    #[cfg(windows)]
     fn test_cmd_heredoc_with_cd() {
         let script = heredoc_script("cd foo && ");
         assert_match_args(args_cmd(&script), Some("foo"));
