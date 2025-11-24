@@ -2053,6 +2053,7 @@ async fn run_turn(
             }
             Err(CodexErr::UsageNotIncluded) => return Err(CodexErr::UsageNotIncluded),
             Err(e @ CodexErr::QuotaExceeded) => return Err(e),
+            Err(e @ CodexErr::InvalidImageRequest()) => return Err(e),
             Err(e @ CodexErr::InvalidRequest(_)) => return Err(e),
             Err(e @ CodexErr::RefreshTokenFailed(_)) => return Err(e),
             Err(e) => {
