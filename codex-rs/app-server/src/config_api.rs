@@ -680,6 +680,10 @@ fn find_effective_layer(layers: &LayersState, segments: &[String]) -> Option<Con
 }
 
 fn system_config_path(codex_home: &Path) -> PathBuf {
+    if let Ok(path) = std::env::var("CODEX_MANAGED_CONFIG_PATH") {
+        return PathBuf::from(path);
+    }
+
     #[cfg(unix)]
     {
         let _ = codex_home;

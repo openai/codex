@@ -71,6 +71,114 @@ sandbox_mode = "workspace-write"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_includes_system_layer_and_overrides() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_config(
+        &codex_home,
+        r#"
+model = "gpt-user"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+writable_roots = ["/user"]
+network_access = true
+"#,
+    )?;
+
+    let managed_path = codex_home.path().join("managed_config.toml");
+    std::fs::write(
+        &managed_path,
+        r#"
+model = "gpt-system"
+approval_policy = "never"
+
+[sandbox_workspace_write]
+writable_roots = ["/system"]
+"#,
+    )?;
+
+    let managed_path_str = managed_path.display().to_string();
+
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[("CODEX_MANAGED_CONFIG_PATH", Some(&managed_path_str))],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: true,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ConfigReadResponse {
+        config,
+        origins,
+        layers,
+    } = to_response(resp)?;
+
+    assert_eq!(config.get("model"), Some(&json!("gpt-system")));
+    assert_eq!(
+        origins.get("model").expect("origin").name,
+        ConfigLayerName::System
+    );
+
+    assert_eq!(config.get("approval_policy"), Some(&json!("never")));
+    assert_eq!(
+        origins.get("approval_policy").expect("origin").name,
+        ConfigLayerName::System
+    );
+
+    assert_eq!(config.get("sandbox_mode"), Some(&json!("workspace-write")));
+    assert_eq!(
+        origins.get("sandbox_mode").expect("origin").name,
+        ConfigLayerName::User
+    );
+
+    assert_eq!(
+        config
+            .get("sandbox_workspace_write")
+            .and_then(|v| v.get("writable_roots")),
+        Some(&json!(["/system"]))
+    );
+    assert_eq!(
+        origins
+            .get("sandbox_workspace_write.writable_roots.0")
+            .expect("origin")
+            .name,
+        ConfigLayerName::System
+    );
+
+    assert_eq!(
+        config
+            .get("sandbox_workspace_write")
+            .and_then(|v| v.get("network_access")),
+        Some(&json!(true))
+    );
+    assert_eq!(
+        origins
+            .get("sandbox_workspace_write.network_access")
+            .expect("origin")
+            .name,
+        ConfigLayerName::User
+    );
+
+    let layers = layers.expect("layers present");
+    assert_eq!(layers.len(), 3);
+    assert_eq!(layers[0].name, ConfigLayerName::System);
+    assert_eq!(layers[1].name, ConfigLayerName::SessionFlags);
+    assert_eq!(layers[2].name, ConfigLayerName::User);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_value_write_replaces_value() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_config(
@@ -165,7 +273,7 @@ model = "gpt-old"
         .as_ref()
         .and_then(|d| d.get("config_write_error_code"))
         .and_then(|v| v.as_str());
-    assert_eq!(code, Some("config_version_conflict"));
+    assert_eq!(code, Some("configVersionConflict"));
 
     Ok(())
 }

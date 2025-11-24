@@ -151,6 +151,10 @@ pub fn merge_toml_values(base: &mut TomlValue, overlay: &TomlValue) {
 }
 
 fn managed_config_default_path(codex_home: &Path) -> PathBuf {
+    if let Ok(path) = std::env::var("CODEX_MANAGED_CONFIG_PATH") {
+        return PathBuf::from(path);
+    }
+
     #[cfg(unix)]
     {
         let _ = codex_home;
