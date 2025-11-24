@@ -57,9 +57,26 @@ struct PreparedSessionHandles {
     turn_ref: Arc<TurnContext>,
     command: Vec<String>,
     cwd: PathBuf,
+    process_id: String,
 }
 
 impl UnifiedExecSessionManager {
+    pub(crate) async fn allocate_process_id(&self) -> (i32, String) {
+        let mut rng = rand::rng();
+        loop {
+            let candidate = rng.random_range(1_000..100_000);
+            let mut sessions = self.sessions.lock().await;
+            if sessions.contains_key(&candidate) {
+                continue;
+            }
+            return (candidate, Self::render_process_id(candidate));
+        }
+    }
+
+    fn render_process_id(id: i32) -> String {
+        id.to_string()
+    }
+
     pub(crate) async fn exec_command(
         &self,
         request: ExecCommandRequest,
@@ -104,16 +121,24 @@ impl UnifiedExecSessionManager {
         let chunk_id = generate_chunk_id();
         let has_exited = session.has_exited();
         let stored_id = self
-            .store_session(session, context, &request.command, cwd.clone(), start)
+            .store_session(
+                session,
+                context,
+                &request.command,
+                cwd.clone(),
+                start,
+                request.session_id,
+                request.process_id.clone(),
+            )
             .await;
+        let process_id = request.process_id.clone();
         let exit_code = self
             .sessions
             .lock()
             .await
             .get(&stored_id)
             .map(|entry| entry.session.exit_code());
-        // Only include a session_id in the response if the process is still alive.
-        let session_id = if has_exited { None } else { Some(stored_id) };
+        let is_waiting = !has_exited;
 
         let original_token_count = approx_token_count(&text);
 
@@ -122,18 +147,19 @@ impl UnifiedExecSessionManager {
             chunk_id,
             wall_time,
             output,
-            session_id,
+            session_id: is_waiting.then_some(stored_id),
+            process_id: Some(process_id.clone()),
             exit_code: exit_code.flatten(),
             original_token_count: Some(original_token_count),
             session_command: Some(request.command.clone()),
         };
 
-        if response.session_id.is_some() {
+        if is_waiting {
             Self::emit_waiting_status(&context.session, &context.turn, &request.command).await;
         }
 
         // If the command completed during this call, emit an ExecCommandEnd via the emitter.
-        if response.session_id.is_none() {
+        if !is_waiting {
             let exit = response.exit_code.unwrap_or(-1);
             Self::emit_exec_end_from_context(
                 context,
@@ -142,6 +168,7 @@ impl UnifiedExecSessionManager {
                 response.output.clone(),
                 exit,
                 response.wall_time,
+                Some(process_id),
             )
             .await;
         }
@@ -153,7 +180,10 @@ impl UnifiedExecSessionManager {
         &self,
         request: WriteStdinRequest<'_>,
     ) -> Result<UnifiedExecResponse, UnifiedExecError> {
-        let session_id = request.session_id;
+        let session_id: i32 = request
+            .process_id
+            .parse()
+            .map_err(|_| UnifiedExecError::UnknownSessionId { session_id: -1 })?;
 
         let PreparedSessionHandles {
             writer_tx,
@@ -164,6 +194,7 @@ impl UnifiedExecSessionManager {
             turn_ref,
             command: session_command,
             cwd: session_cwd,
+            process_id,
         } = self.prepare_session_handles(session_id).await?;
 
         let interaction_emitter = ToolEmitter::unified_exec(
@@ -171,6 +202,7 @@ impl UnifiedExecSessionManager {
             session_cwd.clone(),
             ExecCommandSource::UnifiedExecInteraction,
             (!request.input.is_empty()).then(|| request.input.to_string()),
+            Some(process_id.clone()),
         );
         let make_event_ctx = || {
             ToolEventCtx::new(
@@ -218,13 +250,19 @@ impl UnifiedExecSessionManager {
         let chunk_id = generate_chunk_id();
 
         let status = self.refresh_session_state(session_id).await;
-        let (session_id, exit_code, completion_entry, event_call_id) = match status {
-            SessionStatus::Alive { exit_code, call_id } => {
-                (Some(session_id), exit_code, None, call_id)
-            }
-            SessionStatus::Exited { exit_code, entry } => {
+        let (process_id, exit_code, completion_entry, event_call_id) = match status {
+            SessionStatus::Alive {
+                exit_code,
+                call_id,
+                process_id,
+            } => (Some(process_id), exit_code, None, call_id),
+            SessionStatus::Exited {
+                exit_code,
+                entry,
+                process_id,
+            } => {
                 let call_id = entry.call_id.clone();
-                (None, exit_code, Some(*entry), call_id)
+                (Some(process_id), exit_code, Some(*entry), call_id)
             }
             SessionStatus::Unknown => {
                 return Err(UnifiedExecError::UnknownSessionId { session_id });
@@ -236,7 +274,8 @@ impl UnifiedExecSessionManager {
             chunk_id,
             wall_time,
             output,
-            session_id,
+            session_id: process_id.as_ref().and(Some(session_id)),
+            process_id,
             exit_code,
             original_token_count: Some(original_token_count),
             session_command: Some(session_command.clone()),
@@ -257,7 +296,7 @@ impl UnifiedExecSessionManager {
             )
             .await;
 
-        if response.session_id.is_some() {
+        if response.process_id.is_some() {
             Self::emit_waiting_status(&session_ref, &turn_ref, &session_command).await;
         }
 
@@ -277,6 +316,7 @@ impl UnifiedExecSessionManager {
         };
 
         let exit_code = entry.session.exit_code();
+        let process_id = entry.process_id.clone();
 
         if entry.session.has_exited() {
             let Some(entry) = sessions.remove(&session_id) else {
@@ -285,11 +325,13 @@ impl UnifiedExecSessionManager {
             SessionStatus::Exited {
                 exit_code,
                 entry: Box::new(entry),
+                process_id,
             }
         } else {
             SessionStatus::Alive {
                 exit_code,
                 call_id: entry.call_id.clone(),
+                process_id,
             }
         }
     }
@@ -318,6 +360,7 @@ impl UnifiedExecSessionManager {
             turn_ref: Arc::clone(&entry.turn_ref),
             command: entry.command.clone(),
             cwd: entry.cwd.clone(),
+            process_id: entry.process_id.clone(),
         })
     }
 
@@ -338,15 +381,15 @@ impl UnifiedExecSessionManager {
         command: &[String],
         cwd: PathBuf,
         started_at: Instant,
+        session_id: i32,
+        process_id: String,
     ) -> i32 {
-        let session_id = self
-            .next_session_id
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let entry = SessionEntry {
             session,
             session_ref: Arc::clone(&context.session),
             turn_ref: Arc::clone(&context.turn),
             call_id: context.call_id.clone(),
+            process_id,
             command: command.to_vec(),
             cwd,
             started_at,
@@ -383,6 +426,7 @@ impl UnifiedExecSessionManager {
             entry.cwd,
             ExecCommandSource::UnifiedExecStartup,
             None,
+            Some(entry.process_id.clone()),
         );
         emitter
             .emit(event_ctx, ToolEventStage::Success(output))
@@ -396,6 +440,7 @@ impl UnifiedExecSessionManager {
         aggregated_output: String,
         exit_code: i32,
         duration: Duration,
+        process_id: Option<String>,
     ) {
         let output = ExecToolCallOutput {
             exit_code,
@@ -411,8 +456,13 @@ impl UnifiedExecSessionManager {
             &context.call_id,
             None,
         );
-        let emitter =
-            ToolEmitter::unified_exec(command, cwd, ExecCommandSource::UnifiedExecStartup, None);
+        let emitter = ToolEmitter::unified_exec(
+            command,
+            cwd,
+            ExecCommandSource::UnifiedExecStartup,
+            None,
+            process_id,
+        );
         emitter
             .emit(event_ctx, ToolEventStage::Success(output))
             .await;
@@ -606,10 +656,12 @@ enum SessionStatus {
     Alive {
         exit_code: Option<i32>,
         call_id: String,
+        process_id: String,
     },
     Exited {
         exit_code: Option<i32>,
         entry: Box<SessionEntry>,
+        process_id: String,
     },
     Unknown,
 }

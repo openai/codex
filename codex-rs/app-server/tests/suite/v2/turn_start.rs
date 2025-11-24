@@ -913,6 +913,133 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn command_execution_notifications_include_process_id() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let responses = vec![
+        create_exec_command_sse_response("uexec-1")?,
+        create_final_assistant_message_sse_response("done")?,
+    ];
+    let server = create_mock_chat_completions_server(responses).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let config_toml = codex_home.path().join("config.toml");
+    let mut config_contents = std::fs::read_to_string(&config_toml)?;
+    config_contents.push_str(
+        r#"
+[features]
+unified_exec = true
+"#,
+    );
+    std::fs::write(&config_toml, config_contents)?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "run a command".to_string(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+
+    let started_command = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let notif = mcp
+                .read_stream_until_notification_message("item/started")
+                .await?;
+            let started: ItemStartedNotification = serde_json::from_value(
+                notif
+                    .params
+                    .clone()
+                    .expect("item/started should include params"),
+            )?;
+            if let ThreadItem::CommandExecution { .. } = started.item {
+                return Ok::<ThreadItem, anyhow::Error>(started.item);
+            }
+        }
+    })
+    .await??;
+    let ThreadItem::CommandExecution {
+        id,
+        process_id: started_process_id,
+        status,
+        ..
+    } = started_command
+    else {
+        unreachable!("loop ensures we break on command execution items");
+    };
+    assert_eq!(id, "uexec-1");
+    assert_eq!(status, CommandExecutionStatus::InProgress);
+    let started_process_id = started_process_id.expect("process id should be present");
+
+    let completed_command = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let notif = mcp
+                .read_stream_until_notification_message("item/completed")
+                .await?;
+            let completed: ItemCompletedNotification = serde_json::from_value(
+                notif
+                    .params
+                    .clone()
+                    .expect("item/completed should include params"),
+            )?;
+            if let ThreadItem::CommandExecution { .. } = completed.item {
+                return Ok::<ThreadItem, anyhow::Error>(completed.item);
+            }
+        }
+    })
+    .await??;
+    let ThreadItem::CommandExecution {
+        id: completed_id,
+        process_id: completed_process_id,
+        status: completed_status,
+        exit_code,
+        ..
+    } = completed_command
+    else {
+        unreachable!("loop ensures we break on command execution items");
+    };
+    assert_eq!(completed_id, "uexec-1");
+    assert_eq!(completed_status, CommandExecutionStatus::Completed);
+    assert_eq!(exit_code, Some(0));
+    assert_eq!(
+        completed_process_id.as_deref(),
+        Some(started_process_id.as_str())
+    );
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    Ok(())
+}
+
 // Helper to create a config.toml pointing at the mock model server.
 fn create_config_toml(
     codex_home: &Path,
@@ -939,4 +1066,35 @@ stream_max_retries = 0
 "#
         ),
     )
+}
+
+fn create_exec_command_sse_response(call_id: &str) -> anyhow::Result<String> {
+    let tool_call_arguments = serde_json::to_string(&serde_json::json!({
+        "cmd": "/bin/sh -c echo hi",
+        "yield_time_ms": 500
+    }))?;
+    let tool_call = serde_json::json!({
+        "choices": [
+            {
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "id": call_id,
+                            "function": {
+                                "name": "exec_command",
+                                "arguments": tool_call_arguments
+                            }
+                        }
+                    ]
+                },
+                "finish_reason": "tool_calls"
+            }
+        ]
+    });
+
+    let sse = format!(
+        "data: {}\n\ndata: DONE\n\n",
+        serde_json::to_string(&tool_call)?
+    );
+    Ok(sse)
 }
