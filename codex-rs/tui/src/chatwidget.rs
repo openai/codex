@@ -1116,7 +1116,7 @@ impl ChatWidget {
             self.last_unified_wait = None;
         }
         if should_suppress_unified_wait {
-            self.suppressed_exec_calls.insert(ev.call_id.clone());
+            self.suppressed_exec_calls.insert(ev.call_id);
             return;
         }
         let interaction_input = ev.interaction_input.clone();
