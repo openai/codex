@@ -1789,9 +1789,10 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
     });
 
     let prune_call_id = "uexec-prune-target";
+    // Give the sleeper time to exit before the filler sessions trigger pruning.
     let prune_args = serde_json::json!({
         "cmd": "sleep 1",
-        "yield_time_ms": 250,
+        "yield_time_ms": 1_250,
     });
 
     let mut events = vec![ev_response_created("resp-prune-1")];
