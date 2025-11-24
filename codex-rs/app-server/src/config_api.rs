@@ -9,7 +9,7 @@ use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigReadResponse;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteErrorCode;
-use codex_app_server_protocol::ConfigWriteResult;
+use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::OverriddenMetadata;
@@ -87,7 +87,7 @@ impl ConfigApi {
     pub(crate) async fn write_value(
         &self,
         params: ConfigValueWriteParams,
-    ) -> Result<ConfigWriteResult, JSONRPCErrorError> {
+    ) -> Result<ConfigWriteResponse, JSONRPCErrorError> {
         let edits = vec![(params.key_path, params.value, params.merge_strategy)];
         self.apply_edits(params.file_path, params.expected_version, edits)
             .await
@@ -96,7 +96,7 @@ impl ConfigApi {
     pub(crate) async fn batch_write(
         &self,
         params: ConfigBatchWriteParams,
-    ) -> Result<ConfigWriteResult, JSONRPCErrorError> {
+    ) -> Result<ConfigWriteResponse, JSONRPCErrorError> {
         let edits = params
             .edits
             .into_iter()
@@ -112,7 +112,7 @@ impl ConfigApi {
         file_path: String,
         expected_version: Option<String>,
         edits: Vec<(String, JsonValue, MergeStrategy)>,
-    ) -> Result<ConfigWriteResult, JSONRPCErrorError> {
+    ) -> Result<ConfigWriteResponse, JSONRPCErrorError> {
         let allowed_path = self.codex_home.join(CONFIG_FILE_NAME);
         if !paths_match(&allowed_path, &file_path) {
             return Err(config_write_error(
@@ -183,7 +183,7 @@ impl ConfigApi {
             .map(|_| WriteStatus::OkOverridden)
             .unwrap_or(WriteStatus::Ok);
 
-        Ok(ConfigWriteResult {
+        Ok(ConfigWriteResponse {
             status,
             version: updated_layers.user.version.clone(),
             overridden_metadata: overridden,
@@ -837,7 +837,7 @@ mod tests {
                 .as_ref()
                 .and_then(|d| d.get("config_write_error_code"))
                 .and_then(serde_json::Value::as_str),
-            Some("config_version_conflict")
+            Some("configVersionConflict")
         );
     }
 

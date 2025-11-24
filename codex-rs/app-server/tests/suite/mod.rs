@@ -2,7 +2,6 @@ mod archive_conversation;
 mod auth;
 mod codex_message_processor_flow;
 mod config;
-mod config_rpc;
 mod create_conversation;
 mod fuzzy_file_search;
 mod interrupt;

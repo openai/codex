@@ -7,7 +7,7 @@ use codex_app_server_protocol::ConfigLayerName;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigReadResponse;
 use codex_app_server_protocol::ConfigValueWriteParams;
-use codex_app_server_protocol::ConfigWriteResult;
+use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::MergeStrategy;
@@ -110,7 +110,7 @@ model = "gpt-old"
         mcp.read_stream_until_response_message(RequestId::Integer(write_id)),
     )
     .await??;
-    let write: ConfigWriteResult = to_response(write_resp)?;
+    let write: ConfigWriteResponse = to_response(write_resp)?;
 
     assert_eq!(write.status, WriteStatus::Ok);
     assert!(write.overridden_metadata.is_none());
@@ -204,7 +204,7 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(batch_id)),
     )
     .await??;
-    let batch_write: ConfigWriteResult = to_response(batch_resp)?;
+    let batch_write: ConfigWriteResponse = to_response(batch_resp)?;
     assert_eq!(batch_write.status, WriteStatus::Ok);
 
     let read_id = mcp

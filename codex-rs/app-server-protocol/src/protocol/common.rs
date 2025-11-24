@@ -170,11 +170,11 @@ client_request_definitions! {
     },
     ConfigValueWrite => "config/value/write" {
         params: v2::ConfigValueWriteParams,
-        response: v2::ConfigWriteResult,
+        response: v2::ConfigWriteResponse,
     },
     ConfigBatchWrite => "config/batchWrite" {
         params: v2::ConfigBatchWriteParams,
-        response: v2::ConfigWriteResult,
+        response: v2::ConfigWriteResponse,
     },
 
     GetAccount => "account/read" {

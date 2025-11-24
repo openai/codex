@@ -129,7 +129,7 @@ v2_enum_from_core!(
 );
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub enum ConfigLayerName {
     Mdm,
@@ -158,7 +158,7 @@ pub struct ConfigLayer {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub enum MergeStrategy {
     Replace,
@@ -166,7 +166,7 @@ pub enum MergeStrategy {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub enum WriteStatus {
     Ok,
@@ -185,14 +185,14 @@ pub struct OverriddenMetadata {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ConfigWriteResult {
+pub struct ConfigWriteResponse {
     pub status: WriteStatus,
     pub version: String,
     pub overridden_metadata: Option<OverriddenMetadata>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub enum ConfigWriteErrorCode {
     ConfigLayerReadonly,
@@ -228,7 +228,6 @@ pub struct ConfigValueWriteParams {
     pub key_path: String,
     pub value: JsonValue,
     pub merge_strategy: MergeStrategy,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub expected_version: Option<String>,
 }
 
@@ -238,7 +237,6 @@ pub struct ConfigValueWriteParams {
 pub struct ConfigBatchWriteParams {
     pub file_path: String,
     pub edits: Vec<ConfigEdit>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub expected_version: Option<String>,
 }
 
