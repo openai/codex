@@ -835,4 +835,45 @@ mod tests {
             Some("config_version_conflict")
         );
     }
+
+    #[tokio::test]
+    async fn read_reports_user_overrides_other_layers() {
+        let tmp = tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join(CONFIG_FILE_NAME), "model = \"user\"").unwrap();
+
+        let managed_path = tmp.path().join("managed_config.toml");
+        std::fs::write(&managed_path, "model = \"system\"").unwrap();
+
+        let cli_overrides = vec![(
+            "model".to_string(),
+            TomlValue::String("session".to_string()),
+        )];
+
+        let api = ConfigApi::with_overrides(
+            tmp.path().to_path_buf(),
+            cli_overrides,
+            LoaderOverrides {
+                managed_config_path: Some(managed_path),
+                #[cfg(target_os = "macos")]
+                managed_preferences_base64: None,
+            },
+        );
+
+        let response = api
+            .read(ConfigReadParams {
+                include_layers: true,
+            })
+            .await
+            .expect("response");
+
+        assert_eq!(response.config.get("model"), Some(&json!("user")));
+        assert_eq!(
+            response.origins.get("model").expect("origin").name,
+            ConfigLayerName::User
+        );
+        let layers = response.layers.expect("layers");
+        assert_eq!(layers.first().unwrap().name, ConfigLayerName::User);
+        assert_eq!(layers.get(1).unwrap().name, ConfigLayerName::SessionFlags);
+        assert_eq!(layers.get(2).unwrap().name, ConfigLayerName::System);
+    }
 }

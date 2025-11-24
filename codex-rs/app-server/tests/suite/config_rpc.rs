@@ -21,7 +21,10 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 fn write_config(codex_home: &TempDir, contents: &str) -> Result<()> {
-    Ok(std::fs::write(codex_home.path().join("config.toml"), contents)?)
+    Ok(std::fs::write(
+        codex_home.path().join("config.toml"),
+        contents,
+    )?)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
