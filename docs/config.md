@@ -253,6 +253,26 @@ This is analogous to `model_context_window`, but for the maximum number of outpu
 
 > See also [`codex exec`](./exec.md) to see how these model settings influence non-interactive runs.
 
+### model_auto_compact_token_limit
+
+Controls when Codex will automatically compact conversation history as it approaches the model's context window.
+
+By default, Codex derives an automatic threshold from the model family (typically around 90% of the context window). You can override or disable this behaviour:
+
+```toml
+# Disable automatic history compaction for the current model.
+model_auto_compact_token_limit = 0
+
+# Or, override the automatic threshold with an explicit token limit.
+model_auto_compact_token_limit = 200000
+```
+
+When set to:
+
+- `0` or any negative number: automatic compaction is disabled.
+- A positive number: Codex uses that value as the token threshold (input + output tokens for the turn).
+- Unset: Codex falls back to the default limit for the model family.
+
 ### oss_provider
 
 Specifies the default OSS provider to use when running Codex. This is used when the `--oss` flag is provided without a specific provider.

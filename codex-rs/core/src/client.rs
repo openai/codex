@@ -141,9 +141,12 @@ impl ModelClient {
     }
 
     pub fn get_auto_compact_token_limit(&self) -> Option<i64> {
-        self.config.model_auto_compact_token_limit.or_else(|| {
-            get_model_info(&self.config.model_family).and_then(|info| info.auto_compact_token_limit)
-        })
+        match self.config.model_auto_compact_token_limit {
+            Some(limit) if limit <= 0 => None,
+            Some(limit) => Some(limit),
+            None => get_model_info(&self.config.model_family)
+                .and_then(|info| info.auto_compact_token_limit),
+        }
     }
 
     pub fn config(&self) -> Arc<Config> {

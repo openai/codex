@@ -1341,6 +1341,86 @@ async fn auto_compact_persists_rollout_entries() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_is_disabled_when_limit_is_zero() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let sse1 = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_tokens("r1", 70_000),
+    ]);
+
+    let sse2 = sse(vec![
+        ev_assistant_message("m2", "SECOND_REPLY"),
+        ev_completed_with_tokens("r2", 330_000),
+    ]);
+
+    mount_sse_sequence(&server, vec![sse1, sse2]).await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&home);
+    config.model_provider = model_provider;
+    set_test_compact_prompt(&mut config);
+    config.model_auto_compact_token_limit = Some(0);
+
+    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+    let codex = conversation_manager
+        .new_conversation(config)
+        .await
+        .unwrap()
+        .conversation;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: FIRST_AUTO_MSG.into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: SECOND_AUTO_MSG.into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(
+        requests.len(),
+        2,
+        "auto compact should be disabled when model_auto_compact_token_limit is zero"
+    );
+
+    let contains_auto_compact_prompt = |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body_contains_text(body, SUMMARIZATION_PROMPT)
+    };
+
+    let auto_compact_count = requests
+        .iter()
+        .filter(|req| contains_auto_compact_prompt(req))
+        .count();
+    assert_eq!(
+        auto_compact_count, 0,
+        "no auto compact requests should be sent when model_auto_compact_token_limit is zero"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn manual_compact_retries_after_context_window_error() {
     skip_if_no_network!();
 
