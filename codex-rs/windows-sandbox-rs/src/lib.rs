@@ -14,9 +14,9 @@ pub use windows_impl::run_windows_sandbox_capture;
 pub use windows_impl::CaptureResult;
 
 #[cfg(not(target_os = "windows"))]
-pub use stub::run_windows_sandbox_capture;
-#[cfg(not(target_os = "windows"))]
 pub use stub::apply_world_writable_scan_and_denies;
+#[cfg(not(target_os = "windows"))]
+pub use stub::run_windows_sandbox_capture;
 #[cfg(not(target_os = "windows"))]
 pub use stub::CaptureResult;
 
