@@ -367,6 +367,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 request_max_retries: None,
                 stream_max_retries: None,
                 stream_idle_timeout_ms: None,
+                pool_idle_timeout_secs: None,
                 requires_openai_auth: true,
             },
         ),
@@ -418,6 +419,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         request_max_retries: None,
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
+        pool_idle_timeout_secs: None,
         requires_openai_auth: false,
     }
 }
