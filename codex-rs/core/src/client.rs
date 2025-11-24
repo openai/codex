@@ -426,7 +426,8 @@ impl ModelClient {
 
                 if status == StatusCode::BAD_REQUEST {
                     let body = res.text().await.unwrap_or_default();
-                    if body.contains("The image data you provided does not represent a valid image") {
+                    if body.contains("The image data you provided does not represent a valid image")
+                    {
                         return Err(StreamAttemptError::Fatal(CodexErr::InvalidImageRequest()));
                     }
                     return Err(StreamAttemptError::Fatal(CodexErr::InvalidRequest(body)));
