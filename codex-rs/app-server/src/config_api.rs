@@ -15,10 +15,10 @@ use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::OverriddenMetadata;
 use codex_app_server_protocol::WriteStatus;
 use codex_core::config::ConfigToml;
-use codex_core::config_loader::load_config_layers_with_overrides;
 use codex_core::config_loader::LoadedConfigLayers;
-use codex_core::config_loader::merge_toml_values;
 use codex_core::config_loader::LoaderOverrides;
+use codex_core::config_loader::load_config_layers_with_overrides;
+use codex_core::config_loader::merge_toml_values;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 use sha2::Digest;
@@ -795,10 +795,7 @@ mod tests {
             .await
             .expect("read");
         let config_object = read_after.config.as_object().expect("object");
-        assert_eq!(
-            config_object.get("approval_policy"),
-            Some(&json!("never"))
-        );
+        assert_eq!(config_object.get("approval_policy"), Some(&json!("never")));
         assert_eq!(
             read_after
                 .origins
