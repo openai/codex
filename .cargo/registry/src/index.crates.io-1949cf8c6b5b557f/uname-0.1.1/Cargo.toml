@@ -1,0 +1,16 @@
+[package]
+name = "uname"
+version = "0.1.1"
+authors = ["Ignacio Corderi <icorderi@msn.com>"]
+
+description = "Name and information about current kernel"
+keywords = ["uname", "hostname"]
+
+repository = "https://github.com/icorderi/rust-uname"
+homepage = "https://github.com/icorderi/rust-uname"
+documentation = "https://icorderi.github.io/rust-uname/index.html"
+
+license = "MIT/Apache-2.0"
+
+[dependencies]
+libc = "0.2"

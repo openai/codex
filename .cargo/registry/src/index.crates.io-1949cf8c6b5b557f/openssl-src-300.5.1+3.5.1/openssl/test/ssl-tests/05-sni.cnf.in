@@ -1,0 +1,173 @@
+# -*- mode: perl; -*-
+# Copyright 2016-2020 The OpenSSL Project Authors. All Rights Reserved.
+#
+# Licensed under the Apache License 2.0 (the "License").  You may not use
+# this file except in compliance with the License.  You can obtain a copy
+# in the file LICENSE in the source distribution or at
+# https://www.openssl.org/source/license.html
+
+
+## SSL test configurations
+
+use strict;
+use warnings;
+
+package ssltests;
+use OpenSSL::Test::Utils;
+
+our $fips_mode;
+
+our @tests = (
+    {
+        name => "SNI-switch-context",
+        server => {
+            extra => {
+                "ServerNameCallback" => "IgnoreMismatch",
+            },
+        },
+        client => {
+            extra => {
+                "ServerName" => "server2",
+            },
+        },
+        test   => {
+            "ExpectedServerName" => "server2",
+            "ExpectedResult" => "Success"
+        },
+    },
+    {
+        name => "SNI-keep-context",
+        server => {
+            extra => {
+                "ServerNameCallback" => "IgnoreMismatch",
+            },
+        },
+        client => {
+            extra => {
+                "ServerName" => "server1",
+            },
+        },
+        test   => {
+            "ExpectedServerName" => "server1",
+            "ExpectedResult" => "Success"
+        },
+    },
+    {
+        name => "SNI-no-server-support",
+        server => { },
+        client => {
+            extra => {
+                "ServerName" => "server1",
+            },
+        },
+        test   => { "ExpectedResult" => "Success" },
+    },
+    {
+        name => "SNI-no-client-support",
+        server => {
+            extra => {
+                "ServerNameCallback" => "IgnoreMismatch",
+            },
+        },
+        client => { },
+        test   => {
+            # We expect that the callback is still called
+            # to let the application decide whether they tolerate
+            # missing SNI (as our test callback does).
+            "ExpectedServerName" => "server1",
+            "ExpectedResult" => "Success"
+        },
+    },
+    {
+        name => "SNI-bad-sni-ignore-mismatch",
+        server => {
+            extra => {
+                "ServerNameCallback" => "IgnoreMismatch",
+            },
+        },
+        client => {
+            extra => {
+                "ServerName" => "invalid",
+            },
+        },
+        test   => {
+            "ExpectedServerName" => "server1",
+            "ExpectedResult" => "Success"
+        },
+    },
+    {
+        name => "SNI-bad-sni-reject-mismatch",
+        server => {
+            extra => {
+                "ServerNameCallback" => "RejectMismatch",
+            },
+        },
+        client => {
+            extra => {
+                "ServerName" => "invalid",
+            },
+        },
+        test   => {
+            "ExpectedResult" => "ServerFail",
+            "ExpectedServerAlert" => "UnrecognizedName"
+        },
+    },
+    {
+        name => "SNI-bad-clienthello-sni-ignore-mismatch",
+        server => {
+            extra => {
+                "ServerNameCallback" => "ClientHelloIgnoreMismatch",
+            },
+        },
+        client => {
+            extra => {
+                "ServerName" => "invalid",
+            },
+        },
+        test   => {
+            "ExpectedServerName" => "server1",
+            "ExpectedResult" => "Success"
+        },
+    },
+    {
+        name => "SNI-bad-clienthello-sni-reject-mismatch",
+        server => {
+            extra => {
+                "ServerNameCallback" => "ClientHelloRejectMismatch",
+            },
+        },
+        client => {
+            extra => {
+                "ServerName" => "invalid",
+            },
+        },
+        test   => {
+            "ExpectedResult" => "ServerFail",
+            "ExpectedServerAlert" => "UnrecognizedName"
+        },
+    },
+);
+
+our @tests_tls_1_1 = (
+    {
+        name => "SNI-clienthello-disable-v12",
+        server => {
+            "CipherString" => "DEFAULT:\@SECLEVEL=0",
+            extra => {
+                "ServerNameCallback" => "ClientHelloNoV12",
+            },
+        },
+        client => {
+            "CipherString" => "DEFAULT:\@SECLEVEL=0",
+            extra => {
+                "ServerName" => "server2",
+            },
+        },
+        test   => {
+            "ExpectedProtocol" => "TLSv1.1",
+            "ExpectedServerName" => "server2",
+        },
+    },
+);
+
+push @tests, @tests_tls_1_1 unless disabled("tls1_1") || $fips_mode;

@@ -1,0 +1,26 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Program:
+
+MyRec = record(x = int)
+WrongRec = record(x = int)
+
+def foo(x: MyRec): pass
+
+noop(foo)(WrongRec(x = 1))
+
+Error:
+
+Traceback (most recent call last):
+  * assert.bzl:6, in <module>
+      noop(foo)(WrongRec(x = 1))
+error: Value `record[WrongRec](x=1)` of type `record` does not match the type annotation `MyRec` for argument `x`
+ --> assert.bzl:6:1
+  |
+6 | noop(foo)(WrongRec(x = 1))
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |

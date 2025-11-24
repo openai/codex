@@ -1,0 +1,42 @@
+# Copyright 2021-2025 The OpenSSL Project Authors. All Rights Reserved.
+#
+# Licensed under the Apache License 2.0 (the "License").  You may not use
+# this file except in compliance with the License.  You can obtain a copy
+# in the file LICENSE in the source distribution or at
+# https://www.openssl.org/source/license.html
+
+name: "Make release"
+
+on:
+  push:
+    tags:
+      - "openssl-*"
+
+jobs:
+  release:
+    runs-on: "releaser"
+    steps:
+    - name: "Checkout"
+      uses: "actions/checkout@v4"
+      with:
+        fetch-depth: 1
+        ref: ${{ github.ref_name }}
+        github-server-url: "https://github.openssl.org/"
+        repository: "openssl/openssl"
+        token: ${{ secrets.GHE_TOKEN }}
+        path: ${{ github.ref_name }}
+    - name: "Prepare assets"
+      run: |
+        cd ${{ github.ref_name }}
+        ./util/mktar.sh
+        mkdir assets && mv ${{ github.ref_name }}.tar.gz assets/ && cd assets
+        openssl sha1 -r ${{ github.ref_name }}.tar.gz > ${{ github.ref_name }}.tar.gz.sha1
+        openssl sha256 -r ${{ github.ref_name }}.tar.gz > ${{ github.ref_name }}.tar.gz.sha256
+        gpg -u ${{ vars.signing_key_uid }} -o ${{ github.ref_name }}.tar.gz.asc -sba ${{ github.ref_name }}.tar.gz
+    - name: "Create release"
+      env:
+        GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+      run: |
+        VERSION=$(echo ${{ github.ref_name }} | cut -d "-" -f 2-)
+        PRE_RELEASE=$([[ ${{ github.ref_name }} =~ alpha|beta ]] && echo "-p" || echo "")
+        gh release create ${{ github.ref_name }} $PRE_RELEASE -t "OpenSSL $VERSION" -d --notes " " -R ${{ github.repository }} ${{ github.ref_name }}/assets/*

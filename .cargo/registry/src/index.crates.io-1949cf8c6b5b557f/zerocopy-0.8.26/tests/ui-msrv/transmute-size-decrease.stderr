@@ -1,0 +1,9 @@
+error[E0512]: cannot transmute between types of different sizes, or dependently-sized types
+  --> tests/ui-msrv/transmute-size-decrease.rs:20:27
+   |
+20 | const DECREASE_SIZE: u8 = transmute!(AU16(0));
+   |                           ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: source type: `AU16` (16 bits)
+   = note: target type: `u8` (8 bits)
+   = note: this error originates in the macro `transmute` (in Nightly builds, run with -Z macro-backtrace for more info)

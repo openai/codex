@@ -1,0 +1,47 @@
+# This file is part of ICU4X. For terms of use, please see the file
+# called LICENSE at the top level of the ICU4X source tree
+# (online at: https://github.com/unicode-org/icu4x/blob/main/LICENSE ).
+
+[package]
+name = "yoke"
+description = "Abstraction allowing borrowed data to be carried along with the backing data it borrows from"
+version = "0.8.0"
+authors = ["Manish Goregaokar <manishsmail@gmail.com>"]
+categories = ["data-structures", "memory-management", "caching", "no-std"]
+keywords = ["zerocopy", "serialization", "lifetime", "borrow", "self-referential"]
+
+edition.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.workspaces]
+independent = true
+
+[features]
+default = ["alloc", "zerofrom"]
+derive = ["dep:yoke-derive", "zerofrom/derive"]
+alloc = ["stable_deref_trait/alloc", "serde?/alloc", "zerofrom/alloc"]
+serde = ["dep:serde"]
+zerofrom = ["dep:zerofrom"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[package.metadata.cargo-all-features]
+# We have tons of features here, limit the amount of tests we run
+max_combination_size = 3
+
+[dependencies]
+stable_deref_trait = { workspace = true }
+
+yoke-derive = { workspace = true, optional = true }
+
+serde = { workspace = true, optional = true }
+zerofrom = { workspace = true, optional = true}
+
+[dev-dependencies]
+bincode = { workspace = true }
+postcard = { workspace = true }
+serde = { workspace = true }

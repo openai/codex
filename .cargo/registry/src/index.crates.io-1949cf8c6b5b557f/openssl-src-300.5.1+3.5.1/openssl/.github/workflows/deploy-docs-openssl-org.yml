@@ -1,0 +1,23 @@
+name: "Trigger docs.openssl.org deployment"
+
+on:
+  push:
+    branches:
+      - "openssl-3.[0-9]+"
+      - "master"
+    paths:
+      - "doc/man*/**"
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Trigger deployment workflow"
+        run: |
+          gh workflow run -f branch=${{ github.ref_name }} deploy-site.yaml
+          sleep 3
+          RUN_ID=$(gh run list -w deploy-site.yaml -L 1 --json databaseId -q ".[0].databaseId")
+          gh run watch ${RUN_ID} --exit-status
+        env:
+          GH_REPO: "openssl/openssl-docs"
+          GH_TOKEN: ${{ secrets.OPENSSL_MACHINE_TOKEN }}

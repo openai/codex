@@ -1,0 +1,39 @@
+language: rust
+
+matrix:
+  include:
+    # Stable
+    - rust: stable
+      script:
+        - cargo test --verbose
+        - cargo test --features impl_serde --verbose
+
+    # Stable no_std
+    - rust: stable
+      name: "no_std stable"
+      install:
+        - rustup target add thumbv6m-none-eabi
+      script:
+        - cargo build --target thumbv6m-none-eabi --verbose
+
+    # Beta
+    - rust: beta
+      script:
+        - cargo test --verbose
+        - cargo test --features impl_serde --verbose
+
+    # Nightly
+    - rust: nightly
+      script:
+        - cargo test --verbose
+        - cargo test --all-features --verbose
+
+    # Miri
+    - rust: nightly
+      name: "Miri"
+      script:
+        - ci/miri.sh
+jobs:
+  allow_failures:
+    - rust: nightly
+  fast_finish: true

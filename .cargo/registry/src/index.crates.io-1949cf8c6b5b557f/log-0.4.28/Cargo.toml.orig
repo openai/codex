@@ -1,0 +1,71 @@
+[package]
+
+name = "log"
+version = "0.4.28" # remember to update html_root_url
+authors = ["The Rust Project Developers"]
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/rust-lang/log"
+documentation = "https://docs.rs/log"
+description = """
+A lightweight logging facade for Rust
+"""
+categories = ["development-tools::debugging"]
+keywords = ["logging"]
+exclude = ["rfcs/**/*"]
+rust-version = "1.61.0"
+edition = "2021"
+
+[package.metadata.docs.rs]
+features = ["std", "serde", "kv_std", "kv_sval", "kv_serde"]
+
+[features]
+max_level_off   = []
+max_level_error = []
+max_level_warn  = []
+max_level_info  = []
+max_level_debug = []
+max_level_trace = []
+
+release_max_level_off   = []
+release_max_level_error = []
+release_max_level_warn  = []
+release_max_level_info  = []
+release_max_level_debug = []
+release_max_level_trace = []
+
+std = []
+
+kv = []
+kv_sval = ["kv", "value-bag/sval", "sval", "sval_ref"]
+kv_std = ["std", "kv", "value-bag/error"]
+kv_serde = ["kv_std", "value-bag/serde", "serde"]
+
+# Deprecated: use `kv_*` instead
+# These `*_unstable` features will be removed in a future release
+kv_unstable = ["kv", "value-bag"]
+kv_unstable_sval = ["kv_sval", "kv_unstable"]
+kv_unstable_std = ["kv_std", "kv_unstable"]
+kv_unstable_serde = ["kv_serde", "kv_unstable_std"]
+
+[dependencies]
+serde = { version = "1.0", optional = true, default-features = false }
+sval = { version = "2.14.1", optional = true, default-features = false }
+sval_ref = { version = "2.1", optional = true, default-features = false }
+value-bag = { version = "1.7", optional = true, default-features = false, features = ["inline-i128"] }
+
+[dev-dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0" }
+serde_test = { version = "1.0" }
+sval = { version = "2.1" }
+sval_derive = { version = "2.1" }
+value-bag = { version = "1.7", features = ["test"] }
+
+# NOTE: log doesn't actually depend on this crate. However, our dependencies,
+# serde and sval, dependent on version 1.0 of the crate, which has problem fixed
+# in 1.0.60, specifically in the following commit
+# https://github.com/dtolnay/proc-macro2/commit/e31d61910049e097afdd3d27c37786309082bdcb.
+# By defining the crate as direct dependency we can increase its minimal
+# version making the minimal (crate) version CI happy.
+proc-macro2 = { version = "1.0.63", default-features = false }

@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PropertyOrder",
+  "type": "object",
+  "properties": {
+    "$defs": {
+      "$ref": "#/$defs/UnitStruct"
+    },
+    "examples": {
+      "$ref": "#/$defs/UnitStruct"
+    },
+    "properties": {
+      "$ref": "#/$defs/UnitStruct"
+    },
+    "required": {
+      "$ref": "#/$defs/UnitStruct"
+    },
+    "$schema": {
+      "$ref": "#/$defs/UnitStruct"
+    },
+    "title": {
+      "$ref": "#/$defs/UnitStruct"
+    },
+    "type": {
+      "$ref": "#/$defs/UnitStruct"
+    },
+    "x-custom": {
+      "$ref": "#/$defs/UnitStruct"
+    }
+  },
+  "required": [
+    "$defs",
+    "examples",
+    "properties",
+    "required",
+    "$schema",
+    "title",
+    "type",
+    "x-custom"
+  ],
+  "examples": [
+    {
+      "$defs": null,
+      "examples": null,
+      "properties": null,
+      "required": null,
+      "$schema": null,
+      "title": null,
+      "type": null,
+      "x-custom": null
+    }
+  ],
+  "x-custom": {
+    "$defs": null,
+    "examples": null,
+    "properties": null,
+    "required": null,
+    "$schema": null,
+    "title": null,
+    "type": null,
+    "x-custom": null
+  },
+  "$defs": {
+    "UnitStruct": {
+      "type": "null"
+    }
+  }
+}

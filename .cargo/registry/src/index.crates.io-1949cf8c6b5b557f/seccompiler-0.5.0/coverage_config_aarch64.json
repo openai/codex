@@ -1,0 +1,5 @@
+{
+    "coverage_score": 0,
+    "exclude_path": "tests/integration_tests.rs,tests/json.rs",
+    "crate_features": "json"
+}

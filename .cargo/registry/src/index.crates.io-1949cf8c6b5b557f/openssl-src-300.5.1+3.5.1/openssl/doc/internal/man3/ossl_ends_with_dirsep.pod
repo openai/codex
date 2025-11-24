@@ -1,0 +1,45 @@
+=pod
+
+=head1 NAME
+
+ossl_ends_with_dirsep, ossl_is_absolute_path
+- internal functions to work with paths
+
+=head1 SYNOPSIS
+
+  #include "internal/cryptlib.h"
+
+  int ossl_ends_with_dirsep(const char *path);
+
+  int ossl_is_absolute_path(const char *path);
+
+=head1 DESCRIPTION
+
+ossl_ends_with_dirsep() detects whether the I<path> ends with a directory
+separator in a platform agnostic way.
+
+ossl_is_absolute_path() detects whether the I<path> is absolute path in
+a platform agnostic way.
+
+=head1 RETURN VALUES
+
+ossl_ends_with_dirsep() returns 1 if the I<path> ends with a directory
+separator, 0 otherwise.
+
+ossl_is_absolute_path() returns 1 if the I<path> is absolute, 0 otherwise.
+
+=head1 HISTORY
+
+The functions described here were added in OpenSSL 3.0.
+
+=head1 COPYRIGHT
+
+Copyright 2019-2020 The OpenSSL Project Authors. All Rights Reserved.
+
+Licensed under the Apache License 2.0 (the "License").  You may not use
+this file except in compliance with the License.  You can obtain a copy
+in the file LICENSE in the source distribution or at
+L<https://www.openssl.org/source/license.html>.
+
+=cut
+

@@ -1,0 +1,41 @@
+[package]
+name = "matchit"
+version = "0.8.4"
+license = "MIT AND BSD-3-Clause"
+authors = ["Ibraheem Ahmed <ibraheem@ibraheem.ca>"]
+edition = "2021"
+description = "A high performance, zero-copy URL router."
+categories = ["network-programming", "algorithms"]
+keywords = ["router", "path", "tree", "match", "url"]
+repository = "https://github.com/ibraheemdev/matchit"
+readme = "README.md"
+
+[dependencies]
+
+[dev-dependencies]
+# Benchmarks
+criterion = "0.3.4"
+actix-router = "0.2.7"
+regex = "1.5.4"
+route-recognizer = "0.3.0"
+gonzales = "0.0.3-beta"
+path-tree = "0.2.2"
+routefinder = "0.5.2"
+
+# examples
+tower = { version = "0.4", features = ["make", "util"] }
+tokio = { version = "1", features = ["full"] }
+hyper = { version = "0.14", features = ["full"] }
+
+[features]
+default = []
+__test_helpers = []
+
+[[bench]]
+name = "bench"
+harness = false
+
+[profile.release]
+lto = true
+opt-level = 3
+codegen-units = 1

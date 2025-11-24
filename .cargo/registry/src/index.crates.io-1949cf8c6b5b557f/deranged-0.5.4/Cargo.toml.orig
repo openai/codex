@@ -1,0 +1,46 @@
+[package]
+name = "deranged"
+version = "0.5.4"
+authors = ["Jacob Pratt <jacob@jhpratt.dev>"]
+edition = "2021"
+rust-version = "1.81.0"
+repository = "https://github.com/jhpratt/deranged"
+keywords = ["integer", "int", "range"]
+readme = "../README.md"
+license = "MIT OR Apache-2.0"
+description = "Ranged integers"
+include = ["src/**/*", "LICENSE-*", "README.md"]
+
+[features]
+default = []
+alloc = []
+macros = ["dep:deranged-macros"]
+num = ["dep:num-traits"]
+powerfmt = ["dep:powerfmt"]
+quickcheck = ["dep:quickcheck", "alloc"]
+rand = ["rand08", "rand09"]
+rand08 = ["dep:rand08"]
+rand09 = ["dep:rand09"]
+serde = ["dep:serde_core"]
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--generate-link-to-definition", "--generate-macro-expansion"]
+
+[dependencies]
+deranged-macros = { workspace = true, optional = true }
+num-traits = { version = "0.2.15", optional = true, default-features = false }
+powerfmt = { version = "0.2.0", optional = true, default-features = false }
+quickcheck = { version = "1.0.3", default-features = false, optional = true }
+rand08 = { package = "rand", version = "0.8.4", optional = true, default-features = false }
+rand09 = { package = "rand", version = "0.9.0", optional = true, default-features = false }
+serde_core = { version = "1.0.220", optional = true, default-features = false }
+
+[dev-dependencies]
+rand08 = { package = "rand", version = "0.8.4" }
+rand09 = { package = "rand", version = "0.9.0" }
+serde_json = "1.0.86"

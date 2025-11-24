@@ -1,0 +1,75 @@
+{
+  "$schema": "https://spec.openapis.org/oas/3.0/schema/2024-10-18#/definitions/Schema",
+  "title": "MyStruct",
+  "type": "object",
+  "properties": {
+    "myInt": {
+      "type": "integer"
+    },
+    "myBool": {
+      "type": "boolean"
+    },
+    "myNullableEnum": {},
+    "myInnerStruct": {
+      "type": "object",
+      "properties": {
+        "my_map": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "my_vec": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "my_empty_map": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "my_empty_vec": {
+          "type": "array",
+          "items": {}
+        },
+        "my_tuple": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1
+            },
+            {
+              "type": "integer"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "example": {
+    "myInt": 123,
+    "myBool": true,
+    "myNullableEnum": null,
+    "myInnerStruct": {
+      "my_map": {
+        "k": 1.23
+      },
+      "my_vec": [
+        1.0,
+        2.0,
+        3.0
+      ],
+      "my_empty_map": {},
+      "my_empty_vec": [],
+      "my_tuple": [
+        "💩",
+        42
+      ]
+    }
+  }
+}

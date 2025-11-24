@@ -1,0 +1,31 @@
+[package]
+name = "wayland-protocols-wlr"
+version = "0.3.9"
+documentation = "https://docs.rs/wayland-protocols-wlr/"
+repository = "https://github.com/smithay/wayland-rs"
+authors = ["Elinor Berger <elinor@safaradeg.net>"]
+license = "MIT"
+keywords = ["wayland", "client", "server", "protocol", "extension"]
+description = "Generated API for the WLR wayland protocol extensions"
+categories = ["gui", "api-bindings"]
+edition = "2021"
+rust-version = "1.65"
+readme = "README.md"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+wayland-scanner = { version = "0.31.7", path = "../wayland-scanner" }
+wayland-backend = { version = "0.3.11", path = "../wayland-backend" }
+wayland-client = { version = "0.31.11", path = "../wayland-client", optional = true }
+wayland-server = { version = "0.31.10", path = "../wayland-server", optional = true }
+wayland-protocols = { version = "0.32.9", path = "../wayland-protocols"}
+bitflags = "2"
+
+[features]
+client = ["wayland-client", "wayland-protocols/client"]
+server = ["wayland-server", "wayland-protocols/server"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

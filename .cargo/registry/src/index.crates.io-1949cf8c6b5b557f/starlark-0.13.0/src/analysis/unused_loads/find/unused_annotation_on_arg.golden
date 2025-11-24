@@ -1,0 +1,20 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Program:
+load("foo",
+    "T", # @unused
+    "U",
+     )
+
+Unused loads:
+
+error: Unused load
+ --> unused_annotation_on_arg:3:5
+  |
+3 |     "U",
+  |     ^^^
+  |

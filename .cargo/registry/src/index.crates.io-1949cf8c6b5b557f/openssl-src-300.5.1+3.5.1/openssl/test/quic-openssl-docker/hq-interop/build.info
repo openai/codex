@@ -1,0 +1,10 @@
+PROGRAMS{noinst} = quic-hq-interop \
+                   quic-hq-interop-server
+
+INCLUDE[quic-hq-interop]=../../../include
+SOURCE[quic-hq-interop]=quic-hq-interop.c
+DEPEND[quic-hq-interop]=../../../libcrypto ../../../libssl
+
+INCLUDE[quic-hq-interop-server]=../../../include
+SOURCE[quic-hq-interop-server]=quic-hq-interop-server.c
+DEPEND[quic-hq-interop-server]=../../../libcrypto ../../../libssl

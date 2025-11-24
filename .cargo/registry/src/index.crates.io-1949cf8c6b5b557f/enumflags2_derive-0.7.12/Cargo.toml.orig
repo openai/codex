@@ -1,0 +1,22 @@
+[package]
+name = "enumflags2_derive"
+version = "0.7.12"
+authors = ["maik klein <maikklein@googlemail.com>", "Maja Kądziołka <maya@compilercrim.es>"]
+description = "Do not use directly, use the reexport in the `enumflags2` crate. This allows for better compatibility across versions."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/meithecatte/enumflags2"
+keywords = ["enum", "bitflag", "flag", "bitflags"]
+edition = "2018"
+rust-version = "1.56"
+
+[lib]
+proc-macro = true
+
+[dependencies.syn]
+version = "^2.0"
+features = ["parsing", "printing", "derive", "proc-macro"]
+default-features = false
+
+[dependencies]
+quote = "^1.0"
+proc-macro2 = "^1.0"

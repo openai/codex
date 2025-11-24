@@ -1,0 +1,208 @@
+# We make separate GOAL variables for each algorithm, to make it easy to
+# switch each to the Legacy provider when needed.
+#
+# $TDES_1_GOAL and $TDES_2_GOAL separate FIPSable and non-FIPSable TDES.
+# The latter may become legacy sooner, so it's comfortable to have two
+# variables already now, to switch the non-FIPSable TDES to legacy if needed.
+
+$COMMON_GOAL=../../libcommon.a
+
+$NULL_GOAL=../../libdefault.a
+$AES_GOAL=../../libdefault.a ../../libfips.a
+$TDES_1_GOAL=../../libdefault.a ../../libfips.a
+$TDES_2_GOAL=../../libdefault.a
+$ARIA_GOAL=../../libdefault.a
+$CAMELLIA_GOAL=../../libdefault.a
+$DES_GOAL=../../liblegacy.a
+$BLOWFISH_GOAL=../../liblegacy.a
+$IDEA_GOAL=../../liblegacy.a
+$CAST5_GOAL=../../liblegacy.a
+$RC2_GOAL=../../liblegacy.a
+$RC4_GOAL=../../liblegacy.a
+$RC5_GOAL=../../liblegacy.a
+$SEED_GOAL=../../liblegacy.a
+$SM4_GOAL=../../libdefault.a
+$CHACHA_GOAL=../../libdefault.a
+$CHACHAPOLY_GOAL=../../libdefault.a
+$SIV_GOAL=../../libdefault.a
+$SIV_GCM_GOAL=../../libdefault.a
+
+IF[{- !$disabled{asm} -}]
+  $GHASHDEF_x86=GHASH_ASM
+  $GHASHDEF_x86_sse2=OPENSSL_IA32_SSE2
+
+  $GHASHDEF_x86_64=GHASH_ASM
+  $GHASHDEF_x86_64_sse2=OPENSSL_IA32_SSE2
+
+  # ghash-ia64.s doesn't work on VMS
+  IF[{- $config{target} !~ /^vms-/ -}]
+    $GHASHDEF_ia64=GHASH_ASM
+  ENDIF
+
+  $GHASHDEF_sparcv9=GHASH_ASM
+
+  $GHASHDEF_alpha=GHASH_ASM
+
+  $GHASHDEF_s390x=GHASH_ASM
+
+  $GHASHDEF_armv4=GHASH_ASM
+  $GHASHDEF_aarch64=
+
+  $GHASHDEF_parisc11=GHASH_ASM
+  $GHASHDEF_parisc20_64=$GHASHDEF_parisc11
+
+  $GHASHDEF_ppc32=
+  $GHASHDEF_ppc64=$GHASHDEF_ppc32
+
+  $GHASHDEF_c64xplus=GHASH_ASM
+
+  $GHASHDEF_riscv64=GHASH_ASM
+
+  # Now that we have defined all the arch specific variables, use the
+  # appropriate one, and define the appropriate macros
+
+  IF[$GHASHDEF_{- $target{asm_arch} -}]
+    $GHASHDEF=$GHASHDEF_{- $target{asm_arch} -}
+    IF[{- !$disabled{sse2} -}]
+      IF[$GHASHDEF_{- $target{asm_arch} -}_sse2]
+        $GHASHDEF=$GHASHDEF_{- $target{asm_arch} -}_sse2
+      ENDIF
+    ENDIF
+  ENDIF
+ENDIF
+
+IF[{- !$disabled{asm} -}]
+  IF[{- ($target{perlasm_scheme} // '') ne '31' -}]
+    $AESXTSDEF_s390x=AES_XTS_S390X
+  ENDIF
+
+  # Now that we have defined all the arch specific variables, use the
+  # appropriate one, and define the appropriate macros
+
+  IF[$AESXTSDEF_{- $target{asm_arch} -}]
+    $AESXTSDEF=$AESXTSDEF_{- $target{asm_arch} -}
+  ENDIF
+ENDIF
+
+# This source is common building blocks for all ciphers in all our providers.
+SOURCE[$COMMON_GOAL]=\
+        ciphercommon.c ciphercommon_hw.c ciphercommon_block.c \
+        ciphercommon_gcm.c ciphercommon_gcm_hw.c \
+        ciphercommon_ccm.c ciphercommon_ccm_hw.c
+
+IF[{- !$disabled{des} -}]
+  SOURCE[$TDES_1_GOAL]=cipher_tdes.c cipher_tdes_common.c cipher_tdes_hw.c
+ENDIF
+
+SOURCE[$NULL_GOAL]=\
+        cipher_null.c
+
+SOURCE[$AES_GOAL]=\
+        cipher_aes.c cipher_aes_hw.c \
+        cipher_aes_xts.c cipher_aes_xts_hw.c \
+        cipher_aes_gcm.c cipher_aes_gcm_hw.c \
+        cipher_aes_ccm.c cipher_aes_ccm_hw.c \
+        cipher_aes_wrp.c \
+        cipher_aes_cbc_hmac_sha.c \
+        cipher_aes_cbc_hmac_sha256_hw.c cipher_aes_cbc_hmac_sha1_hw.c \
+        cipher_cts.c
+DEFINE[$AES_GOAL]=$AESXTSDEF
+
+# Extra code to satisfy the FIPS and non-FIPS separation.
+# When the AES-xxx-XTS moves to legacy, cipher_aes_xts_fips.c can be removed.
+SOURCE[$AES_GOAL]=cipher_aes_xts_fips.c
+
+IF[{- !$disabled{siv} -}]
+  DEFINE[$SIV_GCM_GOAL]=$GHASHDEF
+  SOURCE[$SIV_GCM_GOAL]=\
+        cipher_aes_gcm_siv.c cipher_aes_gcm_siv_hw.c \
+        cipher_aes_gcm_siv_polyval.c
+  SOURCE[$SIV_GOAL]=cipher_aes_siv.c cipher_aes_siv_hw.c
+ENDIF
+
+IF[{- !$disabled{des} -}]
+  SOURCE[$TDES_2_GOAL]=\
+      cipher_tdes_default.c cipher_tdes_default_hw.c \
+      cipher_tdes_wrap.c cipher_tdes_wrap_hw.c
+  SOURCE[$DES_GOAL]=\
+      cipher_desx.c cipher_desx_hw.c \
+      cipher_des.c cipher_des_hw.c
+ IF[{- !$disabled{module} -}]
+   SOURCE[$DES_GOAL]=\
+       cipher_tdes_common.c
+ ENDIF
+ENDIF
+
+IF[{- !$disabled{aria} -}]
+  SOURCE[$ARIA_GOAL]=\
+      cipher_aria.c cipher_aria_hw.c \
+      cipher_aria_gcm.c cipher_aria_gcm_hw.c \
+      cipher_aria_ccm.c cipher_aria_ccm_hw.c
+ENDIF
+
+IF[{- !$disabled{camellia} -}]
+  SOURCE[$CAMELLIA_GOAL]=\
+      cipher_camellia.c cipher_camellia_hw.c
+ENDIF
+
+IF[{- !$disabled{bf} -}]
+  SOURCE[$BLOWFISH_GOAL]=\
+      cipher_blowfish.c cipher_blowfish_hw.c
+ENDIF
+
+IF[{- !$disabled{idea} -}]
+  SOURCE[$IDEA_GOAL]=\
+      cipher_idea.c cipher_idea_hw.c
+ENDIF
+
+IF[{- !$disabled{cast} -}]
+  SOURCE[$CAST5_GOAL]=\
+      cipher_cast5.c cipher_cast5_hw.c
+ENDIF
+
+IF[{- !$disabled{seed} -}]
+  SOURCE[$SEED_GOAL]=\
+      cipher_seed.c cipher_seed_hw.c
+ENDIF
+
+IF[{- !$disabled{sm4} -}]
+  SOURCE[$SM4_GOAL]=\
+      cipher_sm4.c cipher_sm4_hw.c \
+      cipher_sm4_gcm.c cipher_sm4_gcm_hw.c \
+      cipher_sm4_ccm.c cipher_sm4_ccm_hw.c \
+      cipher_sm4_xts.c cipher_sm4_xts_hw.c
+
+ENDIF
+
+IF[{- !$disabled{ocb} -}]
+  SOURCE[$AES_GOAL]=\
+       cipher_aes_ocb.c cipher_aes_ocb_hw.c
+ENDIF
+
+IF[{- !$disabled{rc4} -}]
+  SOURCE[$RC4_GOAL]=\
+      cipher_rc4.c cipher_rc4_hw.c
+ IF[{- !$disabled{md5} -}]
+   SOURCE[$RC4_GOAL]=\
+       cipher_rc4_hmac_md5.c cipher_rc4_hmac_md5_hw.c
+ ENDIF
+ENDIF
+
+IF[{- !$disabled{rc5} -}]
+  SOURCE[$RC5_GOAL]=\
+      cipher_rc5.c cipher_rc5_hw.c
+ENDIF
+
+IF[{- !$disabled{rc2} -}]
+  SOURCE[$RC2_GOAL]=\
+      cipher_rc2.c cipher_rc2_hw.c
+ENDIF
+
+IF[{- !$disabled{chacha} -}]
+  SOURCE[$CHACHA_GOAL]=\
+      cipher_chacha20.c cipher_chacha20_hw.c
+ IF[{- !$disabled{poly1305} -}]
+  SOURCE[$CHACHAPOLY_GOAL]=\
+      cipher_chacha20_poly1305.c cipher_chacha20_poly1305_hw.c
+ ENDIF
+ENDIF

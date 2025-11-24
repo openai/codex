@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FlattenValue",
+  "type": "object",
+  "properties": {
+    "flag": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "flag"
+  ],
+  "additionalProperties": true
+}

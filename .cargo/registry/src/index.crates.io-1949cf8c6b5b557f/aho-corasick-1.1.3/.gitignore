@@ -1,0 +1,12 @@
+.*.swp
+doc
+tags
+examples/ss10pusa.csv
+build
+target
+/Cargo.lock
+scratch*
+bench_large/huge
+BREADCRUMBS
+/tmp
+/aho-corasick-debug/Cargo.lock

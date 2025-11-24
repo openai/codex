@@ -1,0 +1,9 @@
+lower = 3e2
+upper = 3E2
+neg = 3e-2
+pos = 3E+2
+zero = 3e0
+pointlower = 3.1e2
+pointupper = 3.1E2
+prefix-zero-exp = 1e06
+prefix-zero-exp-plus = 1e+06

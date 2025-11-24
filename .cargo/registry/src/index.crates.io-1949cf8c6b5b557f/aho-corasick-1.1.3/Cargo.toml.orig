@@ -1,0 +1,74 @@
+[package]
+name = "aho-corasick"
+version = "1.1.3"  #:version
+authors = ["Andrew Gallant <jamslam@gmail.com>"]
+description = "Fast multiple substring searching."
+homepage = "https://github.com/BurntSushi/aho-corasick"
+repository = "https://github.com/BurntSushi/aho-corasick"
+readme = "README.md"
+keywords = ["string", "search", "text", "pattern", "multi"]
+license = "Unlicense OR MIT"
+categories = ["text-processing"]
+autotests = false
+exclude = ["/aho-corasick-debug", "/benchmarks", "/tmp"]
+edition = "2021"
+rust-version = "1.60.0"
+
+[lib]
+name = "aho_corasick"
+
+[features]
+default = ["std", "perf-literal"]
+std = ["memchr?/std"]
+
+# Enables prefilter optimizations that depend on external crates.
+perf-literal = ["dep:memchr"]
+
+# Enable logging via the 'log' crate. This is useful for seeing messages about
+# internal decisions and metrics. For example, how the choice of the internal
+# Aho-Corasick implementation is used or the heap usage of an automaton.
+logging = ["dep:log"]
+
+# Provides a trait impl for fst::Automaton for nfa::noncontiguous::NFA,
+# nfa::contiguous::NFA and dfa::DFA. This is useful for searching an
+# FST with an Aho-Corasick automaton. Note that this does not apply
+# to the top-level 'AhoCorasick' type, as it does not implement the
+# aho_corasick::automaton::Automaton trait, and thus enabling this feature does
+# not cause it to implement fst::Automaton either.
+#
+# NOTE: Currently this feature is not available as `fst` is not at 1.0 yet,
+# and this would make `fst` a public dependency. If you absolutely need this,
+# you can copy the (very small) src/transducer.rs file to your tree. It
+# specifically does not use any private APIs and should work after replacing
+# 'crate::' with 'aho_corasick::'.
+#
+# NOTE: I think my current plan is to flip this around an add an optional
+# dependency on 'aho-corasick' to the 'fst' crate and move the trait impls
+# there. But I haven't gotten around to it yet.
+# transducer = ["fst"]
+
+[dependencies]
+log = { version = "0.4.17", optional = true }
+memchr = { version = "2.4.0", default-features = false, optional = true }
+
+[dev-dependencies]
+doc-comment = "0.3.3"
+# fst = "0.4.5"
+
+[package.metadata.docs.rs]
+# We want to document all features.
+all-features = true
+# This opts into a nightly unstable option to show the features that need to be
+# enabled for public API items. To do that, we set 'docsrs', and when that's
+# enabled, we enable the 'doc_auto_cfg' feature.
+#
+# To test this locally, run:
+#
+#     RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc --all-features
+rustdoc-args = ["--cfg", "docsrs", "--generate-link-to-definition"]
+
+[profile.release]
+debug = true
+
+[profile.bench]
+debug = true

@@ -1,0 +1,27 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Program:
+
+RecFailRt1 = record(a = field(int), b = field(int))
+RecFailRt2 = record(a = field(int), b = field(int))
+
+def f_fail_rt(x: RecFailRt1):
+    return x.a
+
+noop(f_fail_rt)(RecFailRt2(a = 1, b = 2))
+
+Error:
+
+Traceback (most recent call last):
+  * assert.bzl:7, in <module>
+      noop(f_fail_rt)(RecFailRt2(a = 1, b = 2))
+error: Value `record[RecFailRt2](a=1, b=2)` of type `record` does not match the type annotation `RecFailRt1` for argument `x`
+ --> assert.bzl:7:1
+  |
+7 | noop(f_fail_rt)(RecFailRt2(a = 1, b = 2))
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |

@@ -1,0 +1,15 @@
+digraph {
+rankdir = "LR";
+splines = true;
+
+    0 [label="petgraph"]
+    1 [label="fixedbitset"]
+    2 [label="quickcheck"]
+    3 [label="rand"]
+    4 [label="libc"]
+    0 -> 1
+    0 -> 2
+    2 -> 3
+    3 -> 4
+    2 -> 4
+}

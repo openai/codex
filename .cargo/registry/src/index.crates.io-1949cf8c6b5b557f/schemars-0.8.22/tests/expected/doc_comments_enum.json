@@ -1,0 +1,45 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "This is the enum's title",
+  "description": "This is the enum's description.",
+  "oneOf": [
+    {
+      "type": "string",
+      "enum": [
+        "UndocumentedUnit",
+        "UndocumentedUnit2"
+      ]
+    },
+    {
+      "description": "This comment is included in the generated schema :)",
+      "type": "string",
+      "enum": [
+        "DocumentedUnit"
+      ]
+    },
+    {
+      "title": "Complex variant",
+      "description": "This is a struct-like variant.",
+      "type": "object",
+      "required": [
+        "Complex"
+      ],
+      "properties": {
+        "Complex": {
+          "type": "object",
+          "properties": {
+            "my_nullable_string": {
+              "title": "A nullable string",
+              "description": "This field is a nullable string.\n\nThis is the second line!\n\nAnd this is the third!",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  ]
+}

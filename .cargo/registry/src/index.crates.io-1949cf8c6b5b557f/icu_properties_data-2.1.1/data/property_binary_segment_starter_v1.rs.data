@@ -1,0 +1,83 @@
+// @generated
+/// Implement `DataProvider<PropertyBinarySegmentStarterV1>` on the given struct using the data
+/// hardcoded in this file. This allows the struct to be used with
+/// `icu`'s `_unstable` constructors.
+///
+/// Using this implementation will embed the following data in the binary's data segment:
+/// * 1442B[^1] for the singleton data struct
+///
+/// [^1]: these numbers can be smaller in practice due to linker deduplication
+///
+/// This macro requires the following crates:
+/// * `icu`
+/// * `icu_provider`
+/// * `zerovec`
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __impl_property_binary_segment_starter_v1 {
+    ($ provider : ty) => {
+        #[clippy::msrv = "1.83"]
+        const _: () = <$provider>::MUST_USE_MAKE_PROVIDER_MACRO;
+        #[clippy::msrv = "1.83"]
+        impl $provider {
+            #[doc(hidden)]
+            pub const SINGLETON_PROPERTY_BINARY_SEGMENT_STARTER_V1: &'static <icu::properties::provider::PropertyBinarySegmentStarterV1 as icu_provider::DynamicDataMarker>::DataStruct = &icu::properties::provider::PropertyCodePointSet::InversionList(unsafe {
+                #[allow(unused_unsafe)]
+                icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"\0\0\0\0\x03\0O\x03\0P\x03\0p\x03\0\x83\x04\0\x88\x04\0\x91\x05\0\xBE\x05\0\xBF\x05\0\xC0\x05\0\xC1\x05\0\xC3\x05\0\xC4\x05\0\xC6\x05\0\xC7\x05\0\xC8\x05\0\x10\x06\0\x1B\x06\0K\x06\0`\x06\0p\x06\0q\x06\0\xD6\x06\0\xDD\x06\0\xDF\x06\0\xE5\x06\0\xE7\x06\0\xE9\x06\0\xEA\x06\0\xEE\x06\0\x11\x07\0\x12\x07\x000\x07\0K\x07\0\xEB\x07\0\xF4\x07\0\xFD\x07\0\xFE\x07\0\x16\x08\0\x1A\x08\0\x1B\x08\0$\x08\0%\x08\0(\x08\0)\x08\0.\x08\0Y\x08\0\\\x08\0\x97\x08\0\xA0\x08\0\xCA\x08\0\xE2\x08\0\xE3\x08\0\0\t\0<\t\0=\t\0M\t\0N\t\0Q\t\0U\t\0\xBC\t\0\xBD\t\0\xBE\t\0\xBF\t\0\xCD\t\0\xCE\t\0\xD7\t\0\xD8\t\0\xFE\t\0\xFF\t\0<\n\0=\n\0M\n\0N\n\0\xBC\n\0\xBD\n\0\xCD\n\0\xCE\n\0<\x0B\0=\x0B\0>\x0B\0?\x0B\0M\x0B\0N\x0B\0V\x0B\0X\x0B\0\xBE\x0B\0\xBF\x0B\0\xCD\x0B\0\xCE\x0B\0\xD7\x0B\0\xD8\x0B\0<\x0C\0=\x0C\0M\x0C\0N\x0C\0U\x0C\0W\x0C\0\xBC\x0C\0\xBD\x0C\0\xC2\x0C\0\xC3\x0C\0\xCD\x0C\0\xCE\x0C\0\xD5\x0C\0\xD7\x0C\0;\r\0=\r\0>\r\0?\r\0M\r\0N\r\0W\r\0X\r\0\xCA\r\0\xCB\r\0\xCF\r\0\xD0\r\0\xDF\r\0\xE0\r\08\x0E\0;\x0E\0H\x0E\0L\x0E\0\xB8\x0E\0\xBB\x0E\0\xC8\x0E\0\xCC\x0E\0\x18\x0F\0\x1A\x0F\x005\x0F\x006\x0F\x007\x0F\08\x0F\09\x0F\0:\x0F\0q\x0F\0s\x0F\0t\x0F\0u\x0F\0z\x0F\0~\x0F\0\x80\x0F\0\x81\x0F\0\x82\x0F\0\x85\x0F\0\x86\x0F\0\x88\x0F\0\xB5\x0F\0\xB6\x0F\0\xB7\x0F\0\xB8\x0F\0\xC6\x0F\0\xC7\x0F\0.\x10\0/\x10\x007\x10\08\x10\09\x10\0;\x10\0\x8D\x10\0\x8E\x10\0a\x11\0v\x11\0\xA8\x11\0\xC3\x11\0]\x13\0`\x13\0\x14\x17\0\x16\x17\x004\x17\x005\x17\0\xD2\x17\0\xD3\x17\0\xDD\x17\0\xDE\x17\0\xA9\x18\0\xAA\x18\09\x19\0<\x19\0\x17\x1A\0\x19\x1A\0`\x1A\0a\x1A\0u\x1A\0}\x1A\0\x7F\x1A\0\x80\x1A\0\xB0\x1A\0\xBE\x1A\0\xBF\x1A\0\xDE\x1A\0\xE0\x1A\0\xEC\x1A\x004\x1B\x006\x1B\0D\x1B\0E\x1B\0k\x1B\0t\x1B\0\xAA\x1B\0\xAC\x1B\0\xE6\x1B\0\xE7\x1B\0\xF2\x1B\0\xF4\x1B\x007\x1C\08\x1C\0\xD0\x1C\0\xD3\x1C\0\xD4\x1C\0\xE1\x1C\0\xE2\x1C\0\xE9\x1C\0\xED\x1C\0\xEE\x1C\0\xF4\x1C\0\xF5\x1C\0\xF8\x1C\0\xFA\x1C\0\xC0\x1D\0\0\x1E\0\xD0 \0\xDD \0\xE1 \0\xE2 \0\xE5 \0\xF1 \0\xEF,\0\xF2,\0\x7F-\0\x80-\0\xE0-\0\0.\0*0\x0000\0\x990\0\x9B0\0o\xA6\0p\xA6\0t\xA6\0~\xA6\0\x9E\xA6\0\xA0\xA6\0\xF0\xA6\0\xF2\xA6\0\x06\xA8\0\x07\xA8\0,\xA8\0-\xA8\0\xC4\xA8\0\xC5\xA8\0\xE0\xA8\0\xF2\xA8\0+\xA9\0.\xA9\0S\xA9\0T\xA9\0\xB3\xA9\0\xB4\xA9\0\xC0\xA9\0\xC1\xA9\0\xB0\xAA\0\xB1\xAA\0\xB2\xAA\0\xB5\xAA\0\xB7\xAA\0\xB9\xAA\0\xBE\xAA\0\xC0\xAA\0\xC1\xAA\0\xC2\xAA\0\xF6\xAA\0\xF7\xAA\0\xED\xAB\0\xEE\xAB\0\x1E\xFB\0\x1F\xFB\0 \xFE\x000\xFE\0\xFD\x01\x01\xFE\x01\x01\xE0\x02\x01\xE1\x02\x01v\x03\x01{\x03\x01\r\n\x01\x0E\n\x01\x0F\n\x01\x10\n\x018\n\x01;\n\x01?\n\x01@\n\x01\xE5\n\x01\xE7\n\x01$\r\x01(\r\x01i\r\x01n\r\x01\xAB\x0E\x01\xAD\x0E\x01\xFA\x0E\x01\xFC\x0E\x01\xFD\x0E\x01\0\x0F\x01F\x0F\x01Q\x0F\x01\x82\x0F\x01\x86\x0F\x01F\x10\x01G\x10\x01p\x10\x01q\x10\x01\x7F\x10\x01\x80\x10\x01\xB9\x10\x01\xBB\x10\x01\0\x11\x01\x03\x11\x01'\x11\x01(\x11\x013\x11\x015\x11\x01s\x11\x01t\x11\x01\xC0\x11\x01\xC1\x11\x01\xCA\x11\x01\xCB\x11\x015\x12\x017\x12\x01\xE9\x12\x01\xEB\x12\x01;\x13\x01=\x13\x01>\x13\x01?\x13\x01M\x13\x01N\x13\x01W\x13\x01X\x13\x01f\x13\x01m\x13\x01p\x13\x01u\x13\x01\xB8\x13\x01\xB9\x13\x01\xBB\x13\x01\xBC\x13\x01\xC2\x13\x01\xC3\x13\x01\xC9\x13\x01\xCA\x13\x01\xCE\x13\x01\xD1\x13\x01B\x14\x01C\x14\x01F\x14\x01G\x14\x01^\x14\x01_\x14\x01\xB0\x14\x01\xB1\x14\x01\xBA\x14\x01\xBB\x14\x01\xBD\x14\x01\xBE\x14\x01\xC2\x14\x01\xC4\x14\x01\xAF\x15\x01\xB0\x15\x01\xBF\x15\x01\xC1\x15\x01?\x16\x01@\x16\x01\xB6\x16\x01\xB8\x16\x01+\x17\x01,\x17\x019\x18\x01;\x18\x010\x19\x011\x19\x01=\x19\x01?\x19\x01C\x19\x01D\x19\x01\xE0\x19\x01\xE1\x19\x014\x1A\x015\x1A\x01G\x1A\x01H\x1A\x01\x99\x1A\x01\x9A\x1A\x01?\x1C\x01@\x1C\x01B\x1D\x01C\x1D\x01D\x1D\x01F\x1D\x01\x97\x1D\x01\x98\x1D\x01A\x1F\x01C\x1F\x01\x1Ea\x01!a\x01)a\x01*a\x01/a\x010a\x01\xF0j\x01\xF5j\x010k\x017k\x01gm\x01hm\x01\xF0o\x01\xF2o\x01\x9E\xBC\x01\x9F\xBC\x01e\xD1\x01j\xD1\x01m\xD1\x01s\xD1\x01{\xD1\x01\x83\xD1\x01\x85\xD1\x01\x8C\xD1\x01\xAA\xD1\x01\xAE\xD1\x01B\xD2\x01E\xD2\x01\0\xE0\x01\x07\xE0\x01\x08\xE0\x01\x19\xE0\x01\x1B\xE0\x01\"\xE0\x01#\xE0\x01%\xE0\x01&\xE0\x01+\xE0\x01\x8F\xE0\x01\x90\xE0\x010\xE1\x017\xE1\x01\xAE\xE2\x01\xAF\xE2\x01\xEC\xE2\x01\xF0\xE2\x01\xEC\xE4\x01\xF0\xE4\x01\xEE\xE5\x01\xF0\xE5\x01\xE3\xE6\x01\xE4\xE6\x01\xE6\xE6\x01\xE7\xE6\x01\xEE\xE6\x01\xF0\xE6\x01\xF5\xE6\x01\xF6\xE6\x01\xD0\xE8\x01\xD7\xE8\x01D\xE9\x01K\xE9\x01\0\0\x11") }, 1113061u32)
+            });
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DataProvider<icu::properties::provider::PropertyBinarySegmentStarterV1> for $provider {
+            fn load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponse<icu::properties::provider::PropertyBinarySegmentStarterV1>, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponse { payload: icu_provider::DataPayload::from_static_ref(Self::SINGLETON_PROPERTY_BINARY_SEGMENT_STARTER_V1), metadata: icu_provider::DataResponseMetadata::default() })
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyBinarySegmentStarterV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , ITER) => {
+        __impl_property_binary_segment_starter_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::properties::provider::PropertyBinarySegmentStarterV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+    ($ provider : ty , DRY) => {
+        __impl_property_binary_segment_starter_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::properties::provider::PropertyBinarySegmentStarterV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyBinarySegmentStarterV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , DRY , ITER) => {
+        __impl_property_binary_segment_starter_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::properties::provider::PropertyBinarySegmentStarterV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyBinarySegmentStarterV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::properties::provider::PropertyBinarySegmentStarterV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+}
+#[doc(inline)]
+pub use __impl_property_binary_segment_starter_v1 as impl_property_binary_segment_starter_v1;

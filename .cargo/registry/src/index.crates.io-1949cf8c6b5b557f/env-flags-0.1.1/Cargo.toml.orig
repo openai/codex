@@ -1,0 +1,11 @@
+[package]
+name = "env-flags"
+description = "A convenience macro for declaring environment variables"
+version = "0.1.1"
+authors = ["Kyle Kosic <kylekosic@gmail.com>"]
+edition = "2021"
+keywords = ["static", "env", "environment", "config"]
+license = "MIT"
+documentation = "https://docs.rs/env-flags"
+repository = "https://github.com/kykosic/env-flags"
+rust-version = "1.80"

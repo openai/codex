@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "zero": {
+      "type": "integer"
+    },
+    "zeroPointZero": {
+      "type": "number"
+    },
+    "bool": {
+      "type": "boolean"
+    },
+    "null": true,
+    "object": {
+      "type": "object",
+      "properties": {
+        "strings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "mixed": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "zero": 0,
+      "zeroPointZero": 0.0,
+      "bool": true,
+      "null": null,
+      "object": {
+        "strings": [
+          "foo",
+          "bar"
+        ],
+        "mixed": [
+          1,
+          true
+        ]
+      }
+    }
+  ]
+}

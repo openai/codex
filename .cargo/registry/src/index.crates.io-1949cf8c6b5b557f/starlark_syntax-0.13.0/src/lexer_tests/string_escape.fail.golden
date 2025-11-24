@@ -1,0 +1,52 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Program:
+test 'more \xTZ
+
+Error:
+error: Parse error: invalid string escape sequence `xT`
+ --> x:1:12
+  |
+1 | test 'more \xTZ
+  |            ^^^
+  |
+
+
+Program:
+test + 'more \UFFFFFFFF overflows'
+
+Error:
+error: Parse error: invalid string escape sequence `UFFFFFFFF`
+ --> x:1:14
+  |
+1 | test + 'more \UFFFFFFFF overflows'
+  |              ^^^^^^^^^^
+  |
+
+
+Program:
+test 'more \x0yabc'
+
+Error:
+error: Parse error: invalid string escape sequence `x0y`
+ --> x:1:12
+  |
+1 | test 'more \x0yabc'
+  |            ^^^^
+  |
+
+
+Program:
+test 'more \x0
+
+Error:
+error: Parse error: invalid string escape sequence `x0`
+ --> x:1:12
+  |
+1 | test 'more \x0
+  |            ^^^
+  |

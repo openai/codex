@@ -1,0 +1,36 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Program:
+x = 1
+if x == 1:
+  x = 2
+x = 3
+
+Error:
+error: `if` cannot be used outside `def` in this dialect
+ --> top_level_statements:2:1
+  |
+2 | / if x == 1:
+3 | |   x = 2
+4 | | x = 3
+  | |_^
+  |
+
+
+Program:
+x = 1
+for x in []:
+   pass
+
+Error:
+error: `for` cannot be used outside `def` in this dialect
+ --> top_level_statements:2:1
+  |
+2 | / for x in []:
+3 | |    pass
+  | |_______^
+  |

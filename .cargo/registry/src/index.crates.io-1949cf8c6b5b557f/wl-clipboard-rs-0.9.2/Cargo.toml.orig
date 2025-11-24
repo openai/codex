@@ -1,0 +1,55 @@
+[workspace]
+members = ["wl-clipboard-rs-tools"]
+
+[workspace.package]
+version = "0.9.2" # remember to update html_root_url
+authors = ["Ivan Molodetskikh <yalterz@gmail.com>"]
+edition = "2021"
+license = "MIT/Apache-2.0"
+repository = "https://github.com/YaLTeR/wl-clipboard-rs"
+keywords = ["wayland", "clipboard"]
+
+[workspace.dependencies]
+libc = "0.2.170"
+log = "0.4.26"
+rustix = "0.38.44"
+
+[package]
+name = "wl-clipboard-rs"
+version.workspace = true
+authors.workspace = true
+description = "Access to the Wayland clipboard for terminal and other window-less applications."
+edition.workspace = true
+license.workspace = true
+
+readme = "README.md"
+documentation = "https://docs.rs/wl-clipboard-rs"
+repository.workspace = true
+keywords.workspace = true
+categories = ["os"]
+
+[dependencies]
+libc.workspace = true
+log.workspace = true
+os_pipe = { version = "1.2.1", features = ["io_safety"] }
+rustix = { workspace = true, features = ["fs", "event"] }
+tempfile = "3.17.1"
+thiserror = "2"
+tree_magic_mini = "3.1.6"
+wayland-backend = "0.3.8"
+wayland-client = "0.31.8"
+wayland-protocols = { version = "0.32.6", features = ["client", "staging"] }
+wayland-protocols-wlr = { version = "0.3.6", features = ["client"] }
+
+[dev-dependencies]
+wayland-server = "0.31.7"
+wayland-protocols = { version = "0.32.6", features = ["server", "staging"] }
+wayland-protocols-wlr = { version = "0.3.6", features = ["server"] }
+proptest = "1.6.0"
+proptest-derive = "0.5.1"
+
+[features]
+# Link to libwayland-client.so instead of using the Rust implementation.
+native_lib = ["wayland-backend/client_system", "wayland-backend/server_system"]
+
+dlopen = ["native_lib", "wayland-backend/dlopen", "wayland-backend/dlopen"]

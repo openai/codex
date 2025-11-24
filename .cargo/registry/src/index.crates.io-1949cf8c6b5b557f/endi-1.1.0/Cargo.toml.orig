@@ -1,0 +1,16 @@
+[package]
+name = "endi"
+version = "1.1.0"
+description = "A simple endian-handling library"
+authors = ["Zeeshan Ali Khan <zeenix@gmail.com>"]
+repository = "https://github.com/zeenix/endi"
+categories = ["encoding", "parsing", "no-std"]
+keywords = ["byte", "endian", "big-endian", "little-endian", "endianness"]
+license = "MIT"
+rust-version = "1.60"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[features]
+default = ["std"]
+std = []

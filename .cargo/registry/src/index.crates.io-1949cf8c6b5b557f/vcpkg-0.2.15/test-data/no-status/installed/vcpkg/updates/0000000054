@@ -1,0 +1,7 @@
+Package: boost-container-hash
+Version: 1.67.0
+Depends: boost-assert, boost-compatibility, boost-config, boost-core, boost-detail, boost-integer, boost-static-assert, boost-type-traits, boost-vcpkg-helpers
+Architecture: x64-windows
+Multi-Arch: same
+Description: Boost container_hash module
+Status: install ok half-installed

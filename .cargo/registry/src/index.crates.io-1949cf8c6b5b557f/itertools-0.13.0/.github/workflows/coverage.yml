@@ -1,0 +1,34 @@
+on:
+  push:
+    branches: [master]
+    paths-ignore: 
+      - "**.md" 
+  pull_request:
+    paths-ignore: 
+      - "**.md" 
+
+name: Code Coverage
+
+jobs:
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout source
+        uses: actions/checkout@v4
+
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Run llvm-cov
+        run: cargo llvm-cov --all-features --doctests --workspace --lcov --output-path lcov.info
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: lcov.info

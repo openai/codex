@@ -1,0 +1,17 @@
+warning: unused variable: `increase_size`
+  --> tests/ui-msrv/try_transmute_ref-size-increase.rs:19:9
+   |
+19 |     let increase_size: Result<&AU16, _> = try_transmute_ref!(&[0u8; 2]);
+   |         ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_increase_size`
+   |
+   = note: `#[warn(unused_variables)]` on by default
+
+error[E0512]: cannot transmute between types of different sizes, or dependently-sized types
+  --> tests/ui-msrv/try_transmute_ref-size-increase.rs:19:43
+   |
+19 |     let increase_size: Result<&AU16, _> = try_transmute_ref!(&[0u8; 2]);
+   |                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: source type: `AlignOf<[u8; 2]>` (8 bits)
+   = note: target type: `MaxAlignsOf<[u8; 2], AU16>` (16 bits)
+   = note: this error originates in the macro `$crate::assert_align_gt_eq` (in Nightly builds, run with -Z macro-backtrace for more info)

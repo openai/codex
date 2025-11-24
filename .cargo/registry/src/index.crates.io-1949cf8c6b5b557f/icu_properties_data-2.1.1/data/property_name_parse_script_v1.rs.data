@@ -1,0 +1,81 @@
+// @generated
+/// Implement `DataProvider<PropertyNameParseScriptV1>` on the given struct using the data
+/// hardcoded in this file. This allows the struct to be used with
+/// `icu`'s `_unstable` constructors.
+///
+/// Using this implementation will embed the following data in the binary's data segment:
+/// * 2673B[^1] for the singleton data struct
+///
+/// [^1]: these numbers can be smaller in practice due to linker deduplication
+///
+/// This macro requires the following crates:
+/// * `icu`
+/// * `icu_provider`
+/// * `zerotrie`
+/// * `zerovec`
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __impl_property_name_parse_script_v1 {
+    ($ provider : ty) => {
+        #[clippy::msrv = "1.83"]
+        const _: () = <$provider>::MUST_USE_MAKE_PROVIDER_MACRO;
+        #[clippy::msrv = "1.83"]
+        impl $provider {
+            #[doc(hidden)]
+            pub const SINGLETON_PROPERTY_NAME_PARSE_SCRIPT_V1: &'static <icu::properties::provider::PropertyNameParseScriptV1 as icu_provider::DynamicDataMarker>::DataStruct = &icu::properties::provider::names::PropertyValueNameToEnumMap { map: zerotrie::ZeroTrieSimpleAscii { store: unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"\xE1yABCDEGHIJKLMNOPQRSTUVWXYZ\0\0\x01\x01\x02\x02\x03\x03\x03\x04\x04\x05\x06\x06\x07\x07\x07\x08\t\t\t\t\t\tb\xF5\xAA\xEB,\xB3+s\x91A\xAC\xA7\"\xE0Zb\x88n`u\x8F\xB2\xBE\xD0\xC7dfghnrv\n\x0E\x12\x16+Gl\xC2am\x03m\x91\x17\x91\x17ak\x91\x03hb\x91\x0Fom\x91\x11atolian_Hieroglyphs\x91\x0C\xC2am\n\xC2bn\x04\x82ic\x82\x918\xC3ein\x05\x07nian\x83\x90d\x83\xC2es\x06stan\x90et\x90e\xC7aehloru*BQU]o\xC4lmst\t\x0F\x19i\x90.nese\x90.u\x90rm\x90rs\x90va_Vah\x90v\xC2ak\x03k\x90/\x90/\xC2nr\x06g\x84ali\x84\xC2fi\x02\x91@a_Erfe\x91@\xC2ak\x08iksuki\x91\x18s\x91\x18is\x900po\x85mofo\x85a\xC2hi\x06\x901mi\x901\x90\x1Elle\x90\x1E\xC2gh\ti\x90'nese\x90'\xC2di\x02\x90\x1Cd\x90\x1C\xC7ahiopuy:_cpz\x83\xC4knru\x03\x1A!m\x90f\xC2as\x11dian_Aboriginal\x90\x18\x90\x18i\x90Xan\x90Xcasian_Albanian\x91\x0F\xC4aeor\n\x11\x1A\xC2km\x04ma\x90f\x902r\x86okee\x86rasmian\x91-s\x91-rt\x903\xC2mp\x04mon\x80t\x87ic\x87\xC2mr\x03n\x911t\x90\x1Fneiform\x90U\xC2pr\x12r\xC2io\x04ot\x90\x1F_Minoan\x911\xC3ils\x05\x06llic\x88\x88\x904\xC5eiosu\x12#*-\xC2sv\x05eret\x89a\x8Anagari\x8A\xC2av\x03k\x91.es_Akuru\x91.gr\x91\"a\x91\"rt\x89pl\x90woyan\x90w\xC3glt\x1F3y\xC3dhp\x02\x04\x905\x906\x907tian_Hieroglyphs\x907\xC2by\x08a\x90xsan\x90xm\x91)aic\x91)hi\x8Bopic\x8B\xC6aeloru\x07\x14 1Dra\x919y\x919o\xC2kr\x02\x908\x8Cgian\x8Cag\x90(olitic\x90(\xC2nt\x08\xC2gm\x02\x91#\x91\x1Fh\x8Dic\x8D\xC2ae\x08n\x90ytha\x90y\xC2ek\x02k\x8E\x8E\xC4jknr\n\r\x19\xC2ar\x05rati\x8F\x8Fh\x91:jala_Gondi\x91#\xC2mu\x06ukhi\x90\0\x90\0ng_Khema\x91:\xC8aeilmnru=EOS\\`d\xC2nt2\x90\x01\xC7bgiostu\x02\x08\x17\x19\x1B\x1D\x91\x1C\x90\x02ul\x90\x02\x90\x01fi_Rohingya\x91&\x90\x1B\x909\x90:noo\x90\x1Br\x91\x12an\x91\x12br\x90\x03ew\x90\x03ra\x90\x04gana\x90\x04uw\x91\x0Cn\xC2gp\x02\x90;\x91*tl\x91Dkt\x90&ng\x90<\xC3mnt\x10>perial_Aramaic\x90d\xC3dhs\x03\ns\x90=erited\x81criptional_Pa\xC2hr\x06lavi\x90jthian\x90mal\x90\x0E\xC3apu\x10\x14\xC2mv\x03o\x91\x1Da\x90>nese\x90>an\x90Yrc\x91\x04\xC8ahinoprt>}\x8C\x90\x94\x98\x9C\xC6ilntwy\x05\x08\x13(+thi\x90hi\x90?\xC2an\x02\x90\x06ada\x90\x05akana\x90\x06_Or_Hiragana\x90&i\x916ah_Li\x90?\xC5aimou\x0B\x1D&-r\x90)oshthi\x90)tan_Small_Script\x91/\xC2er\x03r\x90\x07\x90\x07j\x91\rki\x91\rdawadi\x91\x01\xC2rt\x08at_Rai\x91;s\x91/da\x90\x05re\x90gel\x90zai\x91;hi\x90h\xC5aeioy\x1F'KO\xC3not\x03\x08a\x90Z\x90\x08o\x90\x08\xC4fgin\x02\x04\x07\x90@\x90An\x90\t\x90\tpc\x90Bha\x90B\xC3mns\x06\x1Bb\x90 u\x90 \xC3abe\x02\x04\x90C\x90!ar_\xC2AB\x02\x90C\x90!u\x90sma\x90{\xC2cd\x07i\x90[an\x90[i\x90\\an\x90\\\xC9aeilortuyV\xAB\xAF\xB3\xC9\xCF\xD3\xDC\xC7hklnrsy\x0C\x14\x1C19E\xC2aj\x06jani\x91\x10\x91\x10a\x91$sar\x91$ayalam\x90\n\xC2di\x07\x90Daic\x90D\x90ichaean\x90ic\x91\x19hen\x91\x19aram_Gondi\x91\x1Fa\x90E\xC4denr\x0F\x1A(\xC2ef\tfaidrin\x91%\x91%tei_Mayek\x90cd\x90|e_Kikakui\x90|\xC2co\x02\x90}\x90Fitic_\xC2CH\x08ursive\x90}ieroglyphs\x90Fao\x90Lym\x90\n\xC3dno\x03\ri\x91\x13g\x90\x0Bolian\x90\x0Bn\x90bo\x91\x05o\x91\x05ei\x90clt\x91\x14ani\x91\x14\xC2am\x06nmar\x90\x0Cr\x90\x0C\xC7abeksuy.2BNRW\xC4bgnr\x08\x17#ataean\x90\x7F\xC2_m\tMundari\x917\x917d\x91+inagari\x91+b\x90~at\x90\x7Fw\xC2_a\tTai_Lue\x90+\x91\x1A\xC2go\x03b\x90t\x90Go\x90Ghu\x91\x06shu\x91\x06iakeng_Puachue_Hmong\x91*\xC6glnrsu\x0B\x85\x89\x99\xAE\xC2ah\x03m\x90\ram\x90\r\xC3_cd\x0F\x12\xC2CO\x06hiki\x90]nal\x91<k\x90]_\xC7HINPSTU\n\x11\x1F.ELungarian\x90<talic\x90\x0Eorth_Arabian\x90~er\xC2ms\x04ic\x90Iian\x90-o\xC2gu\x06dian\x91(th_Arabian\x90uurkic\x90Hyghur\x912ao\x91<\xC3iky\x04\x07ya\x90\x0Fh\x90Ha\x90\x0F\xC3agm\x04\x07ge\x91\x1Be\x91\x1Ba\x90\"nya\x90\"gr\x912\xC6aehlrs*.W[_\xC3hlu\x0B\x15awh_Hmong\x90;m\x91\0yrene\x91\0\xC2_c\tCin_Hau\x91\x15\x91\x15rm\x90I\xC4alno\t\x15\x18g\x90Js_Pa\x90J\xC3ipv\x02\x04\x90j\x90k\x90lx\x90Kenician\x90Krd\x90Lti\x90malter_Pahlavi\x90kaa\xC2ci\x01\x87\x81\xC4ejou\x06\n\x14jang\x90^ng\x90^\xC2hr\x03g\x91&o\x90Mn\xC2ir\x03c\x90\x10\x90\x10\xC7aghiouy&*Ct\x9C\xB1\xC3mru\r\x15\xC2ar\x07ritan\x90n\x90n\xC2ab\x02\x90N\x90ur\x90_ashtra\x90_nw\x90`\xC2ar\x12\xC3rvw\x05\nada\x91\x07ian\x90#\x90#d\x91\x07\xC3dgn\x14\x1E\xC3det\x07\x0C\x91\x16ham\x91\x16tic\x91A\x91AnWriting\x90`\xC2dh\x02\x91\x01\x90\x11ala\x90\x11\xC3gry\r\x1A\xC2do\x07\x91'ian\x91'\x91(a\x91\x08_Sompeng\x91\x08o\x91 mbo\x91 n\xC2du\t\x90aanese\x90a\x91=war\x91=\xC2lr\ro\x90*ti_Nagri\x90*\xC5ceijn\x02\x04\x08\n\x90\x12\x90Oac\x90\x12\x90P\x90Q\xC9aefghinoudrvz\x87\xA7\xAB\xCD\xC8giklmnvy\x11*08ANQ\xC2ab\x05log\x90\x1A\x90\x1Danwa\x90\x1D_\xC4LTVY\x03\x08\re\x90$ham\x90Ziet\x90oo\x91Br\x91\ti\x91\t\xC2eu\x02\x90$\x90+\xC2il\x03l\x90\x13\x90\x13g\x91\n\xC2su\x03a\x913t\x91\nt\x90oo\x91B\xC2ln\x07u\x90\x14gu\x90\x14g\x90Rng\x90,lg\x90\x1Aa\xC2ai\x06\x90\x15na\x90\x15\x90\x16\xC3bfr\x0B\x12\xC2et\x05tan\x90\x17\x90\x17inagh\x90,h\x91\x0Euta\x91\x0Esa\x913\xC3dlt\n\x19\xC2hr\x04ri\x91>\x91>\xC2os\tng_Siki\x91C\x91Co\x914\xC2lt\x0Cu_Tigalari\x91?g\x91?\xC2gn\nar\x90%itic\x90%known\x90W\xC2ai\x06i\x90Si\x90S\xC2st\x03p\x90Th\x915kuqi\x915\xC3aco\x15\x19\xC2nr\x05cho\x91,a\x91\x02ng_Citi\x91\x02ho\x91,le\x91\x0B\xC2ps\x04eo\x90-ux\x90U\xC2ei\x08zi\x910di\x910\x90\x19ii\x90\x19\xC7aimsxyz\x15\x18\x1C%),n\xC2ab\x0Ebazar_Square\x91!\x91!nh\x81th\x90py\xC2em\x02\x91\x1E\x90qxx\x90Vyy\x80zz\x90W") } } };
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DataProvider<icu::properties::provider::PropertyNameParseScriptV1> for $provider {
+            fn load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponse<icu::properties::provider::PropertyNameParseScriptV1>, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponse { payload: icu_provider::DataPayload::from_static_ref(Self::SINGLETON_PROPERTY_NAME_PARSE_SCRIPT_V1), metadata: icu_provider::DataResponseMetadata::default() })
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyNameParseScriptV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , ITER) => {
+        __impl_property_name_parse_script_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::properties::provider::PropertyNameParseScriptV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+    ($ provider : ty , DRY) => {
+        __impl_property_name_parse_script_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::properties::provider::PropertyNameParseScriptV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyNameParseScriptV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , DRY , ITER) => {
+        __impl_property_name_parse_script_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::properties::provider::PropertyNameParseScriptV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyNameParseScriptV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::properties::provider::PropertyNameParseScriptV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+}
+#[doc(inline)]
+pub use __impl_property_name_parse_script_v1 as impl_property_name_parse_script_v1;

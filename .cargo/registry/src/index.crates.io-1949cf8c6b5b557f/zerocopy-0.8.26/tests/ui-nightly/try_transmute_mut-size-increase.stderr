@@ -1,0 +1,17 @@
+warning: unused import: `util::AU16`
+  --> tests/ui-nightly/try_transmute_mut-size-increase.rs:13:5
+   |
+13 | use util::AU16;
+   |     ^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
+
+error[E0512]: cannot transmute between types of different sizes, or dependently-sized types
+  --> tests/ui-nightly/try_transmute_mut-size-increase.rs:20:50
+   |
+20 |     let increase_size: Result<&mut [u8; 2], _> = try_transmute_mut!(src);
+   |                                                  ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: source type: `u8` (8 bits)
+   = note: target type: `[u8; 2]` (16 bits)
+   = note: this error originates in the macro `$crate::assert_size_eq` which comes from the expansion of the macro `try_transmute_mut` (in Nightly builds, run with -Z macro-backtrace for more info)

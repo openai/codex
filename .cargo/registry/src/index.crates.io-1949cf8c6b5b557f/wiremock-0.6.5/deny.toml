@@ -1,0 +1,21 @@
+[licenses]
+# List of explicitly allowed licenses
+# See https://spdx.org/licenses/ for list of possible licenses
+# [possible values: any SPDX 3.11 short identifier (+ optional exception)].
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MPL-2.0",
+    "ISC",
+    "CC0-1.0",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "OpenSSL",
+    "Zlib",
+    "CDLA-Permissive-2.0",
+]
+unused-allowed-license = "allow"
+confidence-threshold = 0.8

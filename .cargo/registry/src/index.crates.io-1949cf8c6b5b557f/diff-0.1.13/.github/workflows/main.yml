@@ -1,0 +1,25 @@
+name: Main
+
+on: [push, pull_request]
+
+jobs:
+  main:
+    name: ${{ matrix.os }} - ${{ matrix.rust }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        rust: [stable, beta, nightly]
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust }}
+          override: true
+          components: clippy, rustfmt
+      - run: cargo build
+      - run: cargo test
+      - run: cargo fmt -- --check
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+      - run: cargo clippy
+        continue-on-error: true

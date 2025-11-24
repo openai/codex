@@ -1,0 +1,18 @@
+[package]
+name = "sentry-debug-images"
+version = "0.34.0"
+authors = ["Sentry <hello@sentry.io>"]
+license = "Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/getsentry/sentry-rust"
+homepage = "https://sentry.io/welcome/"
+description = """
+Sentry integration that adds the list of loaded libraries to events.
+"""
+edition = "2021"
+rust-version = "1.73"
+
+[dependencies]
+findshlibs = "=0.10.2"
+once_cell = "1"
+sentry-core = { version = "0.34.0", path = "../sentry-core" }

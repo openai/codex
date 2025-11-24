@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Enum",
+  "type": "string",
+  "enum": [
+    "Included1",
+    "Included2"
+  ]
+}

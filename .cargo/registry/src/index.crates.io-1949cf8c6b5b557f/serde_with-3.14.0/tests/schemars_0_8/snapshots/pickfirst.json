@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PickFirst(uint32String)",
+  "anyOf": [
+    {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    {
+      "writeOnly": true,
+      "allOf": [
+        {
+          "type": "string"
+        }
+      ]
+    }
+  ]
+}

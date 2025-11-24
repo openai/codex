@@ -1,0 +1,90 @@
+-- Copyright 2022 The OpenSSL Project Authors. All Rights Reserved.
+--
+-- Licensed under the Apache License 2.0 (the "License").  You may not use
+-- this file except in compliance with the License.  You can obtain a copy
+-- in the file LICENSE in the source distribution or at
+-- https://www.openssl.org/source/license.html
+
+-- -------------------------------------------------------------------
+-- Taken from RFC 3279, 3  ASN.1 Module
+-- (https://www.rfc-editor.org/rfc/rfc3279.html#section-3)
+
+ansi-X9-62  OBJECT IDENTIFIER ::= {
+     iso(1) member-body(2) us(840) 10045 }
+
+-- Arc for ECDSA signature OIDS
+
+id-ecSigType OBJECT IDENTIFIER ::= { ansi-X9-62 signatures(4) }
+
+-- OID for ECDSA signatures with SHA-1
+
+ecdsa-with-SHA1 OBJECT IDENTIFIER ::= { id-ecSigType 1 }
+
+id-publicKeyType OBJECT IDENTIFIER  ::= { ansi-X9-62 keyType(2) }
+
+id-ecPublicKey OBJECT IDENTIFIER ::= { id-publicKeyType 1 }
+
+-- Named Elliptic Curves in ANSI X9.62.
+
+ellipticCurve OBJECT IDENTIFIER ::= { ansi-X9-62 curves(3) }
+
+c-TwoCurve OBJECT IDENTIFIER ::= {
+     ellipticCurve characteristicTwo(0) }
+
+c2pnb163v1  OBJECT IDENTIFIER  ::=  { c-TwoCurve  1 }
+c2pnb163v2  OBJECT IDENTIFIER  ::=  { c-TwoCurve  2 }
+c2pnb163v3  OBJECT IDENTIFIER  ::=  { c-TwoCurve  3 }
+c2pnb176w1  OBJECT IDENTIFIER  ::=  { c-TwoCurve  4 }
+c2tnb191v1  OBJECT IDENTIFIER  ::=  { c-TwoCurve  5 }
+c2tnb191v2  OBJECT IDENTIFIER  ::=  { c-TwoCurve  6 }
+c2tnb191v3  OBJECT IDENTIFIER  ::=  { c-TwoCurve  7 }
+c2onb191v4  OBJECT IDENTIFIER  ::=  { c-TwoCurve  8 }
+c2onb191v5  OBJECT IDENTIFIER  ::=  { c-TwoCurve  9 }
+c2pnb208w1  OBJECT IDENTIFIER  ::=  { c-TwoCurve 10 }
+c2tnb239v1  OBJECT IDENTIFIER  ::=  { c-TwoCurve 11 }
+c2tnb239v2  OBJECT IDENTIFIER  ::=  { c-TwoCurve 12 }
+c2tnb239v3  OBJECT IDENTIFIER  ::=  { c-TwoCurve 13 }
+c2onb239v4  OBJECT IDENTIFIER  ::=  { c-TwoCurve 14 }
+c2onb239v5  OBJECT IDENTIFIER  ::=  { c-TwoCurve 15 }
+c2pnb272w1  OBJECT IDENTIFIER  ::=  { c-TwoCurve 16 }
+c2pnb304w1  OBJECT IDENTIFIER  ::=  { c-TwoCurve 17 }
+c2tnb359v1  OBJECT IDENTIFIER  ::=  { c-TwoCurve 18 }
+c2pnb368w1  OBJECT IDENTIFIER  ::=  { c-TwoCurve 19 }
+c2tnb431r1  OBJECT IDENTIFIER  ::=  { c-TwoCurve 20 }
+
+primeCurve OBJECT IDENTIFIER ::= { ellipticCurve prime(1) }
+
+prime192v1  OBJECT IDENTIFIER  ::=  { primeCurve  1 }
+prime192v2  OBJECT IDENTIFIER  ::=  { primeCurve  2 }
+prime192v3  OBJECT IDENTIFIER  ::=  { primeCurve  3 }
+prime239v1  OBJECT IDENTIFIER  ::=  { primeCurve  4 }
+prime239v2  OBJECT IDENTIFIER  ::=  { primeCurve  5 }
+prime239v3  OBJECT IDENTIFIER  ::=  { primeCurve  6 }
+prime256v1  OBJECT IDENTIFIER  ::=  { primeCurve  7 }
+
+-- -------------------------------------------------------------------
+-- Taken from RFC 5758, 3.2.  ECDSA Signature Algorithm
+-- (https://www.rfc-editor.org/rfc/rfc5758.html#section-3.2)
+
+ecdsa-with-SHA224 OBJECT IDENTIFIER ::= { iso(1) member-body(2)
+     us(840) ansi-X9-62(10045) signatures(4) ecdsa-with-SHA2(3) 1 }
+
+ecdsa-with-SHA256 OBJECT IDENTIFIER ::= { iso(1) member-body(2)
+     us(840) ansi-X9-62(10045) signatures(4) ecdsa-with-SHA2(3) 2 }
+
+ecdsa-with-SHA384 OBJECT IDENTIFIER ::= { iso(1) member-body(2)
+     us(840) ansi-X9-62(10045) signatures(4) ecdsa-with-SHA2(3) 3 }
+
+ecdsa-with-SHA512 OBJECT IDENTIFIER ::= { iso(1) member-body(2)
+     us(840) ansi-X9-62(10045) signatures(4) ecdsa-with-SHA2(3) 4 }
+
+-- -------------------------------------------------------------------
+-- Taken from https://csrc.nist.gov/projects/computer-security-objects-register/algorithm-registration
+
+sigAlgs OBJECT IDENTIFIER ::= { 2 16 840 1 101 3 4 3 }
+
+id-ecdsa-with-sha3-224 OBJECT IDENTIFIER ::= { sigAlgs 9 }
+id-ecdsa-with-sha3-256 OBJECT IDENTIFIER ::= { sigAlgs 10 }
+id-ecdsa-with-sha3-384 OBJECT IDENTIFIER ::= { sigAlgs 11 }
+id-ecdsa-with-sha3-512 OBJECT IDENTIFIER ::= { sigAlgs 12 }
+

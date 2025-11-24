@@ -1,0 +1,114 @@
+on:
+  push:
+    branches: [ master, indexmap-1.x ]
+  pull_request:
+    branches: [ master, indexmap-1.x ]
+
+name: Continuous integration
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - rust: 1.56.0 # MSRV
+            features:
+          - rust: stable
+            features: arbitrary
+          - rust: stable
+            features: quickcheck
+          - rust: stable
+            features: rayon
+          - rust: stable
+            features: rustc-rayon
+          - rust: stable
+            features: serde
+          - rust: stable
+            features: std
+          - rust: beta
+            features:
+          - rust: nightly
+            bench: test build benchmarks
+          - rust: nightly
+            features: test_low_transition_point
+
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: ${{ matrix.rust }}
+          override: true
+      - name: Tests
+        run: |
+          cargo build --verbose --features "${{ matrix.features }}"
+          cargo doc --verbose --features "${{ matrix.features }}"
+          cargo test --verbose --features "${{ matrix.features }}"
+          cargo test --release --verbose --features "${{ matrix.features }}"
+      - name: Tests (serde)
+        if: matrix.features == 'serde'
+        run: |
+          cargo test --verbose -p test-serde
+      - name: Test run benchmarks
+        if: matrix.bench != ''
+        run: cargo test -v --benches
+
+  nostd_build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - rust: 1.56.0
+            target: thumbv6m-none-eabi
+          - rust: stable
+            target: thumbv6m-none-eabi
+
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: ${{ matrix.rust }}
+          override: true
+          target: ${{ matrix.target }}
+      - name: Tests
+        run: |
+          cargo build -vv --target=${{ matrix.target }}
+          cargo build -v -p test-nostd --target=${{ matrix.target }}
+
+  clippy:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust:
+          - beta
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: ${{ matrix.rust }}
+          override: true
+          components: clippy
+      - run: cargo clippy
+
+  miri:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust:
+          - nightly
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: ${{ matrix.rust }}
+          override: true
+          components: miri
+      - run: cargo miri test

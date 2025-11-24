@@ -1,0 +1,47 @@
+[package]
+authors = ["The Rust Project Developers"]
+description = "Rational numbers implementation for Rust"
+documentation = "https://docs.rs/num-rational"
+homepage = "https://github.com/rust-num/num-rational"
+keywords = ["mathematics", "numerics", "fractions"]
+categories = ["algorithms", "data-structures", "science", "no-std"]
+license = "MIT OR Apache-2.0"
+name = "num-rational"
+repository = "https://github.com/rust-num/num-rational"
+version = "0.4.2"
+readme = "README.md"
+exclude = ["/ci/*", "/.github/*"]
+edition = "2021"
+rust-version = "1.60"
+
+[package.metadata.docs.rs]
+features = ["std", "num-bigint-std", "serde"]
+
+[dependencies]
+
+[dependencies.num-bigint]
+optional = true
+version = "0.4.0"
+default-features = false
+
+[dependencies.num-integer]
+version = "0.1.42"
+default-features = false
+features = ["i128"]
+
+[dependencies.num-traits]
+version = "0.2.18"
+default-features = false
+features = ["i128"]
+
+[dependencies.serde]
+optional = true
+version = "1.0.0"
+default-features = false
+
+[features]
+default = ["num-bigint", "std"]
+std = ["num-bigint?/std", "num-integer/std", "num-traits/std"]
+num-bigint-std = ["num-bigint/std"]
+num-bigint = ["dep:num-bigint"]
+serde = ["dep:serde"]

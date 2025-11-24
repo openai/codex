@@ -1,0 +1,52 @@
+language: rust
+services: docker
+sudo: required
+
+branches:
+  only:
+  - master
+
+matrix:
+  fast_finish: false
+  include:
+    - env: TARGET=x86_64-unknown-linux-gnu FEATURES=--all-features
+      rust: stable
+    - env: TARGET=i686-unknown-linux-gnu FEATURES=--all-features
+      rust: stable
+    - env: TARGET=powerpc-unknown-linux-gnu FEATURES=--all-features
+      rust: stable
+    - env: TARGET=powerpc64-unknown-linux-gnu FEATURES=--all-features
+      rust: stable
+
+    - env: TARGET=x86_64-unknown-linux-gnu FEATURES=--all-features
+      rust: nightly
+
+    - env: TARGET=x86_64-unknown-linux-gnu FEATURES="--features cshake"
+      rust: stable
+    - env: TARGET=x86_64-unknown-linux-gnu FEATURES="--features fips202"
+      rust: stable
+    - env: TARGET=x86_64-unknown-linux-gnu FEATURES="--features k12"
+      rust: stable
+    - env: TARGET=x86_64-unknown-linux-gnu FEATURES="--features keccak"
+      rust: stable
+    - env: TARGET=x86_64-unknown-linux-gnu FEATURES="--features kmac"
+      rust: stable
+    - env: TARGET=x86_64-unknown-linux-gnu FEATURES="--features sha3"
+      rust: stable
+    - env: TARGET=x86_64-unknown-linux-gnu FEATURES="--features shake"
+      rust: stable
+    - env: TARGET=x86_64-unknown-linux-gnu FEATURES="--features sp800"
+      rust: stable
+    - env: TARGET=x86_64-unknown-linux-gnu FEATURES="--features tuple_hash"
+      rust: stable
+    - env: TARGET=x86_64-unknown-linux-gnu FEATURES="--features parallel_hash"
+      rust: stable
+
+install:
+  - cargo install cross --force
+  - source ~/.cargo/env || true
+
+script:
+  - cross test $FEATURES --verbose --all --release --target $TARGET
+
+cache: cargo

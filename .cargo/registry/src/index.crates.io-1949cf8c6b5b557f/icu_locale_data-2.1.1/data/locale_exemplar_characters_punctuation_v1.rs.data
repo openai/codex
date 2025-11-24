@@ -1,0 +1,729 @@
+// @generated
+/// Implement `DataProvider<LocaleExemplarCharactersPunctuationV1>` on the given struct using the data
+/// hardcoded in this file. This allows the struct to be used with
+/// `icu`'s `_unstable` constructors.
+///
+/// Using this implementation will embed the following data in the binary's data segment:
+/// * 749B for the lookup data structure (164 data identifiers)
+/// * 13615B[^1] for the actual data (94 unique structs)
+///
+/// [^1]: these numbers can be smaller in practice due to linker deduplication
+///
+/// This macro requires the following crates:
+/// * `icu`
+/// * `icu_provider`
+/// * `icu_provider/baked`
+/// * `zerovec`
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __impl_locale_exemplar_characters_punctuation_v1 {
+    ($ provider : ty) => {
+        #[clippy::msrv = "1.83"]
+        const _: () = <$provider>::MUST_USE_MAKE_PROVIDER_MACRO;
+        #[clippy::msrv = "1.83"]
+        impl $provider {
+            const DATA_LOCALE_EXEMPLAR_CHARACTERS_PUNCTUATION_V1: icu_provider::baked::zerotrie::Data<icu::locale::provider::LocaleExemplarCharactersPunctuationV1> = {
+                const TRIE: icu_provider::baked::zerotrie::ZeroTrieSimpleAscii<&'static [u8]> = icu_provider::baked::zerotrie::ZeroTrieSimpleAscii { store: b"\xE1yabcdefghijklmnopqrstuvxyz\0\0\0\0\0\0\0\0\0\0\x01\x01\x01\x01\x01\x01\x01\x01\x02\x02\x02\x02\x02\x02\x119Paz\x99\xA8\xC9\xE3\xE68Pp\x88\x98\xB5\xB7\xC3\x127KX`t\xC5fmrsz\x01\x02\x03\x06\x80\x81\x82\x83t\x84\x80\xC9aeghlnrsu\x08\t\x0C\x0E\x10\x11\x13\x14\x85l-Latn\x86\x87\x88c\x89o\x80o\x8A\x8Bx\x80\x8Ca\x85\xC6aehsvy\x01\x03\x05\x08\n\x84b\x8Dr\x80\x8Ew\x8F\x90\0\x80\xC4aeos\x02\x03\x06\x90\x01\x85i\x90\x02b\x90\x03\xC7elnostu\x02\x04\x05\x07\x08\n\x90\x04\x90\x05\x80\x90\x06\x84\x90\x07\x80\xC6afiory\x02\t\x0E\x10\x12\x90\x08-Adlm\x90\t\x90\nl\x90\x0B\x90\x01\x90\x0C\x80\xC4adlu\x03\x05\x06\x80a\x80\x90\r\x84\x80\xC8aeirstuy\x02\x04\x06\x08\x0B\r\x0F\x90\x0E\x90\x0F\x90\x10\x90\x11b\x90\x03\x90\x12\x90\x13\x90\x14\xC7adegist\x01\x02\x04\x06\x08\n\x80\x80\x90\x15\x90\x16\x90\x17\x90\x18\x90\x19a\x90\x1A\xCBaegkmnosuxy\x02\x05\x07\x10\x12\x13\x1E%&;\x90\x1Ba\x90\x1Cp\x80\x90\0-Arab\x90\x1D\x90\x1E\x80\x90\x1Fk\x80-Latn\x90 \x80-Deva\x80\x80v\x80-\xC3DOT\x04\x08eva\x80rya\x80elu\x80\x85\xC6bimotv\x01\x04\x07\x08\n\x85j\x90\x0Co\x90!\x80\x90\"\x90#\xC8aklnrsty\x03\x05\x06\t\x0B\x0C\x0Ei\x90$\x90%\x80\x80i\x80\x90&\x80\x90'\x90(\xC5deloq\x06\x08\t\x0Bs\x85-NL\x80\x90)\x80\x90*o\x90+\xC3cmr\x07\t\x90,-ES\x90-\x90.\x83\xC6aclmst\x02\x04\x06\t\x0B\x90/m\x80\x900s\x90!\x901\x80-PT\x902u\x80\xC3aou\x03\x05j\x903\x904\x85\xD0acdhikloqrtuvwyz\x05\t\x11\x14\x15\x16\x18\x19\x1B$%&'),\x90$h\x905\x906n\x80\x907-Deva\x80n\x90(\x80\x8E\x908\x80\x909\x90:-Latn\x90;\x80\x80\x80\x90<r\x90=l\x900\xCAaeghknorty\x01\x03\x05\x07\t\n\x0B\x0C\x0E\x80\x90>\x90?\x90@\x90A\x80\x80\x80\x90Bv\x90 \xC5gknrz\x02\x04\x07\t\x90C\x90Dd\x90E\x90F\x80\xC3eim\x03\x04c\x90G\x80w\x90H\xC2hn\x01\x80r\x90I\xC3oru\x02\x04\x90Jl\x84e\x90K-Hans\x90L\xC2ah\x01\x80\x90M-Hant\x90K" };
+                const VALUES: &'static [<icu::locale::provider::LocaleExemplarCharactersPunctuationV1 as icu_provider::baked::zerotrie::DynamicDataMarker>::DataStruct] = &[
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0\xA7\0\0\xA8\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0  \0\" \0& \0' \x002 \x004 \0") }, 32u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0\"\0\0(\0\0*\0\0,\0\0-\0\0.\0\0/\0\0?\0\0@\0\0[\0\0\\\0\0]\0\0^\0\0\xAB\0\0\xAC\0\0\xBB\0\0\xBC\0\0a\x13\0g\x13\0\x10 \0\x11 \0\x13 \0\x14 \09 \0; \0") }, 20u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0#\0\0'\0\0*\0\0-\0\0/\0\0:\0\0;\0\0[\0\0\\\0\0]\0\0^\0\0\xAB\0\0\xAC\0\0\xBB\0\0\xBC\0\0\x0C\x06\0\r\x06\0\x1B\x06\0\x1C\x06\0\x1F\x06\0 \x06\0\x10 \0\x12 \0\x13 \0\x15 \0& \0' \0") }, 20u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0\xA7\0\0\xA8\0\0d\t\0e\t\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0  \0\" \0& \0' \x002 \x004 \0") }, 33u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0^\0\0\xA1\0\0\xA2\0\0\xA7\0\0\xA8\0\0\xAB\0\0\xAC\0\0\xBB\0\0\xBC\0\0\xBF\0\0\xC0\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0  \0\" \0& \0' \x002 \x004 \0") }, 37u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0^\0\0\xA7\0\0\xA8\0\0\xAB\0\0\xAC\0\0\xBB\0\0\xBC\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x19 \0\x1A \0\x1B \0\x1C \0\x1D \0\x1E \0\x1F \0& \0' \0") }, 31u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0\"\0\0,\0\0/\0\0:\0\0<\0\0?\0\0@\0\0\x11 \0\x12 \0\x18 \0\x1A \0\x1C \0\x1E \0") }, 12u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0\"\0\0(\0\0*\0\0,\0\0/\0\0:\0\0<\0\0?\0\0@\0\0[\0\0^\0\0\xAB\0\0\xAC\0\0\xBB\0\0\xBC\0\0\x11 \0\x12 \0") }, 15u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0#\0\0'\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0\xA7\0\0\xA8\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x19 \0\x1A \0\x1B \0\x1C \0\x1D \0\x1E \0\x1F \0& \0' \x003 \x004 \0\x16!\0\x17!\0") }, 28u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0+\0\0-\0\x000\0\0:\0\0;\0\0?\0\0A\0\0[\0\0^\0\0`\0\0a\0\0|\0\0}\0\0\x11 \0\x12 \0\x18 \0\x1A \0\x1C \0\x1E \0& \0' \x002 \x004 \0") }, 27u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0%\0\0+\0\0,\0\x000\0\0:\0\0A\0\0[\0\0^\0\0_\0\0`\0\0|\0\0}\0\0~\0\0\x7F\0\0\xA6\0\0\xA8\0\0\xAB\0\0\xAC\0\0\xB0\0\0\xB1\0\0\xBB\0\0\xBC\0\0\x10 \0\x12 \0\x13 \0\x16 \0\x18 \0\x1A \0\x1C \0\x1E \0  \0$ \0& \0( \x000 \x004 \09 \0; \0") }, 52u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0'\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0\xA7\0\0\xA8\0\0d\t\0f\t\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0  \0\" \0& \0' \x002 \x004 \0") }, 33u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0#\0\0'\0\0+\0\0,\0\0-\0\0.\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0\x10 \0\x11 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1F \0& \0' \x002 \x004 \0") }, 26u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0\x11 \0\x12 \0\x18 \0\x1A \0\x1C \0\x1E \0& \0' \x002 \x004 \0") }, 26u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0\"\0\0&\0\0'\0\0(\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0\xA7\0\0\xA8\0\0\x10 \0\x12 \0\x13 \0\x14 \0\x18 \0\x19 \0\x1A \0\x1B \0\x1C \0\x1D \0\x1E \0\x1F \0& \0' \0") }, 24u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0\xA7\0\0\xA8\0\0n\x16\0o\x16\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0  \0\" \0& \0' \x002 \x004 \0") }, 33u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0^\0\0\xA7\0\0\xA8\0\0\xAB\0\0\xAC\0\0\xBB\0\0\xBC\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0& \0' \0") }, 31u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0\xA7\0\0\xA8\0\0\x10 \0\x12 \0\x13 \0\x14 \0\x18 \0\x1A \0\x1C \0\x1E \0  \0! \0& \0' \x002 \x004 \0") }, 30u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0+\0\0,\0\0-\0\0.\0\x000\0\0:\0\0<\0\0?\0\0A\0\0_\0\0`\0\0\xA7\0\0\xA8\0\0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0  \0\" \0& \0' \x002 \x004 \0") }, 28u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0^\0\0\xA7\0\0\xA8\0\0\xAB\0\0\xAC\0\0\xBB\0\0\xBC\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1B \0\x1C \0\x1D \0\x1E \0\x1F \0& \0' \0") }, 32u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0^\0\0\xA7\0\0\xA8\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0  \0\" \0& \0' \x002 \x004 \0") }, 33u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0#\0\0&\0\0'\0\0(\0\0+\0\0,\0\x000\0\0:\0\0<\0\0@\0\0A\0\0[\0\0^\0\0\xA7\0\0\xA8\0\0\xAB\0\0\xAC\0\0\xBB\0\0\xBC\0\0\x10 \0\x12 \0\x13 \0\x15 \0& \0' \0") }, 24u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0#\0\0'\0\0*\0\0,\0\x000\0\0:\0\0<\0\0?\0\0@\0\0[\0\0^\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0& \0' \0") }, 24u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0\"\0\0(\0\0*\0\0,\0\0/\0\0:\0\0<\0\0?\0\0A\0\0[\0\0^\0\0\x11 \0\x12 \0\x13 \0\x14 \0\x1C \0\x1D \0\x1E \0\x1F \0") }, 17u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0\"\0\0(\0\0+\0\0-\0\x000\0\0:\0\0;\0\0[\0\0^\0\0\xAB\0\0\xAC\0\0\xBB\0\0\xBC\0\0\x0C\x06\0\r\x06\0\x1B\x06\0\x1C\x06\0\x1F\x06\0 \x06\0k\x06\0m\x06\0\x10 \0\x12 \0& \0' \09 \0; \0") }, 23u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"%\0\0&\0\0-\0\0/\0\0\x11 \0\x12 \x000 \x001 \0^\xE9\x01`\xE9\x01") }, 7u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0\"\0\0#\0\0$\0\0&\0\0'\0\0(\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0^\0\0\xA7\0\0\xA8\0\0\xBB\0\0\xBC\0\0\x10 \0\x12 \0\x13 \0\x14 \0\x19 \0\x1A \0\x1D \0\x1E \0& \0' \0") }, 25u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0@\0\0[\0\0\\\0\0]\0\0^\0\0\xA7\0\0\xA8\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0& \0' \x002 \x004 \0") }, 29u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0'\0\0(\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0\xA7\0\0\xA8\0\0\xAB\0\0\xAC\0\0\xBB\0\0\xBC\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x19 \0\x1A \0\x1C \0\x1E \0  \0\" \0& \0' \0") }, 30u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0%\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0^\0\0\xA1\0\0\xA2\0\0\xA7\0\0\xA8\0\0\xA9\0\0\xAA\0\0\xAE\0\0\xAF\0\0\xB0\0\0\xB1\0\0\xB6\0\0\xB8\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0  \0\" \0& \0( \0J \0K \0\"!\0#!\0") }, 41u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0#\0\0'\0\0*\0\0,\0\0/\0\0:\0\0<\0\0?\0\0@\0\0[\0\0^\0\0\x11 \0\x12 \0\x18 \0\x1A \0\x1C \0\x1E \x002 \x004 \0") }, 21u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0#\0\0'\0\0*\0\0,\0\x000\0\0:\0\0<\0\0?\0\0@\0\0[\0\0\\\0\0]\0\0^\0\0\xBE\x05\0\xBF\x05\0\xF3\x05\0\xF5\x05\0\x10 \0\x12 \0\x13 \0\x15 \0") }, 21u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0'\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0\xA7\0\0\xA8\0\0d\t\0f\t\0p\t\0q\t\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0  \0\" \0& \0' \x002 \x004 \0") }, 34u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0#\0\0'\0\0+\0\0,\0\0-\0\0.\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0\x10 \0\x11 \0\x13 \0\x15 \0\x18 \0\x1B \0\x1C \0\x1F \0& \0' \x002 \x004 \0") }, 27u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0%\0\0*\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0\xA7\0\0\xA8\0\0\x11 \0\x12 \0\x18 \0\x1A \0\x1C \0\x1E \0& \0' \x002 \x004 \0") }, 27u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0^\0\0~\0\0\x7F\0\0\xA7\0\0\xA8\0\0\xAB\0\0\xAC\0\0\xBB\0\0\xBC\0\0\x11 \0\x12 \0\x13 \0\x14 \0\x19 \0\x1A \0\x1D \0\x1F \0& \0' \0R \0S \0\xE8'\0\xEA'\0") }, 32u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b",\0\0-\0\0.\0\0/\0\0:\0\0;\0\0\xAB\0\0\xAC\0\0\xBB\0\0\xBC\0\0Z\x05\0`\x05\0\x8A\x05\0\x8B\x05\0") }, 12u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0#\0\0&\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0\xA7\0\0\xA8\0\0\xAB\0\0\xAC\0\0\xBB\0\0\xBC\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1F \0  \0\" \0& \0' \0") }, 32u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0\"\0\0(\0\0*\0\0,\0\0/\0\0:\0\0<\0\0?\0\0@\0\0[\0\0^\0\0\x11 \0\x12 \0\x18 \0\x1A \0\x1C \0\x1E \0") }, 17u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0\"\0\0#\0\0$\0\0%\0\0'\0\0(\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0^\0\0_\0\0`\0\0\xA7\0\0\xA8\0\0\xB7\0\0\xB8\0\0\x10 \0\x12 \0\x13 \0\x17 \0\x18 \0\x1A \0\x1C \0\x1E \0% \0' \x000 \x001 \x002 \x004 \x005 \x006 \0; \0< \0\x010\0\x040\0\x080\0\x120\0\x140\0\x180\0\x1D0\0\x1F0\x000\xFE\x002\xFE\x003\xFE\0E\xFE\0I\xFE\0S\xFE\0T\xFE\0X\xFE\0Y\xFE\0b\xFE\0c\xFE\0d\xFE\0h\xFE\0i\xFE\0j\xFE\0l\xFE\0\x01\xFF\0\x04\xFF\0\x05\xFF\0\x0B\xFF\0\x0C\xFF\0\x10\xFF\0\x1A\xFF\0\x1C\xFF\0\x1F\xFF\0!\xFF\0;\xFF\0>\xFF\0?\xFF\0@\xFF\0[\xFF\0\\\xFF\0]\xFF\0^\xFF\0") }, 127u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0\xA7\0\0\xA8\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x19 \0\x1A \0\x1B \0\x1C \0\x1D \0\x1E \0\x1F \0  \0\" \0& \0' \x002 \x004 \0") }, 32u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0^\0\0\xAB\0\0\xAC\0\0\xBB\0\0\xBC\0\0\x11 \0\x12 \0\x14 \0\x15 \0\x19 \0\x1A \0\x1C \0\x1E \0& \0' \0") }, 27u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0%\0\0'\0\0(\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0^\0\0_\0\0`\0\0\xA7\0\0\xA8\0\0\xB6\0\0\xB7\0\0\x10 \0\x12 \0\x14 \0\x17 \0\x18 \0\x1A \0\x1C \0\x1E \0  \0\" \0% \0' \x000 \x001 \x002 \x004 \0; \0< \0> \0? \0\x010\0\x040\0\x080\0\x120\0\x140\0\x160\0\x1C0\0\x1D0\0\xFB0\0\xFC0\0\x01\xFF\0\x04\xFF\0\x05\xFF\0\x0B\xFF\0\x0C\xFF\0\x10\xFF\0\x1A\xFF\0\x1C\xFF\0\x1F\xFF\0!\xFF\0;\xFF\0>\xFF\0?\xFF\0@\xFF\0[\xFF\0\\\xFF\0]\xFF\0^\xFF\0a\xFF\0f\xFF\0") }, 85u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0\"\0\0#\0\0$\0\0&\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0^\0\0\xA7\0\0\xA8\0\0\xAB\0\0\xAC\0\0\xBB\0\0\xBC\0\0\xFB\x10\0\xFC\x10\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x19 \0\x1A \0\x1B \0\x1C \0\x1D \0\x1E \0\x1F \0  \0\" \0& \0' \x002 \x004 \0\x16!\0\x17!\0") }, 36u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0\xA7\0\0\xA8\0\0\xAB\0\0\xAC\0\0\xBB\0\0\xBC\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0  \0\" \0& \0' \0") }, 32u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0+\0\0-\0\x000\0\0:\0\0;\0\0@\0\0A\0\0[\0\0^\0\0\xA7\0\0\xA8\0\0\xAB\0\0\xAC\0\0\xBB\0\0\xBC\0\0\x0C\x06\0\r\x06\0\x1B\x06\0\x1C\x06\0\x1F\x06\0 \x06\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0& \0' \0") }, 31u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0#\0\0(\0\0*\0\0,\0\0/\0\0?\0\0@\0\0[\0\0^\0\0\xD4\x17\0\xD7\x17\0\xD9\x17\0\xDB\x17\0\x11 \0\x12 \0\x18 \0\x1A \0\x1C \0\x1E \0") }, 21u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0%\0\0'\0\0(\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0^\0\0_\0\0`\0\0\xA1\0\0\xA2\0\0\xA7\0\0\xA8\0\0\xB6\0\0\xB8\0\0\xBF\0\0\xC0\0\0\x10 \0\x12 \0\x14 \0\x16 \0\x18 \0\x1A \0\x1C \0\x1E \0  \0\" \0% \0' \x000 \x001 \x002 \x004 \0; \0< \0> \0? \0\x010\0\x040\0\x080\0\x120\0\x140\0\x160\0\x1C0\0\x1D0\0\xFB0\0\xFC0\0\x01\xFF\0\x04\xFF\0\x05\xFF\0\x0B\xFF\0\x0C\xFF\0\x10\xFF\0\x1A\xFF\0\x1C\xFF\0\x1F\xFF\0!\xFF\0;\xFF\0>\xFF\0?\xFF\0@\xFF\0[\xFF\0\\\xFF\0]\xFF\0^\xFF\0") }, 82u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0\xA7\0\0\xA8\0\0\xAB\0\0\xAC\0\0\xBB\0\0\xBC\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0  \0\" \0& \0' \x002 \x004 \0") }, 34u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0#\0\0'\0\0*\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0^\0\0\xAB\0\0\xAC\0\0\xBB\0\0\xBC\0\0\x11 \0\x12 \0\x14 \0\x15 \0\x19 \0\x1A \0\x1C \0\x1E \0& \0' \0") }, 24u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0\"\0\0(\0\0*\0\0,\0\0/\0\0:\0\0<\0\0?\0\0@\0\0[\0\0^\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x1C \0\x1D \0\x1E \0\x1F \0& \0' \0") }, 19u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0\xA7\0\0\xA8\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1B \0\x1C \0\x1F \0  \0\" \0& \0' \x002 \x004 \0") }, 34u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0^\0\0_\0\0a\0\0|\0\0}\0\0~\0\0\x7F\0\0\xA7\0\0\xA8\0\0\x11 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0& \0' \x002 \x004 \0") }, 35u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0\"\0\0'\0\0*\0\0,\0\0/\0\0:\0\0<\0\0?\0\0@\0\0[\0\0^\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x19 \0\x1A \0\x1B \0\x1C \0\x1D \0\x1E \0\x1F \0& \0' \0") }, 22u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0& \0' \x002 \x004 \0") }, 29u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0#\0\0'\0\0*\0\0,\0\0/\0\0:\0\0<\0\0?\0\0@\0\0[\0\0^\0\0\x11 \0\x12 \0\x18 \0\x1A \0\x1C \0\x1E \0") }, 19u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"#\0\0$\0\0(\0\0+\0\0-\0\0.\0\0/\0\x000\0\0@\0\0A\0\0[\0\0^\0\0J\x10\0L\x10\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0& \0' \0") }, 21u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0#\0\0'\0\0*\0\0,\0\0.\0\0;\0\0<\0\0?\0\0@\0\0[\0\0^\0\0d\t\0e\t\0\x11 \0\x12 \0\x14 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0") }, 19u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0\"\0\0#\0\0$\0\0(\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0^\0\0\xA7\0\0\xA8\0\0\xAB\0\0\xAC\0\0\xBB\0\0\xBC\0\0\xBF\0\0\xC0\0\0\x11 \0\x12 \0\x13 \0\x14 \0\x18 \0\x1A \0\x1C \0\x1E \0  \0\" \0& \0' \x002 \x004 \0") }, 31u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"\xF7\x07\0\xFA\x07\0") }, 3u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0'\0\0(\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0\xA7\0\0\xA8\0\0\xAB\0\0\xAC\0\0\xBB\0\0\xBC\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x19 \0\x1A \0\x1C \0\x1E \0  \0\" \0& \0' \0\xC5\"\0\xC6\"\0") }, 31u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0\xA7\0\0\xA8\0\0\xAB\0\0\xAC\0\0\xBB\0\0\xBC\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0  \0\" \0& \0' \0\xC5\"\0\xC6\"\0") }, 33u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0'\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0& \0' \x002 \x004 \0") }, 28u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0#\0\0&\0\0*\0\0,\0\x000\0\0:\0\0<\0\0?\0\0@\0\0[\0\0\\\0\0]\0\0^\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \x002 \x004 \0") }, 25u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0%\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0^\0\0~\0\0\x7F\0\0\xA7\0\0\xA8\0\0\xAB\0\0\xAC\0\0\xB0\0\0\xB1\0\0\xBB\0\0\xBC\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x1D \0\x1F \0  \0\" \0& \0' \x002 \x004 \0") }, 36u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0\"\0\0'\0\0*\0\0/\0\x000\0\0:\0\0<\0\0[\0\0^\0\0\x0C\x06\0\r\x06\0\xD4\x06\0\xD5\x06\0\x18 \0\x19 \0") }, 13u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0\xA7\0\0\xA8\0\0\xAB\0\0\xAC\0\0\xBB\0\0\xBC\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x1C \0\x1E \0  \0\" \0& \0' \x002 \x004 \0") }, 32u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0+\0\0,\0\x000\0\0:\0\0;\0\0?\0\0A\0\0[\0\0^\0\0`\0\0a\0\0|\0\0}\0\0\xA7\0\0\xA8\0\0\x11 \0\x12 \0\x18 \0\x1A \0\x1C \0\x1E \0& \0' \0") }, 27u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0#\0\0'\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0\xAB\0\0\xAC\0\0\xBB\0\0\xBC\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x19 \0\x1C \0\x1F \0& \0' \0") }, 27u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b":\0\0;\0\0") }, 1u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0+\0\0,\0\0-\0\0.\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0\xAB\0\0\xAC\0\0\xB7\0\0\xB8\0\0\xBB\0\0\xBC\0\0\x10 \0\x11 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0& \0' \x002 \x004 \0") }, 30u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0#\0\0(\0\0*\0\0-\0\0.\0\0/\0\x000\0\0:\0\0;\0\0[\0\0\\\0\0]\0\0^\0\0\x0C\x06\0\r\x06\0\x1B\x06\0\x1C\x06\0\x1F\x06\0 \x06\0m\x06\0n\x06\0\x11 \0\x12 \0\x18 \0\x1A \0\x1D \0\x1E \0& \0' \0") }, 18u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0#\0\0'\0\0+\0\0,\0\0/\0\0:\0\0<\0\0?\0\0A\0\0[\0\0^\0\0\xAB\0\0\xAC\0\0\xBB\0\0\xBC\0\0\x11 \0\x12 \0\x13 \0\x14 \0\x1E \0  \0& \0' \0") }, 23u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0~\0\0\x7F\0\0\xA7\0\0\xA8\0\0\xAB\0\0\xAC\0\0\xBB\0\0\xBC\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0& \0' \x002 \x004 \0") }, 33u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0\"\0\0#\0\0$\0\0(\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0@\0\0[\0\0^\0\0\x10 \0\x12 \0\x13 \0\x14 \0\x19 \0\x1A \0\x1D \0\x1F \0& \0' \0") }, 22u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0\"\0\0#\0\0$\0\0(\0\0+\0\0,\0\0/\0\0:\0\0<\0\0?\0\0@\0\0[\0\0^\0\0\x10 \0\x12 \0\x13 \0\x14 \0\x18 \0\x19 \0\x1A \0\x1B \0\x1C \0\x1D \0\x1E \0\x1F \0& \0' \0") }, 22u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0#\0\0'\0\0*\0\0,\0\0/\0\0:\0\0<\0\0?\0\0@\0\0[\0\0^\0\0\x11 \0\x12 \0") }, 15u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0#\0\0'\0\0*\0\0-\0\0/\0\0:\0\0;\0\0[\0\0\\\0\0]\0\0^\0\0\xAB\0\0\xAC\0\0\xBB\0\0\xBC\0\0\x0C\x06\0\r\x06\0\x1B\x06\0\x1C\x06\0\x1F\x06\0 \x06\0\0\x07\0\x0E\x07\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0& \0' \0") }, 38u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0*\0\0,\0\0/\0\0:\0\0<\0\0?\0\0@\0\0[\0\0^\0\0\x11 \0\x12 \0\x18 \0\x1A \0\x1C \0\x1E \0") }, 21u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0\xA7\0\0\xA8\0\0\xBB\0\0\xBC\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0  \0\" \0& \0' \x002 \x003 \0") }, 32u32)
+                        },
+                        unsafe { zerovec::vecs::VarZeroVec16::from_bytes_unchecked(b"\x01\0\xE2\x80\xB3\xC2\xAB") },
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0'\0\0+\0\0,\0\x000\0\0:\0\0;\0\0@\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0& \0' \x002 \x004 \0") }, 26u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0'\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0^\0\0\xA7\0\0\xA8\0\0\x11 \0\x12 \0\x13 \0\x15 \0\x1C \0\x1E \0& \0' \0") }, 25u32)
+                        },
+                        unsafe { zerovec::vecs::VarZeroVec16::from_bytes_unchecked(b"\x01\0&,") },
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0\xA7\0\0\xA8\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0& \0' \x002 \x004 \0") }, 30u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0\"\0\0(\0\0*\0\0,\0\0/\0\0:\0\0<\0\0?\0\0@\0\0[\0\0^\0\0\xAB\0\0\xAC\0\0\xBB\0\0\xBC\0\0\x11 \0\x12 \09 \0; \0") }, 17u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0#\0\0'\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0^\0\0\xA7\0\0\xA8\0\0\xAB\0\0\xAC\0\0\xBB\0\0\xBC\0\0\x11 \0\x12 \0\x13 \0\x14 \0\x19 \0\x1A \0\x1C \0\x1D \0\x1E \0\x1F \0\x16!\0\x17!\0") }, 26u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0\"\0\0(\0\0*\0\0,\0\0/\0\0:\0\0<\0\0?\0\0@\0\0[\0\0^\0\0\x10 \0\x12 \0") }, 14u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"(\0\0*\0\0.\0\0/\0\0:\0\0;\0\0[\0\0\\\0\0]\0\0^\0\0\x0C\x06\0\x0E\x06\0\x1B\x06\0\x1C\x06\0\x1F\x06\0 \x06\0k\x06\0m\x06\0\xD4\x06\0\xD5\x06\0") }, 13u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\x000\0\0:\0\0<\0\0=\0\0>\0\0?\0\0A\0\0[\0\0^\0\0\xAB\0\0\xAC\0\0\xB7\0\0\xB8\0\0\xBB\0\0\xBC\0\0\x10 \0\x16 \0\x18 \0\x1A \0\x1C \0\x1E \0& \0' \0D \0E \0S \0T \0\x080\0\n0\0") }, 39u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0*\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0\\\0\0]\0\0^\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0& \0' \x002 \x004 \0") }, 28u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0#\0\0'\0\0*\0\0,\0\0/\0\0:\0\0<\0\0?\0\0@\0\0[\0\0^\0\0p\t\0q\t\0\x11 \0\x12 \0\x18 \0\x1A \0\x1C \0\x1E \0") }, 20u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0&\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0  \0\" \0& \0' \x002 \x004 \0") }, 29u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0%\0\0'\0\0(\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0^\0\0_\0\0`\0\0\xA7\0\0\xA8\0\0\xB7\0\0\xB8\0\0\x10 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0  \0\" \0% \0( \x000 \x001 \x002 \x004 \x005 \x006 \0; \0< \0> \0? \0\x010\0\x040\0\x080\0\x120\0\x140\0\x160\0\x1D0\0\x1F0\x000\xFE\0E\xFE\0I\xFE\0S\xFE\0T\xFE\0b\xFE\0c\xFE\0d\xFE\0h\xFE\0i\xFE\0j\xFE\0l\xFE\0\x01\xFF\0\x04\xFF\0\x05\xFF\0\x0B\xFF\0\x0C\xFF\0\x10\xFF\0\x1A\xFF\0\x1C\xFF\0\x1F\xFF\0!\xFF\0;\xFF\0>\xFF\0?\xFF\0@\xFF\0[\xFF\0\\\xFF\0]\xFF\0^\xFF\0") }, 130u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0%\0\0'\0\0(\0\0+\0\0,\0\x000\0\0:\0\0<\0\0?\0\0A\0\0[\0\0^\0\0_\0\0`\0\0\xA7\0\0\xA8\0\0\xB7\0\0\xB8\0\0\x10 \0\x12 \0\x13 \0\x17 \0\x18 \0\x1A \0\x1C \0\x1E \0% \0' \x000 \x001 \x002 \x004 \x005 \x006 \0; \0< \0\x010\0\x040\0\x080\0\x120\0\x140\0\x180\0\x1D0\0\x1F0\x000\xFE\x002\xFE\x003\xFE\0E\xFE\0I\xFE\0S\xFE\0T\xFE\0X\xFE\0Y\xFE\0b\xFE\0c\xFE\0d\xFE\0h\xFE\0i\xFE\0j\xFE\0l\xFE\0\x01\xFF\0\x04\xFF\0\x05\xFF\0\x0B\xFF\0\x0C\xFF\0\x10\xFF\0\x1A\xFF\0\x1C\xFF\0\x1F\xFF\0!\xFF\0;\xFF\0>\xFF\0?\xFF\0@\xFF\0[\xFF\0\\\xFF\0]\xFF\0^\xFF\0") }, 128u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                    icu::locale::provider::ExemplarCharactersData(icu::collections::codepointinvliststringlist::CodePointInversionListAndStringList::from_parts_unchecked(
+                        unsafe {
+                            #[allow(unused_unsafe)]
+                            icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0$\0\0%\0\0/\0\0:\0\0A\0\0[\0\0_\0\0`\0\0a\0\0|\0\0}\0\0~\0\0\x7F\0\0\xB7\0\0\xB8\0\0\x11 \0\x12 \0\x13 \0\x15 \0\x18 \0\x1A \0\x1C \0\x1E \0& \0' \0\x010\0\x030\0\n0\0\x0E0\0\x100\0\x120\0\x01\xFF\0\x02\xFF\0\x08\xFF\0\n\xFF\0\x0C\xFF\0\r\xFF\0\x1A\xFF\0\x1C\xFF\0\x1F\xFF\0 \xFF\0\\\xFF\0]\xFF\0^\xFF\0_\xFF\0") }, 53u32)
+                        },
+                        zerovec::vecs::VarZeroVec16::new(),
+                    )),
+                ];
+                unsafe { icu_provider::baked::zerotrie::Data::from_trie_and_values_unchecked(TRIE, VALUES) }
+            };
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DataProvider<icu::locale::provider::LocaleExemplarCharactersPunctuationV1> for $provider {
+            fn load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponse<icu::locale::provider::LocaleExemplarCharactersPunctuationV1>, icu_provider::DataError> {
+                let mut metadata = icu_provider::DataResponseMetadata::default();
+                let payload = if let Some(payload) = icu_provider::baked::DataStore::get(&Self::DATA_LOCALE_EXEMPLAR_CHARACTERS_PUNCTUATION_V1, req.id, req.metadata.attributes_prefix_match) {
+                    payload
+                } else {
+                    const FALLBACKER: icu::locale::fallback::LocaleFallbackerWithConfig<'static> = icu::locale::fallback::LocaleFallbacker::new().for_config(<icu::locale::provider::LocaleExemplarCharactersPunctuationV1 as icu_provider::DataMarker>::INFO.fallback_config);
+                    let mut fallback_iterator = FALLBACKER.fallback_for(req.id.locale.clone());
+                    loop {
+                        if let Some(payload) = icu_provider::baked::DataStore::get(&Self::DATA_LOCALE_EXEMPLAR_CHARACTERS_PUNCTUATION_V1, icu_provider::DataIdentifierBorrowed::for_marker_attributes_and_locale(req.id.marker_attributes, fallback_iterator.get()), req.metadata.attributes_prefix_match) {
+                            metadata.locale = Some(fallback_iterator.take());
+                            break payload;
+                        }
+                        if fallback_iterator.get().is_unknown() {
+                            return Err(icu_provider::DataErrorKind::IdentifierNotFound.with_req(<icu::locale::provider::LocaleExemplarCharactersPunctuationV1 as icu_provider::DataMarker>::INFO, req));
+                        }
+                        fallback_iterator.step();
+                    }
+                };
+                Ok(icu_provider::DataResponse { payload, metadata })
+            }
+        }
+    };
+    ($ provider : ty , ITER) => {
+        __impl_locale_exemplar_characters_punctuation_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::locale::provider::LocaleExemplarCharactersPunctuationV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BTreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok(icu_provider::baked::DataStore::iter(&Self::DATA_LOCALE_EXEMPLAR_CHARACTERS_PUNCTUATION_V1).collect())
+            }
+        }
+    };
+    ($ provider : ty , DRY) => {};
+    ($ provider : ty , DRY , ITER) => {
+        __impl_locale_exemplar_characters_punctuation_v1!($provider, ITER);
+    };
+}
+#[doc(inline)]
+pub use __impl_locale_exemplar_characters_punctuation_v1 as impl_locale_exemplar_characters_punctuation_v1;

@@ -1,0 +1,29 @@
+[package]
+
+name = "slab"
+# When releasing to crates.io:
+# - Update version number
+#   - README.md
+# - Update CHANGELOG.md
+# - Create git tag
+version = "0.4.11"
+authors = ["Carl Lerche <me@carllerche.com>"]
+edition = "2018"
+rust-version = "1.51"
+license = "MIT"
+description = "Pre-allocated storage for a uniform data type"
+repository = "https://github.com/tokio-rs/slab"
+keywords = ["slab", "allocator", "no_std"]
+categories = ["memory-management", "data-structures", "no-std"]
+exclude = ["/.*"]
+
+[features]
+std = []
+default = ["std"]
+
+[dependencies]
+serde = { version = "1.0.95", optional = true, default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_test = "1"

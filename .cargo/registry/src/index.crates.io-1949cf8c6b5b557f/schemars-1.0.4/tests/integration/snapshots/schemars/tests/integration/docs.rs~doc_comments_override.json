@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OverrideDocs struct",
+  "description": "New description",
+  "type": "object",
+  "properties": {
+    "my_int": {
+      "title": "My integer",
+      "description": "This is an i32",
+      "type": "integer",
+      "format": "int32"
+    },
+    "my_undocumented_bool": {
+      "type": "boolean"
+    },
+    "my_documented_bool": {
+      "title": "Documented bool",
+      "description": "CAPITALIZED",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "my_int",
+    "my_undocumented_bool",
+    "my_documented_bool"
+  ]
+}

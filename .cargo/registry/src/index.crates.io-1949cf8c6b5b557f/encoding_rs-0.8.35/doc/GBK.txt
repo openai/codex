@@ -1,0 +1,17 @@
+/// The decoder for this encoding is the same as the decoder for gb18030.
+/// The encoder side of this encoding is GBK with Windows code page 936 euro
+/// sign behavior and with the changes to two-byte sequences made in GB18030-2022.
+/// GBK extends GB2312-80 to cover the CJK Unified Ideographs Unicode block as
+/// well as a handful of ideographs from the CJK Unified Ideographs Extension A
+/// and CJK Compatibility Ideographs blocks.
+///
+/// Unlike e.g. in the case of ISO-8859-1 and windows-1252, GBK encoder wasn't
+/// unified with the gb18030 encoder in the Encoding Standard out of concern
+/// that servers that expect GBK form submissions might not be able to handle
+/// the four-byte sequences.
+///
+/// [Index visualization for the two-byte sequences](https://encoding.spec.whatwg.org/gb18030.html),
+/// [Visualization of BMP coverage of the two-byte index](https://encoding.spec.whatwg.org/gb18030-bmp.html)
+///
+/// The encoder of this encoding roughly matches the Windows code page 936.
+/// The decoder side is a superset.

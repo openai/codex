@@ -1,0 +1,7 @@
+Package: boost-move
+Version: 1.67.0
+Depends: boost-assert, boost-config, boost-detail, boost-integer, boost-static-assert, boost-vcpkg-helpers
+Architecture: x64-windows
+Multi-Arch: same
+Description: Boost move module
+Status: install ok half-installed

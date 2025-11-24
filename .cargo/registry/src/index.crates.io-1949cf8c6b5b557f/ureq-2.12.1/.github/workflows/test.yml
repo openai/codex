@@ -1,0 +1,92 @@
+on: [push, pull_request]
+
+name: CI
+
+jobs:
+  build_versions:
+    strategy:
+      matrix:
+        rust: [1.71]
+    runs-on: "ubuntu-latest"
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: ${{ matrix.rust }}
+          override: true
+      - uses: Swatinem/rust-cache@v1
+      - uses: actions-rs/cargo@v1
+        with:
+          command: build
+      - uses: actions-rs/cargo@v1
+        with:
+          command: build
+
+  build_and_test:
+    name: Test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        tls:
+          - ""
+          - "tls"
+          - "native-tls"
+        feature:
+          - ""
+          - json
+          - charset
+          - cookies
+          - socks-proxy
+          - native-certs
+          - gzip
+          - brotli
+          - http-crate
+          - http-interop
+          - http-crate http-interop
+    env:
+      RUST_BACKTRACE: "1"
+      RUSTFLAGS: "-D dead_code -D unused-variables -D unused"
+    steps:
+      - uses: actions/checkout@master
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: 1.71
+          override: true
+      - name: Test
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --no-default-features --features "testdeps ${{ matrix.tls }} ${{ matrix.feature }}"
+
+
+  cargo-deny:
+    name: cargo-deny
+
+    # TODO: remove this matrix when https://github.com/EmbarkStudios/cargo-deny/issues/324 is resolved
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - aarch64-apple-ios
+          - aarch64-linux-android
+          - i686-pc-windows-gnu
+          - i686-pc-windows-msvc
+          - i686-unknown-linux-gnu
+          - wasm32-unknown-unknown
+          - x86_64-apple-darwin
+          - x86_64-apple-ios
+          - x86_64-pc-windows-gnu
+          - x86_64-pc-windows-msvc
+          - x86_64-unknown-linux-gnu
+          - x86_64-unknown-redox
+
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: EmbarkStudios/cargo-deny-action@v1
+      with:
+        command: check
+        log-level: error
+        arguments: --all-features --target ${{ matrix.platform }}

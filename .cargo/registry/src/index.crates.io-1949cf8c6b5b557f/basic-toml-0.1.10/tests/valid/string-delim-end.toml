@@ -1,0 +1,3 @@
+str1 = """"This," she said, "is just a pointless statement.""""
+str2 = '''foo''bar'''''
+str3 = """"""""

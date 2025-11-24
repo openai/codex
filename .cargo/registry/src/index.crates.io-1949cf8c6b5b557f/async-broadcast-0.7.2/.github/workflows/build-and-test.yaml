@@ -1,0 +1,46 @@
+name: Build and test
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+jobs:
+  build_and_test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        rust: [nightly, stable]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+          targets: x86_64-pc-windows-gnu, wasm32-unknown-unknown
+
+      - name: Run cargo check
+        run: cargo check --all --bins --examples --tests --all-features
+
+      - name: Run cargo check for WASM
+        run: cargo check --all --all-features --target wasm32-unknown-unknown
+
+      - name: Run cargo check (without dev-dependencies to catch missing feature flags)
+        if: startsWith(matrix.rust, 'nightly')
+        run: cargo check -Z features=dev_dep
+
+      - name: Run cargo test
+        run: cargo test
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cargo-hack
+        uses: taiki-e/install-action@cargo-hack
+      - name: Check MSRV Compatibility
+        run: |
+           cargo hack build --all --rust-version
+           cargo hack build --all --no-default-features --rust-version

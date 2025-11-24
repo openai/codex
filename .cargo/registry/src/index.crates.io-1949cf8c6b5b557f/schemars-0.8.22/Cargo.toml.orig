@@ -1,0 +1,131 @@
+[package]
+name = "schemars"
+description = "Generate JSON Schemas from Rust code"
+homepage = "https://graham.cool/schemars/"
+repository = "https://github.com/GREsau/schemars"
+version = "0.8.22"
+authors = ["Graham Esau <gesau@hotmail.co.uk>"]
+edition = "2021"
+license = "MIT"
+readme = "README.md"
+keywords = ["rust", "json-schema", "serde"]
+categories = ["encoding"]
+build = "build.rs"
+rust-version = "1.60"
+
+[dependencies]
+schemars_derive = { version = "=0.8.22", optional = true, path = "../schemars_derive" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0.25"
+dyn-clone = "1.0"
+
+chrono = { version = "0.4", default-features = false, optional = true }
+indexmap = { version = "1.2", features = ["serde-1"], optional = true }
+indexmap2 = { version = "2.0", features = ["serde"], optional = true, package = "indexmap" }
+either = { version = "1.3", default-features = false, optional = true }
+uuid08 = { version = "0.8", default-features = false, optional = true, package = "uuid" }
+uuid1 = { version = "1.0", default-features = false, optional = true, package = "uuid" }
+smallvec = { version = "1.0", optional = true }
+arrayvec05 = { version = "0.5", default-features = false, optional = true, package = "arrayvec" }
+arrayvec07 = { version = "0.7", default-features = false, optional = true, package = "arrayvec" }
+url = { version = "2.0", default-features = false, optional = true }
+bytes = { version = "1.0", optional = true }
+rust_decimal = { version = "1", default-features = false, optional = true }
+bigdecimal03 = { version = "0.3", default-features = false, optional = true, package = "bigdecimal" }
+bigdecimal04 = { version = "0.4", default-features = false, optional = true, package = "bigdecimal" }
+enumset = { version = "1.0", optional = true }
+smol_str = { version = "0.1.17", optional = true }
+semver = { version = "1.0.9", features = ["serde"], optional = true }
+
+[dev-dependencies]
+pretty_assertions = "1.2.1"
+trybuild = "1.0"
+
+[features]
+default = ["derive"]
+
+derive = ["schemars_derive"]
+
+# Use a different representation for the map type of Schemars.
+# This allows data to be read into a Value and written back to a JSON string
+# while preserving the order of map keys in the input.
+preserve_order = ["indexmap"]
+
+impl_json_schema = ["derive"]
+# derive_json_schema will be removed in a later version
+derive_json_schema = ["impl_json_schema"]
+
+# `uuid` feature contains `uuid08` only for back-compat - will be changed to include uuid 1.0 instead in a later version
+uuid = ["uuid08"]
+# `arrayvec` feature without version suffix is included only for back-compat - will be removed in a later version
+arrayvec = ["arrayvec05"]
+indexmap1 = ["indexmap"]
+
+raw_value = ["serde_json/raw_value"]
+# `bigdecimal` feature without version suffix is included only for back-compat - will be removed in a later version
+bigdecimal = ["bigdecimal03"]
+
+ui_test = []
+
+[[test]]
+name = "chrono"
+required-features = ["chrono"]
+
+[[test]]
+name = "indexmap"
+required-features = ["indexmap"]
+
+[[test]]
+name = "indexmap2"
+required-features = ["indexmap2"]
+
+[[test]]
+name = "either"
+required-features = ["either"]
+
+[[test]]
+name = "uuid"
+required-features = ["uuid08", "uuid1"]
+
+[[test]]
+name = "smallvec"
+required-features = ["smallvec"]
+
+[[test]]
+name = "bytes"
+required-features = ["bytes"]
+
+[[test]]
+name = "arrayvec"
+required-features = ["arrayvec05", "arrayvec07"]
+
+[[test]]
+name = "schema_for_schema"
+required-features = ["impl_json_schema"]
+
+[[test]]
+name = "ui"
+required-features = ["ui_test"]
+
+[[test]]
+name = "url"
+required-features = ["url"]
+
+[[test]]
+name = "enumset"
+required-features = ["enumset"]
+
+[[test]]
+name = "smol_str"
+required-features = ["smol_str"]
+
+[[test]]
+name = "semver"
+required-features = ["semver"]
+
+[[test]]
+name = "decimal"
+required-features = ["rust_decimal", "bigdecimal03", "bigdecimal04"]
+
+[package.metadata.docs.rs]
+all-features = true

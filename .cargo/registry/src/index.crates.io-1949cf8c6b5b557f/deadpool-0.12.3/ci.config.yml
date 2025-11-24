@@ -1,0 +1,23 @@
+jobs:
+  check-deadpool:
+    name: Check deadpool
+    strategy:
+      fail-fast: false
+      matrix:
+        feature1:
+          - managed
+          - unmanaged
+        feature2:
+          - rt_tokio_1
+          - rt_async-std_1
+          - serde
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+      - run: cargo check
+          --no-default-features
+          --features ${{ matrix.feature1 }},${{ matrix.feature2 }}

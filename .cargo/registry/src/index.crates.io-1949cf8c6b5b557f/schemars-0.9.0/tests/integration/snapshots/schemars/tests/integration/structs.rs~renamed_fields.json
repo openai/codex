@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RenamedFields",
+  "type": "object",
+  "properties": {
+    "camelCase": {
+      "type": "integer",
+      "format": "int32"
+    },
+    "new_name": {
+      "type": "integer",
+      "format": "int32"
+    }
+  },
+  "required": [
+    "camelCase",
+    "new_name"
+  ]
+}

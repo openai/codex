@@ -1,0 +1,34 @@
+# This file is part of ICU4X. For terms of use, please see the file
+# called LICENSE at the top level of the ICU4X source tree
+# (online at: https://github.com/unicode-org/icu4x/blob/main/LICENSE ).
+
+[package]
+name = "potential_utf"
+description = "Unvalidated string and character types"
+version = "0.1.4"
+rust-version = "1.82"
+authors.workspace = true
+edition.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+categories.workspace = true
+include.workspace = true
+
+[dependencies]
+databake = { workspace = true, optional = true }
+serde_core = { workspace = true, optional = true }
+zerovec = { workspace = true, optional = true }
+writeable = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+bincode = { workspace = true }
+
+[features]
+default = ["alloc"]
+alloc = ["serde_core?/alloc", "writeable/alloc", "zerovec?/alloc"]
+databake = ["dep:databake"]
+serde = ["dep:serde_core"]
+writeable = ["dep:writeable"]
+zerovec = ["dep:zerovec"]

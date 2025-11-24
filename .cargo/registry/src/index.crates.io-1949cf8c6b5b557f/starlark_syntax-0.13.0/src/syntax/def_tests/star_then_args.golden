@@ -1,0 +1,15 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Program:
+def test(x, *, *args): pass
+
+Error: error: Args parameter after another args or kwargs parameter
+ --> test.star:1:16
+  |
+1 | def test(x, *, *args): pass
+  |                ^^^^^
+  |

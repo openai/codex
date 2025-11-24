@@ -1,0 +1,126 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Internal",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "typeProperty"
+      ],
+      "properties": {
+        "typeProperty": {
+          "type": "string",
+          "enum": [
+            "UnitOne"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "typeProperty"
+      ],
+      "properties": {
+        "typeProperty": {
+          "type": "string",
+          "enum": [
+            "StringMap"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "typeProperty"
+      ],
+      "properties": {
+        "typeProperty": {
+          "type": "string",
+          "enum": [
+            "UnitStructNewType"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "bar",
+        "foo",
+        "typeProperty"
+      ],
+      "properties": {
+        "bar": {
+          "type": "boolean"
+        },
+        "foo": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "typeProperty": {
+          "type": "string",
+          "enum": [
+            "StructNewType"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "bar",
+        "foo",
+        "typeProperty"
+      ],
+      "properties": {
+        "bar": {
+          "type": "boolean"
+        },
+        "foo": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "typeProperty": {
+          "type": "string",
+          "enum": [
+            "Struct"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "typeProperty"
+      ],
+      "properties": {
+        "typeProperty": {
+          "type": "string",
+          "enum": [
+            "UnitTwo"
+          ]
+        }
+      }
+    },
+    {
+      "type": [
+        "object",
+        "integer"
+      ],
+      "format": "int32",
+      "required": [
+        "typeProperty"
+      ],
+      "properties": {
+        "typeProperty": {
+          "type": "string",
+          "enum": [
+            "WithInt"
+          ]
+        }
+      }
+    }
+  ]
+}

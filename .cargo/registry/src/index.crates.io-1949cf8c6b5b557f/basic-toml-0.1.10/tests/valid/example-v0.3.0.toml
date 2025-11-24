@@ -1,0 +1,182 @@
+# Comment
+# I am a comment. Hear me roar. Roar.
+
+# Table
+# Tables (also known as hash tables or dictionaries) are collections of key/value pairs.
+# They appear in square brackets on a line by themselves.
+
+[Table]
+
+key = "value" # Yeah, you can do this.
+
+# Nested tables are denoted by table names with dots in them. Name your tables whatever crap you please, just don't use #, ., [ or ].
+
+[dog.tater]
+type = "pug"
+
+# You don't need to specify all the super-tables if you don't want to. TOML knows how to do it for you.
+
+# [x] you
+# [x.y] don't
+# [x.y.z] need these
+[x.y.z.w] # for this to work
+
+# String
+# There are four ways to express strings: basic, multi-line basic, literal, and multi-line literal.
+# All strings must contain only valid UTF-8 characters.
+
+[String]
+basic = "I'm a string. \"You can quote me\". Name\tJos\u00E9\nLocation\tSF."
+
+[String.Multiline]
+
+# The following strings are byte-for-byte equivalent:
+key1 = "One\nTwo"
+key2 = """One\nTwo"""
+key3 = """
+One
+Two"""
+
+[String.Multilined.Singleline]
+
+# The following strings are byte-for-byte equivalent:
+key1 = "The quick brown fox jumps over the lazy dog."
+
+key2 = """
+The quick brown \
+
+
+  fox jumps over \
+    the lazy dog."""
+
+key3 = """\
+       The quick brown \
+       fox jumps over \
+       the lazy dog.\
+       """
+
+[String.Literal]
+
+# What you see is what you get.
+winpath  = 'C:\Users\nodejs\templates'
+winpath2 = '\\ServerX\admin$\system32\'
+quoted   = 'Tom "Dubs" Preston-Werner'
+regex    = '<\i\c*\s*>'
+
+
+[String.Literal.Multiline]
+
+regex2 = '''I [dw]on't need \d{2} apples'''
+lines  = '''
+The first newline is
+trimmed in raw strings.
+   All other whitespace
+   is preserved.
+'''
+
+# Integer
+# Integers are whole numbers. Positive numbers may be prefixed with a plus sign.
+# Negative numbers are prefixed with a minus sign.
+
+[Integer]
+key1 = +99
+key2 = 42
+key3 = 0
+key4 = -17
+
+# Float
+# A float consists of an integer part (which may be prefixed with a plus or minus sign)
+# followed by a fractional part and/or an exponent part.
+
+[Float.fractional]
+
+# fractional
+key1 = +1.0
+key2 = 3.1415
+key3 = -0.01
+
+[Float.exponent]
+
+# exponent
+#key1 = 5e+22
+#key2 = 1e6
+#key3 = -2E-2
+
+[Float.both]
+
+# both
+#key = 6.626e-34
+
+# Boolean
+# Booleans are just the tokens you're used to. Always lowercase.
+
+[Booleans]
+True = true
+False = false
+
+# Datetime
+# Datetimes are RFC 3339 dates.
+
+[Datetime]
+key1 = 1979-05-27T07:32:00Z
+#key2 = 1979-05-27T00:32:00-07:00
+#key3 = 1979-05-27T00:32:00.999999-07:00
+
+# Array
+# Arrays are square brackets with other primitives inside. Whitespace is ignored. Elements are separated by commas. Data types may not be mixed.
+
+[Array]
+key1 = [ 1, 2, 3 ]
+key2 = [ "red", "yellow", "green" ]
+key3 = [ [ 1, 2 ], [3, 4, 5] ]
+key4 = [ [ 1, 2 ], ["a", "b", "c"] ] # this is ok
+
+#Arrays can also be multiline. So in addition to ignoring whitespace, arrays also ignore newlines between the brackets.
+# Terminating commas are ok before the closing bracket.
+
+key5 = [
+  1, 2, 3
+]
+key6 = [
+  1,
+  2, # this is ok
+]
+
+# Array of Tables
+# These can be expressed by using a table name in double brackets.
+# Each table with the same double bracketed name will be an element in the array.
+# The tables are inserted in the order encountered.
+
+[[products]]
+name = "Hammer"
+sku = 738594937
+
+[[products]]
+
+[[products]]
+name = "Nail"
+sku = 284758393
+color = "gray"
+
+
+# You can create nested arrays of tables as well.
+
+[[fruit]]
+  name = "apple"
+
+  [fruit.physical]
+    color = "red"
+    shape = "round"
+
+  [[fruit.variety]]
+    name = "red delicious"
+
+  [[fruit.variety]]
+    name = "granny smith"
+
+[[fruit]]
+  name = "banana"
+
+  [[fruit.variety]]
+    name = "plantain"
+

@@ -1,0 +1,81 @@
+// @generated
+/// Implement `DataProvider<PropertyNameParseCanonicalCombiningClassV1>` on the given struct using the data
+/// hardcoded in this file. This allows the struct to be used with
+/// `icu`'s `_unstable` constructors.
+///
+/// Using this implementation will embed the following data in the binary's data segment:
+/// * 479B[^1] for the singleton data struct
+///
+/// [^1]: these numbers can be smaller in practice due to linker deduplication
+///
+/// This macro requires the following crates:
+/// * `icu`
+/// * `icu_provider`
+/// * `zerotrie`
+/// * `zerovec`
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __impl_property_name_parse_canonical_combining_class_v1 {
+    ($ provider : ty) => {
+        #[clippy::msrv = "1.83"]
+        const _: () = <$provider>::MUST_USE_MAKE_PROVIDER_MACRO;
+        #[clippy::msrv = "1.83"]
+        impl $provider {
+            #[doc(hidden)]
+            pub const SINGLETON_PROPERTY_NAME_PARSE_CANONICAL_COMBINING_CLASS_V1: &'static <icu::properties::provider::PropertyNameParseCanonicalCombiningClassV1 as icu_provider::DynamicDataMarker>::DataStruct = &icu::properties::provider::names::PropertyValueNameToEnumMap { map: zerotrie::ZeroTrieSimpleAscii { store: unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"\xE1lABCDHIKLNORV\0\0\x01\x01\x01\x01\x01\x01\x01\x01\x01Yz\x110AUel\x86\x91\x99\x91V\xC5LRTbt\x02\x04\x12'\x91T\x91X\xC2AB\x05\x91FR\x91H\x91:L\x918ove\x91V_\xC2LR\x05eft\x91Tight\x91Xtached_\xC2AB\x0Ebove\x91F_Right\x91Helow\x91:_Left\x918\x91L\xC3LRe\x02\x04\x91J\x91Nlow\x91L_\xC2LR\x05eft\x91Jight\x91NCC\xC512389Ai\x85\x88\xCA0123456789\t\r\x16#$%')+\x8A\xC237\x02\x90W\x90[\x8B8\x90f\x8C\xC229\x02\x90j\x90q\x8D\xC3023\x02\x04\x90r\x90t\x90u\x8E\x8F\x90\0\x90\x01\x90\x02\x90\x03\xCA0123456789\x02\x04\x06\x08\n\x0C\x0E\x10\x12\x90\x04\x90\x05\x90\x06\x90\x07\x90\x08\x90\t\x90\n\x90\x0B\x90\x0C\x90\r\xC70123456\x02\x04\x06\x08\n\x0C\x90\x0E\x90\x0F\x90\x10\x90\x11\x90\x12\x90\x13\x90\x144\x90D1\x90K\xC3ABo\x02\x04\x91Z\x91Yuble_\xC2AB\x06bove\x91Zelow\x91Y\xC2Aa\x03NR\x86n_Reading\x86\xC2So\x02\x91`ta_Subscript\x91`\xC2Va\x01\x88na_Voicing\x88\x91Peft\x91P\xC4KRou\x01\x02\x0E\x87\x80t_Reordered\x80kta\x87\xC2Vv\x01\x81erlay\x81\x91Right\x91R\xC2Ri\x01\x89rama\x89") } } };
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DataProvider<icu::properties::provider::PropertyNameParseCanonicalCombiningClassV1> for $provider {
+            fn load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponse<icu::properties::provider::PropertyNameParseCanonicalCombiningClassV1>, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponse { payload: icu_provider::DataPayload::from_static_ref(Self::SINGLETON_PROPERTY_NAME_PARSE_CANONICAL_COMBINING_CLASS_V1), metadata: icu_provider::DataResponseMetadata::default() })
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyNameParseCanonicalCombiningClassV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , ITER) => {
+        __impl_property_name_parse_canonical_combining_class_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::properties::provider::PropertyNameParseCanonicalCombiningClassV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+    ($ provider : ty , DRY) => {
+        __impl_property_name_parse_canonical_combining_class_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::properties::provider::PropertyNameParseCanonicalCombiningClassV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyNameParseCanonicalCombiningClassV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , DRY , ITER) => {
+        __impl_property_name_parse_canonical_combining_class_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::properties::provider::PropertyNameParseCanonicalCombiningClassV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyNameParseCanonicalCombiningClassV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::properties::provider::PropertyNameParseCanonicalCombiningClassV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+}
+#[doc(inline)]
+pub use __impl_property_name_parse_canonical_combining_class_v1 as impl_property_name_parse_canonical_combining_class_v1;

@@ -1,0 +1,11 @@
+error: attribute path `example` will not be forwarded because it is also listed in `attributes`
+ --> tests/compile-fail/attr_forwarded_and_parsed.rs:2:46
+  |
+2 | #[darling(attributes(example), forward_attrs(example))]
+  |                                              ^^^^^^^
+
+error: attribute path `example` will not be forwarded because it is also listed in `attributes`
+ --> tests/compile-fail/attr_forwarded_and_parsed.rs:8:46
+  |
+8 | #[darling(attributes(example), forward_attrs(example))]
+  |                                              ^^^^^^^

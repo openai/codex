@@ -1,0 +1,45 @@
+[package]
+name = "tempfile"
+version = "3.23.0"
+authors = [
+  "Steven Allen <steven@stebalien.com>",
+  "The Rust Project Developers",
+  "Ashley Mannix <ashleymannix@live.com.au>",
+  "Jason White <me@jasonwhite.io>",
+]
+documentation = "https://docs.rs/tempfile"
+edition = "2021"
+rust-version = "1.63"
+homepage = "https://stebalien.com/projects/tempfile-rs/"
+keywords = ["tempfile", "tmpfile", "filesystem"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Stebalien/tempfile"
+description = "A library for managing temporary files and directories."
+
+[dependencies]
+fastrand = "2.1.1"
+# Not available in stdlib until 1.70, but we support 1.63 to support Debian stable.
+once_cell = { version = "1.19.0", default-features = false, features = ["std"] }
+
+[target.'cfg(any(unix, windows, target_os = "wasi"))'.dependencies]
+getrandom = { version = "0.3.0", default-features = false, optional = true }
+
+[target.'cfg(any(unix, target_os = "wasi"))'.dependencies]
+rustix = { version = "1.0.0", features = ["fs"] }
+
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = ">=0.52, <0.62"
+features = [
+    "Win32_Storage_FileSystem",
+    "Win32_Foundation",
+]
+
+[dev-dependencies]
+doc-comment = "0.3"
+
+[features]
+default = ["getrandom"]
+nightly = []
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--generate-link-to-definition"]

@@ -1,0 +1,11 @@
+error[E0308]: mismatched types
+  --> tests/ui/type-mismatch.rs:14:9
+   |
+14 |         0
+   |         ^ expected `()`, found integer
+
+error[E0308]: mismatched types
+  --> tests/ui/type-mismatch.rs:17:9
+   |
+17 |         0
+   |         ^ expected `()`, found integer

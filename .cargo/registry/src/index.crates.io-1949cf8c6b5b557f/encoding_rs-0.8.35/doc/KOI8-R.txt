@@ -1,0 +1,6 @@
+/// This is an encoding for Russian from [RFC 1489](https://tools.ietf.org/html/rfc1489).
+///
+/// [Index visualization](https://encoding.spec.whatwg.org/koi8-r.html),
+/// [Visualization of BMP coverage](https://encoding.spec.whatwg.org/koi8-r-bmp.html)
+///
+/// This encoding matches the Windows code page 20866.

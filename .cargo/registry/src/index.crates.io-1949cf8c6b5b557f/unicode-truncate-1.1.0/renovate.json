@@ -1,0 +1,23 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":automergeMinor",
+    "group:allNonMajor"
+  ],
+  "rangeStrategy": "update-lockfile",
+  "automergeStrategy": "squash",
+  "packageRules": [
+    {
+      "automerge": false,
+      "matchCurrentVersion": "< 1.0.0",
+      "matchUpdateTypes": [
+        "minor"
+      ]
+    },
+    {
+      "matchDepTypes": ["devDependencies"],
+      "automerge": true
+    }
+  ]
+}

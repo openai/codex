@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AdjacentEnum",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "t": {
+          "type": "string",
+          "const": "Unit"
+        }
+      },
+      "required": [
+        "t"
+      ],
+      "foo": "bar"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "t": {
+          "type": "string",
+          "const": "NewType"
+        },
+        "c": true
+      },
+      "required": [
+        "t",
+        "c"
+      ],
+      "foo": "bar"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "t": {
+          "type": "string",
+          "const": "Tuple"
+        },
+        "c": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "integer",
+              "format": "int32"
+            },
+            {
+              "type": "boolean"
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        }
+      },
+      "required": [
+        "t",
+        "c"
+      ],
+      "foo": "bar"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "t": {
+          "type": "string",
+          "const": "Struct"
+        },
+        "c": {
+          "type": "object",
+          "properties": {
+            "i": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "b": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "i",
+            "b"
+          ]
+        }
+      },
+      "required": [
+        "t",
+        "c"
+      ],
+      "foo": "bar"
+    }
+  ],
+  "foo": "bar"
+}

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Bytes",
+  "type": [
+    "array",
+    "string"
+  ],
+  "items": {
+    "type": "integer",
+    "format": "uint8",
+    "minimum": 0,
+    "maximum": 255
+  }
+}

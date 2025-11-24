@@ -1,0 +1,53 @@
+[package]
+name = "serial2"
+version = "0.2.31"
+description = "Cross platform serial ports"
+license = "BSD-2-Clause OR Apache-2.0"
+repository = "https://github.com/de-vri-es/serial2-rs"
+documentation = "https://docs.rs/serial2"
+keywords = ["serial", "serial-port", "COM-port", "RS232", "tty"]
+categories = ["hardware-support", "network-programming", "os", "science::robotics"]
+
+publish = ["crates-io"]
+edition = "2021"
+
+[features]
+# The "unix" feature enables Unix specific extensions.
+unix = []
+
+# The "windows" features enables windows specific extensions.
+windows = []
+
+# The "rs4xx" feature enables RS-485/RS-422 specific extensions on supported platforms.
+rs4xx = []
+
+# Add #[doc(cfg(...))] annotations to platform specific items for better documentation (requires nightly toolchain).
+doc-cfg = []
+
+# Enable limited serde support for serial port configuration.
+serde = ["dep:serde"]
+
+# Add stub implementation of all feature and platform specific items, to allow full documentation to build on all platforms.
+doc = []
+
+[[example]]
+name = "rs485"
+required-features = ["rs4xx"]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"], optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.109"
+cfg-if = "1.0.0"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3.9", features = ["commapi", "fileapi", "handleapi", "ioapiset", "std", "synchapi", "winbase", "winerror", "winreg"] }
+
+[dev-dependencies]
+assert2 = "0.3.11"
+serde_json = "1.0.108"
+serial2 = { path = ".", features = ["serde", "unix", "windows"] }
+
+[package.metadata.docs.rs]
+features = ["doc-cfg", "doc"]

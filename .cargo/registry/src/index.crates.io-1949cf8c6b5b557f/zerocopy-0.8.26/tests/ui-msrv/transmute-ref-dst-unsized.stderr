@@ -1,0 +1,8 @@
+error[E0277]: the size for values of type `[u8]` cannot be known at compilation time
+  --> tests/ui-msrv/transmute-ref-dst-unsized.rs:17:28
+   |
+17 | const DST_UNSIZED: &[u8] = transmute_ref!(&[0u8; 1]);
+   |                            ^^^^^^^^^^^^^^^^^^^^^^^^^ doesn't have a size known at compile-time
+   |
+   = help: the trait `Sized` is not implemented for `[u8]`
+   = note: this error originates in the macro `transmute_ref` (in Nightly builds, run with -Z macro-backtrace for more info)

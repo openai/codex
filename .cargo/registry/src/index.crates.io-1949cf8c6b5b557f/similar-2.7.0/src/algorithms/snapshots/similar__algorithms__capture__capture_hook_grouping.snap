@@ -1,0 +1,64 @@
+---
+source: src/algorithms/capture.rs
+expression: ops
+---
+[
+    [
+        Equal {
+            old_index: 7,
+            new_index: 7,
+            len: 3,
+        },
+        Replace {
+            old_index: 10,
+            old_len: 1,
+            new_index: 10,
+            new_len: 1,
+        },
+        Equal {
+            old_index: 11,
+            new_index: 11,
+            len: 2,
+        },
+        Replace {
+            old_index: 13,
+            old_len: 1,
+            new_index: 13,
+            new_len: 1,
+        },
+        Equal {
+            old_index: 14,
+            new_index: 14,
+            len: 2,
+        },
+        Replace {
+            old_index: 16,
+            old_len: 1,
+            new_index: 16,
+            new_len: 1,
+        },
+        Equal {
+            old_index: 17,
+            new_index: 17,
+            len: 3,
+        },
+    ],
+    [
+        Equal {
+            old_index: 31,
+            new_index: 31,
+            len: 3,
+        },
+        Replace {
+            old_index: 34,
+            old_len: 1,
+            new_index: 34,
+            new_len: 1,
+        },
+        Equal {
+            old_index: 35,
+            new_index: 35,
+            len: 3,
+        },
+    ],
+]

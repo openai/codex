@@ -1,0 +1,14 @@
+[package]
+name = "openssl-macros"
+version = "0.1.1"
+edition = "2018"
+license = "MIT/Apache-2.0"
+description = "Internal macros used by the openssl crate."
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }

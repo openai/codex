@@ -1,0 +1,36 @@
+[package]
+name = "semver"
+version = "1.0.27"
+authors = ["David Tolnay <dtolnay@gmail.com>"]
+categories = ["data-structures", "no-std"]
+description = "Parser and evaluator for Cargo's flavor of Semantic Versioning"
+documentation = "https://docs.rs/semver"
+edition = "2018"
+exclude = ["build.rs"]
+keywords = ["cargo"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/dtolnay/semver"
+rust-version = "1.61"
+
+[features]
+default = ["std"]
+serde = ["dep:serde"]
+std = []
+
+[dependencies]
+serde = { package = "serde_core", version = "1.0.220", optional = true, default-features = false }
+
+[target.'cfg(any())'.dependencies]
+serde = { version = "1.0.220", optional = true, default-features = false }
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = [
+    "--generate-link-to-definition",
+    "--extern-html-root-url=core=https://doc.rust-lang.org",
+    "--extern-html-root-url=alloc=https://doc.rust-lang.org",
+    "--extern-html-root-url=std=https://doc.rust-lang.org",
+]
+
+[package.metadata.playground]
+features = ["serde"]

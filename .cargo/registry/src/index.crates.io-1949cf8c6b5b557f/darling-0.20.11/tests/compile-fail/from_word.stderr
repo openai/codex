@@ -1,0 +1,17 @@
+error: `from_word` cannot be used on unit structs because it conflicts with the generated impl
+ --> tests/compile-fail/from_word.rs:7:23
+  |
+7 | #[darling(from_word = || Ok(Unit))]
+  |                       ^
+
+error: `from_word` cannot be used on newtype structs because the implementation is entirely delegated to the inner type
+  --> tests/compile-fail/from_word.rs:17:23
+   |
+17 | #[darling(from_word = newtype_from_word)]
+   |                       ^^^^^^^^^^^^^^^^^
+
+error: `from_word` cannot be used with an enum that also uses `word`
+  --> tests/compile-fail/from_word.rs:21:23
+   |
+21 | #[darling(from_word = || Ok(Wordy::Options { thing: "Hello".to_string() }))]
+   |                       ^

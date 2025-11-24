@@ -1,0 +1,4 @@
+/doc
+Cargo.lock
+target
+.cargo/config

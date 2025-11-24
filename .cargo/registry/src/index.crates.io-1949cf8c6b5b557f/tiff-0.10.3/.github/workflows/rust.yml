@@ -1,0 +1,94 @@
+name: Rust CI
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust: ["1.74.0", stable, beta, nightly]
+    steps:
+    - uses: actions/checkout@v2
+
+    - uses: dtolnay/rust-toolchain@nightly
+      if: ${{ matrix.rust == '1.74.0' }}
+    - name: Generate Cargo.lock with minimal-version dependencies
+      if: ${{ matrix.rust == '1.74.0' }}
+      run: cargo -Zminimal-versions generate-lockfile
+
+    - uses: dtolnay/rust-toolchain@v1
+      with:
+        toolchain: ${{ matrix.rust }}
+    - name: Cache Cargo Dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        cache-on-failure: true
+    - name: build
+      run: cargo build -v
+    - name: test
+      if: ${{ matrix.rust != '1.74.0' }}
+      run: cargo test -v && cargo doc -v
+
+  features:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        feature: ["", deflate, jpeg, lzw, zstd, default, "default,zstd"]
+    steps:
+    - uses: actions/checkout@v2
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy
+    - name: Cargo check
+      run: cargo check --features "${{ matrix.feature }}" --no-default-features
+
+    - name: Cargo clippy
+      if: ${{ matrix.feature != '' }}
+      run: cargo clippy --no-deps --all-features --all-targets -- -D warnings
+
+  other_archs:
+    # github actions does not support 32-bit or big endian systems directly, but
+    # it does support QEMU. so we install qemu, then build and run the tests on
+    # emulated systems. NOTE: you can also use this approach to test locally.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [powerpc-unknown-linux-gnu, i686-unknown-linux-gnu]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install or use cached cross-rs/cross
+        uses: baptiste0928/cargo-install@v2
+        with:
+          crate: cross
+      - name: Cache Cargo Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          key: ${{ matrix.arch }}
+      - name: Start Docker (required for cross-rs)
+        run: sudo systemctl start docker
+      - name: Cross-Run Tests using QEMU
+        run: cross test --target ${{ matrix.arch }}
+
+  rustfmt:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt
+    - name: Run rustfmt check
+      run: cargo fmt -- --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy
+    - run: cargo clippy --all-features # TODO: enable "-- -D warnings" once all outstanding clippy lints are fixed

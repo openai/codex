@@ -1,0 +1,103 @@
+error[E0277]: the trait bound `&str: __private::not::Bool` is not satisfied
+  --> tests/ui/ensure-nonbool.rs:25:13
+   |
+25 |     ensure!("...");
+   |     --------^^^^^-
+   |     |       |
+   |     |       the trait `__private::not::Bool` is not implemented for `&str`
+   |     required by a bound introduced by this call
+   |
+   = help: the following other types implement trait `__private::not::Bool`:
+             &bool
+             bool
+note: required by a bound in `anyhow::__private::not`
+  --> src/lib.rs
+   |
+   |     pub fn not(cond: impl Bool) -> bool {
+   |                           ^^^^ required by this bound in `not`
+
+error[E0277]: the trait bound `&mut bool: __private::not::Bool` is not satisfied
+  --> tests/ui/ensure-nonbool.rs:29:31
+   |
+29 |         Bool(cond) => ensure!(cond),
+   |                       --------^^^^-
+   |                       |       |
+   |                       |       the trait `__private::not::Bool` is not implemented for `&mut bool`
+   |                       required by a bound introduced by this call
+   |
+   = note: `__private::not::Bool` is implemented for `&bool`, but not for `&mut bool`
+note: required by a bound in `anyhow::__private::not`
+  --> src/lib.rs
+   |
+   |     pub fn not(cond: impl Bool) -> bool {
+   |                           ^^^^ required by this bound in `not`
+help: consider dereferencing here
+   |
+29 |         Bool(cond) => ensure!(*cond),
+   |                               +
+
+error[E0277]: the trait bound `DerefBool: __private::not::Bool` is not satisfied
+  --> tests/ui/ensure-nonbool.rs:33:13
+   |
+33 |     ensure!(db);
+   |     --------^^-
+   |     |       |
+   |     |       unsatisfied trait bound
+   |     required by a bound introduced by this call
+   |
+help: the trait `__private::not::Bool` is not implemented for `DerefBool`
+  --> tests/ui/ensure-nonbool.rs:6:1
+   |
+ 6 | struct DerefBool(bool);
+   | ^^^^^^^^^^^^^^^^
+note: required by a bound in `anyhow::__private::not`
+  --> src/lib.rs
+   |
+   |     pub fn not(cond: impl Bool) -> bool {
+   |                           ^^^^ required by this bound in `not`
+help: consider dereferencing here
+   |
+33 |     ensure!(*db);
+   |             +
+
+error[E0277]: the trait bound `&DerefBool: __private::not::Bool` is not satisfied
+  --> tests/ui/ensure-nonbool.rs:34:13
+   |
+34 |     ensure!(&db);
+   |     --------^^^-
+   |     |       |
+   |     |       the trait `__private::not::Bool` is not implemented for `&DerefBool`
+   |     required by a bound introduced by this call
+   |
+note: required by a bound in `anyhow::__private::not`
+  --> src/lib.rs
+   |
+   |     pub fn not(cond: impl Bool) -> bool {
+   |                           ^^^^ required by this bound in `not`
+help: consider dereferencing here
+   |
+34 |     ensure!(&*db);
+   |              +
+
+error[E0277]: the trait bound `NotBool: __private::not::Bool` is not satisfied
+  --> tests/ui/ensure-nonbool.rs:37:13
+   |
+37 |     ensure!(nb);
+   |     --------^^-
+   |     |       |
+   |     |       unsatisfied trait bound
+   |     required by a bound introduced by this call
+   |
+help: the trait `__private::not::Bool` is not implemented for `NotBool`
+  --> tests/ui/ensure-nonbool.rs:8:1
+   |
+ 8 | struct NotBool(bool);
+   | ^^^^^^^^^^^^^^
+   = help: the following other types implement trait `__private::not::Bool`:
+             &bool
+             bool
+note: required by a bound in `anyhow::__private::not`
+  --> src/lib.rs
+   |
+   |     pub fn not(cond: impl Bool) -> bool {
+   |                           ^^^^ required by this bound in `not`

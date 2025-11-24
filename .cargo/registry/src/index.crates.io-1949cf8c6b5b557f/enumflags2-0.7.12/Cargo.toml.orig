@@ -1,0 +1,31 @@
+[package]
+name = "enumflags2"
+version = "0.7.12"
+authors = ["maik klein <maikklein@googlemail.com>", "Maja Kądziołka <maya@compilercrim.es>"]
+description = "Enum-based bit flags"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/meithecatte/enumflags2"
+readme = "README.md"
+keywords = ["enum", "bitflag", "flag", "bitflags"]
+documentation = "https://docs.rs/enumflags2"
+edition = "2018"
+rust-version = "1.56"
+
+[dependencies.enumflags2_derive]
+version = "=0.7.12"
+path = "enumflags_derive"
+
+[dependencies.serde]
+version = "^1.0.0"
+default-features = false
+optional = true
+
+[features]
+std = []
+
+[workspace]
+members = [
+    "enumflags_derive",
+    "test_suite",
+    "benchmarks",
+]

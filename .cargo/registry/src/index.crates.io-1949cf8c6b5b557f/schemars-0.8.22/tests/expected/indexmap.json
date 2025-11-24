@@ -1,0 +1,25 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "IndexMapTypes",
+  "type": "object",
+  "required": [
+    "map",
+    "set"
+  ],
+  "properties": {
+    "map": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "boolean"
+      }
+    },
+    "set": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "int"
+      },
+      "uniqueItems": true
+    }
+  }
+}

@@ -1,0 +1,5 @@
+error: unexpected token
+ --> tests/ui/unexpected-group.rs:4:12
+  |
+4 |     fn [<a {} b>]() {}
+  |            ^^

@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Adjacent",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "const": "UnitOne"
+        }
+      },
+      "required": [
+        "tag"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "const": "StringMap"
+        },
+        "content": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "tag",
+        "content"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "const": "UnitStructNewType"
+        },
+        "content": {
+          "$ref": "#/$defs/UnitStruct"
+        }
+      },
+      "required": [
+        "tag",
+        "content"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "const": "StructNewType"
+        },
+        "content": {
+          "$ref": "#/$defs/Struct"
+        }
+      },
+      "required": [
+        "tag",
+        "content"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "const": "Struct"
+        },
+        "content": {
+          "type": "object",
+          "properties": {
+            "foo": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "bar": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "foo",
+            "bar"
+          ]
+        }
+      },
+      "required": [
+        "tag",
+        "content"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "const": "Tuple"
+        },
+        "content": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "integer",
+              "format": "int32"
+            },
+            {
+              "type": "boolean"
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        }
+      },
+      "required": [
+        "tag",
+        "content"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "const": "UnitTwo"
+        }
+      },
+      "required": [
+        "tag"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "const": "UnitAsInt"
+        },
+        "content": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "tag",
+        "content"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "const": "TupleAsStr"
+        },
+        "content": {
+          "type": "string",
+          "pattern": "^\\d+ (true|false)$"
+        }
+      },
+      "required": [
+        "tag",
+        "content"
+      ]
+    }
+  ],
+  "$defs": {
+    "UnitStruct": {
+      "type": "null"
+    },
+    "Struct": {
+      "type": "object",
+      "properties": {
+        "foo": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "bar": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "foo",
+        "bar"
+      ]
+    }
+  }
+}

@@ -1,0 +1,86 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Container",
+  "type": "object",
+  "required": [
+    "result1",
+    "result2"
+  ],
+  "properties": {
+    "result1": {
+      "$ref": "#/definitions/Result_of_MyStruct_or_Array_of_String"
+    },
+    "result2": {
+      "$ref": "#/definitions/Result_of_Boolean_or_Null"
+    }
+  },
+  "definitions": {
+    "Result_of_MyStruct_or_Array_of_String": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "Ok"
+          ],
+          "properties": {
+            "Ok": {
+              "$ref": "#/definitions/MyStruct"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "Err"
+          ],
+          "properties": {
+            "Err": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "MyStruct": {
+      "type": "object",
+      "required": [
+        "foo"
+      ],
+      "properties": {
+        "foo": {
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    },
+    "Result_of_Boolean_or_Null": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "Ok"
+          ],
+          "properties": {
+            "Ok": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "Err"
+          ],
+          "properties": {
+            "Err": {
+              "type": "null"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

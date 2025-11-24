@@ -1,0 +1,33 @@
+[package]
+name = "serde_path_to_error"
+version = "0.1.20"
+authors = ["David Tolnay <dtolnay@gmail.com>"]
+categories = ["encoding", "no-std"]
+description = "Path to the element that failed to deserialize"
+documentation = "https://docs.rs/serde_path_to_error"
+edition = "2021"
+keywords = ["serde", "serialization"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/dtolnay/path-to-error"
+rust-version = "1.61"
+
+[dependencies]
+itoa = "1.0"
+serde_core = { version = "1.0.220", default-features = false, features = ["alloc"] }
+
+[target.'cfg(any())'.dependencies]
+serde = { version = "1.0.220", default-features = false }
+
+[dev-dependencies]
+serde = "1.0.220"
+serde_derive = "1.0.220"
+serde_json = "1.0.100"
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = [
+    "--generate-link-to-definition",
+    "--extern-html-root-url=core=https://doc.rust-lang.org",
+    "--extern-html-root-url=alloc=https://doc.rust-lang.org",
+    "--extern-html-root-url=std=https://doc.rust-lang.org",
+]

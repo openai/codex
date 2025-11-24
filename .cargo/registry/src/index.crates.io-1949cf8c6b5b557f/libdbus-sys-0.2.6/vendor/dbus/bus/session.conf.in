@@ -1,0 +1,80 @@
+<!-- This configuration file controls the per-user-login-session message bus.
+     Add a session-local.conf and edit that rather than changing this 
+     file directly. -->
+
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <!-- Our well-known bus type, don't change this -->
+  <type>session</type>
+
+  <!-- If we fork, keep the user's original umask to avoid affecting
+       the behavior of child processes. -->
+  <keep_umask/>
+
+  <listen>@DBUS_SESSION_BUS_LISTEN_ADDRESS@</listen>
+
+  <!-- On Unix systems, the most secure authentication mechanism is
+  EXTERNAL, which uses credential-passing over Unix sockets.
+
+  This authentication mechanism is not available on Windows,
+  is not suitable for use with the tcp: or nonce-tcp: transports,
+  and will not work on obscure flavours of Unix that do not have
+  a supported credentials-passing mechanism. On those platforms/transports,
+  comment out the <auth> element to allow fallback to DBUS_COOKIE_SHA1. -->
+  @DBUS_SESSION_CONF_MAYBE_AUTH_EXTERNAL@
+
+  <standard_session_servicedirs />
+
+  <policy context="default">
+    <!-- Allow everything to be sent -->
+    <allow send_destination="*" eavesdrop="true"/>
+    <!-- Allow everything to be received -->
+    <allow eavesdrop="true"/>
+    <!-- Allow anyone to own anything -->
+    <allow own="*"/>
+  </policy>
+
+  <!-- Include legacy configuration location -->
+  <include ignore_missing="yes">@SYSCONFDIR_FROM_PKGDATADIR@/dbus-1/session.conf</include>
+
+  <!-- Config files are placed here that among other things, 
+       further restrict the above policy for specific services. -->
+  <includedir>session.d</includedir>
+
+  <includedir>@SYSCONFDIR_FROM_PKGDATADIR@/dbus-1/session.d</includedir>
+
+  <!-- This is included last so local configuration can override what's 
+       in this standard file -->
+  <include ignore_missing="yes">@SYSCONFDIR_FROM_PKGDATADIR@/dbus-1/session-local.conf</include>
+
+  <include if_selinux_enabled="yes" selinux_root_relative="yes">contexts/dbus_contexts</include>
+
+  <!-- For the session bus, override the default relatively-low limits 
+       with essentially infinite limits, since the bus is just running 
+       as the user anyway, using up bus resources is not something we need 
+       to worry about. In some cases, we do set the limits lower than 
+       "all available memory" if exceeding the limit is almost certainly a bug, 
+       having the bus enforce a limit is nicer than a huge memory leak. But the 
+       intent is that these limits should never be hit. -->
+
+  <!-- the memory limits are 1G instead of say 4G because they can't exceed 32-bit signed int max -->
+  <limit name="max_incoming_bytes">1000000000</limit>
+  <limit name="max_incoming_unix_fds">250000000</limit>
+  <limit name="max_outgoing_bytes">1000000000</limit>
+  <limit name="max_outgoing_unix_fds">250000000</limit>
+  <limit name="max_message_size">1000000000</limit>
+  <!-- We do not override max_message_unix_fds here since the in-kernel
+       limit is also relatively low -->
+  <limit name="service_start_timeout">120000</limit>  
+  <limit name="auth_timeout">240000</limit>
+  <limit name="pending_fd_timeout">150000</limit>
+  <limit name="max_completed_connections">100000</limit>  
+  <limit name="max_incomplete_connections">10000</limit>
+  <limit name="max_connections_per_user">100000</limit>
+  <limit name="max_pending_service_starts">10000</limit>
+  <limit name="max_names_per_connection">50000</limit>
+  <limit name="max_match_rules_per_connection">50000</limit>
+  <limit name="max_replies_per_connection">50000</limit>
+
+</busconfig>

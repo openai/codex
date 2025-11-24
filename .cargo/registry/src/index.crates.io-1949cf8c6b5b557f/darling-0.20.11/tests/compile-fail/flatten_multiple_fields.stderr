@@ -1,0 +1,23 @@
+error: `#[darling(flatten)]` can only be applied to one field
+  --> tests/compile-fail/flatten_multiple_fields.rs:13:15
+   |
+13 |     #[darling(flatten)]
+   |               ^^^^^^^
+
+error: `#[darling(flatten)]` can only be applied to one field
+  --> tests/compile-fail/flatten_multiple_fields.rs:15:15
+   |
+15 |     #[darling(flatten)]
+   |               ^^^^^^^
+
+error: `#[darling(flatten)]` can only be applied to one field
+  --> tests/compile-fail/flatten_multiple_fields.rs:22:15
+   |
+22 |     #[darling(flatten)]
+   |               ^^^^^^^
+
+error: `#[darling(flatten)]` can only be applied to one field
+  --> tests/compile-fail/flatten_multiple_fields.rs:24:15
+   |
+24 |     #[darling(flatten)]
+   |               ^^^^^^^

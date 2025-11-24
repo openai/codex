@@ -1,0 +1,44 @@
+[package]
+name = "wayland-protocols"
+version = "0.32.9"
+documentation = "https://docs.rs/wayland-protocols/"
+repository = "https://github.com/smithay/wayland-rs"
+authors = ["Elinor Berger <elinor@safaradeg.net>"]
+license = "MIT"
+keywords = ["wayland", "client", "server", "protocol", "extension"]
+description = "Generated API for the officials wayland protocol extensions"
+categories = ["gui", "api-bindings"]
+edition = "2021"
+rust-version = "1.65"
+readme = "README.md"
+include = [
+    "/src/**/*.rs",
+    "/Cargo.toml",
+    "/README.md",
+    "/LICENSE.txt",
+    "/protocols/stable/*/*.xml",
+    "/protocols/staging/*/*.xml",
+    "/protocols/unstable/*/*.xml",
+    # Exclude old version of stabalized protocols
+    "!/protocols/unstable/xdg-shell/xdg-shell-unstable-v5.xml",
+    "!/protocols/unstable/xdg-shell/xdg-shell-unstable-v6.xml",
+    "!/protocols/unstable/linux-dmabuf/linux-dmabuf-unstable-v1.xml",
+    "!/protocols/unstable/tablet/tablet-unstable-v2.xml",
+]
+
+[dependencies]
+wayland-scanner = { version = "0.31.7", path = "../wayland-scanner" }
+wayland-backend = { version = "0.3.11", path = "../wayland-backend" }
+wayland-client = { version = "0.31.11", path = "../wayland-client", optional = true }
+wayland-server = { version = "0.31.10", path = "../wayland-server", optional = true }
+bitflags = "2"
+
+[features]
+client = ["wayland-client"]
+server = ["wayland-server"]
+staging = []
+unstable = []
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ValidateAttrStruct",
+  "type": "object",
+  "properties": {
+    "min_max": {
+      "type": "number",
+      "format": "float",
+      "minimum": 1.0,
+      "maximum": 100.0
+    },
+    "min_max2": {
+      "type": "number",
+      "format": "float",
+      "minimum": 1.0,
+      "maximum": 10.0
+    },
+    "regex_str": {
+      "type": "string",
+      "pattern": "^[Hh]ello"
+    },
+    "contains_str": {
+      "type": "string",
+      "pattern": "substring\\.\\.\\."
+    },
+    "email_address": {
+      "type": "string",
+      "format": "email"
+    },
+    "homepage": {
+      "type": "string",
+      "format": "uri"
+    },
+    "non_empty_str": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "pair": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "required_option": {
+      "type": "boolean"
+    },
+    "x": {
+      "type": "integer",
+      "format": "int32",
+      "minimum": -100,
+      "maximum": 100
+    }
+  },
+  "required": [
+    "min_max",
+    "min_max2",
+    "regex_str",
+    "contains_str",
+    "email_address",
+    "homepage",
+    "non_empty_str",
+    "pair",
+    "required_option",
+    "x"
+  ]
+}

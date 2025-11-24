@@ -1,0 +1,14 @@
+{
+  "best-day-ever": {"type": "datetime", "value": "1987-07-05T17:45:00Z"},
+  "numtheory": {
+    "boring": {"type": "bool", "value": "false"},
+    "perfection": {
+      "type": "array",
+      "value": [
+        {"type": "integer", "value": "6"},
+        {"type": "integer", "value": "28"},
+        {"type": "integer", "value": "496"}
+      ]
+    }
+  }
+}

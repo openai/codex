@@ -1,0 +1,44 @@
+# This file is part of ICU4X. For terms of use, please see the file
+# called LICENSE at the top level of the ICU4X source tree
+# (online at: https://github.com/unicode-org/icu4x/blob/main/LICENSE ).
+
+[package]
+name = "icu_properties"
+description = "Definitions for Unicode properties"
+version.workspace = true
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+homepage.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+icu_collections = { workspace = true }
+icu_provider = { workspace = true }
+zerovec = { workspace = true, features = ["derive", "yoke"] }
+zerotrie = { workspace = true, features = ["yoke", "zerofrom"] }
+databake = { workspace = true, features = ["derive"], optional = true}
+serde = { workspace = true, features = ["derive"], optional = true }
+icu_locale_core = { workspace = true, features = ["zerovec"] }
+
+unicode-bidi = { workspace = true, optional = true }
+
+icu_properties_data = { workspace = true, optional = true }
+
+[dev-dependencies]
+icu = { path = "../../components/icu", default-features = false }
+
+[features]
+default = ["compiled_data"]
+serde = ["dep:serde", "icu_locale_core/serde", "zerovec/serde", "icu_collections/serde", "icu_provider/serde", "zerotrie/serde"]
+datagen = ["serde", "dep:databake", "zerovec/databake", "icu_collections/databake", "icu_locale_core/databake", "zerotrie/databake", "icu_provider/export"]
+unicode_bidi = [ "dep:unicode-bidi" ]
+compiled_data = ["dep:icu_properties_data", "icu_provider/baked"]
+alloc = ["zerovec/alloc", "icu_collections/alloc", "serde?/alloc"]

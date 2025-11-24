@@ -1,0 +1,5 @@
+target/
+*.gcda
+*.gcno
+*.info
+/.idea

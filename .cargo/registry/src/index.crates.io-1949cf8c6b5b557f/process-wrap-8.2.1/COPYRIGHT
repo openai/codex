@@ -1,0 +1,29 @@
+Short version for non-lawyers:
+
+This project is dual-licensed under Apache 2.0 and MIT terms.
+
+
+Longer version:
+
+Copyrights in this project are retained by their contributors. No copyright
+assignment is required to contribute.
+
+Some files include explicit copyright notices and/or license notices.
+For full authorship information, see the version control history.
+
+Except as otherwise noted (below and/or in individual files), the project is
+licensed under the Apache License, Version 2.0 <LICENSE-APACHE> or
+<http://www.apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT>
+or <http://opensource.org/licenses/MIT>, at your option.
+
+
+The read2() method in src/std/core.rs is adapted from the read2()
+function in the Rust stdlib at sys/unix/pipe.rs, copyright the Rust Contributors,
+licensed under Apache 2.0 and MIT.
+<https://github.com/rust-lang/rust/blob/c9aa2595d9ba2313bbfcc8e0244231baa9c5d9e0/library/std/src/sys/unix/pipe.rs#L76-L122>
+
+
+The job_object() and resume_threads() methods in src/windows.rs are
+adapted from the Windows™ version of the new() method in watchexec at
+src/process.rs, copyright Matt Green, licensed under Apache 2.0 only.
+<https://github.com/watchexec/watchexec/blob/07974e0d1411e79e653a5a5f610f923834628038/lib/src/process.rs#L305-L393>

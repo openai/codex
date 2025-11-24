@@ -1,0 +1,36 @@
+name: CI
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust: [stable, beta, nightly]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install Rust ${{ matrix.rust }}
+        run: |
+          rustup self update
+          rustup update ${{ matrix.rust }}
+          rustup default ${{ matrix.rust }}
+          rustc -vV
+      - name: Run tests
+        run: cargo test
+
+  rustfmt:
+    name: Rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install Rust Stable
+        run: |
+          rustup update stable
+          rustup default stable
+          rustup component add rustfmt
+      - name: Run rustfmt
+        run: cargo fmt -- --check

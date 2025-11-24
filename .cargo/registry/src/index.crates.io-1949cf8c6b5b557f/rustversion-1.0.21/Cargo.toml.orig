@@ -1,0 +1,28 @@
+[package]
+name = "rustversion"
+version = "1.0.21"
+authors = ["David Tolnay <dtolnay@gmail.com>"]
+build = "build/build.rs"
+categories = ["development-tools::build-utils", "no-std", "no-std::no-alloc"]
+description = "Conditional compilation according to rustc compiler version"
+documentation = "https://docs.rs/rustversion"
+edition = "2018"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/dtolnay/rustversion"
+rust-version = "1.31"
+
+[lib]
+proc-macro = true
+
+[dev-dependencies]
+trybuild = { version = "1.0.49", features = ["diff"] }
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = [
+    "--generate-link-to-definition",
+    "--extern-html-root-url=core=https://doc.rust-lang.org",
+    "--extern-html-root-url=alloc=https://doc.rust-lang.org",
+    "--extern-html-root-url=std=https://doc.rust-lang.org",
+    "--extern-html-root-url=proc_macro=https://doc.rust-lang.org",
+]

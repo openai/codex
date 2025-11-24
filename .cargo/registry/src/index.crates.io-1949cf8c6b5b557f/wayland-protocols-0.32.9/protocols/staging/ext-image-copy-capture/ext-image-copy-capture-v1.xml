@@ -1,0 +1,456 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="ext_image_copy_capture_v1">
+  <copyright>
+    Copyright © 2021-2023 Andri Yngvason
+    Copyright © 2024 Simon Ser
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice (including the next
+    paragraph) shall be included in all copies or substantial portions of the
+    Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+  </copyright>
+
+  <description summary="image capturing into client buffers">
+    This protocol allows clients to ask the compositor to capture image sources
+    such as outputs and toplevels into user submitted buffers.
+
+    Warning! The protocol described in this file is currently in the testing
+    phase. Backward compatible changes may be added together with the
+    corresponding interface version bump. Backward incompatible changes can
+    only be done by creating a new major version of the extension.
+  </description>
+
+  <interface name="ext_image_copy_capture_manager_v1" version="1">
+    <description summary="manager to inform clients and begin capturing">
+      This object is a manager which offers requests to start capturing from a
+      source.
+    </description>
+
+    <enum name="error">
+      <entry name="invalid_option" value="1" summary="invalid option flag"/>
+    </enum>
+
+    <enum name="options" bitfield="true">
+      <entry name="paint_cursors" value="1" summary="paint cursors onto captured frames"/>
+    </enum>
+
+    <request name="create_session">
+      <description summary="capture an image capture source">
+        Create a capturing session for an image capture source.
+
+        If the paint_cursors option is set, cursors shall be composited onto
+        the captured frame. The cursor must not be composited onto the frame
+        if this flag is not set.
+
+        If the options bitfield is invalid, the invalid_option protocol error
+        is sent.
+      </description>
+      <arg name="session" type="new_id" interface="ext_image_copy_capture_session_v1"/>
+      <arg name="source" type="object" interface="ext_image_capture_source_v1"/>
+      <arg name="options" type="uint" enum="options"/>
+    </request>
+
+    <request name="create_pointer_cursor_session">
+      <description summary="capture the pointer cursor of an image capture source">
+        Create a cursor capturing session for the pointer of an image capture
+        source.
+      </description>
+      <arg name="session" type="new_id" interface="ext_image_copy_capture_cursor_session_v1"/>
+      <arg name="source" type="object" interface="ext_image_capture_source_v1"/>
+      <arg name="pointer" type="object" interface="wl_pointer"/>
+    </request>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the manager">
+        Destroy the manager object.
+
+        Other objects created via this interface are unaffected.
+      </description>
+    </request>
+  </interface>
+
+  <interface name="ext_image_copy_capture_session_v1" version="1">
+    <description summary="image copy capture session">
+      This object represents an active image copy capture session.
+
+      After a capture session is created, buffer constraint events will be
+      emitted from the compositor to tell the client which buffer types and
+      formats are supported for reading from the session. The compositor may
+      re-send buffer constraint events whenever they change.
+
+      To advertise buffer constraints, the compositor must send in no
+      particular order: zero or more shm_format and dmabuf_format events, zero
+      or one dmabuf_device event, and exactly one buffer_size event. Then the
+      compositor must send a done event.
+
+      When the client has received all the buffer constraints, it can create a
+      buffer accordingly, attach it to the capture session using the
+      attach_buffer request, set the buffer damage using the damage_buffer
+      request and then send the capture request.
+    </description>
+
+    <enum name="error">
+      <entry name="duplicate_frame" value="1"
+        summary="create_frame sent before destroying previous frame"/>
+    </enum>
+
+    <event name="buffer_size">
+      <description summary="image capture source dimensions">
+        Provides the dimensions of the source image in buffer pixel coordinates.
+
+        The client must attach buffers that match this size.
+      </description>
+      <arg name="width" type="uint" summary="buffer width"/>
+      <arg name="height" type="uint" summary="buffer height"/>
+    </event>
+
+    <event name="shm_format">
+      <description summary="shm buffer format">
+        Provides the format that must be used for shared-memory buffers.
+
+        This event may be emitted multiple times, in which case the client may
+        choose any given format.
+      </description>
+      <arg name="format" type="uint" enum="wl_shm.format" summary="shm format"/>
+    </event>
+
+    <event name="dmabuf_device">
+      <description summary="dma-buf device">
+        This event advertises the device buffers must be allocated on for
+        dma-buf buffers.
+
+        In general the device is a DRM node. The DRM node type (primary vs.
+        render) is unspecified. Clients must not rely on the compositor sending
+        a particular node type. Clients cannot check two devices for equality
+        by comparing the dev_t value.
+      </description>
+      <arg name="device" type="array" summary="device dev_t value"/>
+    </event>
+
+    <event name="dmabuf_format">
+      <description summary="dma-buf format">
+        Provides the format that must be used for dma-buf buffers.
+
+        The client may choose any of the modifiers advertised in the array of
+        64-bit unsigned integers.
+
+        This event may be emitted multiple times, in which case the client may
+        choose any given format.
+      </description>
+      <arg name="format" type="uint" summary="drm format code"/>
+      <arg name="modifiers" type="array" summary="drm format modifiers"/>
+    </event>
+
+    <event name="done">
+      <description summary="all constraints have been sent">
+        This event is sent once when all buffer constraint events have been
+        sent.
+
+        The compositor must always end a batch of buffer constraint events with
+        this event, regardless of whether it sends the initial constraints or
+        an update.
+      </description>
+    </event>
+
+    <event name="stopped">
+      <description summary="session is no longer available">
+        This event indicates that the capture session has stopped and is no
+        longer available. This can happen in a number of cases, e.g. when the
+        underlying source is destroyed, if the user decides to end the image
+        capture, or if an unrecoverable runtime error has occurred.
+
+        The client should destroy the session after receiving this event.
+      </description>
+    </event>
+
+    <request name="create_frame">
+      <description summary="create a frame">
+        Create a capture frame for this session.
+
+        At most one frame object can exist for a given session at any time. If
+        a client sends a create_frame request before a previous frame object
+        has been destroyed, the duplicate_frame protocol error is raised.
+      </description>
+      <arg name="frame" type="new_id" interface="ext_image_copy_capture_frame_v1"/>
+    </request>
+
+    <request name="destroy" type="destructor">
+      <description summary="delete this object">
+        Destroys the session. This request can be sent at any time by the
+        client.
+
+        This request doesn't affect ext_image_copy_capture_frame_v1 objects created by
+        this object.
+      </description>
+    </request>
+  </interface>
+
+  <interface name="ext_image_copy_capture_frame_v1" version="1">
+    <description summary="image capture frame">
+      This object represents an image capture frame.
+
+      The client should attach a buffer, damage the buffer, and then send a
+      capture request.
+
+      If the capture is successful, the compositor must send the frame metadata
+      (transform, damage, presentation_time in any order) followed by the ready
+      event.
+
+      If the capture fails, the compositor must send the failed event.
+    </description>
+
+    <enum name="error">
+      <entry name="no_buffer" value="1" summary="capture sent without attach_buffer"/>
+      <entry name="invalid_buffer_damage" value="2" summary="invalid buffer damage"/>
+      <entry name="already_captured" value="3" summary="capture request has been sent"/>
+    </enum>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy this object">
+        Destroys the frame. This request can be sent at any time by the
+        client.
+      </description>
+    </request>
+
+    <request name="attach_buffer">
+      <description summary="attach buffer to session">
+        Attach a buffer to the session.
+
+        The wl_buffer.release request is unused.
+
+        The new buffer replaces any previously attached buffer.
+
+        This request must not be sent after capture, or else the
+        already_captured protocol error is raised.
+      </description>
+      <arg name="buffer" type="object" interface="wl_buffer"/>
+    </request>
+
+    <request name="damage_buffer">
+      <description summary="damage buffer">
+        Apply damage to the buffer which is to be captured next. This request
+        may be sent multiple times to describe a region.
+
+        The client indicates the accumulated damage since this wl_buffer was
+        last captured. During capture, the compositor will update the buffer
+        with at least the union of the region passed by the client and the
+        region advertised by ext_image_copy_capture_frame_v1.damage.
+
+        When a wl_buffer is captured for the first time, or when the client
+        doesn't track damage, the client must damage the whole buffer.
+
+        This is for optimisation purposes. The compositor may use this
+        information to reduce copying.
+
+        These coordinates originate from the upper left corner of the buffer.
+
+        If x or y are strictly negative, or if width or height are negative or
+        zero, the invalid_buffer_damage protocol error is raised.
+
+        This request must not be sent after capture, or else the
+        already_captured protocol error is raised.
+      </description>
+      <arg name="x" type="int" summary="region x coordinate"/>
+      <arg name="y" type="int" summary="region y coordinate"/>
+      <arg name="width" type="int" summary="region width"/>
+      <arg name="height" type="int" summary="region height"/>
+    </request>
+
+    <request name="capture">
+      <description summary="capture a frame">
+        Capture a frame.
+
+        Unless this is the first successful captured frame performed in this
+        session, the compositor may wait an indefinite amount of time for the
+        source content to change before performing the copy.
+
+        This request may only be sent once, or else the already_captured
+        protocol error is raised. A buffer must be attached before this request
+        is sent, or else the no_buffer protocol error is raised.
+      </description>
+    </request>
+
+    <event name="transform">
+      <description summary="buffer transform">
+        This event is sent before the ready event and holds the transform that
+        the compositor has applied to the buffer contents.
+      </description>
+      <arg name="transform" type="uint" enum="wl_output.transform"/>
+    </event>
+
+    <event name="damage">
+      <description summary="buffer damaged region">
+        This event is sent before the ready event. It may be generated multiple
+        times to describe a region.
+
+        The first captured frame in a session will always carry full damage.
+        Subsequent frames' damaged regions describe which parts of the buffer
+        have changed since the last ready event.
+
+        These coordinates originate in the upper left corner of the buffer.
+      </description>
+      <arg name="x" type="int" summary="damage x coordinate"/>
+      <arg name="y" type="int" summary="damage y coordinate"/>
+      <arg name="width" type="int" summary="damage width"/>
+      <arg name="height" type="int" summary="damage height"/>
+    </event>
+
+    <event name="presentation_time">
+      <description summary="presentation time of the frame">
+        This event indicates the time at which the frame is presented to the
+        output in system monotonic time. This event is sent before the ready
+        event.
+
+        The timestamp is expressed as tv_sec_hi, tv_sec_lo, tv_nsec triples,
+        each component being an unsigned 32-bit value. Whole seconds are in
+        tv_sec which is a 64-bit value combined from tv_sec_hi and tv_sec_lo,
+        and the additional fractional part in tv_nsec as nanoseconds. Hence,
+        for valid timestamps tv_nsec must be in [0, 999999999].
+      </description>
+      <arg name="tv_sec_hi" type="uint"
+           summary="high 32 bits of the seconds part of the timestamp"/>
+      <arg name="tv_sec_lo" type="uint"
+           summary="low 32 bits of the seconds part of the timestamp"/>
+      <arg name="tv_nsec" type="uint"
+           summary="nanoseconds part of the timestamp"/>
+    </event>
+
+    <event name="ready">
+      <description summary="frame is available for reading">
+        Called as soon as the frame is copied, indicating it is available
+        for reading.
+
+        The buffer may be re-used by the client after this event.
+
+        After receiving this event, the client must destroy the object.
+      </description>
+    </event>
+
+    <enum name="failure_reason">
+      <entry name="unknown" value="0">
+        <description summary="unknown runtime error">
+          An unspecified runtime error has occurred. The client may retry.
+        </description>
+      </entry>
+      <entry name="buffer_constraints" value="1">
+        <description summary="buffer constraints mismatch">
+          The buffer submitted by the client doesn't match the latest session
+          constraints. The client should re-allocate its buffers and retry.
+        </description>
+      </entry>
+      <entry name="stopped" value="2">
+        <description summary="session is no longer available">
+          The session has stopped. See ext_image_copy_capture_session_v1.stopped.
+        </description>
+      </entry>
+    </enum>
+
+    <event name="failed">
+      <description summary="capture failed">
+        This event indicates that the attempted frame copy has failed.
+
+        After receiving this event, the client must destroy the object.
+      </description>
+      <arg name="reason" type="uint" enum="failure_reason"/>
+    </event>
+  </interface>
+
+  <interface name="ext_image_copy_capture_cursor_session_v1" version="1">
+    <description summary="cursor capture session">
+      This object represents a cursor capture session. It extends the base
+      capture session with cursor-specific metadata.
+    </description>
+
+    <enum name="error">
+      <entry name="duplicate_session" value="1" summary="get_capture_session sent twice"/>
+    </enum>
+
+    <request name="destroy" type="destructor">
+      <description summary="delete this object">
+        Destroys the session. This request can be sent at any time by the
+        client.
+
+        This request doesn't affect ext_image_copy_capture_frame_v1 objects created by
+        this object.
+      </description>
+    </request>
+
+    <request name="get_capture_session">
+      <description summary="get image copy capturer session">
+        Gets the image copy capture session for this cursor session.
+
+        The session will produce frames of the cursor image. The compositor may
+        pause the session when the cursor leaves the captured area.
+
+        This request must not be sent more than once, or else the
+        duplicate_session protocol error is raised.
+      </description>
+      <arg name="session" type="new_id" interface="ext_image_copy_capture_session_v1"/>
+    </request>
+
+    <event name="enter">
+      <description summary="cursor entered captured area">
+        Sent when a cursor enters the captured area. It shall be generated
+        before the "position" and "hotspot" events when and only when a cursor
+        enters the area.
+
+        The cursor enters the captured area when the cursor image intersects
+        with the captured area. Note, this is different from e.g.
+        wl_pointer.enter.
+      </description>
+    </event>
+
+    <event name="leave">
+      <description summary="cursor left captured area">
+        Sent when a cursor leaves the captured area. No "position" or "hotspot"
+        event is generated for the cursor until the cursor enters the captured
+        area again.
+      </description>
+    </event>
+
+    <event name="position">
+      <description summary="position changed">
+        Cursors outside the image capture source do not get captured and no
+        event will be generated for them.
+
+        The given position is the position of the cursor's hotspot and it is
+        relative to the main buffer's top left corner in transformed buffer
+        pixel coordinates. The coordinates may be negative or greater than the
+        main buffer size.
+      </description>
+      <arg name="x" type="int" summary="position x coordinates"/>
+      <arg name="y" type="int" summary="position y coordinates"/>
+    </event>
+
+    <event name="hotspot">
+      <description summary="hotspot changed">
+        The hotspot describes the offset between the cursor image and the
+        position of the input device.
+
+        The given coordinates are the hotspot's offset from the origin in
+        buffer coordinates.
+
+        Clients should not apply the hotspot immediately: the hotspot becomes
+        effective when the next ext_image_copy_capture_frame_v1.ready event is received.
+
+        Compositors may delay this event until the client captures a new frame.
+      </description>
+      <arg name="x" type="int" summary="hotspot x coordinates"/>
+      <arg name="y" type="int" summary="hotspot y coordinates"/>
+    </event>
+  </interface>
+</protocol>

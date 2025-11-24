@@ -1,0 +1,24 @@
+[package]
+name = "schemars_derive"
+description = "Macros for #[derive(JsonSchema)], for use with schemars"
+homepage = "https://graham.cool/schemars/"
+repository = "https://github.com/GREsau/schemars"
+version = "0.8.22"
+authors = ["Graham Esau <gesau@hotmail.co.uk>"]
+edition = "2021"
+license = "MIT"
+readme = "README.md"
+keywords = ["rust", "json-schema", "serde"]
+rust-version = "1.60"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "2.0", features = ["extra-traits"] }
+serde_derive_internals = "0.29"
+
+[dev-dependencies]
+pretty_assertions = "1.2.1"

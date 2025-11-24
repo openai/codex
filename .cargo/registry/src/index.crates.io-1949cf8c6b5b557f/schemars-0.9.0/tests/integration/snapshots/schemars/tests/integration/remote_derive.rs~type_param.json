@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TypeParam_for_string",
+  "type": "object",
+  "properties": {
+    "byte_or_bool": {
+      "$ref": "#/$defs/Or_for_uint8_and_boolean"
+    },
+    "unit_or_t": {
+      "$ref": "#/$defs/Or_for_null_and_string"
+    }
+  },
+  "required": [
+    "byte_or_bool",
+    "unit_or_t"
+  ],
+  "$defs": {
+    "Or_for_uint8_and_boolean": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        },
+        {
+          "type": "boolean"
+        }
+      ]
+    },
+    "Or_for_null_and_string": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    }
+  }
+}

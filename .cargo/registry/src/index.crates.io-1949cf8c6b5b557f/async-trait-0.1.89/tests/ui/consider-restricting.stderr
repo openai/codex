@@ -1,0 +1,33 @@
+error: future cannot be sent between threads safely
+  --> tests/ui/consider-restricting.rs:16:5
+   |
+16 |     async fn publish<T: IntoUrl>(&self, _url: T) {}
+   |     ^^^^^ future created by async block is not `Send`
+   |
+note: captured value is not `Send`
+  --> tests/ui/consider-restricting.rs:16:41
+   |
+16 |     async fn publish<T: IntoUrl>(&self, _url: T) {}
+   |                                         ^^^^ has type `T` which is not `Send`
+   = note: required for the cast from `Pin<Box<{async block@$DIR/tests/ui/consider-restricting.rs:16:5: 16:10}>>` to `Pin<Box<dyn Future<Output = ()> + Send>>`
+help: consider further restricting type parameter `T` with trait `Send`
+   |
+16 |     async fn publish<T: IntoUrl + std::marker::Send>(&self, _url: T) {}
+   |                                 +++++++++++++++++++
+
+error: future cannot be sent between threads safely
+  --> tests/ui/consider-restricting.rs:23:5
+   |
+23 |     async fn publish<T>(&self, _url: T) {}
+   |     ^^^^^ future created by async block is not `Send`
+   |
+note: captured value is not `Send`
+  --> tests/ui/consider-restricting.rs:23:32
+   |
+23 |     async fn publish<T>(&self, _url: T) {}
+   |                                ^^^^ has type `T` which is not `Send`
+   = note: required for the cast from `Pin<Box<{async block@$DIR/tests/ui/consider-restricting.rs:23:5: 23:10}>>` to `Pin<Box<dyn Future<Output = ()> + Send>>`
+help: consider further restricting type parameter `T` with trait `Send`
+   |
+23 |     async fn publish<T + std::marker::Send>(&self, _url: T) {}
+   |                        +++++++++++++++++++

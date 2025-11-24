@@ -1,0 +1,246 @@
+Adrian Szyndela <adrian.s@samsung.com>
+Alan Coopersmith <alan.coopersmith@oracle.com>
+Alban Crequy <alban.crequy@collabora.co.uk>
+Alexander Larsson <alexl@redhat.com>
+Alex Richardson <arichardson@FreeBSD.org>
+Alex Richardson <arichardson.kde@gmail.com>
+Anders Carlsson <andersca@codefactory.se>
+Andoni Morales Alastruey <ylatuya@gmail.com>
+Andre Heinecke <aheinecke@intevation.de>
+Andrey Mazo <ahippo@yandex.ru>
+Andy Fiddaman <omnios@citrus-it.co.uk>
+Antoine Jacoutot <ajacoutot@gnome.org>
+Antoine Jacoutot <ajacoutot openbsd org>
+Arnout Engelen <arnout@bzzt.net>
+Artem Bityutskiy <Artem.Bityutskiy@nokia.com>
+Arun Raghavan <arun.raghavan@collabora.co.uk>
+Aurelien Jarno <aurel32@debian.org>
+Benedikt Heine <bebe@bebehei.de>
+Benjamin Reed <rangerrick@befunk.com>
+Bertrand SIMONNET <bsimonnet@chromium.org>
+Brad Smith <brad comstyle com>
+Brian Cameron <brian.cameron@oracle.com>
+Brian Cameron <brian.cameron@sun.com>
+Cameron Norman <camerontnorman@gmail.com>
+Chengwei Yang <chengwei.yang@intel.com>
+Chigozirim Chukwu <nobleman.code@gmx.com>
+Chris Lesiak <chris.lesiak@licor.com>
+Chris Mayo <aklhfex gmail com>
+Chris Morin <cmtm@google.com>
+Chris PeBenito <chpebeni@linux.microsoft.com>
+Christian Dywan <christian.dywan@lanedo.com>
+Christian Ehrlicher <Ch.Ehrlicher@gmx.de>
+Christian Persch (GNOME) <chpe@gnome.org>
+Christopher Morin <chris.morin2@gmail.com>
+Clemens Lang <clemens.lang@bmw-carit.de>
+Colin Walters <walters@verbum.org>
+Colin Watson <cjwatson@ubuntu.com>
+Cosimo Alfarano <cosimo.alfarano@collabora.com>
+Cosimo Alfarano <cosimo.alfarano@collabora.co.uk>
+Cristian Onet <onet.cristian@gmail.com>
+Cristian Rodríguez <cristian.rodriguez@opensuse.org>
+Cristian Rodríguez <crrodriguez@opensuse.org>
+Cyril Brulebois <kibi@debian.org>
+Dagobert Michelsen <dam@opencsw.org>
+Daniel P. Berrange <dan@berrange.com>
+Daniel Reed <djr@redhat.com>
+Daniel Wendt <daniel.wendt@linux.com>
+Dan Williams <dcbw@redhat.com>
+Dave Reisner <dreisner@archlinux.org>
+David King <dking@redhat.com>
+David Redondo <kde@david-redondo.de>
+David Zeuthen <davidz@redhat.com>
+David Zeuthen <zeuthen@gmail.com>
+Deepika Aggarwal <deepika.a@samsung.com>
+Dennis Kaarsemaker <dennis@kaarsemaker.net>
+Diego E. 'Flameeyes' Pettenò <flameeyes@gmail.com>
+Dimitri John Ledkov <dimitri.j.ledkov@intel.com>
+Dmitri Iouchtchenko <johnnyspoon@gmail.com>
+DreamNik <dreamnik@mail.ru>
+Eamon Walsh <ewalsh@tycho.nsa.gov>
+eXeC001er <execooler@gmail.com>
+Federico Mena Quintero <federico@novell.com>
+Felipe Franciosi <felipe@nutanix.com>
+Felipe Gasper <felipe@felipegasper.com>
+Félix Piédallu <felix@piedallu.me>
+Francesco Turco <fturco fastmail fm>
+Frank Osterfeld <frank@kdab.net>
+Frederic Crozat <fcrozat@mandriva.com>
+Fridrich Štrba <fridrich.strba@bluewin.ch>
+Geoffrey Thomas <gthomas@mokafive.com>
+Grzegorz Dąbrowski <gdx@poczta.fm>
+Harald Fernengel <harry@kdevelop.org>
+Harri Porten <porten@kde.org>
+Hasso Tepper <hasso@estpak.ee>
+Havoc Pennington <hp@pobox.com>
+Havoc Pennington <hp@redhat.com>
+Hendrik Buschmeier <hbuschme@TechFak.Uni-Bielefeld.DE>
+hyeric <eric.hyer@diehl.com>
+ilovezfs <ilovezfs@icloud.com>
+Ioan-Adrian Ratiu <adrian.ratiu@ni.com>
+Ivan Romanov <drizt land ru>
+Jaap Boender <jaapb@kerguelen.org>
+Jacek Bukarewicz <j.bukarewicz@samsung.com>
+Jack Nagel <jacknagel@gmail.com>
+James Carter <jwcart2@tycho.nsa.gov>
+James Westby <jw+debian@jameswestby.net>
+James Willcox <jwillcox@gnome.org>
+Jan Alexander Steffens (heftig) <jan.steffens@gmail.com>
+Jan Tojnar <jtojnar@gmail.com>
+Jean-Louis Fuchs <jean-louis.fuchs@adfinis-sygroup.ch>
+Jens Granseuer <jensgr@gmx.net>
+Jérémie Dimino <jeremie@dimino.org>
+Jesper Dam <jalf@medical-insight.com>
+Jiří Klimeš <jklimes@redhat.com>
+Joe Marcus Clarke <marcus@freedesktop.org>
+Joe Shaw <joeshaw@novell.com>
+Johan Gyllenspetz <johangy@axis.com>
+Johannes Carlsson <johannes.carlsson.x@sonyericsson.com>
+John Bradshaw <john johnbradshaw org>
+John (J5) Palmieri <johnp@redhat.com>
+John Johansen <john.johansen@canonical.com>
+Jonathan Perkin <jonathan perkin org uk>
+Jon Gosting <yukarionsen@gmail.com>
+Jon Trowbridge <trow@ximian.com>
+Julien Schueller <schueller@phimeca.com>
+Justin Lee <justinlee5455@gmail.com>
+Kay Sievers <kay.sievers@vrfy.org>
+Kimmo Hämäläinen <kimmo.hamalainen@nokia.com>
+Kir Kolyshkin <kolyshkin@gmail.com>
+Kjartan Maraas <kmaraas@gnome.org>
+Kristian Høgsberg <krh@redhat.com>
+Kristian Rietveld <kris@gtk.org>
+Krzysztof Konopko <krzysztof.konopko@youview.com>
+Kurt Miller <kurt@intricatesoftware.com>
+Lars Uebernickel <lars@uebernic.de>
+Lars Wendler <polynomial-c@gentoo.org>
+Laurent Bigonville <bigon@bigon.be>
+Lawrence R. Steeger <lsteeger@gmail.com>
+Lennart Poettering <lennart@poettering.net>
+Lennart Poettering <mzqohf@0pointer.de>
+Lionel Landwerlin <lionel.landwerlin@openwide.fr>
+Luiz Augusto Von Dentz <luiz.dentz-von@nokia.com>
+Lukasz Skalski <l.skalski@samsung.com>
+Manish Narang <Manish.Narang@kpit.com>
+Marc-André Lureau <marcandre.lureau@redhat.com>
+Marc Brockschmidt <he@debian.org>
+Marc Mutz <marc@kdab.net>
+Marc Mutz <marc.mutz@kdab.com>
+Marcus Brinkmann <marcus.brinkmann@ruhr-uni-bochum.de>
+Mark Brand <mabrand@mabrand.nl>
+Mark McLoughlin <mark@skynet.ie>
+Martin Pitt <martinpitt@gnome.org>
+Martin Pitt <martin.pitt@ubuntu.com>
+Matt Fischer <matt.fischer@garmin.com>
+Matthias Clasen <mclasen@redhat.com>
+Matthijs van Duin <matthijsvanduin@gmail.com>
+Matt Hoosier <matt.hoosier@garmin.com>
+Matt McCutchen <matt@mattmccutchen.net>
+Michael Meeks <michael.meeks@novell.com>
+Michael Meeks <michael@ximian.com>
+Michael Nosthoff <freedesktop@heine.tech>
+Michal Koutný <mkoutny@suse.com>
+Michel HERMIER <hermier@frugalware.org>
+Mikael Hallendal <micke@codefactory.se>
+Mikael Hallendal <micke@imendio.com>
+Mike Gilbert <floppym@gentoo.org>
+Mike McQuaid <mike@mikemcquaid.com>
+Milan Crha <mcrha redhat com>
+Miloslav Trmac <mitr@volny.cz>
+Murray Cumming <murrayc@murrayc.com>
+Natanael Copa <ncopa@alpinelinux.org>
+Nguyễn Thái Ngọc Duy <pclouds@gmail.com>
+Nick Lewycky <nlewycky@google.com>
+Ole André Vadla Ravnås <ole.andre.ravnas@tandberg.com>
+Olivier Andrieu <oliv__a@users.sourceforge.net>
+osmond sun <osmond.sun@gmail.com>
+Oswald Buddenhagen <ossi@kde.org>
+Owen Fraser-Green <owen@discobabe.net>
+Patrick von Reth <patrick.vonreth@gmail.com>
+Patrick Welche <prlw1@cam.ac.uk>
+Pau Garcia i Quiles <pgquiles@elpauer.org>
+Paul Bolle <pebolle@tiscali.nl>
+Pavel Strashkin <pavel.strashkin@gmail.com>
+Pavel Strashkin <pavel.strashkin@nexenta.com>
+Peter Breitenlohner <peb@mppmu.mpg.de>
+Peter Kümmel <syntheticpp@gmx.net>
+Peter McCurdy <peter.mccurdy@gmail.com>
+Peter McCurdy <pmccurdy@skeptopotamus>
+Philip Blundell <philb@gnu.org>
+Philip Withnall <philip.withnall@collabora.co.uk>
+Philip Withnall <withnall@endlessm.com>
+Pino Toscano <toscano.pino@tiscali.it>
+Plácido Revilla <unknown@unknown.domain>
+Radoslaw Pajak <r.pajak@samsung.com>
+Ralf Habacker <ralf.habacker@freenet.de>
+Ralf Habacker <ralf.habacker@sag.eu>
+Ray Strode <rstrode@redhat.com>
+Richard A. Hankins <richard.a.hankins@gmail.com>
+Richard Hughes <richard@hughsie.com>
+Richard Hult <rhult@codefactory.se>
+Richard Hult <richard@imendio.com>
+Robert Ancell <robert.ancell@canonical.com>
+Robert McQueen <robot101@debian.org>
+Roberto Guido <bob4job@gmail.com>
+Rolland Dudemaine <rolland ghs com>
+Romain Pokrzywka <romain@kdab.com>
+Ross Burton <ross@openedhand.com>
+Ryan Lortie <desrt@desrt.ca>
+Samy Mahmoudi <samy.mahmoudi@gmail.com>
+Sascha Silbe <sascha-pgp@silbe.org>
+Sascha Silbe <sascha-web-bugs.freedesktop.org@silbe.org>
+SCOTT-HAMILTON <sgn.hamilton+github@protonmail.com>
+Scott James Remnant <scott@netsplit.com>
+Scott James Remnant <scott@ubuntu.com>
+Sebastian Rasmussen <sebras@hotmail.com>
+Sebastian Sauer <sebsauer@kdab.net>
+Seth Nickell <seth@gnome.org>
+Shin-ichi MORITA <shin1morita@gmail.com>
+Simon McVittie <simon.mcvittie@collabora.co.uk>
+Simon McVittie <smcv@collabora.com>
+Simon McVittie <smcv@debian.org>
+Simon Peeters <peeters.simon@gmail.com>
+Siraj Razick <siraj.razick@collabora.co.uk>
+Sjoerd Simons <sjoerd@luon.net>
+Sledz <sledz@MOBIL-400-586.intern.dresearch.de>
+Steve Grubb <sgrubb@redhat.com>
+Sven Herzberg <sven@imendio.com>
+Sviatoslav Chagaev <sviatoslav.chagaev@gmail.com>
+Taras Zaporozhets <taras.zaporozhets@ev-box.com>
+Thiago Macieira <thiago@kde.org>
+Thiago Macieira <thiago.macieira@intel.com>
+Thomas Fitzsimmons <fitzsim@cisco.com>
+Thomas Haller <thaller@redhat.com>
+Thomas Kluyver <thomas@kluyver.me.uk>
+Thomas Zajic <zlatko gmx at>
+Thomas Zimmermann <tdz@users.sourceforge.net>
+Tim Dijkstra <tim@famdijkstra.org>
+Tobias Mueller <fdo-bugs@cryptobitch.de>
+Tomas Hoger <thoger@redhat.com>
+Tomas Pelka <tpelka@redhat.com>
+Tom Gundersen <teg@jklm.no>
+Tom Hughes <tom.hughes@palm.com>
+Tony Theodore <tonyt logyst com>
+Topi Miettinen <toiwoton@gmail.com>
+Tor Lillqvist <tml@iki.fi>
+Tuomo Rinne <tuomo.rinne@pm.me>
+Tyler Hicks <tyhicks@canonical.com>
+Umut Tezduyar Lindskog <umut@tezduyar.com>
+Vasiliy Balyasnyy <v.balyasnyy@samsung.com>
+Waldo Bastian <bastian@kde.org>
+WaLyong Cho <walyong.cho@samsung.com>
+William Earley <nitrous@sourt.in>
+William Lachance <wrlach@gmail.com>
+Will Thompson <will.thompson@collabora.co.uk>
+Wolfgang Baron <netz.frei freenet de>
+Wulf C. Krueger <philantrop@exherbo.org>
+Xan Lopez <xan@gnome.org>
+Yaakov Selkowitz <yselkowitz@users.sourceforge.net>
+Yiyang Fei <YiYang.Fei@barco.com>
+Zack Rusin <zack@kde.org>
+Zeeshan Ali <zeenix@gmail.com>
+Zeeshan Ali <zeeshanak@gnome.org>
+Zygmunt Krynicki <me@zygoon.pl>
+Илья А. Ткаченко <ilya.tkachenko@syncopate.ru>
+Роман Донченко <dpb corrigendum ru>
+Руслан Ижбулатов <lrn1986@gmail.com>

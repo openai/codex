@@ -1,0 +1,19 @@
+error[E0277]: `MyError` doesn't implement `std::fmt::Display`
+ --> tests/ui/missing-display.rs:4:10
+  |
+3 | #[derive(Error, Debug)]
+  |          ----- in this derive macro expansion
+4 | pub enum MyError {
+  |          ^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `std::fmt::Display` is not implemented for `MyError`
+ --> tests/ui/missing-display.rs:4:1
+  |
+4 | pub enum MyError {
+  | ^^^^^^^^^^^^^^^^
+note: required by a bound in `std::error::Error`
+ --> $RUST/core/src/error.rs
+  |
+  | pub trait Error: Debug + Display {
+  |                          ^^^^^^^ required by this bound in `Error`
+  = note: this error originates in the derive macro `Error` (in Nightly builds, run with -Z macro-backtrace for more info)

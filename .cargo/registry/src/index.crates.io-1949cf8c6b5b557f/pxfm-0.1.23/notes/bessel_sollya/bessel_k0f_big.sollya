@@ -1,0 +1,20 @@
+pretty = proc(u) {
+  return ~(floor(u*1000)/1000);
+};
+
+bessel_k0_asympt = library("./cmake-build-release/libbessel_sollya.dylib");
+
+prec = 500;
+
+f = bessel_k0_asympt(1/x);
+d = [0.01, 0.02];
+w = 1;
+pf = remez(f, 8, d);
+
+w = 1;
+err_p = -log2(dirtyinfnorm(pf*w-f, d));
+print ("relative error:", pretty(err_p));
+
+for i from 0 to degree(pf) do {
+    print("'", coeff(pf, i), "',");
+};

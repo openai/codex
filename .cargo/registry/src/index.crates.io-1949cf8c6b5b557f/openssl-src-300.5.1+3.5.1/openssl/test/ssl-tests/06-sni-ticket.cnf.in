@@ -1,0 +1,101 @@
+# -*- mode: perl; -*-
+# Copyright 2016-2020 The OpenSSL Project Authors. All Rights Reserved.
+#
+# Licensed under the Apache License 2.0 (the "License").  You may not use
+# this file except in compliance with the License.  You can obtain a copy
+# in the file LICENSE in the source distribution or at
+# https://www.openssl.org/source/license.html
+
+
+## Test SNI/Session tickets
+
+use strict;
+use warnings;
+
+package ssltests;
+
+
+our @tests = ();
+
+#Note: MaxProtocol is set to TLSv1.2 as session tickets work differently in
+#TLSv1.3.
+sub generate_tests() {
+    foreach my $c ("SessionTicket", "-SessionTicket") {
+        foreach my $s1 ("SessionTicket", "-SessionTicket") {
+            foreach my $s2 ("SessionTicket", "-SessionTicket") {
+                foreach my $n ("server1", "server2") {
+                    my $ticket_result = expected_result($c, $s1, $s2, $n);
+                    my $session_id_result = "Yes"; # always, even with a ticket
+                    push @tests, {
+                        "name" => "sni-session-ticket",
+                        "client" => {
+                            "Options" => $c,
+                            "extra" => {
+                                "ServerName" => $n,
+                            },
+                            "MaxProtocol" => "TLSv1.2"
+                        },
+                        "server" => {
+                            "Options" => $s1,
+                            "extra" => {
+                                # We don't test mismatch here.
+                                "ServerNameCallback" => "IgnoreMismatch",
+                            },
+                        },
+                        "server2" => {
+                            "Options" => $s2,
+                        },
+                        "test" => {
+                            "ExpectedServerName" => $n,
+                            "ExpectedResult" => "Success",
+                            "SessionIdExpected" => $session_id_result,
+                            "SessionTicketExpected" => $ticket_result,
+                        }
+                    };
+                }
+            }
+        }
+    }
+}
+
+# If the client has session tickets disabled, then No support
+# If the server initial_ctx has session tickets disabled, then No support
+# If SNI is in use, then if the "switched-to" context has session tickets disabled,
+#    then No support
+sub expected_result {
+    my ($c, $s1, $s2, $n) = @_;
+
+    return "No" if $c eq "-SessionTicket";
+    return "No" if $s1 eq "-SessionTicket";
+    return "No" if ($s2 eq "-SessionTicket" && $n eq "server2");
+
+    return "Yes";
+
+}
+
+# Add a "Broken" case.
+push @tests, {
+    "name" => "sni-session-ticket",
+    "client" => {
+        "MaxProtocol" => "TLSv1.2",
+        "Options" => "SessionTicket",
+        "extra" => {
+            "ServerName" => "server1",
+        }
+    },
+    "server" => {
+        "Options" => "SessionTicket",
+        "extra" => {
+              "BrokenSessionTicket" => "Yes",
+        },
+    },
+    "server2" => {
+        "Options" => "SessionTicket",
+    },
+    "test" => {
+        "ExpectedResult" => "Success",
+        "SessionTicketExpected" => "No",
+    }
+};
+
+generate_tests();

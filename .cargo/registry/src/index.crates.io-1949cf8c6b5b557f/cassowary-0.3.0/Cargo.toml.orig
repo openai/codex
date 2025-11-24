@@ -1,0 +1,18 @@
+[package]
+name = "cassowary"
+version = "0.3.0"
+authors = ["Dylan Ede <dylanede@googlemail.com>"]
+description = """
+A Rust implementation of the Cassowary linear constraint solving algorithm.
+
+The Cassowary algorithm is designed for naturally laying out user interfaces using linear constraints,
+like 'this button must line up with this text box'.
+"""
+documentation = "https://dylanede.github.io/cassowary-rs"
+homepage = "https://github.com/dylanede/cassowary-rs"
+repository = "https://github.com/dylanede/cassowary-rs"
+readme = "README.md"
+license = "MIT / Apache-2.0"
+keywords = ["constraint", "simplex", "user", "interface", "layout"]
+
+[dependencies]

@@ -1,0 +1,149 @@
+=pod
+
+=head1 NAME
+
+DERlib - internal OpenSSL DER library
+
+=head1 DESCRIPTION
+
+OpenSSL contains an internal small DER reading and writing library,
+as an alternative to the publicly known i2d and d2i functions.  It's
+solely constituted of functions that work as building blocks to create
+more similar functions to encode and decode larger structures.
+
+All these functions have similar function signatures (C<something>
+will vary depending on what the function will encode):
+
+    int DER_w_something(WPACKET *pkt, int tag, ...);
+
+=begin comment
+
+When readers are added, add this:
+
+    int DER_r_something(PACKET *pkt, int tag, ...);
+
+=end comment
+
+I<pkt> is the packet context used, and I<tag> should be the
+context-specific tag value of the element being handled, or -1 if there
+is no tag number for that element (you may use the convenience macro
+B<DER_NO_CONTEXT> instead of -1).  Any argument following is the C
+variable that's being encoded or decoded.
+
+=head2 DER writers / encoders
+
+DER writers are based in L<WPACKET(3)>, a generic packet writing
+library, so before using any of them, I<pkt> must be initialized
+using L<WPACKET_init_der(3)> or L<WPACKET_init_null_der(3)>
+
+DER writers must be used in reverse order, except for the wrapping
+functions that implement a constructed element.  The latter are easily
+recognised by their function name including the words C<begin> and
+C<end>.  As an example, we can look at the DSA signature structure,
+which is defined like this in ASN.1 terms:
+
+    -- Copied from RFC 3279, section 2.2.2
+    Dss-Sig-Value  ::=  SEQUENCE  {
+            r       INTEGER,
+            s       INTEGER  }
+
+With the DER library, this is the corresponding code, given two OpenSSL
+B<BIGNUM>s I<r> and I<s>:
+
+    int ok = ossl_DER_w_begin_sequence(pkt, -1)
+          && ossl_DER_w_bn(pkg, -1, s)
+          && ossl_DER_w_bn(pkg, -1, r)
+          && ossl_DER_w_end_sequence(pkt, -1);
+
+As an example of the use of I<tag>, an ASN.1 element like this:
+
+    v [1] INTEGER OPTIONAL
+
+Would be encoded like this:
+
+    ossl_DER_w_bn(pkt, 1, v)
+
+=begin comment
+
+=head2 DER readers / decoders
+
+TBA
+
+=end comment
+
+=head1 EXAMPLES
+
+A more complex example, encoding the AlgorithmIdentifier with
+RSASSA-PSS values.
+
+As a reminder, the AlgorithmIdentifier is specified like this:
+
+    -- From RFC 3280, section 4.1.1.2
+    AlgorithmIdentifier  ::=  SEQUENCE  {
+         algorithm               OBJECT IDENTIFIER,
+         parameters              ANY DEFINED BY algorithm OPTIONAL  }
+
+And the RSASSA-PSS OID and parameters are specified like this:
+
+    -- From RFC 3279, section 3.1
+    id-RSASSA-PSS  OBJECT IDENTIFIER  ::=  { pkcs-1 10 }
+
+    RSASSA-PSS-params  ::=  SEQUENCE  {
+       hashAlgorithm      [0] HashAlgorithm DEFAULT
+                                 sha1Identifier,
+       maskGenAlgorithm   [1] MaskGenAlgorithm DEFAULT
+                                 mgf1SHA1Identifier,
+       saltLength         [2] INTEGER DEFAULT 20,
+       trailerField       [3] INTEGER DEFAULT 1  }
+
+The value we want to encode, written in ASN.1 syntax:
+
+    {
+        algorithm               id-RSASSA-PSS,
+        parameters {
+            hashAlgorithm       sha256Identifier,
+            maskGenAlgorithm    mgf1SHA256Identifier,
+            saltLength          20  -- unnecessarily explicit
+        }
+    }
+
+Assuming that we have precompiled constants for C<id-RSASSA-PSS>,
+C<sha256Identifier> and C<mgf1SHA256Identifier>, the DER writing code
+looks as follows. This is a complete function to write that specific
+value:
+
+    int DER_w_AlgorithmIdentifier_RSASSA_PSS_special(WPACKET *pkt,
+                                                     int tag,
+                                                     RSA *rsa)
+    {
+        return ossl_DER_w_begin_sequence(pkt, tag)
+            && (ossl_DER_w_begin_sequence(pkt, DER_NO_CONTEXT)
+                && ossl_DER_w_uint32(pkt, 2, 20)
+                && ossl_DER_w_precompiled(pkt, 1,
+                                          der_mgf1SHA256Identifier,
+                                          sizeof(der_mgf1SHA256Identifier))
+                && ossl_DER_w_precompiled(pkt, 0,
+                                          der_sha256Identifier,
+                                          sizeof(der_sha256Identifier))
+                && ossl_DER_w_end_sequence(pkt, DER_NO_CONTEXT))
+            && ossl_DER_w_precompiled(pkt, DER_NO_CONTEXT,
+                                      der_id_RSASSA_PSS,
+                                      sizeof(der_id_RSASSA_PSS))
+            && ossl_DER_w_end_sequence(pkt, tag);
+    }
+
+=head1 SEE ALSO
+
+L<ossl_DER_w_bn(3)>, L<ossl_DER_w_begin_sequence(3)>,
+L<ossl_DER_w_precompiled(3)>
+
+=head1 COPYRIGHT
+
+Copyright 2020 The OpenSSL Project Authors. All Rights Reserved.
+
+Licensed under the Apache License 2.0 (the "License").  You may not use
+this file except in compliance with the License.  You can obtain a copy
+in the file LICENSE in the source distribution or at
+L<https://www.openssl.org/source/license.html>.
+
+=cut

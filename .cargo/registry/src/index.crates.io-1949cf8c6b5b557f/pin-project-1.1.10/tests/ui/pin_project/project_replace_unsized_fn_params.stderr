@@ -1,0 +1,112 @@
+error[E0277]: the size for values of type `T` cannot be known at compilation time
+ --> tests/ui/pin_project/project_replace_unsized_fn_params.rs:9:8
+  |
+9 | struct Struct<T: ?Sized> {
+  |        ^^^^^^^-^^^^^^^^^
+  |        |      |
+  |        |      this type parameter needs to be `Sized`
+  |        doesn't have a size known at compile-time
+  |
+note: required because it appears within the type `__StructProjectionOwned<T>`
+ --> tests/ui/pin_project/project_replace_unsized_fn_params.rs:9:8
+  |
+9 | struct Struct<T: ?Sized> {
+  |        ^^^^^^
+  = note: the return type of a function must have a statically known size
+help: consider removing the `?Sized` bound to make the type parameter `Sized`
+  |
+9 - struct Struct<T: ?Sized> {
+9 + struct Struct<T> {
+  |
+
+error[E0277]: the size for values of type `T` cannot be known at compilation time
+  --> tests/ui/pin_project/project_replace_unsized_fn_params.rs:14:8
+   |
+14 | struct TupleStruct<T: ?Sized>(T);
+   |        ^^^^^^^^^^^^-^^^^^^^^^
+   |        |           |
+   |        |           this type parameter needs to be `Sized`
+   |        doesn't have a size known at compile-time
+   |
+note: required because it appears within the type `__TupleStructProjectionOwned<T>`
+  --> tests/ui/pin_project/project_replace_unsized_fn_params.rs:14:8
+   |
+14 | struct TupleStruct<T: ?Sized>(T);
+   |        ^^^^^^^^^^^
+   = note: the return type of a function must have a statically known size
+help: consider removing the `?Sized` bound to make the type parameter `Sized`
+   |
+14 - struct TupleStruct<T: ?Sized>(T);
+14 + struct TupleStruct<T>(T);
+   |
+
+error[E0277]: the size for values of type `T` cannot be known at compilation time
+ --> tests/ui/pin_project/project_replace_unsized_fn_params.rs:8:1
+  |
+8 | #[pin_project(project_replace)] //~ ERROR E0277
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ doesn't have a size known at compile-time
+9 | struct Struct<T: ?Sized> {
+  |               - this type parameter needs to be `Sized`
+  |
+note: required because it appears within the type `Struct<T>`
+ --> tests/ui/pin_project/project_replace_unsized_fn_params.rs:9:8
+  |
+9 | struct Struct<T: ?Sized> {
+  |        ^^^^^^
+note: required by an implicit `Sized` bound in `UnsafeOverwriteGuard`
+ --> src/lib.rs
+  |
+  |     pub struct UnsafeOverwriteGuard<T> {
+  |                                     ^ required by the implicit `Sized` requirement on this type parameter in `UnsafeOverwriteGuard`
+  = note: this error originates in the derive macro `::pin_project::__private::__PinProjectInternalDerive` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider removing the `?Sized` bound to make the type parameter `Sized`
+  |
+9   - struct Struct<T: ?Sized> {
+9   + struct Struct<T> {
+    |
+
+error[E0277]: the size for values of type `T` cannot be known at compilation time
+  --> tests/ui/pin_project/project_replace_unsized_fn_params.rs:10:5
+   |
+8  | #[pin_project(project_replace)] //~ ERROR E0277
+   | ------------------------------- required by a bound introduced by this call
+9  | struct Struct<T: ?Sized> {
+   |               - this type parameter needs to be `Sized`
+10 |     f: T,
+   |     ^ doesn't have a size known at compile-time
+   |
+note: required by an implicit `Sized` bound in `std::ptr::read`
+  --> $RUST/core/src/ptr/mod.rs
+   |
+   | pub const unsafe fn read<T>(src: *const T) -> T {
+   |                          ^ required by the implicit `Sized` requirement on this type parameter in `read`
+help: consider removing the `?Sized` bound to make the type parameter `Sized`
+   |
+9    - struct Struct<T: ?Sized> {
+9    + struct Struct<T> {
+     |
+
+error[E0277]: the size for values of type `T` cannot be known at compilation time
+  --> tests/ui/pin_project/project_replace_unsized_fn_params.rs:13:1
+   |
+13 | #[pin_project(project_replace)] //~ ERROR E0277
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ doesn't have a size known at compile-time
+14 | struct TupleStruct<T: ?Sized>(T);
+   |                    - this type parameter needs to be `Sized`
+   |
+note: required because it appears within the type `TupleStruct<T>`
+  --> tests/ui/pin_project/project_replace_unsized_fn_params.rs:14:8
+   |
+14 | struct TupleStruct<T: ?Sized>(T);
+   |        ^^^^^^^^^^^
+note: required by an implicit `Sized` bound in `UnsafeOverwriteGuard`
+  --> src/lib.rs
+   |
+   |     pub struct UnsafeOverwriteGuard<T> {
+   |                                     ^ required by the implicit `Sized` requirement on this type parameter in `UnsafeOverwriteGuard`
+   = note: this error originates in the derive macro `::pin_project::__private::__PinProjectInternalDerive` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider removing the `?Sized` bound to make the type parameter `Sized`
+   |
+14  - struct TupleStruct<T: ?Sized>(T);
+14  + struct TupleStruct<T>(T);
+    |

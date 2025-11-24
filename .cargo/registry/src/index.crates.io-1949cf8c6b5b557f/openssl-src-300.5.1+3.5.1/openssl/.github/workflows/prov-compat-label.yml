@@ -1,0 +1,272 @@
+# Copyright 2023-2025 The OpenSSL Project Authors. All Rights Reserved.
+#
+# Licensed under the Apache License 2.0 (the "License").  You may not use
+# this file except in compliance with the License.  You can obtain a copy
+# in the file LICENSE in the source distribution or at
+# https://www.openssl.org/source/license.html
+
+# This verifies that FIPS and legacy providers built against some earlier
+# released versions continue to run against the current branch.
+
+name: Provider compatibility for PRs
+
+on: [pull_request]
+
+permissions:
+  contents: read
+
+env:
+  opts: enable-rc5 enable-md2 enable-ssl3 enable-weak-ssl-ciphers enable-zlib
+
+jobs:
+  fips-releases:
+    if: ${{ contains(github.event.pull_request.labels.*.name,'extended tests') }}
+    strategy:
+      matrix:
+        release: [
+          # Formally released versions should be added here.
+          #     `dir' it the directory inside the tarball.
+          #     `tgz' is the name of the tarball.
+          #     `url' is the download URL.
+          {
+            dir: openssl-3.0.0,
+            tgz: openssl-3.0.0.tar.gz,
+            url: "https://www.openssl.org/source/old/3.0/openssl-3.0.0.tar.gz",
+          },
+          {
+            dir: openssl-3.0.8,
+            tgz: openssl-3.0.8.tar.gz,
+            url: "https://www.openssl.org/source/openssl-3.0.8.tar.gz",
+          },
+          {
+            dir: openssl-3.0.9,
+            tgz: openssl-3.0.9.tar.gz,
+            url: "https://www.openssl.org/source/openssl-3.0.9.tar.gz",
+          },
+          {
+            dir: openssl-3.1.2,
+            tgz: openssl-3.1.2.tar.gz,
+            url: "https://www.openssl.org/source/openssl-3.1.2.tar.gz",
+          },
+        ]
+
+    runs-on: ubuntu-latest
+    steps:
+      - name: create download directory
+        run: mkdir downloads
+      - name: download release source
+        run: wget --no-verbose ${{ matrix.release.url }}
+        working-directory: downloads
+      - name: unpack release source
+        run: tar xzf downloads/${{ matrix.release.tgz }}
+
+      - name: localegen
+        run: sudo locale-gen tr_TR.UTF-8
+
+      - name: config release
+        run: |
+          ./config --banner=Configured enable-shared enable-fips ${{ env.opts }}
+        working-directory: ${{ matrix.release.dir }}
+      - name: config dump release
+        run: ./configdata.pm --dump
+        working-directory: ${{ matrix.release.dir }}
+
+      - name: make release
+        run: make -s -j4
+        working-directory: ${{ matrix.release.dir }}
+
+      - name: create release artifacts
+        run: |
+          tar cz -H posix -f ${{ matrix.release.tgz }} ${{ matrix.release.dir }}
+
+      - name: show module versions from release
+        run: |
+          ./util/wrap.pl -fips apps/openssl list -provider-path providers   \
+                                                 -provider base             \
+                                                 -provider default          \
+                                                 -provider fips             \
+                                                 -provider legacy           \
+                                                 -providers
+        working-directory: ${{ matrix.release.dir }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.release.tgz }}
+          path: ${{ matrix.release.tgz }}
+          retention-days: 7
+
+  development-branches:
+    if: ${{ contains(github.event.pull_request.labels.*.name,'extended tests') }}
+    strategy:
+      matrix:
+        branch: [
+          # Currently supported FIPS capable branches should be added here.
+          #     `name' is the branch name used to checkout out.
+          #     `dir' directory that will be used to build and test in.
+          #     `tgz' is the name of the tarball use to keep the artifacts of
+          #         the build.
+          {
+            name: '',
+            dir: PR,
+            tgz: PR.tar.gz,
+          }, {
+            name: openssl-3.0,
+            dir: branch-3.0,
+            tgz: branch-3.0.tar.gz,
+          }, {
+            name: openssl-3.2,
+            dir: branch-3.2,
+            tgz: branch-3.2.tar.gz,
+          }, {
+            name: openssl-3.3,
+            dir: branch-3.3,
+            tgz: branch-3.3.tar.gz,
+          }, {
+            name: openssl-3.4,
+            dir: branch-3.4,
+            tgz: branch-3.4.tar.gz,
+          }, {
+            name: openssl-3.5,
+            dir: branch-3.5,
+            tgz: branch-3.5.tar.gz,
+          }, {
+            name: master,
+            dir: branch-master,
+            tgz: branch-master.tar.gz,
+          },
+        ]
+
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ${{ matrix.branch.dir }}
+          repository: openssl/openssl
+          ref: ${{ matrix.branch.name }}
+      - name: localegen
+        run: sudo locale-gen tr_TR.UTF-8
+
+      - name: config branch
+        run: |
+          ./config --banner=Configured enable-shared enable-fips ${{ env.opts }}
+        working-directory: ${{ matrix.branch.dir }}
+      - name: config dump current
+        run: ./configdata.pm --dump
+        working-directory: ${{ matrix.branch.dir }}
+
+      - name: make branch
+        run: make -s -j4
+        working-directory: ${{ matrix.branch.dir }}
+
+      - name: create branch artifacts
+        run: |
+          tar cz -H posix -f ${{ matrix.branch.tgz }} ${{ matrix.branch.dir }}
+
+      - name: show module versions from branch
+        run: |
+          ./util/wrap.pl -fips apps/openssl list -provider-path providers   \
+                                                 -provider base             \
+                                                 -provider default          \
+                                                 -provider fips             \
+                                                 -provider legacy           \
+                                                 -providers
+        working-directory: ${{ matrix.branch.dir }}
+
+      - name: get cpu info
+        run: |
+          cat /proc/cpuinfo
+          ./util/opensslwrap.sh version -c
+        working-directory: ${{ matrix.branch.dir }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.branch.tgz }}
+          path: ${{ matrix.branch.tgz }}
+          retention-days: 7
+
+  cross-testing:
+    if: ${{ contains(github.event.pull_request.labels.*.name,'extended tests') }}
+    needs: [fips-releases, development-branches]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # These can't be figured out earlier and included here as a variable
+        # substitution.
+        #
+        # Note that releases are not used as a test environment for
+        # later providers.  Problems in these situations ought to be
+        # caught by cross branch testing before the release.
+        tree_a: [ branch-3.5, branch-3.4, branch-3.3, branch-3.2, branch-3.0,
+                  openssl-3.0.0, openssl-3.0.8, openssl-3.0.9, openssl-3.1.2 ]
+        tree_b: [ PR ]
+        include:
+          - tree_a: PR
+            tree_b: branch-master
+          - tree_a: PR
+            tree_b: branch-3.5
+          - tree_a: PR
+            tree_b: branch-3.4
+          - tree_a: PR
+            tree_b: branch-3.3
+          - tree_a: PR
+            tree_b: branch-3.2
+          - tree_a: PR
+            tree_b: branch-3.0
+    steps:
+      - name: early exit checks
+        id: early_exit
+        run: |
+          if [ "${{ matrix.tree_a }}" = "${{ matrix.tree_b }}" ];           \
+          then                                                              \
+            echo "Skipping because both are the same version";              \
+            exit 1;                                                         \
+          fi
+        continue-on-error: true
+
+      - uses: actions/download-artifact@v4.1.8
+        if: steps.early_exit.outcome == 'success'
+        with:
+          name: ${{ matrix.tree_a }}.tar.gz
+      - name: unpack first build
+        if: steps.early_exit.outcome == 'success'
+        run: tar xzf "${{ matrix.tree_a }}.tar.gz"
+
+      - uses: actions/download-artifact@v4.1.8
+        if: steps.early_exit.outcome == 'success'
+        with:
+          name: ${{ matrix.tree_b }}.tar.gz
+      - name: unpack second build
+        if: steps.early_exit.outcome == 'success'
+        run: tar xzf "${{ matrix.tree_b }}.tar.gz"
+
+      - name: set up cross validation of FIPS from A with tree from B
+        if: steps.early_exit.outcome == 'success'
+        run: |
+          cp providers/fips.so ../${{ matrix.tree_b }}/providers/
+          cp providers/fipsmodule.cnf ../${{ matrix.tree_b }}/providers/
+        working-directory: ${{ matrix.tree_a }}
+
+      - name: show module versions from cross validation
+        if: steps.early_exit.outcome == 'success'
+        run: |
+          ./util/wrap.pl -fips apps/openssl list -provider-path providers   \
+                                                 -provider base             \
+                                                 -provider default          \
+                                                 -provider fips             \
+                                                 -provider legacy           \
+                                                 -providers
+        working-directory: ${{ matrix.tree_b }}
+
+      - name: get cpu info
+        if: steps.early_exit.outcome == 'success'
+        run: |
+          cat /proc/cpuinfo
+          ./util/opensslwrap.sh version -c
+        working-directory: ${{ matrix.tree_b }}
+
+      - name: run cross validation tests of FIPS from A with tree from B
+        if: steps.early_exit.outcome == 'success'
+        run: |
+          make test HARNESS_JOBS=${HARNESS_JOBS:-4}
+        working-directory: ${{ matrix.tree_b }}

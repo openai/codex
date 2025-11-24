@@ -1,0 +1,182 @@
+# libcommon.a           Contains common building blocks and other routines,
+#                       potentially needed by any of our providers.
+#
+# libfips.a             Contains all algorithm implementations that should
+#                       go in the FIPS provider.  The compilations for this
+#                       library are all done with FIPS_MODULE defined.
+#
+# liblegacy.a           Contains all algorithm implementations that should
+#                       go into the legacy provider.  The compilations for
+#                       this library are all done with STATIC_LEGACY defined.
+#
+# libdefault.a          Contains all algorithm implementations that should
+#                       into the default or base provider.
+#
+# To be noted is that the FIPS provider shares source code with libcrypto,
+# which means that select source files from crypto/ are compiled for
+# libfips.a the sources from providers/implementations.
+#
+# This is how a provider module should be linked:
+#
+#     -o {modulename}.so {object files...} lib{modulename}.a libcommon.a
+#
+# It is crucial that code that checks the FIPS_MODULE macro ends up in
+# libfips.a.
+# It is crucial that code that checks the STATIC_LEGACY macro ends up in
+# liblegacy.a.
+# It is recommended that code that is written for libcommon.a doesn't end
+# up depending on libfips.a, liblegacy.a or libdefault.a
+#
+# Code in providers/implementations/ should be written in such a way that
+# the OSSL_DISPATCH arrays (and preferably the majority of the actual code)
+# end up in either libfips.a, liblegacy.a or libdefault.a.
+
+SUBDIRS=common implementations
+
+INCLUDE[../libcrypto]=common/include
+
+# Libraries we're dealing with
+$LIBCOMMON=libcommon.a
+$LIBFIPS=libfips.a
+$LIBLEGACY=liblegacy.a
+$LIBDEFAULT=libdefault.a
+LIBS{noinst}=$LIBDEFAULT $LIBCOMMON
+
+# Enough of our implementations include prov/ciphercommon.h (present in
+# providers/implementations/include), which includes crypto/*_platform.h
+# (present in include), which in turn may include very internal header
+# files in crypto/, so let's have a common include list for them all.
+$COMMON_INCLUDES=../crypto ../include implementations/include common/include \
+    fips/include
+
+INCLUDE[$LIBCOMMON]=$COMMON_INCLUDES
+INCLUDE[$LIBFIPS]=.. $COMMON_INCLUDES
+INCLUDE[$LIBLEGACY]=.. $COMMON_INCLUDES
+INCLUDE[$LIBDEFAULT]=.. $COMMON_INCLUDES
+DEFINE[$LIBFIPS]=FIPS_MODULE
+
+# Weak dependencies to provide library order information.  What is actually
+# used is determined by non-weak dependencies.
+DEPEND[$LIBCOMMON]{weak}=../libcrypto
+
+# Strong dependencies.  This ensures that any time an implementation library
+# is used, libcommon gets included as well.
+# The $LIBFIPS dependency on $LIBCOMMON is extra strong, to mitigate for
+# linking problems because they are interdependent
+SOURCE[$LIBFIPS]=$LIBCOMMON
+DEPEND[$LIBLEGACY]=$LIBCOMMON
+DEPEND[$LIBDEFAULT]=$LIBCOMMON
+
+#
+# Default provider stuff
+#
+# Because the default provider is built in, it means that libcrypto must
+# include all the object files that are needed (we do that indirectly,
+# by using the appropriate libraries as source).  Note that for shared
+# libraries, SOURCEd libraries are considered as if they were specified
+# with DEPEND.
+$DEFAULTGOAL=../libcrypto
+SOURCE[$DEFAULTGOAL]=$LIBDEFAULT defltprov.c
+INCLUDE[$DEFAULTGOAL]=implementations/include
+
+#
+# Base provider stuff
+#
+# Because the base provider is built in, it means that libcrypto must
+# include all of the object files that are needed, just like the default
+# provider.
+$BASEGOAL=../libcrypto
+SOURCE[$BASEGOAL]=$LIBDEFAULT baseprov.c
+INCLUDE[$BASEGOAL]=implementations/include
+
+#
+# FIPS provider stuff
+#
+# We define it this way to ensure that configdata.pm will have all the
+# necessary information even if we don't build the module.  This will allow
+# us to make all kinds of checks on the source, based on what we specify in
+# diverse build.info files.  libfips.a, fips.so and their sources aren't
+# built unless the proper LIBS or MODULES statement has been seen, so we
+# have those and only those within a condition.
+IF[{- !$disabled{fips} -}]
+  SUBDIRS=fips
+  $FIPSGOAL=fips
+
+  # This is the trigger to actually build the FIPS module.  Without these
+  # statements, the final build file will not have a trace of it.
+  MODULES{fips}=$FIPSGOAL
+  LIBS{noinst}=$LIBFIPS
+
+  DEPEND[$FIPSGOAL]=$LIBFIPS
+  INCLUDE[$FIPSGOAL]=../include
+  DEFINE[$FIPSGOAL]=FIPS_MODULE
+  IF[{- defined $target{shared_defflag} -}]
+    SOURCE[$FIPSGOAL]=fips.ld
+    GENERATE[fips.ld]=../util/providers.num
+  ENDIF
+
+  DEPEND[|build_modules_nodep|]=fipsmodule.cnf
+  GENERATE[fipsmodule.cnf]=../util/mk-fipsmodule-cnf.pl \
+          -module $(FIPSMODULE) -section_name fips_sect -key $(FIPSKEY)
+  DEPEND[fipsmodule.cnf]=$FIPSGOAL
+
+  # Add VERSIONINFO resource for windows
+  IF[{- $config{target} =~ /^(?:Cygwin|mingw|VC-|BC-)/ -}]
+    GENERATE[fips.rc]=../util/mkrc.pl fips
+    SOURCE[$FIPSGOAL]=fips.rc
+  ENDIF
+ENDIF
+
+#
+# Legacy provider stuff
+#
+IF[{- !$disabled{legacy} -}]
+  LIBS{noinst}=$LIBLEGACY
+
+  IF[{- $disabled{module} -}]
+    # Become built in
+    # In this case, we need to do the same thing a for the default provider,
+    # and make the liblegacy object files end up in libcrypto.  We could also
+    # just say that for the built-in legacy, we put the source directly in
+    # libcrypto instead of going via liblegacy, but that makes writing the
+    # implementation specific build.info files harder to write, so we don't.
+    $LEGACYGOAL=../libcrypto
+    SOURCE[$LEGACYGOAL]=$LIBLEGACY
+    DEFINE[$LEGACYGOAL]=STATIC_LEGACY
+  ELSE
+    # Become a module
+    # In this case, we can work with dependencies
+    $LEGACYGOAL=legacy
+    MODULES=$LEGACYGOAL
+    DEPEND[$LEGACYGOAL]=$LIBLEGACY ../libcrypto
+    IF[{- defined $target{shared_defflag} -}]
+      SOURCE[legacy]=legacy.ld
+      GENERATE[legacy.ld]=../util/providers.num
+    ENDIF
+
+    # Add VERSIONINFO resource for windows
+    IF[{- $config{target} =~ /^(?:Cygwin|mingw|VC-|BC-)/ -}]
+      GENERATE[legacy.rc]=../util/mkrc.pl legacy
+      SOURCE[$LEGACYGOAL]=legacy.rc
+    ENDIF
+
+    SOURCE[$LIBLEGACY]=prov_running.c
+  ENDIF
+
+  # Common things that are valid no matter what form the Legacy provider
+  # takes.
+  SOURCE[$LEGACYGOAL]=legacyprov.c
+  INCLUDE[$LEGACYGOAL]=../include implementations/include common/include
+ENDIF
+
+#
+# Null provider stuff
+#
+# Because the null provider is built in, it means that libcrypto must
+# include all the object files that are needed.
+$NULLGOAL=../libcrypto
+SOURCE[$NULLGOAL]=nullprov.c prov_running.c
+
+# template library, not used anywhere. It's merely here to ensure that the object files build
+LIBS{noinst}=libtemplate.a
+INCLUDE[libtemplate.a]=$COMMON_INCLUDES

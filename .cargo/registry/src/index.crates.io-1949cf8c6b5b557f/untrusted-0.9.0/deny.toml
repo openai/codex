@@ -1,0 +1,20 @@
+[advisories]
+unmaintained = "deny"
+yanked = "deny"
+notice = "deny"
+
+[licenses]
+allow = [
+    "ISC",
+]
+confidence-threshold = 1.0
+
+[bans]
+# We don't maintain a fixed Cargo.lock so enforcing
+# `multiple-versions = "deny"` is impractical.
+multiple-versions = "allow"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

@@ -1,0 +1,17 @@
+error: aligned repr on struct that implements RefCast is not supported
+ --> tests/ui/repr-align.rs:4:8
+  |
+4 | #[repr(align(2), C, align = "2")]
+  |        ^^^^^^^^
+
+error: aligned repr on struct that implements RefCast is not supported
+ --> tests/ui/repr-align.rs:4:21
+  |
+4 | #[repr(align(2), C, align = "2")]
+  |                     ^^^^^^^^^^^
+
+error[E0693]: incorrect `repr(align)` attribute format
+ --> tests/ui/repr-align.rs:4:21
+  |
+4 | #[repr(align(2), C, align = "2")]
+  |                     ^^^^^^^^^^^ help: use parentheses instead: `align(2)`

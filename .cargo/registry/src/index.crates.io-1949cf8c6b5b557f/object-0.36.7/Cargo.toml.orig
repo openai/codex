@@ -1,0 +1,120 @@
+[package]
+name = "object"
+version = "0.36.7"
+edition = "2018"
+keywords = ["object", "elf", "mach-o", "pe", "coff"]
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/gimli-rs/object"
+# NB: if this number increases to 1.81-or-later delete the `build.rs` script
+# as it's no longer necessary.
+rust-version = "1.65"
+description = "A unified interface for reading and writing object file formats."
+include = [
+  "/build.rs",
+  "/Cargo.toml",
+  "/CHANGELOG.md",
+  "/README.md",
+  "/LICENSE-APACHE",
+  "/LICENSE-MIT",
+  "/src",
+  "/tests",
+]
+
+[package.metadata.docs.rs]
+features = ['doc']
+
+[dependencies]
+crc32fast = { version = "1.2", default-features = false, optional = true }
+flate2 = { version = "1", optional = true }
+indexmap = { version = "2.0", default-features = false, optional = true }
+wasmparser = { version = "0.222.0", default-features = false, optional = true }
+memchr = { version = "2.4.1", default-features = false }
+hashbrown = { version = "0.15.0", features = ["default-hasher"], default-features = false, optional = true }
+ruzstd = { version = "0.7.0", optional = true }
+
+# Internal feature, only used when building as part of libstd, not part of the
+# stable interface of this crate.
+core = { version = '1.0.0', optional = true, package = 'rustc-std-workspace-core' }
+compiler_builtins = { version = '0.1.2', optional = true }
+alloc = { version = '1.0.0', optional = true, package = 'rustc-std-workspace-alloc' }
+
+[features]
+#=======================================
+# Read/write features.
+
+# Core read support. You will need to enable some file formats too.
+read_core = []
+# Read support for most file formats (including unaligned files).
+read = ["read_core", "archive", "coff", "elf", "macho", "pe", "xcoff", "unaligned"]
+# Core write support. You will need to enable some file formats too.
+write_core = ["dep:crc32fast", "dep:indexmap", "dep:hashbrown"]
+# Core write support with libstd features. You will need to enable some file formats too.
+write_std = ["write_core", "std", "indexmap?/std", "crc32fast?/std"]
+# Write support for all file formats, including libstd features.
+write = ["write_std", "coff", "elf", "macho", "pe", "xcoff"]
+# Core builder support. You will need to enable some file formats too.
+build_core = ["read_core", "write_core"]
+# Builder support for all file formats.
+build = ["build_core", "write_std", "elf"]
+
+#=======================================
+# Misc features.
+
+# Enable things that require libstd.
+# Currently, this provides an `Error` implementation.
+std = ["memchr/std"]
+# Enable decompression of compressed sections.
+# This feature is not required if you want to do your own decompression.
+compression = ["dep:flate2", "dep:ruzstd", "std"]
+# Treat all types as unaligned.
+# Normally types use the alignment required by the specifications, but
+# sometimes files do not strictly follow the specifications.
+# This may be useful to enable when processing files for architectures
+# that have no alignment constraints.
+unaligned = []
+
+#=======================================
+# File format features.
+archive = []
+coff = []
+elf = []
+macho = []
+pe = ["coff"]
+wasm = ["dep:wasmparser"]
+xcoff = []
+
+#=======================================
+# By default, support all read features.
+default = ["read", "compression"]
+
+#=======================================
+# Umbrella feature for enabling all user-facing features of this crate. Does not
+# enable internal features like `rustc-dep-of-std`.
+all = ["read", "write", "build", "std", "compression", "wasm"]
+
+# Use of --all-features is not supported.
+# This is a dummy feature to detect when --all-features is used.
+cargo-all = []
+
+#=======================================
+# Documentation should be generated with everything in "all" except for "unaligned".
+doc = [
+  "read_core", "write_std", "build_core",
+  "std", "compression",
+  "archive", "coff", "elf", "macho", "pe", "wasm", "xcoff",
+]
+
+#=======================================
+# Unstable features. Breaking changes in these features will not affect versioning.
+unstable = []
+unstable-all = ["all", "unstable"]
+
+#=======================================
+# Internal feature, only used when building as part of libstd, not part of the
+# stable interface of this crate.
+rustc-dep-of-std = ['core', 'compiler_builtins', 'alloc', 'memchr/rustc-dep-of-std']
+
+[workspace]
+members = ["crates/*"]
+default-members = [".", "crates/examples"]
+resolver = "2"

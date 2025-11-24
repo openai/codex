@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MyStruct",
+  "type": "object",
+  "properties": {
+    "myBool": {
+      "type": "boolean"
+    },
+    "myNullableEnum": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MyEnum"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "myNumber": {
+      "type": "integer",
+      "maximum": 10,
+      "minimum": 1
+    },
+    "myVecStr": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^x$"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "myNumber",
+    "myBool",
+    "myVecStr"
+  ],
+  "x-customProperty": "example",
+  "$defs": {
+    "MyEnum": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "email"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "floats": {
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "float"
+              },
+              "maxItems": 100,
+              "minItems": 1
+            }
+          },
+          "required": [
+            "floats"
+          ]
+        }
+      ]
+    }
+  }
+}

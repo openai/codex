@@ -1,0 +1,44 @@
+[package]
+name = "ignore"
+version = "0.4.23"  #:version
+authors = ["Andrew Gallant <jamslam@gmail.com>"]
+description = """
+A fast library for efficiently matching ignore files such as `.gitignore`
+against file paths.
+"""
+documentation = "https://docs.rs/ignore"
+homepage = "https://github.com/BurntSushi/ripgrep/tree/master/crates/ignore"
+repository = "https://github.com/BurntSushi/ripgrep/tree/master/crates/ignore"
+readme = "README.md"
+keywords = ["glob", "ignore", "gitignore", "pattern", "file"]
+license = "Unlicense OR MIT"
+edition = "2021"
+
+[lib]
+name = "ignore"
+bench = false
+
+[dependencies]
+crossbeam-deque = "0.8.3"
+globset = { version = "0.4.15", path = "../globset" }
+log = "0.4.20"
+memchr = "2.6.3"
+same-file = "1.0.6"
+walkdir = "2.4.0"
+
+[dependencies.regex-automata]
+version = "0.4.0"
+default-features = false
+features = ["std", "perf", "syntax", "meta", "nfa", "hybrid", "dfa-onepass"]
+
+[target.'cfg(windows)'.dependencies.winapi-util]
+version = "0.1.2"
+
+[dev-dependencies]
+bstr = { version = "1.6.2", default-features = false, features = ["std"] }
+crossbeam-channel = "0.5.8"
+
+[features]
+# DEPRECATED. It is a no-op. SIMD is done automatically through runtime
+# dispatch.
+simd-accel = []

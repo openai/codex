@@ -1,0 +1,4 @@
+# This is a placeholder in the interest of keeping the repository size smaller.
+# Replace this file with the contents of
+# https://www.unicode.org/Public/UCD/latest/ucd/NormalizationTest.txt to actually
+# run the conformance test.

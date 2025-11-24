@@ -1,0 +1,62 @@
+# -*- mode: perl; -*-
+# Copyright 2017-2020 The OpenSSL Project Authors. All Rights Reserved.
+#
+# Licensed under the Apache License 2.0 (the "License").  You may not use
+# this file except in compliance with the License.  You can obtain a copy
+# in the file LICENSE in the source distribution or at
+# https://www.openssl.org/source/license.html
+
+
+## Test KeyUpdate
+
+use strict;
+use warnings;
+
+package ssltests;
+
+our @tests = (
+    {
+        name => "update-key-client-update-not-requested",
+        server => {},
+        client => {},
+        test => {
+            "HandshakeMode" => "KeyUpdateClient",
+            "KeyUpdateType" => "KeyUpdateNotRequested",
+            "ResumptionExpected" => "No",
+            "ExpectedResult" => "Success"
+        }
+    },
+    {
+        name => "update-key-server-update-not-requested",
+        server => {},
+        client => {},
+        test => {
+            "HandshakeMode" => "KeyUpdateServer",
+            "KeyUpdateType" => "KeyUpdateNotRequested",
+            "ResumptionExpected" => "No",
+            "ExpectedResult" => "Success"
+        }
+    },
+    {
+        name => "update-key-client-update-requested",
+        server => {},
+        client => {},
+        test => {
+            "HandshakeMode" => "KeyUpdateClient",
+            "KeyUpdateType" => "KeyUpdateRequested",
+            "ResumptionExpected" => "No",
+            "ExpectedResult" => "Success"
+        }
+    },
+    {
+        name => "update-key-server-update-requested",
+        server => {},
+        client => {},
+        test => {
+            "HandshakeMode" => "KeyUpdateServer",
+            "KeyUpdateType" => "KeyUpdateRequested",
+            "ResumptionExpected" => "No",
+            "ExpectedResult" => "Success"
+        }
+    }
+);

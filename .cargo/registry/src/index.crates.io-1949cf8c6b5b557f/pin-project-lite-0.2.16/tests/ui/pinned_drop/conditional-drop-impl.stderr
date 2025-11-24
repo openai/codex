@@ -1,0 +1,34 @@
+error[E0367]: `Drop` impl requires `T: Unpin` but the struct it is implemented for does not
+  --> tests/ui/pinned_drop/conditional-drop-impl.rs:11:9
+   |
+11 | impl<T: Unpin> Drop for DropImpl<T> {
+   |         ^^^^^
+   |
+note: the implementor must specify the same requirement
+  --> tests/ui/pinned_drop/conditional-drop-impl.rs:7:1
+   |
+7  | struct DropImpl<T> {
+   | ^^^^^^^^^^^^^^^^^^
+
+error[E0367]: `Drop` impl requires `T: Unpin` but the struct it is implemented for does not
+  --> tests/ui/pinned_drop/conditional-drop-impl.rs:16:1
+   |
+16 | / pin_project! {
+17 | |     //~^ ERROR E0367
+18 | |     struct PinnedDropImpl<T> {
+19 | |         #[pin]
+...  |
+26 | | }
+   | |_^
+   |
+note: the implementor must specify the same requirement
+  --> tests/ui/pinned_drop/conditional-drop-impl.rs:16:1
+   |
+16 | / pin_project! {
+17 | |     //~^ ERROR E0367
+18 | |     struct PinnedDropImpl<T> {
+19 | |         #[pin]
+...  |
+26 | | }
+   | |_^
+   = note: this error originates in the macro `$crate::__pin_project_make_drop_impl` which comes from the expansion of the macro `pin_project` (in Nightly builds, run with -Z macro-backtrace for more info)

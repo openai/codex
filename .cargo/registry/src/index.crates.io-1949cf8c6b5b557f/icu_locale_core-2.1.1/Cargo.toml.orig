@@ -1,0 +1,55 @@
+# This file is part of ICU4X. For terms of use, please see the file
+# called LICENSE at the top level of the ICU4X source tree
+# (online at: https://github.com/unicode-org/icu4x/blob/main/LICENSE ).
+
+[package]
+name = "icu_locale_core"
+description = "API for managing Unicode Language and Locale Identifiers"
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+homepage.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+displaydoc = { workspace = true }
+litemap = { workspace = true }
+tinystr = { workspace = true }
+writeable = { workspace = true }
+
+databake = { workspace = true, features = ["derive"], optional = true }
+serde = { workspace = true, optional = true }
+zerovec = { workspace = true, optional = true }
+
+[features]
+databake = ["dep:databake", "alloc"]
+serde = ["dep:serde", "tinystr/serde"]
+zerovec = ["dep:zerovec", "tinystr/zerovec"]
+alloc = ["litemap/alloc", "tinystr/alloc", "writeable/alloc", "serde?/alloc"]
+
+[lib]
+bench = false # This option is required for Benchmark CI
+
+[[bench]]
+name = "subtags"
+harness = false
+
+[[bench]]
+name = "langid"
+harness = false
+
+[[bench]]
+name = "locale"
+harness = false
+
+[[bench]]
+name = "iai_langid"
+harness = false

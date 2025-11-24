@@ -1,0 +1,39 @@
+[package]
+name = "sse-stream"
+version = "0.2.1"
+edition = "2021"
+authors = ["4t145 <u4t145@163.com>"]
+license = "MIT/Apache-2.0"
+readme = "README.md"
+categories = ["network-programming", "asynchronous"]
+keywords = ["sse", "http", "http-client"]
+repository = "https://github.com/4t145/sse-stream/"
+description = "Conversion between http body and sse stream"
+documentation = "https://docs.rs/sse-stream/sse-stream"
+
+[dependencies]
+bytes = "1"
+futures-util = { version = "0.3" }
+http-body = "1"
+http-body-util = "0.1"
+pin-project-lite = "0.2"
+tracing = { version = "0.1", optional = true }
+
+[dev-dependencies]
+tokio-util = { version = "0.7", features = ["io"] }
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["stream"] }
+anyhow = "1"
+tracing-subscriber = { version = "0.3", features = [
+  "env-filter",
+  "std",
+  "fmt",
+] }
+serde = { version = "1", features = ["derive"] }
+axum = { version = "0.8", features = ["tracing"] }
+tracing = { version = "0.1" }
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+[features]
+default = []
+tracing = ["dep:tracing"]

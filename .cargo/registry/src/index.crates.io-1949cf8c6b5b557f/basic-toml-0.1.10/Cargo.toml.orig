@@ -1,0 +1,29 @@
+[package]
+name = "basic-toml"
+version = "0.1.10"
+authors = ["Alex Crichton <alex@alexcrichton.com>", "David Tolnay <dtolnay@gmail.com>"]
+categories = ["config", "encoding", "parser-implementations"]
+description = "Minimal TOML library with few dependencies"
+documentation = "https://docs.rs/basic-toml"
+edition = "2021"
+keywords = ["toml", "serde"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/dtolnay/basic-toml"
+
+[dependencies]
+serde = "1.0.194"
+
+[dev-dependencies]
+semver = { version = "1.0.17", features = ["serde"] }
+serde = { version = "1.0.194", features = ["derive"] }
+serde_derive = "1.0.194"
+serde_json = "1.0.99"
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = [
+    "--generate-link-to-definition",
+    "--extern-html-root-url=core=https://doc.rust-lang.org",
+    "--extern-html-root-url=alloc=https://doc.rust-lang.org",
+    "--extern-html-root-url=std=https://doc.rust-lang.org",
+]

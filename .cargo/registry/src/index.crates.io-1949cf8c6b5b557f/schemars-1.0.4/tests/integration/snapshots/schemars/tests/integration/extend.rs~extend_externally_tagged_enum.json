@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ExternalEnum",
+  "oneOf": [
+    {
+      "type": "string",
+      "const": "Unit",
+      "foo": "bar"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "NewType": true
+      },
+      "required": [
+        "NewType"
+      ],
+      "additionalProperties": false,
+      "foo": "bar"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "Tuple": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "integer",
+              "format": "int32"
+            },
+            {
+              "type": "boolean"
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        }
+      },
+      "required": [
+        "Tuple"
+      ],
+      "additionalProperties": false,
+      "foo": "bar"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "Struct": {
+          "type": "object",
+          "properties": {
+            "i": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "b": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "i",
+            "b"
+          ]
+        }
+      },
+      "required": [
+        "Struct"
+      ],
+      "additionalProperties": false,
+      "foo": "bar"
+    }
+  ],
+  "foo": "bar"
+}

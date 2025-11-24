@@ -1,0 +1,23 @@
+environment:
+  matrix:
+  - TOOLCHAIN: stable
+  - TOOLCHAIN: nightly
+
+matrix:
+  allow_failures:
+    - TOOLCHAIN: nightly
+
+install:
+  - ps: Start-FileDownload 'https://static.rust-lang.org/rustup/dist/i686-pc-windows-gnu/rustup-init.exe'
+  - rustup-init.exe -y --default-toolchain %TOOLCHAIN%
+  - set PATH=%PATH%;%USERPROFILE%\.cargo\bin
+
+build_script:
+  - cargo build --verbose --all-features
+
+test_script:
+  - cargo test --verbose --all-features
+
+cache:
+  - '%USERPROFILE%\.cargo'
+  - target

@@ -1,0 +1,14 @@
+error[E0308]: mismatched types
+  --> src/format.rs:51:6
+   |
+51 |   ) -> Option<String> {
+   |        -------------- expected `std::option::Option<std::string::String>` because of return type
+52 | /     for ann in annotations {
+53 | |         match (ann.range.0, ann.range.1) {
+54 | |             (None, None) => continue,
+55 | |             (Some(start), Some(end)) if start > end_index || end < start_index => continue,
+...  |
+71 | |         }
+72 | |     }
+   | |_____^ expected enum `std::option::Option`, found ()
+   |

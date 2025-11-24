@@ -1,0 +1,865 @@
+=pod
+{- OpenSSL::safe::output_do_not_edit_headers(); -}
+
+=head1 NAME
+
+openssl-req - PKCS#10 certificate request and certificate generating command
+
+=head1 SYNOPSIS
+
+B<openssl> B<req>
+[B<-help>]
+[B<-cipher>]
+[B<-inform> B<DER>|B<PEM>]
+[B<-outform> B<DER>|B<PEM>]
+[B<-in> I<filename>]
+[B<-passin> I<arg>]
+[B<-out> I<filename>]
+[B<-passout> I<arg>]
+[B<-text>]
+[B<-pubkey>]
+[B<-noout>]
+[B<-verify>]
+[B<-modulus>]
+[B<-new>]
+[B<-newkey> I<arg>]
+[B<-pkeyopt> I<opt>:I<value>]
+[B<-noenc>]
+[B<-nodes>]
+[B<-key> I<filename>|I<uri>]
+[B<-keyform> B<DER>|B<PEM>|B<P12>|B<ENGINE>]
+[B<-keyout> I<filename>]
+[B<-keygen_engine> I<id>]
+[B<-I<digest>>]
+[B<-config> I<filename>]
+[B<-section> I<name>]
+[B<-x509>]
+[B<-x509v1>]
+[B<-CA> I<filename>|I<uri>]
+[B<-CAkey> I<filename>|I<uri>]
+[B<-not_before> I<date>]
+[B<-not_after> I<date>]
+[B<-days> I<n>]
+[B<-set_serial> I<n>]
+[B<-newhdr>]
+[B<-copy_extensions> I<arg>]
+[B<-extensions> I<section>]
+[B<-reqexts> I<section>]
+[B<-addext> I<ext>]
+[B<-precert>]
+[B<-utf8>]
+[B<-reqopt>]
+[B<-subject>]
+[B<-subj> I<arg>]
+[B<-multivalue-rdn>]
+[B<-sigopt> I<nm>:I<v>]
+[B<-vfyopt> I<nm>:I<v>]
+[B<-batch>]
+[B<-verbose>]
+[B<-quiet>]
+{- $OpenSSL::safe::opt_name_synopsis -}
+{- $OpenSSL::safe::opt_r_synopsis -}
+{- $OpenSSL::safe::opt_engine_synopsis -}{- $OpenSSL::safe::opt_provider_synopsis -}
+
+=head1 DESCRIPTION
+
+This command primarily creates and processes certificate requests (CSRs)
+in PKCS#10 format. It can additionally create self-signed certificates
+for use as root CAs for example.
+
+=head1 OPTIONS
+
+=over 4
+
+=item B<-help>
+
+Print out a usage message.
+
+=item B<-inform> B<DER>|B<PEM>
+
+The CSR input file format to use; by default PEM is tried first.
+See L<openssl-format-options(1)> for details.
+
+=item B<-outform> B<DER>|B<PEM>
+
+The output format; unspecified by default.
+See L<openssl-format-options(1)> for details.
+
+The data is a PKCS#10 object.
+
+=item B<-cipher> I<name>
+
+Specify the cipher to be used for encrypting the private key.
+If no cipher is specified, AES-256-CBC will be used by default.
+You can override this by providing any valid OpenSSL cipher name.
+
+=item B<-in> I<filename>
+
+This specifies the input filename to read a request from.
+This defaults to standard input unless B<-x509> or B<-CA> is specified.
+A request is only read if the creation options
+(B<-new> or B<-newkey> or B<-precert>) are not specified.
+
+=item B<-sigopt> I<nm>:I<v>
+
+Pass options to the signature algorithm during sign operations.
+Names and values of these options are algorithm-specific.
+
+=item B<-vfyopt> I<nm>:I<v>
+
+Pass options to the signature algorithm during verify operations.
+Names and values of these options are algorithm-specific.
+
+=begin comment
+
+Maybe it would be preferable to only have -opts instead of -sigopt and
+-vfyopt?  They are both present here to be compatible with L<openssl-ca(1)>,
+which supports both options for good reasons.
+
+=end comment
+
+=item B<-passin> I<arg>
+
+The password source for private key and certificate input.
+For more information about the format of B<arg>
+see L<openssl-passphrase-options(1)>.
+
+=item B<-passout> I<arg>
+
+The password source for the output file.
+For more information about the format of B<arg>
+see L<openssl-passphrase-options(1)>.
+
+=item B<-out> I<filename>
+
+This specifies the output filename to write to or standard output by default.
+
+=item B<-text>
+
+Prints out the certificate request in text form.
+
+=item B<-subject>
+
+Prints out the certificate request subject
+(or certificate subject if B<-x509> is in use).
+
+=item B<-pubkey>
+
+Prints out the public key.
+
+=item B<-noout>
+
+This option prevents output of the encoded version of the certificate request.
+
+=item B<-modulus>
+
+Prints out the value of the modulus of the public key contained in the request.
+
+=item B<-verify>
+
+Verifies the self-signature on the request. If the verification fails,
+the program will immediately exit, i.e. further option processing
+(e.g. B<-text>) is skipped.
+
+=item B<-new>
+
+This option generates a new certificate request. It will prompt
+the user for the relevant field values. The actual fields
+prompted for and their maximum and minimum sizes are specified
+in the configuration file and any requested extensions.
+
+If the B<-key> option is not given it will generate a new private key
+using information specified in the configuration file or given with
+the B<-newkey> and B<-pkeyopt> options,
+else by default an RSA key with 2048 bits length.
+
+=item B<-newkey> I<arg>
+
+This option is used to generate a new private key unless B<-key> is given.
+It is subsequently used as if it was given using the B<-key> option.
+
+This option implies the B<-new> flag to create a new certificate request
+or a new certificate in case B<-x509> is used.
+
+The argument takes one of several forms.
+
+[B<rsa:>]I<nbits> generates an RSA key I<nbits> in size.
+If I<nbits> is omitted, i.e., B<-newkey> B<rsa> is specified,
+the default key size specified in the configuration file
+with the B<default_bits> option is used if present, else 2048.
+
+All other algorithms support the B<-newkey> I<algname>:I<file> form, where
+I<file> is an algorithm parameter file, created with C<openssl genpkey -genparam>
+or an X.509 certificate for a key with appropriate algorithm.
+
+B<param:>I<file> generates a key using the parameter file or certificate
+I<file>, the algorithm is determined by the parameters.
+
+I<algname>[:I<file>] generates a key using the given algorithm I<algname>.
+If a parameter file I<file> is given then the parameters specified there
+are used, where the algorithm parameters must match I<algname>.
+If algorithm parameters are not given,
+any necessary parameters should be specified via the B<-pkeyopt> option.
+
+B<dsa:>I<filename> generates a DSA key using the parameters
+in the file I<filename>. B<ec:>I<filename> generates EC key (usable both with
+ECDSA or ECDH algorithms), B<gost2001:>I<filename> generates GOST R
+34.10-2001 key (requires B<gost> engine configured in the configuration
+file). If just B<gost2001> is specified a parameter set should be
+specified by B<-pkeyopt> I<paramset:X>
+
+=item B<-pkeyopt> I<opt>:I<value>
+
+Set the public key algorithm option I<opt> to I<value>. The precise set of
+options supported depends on the public key algorithm used and its
+implementation.
+See L<openssl-genpkey(1)/KEY GENERATION OPTIONS> for more details.
+
+=item B<-key> I<filename>|I<uri>
+
+This option provides the private key for signing a new certificate or
+certificate request.
+Unless B<-in> is given, the corresponding public key is placed in
+the new certificate or certificate request, resulting in a self-signature.
+
+For certificate signing this option is overridden by the B<-CA> option.
+
+This option also accepts PKCS#8 format private keys for PEM format files.
+
+=item B<-keyform> B<DER>|B<PEM>|B<P12>|B<ENGINE>
+
+The format of the private key; unspecified by default.
+See L<openssl-format-options(1)> for details.
+
+=item B<-keyout> I<filename>
+
+This gives the filename to write any private key to that has been newly created
+or read from B<-key>.  If neither the B<-keyout> option nor the B<-key> option
+are given then the filename specified in the configuration file with the
+B<default_keyfile> option is used, if present.  Thus, if you want to write the
+private key and the B<-key> option is provided, you should provide the
+B<-keyout> option explicitly.  If a new key is generated and no filename is
+specified the key is written to standard output.
+
+=item B<-noenc>
+
+If this option is specified then if a private key is created it
+will not be encrypted.
+
+=item B<-nodes>
+
+This option is deprecated since OpenSSL 3.0; use B<-noenc> instead.
+
+=item B<-I<digest>>
+
+This specifies the message digest to sign the request.
+Any digest supported by the OpenSSL B<dgst> command can be used.
+This overrides the digest algorithm specified in
+the configuration file.
+
+Some public key algorithms may override this choice. For instance, DSA
+signatures always use SHA1, GOST R 34.10 signatures always use
+GOST R 34.11-94 (B<-md_gost94>), Ed25519 and Ed448 never use any digest.
+
+=item B<-config> I<filename>
+
+This allows an alternative configuration file to be specified.
+Optional; for a description of the default value,
+see L<openssl(1)/COMMAND SUMMARY>.
+
+=item B<-section> I<name>
+
+Specifies the name of the section to use; the default is B<req>.
+
+=item B<-subj> I<arg>
+
+Sets subject name for new request or supersedes the subject name
+when processing a certificate request.
+
+The arg must be formatted as C</type0=value0/type1=value1/type2=...>.
+Special characters may be escaped by C<\> (backslash), whitespace is retained.
+Empty values are permitted, but the corresponding type will not be included
+in the request.
+Giving a single C</> will lead to an empty sequence of RDNs (a NULL-DN).
+Multi-valued RDNs can be formed by placing a C<+> character instead of a C</>
+between the AttributeValueAssertions (AVAs) that specify the members of the set.
+Example:
+
+C</DC=org/DC=OpenSSL/DC=users/UID=123456+CN=John Doe>
+
+=item B<-multivalue-rdn>
+
+This option has been deprecated and has no effect.
+
+=item B<-x509>
+
+This option outputs a certificate instead of a certificate request.
+This is typically used to generate test certificates.
+It is implied by the B<-CA> option.
+
+This option implies the B<-new> flag if B<-in> is not given.
+
+If an existing request is specified with the B<-in> option, it is converted
+to a certificate; otherwise a request is created from scratch.
+
+Unless specified using the B<-set_serial> option,
+a large random number will be used for the serial number.
+
+Unless the B<-copy_extensions> option is used,
+X.509 extensions are not copied from any provided request input file.
+
+X.509 extensions to be added can be specified in the configuration file,
+possibly using the B<-config> and B<-extensions> options,
+and/or using the B<-addext> option.
+
+Unless B<-x509v1> is given, generated certificates bear X.509 version 3.
+Unless specified otherwise,
+key identifier extensions are included as described in L<x509v3_config(5)>.
+
+=item B<-x509v1>
+
+Request generation of certificates with X.509 version 1.
+This implies B<-x509>.
+If X.509 extensions are given, anyway X.509 version 3 is set.
+
+=item B<-CA> I<filename>|I<uri>
+
+Specifies the "CA" certificate to be used for signing a new certificate
+and implies use of B<-x509>.
+When present, this behaves like a "micro CA" as follows:
+The subject name of the "CA" certificate is placed as issuer name in the new
+certificate, which is then signed using the "CA" key given as specified below.
+
+=item B<-CAkey> I<filename>|I<uri>
+
+Sets the "CA" private key to sign a certificate with.
+The private key must match the public key of the certificate given with B<-CA>.
+If this option is not provided then the key must be present in the B<-CA> input.
+
+=item B<-not_before> I<date>
+
+When B<-x509> is in use this allows the start date to be explicitly set,
+otherwise it is ignored. The format of I<date> is YYMMDDHHMMSSZ (the
+same as an ASN1 UTCTime structure), or YYYYMMDDHHMMSSZ (the same as an
+ASN1 GeneralizedTime structure). In both formats, seconds SS and
+timezone Z must be present.
+Alternatively, you can also use "today".
+
+=item B<-not_after> I<date>
+
+When B<-x509> is in use this allows the expiry date to be explicitly
+set, otherwise it is ignored. The format of I<date> is YYMMDDHHMMSSZ
+(the same as an ASN1 UTCTime structure), or YYYYMMDDHHMMSSZ (the same as
+an ASN1 GeneralizedTime structure). In both formats, seconds SS and
+timezone Z must be present.
+Alternatively, you can also use "today".
+
+This overrides the B<-days> option.
+
+=item B<-days> I<n>
+
+When B<-x509> is in use this specifies the number of days from today to
+certify the certificate for, otherwise it is ignored. I<n> should
+be a positive integer. The default is 30 days.
+
+Regardless of the option B<-not_before>, the days are always counted from
+today.
+When used together with the option B<-not_after>, the explicit expiry
+date takes precedence.
+
+=item B<-set_serial> I<n>
+
+Serial number to use when outputting a self-signed certificate.
+This may be specified as a decimal value or a hex value if preceded by C<0x>.
+If not given, a large random number will be used.
+
+=item B<-copy_extensions> I<arg>
+
+Determines how X.509 extensions in certificate requests should be handled
+when B<-x509> is in use.
+If I<arg> is B<none> or this option is not present then extensions are ignored.
+If I<arg> is B<copy> or B<copyall> then
+all extensions in the request are copied to the certificate.
+
+The main use of this option is to allow a certificate request to supply
+values for certain extensions such as subjectAltName.
+
+=item B<-extensions> I<section>,
+B<-reqexts> I<section>
+
+Can be used to override the name of the configuration file section
+from which X.509 extensions are included
+in the certificate (when B<-x509> is in use) or certificate request.
+This allows several different sections to be used in the same configuration
+file to specify requests for a variety of purposes.
+
+=item B<-addext> I<ext>
+
+Add a specific extension to the certificate (if B<-x509> is in use)
+or certificate request.  The argument must have the form of
+a C<key=value> pair as it would appear in a config file.
+
+If an extension is added using this option that has the same OID as one
+defined in the extension section of the config file, it overrides that one.
+
+This option can be given multiple times.
+Doing so, the same key most not be given more than once.
+
+=item B<-precert>
+
+A poison extension will be added to the certificate, making it a
+"pre-certificate" (see RFC6962). This can be submitted to Certificate
+Transparency logs in order to obtain signed certificate timestamps (SCTs).
+These SCTs can then be embedded into the pre-certificate as an extension, before
+removing the poison and signing the certificate.
+
+This implies the B<-new> flag.
+
+=item B<-utf8>
+
+This option causes field values to be interpreted as UTF8 strings, by
+default they are interpreted as ASCII. This means that the field
+values, whether prompted from a terminal or obtained from a
+configuration file, must be valid UTF8 strings.
+
+=item B<-reqopt> I<option>
+
+Customise the printing format used with B<-text>. The I<option> argument can be
+a single option or multiple options separated by commas.
+
+See discussion of the  B<-certopt> parameter in the L<openssl-x509(1)>
+command.
+
+=item B<-newhdr>
+
+Adds the word B<NEW> to the PEM file header and footer lines on the outputted
+request. Some software (Netscape certificate server) and some CAs need this.
+
+=item B<-batch>
+
+Non-interactive mode.
+
+=item B<-verbose>
+
+Print extra details about the operations being performed.
+
+=item B<-quiet>
+
+Print fewer details about the operations being performed, which may be
+handy during batch scripts or pipelines (specifically "progress dots"
+during key generation are suppressed).
+
+=item B<-keygen_engine> I<id>
+
+Specifies an engine (by its unique I<id> string) which would be used
+for key generation operations.
+
+{- $OpenSSL::safe::opt_name_item -}
+
+{- $OpenSSL::safe::opt_r_item -}
+
+{- $OpenSSL::safe::opt_engine_item -}
+
+{- $OpenSSL::safe::opt_provider_item -}
+
+=back
+
+=head1 CONFIGURATION FILE FORMAT
+
+The configuration options are specified in the B<req> section of
+the configuration file. An alternate name be specified by using the
+B<-section> option.
+As with all configuration files, if no
+value is specified in the specific section then
+the initial unnamed or B<default> section is searched too.
+
+The options available are described in detail below.
+
+=over 4
+
+=item B<input_password>, B<output_password>
+
+The passwords for the input private key file (if present) and
+the output private key file (if one will be created). The
+command line options B<passin> and B<passout> override the
+configuration file values.
+
+=item B<default_bits>
+
+Specifies the default key size in bits.
+
+This option is used in conjunction with the B<-new> option to generate
+a new key. It can be overridden by specifying an explicit key size in
+the B<-newkey> option. The smallest accepted key size is 512 bits. If
+no key size is specified then 2048 bits is used.
+
+=item B<default_keyfile>
+
+This is the default filename to write a private key to. If not
+specified the key is written to standard output. This can be
+overridden by the B<-keyout> option.
+
+=item B<oid_file>
+
+This specifies a file containing additional B<OBJECT IDENTIFIERS>.
+Each line of the file should consist of the numerical form of the
+object identifier followed by whitespace then the short name followed
+by whitespace and finally the long name.
+
+=item B<oid_section>
+
+This specifies a section in the configuration file containing extra
+object identifiers. Each line should consist of the short name of the
+object identifier followed by B<=> and the numerical form. The short
+and long names are the same when this option is used.
+
+=item B<RANDFILE>
+
+At startup the specified file is loaded into the random number generator,
+and at exit 256 bytes will be written to it.
+It is used for private key generation.
+
+=item B<encrypt_key>
+
+If this is set to B<no> then if a private key is generated it is
+B<not> encrypted. This is equivalent to the B<-noenc> command line
+option. For compatibility B<encrypt_rsa_key> is an equivalent option.
+
+=item B<default_md>
+
+This option specifies the digest algorithm to use. Any digest supported by the
+OpenSSL B<dgst> command can be used. This option can be overridden on the
+command line. Certain signing algorithms (i.e. Ed25519 and Ed448) will ignore
+any digest that has been set.
+
+=item B<string_mask>
+
+This option masks out the use of certain string types in certain
+fields. Most users will not need to change this option. It can be set to
+several values:
+
+=over 4
+
+=item B<utf8only>
+- only UTF8Strings are used (this is the default value)
+
+=item B<pkix>
+- any string type except T61Strings
+
+=item B<nombstr>
+- any string type except BMPStrings and UTF8Strings
+
+=item B<default>
+- any kind of string type
+
+=back
+
+Note that B<utf8only> is the PKIX recommendation in RFC2459 after 2003, and the
+default B<string_mask>; B<default> is not the default option. The B<nombstr>
+value is a workaround for some software that has problems with variable-sized
+BMPStrings and UTF8Strings.
+
+=item B<req_extensions>
+
+This specifies the configuration file section containing a list of
+extensions to add to the certificate request. It can be overridden
+by the B<-reqexts> (or B<-extensions>) command line switch. See the
+L<x509v3_config(5)> manual page for details of the
+extension section format.
+
+=item B<x509_extensions>
+
+This specifies the configuration file section containing a list of
+extensions to add to certificate generated when B<-x509> is in use.
+It can be overridden by the B<-extensions> command line switch.
+
+=item B<prompt>
+
+If set to the value B<no> this disables prompting of certificate fields
+and just takes values from the config file directly. It also changes the
+expected format of the B<distinguished_name> and B<attributes> sections.
+
+=item B<utf8>
+
+If set to the value B<yes> then field values to be interpreted as UTF8
+strings, by default they are interpreted as ASCII. This means that
+the field values, whether prompted from a terminal or obtained from a
+configuration file, must be valid UTF8 strings.
+
+=item B<attributes>
+
+This specifies the section containing any request attributes: its format
+is the same as B<distinguished_name>. Typically these may contain the
+challengePassword or unstructuredName types. They are currently ignored
+by OpenSSL's request signing utilities but some CAs might want them.
+
+=item B<distinguished_name>
+
+This specifies the section containing the distinguished name fields to
+prompt for when generating a certificate or certificate request. The format
+is described in the next section.
+
+=back
+
+=head1 DISTINGUISHED NAME AND ATTRIBUTE SECTION FORMAT
+
+There are two separate formats for the distinguished name and attribute
+sections. If the B<prompt> option is set to B<no> then these sections
+just consist of field names and values: for example,
+
+ CN=My Name
+ OU=My Organization
+ emailAddress=someone@somewhere.org
+
+This allows external programs (e.g. GUI based) to generate a template file with
+all the field names and values and just pass it to this command. An example
+of this kind of configuration file is contained in the B<EXAMPLES> section.
+
+Alternatively if the B<prompt> option is absent or not set to B<no> then the
+file contains field prompting information. It consists of lines of the form:
+
+ fieldName="prompt"
+ fieldName_default="default field value"
+ fieldName_min= 2
+ fieldName_max= 4
+
+"fieldName" is the field name being used, for example commonName (or CN).
+The "prompt" string is used to ask the user to enter the relevant
+details. If the user enters nothing then the default value is used if no
+default value is present then the field is omitted. A field can
+still be omitted if a default value is present if the user just
+enters the '.' character.
+
+The number of characters entered must be between the fieldName_min and
+fieldName_max limits: there may be additional restrictions based
+on the field being used (for example countryName can only ever be
+two characters long and must fit in a PrintableString).
+
+Some fields (such as organizationName) can be used more than once
+in a DN. This presents a problem because configuration files will
+not recognize the same name occurring twice. To avoid this problem
+if the fieldName contains some characters followed by a full stop
+they will be ignored. So for example a second organizationName can
+be input by calling it "1.organizationName".
+
+The actual permitted field names are any object identifier short or
+long names. These are compiled into OpenSSL and include the usual
+values such as commonName, countryName, localityName, organizationName,
+organizationalUnitName, stateOrProvinceName. Additionally emailAddress
+is included as well as name, surname, givenName, initials, and dnQualifier.
+
+Additional object identifiers can be defined with the B<oid_file> or
+B<oid_section> options in the configuration file. Any additional fields
+will be treated as though they were a DirectoryString.
+
+
+=head1 EXAMPLES
+
+Examine and verify certificate request:
+
+ openssl req -in req.pem -text -verify -noout
+
+Specify the cipher to be used for encrypting the private key:
+
+ openssl req -newkey rsa:2048 -keyout privatekey.pem -out request.csr -cipher aes-256-cbc
+
+Create a private key and then generate a certificate request from it:
+
+ openssl genrsa -out key.pem 2048
+ openssl req -new -key key.pem -out req.pem
+
+The same but just using req:
+
+ openssl req -newkey rsa:2048 -keyout key.pem -out req.pem
+
+Generate a self-signed root certificate:
+
+ openssl req -x509 -newkey rsa:2048 -keyout key.pem -out req.pem
+
+Create an SM2 private key and then generate a certificate request from it:
+
+ openssl ecparam -genkey -name SM2 -out sm2.key
+ openssl req -new -key sm2.key -out sm2.csr -sm3 -sigopt "distid:1234567812345678"
+
+Examine and verify an SM2 certificate request:
+
+ openssl req -verify -in sm2.csr -sm3 -vfyopt "distid:1234567812345678"
+
+Example of a file pointed to by the B<oid_file> option:
+
+ 1.2.3.4        shortName       A longer Name
+ 1.2.3.6        otherName       Other longer Name
+
+Example of a section pointed to by B<oid_section> making use of variable
+expansion:
+
+ testoid1=1.2.3.5
+ testoid2=${testoid1}.6
+
+Sample configuration file prompting for field values:
+
+ [ req ]
+ default_bits           = 2048
+ default_keyfile        = privkey.pem
+ distinguished_name     = req_distinguished_name
+ attributes             = req_attributes
+ req_extensions         = v3_ca
+
+ dirstring_type = nombstr
+
+ [ req_distinguished_name ]
+ countryName                    = Country Name (2 letter code)
+ countryName_default            = AU
+ countryName_min                = 2
+ countryName_max                = 2
+
+ localityName                   = Locality Name (eg, city)
+
+ organizationalUnitName         = Organizational Unit Name (eg, section)
+
+ commonName                     = Common Name (eg, YOUR name)
+ commonName_max                 = 64
+
+ emailAddress                   = Email Address
+ emailAddress_max               = 40
+
+ [ req_attributes ]
+ challengePassword              = A challenge password
+ challengePassword_min          = 4
+ challengePassword_max          = 20
+
+ [ v3_ca ]
+
+ subjectKeyIdentifier=hash
+ authorityKeyIdentifier=keyid:always,issuer:always
+ basicConstraints = critical, CA:true
+
+Sample configuration containing all field values:
+
+
+ [ req ]
+ default_bits           = 2048
+ default_keyfile        = keyfile.pem
+ distinguished_name     = req_distinguished_name
+ attributes             = req_attributes
+ prompt                 = no
+ output_password        = mypass
+
+ [ req_distinguished_name ]
+ C                      = GB
+ ST                     = Test State or Province
+ L                      = Test Locality
+ O                      = Organization Name
+ OU                     = Organizational Unit Name
+ CN                     = Common Name
+ emailAddress           = test@email.address
+
+ [ req_attributes ]
+ challengePassword              = A challenge password
+
+Example of giving the most common attributes (subject and extensions)
+on the command line:
+
+ openssl req -new -subj "/C=GB/CN=foo" \
+                  -addext "subjectAltName = DNS:foo.co.uk" \
+                  -addext "certificatePolicies = 1.2.3.4" \
+                  -newkey rsa:2048 -keyout key.pem -out req.pem
+
+
+=head1 NOTES
+
+The certificate requests generated by B<Xenroll> with MSIE have extensions
+added. It includes the B<keyUsage> extension which determines the type of
+key (signature only or general purpose) and any additional OIDs entered
+by the script in an B<extendedKeyUsage> extension.
+
+=head1 DIAGNOSTICS
+
+The following messages are frequently asked about:
+
+        Using configuration from /some/path/openssl.cnf
+        Unable to load config info
+
+This is followed some time later by:
+
+        unable to find 'distinguished_name' in config
+        problems making Certificate Request
+
+The first error message is the clue: it can't find the configuration
+file! Certain operations (like examining a certificate request) don't
+need a configuration file so its use isn't enforced. Generation of
+certificates or requests however does need a configuration file. This
+could be regarded as a bug.
+
+Another puzzling message is this:
+
+        Attributes:
+            a0:00
+
+this is displayed when no attributes are present and the request includes
+the correct empty B<SET OF> structure (the DER encoding of which is 0xa0
+0x00). If you just see:
+
+        Attributes:
+
+then the B<SET OF> is missing and the encoding is technically invalid (but
+it is tolerated). See the description of the command line option B<-asn1-kludge>
+for more information.
+
+=head1 BUGS
+
+OpenSSL's handling of T61Strings (aka TeletexStrings) is broken: it effectively
+treats them as ISO-8859-1 (Latin 1), Netscape and MSIE have similar behaviour.
+This can cause problems if you need characters that aren't available in
+PrintableStrings and you don't want to or can't use BMPStrings.
+
+As a consequence of the T61String handling the only correct way to represent
+accented characters in OpenSSL is to use a BMPString: unfortunately Netscape
+currently chokes on these. If you have to use accented characters with Netscape
+and MSIE then you currently need to use the invalid T61String form.
+
+The current prompting is not very friendly. It doesn't allow you to confirm what
+you've just entered. Other things like extensions in certificate requests are
+statically defined in the configuration file. Some of these: like an email
+address in subjectAltName should be input by the user.
+
+=head1 SEE ALSO
+
+L<openssl(1)>,
+L<openssl-x509(1)>,
+L<openssl-ca(1)>,
+L<openssl-genrsa(1)>,
+L<openssl-gendsa(1)>,
+L<config(5)>,
+L<x509v3_config(5)>
+
+=head1 HISTORY
+
+The default encryption cipher was changed from 3DES to AES-256 in OpenSSL 3.5.
+
+The B<-section> option was added in OpenSSL 3.0.0.
+
+The B<-multivalue-rdn> option has become obsolete in OpenSSL 3.0.0 and
+has no effect.
+
+The B<-engine> option was deprecated in OpenSSL 3.0.
+The <-nodes> option was deprecated in OpenSSL 3.0, too; use B<-noenc> instead.
+
+The B<-reqexts> option has been made an alias of B<-extensions> in OpenSSL 3.2.
+
+Since OpenSSL 3.2,
+generated certificates bear X.509 version 3 unless B<-x509v1> is given,
+and key identifier extensions are included by default.
+
+Since OpenSSL 3.3, the B<-verify> option will exit with 1 on failure.
+
+=head1 COPYRIGHT
+
+Copyright 2000-2025 The OpenSSL Project Authors. All Rights Reserved.
+
+Licensed under the Apache License 2.0 (the "License").  You may not use
+this file except in compliance with the License.  You can obtain a copy
+in the file LICENSE in the source distribution or at
+L<https://www.openssl.org/source/license.html>.
+
+=cut

@@ -1,0 +1,37 @@
+[package]
+name = "fastrand"
+# When publishing a new version:
+# - Update CHANGELOG.md
+# - Create "v2.x.y" git tag
+version = "2.3.0"
+authors = ["Stjepan Glavina <stjepang@gmail.com>"]
+edition = "2018"
+rust-version = "1.36"
+description = "A simple and fast random number generator"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/smol-rs/fastrand"
+keywords = ["simple", "fast", "rand", "random", "wyrand"]
+categories = ["algorithms"]
+exclude = ["/.*"]
+
+[features]
+default = ["std"]
+alloc = []
+std = ["alloc"]
+js = ["std", "getrandom"]
+
+[target.'cfg(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.2", features = ["js"], optional = true }
+
+[target.'cfg(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown"))'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+getrandom = { version = "0.2", features = ["js"] }
+
+[dev-dependencies]
+rand = "0.8"
+wyhash = "0.5"
+getrandom = "0.2"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

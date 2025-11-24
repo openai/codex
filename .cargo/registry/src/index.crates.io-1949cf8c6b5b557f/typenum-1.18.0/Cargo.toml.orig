@@ -1,0 +1,39 @@
+[package]
+name = "typenum"
+version = "1.18.0" # remember to update html_root_url
+authors = ["Paho Lurie-Gregg <paho@paholg.com>", "Andre Bogus <bogusandre@gmail.com>"]
+documentation = "https://docs.rs/typenum"
+repository = "https://github.com/paholg/typenum"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+description = """Typenum is a Rust library for type-level numbers evaluated at
+    compile time. It currently supports bits, unsigned integers, and signed
+    integers. It also provides a type-level array of type-level numbers, but its
+    implementation is incomplete."""
+categories = ["no-std"]
+edition = "2018"
+rust-version = "1.37.0"
+
+[dependencies]
+scale-info = { version = "1.0", default-features = false, optional = true }
+
+[lib]
+name = "typenum"
+
+[features]
+no_std                    = [] # Deprecated
+i128                      = []
+strict                    = []
+force_unix_path_separator = [] # Deprecated
+const-generics            = []
+scale_info                = ["scale-info/derive"]
+
+[package.metadata.docs.rs]
+features     = ["i128", "const-generics"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[package.metadata.playground]
+features = ["i128", "const-generics"]
+
+[workspace]
+members = ["generate"]

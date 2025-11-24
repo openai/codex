@@ -1,0 +1,34 @@
+# Generated with generate_ssl_tests.pl
+
+num_tests = 1
+
+test-0 = 0-default
+# ===========================================================
+
+[0-default]
+ssl_conf = 0-default-ssl
+
+[0-default-ssl]
+server = 0-default-server
+client = 0-default-client
+
+[0-default-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+RecordPadding = 64
+
+[0-default-client]
+CipherString = DEFAULT
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+RecordPadding = 11
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-0]
+ExpectedResult = Success
+
+

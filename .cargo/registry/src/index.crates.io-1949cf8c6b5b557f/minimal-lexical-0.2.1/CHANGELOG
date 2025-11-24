@@ -1,0 +1,38 @@
+# Changelog
+
+Notes significant changes to minimal-lexical.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.1.4] 2021-10-02
+### Added
+- Missing license details for `src/bellerophon.rs`.
+
+## [0.2.0] 2021-09-10
+### Changed
+- `no_alloc` feature flag was replaced with an `alloc` feature flag.
+
+## [0.1.3] 2021-09-04
+### Added
+- Added the `compact` feature, which sacrifices performance for smaller binary sizes.
+- Added the `nightly` feature, which adds inline ASM to use FPU instructions for to ensure proper rounding on x86 targets using the x87 FPU without SSE2.
+
+### Changed
+- Removed stackvec dependent, even on `no_alloc`.
+- Improved the algorithms for parsing.
+- Simplified big-integer arithmetic, and the slow path algorithms.
+- Reduced the binary sizes.
+- Added optimizations for small floats.
+
+## [0.1.2] 2021-05-09
+### Added
+- Remove cached_float and infer exponents rather than store them.
+
+## [0.1.1] 2021-05-08
+### Added
+- Added the Eisel-Lemire algorithm.
+
+## [0.1.0] 2021-04-27
+### Added
+- Initial version.

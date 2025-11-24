@@ -1,0 +1,893 @@
+= D-Bus API Design Guidelines
+@link[guide >index]
+@credit[type="author copyright"]
+  @name Philip Withnall
+  @email philip.withnall@collabora.co.uk
+  @years 2015
+@desc Guidelines for writing high quality D-Bus APIs
+@revision[date=2015-02-05 status=draft]
+
+[synopsis]
+  [title]
+  Summary
+
+  The most common use for D-Bus is in implementing a service which will be
+  consumed by multiple client programs, and hence all interfaces exported on the
+  bus form a public API. Designing a D-Bus API is like designing any other API:
+  there is a lot of flexibility, but there are design patterns to follow and
+  anti-patterns to avoid.
+
+  This guide aims to explain the best practices for writing D-Bus APIs. These
+  have been refined over several years of use of D-Bus in many projects.
+  Pointers will be given for implementing APIs using common D-Bus
+  libraries like
+  $link[>>https://developer-old.gnome.org/gio/stable/gdbus-convenience.html](GDBus),
+  but detailed implementation instructions are left to the libraries’
+  documentation. Note that you should $em(not) use dbus-glib to implement D-Bus
+  services as it is deprecated and unmaintained. Most services should also avoid
+  libdbus (dbus-1), which is a low-level library and is awkward to use
+  correctly: it is designed to be used via a language binding such as
+  $link[>>https://doc.qt.io/qt/qtdbus-index.html](QtDBus).
+
+  For documentation on D-Bus itself, see the
+  $link[>>http://dbus.freedesktop.org/doc/dbus-specification.html](D-Bus
+  specification).
+
+[links section]
+
+== APIs
+   [id="apis"]
+
+A D-Bus API is a specification of one or more interfaces, which will be
+implemented by objects exposed by a service on the bus. Typically an API is
+designed as a set of $link[>#interface-files](interface files), and the
+implementation of the service follows those files. Some projects, however,
+choose to define the API in the code for the service, and to export XML
+interface files from the running service
+$link[>>http://dbus.freedesktop.org/doc/dbus-specification.html#standard-interfaces-introspectable](using
+D-Bus introspection). Both are valid approaches.
+
+For simplicity, this document uses the XML descriptions of D-Bus interfaces as
+the canonical representation.
+
+== Interface files
+   [id="interface-files"]
+
+A D-Bus interface file is an XML file which describes one or more D-Bus
+interfaces, and is the best way of describing a D-Bus API in a machine
+readable way. The format is described in the
+$link[>>http://dbus.freedesktop.org/doc/dbus-specification.html#introspection-format](D-Bus
+specification), and is supported by tools such as $cmd(gdbus-codegen).
+
+Interface files for public API should be installed to
+$code($var($$(datadir))/dbus-1/interfaces) so that other services can load
+them. Private APIs should not be installed. There should be one file installed
+per D-Bus interface, named after the interface, containing a single top-level
+$code(<node>) element with a single $code(<interface>) beneath it. For example,
+interface $code(com.example.MyService1.Manager) would be described by file
+$file($var($$(datadir))/dbus-1/interfaces/com.example.MyService1.Manager.xml):
+
+[listing]
+  [title]
+    Example D-Bus Interface XML
+  [desc]
+    A brief example interface XML document.
+  [code mime="application/xml"]
+    <!DOCTYPE node PUBLIC
+        "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+        "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd" >
+    <node xmlns:doc="http://www.freedesktop.org/dbus/1.0/doc.dtd">
+      <interface name="com.example.MyService1.InterestingInterface">
+        <method name="AddContact">
+          <arg name="name" direction="in" type="s">
+            <doc:doc><doc:summary>Name of new contact</doc:summary></doc:doc>
+          </arg>
+          <arg name="email" direction="in" type="s">
+            <doc:doc><doc:summary>E-mail address of new contact</doc:summary></doc:doc>
+          </arg>
+          <arg name="id" direction="out" type="u">
+            <doc:doc><doc:summary>ID of newly added contact</doc:summary></doc:doc>
+          </arg>
+          <doc:doc>
+            <doc:description>
+              <doc:para>
+                Adds a new contact to the address book with their name and
+                e-mail address.
+              </doc:para>
+            </doc:description>
+          </doc:doc>
+        </method>
+      </interface>
+    </node>
+
+If an interface defined by service A needs to be used by client B, client B
+should declare a build time dependency on service A, and use the installed copy
+of the interface file for any code generation it has to do. It should $em(not)
+have a local copy of the interface, as that could then go out of sync with the
+canonical copy in service A’s git repository.
+
+== API versioning
+   [id="api-versioning"]
+
+$link[>>http://ometer.com/parallel.html](Just like C APIs), D-Bus interfaces
+should be designed to be usable in parallel with API-incompatible versions. This
+is achieved by including a version number in each interface name, service name
+and object path which is incremented on every backwards-incompatible change.
+
+Version numbers should be included in all APIs from the first release, as that
+means moving to a new version is as simple as incrementing the number, rather
+than inserting a number everywhere, which takes more effort.
+
+New API can be added to a D-Bus interface without incrementing the version
+number, as such additions are still backwards-compatible. However, clients
+should gracefully handle the $code(org.freedesktop.DBus.Error.UnknownMethod)
+error reply from all D-Bus method calls if they want to run against older
+versions of the service which don’t implement new methods. (This also prevents
+use of generated bindings; any method which a client wants to gracefully fall
+back from should be called using a generic D-Bus method invocation rather than
+a specific generated binding.)
+
+When API is broken, changed or removed, the service’s version number must be
+bumped; for example, from $code(com.example.MyService1)
+to $code(com.example.MyService2). If backwards compatibility is maintained in
+the service by implementing both the old and new interfaces, the service can
+own $em(both) well-known names and clients can use whichever they support.
+
+As discussed in $link[>#annotations], new or deprecated APIs should be marked in
+the interface XML using annotations.
+
+Note, however, that supporting multiple interface versions simultaneously
+requires that $em(object paths) are versioned as well, so objects $em(must not)
+be put on the bus at the root path (‘/’). This is for technical reasons: signals
+sent from a D-Bus service have the originating service name overwritten by its
+unique name (e.g. $code(com.example.MyService2) is overwritten by $code(:1:15)).
+If object paths are shared between objects implementing two versions of the
+service’s interface, client programs cannot tell which object a signal has come
+from. The solution is to include the version number in all object paths, for
+example $code(/com/example/MyService1/Manager) instead of $code(/) or
+$code(/com/example/MyService/Manager).
+
+In summary, version numbers should be included in all service names, interface
+names and object paths:
+[list]
+* $code(com.example.MyService1)
+* $code(com.example.MyService1.InterestingInterface)
+* $code(com.example.MyService1.OtherInterface)
+* $code(/com/example/MyService1/Manager)
+* $code(/com/example/MyService1/OtherObject)
+
+== API design
+   [id="api-design"]
+
+D-Bus API design is broadly the same as C API design, but there are a few
+additional points to bear in mind which arise both from D-Bus’ features
+(explicit errors, signals and properties), and from its implementation as an IPC
+system.
+
+D-Bus method calls are much more expensive than C function calls, typically
+taking on the order of milliseconds to complete a round trip. Therefore, the
+design should minimize the number of method calls needed to perform an
+operation.
+
+The type system is very expressive, especially compared to C’s, and APIs should
+take full advantage of it.
+
+Similarly, its support for signals and properties differentiates it from normal
+C APIs, and well written D-Bus APIs make full use of these features where
+appropriate. They can be coupled with standard interfaces defined in the D-Bus
+specification to allow for consistent access to properties and objects in a
+hierarchy.
+
+=== Minimizing Round Trips
+    [id="round-trips"]
+
+Each D-Bus method call is a round trip from a client program to a service and
+back again, which is expensive — taking on the order of a millisecond. One of
+the top priorities in D-Bus API design is to minimize the number of round trips
+needed by clients. This can be achieved by a combination of providing specific
+convenience APIs and designing APIs which operate on large data sets in a single
+call, rather than requiring as many calls as elements in the data set.
+
+Consider an address book API, $code(com.example.MyService1.AddressBook). It
+might have an $code(AddContact(ss) → (u)) method to add a contact (taking name
+and e-mail address parameters and returning a unique contact ID), and a
+$code(RemoveContact(u)) method to remove one by ID. In the normal case of
+operating on single contacts in the address book, these calls are optimal.
+However, if the user wants to import a list of contacts, or delete multiple
+contacts simultaneously, one call has to be made per contact — this could take
+a long time for large contact lists.
+
+Instead of the $code(AddContact) and $code(RemoveContact) methods, the interface
+could have an $code(UpdateContacts(a(ss)au) → (au)) method, which takes an array
+of structs containing the new contacts’ details, and an array of IDs of the
+contacts to delete, and returns an array of IDs for the new contacts. This
+reduces the number of round trips needed to one.
+
+Adding convenience APIs to replace a series of common method calls with a single
+method call specifically for that task is best done after the API has been
+profiled and bottlenecks identified, otherwise it could lead to premature
+optimization. One area where convenience methods can typically be added
+is during initialization of a client, where multiple method calls are needed to
+establish its state with the service.
+
+=== Taking Advantage of the Type System
+    [id="type-system"]
+
+D-Bus’ type system is similar to Python’s, but with a terser syntax which may be
+unfamiliar to C developers. The key to using the type system effectively is
+to expose as much structure in types as possible. In particular, sending
+structured strings over D-Bus should be avoided, as they need to be built and
+parsed; both are complex operations which are prone to bugs.
+
+For APIs being used in constrained situations, enumerated values should be
+transmitted as unsigned integers. For APIs which need to be extended by third
+parties or which are used in more loosely coupled systems, enumerated values
+should be strings in some defined format.
+
+Transmitting values as integers means string parsing and matching can be
+avoided, the messages are more compact, and typos can be more easily avoided by
+developers (if, for example, C enums are used in the implementation).
+
+Transmitting values as strings means additional values can be defined by third
+parties without fear of conflicting over integer values; for instance by using
+the same reverse-domain-name namespacing as D-Bus interfaces.
+
+In both cases, the interface documentation should describe the meaning of each
+value. It should state whether the type can be extended in future and, if so,
+how the service and client should handle unrecognized values — typically by
+considering them equal to an ‘unknown’ or ‘failure’ value. Conventionally, zero
+is used as the ‘unknown’ value.
+
+[example]
+  For example, instead of:
+  [code style="invalid" mime="application/xml"]
+    <!--
+        Status:
+
+        Status of the object.
+        Valid statuses: ‘unknown’, ‘ready’, ‘complete’.
+    -->
+    <property name="Status" type="s" access="read" />
+
+  Use:
+  [code style="valid" mime="application/xml"]
+    <!--
+        Status:
+
+        Status of the object.
+        Valid statuses: 0 = Unknown, 1 = Ready, 2 = Complete.
+        Unrecognized statuses should be considered equal to Unknown.
+    -->
+    <property name="Status" type="u" access="read" />
+
+Similarly, enumerated values should be used instead of booleans, as they allow
+extra values to be added in future, and there is no ambiguity about the sense of
+the boolean value.
+
+[example]
+  For example, instead of:
+  [code style="invalid" mime="application/xml"]
+    <!--
+       MoveAddressBook:
+       @direction: %TRUE to move it up in the list, %FALSE to move it down
+
+       Move this address book up or down in the user’s list of address books.
+       Higher address books have their contacts displayed first in search
+       results.
+    -->
+    <method name="MoveAddressBook">
+      <arg name="direction" type="b" direction="in" />
+    </method>
+
+  Be more explicit than a boolean:
+  [code style="valid" mime="application/xml"]
+    <!--
+       MoveAddressBook:
+       @direction: 0 = Move it up in the list, 1 = Move it down
+
+       Move this address book up or down in the user’s list of address books.
+       Higher address books have their contacts displayed first in search
+       results.
+
+       Unrecognized enum values for @direction will result in the address book
+       not moving.
+    -->
+    <method name="MoveAddressBook">
+      <arg name="direction" type="u" direction="in" />
+    </method>
+
+Enumerated values should also be used instead of $em(human readable) strings,
+which should not be sent over the bus if possible. The service and client could
+be running in different locales, and hence interpret any human readable strings
+differently, or present them to the user in the wrong language. Transmit an
+enumerated value and convert it to a human readable string in the client.
+
+In situations where a service has received a human readable string from
+somewhere else, it should pass it on unmodified to the client, ideally with its
+locale alongside. Passing human readable information to a client is better than
+passing nothing.
+
+[example]
+  For example, instead of:
+  [code style="invalid" mime="application/xml"]
+    <!--
+       ProgressNotification:
+       @progress_message: Human readable progress message string.
+
+       Emitted whenever significant progress is made with some example
+       operation. The @progress_message can be displayed in a UI dialogue to
+       please the user.
+    -->
+    <signal name="ProgressNotification">
+      <arg name="progress_message" type="s" />
+    </method>
+
+  The progress should be reported as an enumerated value:
+  [code style="valid" mime="application/xml"]
+    <!--
+       ProgressNotification:
+       @progress_state: 0 = Preparing, 1 = In progress, 2 = Finished
+
+       Emitted whenever significant progress is made with some example
+       operation. The @progress_state is typically converted to a human readable
+       string and presented to the user. Unrecognized @progress_state values
+       should be treated as state 1, in progress.
+    -->
+    <signal name="ProgressNotification">
+      <arg name="progress_state" type="u" />
+    </method>
+
+D-Bus has none of the problems of signed versus unsigned integers which C has
+(specifically, it does not do implicit sign conversion), so integer types should
+always be chosen to be an appropriate size and signedness for the data they
+could possibly contain. Typically, unsigned values are more frequently needed
+than signed values.
+
+Structures can be used almost anywhere in a D-Bus type, and arrays of structures
+are particularly useful. Structures should be used wherever data fields are
+related. Note, however, that structures are not extensible in future, so always
+consider $link[>#extensibility].
+
+[example]
+  For example, instead of several identically-indexed arrays containing
+  different properties of the same set of items:
+  [code style="invalid" mime="application/xml"]
+    <!--
+       AddContacts:
+       @names: Array of contact names to add.
+       @emails: Corresponding array of contact e-mail addresses.
+       @ids: Returned array of the IDs of the new contacts. This will be the
+         same length as @names.
+
+       Add zero or more contacts to the address book, using their names and
+       e-mail addresses. @names and @emails must be the same length.
+    -->
+    <method name="AddContacts">
+      <arg name="names" type="as" direction="in" />
+      <arg name="emails" type="as" direction="in" />
+      <arg name="ids" type="au" direction="out" />
+    </method>
+
+  The arrays can be combined into a single array of structures:
+  [code style="invalid" mime="application/xml"]
+    <!--
+       AddContacts:
+       @details: Array of (contact name, contact e-mail address) to add.
+       @ids: Returned array of the IDs of the new contacts. This will be the
+         same length as @details.
+
+       Add zero or more contacts to the address book, using their names and
+       e-mail addresses.
+    -->
+    <method name="AddContacts">
+      <arg name="details" type="a(ss)" direction="in" />
+      <arg name="ids" type="au" direction="out" />
+    </method>
+
+Note that D-Bus arrays are automatically transmitted with their length, so there
+is no need to null-terminate them or encode their length separately.
+
+[comment]
+  FIXME: Mention maybe types and the extended kdbus/GVariant type system once
+  that’s stable and round-trip-ability is no longer a concern.
+
+=== Extensibility
+    [id="extensibility"]
+
+Some D-Bus APIs have very well-defined use cases, and will never need extension.
+Others are used in more loosely coupled systems which may change over time, and
+hence should be designed to be extensible from the beginning without the need
+to break API in future. This is a trade off between having a more complex API,
+and being able to easily extend it in future.
+
+The key tool for extensibility in D-Bus is $code(a{sv}), the dictionary mapping
+strings to variants. If well-defined namespaced strings are used as the
+dictionary keys, arbitrary D-Bus peers can add whatever information they need
+into the dictionary. Any other peer which understands it can query and retrieve
+the information; other peers will ignore it.
+
+The canonical example of an extensible API using $code(a{sv}) is
+$link[>>http://telepathy.freedesktop.org/spec/](Telepathy). It uses $code(a{sv})
+values as the final element in structures to allow them to be extended in
+future.
+
+A secondary tool is the use of flag fields in method calls. The set of accepted
+flags is entirely under the control of the interface designer and, as with
+enumerated types, can be extended in future without breaking API. Adding more
+flags allows the functionality of the method call to be tweaked.
+
+=== Using Signals, Properties and Errors
+    [id="using-the-features"]
+
+D-Bus method calls are explicitly asynchronous due to the latency inherent in
+IPC. This means that peers should not block on receiving a reply from a method
+call; they should schedule other work (in a main loop) and handle the reply when
+it is received. Even though method replies may take a while, the caller is
+$em(guaranteed) to receive exactly one reply eventually. This reply could be the
+return value from the method, an error from the method, or an error from the
+D-Bus daemon indicating the service failed in some way (e.g. due to crashing).
+
+Because of this, service implementations should be careful to always reply
+exactly once to each method call. Replying at the end of a long-running
+operation is correct — the client will patiently wait until the operation has
+finished and the reply is received.
+
+Note that D-Bus client bindings may implement synthetic timeouts of several
+tens of seconds, unless explicitly disabled for a call. For very long-running
+operations, you should disable the client bindings’ timeout and make it clear
+in the client’s UI that the application has not frozen and is simply running a
+long operation.
+
+An anti-pattern to avoid in this situation is to start a long-running operation
+when a method call is received, then to never reply to the method call and
+instead notify the client of completion of the operation via a signal. This
+approach is incorrect as signal emissions do not have a one-to-one relationship
+with method calls — the signal could theoretically be emitted multiple times, or
+never, which the client would not be able to handle.
+
+Similarly, use a D-Bus error reply to signify failure of an operation triggered
+by a method call, rather than using a custom error code in the method’s
+reply. This means that a reply always indicates success, and an error always
+indicates failure — rather than a reply indicating either depending on its
+parameters, and having to return dummy values in the other parameters. Using
+D-Bus error replies also means such failures can be highlighted in debugging
+tools, simplifying debugging.
+
+Clients should handle all possible standard and documented D-Bus errors for each
+method call. IPC inherently has more potential failures than normal C function
+calls, and clients should be prepared to handle all of them gracefully.
+
+=== Using Standard Interfaces
+    [id="standard-interfaces"]
+
+Use standard D-Bus interfaces where possible.
+
+==== Properties
+     [id="interface-properties"]
+
+The D-Bus specification defines the
+$link[>>http://dbus.freedesktop.org/doc/dbus-specification.html#standard-interfaces-properties]($code(org.freedesktop.DBus.Properties))
+interface, which should be used by all objects to notify clients of changes
+to their property values, with the $code(PropertiesChanged) signal. This signal
+eliminates the need for individual $code($var(PropertyName)Changed) signals, and
+allows multiple properties to be notified in a single signal emission, reducing
+IPC round trips. Similarly, the $code(Get) and $code(Set) methods can be used to
+manipulate properties on an object, eliminating redundant
+$code(Get$var(PropertyName)) and $code(Set$var(PropertyName)) methods.
+
+[example]
+  For example, consider an object implementing an interface
+  $code(com.example.MyService1.SomeInterface) with methods:
+  [list]
+  * $code(GetName() → (s))
+  * $code(SetName(s) → ())
+  * $code(GetStatus() → (u))
+  * $code(RunOperation(ss) → (u))
+  and signals:
+  [list]
+  * $code(NameChanged(u))
+  * $code(StatusChanged(u))
+
+  The interface could be cut down to a single method:
+  [list]
+  * $code(RunOperation(ss) → (u))
+  The object could then implement the $code(org.freedesktop.DBus.Properties)
+  interface and define properties:
+  [list]
+  * $code(Name) of type $code(s), read–write
+  * $code(Status) of type $code(u), read-only
+
+  The $code(NameChanged) and $code(StatusChanged) signals would be replaced by
+  $code(org.freedesktop.DBus.Properties.PropertiesChanged).
+
+==== Object Manager
+     [id="interface-object-manager"]
+
+The specification also defines the
+$link[>>http://dbus.freedesktop.org/doc/dbus-specification.html#standard-interfaces-objectmanager]($code(org.freedesktop.DBus.ObjectManager))
+interface, which should be used whenever a service needs to expose a variable
+number of objects of the same class in a flat or tree-like structure, and
+clients are expected to be interested in most or all of the objects. For
+example, this could be used by an address book service which exposes multiple
+address books, each as a separate object. The $code(GetManagedObjects) method
+allows the full object tree to be queried, returning all the objects’ properties
+too, eliminating the need for further IPC round trips to query the properties.
+
+If clients are not expected to be interested in most of the exposed objects,
+$code(ObjectManager) should $em(not) be used, as it will send all of the objects
+to each client anyway, wasting bus bandwidth. A file manager, therefore, should
+not expose the entire file system hierarchy using $code(ObjectManager).
+
+[example]
+  For example, consider an object implementing an interface
+  $code(com.example.MyService1.AddressBookManager) with methods:
+  [list]
+  * $code(GetAddressBooks() → (ao))
+  and signals:
+  [list]
+  * $code(AddressBookAdded(o))
+  * $code(AddressBookRemoved(o))
+
+  If the manager object is at path
+  $code(/com/example/MyService1/AddressBookManager), each address book is a
+  child object, e.g.
+  $code(/com/example/MyService1/AddressBookManager/SomeAddressBook).
+
+  The interface could be eliminated, and the
+  $code(org.freedesktop.DBus.ObjectManager) interface implemented on the manager
+  object instead.
+
+  Calls to $code(GetAddressBooks) would become calls to $code(GetManagedObjects)
+  and emissions of the $code(AddressBookAdded) and $code(AddressBookRemoved)
+  signals would become emissions of $code(InterfacesAdded) and
+  $code(InterfacesRemoved).
+
+=== Naming Conventions
+    [id="naming-conventions"]
+
+All D-Bus names, from service names through to method parameters, follow a set
+of conventions. Following these conventions makes APIs more natural to use and
+consistent with all other services on the system.
+
+Services use reverse-domain-name notation, based on the domain name of the
+project providing the service (all in lower case), plus a unique name for the
+service (in camel case).
+
+[example]
+  For example, version 2 of an address book application called $code(ContactDex)
+  provided by a software vendor whose website is $code(chocolateteapot.com)
+  would use service name $code(com.chocolateteapot.ContactDex2).
+
+Almost all names use camel case with no underscores, as in the examples below.
+Method and signal parameters are an exception, using
+$code(lowercase_with_underscores). Type information is never encoded in the
+parameter name (i.e. $em(not)
+$link[>>http://en.wikipedia.org/wiki/Hungarian_notation](Hungarian notation)).
+
+[example]
+  [terms]
+  - Service Name
+  * $code(com.example.MyService1)
+  - Interface Name
+  * $code(com.example.MyService1.SomeInterface)
+  - Object Path (Root Object)
+  * $code(/com/example/MyService1)
+  - Object Path (Child Object)
+  * $code(/com/example/MyService1/SomeChild)
+  - Object Path (Grandchild Object)
+  * $code(/com/example/MyService1/AnotherChild/Grandchild1)
+  - Method Name
+  * $code(com.example.MyService1.SomeInterface.MethodName)
+  - Signal Name
+  * $code(com.example.MyService1.SomeInterface.SignalName)
+  - Property Name
+  * $code(com.example.MyService1.SomeInterface.PropertyName)
+
+See also: $link[>#api-versioning].
+
+== Code generation
+   [id="code-generation"]
+
+Rather than manually implementing both the server and client sides of a D-Bus
+interface, it is often easier to write the interface XML description and use a
+tool such as
+$link[>>https://developer-old.gnome.org/gio/stable/gdbus-codegen.html]($cmd(gdbus-codegen))
+to generate type-safe C APIs, then build the implementation using those. This
+avoids the tedious and error-prone process of writing code to build and read
+D-Bus parameter variants for each method call.
+
+Use of code generators is beyond the scope of this guide; for more information,
+see the
+$link[>>https://developer-old.gnome.org/gio/stable/gdbus-codegen.html]($cmd(gdbus-codegen)
+manual).
+
+== Annotations
+   [id="annotations"]
+
+Annotations may be added to the interface XML to expose metadata on the API
+which can be used by documentation or code generation tools to modify their
+output. Some standard annotations are given in the
+$link[>>http://dbus.freedesktop.org/doc/dbus-specification.html#introspection-format](D-Bus
+specification), but further annotations may be defined by specific tools.
+
+For example, $cmd(gdbus-codegen) defines several useful annotations, listed on
+its man page.
+
+The following annotations are the most useful:
+
+[terms]
+- $code(org.freedesktop.DBus.Deprecated)
+* Mark a symbol as deprecated. This should be used whenever the API is changed,
+  specifying the version introducing the deprecation, the reason for
+  deprecation, and a replacement symbol to use.
+- $code(org.gtk.GDBus.Since)
+* Mark a symbol as having been added to the API after the initial release. This
+  should include the version the symbol was first added in.
+- $code(org.gtk.GDBus.C.Name) and $code(org.freedesktop.DBus.GLib.CSymbol)
+* Both used interchangeably to hint at a C function name to use when generating
+  code for a symbol. Use of this annotation can make generated bindings a lot
+  more pleasant to use.
+- $code(org.freedesktop.DBus.Property.EmitsChangedSignal)
+* Indicate whether a property is expected to emit change signals. This can
+  affect code generation, but is also useful documentation, as client programs
+  then know when to expect property change notifications and when they have to
+  requery.
+
+== Documentation
+   [id="documentation"]
+
+Also just like C APIs, D-Bus APIs must be documented. There are several methods
+for documenting the interfaces, methods, properties and signals in a D-Bus
+interface XML file, each unfortunately with their own downsides. You should
+choose the method which best matches the tooling and workflow you are using.
+
+=== XML Comments
+
+XML comments containing documentation in the
+$link[>>https://developer-old.gnome.org/gtk-doc-manual/stable/documenting_syntax.html.en](gtk-doc
+format) is the recommended format for use with
+$link[>>https://developer-old.gnome.org/gio/stable/gdbus-codegen.html]($cmd(gdbus-codegen)).
+Using $cmd(gdbus-codegen), these comments can be extracted, converted to DocBook
+format and included in the project’s API manual. For example:
+
+[listing]
+  [title]
+    Documentation Comments in D-Bus Interface XML
+  [desc]
+    Example gtk-doc–style documentation comments in the introspection XML for
+    the $code(org.freedesktop.DBus.Properties) interface.
+  [code mime="application/xml"]
+    <!--
+        org.freedesktop.DBus.Properties:
+        @short_description: Standard property getter/setter interface
+
+        Interface for all objects which expose properties on the bus, allowing
+        those properties to be got, set, and signals emitted to notify of changes
+        to the property values.
+    -->
+    <interface name="org.freedesktop.DBus.Properties">
+      <!--
+          Get:
+          @interface_name: Name of the interface the property is defined on.
+          @property_name: Name of the property to get.
+          @value: Property value, wrapped in a variant.
+
+          Retrieves the value of the property at @property_name on
+          @interface_name on this object. If @interface_name is an empty string,
+          all interfaces will be searched for @property_name; if multiple
+          properties match, the result is undefined.
+
+          If @interface_name or @property_name do not exist, a
+          #org.freedesktop.DBus.Error.InvalidArgs error is returned.
+      -->
+      <method name="Get">
+        <arg type="s" name="interface_name" direction="in"/>
+        <arg type="s" name="property_name" direction="in"/>
+        <arg type="v" name="value" direction="out"/>
+      </method>
+
+      <!--
+          PropertiesChanged:
+          @interface_name: Name of the interface the properties changed on.
+          @changed_properties: Map of property name to updated value for the
+            changed properties.
+          @invalidated_properties: List of names of other properties which have
+            changed, but whose updated values are not notified.
+
+          Emitted when one or more properties change values on @interface_name.
+          A property may be listed in @changed_properties or
+          @invalidated_properties depending on whether the service wants to
+          broadcast the property’s new value. If a value is large or infrequently
+          used, the service might not want to broadcast it, and will wait for
+          clients to request it instead.
+      -->
+      <signal name="PropertiesChanged">
+        <arg type="s" name="interface_name"/>
+        <arg type="a{sv}" name="changed_properties"/>
+        <arg type="as" name="invalidated_properties"/>
+      </signal>
+    </interface>
+
+[comment]
+  FIXME: This is only present to fix
+  $link[>>https://github.com/projectmallard/mallard-ducktype/issues/2].
+
+=== XML Annotations
+
+Documentation can also be added as annotation elements in the XML. This format
+is also supported by $cmd(gdbus-codegen), but gtk-doc comments are preferred.
+For example:
+
+[listing]
+  [title]
+    Documentation Annotations in D-Bus Interface XML
+  [desc]
+    Example GDBus documentation annotations in the introspection XML for
+    the $code(org.freedesktop.DBus.Properties) interface.
+  [code mime="application/xml"]
+    <interface name="org.freedesktop.DBus.Properties">
+      <annotation name="org.gtk.GDBus.DocString" value="Interface for all
+        objects which expose properties on the bus, allowing those properties to
+        be got, set, and signals emitted to notify of changes to the property
+        values."/>
+      <annotation name="org.gtk.GDBus.DocString.Short"
+        value="Standard property getter/setter interface"/>
+
+      <method name="Get">
+        <annotation name="org.gtk.GDBus.DocString" value="Retrieves the value of
+          the property at @property_name on @interface_name on this object. If
+          @interface_name is an empty string, all interfaces will be searched
+          for @property_name; if multiple properties match, the result is
+          undefined.
+
+          If @interface_name or @property_name do not exist, a
+          #org.freedesktop.DBus.Error.InvalidArgs error is returned."/>
+
+        <arg type="s" name="interface_name" direction="in">
+          <annotation name="org.gtk.GDBus.DocString"
+            value="Name of the interface the property is defined on."/>
+        </arg>
+
+        <arg type="s" name="property_name" direction="in">
+          <annotation name="org.gtk.GDBus.DocString"
+            value="Name of the property to get."/>
+        </arg>
+
+        <arg type="v" name="value" direction="out">
+          <annotation name="org.gtk.GDBus.DocString"
+            value="Property value, wrapped in a variant."/>
+        </arg>
+      </method>
+
+      <signal name="PropertiesChanged">
+        <annotation name="org.gtk.GDBus.DocString" value="Emitted when one or
+          more properties change values on @interface_name. A property may be
+          listed in @changed_properties or @invalidated_properties depending on
+          whether the service wants to broadcast the property’s new value. If a
+          value is large or infrequently used, the service might not want to
+          broadcast it, and will wait for clients to request it instead."/>
+
+        <arg type="s" name="interface_name">
+          <annotation name="org.gtk.GDBus.DocString"
+            value="Name of the interface the properties changed on."/>
+        </arg>
+
+        <arg type="a{sv}" name="changed_properties">
+          <annotation name="org.gtk.GDBus.DocString"
+            value="Map of property name to updated value for the changed
+              properties."/>
+        </arg>
+
+        <arg type="as" name="invalidated_properties">
+          <annotation name="org.gtk.GDBus.DocString"
+            value="List of names of other properties which have changed, but
+              whose updated values are not notified."/>
+        </arg>
+      </signal>
+    </interface>
+
+[comment]
+  FIXME: This is only present to fix
+  $link[>>https://github.com/projectmallard/mallard-ducktype/issues/2].
+
+== Service files
+   [id="service-files"]
+
+Each D-Bus service must install a $file(.service) file describing its service
+name and the command to run to start the service. This allows for service
+activation (see the
+$link[>>http://dbus.freedesktop.org/doc/dbus-specification.html#message-bus-starting-services](D-Bus
+specification)).
+
+Service files must be named after the service’s well-known name, for example
+file $file(com.example.MyService1.service) for well-known name
+$code(com.example.MyService1). Files must be installed in
+$file($var($$(datadir))/dbus-1/services) for the session bus and
+$file($var($$(datadir))/dbus-1/system-services) for the system bus. Note, however,
+that services on the system bus almost always need a
+$link[>#security-policies](security policy) as well.
+
+== Security Policies
+   [id="security-policies"]
+
+At a high level, the D-Bus security model is:
+[list]
+* There is a system bus, and zero or more session buses.
+* Any process may connect to the system bus. The system bus limits which can own
+  names or send method calls, and only processes running as privileged users can
+  receive unicast messages not addressed to them. Every process may receive
+  broadcasts.
+* Each session bus has an owner (a user). Only its owner may connect; on
+  general-purpose Linux, a session bus is not treated as a privilege boundary,
+  so there is no further privilege separation between processes on it.
+
+Full coverage of securing D-Bus services is beyond the scope of this guide,
+however there are some steps which you can take when designing an API to ease
+security policy implementation.
+
+D-Bus security policies are written as XML files in
+$file($var($$(datadir)/dbus-1/system.d)),
+$file($var($$(datadir)/dbus-1/session.d)),
+$file($var($$(sysconfdir)/dbus-1/system.d)) and
+$file($var($$(sysconfdir)/dbus-1/session.d)) and use an allow/deny model, where
+each message (method call, signal emission, etc.) can be allowed or denied
+according to the sum of all policy rules which match it. Each $code(<allow>) or
+$code(<deny>) rule in the policy should have the $code(own),
+$code(send_destination) or $code(receive_sender) attribute set.
+
+When designing an API, bear in mind the need to write and install such a
+security policy, and consider splitting up methods or providing more restricted
+versions which accept constrained parameters, so that they can be exposed with
+less restrictive security policies if needed by less trusted clients. Since
+dbus-daemon 1.10, security policies should be installed to
+$file($var($$(datadir))) rather than $(file($var($$(sysconfdir))); the latter
+is intended for system administators.
+
+Secondly, the default D-Bus security policy for the system bus is restrictive
+enough to allow sensitive data, such as passwords, to be safely sent over the
+bus in unicast messages (including unicast signals); so there is no need to
+complicate APIs by implementing extra security. Note, however, that sensitive
+data must $em(not) be sent in broadcast signals, as they can be seen by all
+peers on the bus. The default policy for the session bus is not restrictive, but
+it is typically not a security boundary.
+
+== Debugging
+   [id="debugging"]
+
+Debugging services running on D-Bus can be tricky, especially if they are
+launched via service activation and hence in an environment out of your control.
+
+Three main tools are available: D-Bus Monitor, Bustle and D-Feet.
+
+=== D-Bus Monitor
+    [id="dbus-monitor"]
+
+$link[>>http://dbus.freedesktop.org/doc/dbus-monitor.1.html]($cmd(dbus-monitor))
+is a core D-Bus tool, and allows eavesdropping on the session or system bus,
+printing all messages it sees. The messages may be filtered using a standard
+$link[>>http://dbus.freedesktop.org/doc/dbus-specification.html#message-bus-routing-match-rules](D-Bus
+match rule) to make the stream more manageable.
+
+Previous versions of D-Bus have required the security policy for the system bus
+to be manually relaxed to allow eavesdropping on all messages. This meant that
+debugging it was difficult and insecure. The latest versions of D-Bus add
+support for monitor-only connections for the root user, which means that
+$cmd(dbus-monitor) can be run as root to painlessly monitor all messages on the
+system bus without modifying its security policy.
+
+=== Bustle
+    [id="bustle"]
+
+$link[>>https://gitlab.freedesktop.org/bustle/bustle](Bustle) is a graphical version of
+$cmd(dbus-monitor), with a UI focused on profiling D-Bus performance by plotting
+messages on a timeline. It is ideal for finding bottlenecks in IPC performance
+between a service and client.
+
+=== D-Feet
+    [id="d-feet"]
+
+$link[>>https://wiki.gnome.org/Apps/DFeet](D-Feet) is an introspection tool for
+D-Bus, which displays all peers on the bus graphically, with their objects,
+interfaces, methods, signals and properties listed for examination. It is useful
+for debugging all kinds of issues related to presence of services on the bus
+and the objects they expose.

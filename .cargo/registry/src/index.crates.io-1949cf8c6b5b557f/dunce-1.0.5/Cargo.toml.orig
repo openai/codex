@@ -1,0 +1,23 @@
+[package]
+authors = ["Kornel <kornel@geekhood.net>"]
+categories = ["filesystem"]
+description = "Normalize Windows paths to the most compatible format, avoiding UNC where possible"
+documentation = "https://docs.rs/dunce"
+homepage = "https://lib.rs/crates/dunce"
+keywords = ["realpath", "unc", "canonicalize", "windows", "deunc"]
+license = "CC0-1.0 OR MIT-0 OR Apache-2.0"
+name = "dunce"
+readme = "README.md"
+repository = "https://gitlab.com/kornelski/dunce"
+version = "1.0.5"
+edition = "2021"
+
+[badges]
+gitlab = { repository = "kornelski/dunce" }
+appveyor = { repository = "pornel/dunce" }
+maintenance = { status = "passively-maintained" }
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--generate-link-to-definition"]
+

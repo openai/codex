@@ -1,0 +1,51 @@
+[package]
+name = "regex-syntax"
+version = "0.8.5"  #:version
+authors = ["The Rust Project Developers", "Andrew Gallant <jamslam@gmail.com>"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rust-lang/regex/tree/master/regex-syntax"
+documentation = "https://docs.rs/regex-syntax"
+description = "A regular expression parser."
+workspace = ".."
+edition = "2021"
+rust-version = "1.65"
+
+# Features are documented in the "Crate features" section of the crate docs:
+# https://docs.rs/regex-syntax/*/#crate-features
+[features]
+default = ["std", "unicode"]
+std = []
+arbitrary = ["dep:arbitrary"]
+
+unicode = [
+  "unicode-age",
+  "unicode-bool",
+  "unicode-case",
+  "unicode-gencat",
+  "unicode-perl",
+  "unicode-script",
+  "unicode-segment",
+]
+unicode-age = []
+unicode-bool = []
+unicode-case = []
+unicode-gencat = []
+unicode-perl = []
+unicode-script = []
+unicode-segment = []
+
+[dependencies]
+arbitrary = { version = "1.3.0", features = ["derive"], optional = true }
+
+[package.metadata.docs.rs]
+# We want to document all features.
+all-features = true
+# Since this crate's feature setup is pretty complicated, it is worth opting
+# into a nightly unstable option to show the features that need to be enabled
+# for public API items. To do that, we set 'docsrs', and when that's enabled,
+# we enable the 'doc_auto_cfg' feature.
+#
+# To test this locally, run:
+#
+#     RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc --all-features
+rustdoc-args = ["--cfg", "docsrs"]

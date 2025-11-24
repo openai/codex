@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Process",
+  "type": "object",
+  "properties": {
+    "command_line": {
+      "type": "string"
+    },
+    "durations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Duration"
+      }
+    },
+    "wall_time": {
+      "$ref": "#/$defs/Duration"
+    }
+  },
+  "required": [
+    "command_line",
+    "wall_time",
+    "durations"
+  ],
+  "$defs": {
+    "Duration": {
+      "type": "object",
+      "properties": {
+        "nanos": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "secs": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "secs",
+        "nanos"
+      ]
+    }
+  }
+}

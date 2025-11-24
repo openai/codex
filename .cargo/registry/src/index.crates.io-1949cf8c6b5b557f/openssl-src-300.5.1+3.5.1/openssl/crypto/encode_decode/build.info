@@ -1,0 +1,5 @@
+SOURCE[../../libcrypto]=encoder_meth.c encoder_lib.c encoder_pkey.c
+SOURCE[../../libcrypto]=decoder_meth.c decoder_lib.c decoder_pkey.c
+
+SOURCE[../../libcrypto]=encoder_err.c
+SOURCE[../../libcrypto]=decoder_err.c

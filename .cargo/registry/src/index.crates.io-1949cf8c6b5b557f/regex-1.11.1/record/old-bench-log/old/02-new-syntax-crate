@@ -1,0 +1,28 @@
+test bench::anchored_literal_long_match      ... bench:       545 ns/iter (+/- 12)
+test bench::anchored_literal_long_non_match  ... bench:       251 ns/iter (+/- 11)
+test bench::anchored_literal_short_match     ... bench:       521 ns/iter (+/- 31)
+test bench::anchored_literal_short_non_match ... bench:       231 ns/iter (+/- 0)
+test bench::easy0_1K                         ... bench:      7465 ns/iter (+/- 102) = 137 MB/s
+test bench::easy0_32                         ... bench:      4995 ns/iter (+/- 27) = 6 MB/s
+test bench::easy0_32K                        ... bench:     86985 ns/iter (+/- 755) = 376 MB/s
+test bench::easy1_1K                         ... bench:      9493 ns/iter (+/- 1727) = 107 MB/s
+test bench::easy1_32                         ... bench:      4955 ns/iter (+/- 324) = 6 MB/s
+test bench::easy1_32K                        ... bench:    155288 ns/iter (+/- 13016) = 210 MB/s
+test bench::hard_1K                          ... bench:     95925 ns/iter (+/- 1674) = 10 MB/s
+test bench::hard_32                          ... bench:      8264 ns/iter (+/- 151) = 3 MB/s
+test bench::hard_32K                         ... bench:   2886440 ns/iter (+/- 25807) = 11 MB/s
+test bench::literal                          ... bench:       365 ns/iter (+/- 12)
+test bench::match_class                      ... bench:      2313 ns/iter (+/- 8)
+test bench::match_class_in_range             ... bench:      2596 ns/iter (+/- 8)
+test bench::medium_1K                        ... bench:     38136 ns/iter (+/- 941) = 26 MB/s
+test bench::medium_32                        ... bench:      6178 ns/iter (+/- 147) = 5 MB/s
+test bench::medium_32K                       ... bench:   1065698 ns/iter (+/- 6815) = 30 MB/s
+test bench::no_exponential                   ... bench:    682461 ns/iter (+/- 2860)
+test bench::not_literal                      ... bench:      4525 ns/iter (+/- 67)
+test bench::one_pass_long_prefix             ... bench:      1459 ns/iter (+/- 13)
+test bench::one_pass_long_prefix_not         ... bench:      1463 ns/iter (+/- 8)
+test bench::one_pass_short_a                 ... bench:      2615 ns/iter (+/- 10)
+test bench::one_pass_short_a_not             ... bench:      4066 ns/iter (+/- 48)
+test bench::one_pass_short_b                 ... bench:      2064 ns/iter (+/- 10)
+test bench::one_pass_short_b_not             ... bench:      3502 ns/iter (+/- 24)
+test bench::replace_all                      ... bench:      2949 ns/iter (+/- 15)

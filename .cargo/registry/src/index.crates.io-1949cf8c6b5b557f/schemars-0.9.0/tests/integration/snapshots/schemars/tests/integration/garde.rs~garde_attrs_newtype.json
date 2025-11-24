@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GardeAttrNewType",
+  "type": "integer",
+  "format": "uint8",
+  "minimum": 0,
+  "maximum": 10
+}

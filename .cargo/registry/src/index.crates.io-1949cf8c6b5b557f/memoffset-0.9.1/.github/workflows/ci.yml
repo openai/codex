@@ -1,0 +1,72 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust:
+          - stable
+          - beta
+          - nightly
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+      - name: Run cargo test
+        run: cargo test
+
+  test-msrv:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust:
+          - 1.19.0  # Oldest supported (first version with numeric fields in struct patterns)
+          - 1.20.0  # Oldest supported with tuple_ty
+          - 1.31.0  # Oldest supported with allow(clippy)
+          - 1.36.0  # Oldest supported with MaybeUninit
+          - 1.40.0  # Oldest supported with cfg(doctest)
+          - 1.51.0  # Oldest supported with ptr::addr_of!
+          - 1.65.0  # Oldest supported with stable const evaluation (sans cell)
+          - 1.77.0  # Oldest supported with native `offset_of!`
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+      - name: Run cargo test
+        # Exclude doctests here, as we don't want to clutter docs themselves
+        # with backwards compatibility workarounds.
+        run: cargo test --lib
+
+  miri:
+    name: Test Suite (Miri)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: miri
+      - name: Test with Miri
+        run: |
+          cargo miri test
+
+  style:
+    name: lints and formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.51.0 # pin a version for reproducible results
+          components: rustfmt
+      - name: Check warnings
+        run: RUSTFLAGS="-D warnings" cargo check --all-targets
+      - name: Check formatting
+        run: cargo fmt -- --check

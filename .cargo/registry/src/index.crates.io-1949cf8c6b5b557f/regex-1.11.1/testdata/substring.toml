@@ -1,0 +1,36 @@
+# These tests check that regex engines perform as expected when the search is
+# instructed to only search a substring of a haystack instead of the entire
+# haystack. This tends to exercise interesting edge cases that are otherwise
+# difficult to provoke. (But not necessarily impossible. Regex search iterators
+# for example, make use of the "search just a substring" APIs by changing the
+# starting position of a search to the end position of the previous match.)
+
+[[test]]
+name = "unicode-word-start"
+regex = '\b[0-9]+\b'
+haystack = "β123"
+bounds = { start = 2, end = 5 }
+matches = []
+
+[[test]]
+name = "unicode-word-end"
+regex = '\b[0-9]+\b'
+haystack = "123β"
+bounds = { start = 0, end = 3 }
+matches = []
+
+[[test]]
+name = "ascii-word-start"
+regex = '\b[0-9]+\b'
+haystack = "β123"
+bounds = { start = 2, end = 5 }
+matches = [[2, 5]]
+unicode = false
+
+[[test]]
+name = "ascii-word-end"
+regex = '\b[0-9]+\b'
+haystack = "123β"
+bounds = { start = 0, end = 3 }
+matches = [[0, 3]]
+unicode = false

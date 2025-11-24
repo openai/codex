@@ -1,0 +1,34 @@
+{
+  "a": {
+    "b": {
+      "type": "integer",
+      "value": "123"
+    }
+  },
+  "table": {
+    "a": {
+      "b": {
+        "c": {
+          "type": "integer",
+          "value": "1"
+        },
+        "d": {
+          "type": "integer",
+          "value": "2"
+        }
+      }
+    },
+    "in": {
+      "type": {
+        "color": {
+          "type": "string",
+          "value": "blue"
+        },
+        "name": {
+          "type": "string",
+          "value": "cat"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,20 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Code:
+def test():
+    # Type of `x` should be inferred as list of either `int` or `str`.
+    x = []
+    x.append(1)
+    x.append("")
+
+No errors.
+
+Types:
+x: list[int | str]
+
+Compiler typechecker (eval):
+No errors.

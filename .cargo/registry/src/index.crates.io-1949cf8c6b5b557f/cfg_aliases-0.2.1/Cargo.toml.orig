@@ -1,0 +1,22 @@
+[package]
+name = "cfg_aliases"
+version = "0.2.1"
+license = "MIT"
+authors = ["Zicklag <zicklag@katharostech.com>"]
+edition = "2018"
+description = "A tiny utility to help save you a lot of effort with long winded `#[cfg()]` checks."
+keywords = ["cfg", "alias", "conditional", "compilation", "build"]
+categories = ["development-tools", "development-tools::build-utils"]
+
+documentation = "https://docs.rs/cfg_aliases"
+readme = "README.md"
+homepage = "https://github.com/katharostech/cfg_aliases"
+repository = "https://github.com/katharostech/cfg_aliases"
+
+exclude = ["modoc.config", "release.toml"]
+
+[badges]
+maintenance = { status = "passively-maintained" }
+
+[lints.clippy]
+str_to_string = "deny"

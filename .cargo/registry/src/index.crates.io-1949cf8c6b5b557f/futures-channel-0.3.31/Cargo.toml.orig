@@ -1,0 +1,37 @@
+[package]
+name = "futures-channel"
+version = "0.3.31"
+edition = "2018"
+rust-version = "1.56"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rust-lang/futures-rs"
+homepage = "https://rust-lang.github.io/futures-rs"
+description = """
+Channels for asynchronous communication using futures-rs.
+"""
+
+[features]
+default = ["std"]
+std = ["alloc", "futures-core/std"]
+alloc = ["futures-core/alloc"]
+sink = ["futures-sink"]
+
+# These features are no longer used.
+# TODO: remove in the next major version.
+unstable = []
+cfg-target-has-atomic = []
+
+[dependencies]
+futures-core = { path = "../futures-core", version = "0.3.31", default-features = false }
+futures-sink = { path = "../futures-sink", version = "0.3.31", default-features = false, optional = true }
+
+[dev-dependencies]
+futures = { path = "../futures", default-features = true }
+futures-test = { path = "../futures-test", default-features = true }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true

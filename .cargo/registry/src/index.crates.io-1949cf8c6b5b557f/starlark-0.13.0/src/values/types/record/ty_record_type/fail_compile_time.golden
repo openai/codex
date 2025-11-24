@@ -1,0 +1,24 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Program:
+
+MyRec = record(x = int)
+WrongRec = record(x = int)
+
+def foo(x: MyRec): pass
+
+def bar():
+    foo(WrongRec(x = 1))
+
+Error:
+
+error: Expected type `MyRec` but got `WrongRec`
+ --> assert.bzl:7:9
+  |
+7 |     foo(WrongRec(x = 1))
+  |         ^^^^^^^^^^^^^^^
+  |

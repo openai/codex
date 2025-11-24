@@ -1,0 +1,37 @@
+[package]
+name = "pretty_assertions"
+version = "1.4.1"
+authors = [
+    "Colin Kiegel <kiegel@gmx.de>",
+    "Florent Fayolle <florent.fayolle69@gmail.com>",
+    "Tom Milligan <code@tommilligan.net>",
+]
+edition = "2018"
+
+description = "Overwrite `assert_eq!` and `assert_ne!` with drop-in replacements, adding colorful diffs."
+repository = "https://github.com/rust-pretty-assertions/rust-pretty-assertions"
+documentation = "https://docs.rs/pretty_assertions"
+
+license = "MIT OR Apache-2.0"
+categories = ["development-tools"]
+keywords = ["assert", "diff", "pretty", "color"]
+readme = "README.md"
+
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+default = ["std"]
+
+# Use the Rust standard library.
+# Exactly one of `std` and `alloc` is required.
+std = []
+# Use the `alloc` crate.
+# Exactly one of `std` and `alloc` is required.
+alloc = []
+# Enable unstable features. Requires nightly rustc.
+unstable = []
+
+[dependencies]
+yansi = "1.0.1"
+diff = "0.1.12"

@@ -1,0 +1,301 @@
+Revision history for Text::Template
+
+1.56  2019-07-09
+    - Fix typos in Changes
+
+1.55  2019-02-25
+    - Improve AppVeyor tests for older Perls (Thanks Roy Ivy)
+    - Check for Test::More 0.94 and skip tests if not installed where
+      done_testing() is used (Thanks Roy Ivy).
+    - Improve workaround for broken Win32 File::Temp taint failure (Thanks Roy Ivy).
+    - Skip/todo tests which fail under Devel::Cover (Thanks Roy Ivy)
+    - Add checks and skip_all checks for non-core test modules (Thanks Roy Ivy)
+
+1.54  2019-01-13
+    - Fix tempfile creation during tests on Win32
+
+1.53  2018-05-02
+    - Add support for decoding template files via ENCODING constructor arg
+      [github #11]
+    - Docs cleanup: replace indirect-object style examples and use class method
+      style constructor calls in the POD docs
+    - Docs cleanup: remove hard tabs from POD, replace dated, unfair synopsis
+      [github #5], convert "THANKS" section to a POD list
+
+1.52  2018-03-19
+    - Fix possible 'Subroutine ... redefined' warning (Github #10)
+
+1.51  2018-03-04
+    - Add test for nested tags breakage that happened in v1.46
+    - Turn off strict+warnings in sections where template code is eval'ed
+      [github #9]
+
+1.50  2018-02-10
+  *** Revert support for identical start/end delimiters (e.g.: @@foo@@, XXfooXX)
+      due to breakage with nested tags (see
+      https://github.com/mschout/perl-text-template/issues/8).  Will revisit
+      this in a future release.
+
+1.49  2018-02-07
+    - Fix failing tests in v1.48 under perl < 5.8.9
+
+1.48  2018-02-07
+    - remove COPYING and Artistic files from the dist.  These are replaced by
+      the Dist::Zilla generated LICENSE file.
+    - use strict/warnings (thanks Mohammad S Anwar)
+    - remove $VERSION checks from tests. This makes it easier to run the test
+      with Dist::Zilla and avoids maintenance issue of updating the tests for
+      each release (Thanks Andrew Ruder).
+    - Allow precompiled templates to work with preprocessing [#29928] (Thanks
+      Nik LaBelle)
+    - Add "strict" option to fill_in().  This adds "use strict" and "use vars
+      (...)" to the prepend section, and only the keys of the HASH option are
+      allowed in the template.  (Thanks Desmond Daignault, Kivanc Yazan, CJM)
+      [55696]
+    - Fix templates with inline comments without newline after comment for perl
+      < 5.18 [34292]
+    - Don't use bareword file handles
+    - use three arg form of open()
+    - Fix BROKEN behaviour so that it returns the text accumulated so far on
+      undef as documented [28974]
+    - Source code cleanups
+    - Minimum perl version is now 5.8.0
+    - Allow start/end delimiters to be identical (e.g.: @@foo@@, XXfooXX)
+      (Thanks mirod) [46639]
+    - Fix + document the FILENAME parameter to fill_in() (Thanks VDB) [106093]
+    - Test suite cleanups:
+        + turn on strict/warnings for all tests
+        + run tests through perltidy and formatting cleanup
+        + remove number prefixes from test names
+        + use Test::More instead of generating TAP by hand
+        + use three-arg form of open()
+        + don't use indirect object syntax
+        + don't use bareword file handles
+        + use File::Temp to generate temporary files
+
+1.47  2017-02-27
+    - Fix longstanding memory leak in _scrubpkg() [#22031]
+    - Fix various spelling errors [#86872]
+
+NOTE: Changes for versions prior to 1.47 have been imported from README
+
+1.46  2013-02-11
+    - Thanks to Rik Signes, there is a new
+      Text::Template->append_text_to_output method, which Text::Template always
+      uses whenever it wants to emit output.  You can subclass this to get
+      control over the output, for example for postprocessing.
+    - A spurious warning is no longer emitted when the TYPE parameter to ->new
+      is omitted.
+
+1.45  2008-04-16
+
+1.44  2003-04-29
+    - This is a maintenance release.  There are no feature changes.
+    - _scrubpkg, which was responsible for eptying out temporary packages after
+      the module had done with them, wasn't always working; the result was
+      memory leaks in long-running applications. This should be fixed now, and
+      there is a test in the test suite for it.
+    - Minor changes to the test suite to prevent spurious errors.
+    - Minor documentation changes.
+
+1.43  2002-03-25
+    - The ->new method now fails immediately and sets $Text::Template::ERROR if
+      the file that is named by a filename argument does not exist or cannot be
+      opened for some other reason.  Formerly, the constructor would succeed
+      and the ->fill_in call would fail.
+
+1.42  2001-11-05
+    - This is a maintenance release.  There are no feature changes.
+    - Fixed a bug relating to use of UNTAINT under perl 5.005_03 and possibly
+      other versions.
+    - Taint-related tests are now more comprehensive.
+
+1.41  2001-09-04
+    - This is a maintenance release.  There are no feature changes.
+    - Tests now work correctly on Windows systems and possibly on other
+      non-unix systems.
+
+1.40  2001-08-30
+  *** INCOMPATIBLE CHANGE ***
+    -  The format of the default error message has changed.  It used to look
+       like:
+
+        Program fragment at line 30 delivered error ``Illegal division by zero''
+
+       It now looks like:
+
+        Program fragment delivered error ``Illegal division by zero at catalog.tmpl line 37''
+
+      Note that the default message used to report the line number at which the
+      program fragment began; it now reports the line number at which the error
+      actually occurred.
+
+  *** INCOMPATIBLE CHANGE ***
+    - The format of the default error message has changed. It used to look like:
+
+        Program fragment at line 30 delivered error ``Illegal division by zero''
+
+      It now looks like:
+
+        Program fragment delivered error ``Illegal division by zero at catalog.tmpl line 37''
+
+    - Note that the default message used to report the line number at which the
+      program fragment began; it now reports the line number at which the error
+      actually occurred.
+    - New UNTAINT option tells the module that it is safe to 'eval' code even
+      though it has come from a file or filehandle.
+    - Code added to prevent memory leaks when filling many templates.  Thanks
+      to Itamar Almeida de Carvalho.
+    - Bug fix:  $OUT was not correctly initialized when used in conjunction
+      with SAFE.
+    - You may now use a glob ref when passing a filehandle to the ->new
+      function.  Formerly, a glob was required.
+    - New subclass:  Text::Template::Preprocess.  Just like Text::Template, but
+      you may supply a PREPROCESS option in the constructor or the fill_in
+      call; this is a function which receives each code fragment prior to
+      evaluation, and which may modify and return the fragment; the modified
+      fragment is what is evaluated.
+    - Error messages passed to BROKEN subroutines will now report the correct
+      line number of the template at which the error occurred:
+
+        Illegal division by zero at template line 37.
+
+    - If the template comes from a file, the filename will be reported as well:
+
+        Illegal division by zero at catalog.tmpl line 37.
+
+    - New UNTAINT option tells the module that it is safe to eval template code
+      even if it has come from a file or filehandle, disabling taint checking
+      in these cases.
+    - Code added to prevent memory leaks when filling many templates. Thanks to
+      Itamar Almeida de Carvalho.
+    - Bug fix: $OUT was not always correctly initialized when used in
+      conjunction with SAFE.
+    - You may now use a glob ref when passing a filehandle to the new function.
+      Formerly, a glob was required.
+    - Error messages passed to BROKEN subroutines will now report the correct
+      line number of the template at which the error occurred:
+
+        Illegal division by zero at template line 37.
+
+      If the template comes from a file, the filename will be reported as well:
+
+        Illegal division by zero at catalog.tmpl line 37.
+
+    - New subclass: Text::Template::Preprocess. Just like Text::Template, but
+      you may supply a PREPROCESS option in the fill_in call; this is a
+      function which receives each code fragment prior to evaluation, and which
+      may modify and return the fragment; the modified fragment is what is
+      evaluated. 
+
+1.31  2001-02-05
+    - Maintenance and bug fix release
+    - fill_in_string was failing.  Thanks to Donald L. Greer Jr. for the test case.
+
+1.23  1999-12-21
+    - Small bug fix:  DELIMITER and other arguments were being ignored in calls
+      to fill_in_file and fill_this_in.  (Thanks to Jonathan Roy for reporting
+      this.)
+
+1.22
+    - You can now specify that certain Perl statements be prepended to the
+      beginning of every program fragment in a template, either per template,
+      or for all templates, or for the duration of only one call to fill_in.
+      This is useful, for example, if you want to enable `strict' checks in
+      your templates but you don't want to manually add `use strict' to the
+      front of every program fragment everywhere.
+
+1.20  1999-03-08
+    - You can now specify that the program fragment delimiters are strings
+      other than { and }.  This has three interesting effects: First, it
+      changes the delimiter strings.  Second, it disables the special meaning
+      of \, so you have to be really, really sure that the delimiters will not
+      appear in your templates.  And third, because of the simplifications
+      introduced by the elimination of \ processing, template parsing is 20-25%
+      faster.  See the manual section on `Alternative Delimiters'.
+    - Fixed bug having to do with undefined values in HASH options.  In
+      particular, Text::Template no longer generates a warning if you try to
+      give a variable an undefined value.
+
+1.12  1999-02-28
+    - I forgot to say that Text::Template ISA Exporter, so the exported
+      functions never got exported.  Duhhh!
+    - Template TYPEs are now case-insensitive.  The `new' method now diagnoses
+      attempts to use an invalid TYPE.
+    - More tests for these things.
+
+1.11  1999-02-25
+    - Fixed a bug in the way backslashes were processed.  The 1.10 behavior was
+      incompatible with the beta versions and was also inconvenient.  (`\n' in
+      templates was replaced with `n' before it was given to Perl for
+      evaluation.)  The new behavior is also incompatible with the beta
+      versions, but it is only a little bit incompatible, and it is probably
+      better.
+    - Documentation for the new behavior, and tests for the bug.
+
+1.10  1999-02-13
+    - New OUTPUT option delivers template results directly to a filehandle
+      instead of making them into a string.  Saves space and time. 
+    - PACKAGE and HASH now work intelligently with SAFE.
+    - Fragments may now output data directly to the template, rather than
+      having to arrange to return it as a return value at the end.  This means
+      that where you used to have to write this:
+
+            { my $blist = '';
+                  foreach $i (@items) {
+                    $blist .= qq{  * $i\n};
+                  }
+                  $blist;
+                }
+
+      You can now write this instead, because $OUT is special.
+
+            { foreach $i (@items) {
+                    $OUT.= "  * $i\n";
+                  }
+                }
+
+      (`A spoonful of sugar makes the medicine go down.')
+    - Fixed some small bugs.  Worked around a bug in Perl that does the wrong
+      thing with $x = <Y> when $x contains a glob.
+    - More documentation.  Errors fixed.
+    - Lots more tests.  
+
+1.03  1999-02-06
+    - Code added to support HASH option to fill_in.  (Incl. `_gensym'
+      function.)
+    - Documentation for HASH.
+    - New test file for HASH.
+    - Note about failure of lexical variables to propagate into templates.  Why
+      does this surprise people?
+    - Bug fix: program fragments are evaluated in an environment with `no
+      strict' by default.  Otherwise, you get a lot of `Global symbol "$v"
+      requires explicit package name' failures.  Why didn't the test program
+      pick this up?  Because the only variable the test program ever used was
+      `$a', which is exempt.  Duhhhhh.
+    - Fixed the test program.
+    - Various minor documentation fixes.
+
+1.00  1999-02-05
+    This is a complete rewrite. The new version delivers better functionality
+    but is only 2/3 as long, which I think is a good sign. It is supposed to be
+    100% backward-compatible with the previous versions. With one cosmetic
+    change, it passes the test suite that the previous versions passed. If you
+    have compatibility problems, please mail me immediately.
+
+    - At least twice as fast
+    - Better support for filling out the same template more than once 
+    - Now supports evaluation of program fragments in Safe compartments.
+      (Thanks, Jonathan!)
+    - Better argument syntax
+    - More convenience functions
+    - The parser is much better and simpler
+    - Once a template is parsed, the parsed version is stored so that
+      it needn't be parsed again.
+    - BROKEN function behavior is rationalized. You can now pass an
+      arbitrary argument to your BROKEN function, or return a value
+      from it to the main program.
+    - Documentation overhauled.
+
+Previous Versions
+    - Maintained by Mark Jason Dominus (MJD)

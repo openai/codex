@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "This is the struct's title",
+  "description": "This is the struct's description.",
+  "type": "object",
+  "properties": {
+    "my_int": {
+      "title": "An integer",
+      "type": "integer",
+      "format": "int32"
+    },
+    "my_undocumented_bool": {
+      "type": "boolean"
+    },
+    "my_unit": {
+      "description": "A unit struct instance",
+      "$ref": "#/$defs/MyUnitStruct"
+    },
+    "my_documented_bool": {
+      "title": "Documented bool",
+      "description": "This bool is documented",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "my_int",
+    "my_undocumented_bool",
+    "my_unit",
+    "my_documented_bool"
+  ],
+  "$defs": {
+    "MyUnitStruct": {
+      "title": "A Unit",
+      "type": "null"
+    }
+  }
+}

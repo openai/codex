@@ -1,0 +1,30 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Code:
+def func_which_returns_union(p) -> str | int:
+    if p == 56:
+        return "a"
+    elif p == 57:
+        return 1
+    else:
+        return []
+
+Error:
+error: Expected type `int | str` but got `list[typing.Never]`
+ --> filename:8:9
+  |
+8 |         return []
+  |         ^^^^^^^^^
+  |
+
+Compiler typechecker (eval):
+error: Expected type `int | str` but got `list[typing.Never]`
+ --> filename:8:9
+  |
+8 |         return []
+  |         ^^^^^^^^^
+  |

@@ -1,0 +1,90 @@
+[package]
+name = "weezl"
+version = "0.1.10"
+license = "MIT OR Apache-2.0"
+description = "Fast LZW compression and decompression."
+authors = ["The image-rs Developers"]
+readme = "README.md"
+repository = "https://github.com/image-rs/weezl"
+documentation = "https://docs.rs/weezl"
+edition = "2018"
+exclude = ["benches/*.lzw"]
+
+[lib]
+name = "weezl"
+bench = false
+
+[dependencies.futures]
+optional = true
+version = "0.3.12"
+default-features = false
+features = ["std"]
+
+[dev-dependencies]
+criterion = "0.3.1"
+[dev-dependencies.tokio]
+version = "1"
+default-features = false
+features = ["macros", "io-util", "net", "rt", "rt-multi-thread"]
+[dev-dependencies.tokio-util]
+version = "0.6.2"
+default-features = false
+features = ["compat"]
+
+[features]
+default = ["std"]
+# Enable usage of the standard library and in particular any interface that
+# requires the io interfaces `Read` and `Write`.
+std = ["alloc"]
+# Enable usage of the `alloc` crate. You should always have this feature
+# enabled. Without this feature neither the encoder nor the decoder exists.
+# This is purely a reservation for future possibilities.
+alloc = []
+# Enable usage of `async` through `futures`. This is basically the blocker
+# for `1.0` as we may track its version. Note that this negates no_std right
+# now but implicitly through being required from futures. We also use the
+# `std::io::Error` interface. Note that this features is NOT supported on
+# 1.34.2 but only on stable.
+async = ["futures", "std"]
+
+[[bin]]
+name = "lzw"
+path = "bin/lzw.rs"
+bench = false
+required-features = ["std"]
+
+[[bench]]
+name = "msb8"
+harness = false
+required-features = ["std"]
+
+[[example]]
+name = "lzw-compress"
+required-features = ["std"]
+
+[[example]]
+name = "lzw-decompress"
+required-features = ["std"]
+
+[[test]]
+name = "async"
+required-features = ["async", "std"]
+
+[[test]]
+name = "roundtrip"
+required-features = ["std"]
+
+[[test]]
+name = "roundtrip_vec"
+required-features = ["alloc"]
+
+[[test]]
+name = "implicit_reset"
+required-features = ["std"]
+
+[[test]]
+name = "end_of_buffer"
+required-features = ["alloc"]
+
+[package.metadata.docs.rs]
+all-features = true

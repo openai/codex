@@ -1,0 +1,40 @@
+[[slices]]
+source = """
+) -> Option<String> {
+    for ann in annotations {
+        match (ann.range.0, ann.range.1) {
+            (None, None) => continue,
+            (Some(start), Some(end)) if start > end_index || end < start_index => continue,
+            (Some(start), Some(end)) if start >= start_index && end <= end_index => {
+                let label = if let Some(ref label) = ann.label {
+                    format!(" {}", label)
+                } else {
+                    String::from("")
+                };
+
+                return Some(format!(
+                    "{}{}{}",
+                    " ".repeat(start - start_index),
+                    "^".repeat(end - start),
+                    label
+                ));
+            }
+            _ => continue,
+        }
+    }
+"""
+line_start = 51
+origin = "src/format.rs"
+fold = true
+[[slices.annotations]]
+label = "expected `std::option::Option<std::string::String>` because of return type"
+annotation_type = "Warning"
+range = [5, 19]
+[[slices.annotations]]
+label = "expected enum `std::option::Option`, found ()"
+annotation_type = "Error"
+range = [22, 766]
+[title]
+label = "mismatched types"
+id = "E0308"
+annotation_type =  "Error"

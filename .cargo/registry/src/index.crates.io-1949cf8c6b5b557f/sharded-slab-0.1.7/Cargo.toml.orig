@@ -1,0 +1,53 @@
+[package]
+name = "sharded-slab"
+version = "0.1.7"
+authors = ["Eliza Weisman <eliza@buoyant.io>"]
+edition = "2018"
+documentation = "https://docs.rs/sharded-slab/"
+homepage = "https://github.com/hawkw/sharded-slab"
+repository = "https://github.com/hawkw/sharded-slab"
+readme = "README.md"
+rust-version = "1.42.0"
+license = "MIT"
+keywords = ["slab", "allocator", "lock-free", "atomic"]
+categories = ["memory-management", "data-structures", "concurrency"]
+description = """
+A lock-free concurrent slab.
+"""
+ignore = [
+    "flake.nix",
+    "flake.lock",
+    ".envrc",
+    ".clog.toml",
+    ".cargo",
+    ".github",
+    ".direnv",
+    "bin",
+]
+
+[badges]
+maintenance = { status = "experimental" }
+
+[[bench]]
+name = "bench"
+harness = false
+
+[dependencies]
+lazy_static = "1"
+
+[dev-dependencies]
+proptest = "1"
+criterion = "0.3"
+slab = "0.4.2"
+memory-stats = "1"
+indexmap = "1" # newer versions lead to "candidate versions found which didn't match" on 1.42.0
+
+[target.'cfg(loom)'.dependencies]
+loom = { version = "0.5", features = ["checkpoint"], optional = true }
+
+[target.'cfg(loom)'.dev-dependencies]
+loom = { version = "0.5", features = ["checkpoint"] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

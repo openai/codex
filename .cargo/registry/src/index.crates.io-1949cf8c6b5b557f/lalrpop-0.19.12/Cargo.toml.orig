@@ -1,0 +1,58 @@
+[package]
+name = "lalrpop"
+version = "0.19.12" # LALRPOP
+description = "convenient LR(1) parser generator"
+repository = "https://github.com/lalrpop/lalrpop"
+readme = "../README.md"
+keywords = ["parser", "generator", "LR", "yacc", "grammar"]
+categories = ["parsing"]
+license = "Apache-2.0 OR MIT"
+authors = ["Niko Matsakis <niko@alum.mit.edu>"]
+workspace = ".."
+
+exclude = ["build.rs"]
+
+[lib]
+doctest = false
+
+[dependencies]
+ascii-canvas = { version = "3.0", default_features = false }
+bit-set = { version = "0.5.2", default_features = false }
+diff = { version = "0.1.12", default_features = false }
+ena = { version = "0.14", default_features = false }
+is-terminal = "0.4.2"
+itertools = { version = "0.10", default_features = false, features = ["use_std"] }
+petgraph = { version = "0.6", default_features = false }
+regex = { version = "1", default_features = false, features = ["std"] }
+regex-syntax = { version = "0.6", default_features = false, features = ["unicode"] }
+string_cache = { version = "0.8", default_features = false }
+term = { version = "0.7", default_features = false }
+tiny-keccak = { version = "2.0.2", features = ["sha3"] }
+unicode-xid = { version = "0.2", default_features = false }
+
+pico-args = { version = "0.4", default_features = false, optional = true }
+
+[dev-dependencies]
+regex = { version = "1", default-features = false, features = ["std", "unicode-case", "unicode-perl"] }
+regex-syntax = { version = "0.6", default-features = false, features = ["unicode-case", "unicode-perl"] }
+rand = "0.8"
+
+[dependencies.lalrpop-util]
+path = "../lalrpop-util"
+version = "0.19.12" # LALRPOP
+
+[features]
+default=["lexer"]
+
+# Feature used when developing LALRPOP. Tells the build script to use an existing lalrpop binary to
+# generate LALRPOPs own parser instead of using the saved parser.
+test = []
+
+lexer = ["lalrpop-util/lexer"]
+
+[package.metadata.docs.rs]
+features = ["lexer"]
+
+[[bin]]
+name = "lalrpop"
+required-features = ["pico-args"]

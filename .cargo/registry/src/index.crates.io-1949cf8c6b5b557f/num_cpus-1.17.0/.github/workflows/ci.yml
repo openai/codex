@@ -1,0 +1,160 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+env:
+  RUST_BACKTRACE: 1
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ci-pass:
+    name: CI is green
+    runs-on: ubuntu-latest
+    needs:
+      - msrv
+      - test-linux
+      - test-macos
+      - test-windows
+      - build-cross
+      - test-cgroups
+    steps:
+      - run: exit 0
+
+  msrv:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        rust:
+          - 1.13
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Run tests
+      run: |
+        rustup default ${{ matrix.rust }}
+        cargo update
+        cargo update -p libc --precise 0.2.26
+        cargo test --verbose
+
+  test-linux:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        rust:
+          - stable
+          - beta
+          - nightly
+        target:
+          - x86_64-unknown-linux-gnu
+          - x86_64-unknown-linux-musl
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Run tests
+      run: |
+        rustup default ${{ matrix.rust }}
+        rustup target add ${{ matrix.target }}
+        cargo test --verbose --target ${{ matrix.target }}
+
+  test-macos:
+    runs-on: macos-latest
+
+    strategy:
+      matrix:
+        rust:
+          - stable
+          - beta
+          - nightly
+        target:
+          - x86_64-apple-darwin
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Run tests
+      run: |
+        rustup default ${{ matrix.rust }}
+        rustup target add ${{ matrix.target }}
+        cargo test --verbose --target ${{ matrix.target }}
+
+  test-windows:
+    runs-on: windows-latest
+
+    strategy:
+      matrix:
+        rust:
+          - stable
+          - beta
+          - nightly
+        target:
+          - x86_64-pc-windows-gnu
+          - x86_64-pc-windows-msvc
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Run tests
+      run: |
+        rustup default ${{ matrix.rust }}
+        rustup target add ${{ matrix.target }}
+        cargo test --verbose --target ${{ matrix.target }}
+
+  build-cross:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        rust:
+          - stable
+        target:
+          - aarch64-unknown-linux-gnu
+          - i686-pc-windows-gnu
+          - i686-pc-windows-msvc
+          - i686-unknown-linux-gnu
+          - aarch64-apple-darwin
+          - aarch64-pc-windows-msvc
+          - aarch64-unknown-linux-musl
+          - arm-unknown-linux-gnueabi
+          - arm-unknown-linux-gnueabihf
+          - armv7-unknown-linux-gnueabihf
+          - powerpc-unknown-linux-gnu
+          - powerpc64-unknown-linux-gnu
+          - powerpc64le-unknown-linux-gnu
+          - riscv64gc-unknown-linux-gnu
+          - s390x-unknown-linux-gnu
+          - x86_64-unknown-freebsd
+          - x86_64-unknown-illumos
+          - x86_64-unknown-netbsd
+          - i686-linux-android
+          - x86_64-linux-android
+          - arm-linux-androideabi
+          - aarch64-linux-android
+          - x86_64-apple-ios
+          - aarch64-apple-ios
+          - aarch64-apple-ios-sim
+          - aarch64-apple-darwin
+    steps:
+    - uses: actions/checkout@v3
+    - name: Run build
+      run: |
+        rustup default ${{ matrix.rust }}
+        rustup target add ${{ matrix.target }}
+        cargo build --verbose --target ${{ matrix.target }}
+
+  test-cgroups:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Test Cgroup
+      run: |
+        docker build -f ci/cgroups/Dockerfile -t num-cpus-cgroups .
+        # Test without cgroups
+        docker run -e NUM_CPUS_TEST_GET=4 num-cpus-cgroups
+        # Only 1 CPU
+        docker run --cpus="1" -e NUM_CPUS_TEST_GET=1 num-cpus-cgroups
+        # 1.5 CPUs
+        docker run --cpus="1.5" -e NUM_CPUS_TEST_GET=2 num-cpus-cgroups

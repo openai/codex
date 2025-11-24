@@ -1,0 +1,7 @@
+Package: boost-container
+Version: 1.67.0
+Depends: boost-assert, boost-build, boost-config, boost-core, boost-functional, boost-integer, boost-intrusive, boost-modular-build-helper, boost-move, boost-static-assert, boost-type-traits, boost-vcpkg-helpers
+Architecture: x64-windows
+Multi-Arch: same
+Description: Boost container module
+Status: install ok installed

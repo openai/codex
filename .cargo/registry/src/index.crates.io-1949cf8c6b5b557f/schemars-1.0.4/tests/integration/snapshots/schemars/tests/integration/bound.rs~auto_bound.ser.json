@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MyContainer2",
+  "type": "object",
+  "properties": {
+    "u": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "phantom": {
+      "type": "null"
+    }
+  },
+  "required": [
+    "u",
+    "phantom"
+  ]
+}

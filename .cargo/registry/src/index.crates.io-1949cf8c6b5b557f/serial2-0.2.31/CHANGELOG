@@ -1,0 +1,172 @@
+# Version 0.2.31 - 2025-08-07
+- [fix][patch] Fix build for AIX targets.
+
+# Version 0.2.30 - 2025-07-31
+- [fix][minor] Fix `SerialPort::discard_buffers()` on Unix platforms.
+
+# Version 0.2.29 - 2025-04-08
+- [add][minor] Add `SerialPort::set_break()` to hold the data line in break condition.
+
+# Version 0.2.28 - 2024-11-10
+- [fix][minor] Fix verification of applied settings on iOS and macOS.
+
+# Version 0.2.27 - 2024-09-13
+- [fix][minor] Allow for a 2.5% deviation in actual baud rate when applying settings on Unix.
+- [add][minor] Implement `Debug` for `SerialPort` showing the underlying file descriptor (Unix) or handle (Windows).
+
+# Version 0.2.26 - 2024-06-21
+- [add][minor] Support more custom baud rates on iOS and macOS.
+
+# Version 0.2.25 - 2024-06-13
+- [fix][patch] Fix documentation build failre on http://docs.rs.
+
+# Version 0.2.24 - 2024-04-23
+- [fix][patch] Fix compilation with "doc" feature on supported platforms.
+
+# Version 0.2.23 - 2024-04-23
+- [add][minor] Add a "doc" feature to enable all feature and platform specific items with stubs for documentation purposes.
+
+# Version 0.2.22 - 2024-04-23
+- [add][minor] Add `SerialPort::set_rs4xx_mode()` and `get_rs4xx_mode()` behind `rs4xx` feature flag.
+
+# Version 0.2.21 - 2024-04-15
+- [change][patch] Improve documentation about timeouts and composed operations like `read_exact()` and `write_all()`.
+
+# Version 0.2.20 - 2024-03-04
+- [fix][minor] Fix write timeout for Unix platforms.
+
+# Version 0.2.19 - 2024-02-04
+- [add][minor] Add `SerialPort::pair()` on Unix platforms to open a pair of connected pseudo-terminals.
+
+# Version 0.2.18 - 2024-02-04
+- [change][minor] Open serial ports on Unix with the `O_NOCTTY` flag.
+
+# Version 0.2.17 - 2024-01-19
+- [fix][minor] Set the `IGNBRK` and `IGNPAR` flags in `Settings::set_raw()` on Unix platforms.
+
+# Version 0.2.16 - 2024-01-08
+- [add][minor] Add `SerialPort::read_exact()` that takes `&self`.
+- [fix][minor] Fix behavior of `SerialPort::write_all()` when a write returns `Ok(0)`.
+- [fix][minor] Fix behavior of `SerialPort::write_all()` when a write is interrupted.
+
+# Version 0.2.15 - 2023-12-27
+- [add][minor] Add `SerialPort::try_clone()`.
+
+# Version 0.2.14 - 2023-12-16
+- [fix][minor] Make `TryFromError` public.
+
+# Version 0.2.13 - 2023-12-16
+- [add][minor] Add `CharSize::as_u8()`.
+- [add][minor] Add `StopBits::as_u8()`.
+- [add][minor] Add `Parity::as_str()` and `Parity::from_str()`.
+- [add][minor] Add `FlowControl::as_str()` and FlowControl::from_str()`.
+- [add][minor] Implement `Display` for `CharSize`, `StopBits`, `Parity` and `FlowControl`.
+- [add][minor] Implement `TryFrom<...>` for `CharSize` for integer types.
+- [add][minor] Implement `TryFrom<...>` for `StopBits` for integer types.
+- [add][minor] Implement `TryFrom<&str>` for `Parity`.
+- [add][minor] Implement `TryFrom<&str>` for `FlowControl`.
+
+# Version 0.2.12 - 2023-12-02
+- [add][minor] Implement `Read` and `Write` for `&SerialPort`.
+
+# Version 0.2.11 - 2023-12-02
+- [change][patch] Add example for `SerialPort::open()` for configuring the serial port with a closure.
+
+# Version 0.2.10 - 2023-11-21
+- [change][patch] Tweak the documentation style for the optional `serde` support.
+
+# Version 0.2.9 - 2023-11-21
+- [add][minor] Add optional support for `serde` with the `serde` feature.
+
+# Version 0.2.8 - 2023-11-03
+- [change][minor] Set `VMIN` to 1 on Unix platforms to work correctly with `epoll()` on Linux.
+
+# Version 0.2.7 - 2023-10-16
+- [add][minor] Add the `"unix"` crate feature to enable Unix specific extensions.
+- [add][minor] Add the `"windows"` crate feature to enable Windows specific extensions.
+- [add][minor] Add `Settings::as_raw_termios()` and `as_raw_termios_mut()` on Unix platforms.
+- [add][minor] Add `Settings::as_raw_dcb()` and `as_raw_dcb_mut()` on Windows.
+- [add][minor] Add `SerialPort::get_windows_timeouts()` and `set_windows_timeouts()` on Windows.
+
+# Version 0.2.6 - 2023-10-06
+- [fix][oatch] Remove wrong documentation about manually using the win32 device namespace on Windows.
+
+# Version 0.2.5 - 2023-10-06
+- [change][minor] Increase the default read/write timeouts on Unix platforms to 3 seconds.
+- [fix][minor] Explicitly set `VMIN` and `VTIME` to 0 on Unix platforms in `Settings::set_raw()`.
+- [fix][minor] Mimic Unix behavior on Windows: read will return with available data as soon as possible.
+
+# Version 0.2.4 - 2023-10-06
+- [change][patch] Always open serial ports with the `O_NONBLOCK` flag on Unix.
+
+# Version 0.2.3 - 2023-10-06
+- [add][minor] Implement `From<OwnedFd>`, `Into<OwnedFd>` and `AsFd` for `SerialPort` on Unix platforms.
+- [add][minor] Implement `From<OwnedHandle>`, `Into<OwnedHandle>` and `AsHandle` for `SerialPort` on Windows.
+
+# Version 0.2.2 - 2023-08-04
+- [fix][minor] Fix `Settings::get_flow_control()` on Unix platforms.
+
+# Version 0.2.1 - 2023-05-29
+- [fix][minor] Fix `Settings::get_parity()` on Unix platforms.
+
+# Version 0.2.0 - 2023-05-28
+- [change][major] Do not implicitly set the serial port to raw mode when using a closure as second argument to `SerialPort::open()`.
+- [add][minor] Add `Settings::set_raw()` to disable OS level input/output processing.
+
+# Version 0.1.10 - 2023-05-29
+- [fix][minor] Fix `Settings::get_parity()` on Unix platforms.
+
+# Version 0.1.9 - 2023-05-28
+- [fix][minor] Disable `fDsrSensitivity` on Windows when configuring flow control.
+
+# Version 0.1.8 - 2023-05-28
+- [change][patch] Mention the win32 device namespace in the documentation.
+- [add][minor] Implement `Debug` for `Settings`.
+- [fix][minor] Fix setting of character size, stop bits and parity on Unix platforms.
+
+# Version 0.1.7 - 2022-10-12
+- [add][minor] Add `write_all()` function that takes `&self`.
+
+# Version 0.1.6 - 2021-12-09
+- [change][patch] Remove fills for libc constants that are no longer needed.
+
+# Version 0.1.5 - 2021-11-20
+- [change][patch] Dual-license under BSD-2-Clause and Apache-2.0.
+
+# Version 0.1.4 - 2021-11-19
+- [add][minor] Detect `/dev/ttyU*` and `/dev/cuaU*` devices when listing serial ports on FreeBSD and DragonFlyBSD.
+
+# Version 0.1.3 - 2021-11-13
+- [fix][minor] Handle non-existing `HKLM\Hardware\DEVICEMAP\SERIAL` registry key for port enumeration on Windows.
+
+# Version 0.1.2 - 2021-11-13
+- [fix][patch] Fix link to documentation in `Cargo.toml`.
+
+# Version 0.1.1 - 2021-11-13
+- [fix][minor] Fix leaking event objects on Windows.
+
+# Version 0.1.0 - 2021-11-12
+- [add][minor] Add non-trait `is_read_vectored()` and `is_write_vectored()` functions.
+- [change][patch] Improve documentation.
+
+# Version 0.1.0-alpha5 - 2021-11-11
+- [add][minor] Implement port enumeration for BSD and Apple platforms.
+- [add][minor] Implement port enumeration for Illumos and Solaris.
+
+# Version 0.1.0-alpha4 - 2021-11-09
+- [fix][minor] Fix buffer truncation when enumerating ports on Windows.
+- [add][minor] Switch to overlapped IO on windows to allow concurrent reads and writes.
+
+# Version 0.1.0-alpha3 - 2021-11-08
+- [add][minor] Implement port enumeration for Windows.
+- [fix][minor] Fix comparing `termios` struct on Linux, when using `BOTHER` with a standard baud rate.
+- [change][minor] Always set the TTY to raw mode on Unix.
+- [add][minor] Add versions of `read()`, `write()` and friends that take a const `&self`.
+- [add][minor] Make `KeepSettings` public as intended.
+- [change][minor] Make more functions take `&self` instead of `&mut self`.
+
+# Version 0.1.0-alpha2 - 2021-11-07
+- [add][minor] Add `SerialPort::available_ports()`, which for now only works on Linux.
+
+# Version 0.1.0-alpha1 - 2021-11-07
+- [add][minor] First alpha release.

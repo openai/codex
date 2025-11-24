@@ -1,0 +1,24 @@
+[package]
+name = "castaway"
+version = "0.2.4"
+description = "Safe, zero-cost downcasting for limited compile-time specialization."
+authors = ["Stephen M. Coakley <me@stephencoakley.com>"]
+license = "MIT"
+keywords = ["specialization", "specialize", "cast"]
+categories = ["no-std", "rust-patterns"]
+repository = "https://github.com/sagebind/castaway"
+edition = "2018"
+
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+default = ["std"]
+std = ["alloc"]
+alloc = []
+
+[dependencies]
+rustversion = "1"
+
+[dev-dependencies]
+paste = "1"

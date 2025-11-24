@@ -1,0 +1,13 @@
+error: expected `;`
+ --> tests/ui/function-body.rs:9:42
+  |
+9 |     pub fn ref_cast(s: &String) -> &Self {}
+  |                                          ^
+
+error[E0308]: mismatched types
+ --> tests/ui/function-body.rs:9:36
+  |
+9 |     pub fn ref_cast(s: &String) -> &Self {}
+  |            --------                ^^^^^ expected `&Thing`, found `()`
+  |            |
+  |            implicitly returns `()` as its body has no tail or `return` expression

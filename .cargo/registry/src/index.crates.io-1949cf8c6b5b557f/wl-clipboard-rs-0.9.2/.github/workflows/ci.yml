@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 1 * *' # Monthly
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+
+      matrix:
+        rust: [stable, beta]
+        features: ['', dlopen]
+
+    name: ${{ matrix.rust }} - ${{ matrix.features }}
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          show-progress: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --all --features=${{ matrix.features }}
+
+      - name: Set up XDG_RUNTIME_DIR
+        run: |
+          mkdir .runtime
+          echo "XDG_RUNTIME_DIR=$PWD/.runtime" >> "$GITHUB_ENV"
+
+      - name: Test
+        run: cargo test --all --features=${{ matrix.features }}
+
+      - name: Generate documentation
+        run: cargo doc --features=${{ matrix.features }}
+
+      - name: Copy documentation index
+        run: cp doc/index.html target/doc/
+
+      - name: Deploy documentation
+        if: >
+          matrix.rust == 'stable' &&
+          matrix.features == '' &&
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/master'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./target/doc
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          show-progress: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run clippy
+        run: cargo clippy --all --all-targets
+
+  rustfmt:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          show-progress: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+
+      - name: Run rustfmt
+        run: cargo fmt --all -- --check

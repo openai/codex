@@ -1,0 +1,41 @@
+[package]
+name = "eyre"
+version = "0.6.12"
+authors = ["David Tolnay <dtolnay@gmail.com>", "Jane Lusby <jlusby42@gmail.com>"]
+description = "Flexible concrete Error Reporting type built on std::error::Error with customizable Reports"
+documentation = "https://docs.rs/eyre"
+categories = ["rust-patterns"]
+
+edition = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
+readme = { workspace = true }
+rust-version = { workspace = true }
+
+[features]
+default = ["auto-install", "track-caller"]
+auto-install = []
+track-caller = []
+
+[dependencies]
+indenter = { workspace = true }
+once_cell = { workspace = true }
+pyo3 = { version = "0.20", optional = true, default-features = false }
+
+[dev-dependencies]
+futures = { version = "0.3", default-features = false }
+rustversion = "1.0"
+thiserror = "1.0"
+trybuild = { version = "1.0.19", features = ["diff"] }
+backtrace = "0.3.46"
+anyhow = "1.0.28"
+syn = { version = "2.0", features = ["full"] }
+pyo3 = { version = "0.20", default-features = false, features = ["auto-initialize"] }
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--cfg", "doc_cfg"]
+
+[package.metadata.workspaces]
+independent = true
+

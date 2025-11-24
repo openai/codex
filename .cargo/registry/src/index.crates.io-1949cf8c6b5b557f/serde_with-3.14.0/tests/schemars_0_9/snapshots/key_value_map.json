@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Test",
+  "type": "object",
+  "properties": {
+    "data": {
+      "$ref": "#/$defs/KeyValueMap(KvMapData)"
+    }
+  },
+  "required": [
+    "data"
+  ],
+  "$defs": {
+    "KeyValueMap(KvMapData)": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "d": {
+            "type": "boolean"
+          },
+          "a": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "b": {
+            "type": "string"
+          },
+          "c": {
+            "type": "number",
+            "format": "float"
+          }
+        },
+        "required": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ]
+      }
+    }
+  }
+}

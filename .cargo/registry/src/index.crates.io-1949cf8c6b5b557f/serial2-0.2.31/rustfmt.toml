@@ -1,0 +1,9 @@
+hard_tabs = true
+tab_spaces = 4
+max_width = 120
+imports_layout = "HorizontalVertical"
+match_block_trailing_comma = true
+overflow_delimited_expr = true
+reorder_impl_items = true
+unstable_features = true
+use_field_init_shorthand = true

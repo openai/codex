@@ -1,0 +1,30 @@
+[package]
+name = "ipnet"
+version = "2.11.0" # Remember to update html_root_url
+authors = ["Kris Price <kris@krisprice.nz>"]
+description = "Provides types and useful methods for working with IPv4 and IPv6 network addresses, commonly called IP prefixes. The new `IpNet`, `Ipv4Net`, and `Ipv6Net` types build on the existing `IpAddr`, `Ipv4Addr`, and `Ipv6Addr` types already provided in Rust's standard library and align to their design to stay consistent. The module also provides useful traits that extend `Ipv4Addr` and `Ipv6Addr` with methods for `Add`, `Sub`, `BitAnd`, and `BitOr` operations. The module only uses stable feature so it is guaranteed to compile using the stable toolchain."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/krisprice/ipnet"
+keywords = ["IP", "CIDR", "network", "prefix", "subnet"]
+categories = ["network-programming"]
+readme = "README.md"
+documentation = "https://docs.rs/ipnet"
+edition = "2018"
+
+[features]
+default = ["std"]
+std = []
+# Implements "schemars::JsonSchema". Also implies "serde".
+json = ["serde", "schemars"]
+ser_as_str = ["heapless"]
+
+[dependencies]
+serde = { package = "serde", version = "1", features = ["derive"], optional = true, default-features=false }
+schemars = { version = "0.8", optional = true }
+heapless = { version = "0", optional = true }
+
+[dev-dependencies]
+serde_test = "1"
+
+[badges]
+travis-ci = { repository = "krisprice/ipnet" }

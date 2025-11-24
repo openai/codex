@@ -1,0 +1,232 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE article PUBLIC "-//OASIS//DTD DocBook XML V4.4//EN"
+"http://www.oasis-open.org/docbook/xml/4.4/docbookx.dtd"
+[
+]>
+
+<article id="index">
+  <articleinfo>
+    <title>D-Bus Test Plan</title>
+    <date>14 February 2003</date>
+    <authorgroup>
+      <author>
+	<firstname>Anders</firstname>
+	<surname>Carlsson</surname>
+	<affiliation>
+	  <orgname>CodeFactory AB</orgname>
+	  <address><email>andersca@codefactory.se</email></address>
+	</affiliation>
+      </author>
+    </authorgroup>
+  </articleinfo>
+  <sect1 id="introduction">
+    <title>Introduction</title>
+    <para>
+      This document tries to explain the details of the test plan for D-Bus
+    </para>
+    <sect2 id="importance-of-testing">
+      <title>The importance of testing</title>
+      <para>
+        As with any big library or program, testing is important. It
+        can help find bugs and regressions and make the code better
+        overall. 
+      </para>
+      <para>
+        D-Bus is a large and complex piece of software (about 25,000
+        lines of code for the client library, and 2,500 lines of code
+        for the bus daemon) and it's therefore important to try to make sure
+        that all parts of the software is functioning correctly.
+      </para>
+      <para>
+        D-Bus can be built with support for testing by passing
+        <literal>--enable-tests</literal>. to the configure script. It
+        is recommended that production systems build without testing
+        since that reduces the D-Bus client library size.
+      </para>
+    </sect2>
+  </sect1>
+  <sect1 id="client-library">
+    <title>Testing the D-Bus client library</title>
+    <para>
+      The tests for the client library consist of the test-dbus
+      program which is a unit test for all aspects of the client
+      library. Whenever a bug in the client library is found and
+      fixed, a test is added to make sure that the bug won't occur again.
+    </para>
+    <sect2 id="data-structures">
+      <title>Data Structures</title>
+      <para>
+      The D-Bus client library consists of some data structures that
+      are used internally; a linked list class, a hashtable class and
+      a string class. All aspects of those are tested by test-dbus.
+      </para>
+    </sect2>
+    <sect2 id="message-loader">
+      <title>Message loader</title>
+      <para>
+        The message loader is the part of D-Bus that takes messages in
+        raw character form and parses them, turning them into DBusMessages.
+      </para>
+      <para>
+        This is one of the parts of D-Bus that
+        <emphasis>must</emphasis> be absolutely bug-free and
+        robust. The message loader should be able to handle invalid
+        and incomplete messages without crashing. Not doing so is a
+        serious issue and can easily result in D-Bus being exploitable
+        to DoS attacks.
+      </para>
+      <para>
+        To solve these problems, there is a testing feature called the
+        Message Builder. The message builder can take a serialized
+        message in string-form and convert it into a raw character
+        string which can then be loaded by the message loader. 
+      </para>
+      <figure>
+	<title>Example of a message in string form</title>
+	<programlisting>
+          # Standard org.freedesktop.DBus.Hello message
+
+          VALID_HEADER
+          FIELD_NAME name
+          TYPE STRING
+          STRING 'org.freedesktop.DBus.Hello'
+          FIELD_NAME srvc
+          TYPE STRING
+          STRING 'org.freedesktop.DBus'
+          ALIGN 8
+          END_LENGTH Header
+          START_LENGTH Body
+          END_LENGTH Body
+        </programlisting>
+      </figure>
+      <para>
+        The file format of messages in string form is documented in
+        the D-Bus Reference Manual.
+      </para>
+      <para>
+        The message test part of test-dbus is using the message
+        builder to build different kinds of messages, both valid,
+        invalid, and invalid ones, to make sure that the loader won't
+        crash or leak memory of any of those, and that the loader
+        knows if a message is valid or not.
+      </para>
+      <para>
+        There is also a test program called
+        <literal>break-loader</literal> that loads a message in
+        string-form into raw character form using the message
+        builder. It then randomly changes the message, it can for
+        example replace single bytes of data or modify the length of
+        the message. This is to simulate network errors. The
+        break-loader program saves all the messages leading to errors
+        so it can easily be run for a long period of time.
+      </para>
+    </sect2>
+    <sect2 id="authentication">
+      <title>Authentication</title>
+      <para>
+        For testing authentication, there is a testing feature that
+        can read authentication sequences from a file and play them
+        back to a dummy server and client to make sure that
+        authentication is working according to the specification.
+      </para>
+      <figure>
+	<title>Example of an authentication script</title>
+	<programlisting>
+          ## this tests a successful auth of type EXTERNAL
+          
+          SERVER
+          SEND 'AUTH EXTERNAL USERNAME_HEX'
+          EXPECT_COMMAND OK
+          EXPECT_STATE WAITING_FOR_INPUT
+          SEND 'BEGIN'
+          EXPECT_STATE AUTHENTICATED
+        </programlisting>
+      </figure>
+    </sect2>
+  </sect1>
+  <sect1 id="daemon">
+    <title>Testing the D-Bus bus daemon</title>
+    <para>
+      Since the D-Bus bus daemon is using the D-Bus client library it
+      will benefit from all tests done on the client library, but
+      there is still the issue of testing client-server communication.
+      This is more complicated since it it may require another process
+      running.
+    </para>
+    <sect2 id="debug-transport">
+      <title>The debug transport</title>
+      <para>
+        In D-Bus, a <emphasis>transport</emphasis> is a class that
+        handles sending and receiving raw data over a certain
+        medium. The transport that is used most in D-Bus is the UNIX
+        transport with sends and recevies data over a UNIX socket. A
+        transport that tunnels data through X11 client messages is
+        also under development.
+      </para>
+      <para>
+        The D-Bus debug transport is a specialized transport that
+        works in-process. This means that a client and server that
+        exists in the same process can talk to eachother without using
+        a socket.
+      </para>
+    </sect2>
+    <sect2 id="test-bus">
+      <title>The test-bus program</title>
+      <para>
+        The test-bus program is a program that is used to test various
+        parts of the D-Bus bus daemon; robustness and that it conforms
+        to the specifications.
+      </para>
+      <para>
+        The test program has the necessary code from the bus daemon
+        linked in, and it uses the debug transport for
+        communication. This means that the bus daemon code can be
+        tested without the real bus actually running, which makes
+        testing easier.
+      </para>
+      <para>
+        The test-bus program should test all major features of the
+        bus, such as service registration, notification when things
+        occurs and message matching.
+      </para>
+    </sect2>
+  </sect1>
+  <sect1 id="other-tests">
+    <title>Other tests</title>
+
+    <sect2 id="oom-robustness">
+      <title>Out-Of-Memory robustness</title>
+      <para>
+        Since D-Bus should be able to be used in embedded devices, and
+        also as a system service, it should be able to cope with
+        low-memory situations without exiting or crashing.
+      </para>
+      <para>
+        In practice, this means that both the client and server code
+        must be able to handle dbus_malloc returning NULL. 
+      </para>
+      <para>
+        To test this, two environment variables
+        exist. <literal>DBUS_MALLOC_FAIL_NTH</literal> will make every
+        nth call to dbus_malloc return NULL, and
+        <literal>DBUS_MALLOC_FAIL_GREATER_THAN</literal> will make any
+        dbus_malloc call with a request for more than the specified
+        number of bytes fail.
+      </para>
+    </sect2>
+
+    <sect2 id="leaks-and-other-stuff">
+      <title>Memory leaks and code robustness</title> 
+      <para>
+        Naturally there are some things that tests can't be written
+        for, for example things like memory leaks and out-of-bounds
+        memory reading or writing.
+      </para>
+      <para>
+        Luckily there exists good tools for catching such errors. One
+        free good tool is <ulink url="http://devel-home.kde.org/~sewardj/">Valgrind</ulink>, which runs the program in a
+        virtual CPU which makes catching errors easy. All test programs can be run under Valgrind, 
+      </para>
+    </sect2>
+  </sect1>
+</article>

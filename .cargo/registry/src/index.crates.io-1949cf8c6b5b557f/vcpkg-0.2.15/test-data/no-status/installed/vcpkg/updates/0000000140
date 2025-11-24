@@ -1,0 +1,7 @@
+Package: boost-spirit
+Version: 1.67.0
+Depends: boost-algorithm, boost-array, boost-assert, boost-compatibility, boost-concept-check, boost-config, boost-core, boost-detail, boost-endian, boost-filesystem, boost-foreach, boost-function, boost-function-types, boost-fusion, boost-integer, boost-io, boost-iostreams, boost-iterator, boost-lexical-cast, boost-locale, boost-math, boost-move, boost-mpl, boost-optional, boost-phoenix, boost-pool, boost-preprocessor, boost-proto, boost-range, boost-regex, boost-smart-ptr, boost-static-assert, boost-thread, boost-throw-exception, boost-tti, boost-typeof, boost-type-traits, boost-unordered, boost-utility, boost-variant, boost-vcpkg-helpers
+Architecture: x64-windows
+Multi-Arch: same
+Description: Boost spirit module
+Status: install ok half-installed

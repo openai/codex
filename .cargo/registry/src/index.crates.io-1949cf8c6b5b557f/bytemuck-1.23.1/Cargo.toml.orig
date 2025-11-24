@@ -1,0 +1,128 @@
+[package]
+name = "bytemuck"
+description = "A crate for mucking around with piles of bytes."
+version = "1.23.1"
+authors = ["Lokathor <zefria@gmail.com>"]
+repository = "https://github.com/Lokathor/bytemuck"
+readme = "README.md"
+keywords = ["transmute", "bytes", "casting"]
+categories = ["encoding", "no-std"]
+edition = "2018"
+license = "Zlib OR Apache-2.0 OR MIT"
+exclude = ["/pedantic.bat"]
+
+[features]
+# In v2 we'll fix these names to be more "normal".
+
+# Enable deriving the various `bytemuck` traits.
+derive = ["bytemuck_derive"]
+# Enable features requiring items from `extern crate alloc`.
+extern_crate_alloc = []
+# Enable features requiring items from `extern crate std`.
+extern_crate_std = ["extern_crate_alloc"]
+# Implement `Zeroable` for `MaybeUninit`.
+zeroable_maybe_uninit = []
+# Implement `Zeroable` for `std::sync::atomic` types.
+zeroable_atomics = []
+
+# All MSRV notes below are GUIDELINES and future versions may require even more
+# MSRV on any feature.
+
+# MSRV 1.36: Use `align_offset` method instead of casting to `usize` to check
+# alignment of pointers, this *may* improve codegen in some cases (but it has
+# never been formally benchmarked!)
+align_offset = []
+
+min_const_generics = [] # MSRV 1.51: support arrays via min_const_generics
+
+wasm_simd = []    # MSRV 1.54.0: support wasm simd types
+aarch64_simd = [] # MSRV 1.59.0: support aarch64 simd types
+avx512_simd = [] # MSRV 1.72.0: support avx512 simd types
+
+must_cast = [] # MSRV 1.64.0: support the `must` module.
+must_cast_extra = ["must_cast"] # MSRV 1.83.0: support mutable references in const
+
+# Adds `TransparentWrapper` impls for stdlib types newer than bytemuck's base MSRV.
+# Current MSRV 1.74.0: `core::num::Saturating`.
+# MSRV may increase if impls are added for newer types.
+transparentwrapper_extra = []
+
+const_zeroed = [] # MSRV 1.75.0: support const `zeroed()`
+
+# MSRV 1.82.0: support `zeroed_*rc*` when combined with `extern_crate_alloc`
+alloc_uninit = []
+
+# Do not use if you can avoid it, because this is **unsound**!!!!
+unsound_ptr_pod_impl = []
+
+# MSRV 1.46.0: adds the `#[track_caller]` attribute to functions which may panic
+track_caller = []
+
+# MSRV 1.74.0 Pod/Zeroable implementations for `core::num::Saturating`
+pod_saturating = []
+
+# MSRV 1.71: Adds ZeroableInOption impl for fn-ptrs with -unwind
+zeroable_unwind_fn = []
+
+# MSRV 1.81: Impls core::error:Error for error types
+impl_core_error = []
+
+# Enables all features that are both sound and supported on the latest stable
+# version of Rust, with the exception of `extern_crate_alloc` and
+# `extern_crate_std`.
+# Note: Enabling this feature opts out of any MSRV guarantees!
+latest_stable_rust = [
+  # Keep this list sorted.
+  "aarch64_simd",
+  "avx512_simd",
+  "align_offset",
+  "alloc_uninit",
+  "const_zeroed",
+  "derive",
+  "impl_core_error",
+  "min_const_generics",
+  "must_cast",
+  "must_cast_extra",
+  "pod_saturating",
+  "track_caller",
+  "transparentwrapper_extra",
+  "wasm_simd",
+  "zeroable_atomics",
+  "zeroable_maybe_uninit",
+  "zeroable_unwind_fn",
+]
+
+# ALL FEATURES BELOW THIS ARE NOT SEMVER SUPPORTED! TEMPORARY ONLY!
+
+# Enable support for `std::simd` types.
+nightly_portable_simd = []
+# Enable support for unstable `std::arch` types (such as the AVX512 types).
+nightly_stdsimd = []
+# Enable `f16` and `f128`
+nightly_float = []
+
+# Improved documentation using the nightly toolchain
+nightly_docs = []
+
+[dependencies]
+bytemuck_derive = { version = "1.4.1", path = "derive", optional = true }
+
+[lints.rust]
+unexpected_cfgs = { level = "deny", check-cfg = ['cfg(target_arch, values("spirv"))'] }
+
+[package.metadata.docs.rs]
+# Note(Lokathor): Don't use all-features or it would use `unsound_ptr_pod_impl` too.
+features = [
+  "nightly_docs",
+  "latest_stable_rust",
+  "extern_crate_alloc",
+  "extern_crate_std",
+]
+
+[package.metadata.playground]
+# Note(Lokathor): Don't use all-features or it would use `unsound_ptr_pod_impl` too.
+features = [
+  "latest_stable_rust",
+  "extern_crate_alloc",
+  "extern_crate_std",
+]

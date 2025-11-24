@@ -1,0 +1,18 @@
+error[E0557]: feature has been removed
+  --> tests/ui/unstable-features/overlapping_marker_traits.rs:13:12
+   |
+13 | #![feature(overlapping_marker_traits)]
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^ feature has been removed
+   |
+   = note: removed in favor of `#![feature(marker_trait_attr)]`
+
+error[E0119]: conflicting implementations of trait `Unpin` for type `Struct<_>`
+  --> tests/ui/unstable-features/overlapping_marker_traits.rs:19:1
+   |
+19 | #[pin_project]
+   | ^^^^^^^^^^^^^^ conflicting implementation for `Struct<_>`
+...
+26 | impl<T> Unpin for Struct<T> {}
+   | --------------------------- first implementation here
+   |
+   = note: this error originates in the derive macro `::pin_project::__private::__PinProjectInternalDerive` (in Nightly builds, run with -Z macro-backtrace for more info)

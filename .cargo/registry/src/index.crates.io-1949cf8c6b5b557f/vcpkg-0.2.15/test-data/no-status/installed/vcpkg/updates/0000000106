@@ -1,0 +1,7 @@
+Package: boost-endian
+Version: 1.67.0
+Depends: boost-assert, boost-config, boost-core, boost-integer, boost-predef, boost-static-assert, boost-system, boost-type-traits, boost-utility, boost-vcpkg-helpers
+Architecture: x64-windows
+Multi-Arch: same
+Description: Boost endian module
+Status: install ok half-installed

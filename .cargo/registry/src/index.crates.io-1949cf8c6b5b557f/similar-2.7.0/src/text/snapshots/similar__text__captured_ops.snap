@@ -1,0 +1,22 @@
+---
+source: src/text/mod.rs
+expression: "&diff.ops()"
+---
+[
+    Equal {
+        old_index: 0,
+        new_index: 0,
+        len: 1,
+    },
+    Replace {
+        old_index: 1,
+        old_len: 1,
+        new_index: 1,
+        new_len: 1,
+    },
+    Equal {
+        old_index: 2,
+        new_index: 2,
+        len: 1,
+    },
+]

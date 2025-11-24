@@ -1,0 +1,75 @@
+=pod
+
+=head1 NAME
+
+ossl_rsa_set0_all_params, ossl_rsa_get0_all_params
+- Internal routines for getting and setting data in an RSA object
+
+=head1 SYNOPSIS
+
+ #include "crypto/rsa.h"
+
+ int ossl_rsa_get0_all_params(RSA *r, STACK_OF(BIGNUM_const) *primes,
+                              STACK_OF(BIGNUM_const) *exps,
+                              STACK_OF(BIGNUM_const) *coeffs);
+ int ossl_rsa_set0_all_params(RSA *r, const STACK_OF(BIGNUM) *primes,
+                              const STACK_OF(BIGNUM) *exps,
+                              const STACK_OF(BIGNUM) *coeffs);
+
+=head1 DESCRIPTION
+
+ossl_rsa_set0_all_params() sets all primes, CRT exponents and CRT coefficients
+in the B<RSA> object I<r> to the contents of the stacks of BIGNUMs I<primes>,
+I<exps> and I<coeffs>.  The B<RSA> object takes ownership of the BIGNUMs,
+but not of the stacks.
+
+ossl_rsa_get0_all_params() gets all primes, CRT exponents and CRT coefficients
+in the B<RSA> object I<r> and pushes them on the stacks of constant BIGNUMs
+I<primes>, I<exps> and I<coeffs>.  The B<RSA> object retains ownership of the
+BIGNUMs, but not of the stacks.
+
+=head1 NOTES
+
+For RSA_set0_all_params() and RSA_get0_all_params():
+
+=over 4
+
+=item *
+
+the I<primes> stack contains I<p>, I<q>, and then the rest of the primes
+if the B<RSA> object is a multi-prime RSA key.
+
+=item *
+
+the I<exps> stack contains I<dP>, I<dQ>, and then the rest of the exponents
+if the B<RSA> object is a multi-prime RSA key.
+
+=item *
+
+the I<coeffs> stack contains I<qInv>, and then the rest of the coefficients
+if the B<RSA> object is a multi-prime RSA key.
+
+=back
+
+The number of primes must always be equal to the number of exponents, and
+the number of coefficients must be one less than the number of primes.
+
+=head1 RETURN VALUES
+
+ossl_rsa_get0_all_params() and ossl_rsa_set0_all_params() return 1 on success,
+or 0 on failure.
+
+=head1 SEE ALSO
+
+L<RSA_set0_multi_prime_params(3)>
+
+=head1 COPYRIGHT
+
+Copyright 2019-2020 The OpenSSL Project Authors. All Rights Reserved.
+
+Licensed under the Apache License 2.0 (the "License").  You may not use
+this file except in compliance with the License.  You can obtain a copy
+in the file LICENSE in the source distribution or at
+L<https://www.openssl.org/source/license.html>.
+
+=cut

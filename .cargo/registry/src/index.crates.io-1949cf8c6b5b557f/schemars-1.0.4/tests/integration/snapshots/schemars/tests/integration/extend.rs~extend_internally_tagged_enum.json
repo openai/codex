@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "InternalEnum",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "t": {
+          "type": "string",
+          "const": "Unit"
+        }
+      },
+      "required": [
+        "t"
+      ],
+      "foo": "bar"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "t": {
+          "type": "string",
+          "const": "NewType"
+        }
+      },
+      "required": [
+        "t"
+      ],
+      "foo": "bar"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "i": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "b": {
+          "type": "boolean"
+        },
+        "t": {
+          "type": "string",
+          "const": "Struct"
+        }
+      },
+      "required": [
+        "t",
+        "i",
+        "b"
+      ],
+      "foo": "bar"
+    }
+  ],
+  "foo": "bar"
+}

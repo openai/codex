@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GardeAttrTuple",
+  "type": "array",
+  "prefixItems": [
+    {
+      "type": "integer",
+      "format": "uint8",
+      "minimum": 0,
+      "maximum": 10
+    },
+    {
+      "type": "boolean"
+    }
+  ],
+  "minItems": 2,
+  "maxItems": 2
+}

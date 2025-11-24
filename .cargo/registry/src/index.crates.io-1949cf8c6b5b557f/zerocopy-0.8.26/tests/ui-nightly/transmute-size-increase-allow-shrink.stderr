@@ -1,0 +1,9 @@
+error[E0512]: cannot transmute between types of different sizes, or dependently-sized types
+  --> tests/ui-nightly/transmute-size-increase-allow-shrink.rs:20:29
+   |
+20 | const INCREASE_SIZE: AU16 = transmute!(#![allow(shrink)] 0u8);
+   |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: source type: `u8` (8 bits)
+   = note: target type: `Transmute<u8, AU16>` (16 bits)
+   = note: this error originates in the macro `transmute` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -1,0 +1,20 @@
+language: rust
+sudo: false
+matrix:
+  include:
+    - rust: stable
+    - rust: nightly
+script:
+    - cargo build
+    - cargo test
+    - cargo test --features serde
+    - |
+      if [ "$TRAVIS_RUST_VERSION" == "nightly" ]; then
+        cargo test --no-default-features
+        cargo test --no-default-features --features serde;
+      fi
+    - cargo doc --no-deps
+after_success: |
+    if [ "$TRAVIS_RUST_VERSION" == "nightly" ]; then
+      cargo bench;
+    fi

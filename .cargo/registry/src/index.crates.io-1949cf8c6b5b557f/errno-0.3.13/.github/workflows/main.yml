@@ -1,0 +1,89 @@
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  schedule:
+    - cron: '5 21 * * 5'
+  workflow_dispatch:
+
+name: CI
+
+jobs:
+  test:
+    name: Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        rust: [stable, nightly, '1.56']
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+      - name: Pin to old dependency versions (Rust 1.56 only)
+        if: matrix.rust == '1.56'
+        run: |
+          cargo update -p libc --precise 0.2.163
+          cargo update -p windows-sys --precise 0.52.0
+      - name: Setup cache
+        uses: Swatinem/rust-cache@v2
+      - name: Test (no features)
+        run: cargo test --no-default-features
+      - name: Test (all features)
+        run: cargo test --all-features
+
+
+  wasi:
+    name: Test WASI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: wasm32-wasip2
+      - name: Install wasmtime
+        run: |
+          curl https://wasmtime.dev/install.sh -sSf | bash
+          echo "$HOME/.wasmtime/bin" >> $GITHUB_PATH
+      - name: Test (no features)
+        run: CARGO_TARGET_WASM32_WASIP2_RUNNER=wasmtime cargo test --target wasm32-wasip2 --no-default-features
+      - name: Test (all features)
+        run: CARGO_TARGET_WASM32_WASIP2_RUNNER=wasmtime cargo test --target wasm32-wasip2 --all-features
+
+  emscripten:
+    name: Test Emscripten
+    runs-on: ubuntu-latest
+    container: emscripten/emsdk:latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: wasm32-unknown-emscripten
+      - name: Test (no features)
+        run: CARGO_TARGET_WASM32_UNKNOWN_EMSCRIPTEN_RUNNER=node cargo test --target wasm32-unknown-emscripten --no-default-features
+      - name: Test (all features)
+        run: CARGO_TARGET_WASM32_UNKNOWN_EMSCRIPTEN_RUNNER=node cargo test --target wasm32-unknown-emscripten --all-features
+
+
+  lints:
+    name: Rustfmt & Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Check clippy
+        run: cargo clippy -- -D warnings

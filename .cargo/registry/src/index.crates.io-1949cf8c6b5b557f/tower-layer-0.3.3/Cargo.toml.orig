@@ -1,0 +1,26 @@
+[package]
+name = "tower-layer"
+# When releasing to crates.io:
+# - Update doc url
+#   - Cargo.toml
+#   - README.md
+# - Update CHANGELOG.md.
+# - Create "v0.1.x" git tag.
+version = "0.3.3"
+authors = ["Tower Maintainers <team@tower-rs.com>"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/tower-rs/tower"
+homepage = "https://github.com/tower-rs/tower"
+documentation = "https://docs.rs/tower-layer/0.3.3"
+description = """
+Decorates a `Service` to allow easy composition between `Service`s.
+"""
+categories = ["asynchronous", "network-programming"]
+edition = "2018"
+
+[dependencies]
+
+[dev-dependencies]
+tower-service = { path = "../tower-service" }
+tower = { path = "../tower" }

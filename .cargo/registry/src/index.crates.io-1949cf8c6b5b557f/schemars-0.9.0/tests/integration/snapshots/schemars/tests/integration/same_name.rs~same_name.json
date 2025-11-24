@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Config2",
+  "type": "object",
+  "properties": {
+    "a_cfg": {
+      "$ref": "#/$defs/Config"
+    },
+    "b_cfg": {
+      "$ref": "#/$defs/Config2"
+    },
+    "c_cfg": {
+      "$ref": "#/$defs/Config3"
+    }
+  },
+  "required": [
+    "a_cfg",
+    "b_cfg",
+    "c_cfg"
+  ],
+  "$defs": {
+    "Config": {
+      "type": "object",
+      "properties": {
+        "test": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "test"
+      ]
+    },
+    "Config2": {
+      "type": "object",
+      "properties": {
+        "test2": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "test2"
+      ]
+    },
+    "Config3": {
+      "type": "object",
+      "properties": {
+        "test3": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "test3"
+      ]
+    }
+  }
+}

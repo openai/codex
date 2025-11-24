@@ -1,0 +1,517 @@
+# Basic Unicode literal support.
+[[test]]
+name = "literal1"
+regex = '☃'
+haystack = "☃"
+matches = [[0, 3]]
+
+[[test]]
+name = "literal2"
+regex = '☃+'
+haystack = "☃"
+matches = [[0, 3]]
+
+[[test]]
+name = "literal3"
+regex = '☃+'
+haystack = "☃"
+matches = [[0, 3]]
+case-insensitive = true
+
+[[test]]
+name = "literal4"
+regex = 'Δ'
+haystack = "δ"
+matches = [[0, 2]]
+case-insensitive = true
+
+# Unicode word boundaries.
+[[test]]
+name = "wb-100"
+regex = '\d\b'
+haystack = "6δ"
+matches = []
+
+[[test]]
+name = "wb-200"
+regex = '\d\b'
+haystack = "6 "
+matches = [[0, 1]]
+
+[[test]]
+name = "wb-300"
+regex = '\d\B'
+haystack = "6δ"
+matches = [[0, 1]]
+
+[[test]]
+name = "wb-400"
+regex = '\d\B'
+haystack = "6 "
+matches = []
+
+# Unicode character class support.
+[[test]]
+name = "class1"
+regex = '[☃Ⅰ]+'
+haystack = "☃"
+matches = [[0, 3]]
+
+[[test]]
+name = "class2"
+regex = '\pN'
+haystack = "Ⅰ"
+matches = [[0, 3]]
+
+[[test]]
+name = "class3"
+regex = '\pN+'
+haystack = "Ⅰ1Ⅱ2"
+matches = [[0, 8]]
+
+[[test]]
+name = "class4"
+regex = '\PN+'
+haystack = "abⅠ"
+matches = [[0, 2]]
+
+[[test]]
+name = "class5"
+regex = '[\PN]+'
+haystack = "abⅠ"
+matches = [[0, 2]]
+
+[[test]]
+name = "class6"
+regex = '[^\PN]+'
+haystack = "abⅠ"
+matches = [[2, 5]]
+
+[[test]]
+name = "class7"
+regex = '\p{Lu}+'
+haystack = "ΛΘΓΔα"
+matches = [[0, 8]]
+
+[[test]]
+name = "class8"
+regex = '\p{Lu}+'
+haystack = "ΛΘΓΔα"
+matches = [[0, 10]]
+case-insensitive = true
+
+[[test]]
+name = "class9"
+regex = '\pL+'
+haystack = "ΛΘΓΔα"
+matches = [[0, 10]]
+
+[[test]]
+name = "class10"
+regex = '\p{Ll}+'
+haystack = "ΛΘΓΔα"
+matches = [[8, 10]]
+
+# Unicode aware "Perl" character classes.
+[[test]]
+name = "perl1"
+regex = '\w+'
+haystack = "dδd"
+matches = [[0, 4]]
+
+[[test]]
+name = "perl2"
+regex = '\w+'
+haystack = "⥡"
+matches = []
+
+[[test]]
+name = "perl3"
+regex = '\W+'
+haystack = "⥡"
+matches = [[0, 3]]
+
+[[test]]
+name = "perl4"
+regex = '\d+'
+haystack = "1२३9"
+matches = [[0, 8]]
+
+[[test]]
+name = "perl5"
+regex = '\d+'
+haystack = "Ⅱ"
+matches = []
+
+[[test]]
+name = "perl6"
+regex = '\D+'
+haystack = "Ⅱ"
+matches = [[0, 3]]
+
+[[test]]
+name = "perl7"
+regex = '\s+'
+haystack = " "
+matches = [[0, 3]]
+
+[[test]]
+name = "perl8"
+regex = '\s+'
+haystack = "☃"
+matches = []
+
+[[test]]
+name = "perl9"
+regex = '\S+'
+haystack = "☃"
+matches = [[0, 3]]
+
+# Specific tests for Unicode general category classes.
+[[test]]
+name = "class-gencat1"
+regex = '\p{Cased_Letter}'
+haystack = "Ａ"
+matches = [[0, 3]]
+
+[[test]]
+name = "class-gencat2"
+regex = '\p{Close_Punctuation}'
+haystack = "❯"
+matches = [[0, 3]]
+
+[[test]]
+name = "class-gencat3"
+regex = '\p{Connector_Punctuation}'
+haystack = "⁀"
+matches = [[0, 3]]
+
+[[test]]
+name = "class-gencat4"
+regex = '\p{Control}'
+haystack = "\u009F"
+matches = [[0, 2]]
+
+[[test]]
+name = "class-gencat5"
+regex = '\p{Currency_Symbol}'
+haystack = "￡"
+matches = [[0, 3]]
+
+[[test]]
+name = "class-gencat6"
+regex = '\p{Dash_Punctuation}'
+haystack = "〰"
+matches = [[0, 3]]
+
+[[test]]
+name = "class-gencat7"
+regex = '\p{Decimal_Number}'
+haystack = "𑓙"
+matches = [[0, 4]]
+
+[[test]]
+name = "class-gencat8"
+regex = '\p{Enclosing_Mark}'
+haystack = "\uA672"
+matches = [[0, 3]]
+
+[[test]]
+name = "class-gencat9"
+regex = '\p{Final_Punctuation}'
+haystack = "⸡"
+matches = [[0, 3]]
+
+[[test]]
+name = "class-gencat10"
+regex = '\p{Format}'
+haystack = "\U000E007F"
+matches = [[0, 4]]
+
+[[test]]
+name = "class-gencat11"
+regex = '\p{Initial_Punctuation}'
+haystack = "⸜"
+matches = [[0, 3]]
+
+[[test]]
+name = "class-gencat12"
+regex = '\p{Letter}'
+haystack = "Έ"
+matches = [[0, 2]]
+
+[[test]]
+name = "class-gencat13"
+regex = '\p{Letter_Number}'
+haystack = "ↂ"
+matches = [[0, 3]]
+
+[[test]]
+name = "class-gencat14"
+regex = '\p{Line_Separator}'
+haystack = "\u2028"
+matches = [[0, 3]]
+
+[[test]]
+name = "class-gencat15"
+regex = '\p{Lowercase_Letter}'
+haystack = "ϛ"
+matches = [[0, 2]]
+
+[[test]]
+name = "class-gencat16"
+regex = '\p{Mark}'
+haystack = "\U000E01EF"
+matches = [[0, 4]]
+
+[[test]]
+name = "class-gencat17"
+regex = '\p{Math}'
+haystack = "⋿"
+matches = [[0, 3]]
+
+[[test]]
+name = "class-gencat18"
+regex = '\p{Modifier_Letter}'
+haystack = "𖭃"
+matches = [[0, 4]]
+
+[[test]]
+name = "class-gencat19"
+regex = '\p{Modifier_Symbol}'
+haystack = "🏿"
+matches = [[0, 4]]
+
+[[test]]
+name = "class-gencat20"
+regex = '\p{Nonspacing_Mark}'
+haystack = "\U0001E94A"
+matches = [[0, 4]]
+
+[[test]]
+name = "class-gencat21"
+regex = '\p{Number}'
+haystack = "⓿"
+matches = [[0, 3]]
+
+[[test]]
+name = "class-gencat22"
+regex = '\p{Open_Punctuation}'
+haystack = "｟"
+matches = [[0, 3]]
+
+[[test]]
+name = "class-gencat23"
+regex = '\p{Other}'
+haystack = "\u0BC9"
+matches = [[0, 3]]
+
+[[test]]
+name = "class-gencat24"
+regex = '\p{Other_Letter}'
+haystack = "ꓷ"
+matches = [[0, 3]]
+
+[[test]]
+name = "class-gencat25"
+regex = '\p{Other_Number}'
+haystack = "㉏"
+matches = [[0, 3]]
+
+[[test]]
+name = "class-gencat26"
+regex = '\p{Other_Punctuation}'
+haystack = "𞥞"
+matches = [[0, 4]]
+
+[[test]]
+name = "class-gencat27"
+regex = '\p{Other_Symbol}'
+haystack = "⅌"
+matches = [[0, 3]]
+
+[[test]]
+name = "class-gencat28"
+regex = '\p{Paragraph_Separator}'
+haystack = "\u2029"
+matches = [[0, 3]]
+
+[[test]]
+name = "class-gencat29"
+regex = '\p{Private_Use}'
+haystack = "\U0010FFFD"
+matches = [[0, 4]]
+
+[[test]]
+name = "class-gencat30"
+regex = '\p{Punctuation}'
+haystack = "𑁍"
+matches = [[0, 4]]
+
+[[test]]
+name = "class-gencat31"
+regex = '\p{Separator}'
+haystack = "\u3000"
+matches = [[0, 3]]
+
+[[test]]
+name = "class-gencat32"
+regex = '\p{Space_Separator}'
+haystack = "\u205F"
+matches = [[0, 3]]
+
+[[test]]
+name = "class-gencat33"
+regex = '\p{Spacing_Mark}'
+haystack = "\U00016F7E"
+matches = [[0, 4]]
+
+[[test]]
+name = "class-gencat34"
+regex = '\p{Symbol}'
+haystack = "⯈"
+matches = [[0, 3]]
+
+[[test]]
+name = "class-gencat35"
+regex = '\p{Titlecase_Letter}'
+haystack = "ῼ"
+matches = [[0, 3]]
+
+[[test]]
+name = "class-gencat36"
+regex = '\p{Unassigned}'
+haystack = "\U0010FFFF"
+matches = [[0, 4]]
+
+[[test]]
+name = "class-gencat37"
+regex = '\p{Uppercase_Letter}'
+haystack = "Ꝋ"
+matches = [[0, 3]]
+
+
+# Tests for Unicode emoji properties.
+[[test]]
+name = "class-emoji1"
+regex = '\p{Emoji}'
+haystack = "\u23E9"
+matches = [[0, 3]]
+
+[[test]]
+name = "class-emoji2"
+regex = '\p{emoji}'
+haystack = "\U0001F21A"
+matches = [[0, 4]]
+
+[[test]]
+name = "class-emoji3"
+regex = '\p{extendedpictographic}'
+haystack = "\U0001FA6E"
+matches = [[0, 4]]
+
+[[test]]
+name = "class-emoji4"
+regex = '\p{extendedpictographic}'
+haystack = "\U0001FFFD"
+matches = [[0, 4]]
+
+
+# Tests for Unicode grapheme cluster properties.
+[[test]]
+name = "class-gcb1"
+regex = '\p{grapheme_cluster_break=prepend}'
+haystack = "\U00011D46"
+matches = [[0, 4]]
+
+[[test]]
+name = "class-gcb2"
+regex = '\p{gcb=regional_indicator}'
+haystack = "\U0001F1E6"
+matches = [[0, 4]]
+
+[[test]]
+name = "class-gcb3"
+regex = '\p{gcb=ri}'
+haystack = "\U0001F1E7"
+matches = [[0, 4]]
+
+[[test]]
+name = "class-gcb4"
+regex = '\p{regionalindicator}'
+haystack = "\U0001F1FF"
+matches = [[0, 4]]
+
+[[test]]
+name = "class-gcb5"
+regex = '\p{gcb=lvt}'
+haystack = "\uC989"
+matches = [[0, 3]]
+
+[[test]]
+name = "class-gcb6"
+regex = '\p{gcb=zwj}'
+haystack = "\u200D"
+matches = [[0, 3]]
+
+# Tests for Unicode word boundary properties.
+[[test]]
+name = "class-word-break1"
+regex = '\p{word_break=Hebrew_Letter}'
+haystack = "\uFB46"
+matches = [[0, 3]]
+
+[[test]]
+name = "class-word-break2"
+regex = '\p{wb=hebrewletter}'
+haystack = "\uFB46"
+matches = [[0, 3]]
+
+[[test]]
+name = "class-word-break3"
+regex = '\p{wb=ExtendNumLet}'
+haystack = "\uFF3F"
+matches = [[0, 3]]
+
+[[test]]
+name = "class-word-break4"
+regex = '\p{wb=WSegSpace}'
+haystack = "\u3000"
+matches = [[0, 3]]
+
+[[test]]
+name = "class-word-break5"
+regex = '\p{wb=numeric}'
+haystack = "\U0001E950"
+matches = [[0, 4]]
+
+# Tests for Unicode sentence boundary properties.
+[[test]]
+name = "class-sentence-break1"
+regex = '\p{sentence_break=Lower}'
+haystack = "\u0469"
+matches = [[0, 2]]
+
+[[test]]
+name = "class-sentence-break2"
+regex = '\p{sb=lower}'
+haystack = "\u0469"
+matches = [[0, 2]]
+
+[[test]]
+name = "class-sentence-break3"
+regex = '\p{sb=Close}'
+haystack = "\uFF60"
+matches = [[0, 3]]
+
+[[test]]
+name = "class-sentence-break4"
+regex = '\p{sb=Close}'
+haystack = "\U0001F677"
+matches = [[0, 4]]
+
+[[test]]
+name = "class-sentence-break5"
+regex = '\p{sb=SContinue}'
+haystack = "\uFF64"
+matches = [[0, 3]]

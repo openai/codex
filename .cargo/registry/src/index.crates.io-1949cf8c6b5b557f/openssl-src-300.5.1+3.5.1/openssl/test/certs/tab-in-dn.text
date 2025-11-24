@@ -1,0 +1,27 @@
+Certificate:
+    Data:
+        Version: 3 (0x2)
+        Serial Number:
+            2d:48:b5:92:24:a8:3c:4e:99:ae:44:6f:d4:97:37:a9:29:8d:8c:6b
+        Signature Algorithm: ED25519
+        Issuer: CN=Test\09TAB
+        Validity
+            Not Before: Feb 28 10:34:19 2025 GMT
+            Not After : Feb  4 10:34:19 2125 GMT
+        Subject: CN=Test\09TAB
+        Subject Public Key Info:
+            Public Key Algorithm: ED25519
+                ED25519 Public-Key:
+                pub:
+                    d6:9b:52:24:21:ab:0c:73:25:58:4a:22:ae:16:5e:
+                    b3:64:c4:4c:e3:1e:e1:fd:06:df:7e:6a:5d:81:c3:
+                    3c:ff
+        X509v3 extensions:
+            X509v3 Subject Key Identifier: 
+                30:08:39:F2:62:7B:D1:D8:65:E8:4E:8C:52:C4:F9:A9:92:F1:11:FB
+    Signature Algorithm: ED25519
+    Signature Value:
+        6c:cc:54:31:79:65:b5:04:15:20:59:ff:5a:b3:6c:c3:c9:80:
+        8e:e3:79:01:59:31:53:ca:93:ec:16:4a:6e:02:0e:2d:a3:1a:
+        ea:cd:be:ca:77:84:48:4f:44:c6:b5:11:a0:77:78:30:46:4a:
+        82:d1:e7:20:33:f3:66:5c:e6:0c

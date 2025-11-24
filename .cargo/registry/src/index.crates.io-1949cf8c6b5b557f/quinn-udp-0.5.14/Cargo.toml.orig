@@ -1,0 +1,51 @@
+[package]
+name = "quinn-udp"
+version = "0.5.14"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "UDP sockets with ECN information for the QUIC transport protocol"
+keywords.workspace = true
+categories.workspace = true
+workspace = ".."
+
+[features]
+# NOTE: Please keep this in sync with the feature list in `.github/workflows/codecov.yml`, see
+# comment in that file for more information.
+default = ["tracing", "log"]
+# Configure `tracing` to log events via `log` if no `tracing` subscriber exists.
+log = ["tracing/log"]
+direct-log = ["dep:log"]
+# Use private Apple APIs to send multiple packets in a single syscall.
+fast-apple-datapath = []
+
+[dependencies]
+libc = "0.2.158"
+log = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
+socket2 = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+once_cell = { workspace = true }
+windows-sys = { workspace = true }
+
+[dev-dependencies]
+criterion = { version = "0.7", default-features = false, features = ["async_tokio"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "net"] }
+
+[build-dependencies]
+cfg_aliases = { workspace = true }
+
+[lib]
+# See https://github.com/bheisler/criterion.rs/blob/master/book/src/faq.md#cargo-bench-gives-unrecognized-option-errors-for-valid-command-line-options
+bench = false
+
+[[bench]]
+name = "throughput"
+harness = false
+
+[package.metadata.docs.rs]
+all-features = true

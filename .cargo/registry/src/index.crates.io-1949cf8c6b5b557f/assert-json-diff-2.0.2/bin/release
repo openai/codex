@@ -1,0 +1,54 @@
+#!/bin/bash
+set -e
+
+confirm() {
+  while true; do
+    read -p "$1? Please double check. y/n? " yn
+    case $yn in
+      [Yy]* ) break;;
+      [Nn]* ) exit 1;;
+      * ) echo "Please answer yes or no.";;
+    esac
+  done
+}
+
+cargo fmt --all -- --check
+echo "✔ code formatting looks good!"
+
+cargo check
+echo "✔ types look good"
+
+cargo readme > README.md
+echo "✔ README.md compiled"
+
+cargo test > /dev/null
+echo "✔ tests are passing"
+
+confirm "Updated Cargo.toml"
+confirm "Updated CHANGELOG.md"
+
+version="$1"
+version_without_v="`sed \"s/v//g\" <(echo $version)`"
+
+if (echo $version | egrep "v\d+\.\d+\.\d+" > /dev/null)
+then
+  confirm "Ready to release $version (as $version_without_v)?"
+else
+  echo "Invalid version number: $1"
+  exit 1
+fi
+
+version_in_toml=$(cat Cargo.toml | egrep "^version = \"$version_without_v\"")
+
+if [[ "$version_in_toml" == "version = \"$version_without_v\"" ]]
+then
+  true
+else
+  echo "Cargo.toml isn't set to version $version_without_v"
+fi
+
+GIT_COMMITTER_DATE=$(git log -n1 --pretty=%aD) git tag -a -m "Release $version" $version
+git push --tags
+
+cargo publish --dry-run
+cargo publish || true

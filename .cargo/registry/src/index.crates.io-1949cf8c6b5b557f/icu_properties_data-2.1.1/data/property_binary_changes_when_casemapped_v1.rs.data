@@ -1,0 +1,83 @@
+// @generated
+/// Implement `DataProvider<PropertyBinaryChangesWhenCasemappedV1>` on the given struct using the data
+/// hardcoded in this file. This allows the struct to be used with
+/// `icu`'s `_unstable` constructors.
+///
+/// Using this implementation will embed the following data in the binary's data segment:
+/// * 818B[^1] for the singleton data struct
+///
+/// [^1]: these numbers can be smaller in practice due to linker deduplication
+///
+/// This macro requires the following crates:
+/// * `icu`
+/// * `icu_provider`
+/// * `zerovec`
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __impl_property_binary_changes_when_casemapped_v1 {
+    ($ provider : ty) => {
+        #[clippy::msrv = "1.83"]
+        const _: () = <$provider>::MUST_USE_MAKE_PROVIDER_MACRO;
+        #[clippy::msrv = "1.83"]
+        impl $provider {
+            #[doc(hidden)]
+            pub const SINGLETON_PROPERTY_BINARY_CHANGES_WHEN_CASEMAPPED_V1: &'static <icu::properties::provider::PropertyBinaryChangesWhenCasemappedV1 as icu_provider::DynamicDataMarker>::DataStruct = &icu::properties::provider::PropertyCodePointSet::InversionList(unsafe {
+                #[allow(unused_unsafe)]
+                icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"A\0\0[\0\0a\0\0{\0\0\xB5\0\0\xB6\0\0\xC0\0\0\xD7\0\0\xD8\0\0\xF7\0\0\xF8\0\08\x01\09\x01\0\x8D\x01\0\x8E\x01\0\xAA\x01\0\xAC\x01\0\xBA\x01\0\xBC\x01\0\xBE\x01\0\xBF\x01\0\xC0\x01\0\xC4\x01\0!\x02\0\"\x02\x004\x02\0:\x02\0U\x02\0V\x02\0X\x02\0Y\x02\0Z\x02\0[\x02\0]\x02\0`\x02\0b\x02\0c\x02\0g\x02\0h\x02\0m\x02\0o\x02\0p\x02\0q\x02\0s\x02\0u\x02\0v\x02\0}\x02\0~\x02\0\x80\x02\0\x81\x02\0\x82\x02\0\x84\x02\0\x87\x02\0\x8D\x02\0\x92\x02\0\x93\x02\0\x9D\x02\0\x9F\x02\0E\x03\0F\x03\0p\x03\0t\x03\0v\x03\0x\x03\0{\x03\0~\x03\0\x7F\x03\0\x80\x03\0\x86\x03\0\x87\x03\0\x88\x03\0\x8B\x03\0\x8C\x03\0\x8D\x03\0\x8E\x03\0\xA2\x03\0\xA3\x03\0\xD2\x03\0\xD5\x03\0\xF6\x03\0\xF7\x03\0\xFC\x03\0\xFD\x03\0\x82\x04\0\x8A\x04\x000\x05\x001\x05\0W\x05\0a\x05\0\x88\x05\0\xA0\x10\0\xC6\x10\0\xC7\x10\0\xC8\x10\0\xCD\x10\0\xCE\x10\0\xD0\x10\0\xFB\x10\0\xFD\x10\0\0\x11\0\xA0\x13\0\xF6\x13\0\xF8\x13\0\xFE\x13\0\x80\x1C\0\x8B\x1C\0\x90\x1C\0\xBB\x1C\0\xBD\x1C\0\xC0\x1C\0y\x1D\0z\x1D\0}\x1D\0~\x1D\0\x8E\x1D\0\x8F\x1D\0\0\x1E\0\x9C\x1E\0\x9E\x1E\0\x9F\x1E\0\xA0\x1E\0\x16\x1F\0\x18\x1F\0\x1E\x1F\0 \x1F\0F\x1F\0H\x1F\0N\x1F\0P\x1F\0X\x1F\0Y\x1F\0Z\x1F\0[\x1F\0\\\x1F\0]\x1F\0^\x1F\0_\x1F\0~\x1F\0\x80\x1F\0\xB5\x1F\0\xB6\x1F\0\xBD\x1F\0\xBE\x1F\0\xBF\x1F\0\xC2\x1F\0\xC5\x1F\0\xC6\x1F\0\xCD\x1F\0\xD0\x1F\0\xD4\x1F\0\xD6\x1F\0\xDC\x1F\0\xE0\x1F\0\xED\x1F\0\xF2\x1F\0\xF5\x1F\0\xF6\x1F\0\xFD\x1F\0&!\0'!\0*!\0,!\x002!\x003!\0N!\0O!\0`!\0\x80!\0\x83!\0\x85!\0\xB6$\0\xEA$\0\0,\0q,\0r,\0t,\0u,\0w,\0~,\0\xE4,\0\xEB,\0\xEF,\0\xF2,\0\xF4,\0\0-\0&-\0'-\0(-\0--\0.-\0@\xA6\0n\xA6\0\x80\xA6\0\x9C\xA6\0\"\xA7\x000\xA7\x002\xA7\0p\xA7\0y\xA7\0\x88\xA7\0\x8B\xA7\0\x8E\xA7\0\x90\xA7\0\x95\xA7\0\x96\xA7\0\xAF\xA7\0\xB0\xA7\0\xDD\xA7\0\xF5\xA7\0\xF7\xA7\0S\xAB\0T\xAB\0p\xAB\0\xC0\xAB\0\0\xFB\0\x07\xFB\0\x13\xFB\0\x18\xFB\0!\xFF\0;\xFF\0A\xFF\0[\xFF\0\0\x04\x01P\x04\x01\xB0\x04\x01\xD4\x04\x01\xD8\x04\x01\xFC\x04\x01p\x05\x01{\x05\x01|\x05\x01\x8B\x05\x01\x8C\x05\x01\x93\x05\x01\x94\x05\x01\x96\x05\x01\x97\x05\x01\xA2\x05\x01\xA3\x05\x01\xB2\x05\x01\xB3\x05\x01\xBA\x05\x01\xBB\x05\x01\xBD\x05\x01\x80\x0C\x01\xB3\x0C\x01\xC0\x0C\x01\xF3\x0C\x01P\r\x01f\r\x01p\r\x01\x86\r\x01\xA0\x18\x01\xE0\x18\x01@n\x01\x80n\x01\xA0n\x01\xB9n\x01\xBBn\x01\xD4n\x01\0\xE9\x01D\xE9\x01") }, 3037u32)
+            });
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DataProvider<icu::properties::provider::PropertyBinaryChangesWhenCasemappedV1> for $provider {
+            fn load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponse<icu::properties::provider::PropertyBinaryChangesWhenCasemappedV1>, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponse { payload: icu_provider::DataPayload::from_static_ref(Self::SINGLETON_PROPERTY_BINARY_CHANGES_WHEN_CASEMAPPED_V1), metadata: icu_provider::DataResponseMetadata::default() })
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyBinaryChangesWhenCasemappedV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , ITER) => {
+        __impl_property_binary_changes_when_casemapped_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::properties::provider::PropertyBinaryChangesWhenCasemappedV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+    ($ provider : ty , DRY) => {
+        __impl_property_binary_changes_when_casemapped_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::properties::provider::PropertyBinaryChangesWhenCasemappedV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyBinaryChangesWhenCasemappedV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , DRY , ITER) => {
+        __impl_property_binary_changes_when_casemapped_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::properties::provider::PropertyBinaryChangesWhenCasemappedV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyBinaryChangesWhenCasemappedV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::properties::provider::PropertyBinaryChangesWhenCasemappedV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+}
+#[doc(inline)]
+pub use __impl_property_binary_changes_when_casemapped_v1 as impl_property_binary_changes_when_casemapped_v1;

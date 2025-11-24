@@ -1,0 +1,24 @@
+name: Valgrind
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  valgrind:
+    name: Valgrind Tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install latest nightly
+        uses: actions-rs/toolchain@v1
+        with:
+            toolchain: nightly
+            override: true
+      - run: sudo apt-get install valgrind
+      - run: cargo +nightly install cargo-valgrind
+      - run: cargo +nightly valgrind test --release
+      - run: cargo +nightly valgrind test --all-features --release

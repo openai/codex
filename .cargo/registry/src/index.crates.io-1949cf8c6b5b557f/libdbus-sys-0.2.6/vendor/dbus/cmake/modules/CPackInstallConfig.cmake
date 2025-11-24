@@ -1,0 +1,37 @@
+
+if(DBUS_INSTALL_SYSTEM_LIBS)
+    if(MINGW)
+    else(MINGW)
+        include(InstallRequiredSystemLibraries)
+    endif()
+        install(FILES ${LIBEXPAT_LIBRARIES} DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
+
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "D-BUS For Windows")
+set(CPACK_PACKAGE_VENDOR "D-BUS Windows Team")
+set(CPACK_PACKAGE_DESCRIPTION_FILE "${CMAKE_SOURCE_DIR}/README")
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/COPYING")
+# duplicated from VERSION
+set(CPACK_PACKAGE_VERSION_MAJOR ${VERSION_MAJOR})
+set(CPACK_PACKAGE_VERSION_MINOR ${VERSION_MINOR})
+set(CPACK_PACKAGE_VERSION_PATCH ${VERSION_PATCH})
+#SET(CPACK_PACKAGE_INSTALL_DIRECTORY "dbus ${CMake_VERSION_MAJOR}.${CMake_VERSION_MINOR}")
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "dbus")
+if(WIN32 AND NOT UNIX)
+    set(CPACK_GENERATOR NSIS ZIP)     # can be NSIS, STGZ, TBZ2, TGZ, TZ and ZIP
+    set(CPACK_NSIS_COMPRESSOR "/SOLID lzma")
+  # There is a bug in NSI that does not handle full unix paths properly. Make
+  # sure there is at least one set of four (4) backlasshes.
+# SET(CPACK_PACKAGE_ICON "${CMake_SOURCE_DIR}/Utilities/Release\\\\InstallIcon.bmp")
+    set(CPACK_NSIS_INSTALLED_ICON_NAME "bin\\\\dbus-launch.bat")
+    set(CPACK_NSIS_DISPLAY_NAME "D-Bus for Windows")
+    set(CPACK_NSIS_HELP_LINK "http:\\\\\\\\sourceforge.net/projects/windbus")
+    set(CPACK_NSIS_URL_INFO_ABOUT "http:\\\\\\\\sourceforge.net/projects/windbus")
+    set(CPACK_NSIS_CONTACT "me@my-personal-home-page.com")
+    set(CPACK_NSIS_MODIFY_PATH ON)
+else(WIN32 AND NOT UNIX)
+    set(CPACK_STRIP_FILES "bin/MyExecutable")
+    set(CPACK_SOURCE_STRIP_FILES "")
+endif()
+set(CPACK_PACKAGE_EXECUTABLES "dbus-launch" "D-Bus Daemon")
+include(CPack)

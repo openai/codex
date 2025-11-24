@@ -1,0 +1,46 @@
+[package]
+name = "unicode-truncate"
+version = "1.1.0"
+authors = ["Aetf <aetf@unlimitedcodeworks.xyz>"]
+edition = "2018"
+rust-version = "1.63"
+
+homepage = "https://github.com/Aetf/unicode-truncate"
+repository = "https://github.com/Aetf/unicode-truncate"
+license = "MIT OR Apache-2.0"
+keywords = ["text", "width", "unicode", "truncate", "pad"]
+readme = "README.md"
+description = """
+Unicode-aware algorithm to pad or truncate `str` in terms of displayed width.
+"""
+exclude = [
+    "benches/data/*",
+]
+
+[dependencies]
+itertools = { version = "0.13", default-features = false }
+unicode-segmentation = { version = "1", default-features = false }
+unicode-width = "0.1"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[lib]
+bench = false
+
+[features]
+default = ["std"]
+std = []
+
+[[test]]
+name = "integration"
+required-features = ["std"]
+
+[[bench]]
+name = "benchmark"
+harness = false
+
+# Improve benchmark consistency
+[profile.bench]
+codegen-units = 1
+lto = true

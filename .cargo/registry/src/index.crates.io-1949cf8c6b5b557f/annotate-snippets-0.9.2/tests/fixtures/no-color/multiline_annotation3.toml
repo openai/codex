@@ -1,0 +1,18 @@
+[[slices]]
+source = """
+This is an exampl
+e of an edge case of an annotation overflowing
+to exactly one character on next line.
+"""
+line_start = 26
+origin = "foo.txt"
+fold = false
+[[slices.annotations]]
+label = "this should not be on separate lines"
+annotation_type = "Error"
+range = [11, 18]
+
+[title]
+label = "spacing error found"
+id = "E####"
+annotation_type = "Error"

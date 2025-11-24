@@ -1,0 +1,125 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - master
+
+jobs:
+  stable:
+    name: stable
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup update stable --no-self-update
+      - name: Test in debug mode
+        run: cargo test --no-fail-fast
+      - name: Test in release mode
+        run: cargo test --no-fail-fast --release
+      - name: Check with no default features
+        run: cargo check --no-default-features
+  nightly:
+    name: nightly
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup update nightly
+      - name: Test in debug mode
+        run: cargo +nightly test --no-fail-fast
+      - name: Test in release mode
+        run: cargo +nightly test --no-fail-fast --release
+      - name: Check with no default features
+        run: cargo +nightly check --no-default-features
+      - name: Build benches
+        run: cargo +nightly build --benches --all
+  msrv:
+    name: msrv
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get MSRV from Cargo.toml
+        id: msrv
+        run: echo "version=$(grep '^rust-version' Cargo.toml | sed 's/rust-version = "\(.*\)"/\1/')" >> $GITHUB_OUTPUT
+      - name: Install Rust
+        run: rustup update ${{ steps.msrv.outputs.version }} && rustup default ${{ steps.msrv.outputs.version }}
+      - name: Test in debug mode
+        run: cargo test --no-fail-fast
+      - name: Test in release mode
+        run: cargo test --no-fail-fast --release
+      - name: Check with no default features
+        run: cargo check --no-default-features
+  asan:
+    name: asan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup update nightly --no-self-update
+      - name: Run address sanitizer
+        run: RUSTFLAGS="-Z sanitizer=address" cargo +nightly test --lib --target x86_64-unknown-linux-gnu
+        env:
+          ASAN_OPTIONS: "detect_odr_violation=0 detect_leaks=0"
+          RUST_BACKTRACE: "1"
+  cross-test:
+    name: cross-test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - i686-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup update --no-self-update
+      - name: Install Cross
+        run: cargo install --force cross
+      - name: Test
+        run: cross test --target=${{ matrix.target }}
+      - name: Check with no default features
+        run: cross check --target=${{ matrix.target }} --no-default-features
+  cross-check:
+    name: cross-check
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - wasm32-unknown-unknown
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup update --no-self-update
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+      - name: Check
+        run: cargo check --target=${{ matrix.target }}
+      - name: Check with no default features
+        run: cargo check --target=${{ matrix.target }} --no-default-features
+  cross-check-nightly-feature:
+    name: cross-check-nightly-features
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - aarch64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup update nightly --no-self-update && rustup default nightly
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+      - name: Check
+        run: cargo check --target=${{ matrix.target }} --features=nightly
+      - name: Check with no default features
+        run: cargo check --target=${{ matrix.target }} --no-default-features --features=nightly

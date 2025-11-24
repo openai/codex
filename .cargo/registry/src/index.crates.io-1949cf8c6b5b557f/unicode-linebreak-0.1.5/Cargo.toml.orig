@@ -1,0 +1,14 @@
+[package]
+name = "unicode-linebreak"
+version = "0.1.5"
+authors = ["Axel Forsman <axelsfor@gmail.com>"]
+description = "Implementation of the Unicode Line Breaking Algorithm"
+homepage = "https://github.com/axelf4/unicode-linebreak"
+repository = "https://github.com/axelf4/unicode-linebreak"
+readme = "README.md"
+keywords = ["unicode", "text", "layout"]
+categories = ["internationalization"]
+license = "Apache-2.0"
+include = ["src/**/*", "LICENSE"]
+edition = "2021"
+rust-version = "1.56"

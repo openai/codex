@@ -1,0 +1,32 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+def simple(x, y, z): pass
+def(x: typing.Any, y: typing.Any, z: typing.Any) -> typing.Any
+
+def default_value(x, y=1, z=2): pass
+def(x: typing.Any, y: typing.Any = ..., z: typing.Any = ...) -> typing.Any
+
+def param_type(x: int, y: str, z: int, w: list): pass
+def(x: int, y: str, z: int, w: list) -> typing.Any
+
+def named_only_a(x, *, y): pass
+def(x: typing.Any, *, y: typing.Any) -> typing.Any
+
+def named_only_b(*, y): pass
+def(*, y: typing.Any) -> typing.Any
+
+def pos_only_a(x, /, y): pass
+def(_: typing.Any, /, y: typing.Any) -> typing.Any
+
+def pos_only_b(x, /, *, y): pass
+def(_: typing.Any, /, *, y: typing.Any) -> typing.Any
+
+def pos_only_c(x, /, *args): pass
+def(_: typing.Any, /, *args: typing.Any) -> typing.Any
+
+def pos_only_d(x, /, *args, **kwargs): pass
+def(_: typing.Any, /, *args: typing.Any, **kwargs: typing.Any) -> typing.Any

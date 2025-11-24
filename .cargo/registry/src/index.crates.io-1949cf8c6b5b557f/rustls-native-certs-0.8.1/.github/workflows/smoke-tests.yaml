@@ -1,0 +1,53 @@
+name: smoke-tests
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+  schedule:
+    # We run these tests on a daily basis (at a time slightly offset from the
+    # top of the hour), because they rely on external 3rd party services that
+    # can be flaky.
+    - cron: '15 18 * * *'
+
+jobs:
+  smoke-tests:
+    name: Smoke Tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        # test a bunch of toolchains on ubuntu
+        rust:
+          - stable
+          - beta
+          - nightly
+        os: [ ubuntu-latest ]
+        # but only stable on macos/windows (slower platforms)
+        include:
+          - os: macos-latest
+            rust: stable
+          - os: windows-latest
+            rust: stable
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install ${{ matrix.rust }} toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+
+      - name: Install NASM for aws-lc-rs on Windows
+        if: runner.os == 'Windows'
+        uses: ilammy/setup-nasm@v1
+
+      - name: Build main crate
+        run: cargo build --locked
+
+      - name: Run smoke tests
+        run: cargo test --locked -- --ignored
+        env:
+          RUST_BACKTRACE: 1

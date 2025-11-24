@@ -1,0 +1,226 @@
+[package]
+build = "build.rs"
+categories = ["cryptography", "no-std"]
+description = "An experiment."
+edition = "2021"
+keywords = ["crypto", "cryptography", "rand", "ECC", "RSA"]
+license = "Apache-2.0 AND ISC"
+name = "ring"
+repository = "https://github.com/briansmith/ring"
+
+# Keep in sync with .github/workflows/ci.yml ("MSRV") and see the MSRV note
+# in cpu/arm.rs.
+# 1.66 is required on x86/x86_64 for https://github.com/rust-lang/rust/pull/101861.
+rust-version = "1.66.0"
+
+# Keep in sync with `links` below.
+version = "0.17.14"
+
+# Keep in sync with `version` above.
+#
+# build.rs verifies that this equals "ring_core_{major}_{minor}_{patch}_{pre}"
+# as keeping this in sync with the symbol prefixing is crucial for ensuring
+# the safety of multiple versions of *ring* being used in a program.
+links = "ring_core_0_17_14_"
+
+include = [
+    "LICENSE",
+    "LICENSE-other-bits",
+    "LICENSE-BoringSSL",
+    "src/polyfill/once_cell/LICENSE-APACHE",
+    "src/polyfill/once_cell/LICENSE-MIT",
+
+    "Cargo.toml",
+
+    "pregenerated/*",
+
+    "benches/*.rs",
+    "build.rs",
+
+    "crypto/chacha/asm/chacha-armv4.pl",
+    "crypto/chacha/asm/chacha-armv8.pl",
+    "crypto/chacha/asm/chacha-x86.pl",
+    "crypto/chacha/asm/chacha-x86_64.pl",
+    "crypto/constant_time_test.c",
+    "crypto/cpu_intel.c",
+    "crypto/crypto.c",
+    "crypto/curve25519/asm/x25519-asm-arm.S",
+    "crypto/curve25519/curve25519.c",
+    "crypto/curve25519/curve25519_64_adx.c",
+    "crypto/curve25519/curve25519_tables.h",
+    "crypto/curve25519/internal.h",
+    "crypto/fipsmodule/aes/aes_nohw.c",
+    "crypto/fipsmodule/aes/asm/aes-gcm-avx2-x86_64.pl",
+    "crypto/fipsmodule/aes/asm/aesni-x86.pl",
+    "crypto/fipsmodule/aes/asm/aesni-gcm-x86_64.pl",
+    "crypto/fipsmodule/aes/asm/aesni-x86_64.pl",
+    "crypto/fipsmodule/aes/asm/aesv8-armx.pl",
+    "crypto/fipsmodule/aes/asm/aesv8-gcm-armv8.pl",
+    "crypto/fipsmodule/aes/asm/ghash-armv4.pl",
+    "crypto/fipsmodule/aes/asm/ghash-neon-armv8.pl",
+    "crypto/fipsmodule/aes/asm/ghash-x86.pl",
+    "crypto/fipsmodule/aes/asm/ghash-x86_64.pl",
+    "crypto/fipsmodule/aes/asm/ghashv8-armx.pl",
+    "crypto/fipsmodule/aes/asm/bsaes-armv7.pl",
+    "crypto/fipsmodule/aes/asm/bsaes-x86_64.pl",
+    "crypto/fipsmodule/aes/asm/vsaes-armv7.pl",
+    "crypto/fipsmodule/aes/asm/vpaes-armv7.pl",
+    "crypto/fipsmodule/aes/asm/vpaes-armv8.pl",
+    "crypto/fipsmodule/aes/asm/vpaes-x86.pl",
+    "crypto/fipsmodule/aes/asm/vpaes-x86_64.pl",
+    "crypto/fipsmodule/bn/asm/armv4-mont.pl",
+    "crypto/fipsmodule/bn/asm/armv8-mont.pl",
+    "crypto/fipsmodule/bn/asm/x86-mont.pl",
+    "crypto/fipsmodule/bn/asm/x86_64-mont.pl",
+    "crypto/fipsmodule/bn/asm/x86_64-mont5.pl",
+    "crypto/fipsmodule/bn/internal.h",
+    "crypto/fipsmodule/bn/montgomery.c",
+    "crypto/fipsmodule/bn/montgomery_inv.c",
+    "crypto/fipsmodule/ec/asm/p256-armv8-asm.pl",
+    "crypto/fipsmodule/ec/asm/p256-x86_64-asm.pl",
+    "crypto/fipsmodule/ec/ecp_nistz.c",
+    "crypto/fipsmodule/ec/ecp_nistz.h",
+    "crypto/fipsmodule/ec/ecp_nistz384.h",
+    "crypto/fipsmodule/ec/ecp_nistz384.inl",
+    "crypto/fipsmodule/ec/gfp_p256.c",
+    "crypto/fipsmodule/ec/gfp_p384.c",
+    "crypto/fipsmodule/ec/p256.c",
+    "crypto/fipsmodule/ec/p256-nistz-table.h",
+    "crypto/fipsmodule/ec/p256-nistz.c",
+    "crypto/fipsmodule/ec/p256-nistz.h",
+    "crypto/fipsmodule/ec/p256_shared.h",
+    "crypto/fipsmodule/ec/p256_table.h",
+    "crypto/fipsmodule/ec/util.h",
+    "crypto/fipsmodule/ecdsa/ecdsa_verify_tests.txt",
+    "crypto/fipsmodule/sha/asm/sha256-armv4.pl",
+    "crypto/fipsmodule/sha/asm/sha512-armv4.pl",
+    "crypto/fipsmodule/sha/asm/sha512-armv8.pl",
+    "crypto/fipsmodule/sha/asm/sha512-x86_64.pl",
+    "crypto/internal.h",
+    "crypto/limbs/limbs.c",
+    "crypto/limbs/limbs.h",
+    "crypto/limbs/limbs.inl",
+    "crypto/mem.c",
+    "crypto/perlasm/arm-xlate.pl",
+    "crypto/perlasm/x86asm.pl",
+    "crypto/perlasm/x86gas.pl",
+    "crypto/perlasm/x86nasm.pl",
+    "crypto/perlasm/x86_64-xlate.pl",
+    "crypto/poly1305/poly1305.c",
+    "crypto/poly1305/poly1305_arm.c",
+    "crypto/poly1305/poly1305_arm_asm.S",
+    "crypto/cipher/asm/chacha20_poly1305_armv8.pl",
+    "crypto/cipher/asm/chacha20_poly1305_x86_64.pl",
+    "examples/**/*.rs",
+    "include/ring-core/aes.h",
+    "include/ring-core/asm_base.h",
+    "include/ring-core/base.h",
+    "include/ring-core/check.h",
+    "include/ring-core/mem.h",
+    "include/ring-core/target.h",
+    "include/ring-core/type_check.h",
+    "src/**/*.rs",
+    "src/aead/poly1305_test.txt",
+    "src/data/alg-rsa-encryption.der",
+    "src/ec/curve25519/ed25519/ed25519_pkcs8_v2_template.der",
+    "src/ec/suite_b/ecdsa/ecPublicKey_p256_pkcs8_v1_template.der",
+    "src/ec/suite_b/ecdsa/ecPublicKey_p384_pkcs8_v1_template.der",
+    "src/rsa/signature_rsa_example_private_key.der",
+    "src/rsa/signature_rsa_example_public_key.der",
+    "tests/**/*.rs",
+    "tests/ecdsa_test_private_key_p256.p8",
+    "tests/ecdsa_test_public_key_p256.der",
+    "tests/ecdsa_test_public_key_p256_debug.txt",
+    "tests/ed25519_test_private_key.bin",
+    "tests/ed25519_test_private_key.p8",
+    "tests/ed25519_test_public_key.bin",
+    "tests/ed25519_test_public_key.der",
+    "tests/rsa_test_private_key_2048.p8",
+    "tests/rsa_test_public_key_2048.der",
+    "tests/rsa_test_public_key_2048_debug.txt",
+    "tests/rsa_test_public_modulus.bin",
+    "third_party/fiat/asm/fiat_curve25519_adx_mul.S",
+    "third_party/fiat/asm/fiat_curve25519_adx_square.S",
+    "third_party/fiat/curve25519_32.h",
+    "third_party/fiat/curve25519_64.h",
+    "third_party/fiat/curve25519_64_adx.h",
+    "third_party/fiat/curve25519_64_msvc.h",
+    "third_party/fiat/p256_32.h",
+    "third_party/fiat/p256_64.h",
+    "third_party/fiat/p256_64_msvc.h",
+    "third_party/fiat/LICENSE",
+]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lib]
+name = "ring"
+
+[dependencies]
+cfg-if = { version = "1.0.0", default-features = false }
+getrandom = { version = "0.2.10" }
+untrusted = { version = "0.9" }
+
+[target.'cfg(all(any(all(target_arch = "aarch64", target_endian = "little"), all(target_arch = "arm", target_endian = "little")), any(target_os = "android", target_os = "linux")))'.dependencies]
+libc = { version = "0.2.148", default-features = false }
+
+[target.'cfg(all(all(target_arch = "aarch64", target_endian = "little"), target_vendor = "apple", any(target_os = "ios", target_os = "macos", target_os = "tvos", target_os = "visionos", target_os = "watchos")))'.dependencies]
+libc = { version = "0.2.155", default-features = false }
+
+[target.'cfg(all(all(target_arch = "aarch64", target_endian = "little"), target_os = "windows"))'.dependencies]
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
+wasm-bindgen-test = { version = "0.3.37", default-features = false, features = ["std"] }
+
+[target.'cfg(any(unix, windows, target_os = "wasi"))'.dev-dependencies]
+libc = { version = "0.2.148", default-features = false }
+
+[build-dependencies]
+cc = { version = "1.2.8", default-features = false }
+
+[features]
+# These features are documented in the top-level module's documentation.
+default = ["alloc", "dev_urandom_fallback"]
+alloc = []
+dev_urandom_fallback = []
+less-safe-getrandom-custom-or-rdrand = []
+less-safe-getrandom-espidf = []
+slow_tests = []
+std = ["alloc"]
+unstable-testing-arm-no-hw = []
+unstable-testing-arm-no-neon = []
+test_logging = []
+wasm32_unknown_unknown_js = ["getrandom/js"]
+
+# XXX: debug = false because of https://github.com/rust-lang/rust/issues/34122
+
+[profile.bench]
+opt-level = 3
+debug = false
+rpath = false
+lto = true
+debug-assertions = false
+codegen-units = 1
+
+[profile.release]
+opt-level = 3
+debug = false
+rpath = false
+lto = true
+debug-assertions = false
+codegen-units = 1
+
+[workspace]
+members = [
+    # intentionally not a default member so that `cargo test` doesn't cause criterion.rs and all its
+    # dependencies to get built.
+    "bench",
+
+    "cavp",
+]
+default-members = [
+    ".",
+    "cavp"
+]

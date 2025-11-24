@@ -1,0 +1,112 @@
+f = sin(x)/x;
+I = [0.0; 0.25];
+P = fpminimax(f, [|0, 2, 4, 6, 8, 10|], [|1, D...|], I, absolute, floating);
+print("Sinc [0, 0.25]");
+print(P);
+for i from 0 to degree(P) by 2 do printdouble(coeff(P, i));
+
+err = dirtyinfnorm(P - f, I);
+print("Err:");
+print(err);
+printdouble(err);
+
+I = [0.0; 0.25];
+P = fpminimax(f, [|0, 2, 4, 6, 8, 10, 12, 14|], [|1, 128...|], I, absolute, floating);
+print("Sinc [0.0, 0.25]");
+for i from 0 to degree(P) by 2 do print(coeff(P, i));
+
+I = [0.25; 0.35];
+P = fpminimax(f, [|0, 2, 4, 6, 8, 10|], [|1, D...|], I, absolute, floating);
+print("Sinc [0.25, 0.35]");
+print(P);
+for i from 0 to degree(P) by 2 do printdouble(coeff(P, i));
+
+err = dirtyinfnorm(P - f, I);
+print("Err:");
+print(err);
+printdouble(err);
+
+I = [0.25; 0.35];
+P = fpminimax(f, [|0, 2, 4, 6, 8, 10, 12, 14|], [|1, 128...|], I, absolute, floating);
+print("Sinc [0.25, 0.36]");
+for i from 0 to degree(P) by 2 do print(coeff(P, i));
+
+I = [0.35; 0.5];
+P = fpminimax(f, [|0, 2, 4, 6, 8, 10, 12, 14|], [|1, D...|], I, absolute, floating);
+print("Sinc [0.35, 0.5]");
+print(P);
+for i from 0 to degree(P) by 2 do printdouble(coeff(P, i));
+
+err = dirtyinfnorm(P - f, I);
+print("Err:");
+print(err);
+printdouble(err);
+
+I = [0.35; 0.55];
+P = fpminimax(f, [|0, 2, 4, 6, 8, 10, 12, 14, 16, 18|], [|1, 128...|], I, absolute, floating);
+print("Sinc [0.35, 0.55]");
+for i from 0 to degree(P) by 2 do print(coeff(P, i));
+
+I = [0.5; 0.7];
+P = fpminimax(f, [|0, 2, 4, 6, 8, 10, 12, 14|], [|1, D...|], I, absolute, floating);
+print("Sinc [0.5, 0.7]");
+print(P);
+for i from 0 to degree(P) by 2 do printdouble(coeff(P, i));
+
+err = dirtyinfnorm(P - f, I);
+print("Err:");
+print(err);
+printdouble(err);
+
+I = [0.5; 0.7];
+P = fpminimax(f, [|0, 2, 4, 6, 8, 10, 12, 14, 16, 18|], [|1, 128...|], I, relative, floating);
+print("Sinc [0.5, 0.7]");
+for i from 0 to degree(P) by 2 do print(coeff(P, i));
+
+I = [0.7; 0.85];
+P = fpminimax(f, [|0, 2, 4, 6, 8, 10, 12, 14|], [|1, D...|], I, relative, floating);
+print("Sinc [0.7, 0.9]");
+print(P);
+for i from 0 to degree(P) by 2 do printdouble(coeff(P, i));
+
+err = dirtyinfnorm(P - f, I);
+print("Err:");
+print(err);
+printdouble(err);
+
+I = [0.7; 0.85];
+P = fpminimax(f, [|0, 2, 4, 6, 8, 10, 12, 14, 16, 18|], [|1, 128...|], I, relative, floating);
+print("Sinc [0.7, 0.9]");
+for i from 0 to degree(P) by 2 do print(coeff(P, i));
+
+I = [0.85; 1.0];
+P = fpminimax(f, [|0, 2, 4, 6, 8, 10, 12, 14, 16, 18|], [|1, D...|], I, relative, floating);
+print("Sinc [0.85, 1.0]");
+print(P);
+for i from 0 to degree(P) by 2 do printdouble(coeff(P, i));
+
+err = dirtyinfnorm(P - f, I);
+print("Err:");
+print(err);
+printdouble(err);
+
+I = [0.85; 1.0];
+P = fpminimax(f, [|0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22|], [|1, 128...|], I, relative, floating);
+print("Sinc [0.85, 1.0]");
+for i from 0 to degree(P) by 2 do print(coeff(P, i));
+
+I = [1.0; 1.12];
+P = fpminimax(f, [|0, 2, 4, 6, 8, 10, 12, 14, 16, 18|], [|1, D...|], I, relative, floating);
+print("Sinc [1.0, 1.12]");
+print(P);
+for i from 0 to degree(P) by 2 do printdouble(coeff(P, i));
+
+err = dirtyinfnorm(P - f, I);
+print("Err:");
+print(err);
+printdouble(err);
+
+I = [1.0; 1.12];
+P = fpminimax(f, [|0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22|], [|1, 128...|], I, relative, floating);
+print("Sinc [1.0, 1.12]");
+for i from 0 to degree(P) by 2 do print(coeff(P, i));

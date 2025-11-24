@@ -1,0 +1,33 @@
+[package]
+name = "rustls-native-certs"
+version = "0.8.1"
+edition = "2021"
+rust-version = "1.71"
+license = "Apache-2.0 OR ISC OR MIT"
+readme = "README.md"
+description = "rustls-native-certs allows rustls to use the platform native certificate store"
+homepage = "https://github.com/rustls/rustls-native-certs"
+repository = "https://github.com/rustls/rustls-native-certs"
+categories = ["network-programming", "cryptography"]
+
+[dependencies]
+pki-types = { package = "rustls-pki-types", version = "1.10", features = ["std"] }
+
+[dev-dependencies]
+ring = "0.17"
+rustls = "0.23"
+rustls-webpki = "0.102"
+serial_test = "3"
+tempfile = "3.5"
+untrusted = "0.9"
+webpki-roots = "0.26"
+x509-parser = "0.16"
+
+[target.'cfg(windows)'.dependencies]
+schannel = "0.1"
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+openssl-probe = "0.1.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"

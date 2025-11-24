@@ -1,0 +1,3 @@
+LIBS=../../libcrypto
+
+SOURCE[../../libcrypto]= ess_asn1.c ess_err.c ess_lib.c

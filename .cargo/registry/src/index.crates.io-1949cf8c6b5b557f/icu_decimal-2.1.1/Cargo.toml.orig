@@ -1,0 +1,58 @@
+# This file is part of ICU4X. For terms of use, please see the file
+# called LICENSE at the top level of the ICU4X source tree
+# (online at: https://github.com/unicode-org/icu4x/blob/main/LICENSE ).
+
+[package]
+name = "icu_decimal"
+description = "API for formatting basic decimal numbers in a locale-sensitive way"
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+homepage.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+fixed_decimal = { workspace = true }
+icu_provider = { workspace = true }
+icu_locale_core = { workspace = true }
+writeable = { workspace = true }
+zerovec = { workspace = true, features = ["alloc"] }
+databake = { workspace = true, features = ["derive"], optional = true}
+serde = { workspace = true, features = ["derive"], optional = true }
+
+icu_decimal_data = { workspace = true, optional = true }
+icu_locale = { workspace = true, optional = true }
+
+[dev-dependencies]
+icu = { path = "../../components/icu", default-features = false }
+icu_provider_adapters = { path = "../../provider/adapters" }
+rand = { workspace = true }
+rand_pcg = { workspace = true }
+rand_distr = { workspace = true }
+getrandom = { workspace = true, features = ["wasm_js"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion = { workspace = true }
+
+[features]
+default = ["compiled_data"]
+serde = ["dep:serde", "icu_provider/serde", "zerovec/serde"]
+datagen = ["serde", "dep:databake", "zerovec/databake", "icu_provider/export", "alloc"]
+compiled_data = ["dep:icu_decimal_data", "dep:icu_locale", "icu_locale?/compiled_data", "icu_provider/baked"]
+ryu = ["fixed_decimal/ryu"]
+alloc = ["serde?/alloc", "zerovec/alloc"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(icu4x_run_size_tests)'] }
+
+[[bench]]
+name = "fixed_decimal_format"
+harness = false

@@ -1,0 +1,36 @@
+[package]
+name = "async-channel"
+# When publishing a new version:
+# - Update CHANGELOG.md
+# - Create "v2.x.y" git tag
+version = "2.5.0"
+authors = ["Stjepan Glavina <stjepang@gmail.com>"]
+edition = "2021"
+rust-version = "1.60"
+description = "Async multi-producer multi-consumer channel"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/smol-rs/async-channel"
+keywords = ["mpmc", "mpsc", "spmc", "chan", "futures"]
+categories = ["asynchronous", "concurrency"]
+exclude = ["/.*"]
+
+[dependencies]
+concurrent-queue = { version = "2.5", default-features = false }
+event-listener-strategy = { version = "0.5.4", default-features = false }
+futures-core = { version = "0.3.5", default-features = false }
+pin-project-lite = "0.2.11"
+
+portable-atomic = { version = "1", default-features = false, features = ["require-cas"], optional = true }
+portable-atomic-util = { version = "0.2", default-features = false, features = ["alloc"], optional = true }
+
+[dev-dependencies]
+easy-parallel = "3"
+futures-lite = "2"
+
+[target.'cfg(target_family = "wasm")'.dev-dependencies]
+wasm-bindgen-test = "0.3.37"
+
+[features]
+default = ["std"]
+std = ["concurrent-queue/std", "event-listener-strategy/std"]
+portable-atomic = ["concurrent-queue/portable-atomic", "event-listener-strategy/portable-atomic", "dep:portable-atomic-util", "dep:portable-atomic"]

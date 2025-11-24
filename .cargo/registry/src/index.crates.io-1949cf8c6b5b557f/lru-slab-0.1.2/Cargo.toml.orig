@@ -1,0 +1,12 @@
+[package]
+name = "lru-slab"
+version = "0.1.2"
+edition = "2021"
+description = "Pre-allocated storage with constant-time LRU tracking"
+authors = ["Benjamin Saunders <ben.e.saunders@gmail.com>"]
+license = "MIT OR Apache-2.0 OR Zlib"
+categories = ["data-structures", "no-std"]
+repository = "https://github.com/Ralith/lru-slab"
+readme = "README.md"
+
+[dependencies]

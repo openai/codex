@@ -1,0 +1,35 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Code:
+def test():
+    # Good.
+    x = -1
+    # Bad.
+    y = ~True
+    # Union good and bad.
+    z = -(1 if True else "")
+
+Error:
+error: Unary operator `~` is not available on the type `bool`
+ --> filename:6:9
+  |
+6 |     y = ~True
+  |         ^^^^^
+  |
+
+Types:
+x: int
+y: typing.Never
+z: int
+
+Compiler typechecker (eval):
+error: Unary operator `~` is not available on the type `bool`
+ --> filename:6:9
+  |
+6 |     y = ~True
+  |         ^^^^^
+  |

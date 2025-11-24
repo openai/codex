@@ -1,0 +1,3 @@
+# FIXME: Drop this config when cross is updated to support loongarch64-linux-gnu
+[target.loongarch64-unknown-linux-gnu]
+image = "ghcr.io/cross-rs/loongarch64-unknown-linux-gnu:edge"

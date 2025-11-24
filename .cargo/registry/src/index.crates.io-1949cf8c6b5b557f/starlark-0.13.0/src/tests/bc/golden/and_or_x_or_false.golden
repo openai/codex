@@ -1,0 +1,18 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+def test(x): return x or False
+
+# Bytecode:
+
+Max stack size: 1
+Instructions:
+   0: IfNotBr &x 40
+   16: Mov &x ->&1
+   32: Br 64
+  >40: Const False ->&1
+  >64: Return &1
+   72: End

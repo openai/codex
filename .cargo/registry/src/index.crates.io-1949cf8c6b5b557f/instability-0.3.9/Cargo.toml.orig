@@ -1,0 +1,39 @@
+[workspace]
+resolver = "2"
+members = ["example"]
+
+[workspace.package]
+authors = ["Stephen M. Coakley <me@stephencoakley.com>", "The Ratatui Developers"]
+license = "MIT"
+version = "0.3.9"
+edition = "2021"
+rust-version = "1.64"
+repository = "https://github.com/ratatui/instability"
+
+[workspace.dependencies]
+instability = { path = ".", version = "0.3.9" }
+
+[package]
+name = "instability"
+description = "Rust API stability attributes for the rest of us. A fork of the `stability` crate."
+documentation = "https://docs.rs/instability/"
+authors.workspace = true
+license.workspace = true
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
+
+[dependencies]
+darling = "0.20.10"
+indoc = "2.0.5"
+proc-macro2 = "1.0.92"
+quote = "1.0.37"
+syn = { version = "2.0.90", features = ["derive", "full"] }
+
+[dev-dependencies]
+pretty_assertions = "1.4.1"
+
+[lib]
+proc-macro = true

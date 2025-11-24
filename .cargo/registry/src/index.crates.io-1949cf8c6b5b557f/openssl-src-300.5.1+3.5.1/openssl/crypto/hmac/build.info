@@ -1,0 +1,23 @@
+LIBS=../../libcrypto
+
+$COMMON=hmac.c
+
+IF[{- !$disabled{asm} -}]
+  IF[{- ($target{perlasm_scheme} // '') ne '31' -}]
+    $HMACASM_s390x=hmac_s390x.c
+    $HMACDEF_s390x=OPENSSL_HMAC_S390X
+  ENDIF
+
+  # Now that we have defined all the arch specific variables, use the
+  # appropriate ones, and define the appropriate macros
+  IF[$HMACASM_{- $target{asm_arch} -}]
+    $HMACASM=$HMACASM_{- $target{asm_arch} -}
+    $HMACDEF=$HMACDEF_{- $target{asm_arch} -}
+  ENDIF
+ENDIF
+
+DEFINE[../../libcrypto]=$HMACDEF
+DEFINE[../../providers/libfips.a]=$HMACDEF
+
+SOURCE[../../libcrypto]=$COMMON $HMACASM
+SOURCE[../../providers/libfips.a]=$COMMON $HMACASM

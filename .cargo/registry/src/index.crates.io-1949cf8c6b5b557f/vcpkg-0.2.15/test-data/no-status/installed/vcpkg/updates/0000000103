@@ -1,0 +1,7 @@
+Package: boost-multiprecision
+Version: 1.67.0
+Depends: boost-array, boost-assert, boost-config, boost-detail, boost-functional, boost-integer, boost-lexical-cast, boost-math, boost-mpl, boost-random, boost-rational, boost-smart-ptr, boost-static-assert, boost-throw-exception, boost-type-traits, boost-utility, boost-vcpkg-helpers
+Architecture: x64-windows
+Multi-Arch: same
+Description: Boost multiprecision module
+Status: install ok installed

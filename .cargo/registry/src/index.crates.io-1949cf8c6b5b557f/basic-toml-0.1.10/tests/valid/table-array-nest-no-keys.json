@@ -1,0 +1,14 @@
+{
+    "albums": [
+        {
+            "songs": [{}, {}]
+        }
+    ],
+    "artists": [
+        {
+            "home": {
+                "address": {}
+            }
+        }
+    ]
+}

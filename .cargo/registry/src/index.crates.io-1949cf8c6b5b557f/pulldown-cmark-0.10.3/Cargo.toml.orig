@@ -1,0 +1,85 @@
+[package]
+name = "pulldown-cmark"
+version = "0.10.3"
+authors = [
+    "Raph Levien <raph.levien@gmail.com>",
+    "Marcus Klaas de Vries <mail@marcusklaas.nl>",
+]
+license = "MIT"
+description = "A pull parser for CommonMark"
+repository = "https://github.com/raphlinus/pulldown-cmark"
+keywords = ["markdown", "commonmark"]
+categories = ["text-processing"]
+edition = "2021"
+rust-version = "1.74" # Update README.md and GitHub action when changing this
+readme = "../README.md"
+exclude = [
+    "/third_party/**/*",
+    "/tools/**/*",
+    "/specs/**/*",
+    "/azure-pipelines.yml",
+]
+
+build = "build.rs"
+
+[[bin]]
+name = "pulldown-cmark"
+required-features = ["getopts"]
+doc = false
+
+[[bench]]
+name = "html_rendering"
+harness = false
+
+[[bench]]
+name = "lib"
+harness = false
+
+[[bench]]
+name = "markdown-it"
+harness = false
+
+[[example]]
+name = "event-filter"
+required-features = ["html"]
+
+[[example]]
+name = "footnote-rewrite"
+required-features = ["html"]
+
+[[example]]
+name = "parser-map-event-print"
+required-features = ["html"]
+
+[[example]]
+name = "parser-map-tag-print"
+required-features = ["html"]
+
+[[example]]
+name = "string-to-string"
+required-features = ["html"]
+
+[[example]]
+name = "broken-link-callbacks"
+required-features = ["html"]
+
+[dependencies]
+bitflags = "2"
+unicase = "2.6"
+memchr = "2.5"
+getopts = { version = "0.2", optional = true }
+serde = { version = "1.0", optional = true, features = ["derive"] }
+pulldown-cmark-escape = { path = "../pulldown-cmark-escape", version = "0.10.0", optional = true }
+
+[dev-dependencies]
+lazy_static = "1.4"
+criterion = "0.5"
+regex = "1.6"
+serde_json = "1.0.61"
+bincode = "1.3.1"
+
+[features]
+default = ["getopts", "html"]
+gen-tests = []
+simd = ["pulldown-cmark-escape?/simd"]
+html = ["pulldown-cmark-escape"]

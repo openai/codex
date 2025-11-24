@@ -1,0 +1,21 @@
+[package]
+name = "wait-timeout"
+version = "0.2.1"
+authors = ["Alex Crichton <alex@alexcrichton.com>"]
+license = "MIT/Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/alexcrichton/wait-timeout"
+homepage = "https://github.com/alexcrichton/wait-timeout"
+documentation = "https://docs.rs/wait-timeout"
+description = """
+A crate to wait on a child process with a timeout specified across Unix and
+Windows platforms.
+"""
+categories = ["os"]
+
+[badges]
+travis-ci = { repository = "alexcrichton/wait-timeout" }
+appveyor = { repository = "alexcrichton/wait-timeout" }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.56"

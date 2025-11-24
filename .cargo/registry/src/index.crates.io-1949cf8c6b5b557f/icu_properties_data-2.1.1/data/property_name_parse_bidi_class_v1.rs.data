@@ -1,0 +1,81 @@
+// @generated
+/// Implement `DataProvider<PropertyNameParseBidiClassV1>` on the given struct using the data
+/// hardcoded in this file. This allows the struct to be used with
+/// `icu`'s `_unstable` constructors.
+///
+/// Using this implementation will embed the following data in the binary's data segment:
+/// * 463B[^1] for the singleton data struct
+///
+/// [^1]: these numbers can be smaller in practice due to linker deduplication
+///
+/// This macro requires the following crates:
+/// * `icu`
+/// * `icu_provider`
+/// * `zerotrie`
+/// * `zerovec`
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __impl_property_name_parse_bidi_class_v1 {
+    ($ provider : ty) => {
+        #[clippy::msrv = "1.83"]
+        const _: () = <$provider>::MUST_USE_MAKE_PROVIDER_MACRO;
+        #[clippy::msrv = "1.83"]
+        impl $provider {
+            #[doc(hidden)]
+            pub const SINGLETON_PROPERTY_NAME_PARSE_BIDI_CLASS_V1: &'static <icu::properties::provider::PropertyNameParseBidiClassV1 as icu_provider::DynamicDataMarker>::DataStruct = &icu::properties::provider::names::PropertyValueNameToEnumMap { map: zerotrie::ZeroTrieSimpleAscii { store: unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"\xE1lABCEFLNOPRSW\0\0\0\0\0\0\0\0\x01\x01\x01\x1D4Hy\x94\xCF\xE5\xF67r\x84\xC3LNr\x01\x02\x8D\x85abic_\xC2LN\x06etter\x8Dumber\x85\x87\xC2No\x02\x90\x02undary_Neutral\x90\x02\xC2So\x01\x86mmon_Separator\x86\xC4NSTu\x01\x02\x03\x82\x83\x84ropean_\xC3NST\x06\x0Fumber\x82eparator\x83erminator\x84\xC2Si\x03I\x90\x03rst_Strong_Isolate\x90\x03\x80\xC2Re\n\xC3EIO\x01\x03\x8B\x90\x04\x8Cft_To_Right\x80_\xC3EIO\t\x11mbedding\x8Bsolate\x90\x04verride\x8C\xC2So\x03M\x90\x01nspacing_Mark\x90\x01\xC2Nt\x01\x8Aher_Neutral\x8A\xC3Dao\x08\x1A\xC2FI\x02\x90\0\x90\x06ragraph_Separator\x87p_Directional_\xC2FI\x07ormat\x90\0solate\x90\x06\x81\xC2Li\n\xC3EIO\x01\x03\x8E\x90\x05\x8Fght_To_Left\x81_\xC3EIO\t\x11mbedding\x8Esolate\x90\x05verride\x8F\x88egment_Separator\x88\xC2Sh\x01\x89ite_Space\x89") } } };
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DataProvider<icu::properties::provider::PropertyNameParseBidiClassV1> for $provider {
+            fn load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponse<icu::properties::provider::PropertyNameParseBidiClassV1>, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponse { payload: icu_provider::DataPayload::from_static_ref(Self::SINGLETON_PROPERTY_NAME_PARSE_BIDI_CLASS_V1), metadata: icu_provider::DataResponseMetadata::default() })
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyNameParseBidiClassV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , ITER) => {
+        __impl_property_name_parse_bidi_class_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::properties::provider::PropertyNameParseBidiClassV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+    ($ provider : ty , DRY) => {
+        __impl_property_name_parse_bidi_class_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::properties::provider::PropertyNameParseBidiClassV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyNameParseBidiClassV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , DRY , ITER) => {
+        __impl_property_name_parse_bidi_class_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::properties::provider::PropertyNameParseBidiClassV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyNameParseBidiClassV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::properties::provider::PropertyNameParseBidiClassV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+}
+#[doc(inline)]
+pub use __impl_property_name_parse_bidi_class_v1 as impl_property_name_parse_bidi_class_v1;

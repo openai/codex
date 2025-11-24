@@ -1,0 +1,12 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "title": "root-array",
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "value": { "type": "integer" }
+        },
+        "additionalProperties": false
+    }
+}

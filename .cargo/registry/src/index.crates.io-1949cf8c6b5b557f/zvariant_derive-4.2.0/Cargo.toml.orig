@@ -1,0 +1,30 @@
+[package]
+name = "zvariant_derive"
+# Keep major and minor version in sync with zvariant crate
+version = "4.2.0"
+authors = ["Zeeshan Ali Khan <zeeshanak@gnome.org>"]
+edition = "2021"
+rust-version = "1.75"
+
+description = "D-Bus & GVariant encoding & decoding"
+repository = "https://github.com/dbus2/zbus/"
+keywords = ["D-Bus", "DBus", "IPC", "GVariant"]
+license = "MIT"
+categories = ["data-structures", "encoding", "parsing"]
+readme = "README.md"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0.81"
+syn = { version = "2.0.64", features = ["extra-traits", "full"] }
+quote = "1.0.36"
+proc-macro-crate = "3.1.0"
+zvariant_utils = { path = "../zvariant_utils", version = "=2.1.0" }
+
+[dev-dependencies]
+zvariant = { path = "../zvariant", features = ["enumflags2"] }
+enumflags2 = { version = "0.7.9", features = ["serde"] }
+serde = { version = "1.0.200", features = ["derive"] }
+serde_repr = "0.1.19"

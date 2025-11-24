@@ -1,0 +1,19 @@
+<!--
+This configuration file is no longer required and may be removed.
+
+In older versions of dbus, this file defined the behaviour of the well-known
+session bus. That behaviour is now determined by
+@DATADIR_FROM_PKGSYSCONFDIR@/dbus-1/session.conf, which should not be edited.
+
+For local configuration changes, create a file
+session-local.conf or files matching session.d/*.conf in the same directory
+as this one, with a <busconfig> element containing configuration directives.
+These directives can override D-Bus or OS defaults.
+
+For upstream or distribution-wide defaults that can be overridden
+by a local sysadmin, create files matching
+@DATADIR_FROM_PKGSYSCONFDIR@/dbus-1/session.d/*.conf instead.
+-->
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig></busconfig>

@@ -1,0 +1,182 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="xdg_foreign_unstable_v1">
+
+  <copyright>
+    Copyright © 2015-2016 Red Hat Inc.
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice (including the next
+    paragraph) shall be included in all copies or substantial portions of the
+    Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+  </copyright>
+
+  <description summary="Protocol for exporting xdg surface handles">
+    This protocol specifies a way for making it possible to reference a surface
+    of a different client. With such a reference, a client can, by using the
+    interfaces provided by this protocol, manipulate the relationship between
+    its own surfaces and the surface of some other client. For example, stack
+    some of its own surface above the other clients surface.
+
+    In order for a client A to get a reference of a surface of client B, client
+    B must first export its surface using xdg_exporter.export. Upon doing this,
+    client B will receive a handle (a unique string) that it may share with
+    client A in some way (for example D-Bus). After client A has received the
+    handle from client B, it may use xdg_importer.import to create a reference
+    to the surface client B just exported. See the corresponding requests for
+    details.
+
+    A possible use case for this is out-of-process dialogs. For example when a
+    sandboxed client without file system access needs the user to select a file
+    on the file system, given sandbox environment support, it can export its
+    surface, passing the exported surface handle to an unsandboxed process that
+    can show a file browser dialog and stack it above the sandboxed client's
+    surface.
+
+    Warning! The protocol described in this file is experimental and backward
+    incompatible changes may be made. Backward compatible changes may be added
+    together with the corresponding interface version bump. Backward
+    incompatible changes are done by bumping the version number in the protocol
+    and interface names and resetting the interface version. Once the protocol
+    is to be declared stable, the 'z' prefix and the version number in the
+    protocol and interface names are removed and the interface version number is
+    reset.
+  </description>
+
+  <interface name="zxdg_exporter_v1" version="1">
+    <description summary="interface for exporting surfaces">
+      A global interface used for exporting surfaces that can later be imported
+      using xdg_importer.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the xdg_exporter object">
+	Notify the compositor that the xdg_exporter object will no longer be
+	used.
+      </description>
+    </request>
+
+    <request name="export">
+      <description summary="export a surface">
+	The export request exports the passed surface so that it can later be
+	imported via xdg_importer. When called, a new xdg_exported object will
+	be created and xdg_exported.handle will be sent immediately. See the
+	corresponding interface and event for details.
+
+	A surface may be exported multiple times, and each exported handle may
+	be used to create an xdg_imported multiple times. Only xdg_surface
+	surfaces may be exported.
+      </description>
+      <arg name="id" type="new_id" interface="zxdg_exported_v1"
+	   summary="the new xdg_exported object"/>
+      <arg name="surface" type="object" interface="wl_surface"
+	   summary="the surface to export"/>
+    </request>
+  </interface>
+
+  <interface name="zxdg_importer_v1" version="1">
+    <description summary="interface for importing surfaces">
+      A global interface used for importing surfaces exported by xdg_exporter.
+      With this interface, a client can create a reference to a surface of
+      another client.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the xdg_importer object">
+	Notify the compositor that the xdg_importer object will no longer be
+	used.
+      </description>
+    </request>
+
+    <request name="import">
+      <description summary="import a surface">
+	The import request imports a surface from any client given a handle
+	retrieved by exporting said surface using xdg_exporter.export. When
+	called, a new xdg_imported object will be created. This new object
+	represents the imported surface, and the importing client can
+	manipulate its relationship using it. See xdg_imported for details.
+      </description>
+      <arg name="id" type="new_id" interface="zxdg_imported_v1"
+	   summary="the new xdg_imported object"/>
+      <arg name="handle" type="string"
+	   summary="the exported surface handle"/>
+    </request>
+  </interface>
+
+  <interface name="zxdg_exported_v1" version="1">
+    <description summary="an exported surface handle">
+      An xdg_exported object represents an exported reference to a surface. The
+      exported surface may be referenced as long as the xdg_exported object not
+      destroyed. Destroying the xdg_exported invalidates any relationship the
+      importer may have established using xdg_imported.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="unexport the exported surface">
+	Revoke the previously exported surface. This invalidates any
+	relationship the importer may have set up using the xdg_imported created
+	given the handle sent via xdg_exported.handle.
+      </description>
+    </request>
+
+    <event name="handle">
+      <description summary="the exported surface handle">
+	The handle event contains the unique handle of this exported surface
+	reference. It may be shared with any client, which then can use it to
+	import the surface by calling xdg_importer.import. A handle may be
+	used to import the surface multiple times.
+      </description>
+      <arg name="handle" type="string" summary="the exported surface handle"/>
+    </event>
+  </interface>
+
+  <interface name="zxdg_imported_v1" version="1">
+    <description summary="an imported surface handle">
+      An xdg_imported object represents an imported reference to surface exported
+      by some client. A client can use this interface to manipulate
+      relationships between its own surfaces and the imported surface.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the xdg_imported object">
+	Notify the compositor that it will no longer use the xdg_imported
+	object. Any relationship that may have been set up will at this point
+	be invalidated.
+      </description>
+    </request>
+
+    <request name="set_parent_of">
+      <description summary="set as the parent of some surface">
+	Set the imported surface as the parent of some surface of the client.
+	The passed surface must be a toplevel xdg_surface. Calling this function
+	sets up a surface to surface relation with the same stacking and positioning
+	semantics as xdg_surface.set_parent.
+      </description>
+      <arg name="surface" type="object" interface="wl_surface"
+	   summary="the child surface"/>
+    </request>
+
+    <event name="destroyed">
+      <description summary="the imported surface handle has been destroyed">
+	The imported surface handle has been destroyed and any relationship set
+	up has been invalidated. This may happen for various reasons, for
+	example if the exported surface or the exported surface handle has been
+	destroyed, if the handle used for importing was invalid.
+      </description>
+    </event>
+  </interface>
+
+</protocol>

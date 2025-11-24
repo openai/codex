@@ -1,0 +1,33 @@
+[package]
+name = "lock_api"
+version = "0.4.13"
+authors = ["Amanieu d'Antras <amanieu@gmail.com>"]
+description = "Wrappers to create fully-featured Mutex and RwLock types. Compatible with no_std."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Amanieu/parking_lot"
+keywords = ["mutex", "rwlock", "lock", "no_std"]
+categories = ["concurrency", "no-std"]
+edition = "2021"
+rust-version = "1.64.0"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs", "--generate-link-to-definition"]
+
+[dependencies]
+scopeguard = { version = "1.1.0", default-features = false }
+owning_ref = { version = "0.4.1", optional = true }
+
+# Optional dependency for supporting serde.  Optional crates automatically
+# create a feature with the same name as the crate, so if you need serde
+# support, just pass "--features serde" when building this crate.
+serde = { version = "1.0.126", default-features = false, optional = true }
+
+[build-dependencies]
+autocfg = "1.1.0"
+
+[features]
+default = ["atomic_usize"]
+nightly = []
+arc_lock = []
+atomic_usize = []

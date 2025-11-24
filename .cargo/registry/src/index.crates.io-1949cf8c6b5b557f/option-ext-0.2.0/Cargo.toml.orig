@@ -1,0 +1,11 @@
+[package]
+name = "option-ext"
+description = "Extends `Option` with additional operations"
+version = "0.2.0"
+authors = ["Simon Ochsenreither <simon@ochsenreither.de>"]
+categories = ["rust-patterns", "algorithms"]
+documentation = "https://docs.rs/option-ext/"
+repository = "https://github.com/soc/option-ext.git"
+homepage = "https://github.com/soc/option-ext"
+readme = "README.md"
+license = "MPL-2.0"

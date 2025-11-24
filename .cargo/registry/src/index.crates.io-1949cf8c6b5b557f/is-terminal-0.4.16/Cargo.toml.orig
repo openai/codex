@@ -1,0 +1,43 @@
+[package]
+name = "is-terminal"
+version = "0.4.16"
+authors = [
+    "softprops <d.tangren@gmail.com>",
+    "Dan Gohman <dev@sunfishcode.online>"
+]
+description = "Test whether a given stream is a terminal"
+documentation = "https://docs.rs/is-terminal"
+repository = "https://github.com/sunfishcode/is-terminal"
+keywords = ["terminal", "tty", "isatty"]
+categories = ["command-line-interface"]
+license = "MIT"
+edition = "2018"
+include = ["src", "build.rs", "Cargo.toml", "COPYRIGHT", "LICENSE*", "/*.md"]
+rust-version = "1.63"
+
+[target.'cfg(any(unix, target_os = "wasi"))'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "hermit")'.dependencies]
+hermit-abi = "0.5.0"
+
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = ">=0.52, <0.60"
+features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+]
+
+[dev-dependencies]
+atty = "0.2.14"
+
+[target.'cfg(any(unix, target_os = "wasi"))'.dev-dependencies]
+rustix = { version = "1.0.0", features = ["termios"] }
+libc = "0.2.110"
+
+[target.'cfg(not(any(windows, target_os = "hermit", target_os = "unknown")))'.dev-dependencies]
+rustix = { version = "1.0.0", features = ["stdio"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+tempfile  = "3"

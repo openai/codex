@@ -1,0 +1,7 @@
+error[E0277]: the trait bound `Src: IntoBytes` is not satisfied
+  --> tests/ui-msrv/transmute-mut-src-not-intobytes.rs:24:36
+   |
+24 | const SRC_NOT_AS_BYTES: &mut Dst = transmute_mut!(&mut Src);
+   |                                    ^^^^^^^^^^^^^^^^^^^^^^^^ the trait `IntoBytes` is not implemented for `Src`
+   |
+   = note: this error originates in the macro `transmute_mut` (in Nightly builds, run with -Z macro-backtrace for more info)

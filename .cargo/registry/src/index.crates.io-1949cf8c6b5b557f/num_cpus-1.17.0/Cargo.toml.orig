@@ -1,0 +1,18 @@
+[package]
+
+name = "num_cpus"
+version = "1.17.0"
+description = "Get the number of CPUs on a machine."
+authors = ["Sean McArthur <sean@seanmonstar.com>"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/seanmonstar/num_cpus"
+documentation = "https://docs.rs/num_cpus"
+keywords = ["cpu", "cpus", "cores"]
+categories = ["hardware-support"]
+readme = "README.md"
+
+[target.'cfg(not(windows))'.dependencies]
+libc = "0.2.26"
+
+[target.'cfg(target_os = "hermit")'.dependencies]
+hermit-abi = "0.5.0"

@@ -1,0 +1,68 @@
+name: Rust
+
+on:
+  push:
+    branches:
+      - trying
+      - staging
+  pull_request:
+
+env:
+  CARGO_INCREMENTAL: 0
+  RUST_TEST_THREADS: 1
+
+jobs:
+  build_tier_one:
+    runs-on: ${{ matrix.os }}-latest
+    strategy:
+      matrix:
+        os: [ubuntu, macos, windows]
+        channel: [stable, beta, nightly]
+        feature: [arc_lock, serde, deadlock_detection]
+        include:
+          - channel: nightly
+            feature: nightly
+            os: ubuntu
+          - channel: nightly
+            feature: hardware-lock-elision
+            os: ubuntu
+
+    steps:
+    - uses: actions/checkout@v4
+    - run: rustup default ${{ matrix.channel }}
+    - run: cargo build --all
+    - run: cargo test --all
+    - run: cargo build --all --features ${{ matrix.feature }}
+    - run: cargo test --all --features ${{ matrix.feature }}
+      if: matrix.feature == 'nightly'
+    - run: cargo install cargo-msrv
+    - run: cargo msrv --workspace verify
+  build_other_platforms:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - wasm32-unknown-unknown
+          - x86_64-fortanix-unknown-sgx
+          - x86_64-unknown-redox
+          - x86_64-linux-android
+    steps:
+    - uses: actions/checkout@v4
+    - run: rustup default nightly
+    - run: rustup target add ${{ matrix.target }}
+    - run: cargo build --workspace --target ${{ matrix.target }} --features nightly
+  build_docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup default nightly
+      - run: cargo doc --workspace --features arc_lock,serde,deadlock_detection --no-deps -p parking_lot -p parking_lot_core -p lock_api
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup default nightly
+      - run: |
+          cd benchmark
+          cargo run --release --bin mutex -- 2 1 0 1 2
+          cargo run --release --bin rwlock -- 1 1 1 0 1 2

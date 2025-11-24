@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "External",
+  "oneOf": [
+    {
+      "type": "string",
+      "const": "Unit",
+      "x-propertyCount": 0,
+      "x-upperType": "STRING"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "NewType": true
+      },
+      "required": [
+        "NewType"
+      ],
+      "additionalProperties": false,
+      "x-propertyCount": 1,
+      "x-upperType": "OBJECT"
+    }
+  ],
+  "x-propertyCount": 0
+}

@@ -1,0 +1,51 @@
+[package]
+
+name = "mime_guess"
+version = "2.0.5"
+authors = ["Austin Bonander <austin.bonander@gmail.com>"]
+license = "MIT"
+description = "A simple crate for detection of a file's MIME type by its extension."
+keywords = ["mime", "filesystem", "extension"]
+repository = "https://github.com/abonander/mime_guess"
+documentation = "https://docs.rs/mime_guess/"
+readme = "README.md"
+
+[features]
+default = ["rev-mappings"]
+# FIXME: when `phf` release 0.8.0 is ready
+# phf-map = ["phf", "phf_codegen"]
+
+# generate reverse-mappings for lookup of extensions by MIME type
+# default-on but can be turned off for smaller generated code
+rev-mappings = []
+
+[dependencies]
+mime = "0.3"
+unicase = "2.4.0"
+
+#[dependencies.phf]
+## version = "0.7.24"
+## git = "https://github.com/sfackler/rust-phf"
+#path = "../rust-phf/phf"
+#features = ["unicase"]
+#optional = true
+
+[build-dependencies]
+unicase = "2.4.0"
+
+#[build-dependencies.phf_codegen]
+#version = "0.7.24"
+#git = "https://github.com/sfackler/rust-phf"
+#path = "../rust-phf/phf_codegen"
+#optional = true
+
+[dev-dependencies]
+criterion = "0.3"
+
+[[example]]
+name = "rev_map"
+required-features = ["rev-mappings"]
+
+[[bench]]
+name = "benchmark"
+harness = false

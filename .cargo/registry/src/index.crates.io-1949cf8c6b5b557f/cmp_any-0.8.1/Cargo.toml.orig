@@ -1,0 +1,10 @@
+[package]
+name = "cmp_any"
+version = "0.8.1"
+license = "MIT OR Apache-2.0"
+authors = ["Facebook"]
+edition = "2021"
+repository = "https://github.com/facebookincubator/gazebo"
+documentation = "https://docs.rs/cmp_any"
+categories = ["rust-patterns"]
+description = "Comparison for &dyn types"

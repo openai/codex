@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Adjacent",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "const": "Unit"
+        }
+      },
+      "required": [
+        "tag"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "const": "StringMap"
+        },
+        "content": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "tag",
+        "content"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "const": "StructNewType"
+        },
+        "content": {
+          "$ref": "#/$defs/Struct"
+        }
+      },
+      "required": [
+        "tag",
+        "content"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "const": "StructDenyUnknownFieldsNewType"
+        },
+        "content": {
+          "$ref": "#/$defs/StructDenyUnknownFields"
+        }
+      },
+      "required": [
+        "tag",
+        "content"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "const": "Struct"
+        },
+        "content": {
+          "type": "object",
+          "properties": {
+            "foo": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "bar": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "foo",
+            "bar"
+          ]
+        }
+      },
+      "required": [
+        "tag",
+        "content"
+      ],
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "Struct": {
+      "type": "object",
+      "properties": {
+        "foo": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "bar": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "foo",
+        "bar"
+      ]
+    },
+    "StructDenyUnknownFields": {
+      "type": "object",
+      "properties": {
+        "baz": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "foobar": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "baz",
+        "foobar"
+      ]
+    }
+  }
+}

@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Internal",
+  "anyOf": [
+    {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "const": "TaggedUnitOne"
+        }
+      },
+      "required": [
+        "tag"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "baz": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "foobar": {
+          "type": "boolean"
+        },
+        "tag": {
+          "type": "string",
+          "const": "TaggedStruct"
+        }
+      },
+      "required": [
+        "tag",
+        "baz",
+        "foobar"
+      ]
+    },
+    {
+      "type": "null"
+    },
+    {
+      "$ref": "#/$defs/UnitStruct"
+    },
+    {
+      "$ref": "#/$defs/Struct"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "baz": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "foobar": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "baz",
+        "foobar"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  ],
+  "$defs": {
+    "UnitStruct": {
+      "type": "null"
+    },
+    "Struct": {
+      "type": "object",
+      "properties": {
+        "foo": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "bar": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "foo",
+        "bar"
+      ]
+    }
+  }
+}

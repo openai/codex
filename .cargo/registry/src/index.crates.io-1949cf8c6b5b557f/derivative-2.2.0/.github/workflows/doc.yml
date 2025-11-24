@@ -1,0 +1,35 @@
+on: [push]
+
+name: Deploy documentation
+
+jobs:
+  deploy:
+    name: Deploy documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - run: cargo +stable install mdbook --no-default-features --features search --vers "^0.4.0"
+      - uses: actions/checkout@v2
+        with:
+          path: code
+      - run: mdbook build
+        working-directory: code
+      - uses: actions/checkout@v2
+        with:
+          path: doc
+          ref: gh-pages
+      - run: |
+          mkdir -p doc/branches
+          rm -fr doc/branches/${GITHUB_REF##*/}
+          mv code/book doc/branches/${GITHUB_REF##*/}
+      - working-directory: doc
+        run: |
+          git config user.name bot
+          git config user.email bot@bot
+          git add .
+          git diff-index --quiet HEAD || git commit -m "Autogenerate documentation for branch ${GITHUB_REF##*/}" 
+          git push

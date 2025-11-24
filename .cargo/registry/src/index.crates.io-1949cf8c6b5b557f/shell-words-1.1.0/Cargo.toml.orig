@@ -1,0 +1,19 @@
+[package]
+name = "shell-words"
+version = "1.1.0"
+authors = ["Tomasz Miąsko <tomasz.miasko@gmail.com>"]
+license = "MIT/Apache-2.0"
+repository = "https://github.com/tmiasko/shell-words"
+description = "Process command line according to parsing rules of UNIX shell"
+readme = "README.md"
+keywords = [
+  "quote",
+  "shell",
+  "split",
+  "unix",
+  "words",
+]
+
+[features]
+default = ["std"]
+std = []

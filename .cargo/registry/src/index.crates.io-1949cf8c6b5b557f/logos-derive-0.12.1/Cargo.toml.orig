@@ -1,0 +1,27 @@
+[package]
+name = "logos-derive"
+version = "0.12.1"
+authors = ["Maciej Hirsz <hello@maciej.codes>"]
+license = "MIT OR Apache-2.0"
+description = "Create ridiculously fast Lexers"
+repository = "https://github.com/maciejhirsz/logos"
+documentation = "https://docs.rs/logos-derive"
+keywords = ["lexer", "lexical", "tokenizer", "parser", "no_std"]
+categories = ["parsing", "text-processing"]
+readme = "../README.md"
+edition = "2018"
+
+[lib]
+name = "logos_derive"
+proc-macro = true
+
+[dependencies]
+beef = "0.5.0"
+fnv = "1.0.6"
+syn = { version = "1.0.17", features = ["full"] }
+quote = "1.0.3"
+proc-macro2 = "1.0.9"
+regex-syntax = "0.6"
+
+[dev-dependencies]
+pretty_assertions = "0.6.1"

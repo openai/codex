@@ -1,0 +1,21 @@
+[package]
+name = "same-file"
+version = "1.0.6"  #:version
+authors = ["Andrew Gallant <jamslam@gmail.com>"]
+description = """
+A simple crate for determining whether two file paths point to the same file.
+"""
+documentation = "https://docs.rs/same-file"
+homepage = "https://github.com/BurntSushi/same-file"
+repository = "https://github.com/BurntSushi/same-file"
+readme = "README.md"
+keywords = ["same", "file", "equal", "inode"]
+license = "Unlicense/MIT"
+exclude = ["/.github"]
+edition = "2018"
+
+[target.'cfg(windows)'.dependencies.winapi-util]
+version = "0.1.1"
+
+[dev-dependencies]
+doc-comment = "0.3"

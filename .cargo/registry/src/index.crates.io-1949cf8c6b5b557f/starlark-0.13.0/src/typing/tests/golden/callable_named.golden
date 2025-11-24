@@ -1,0 +1,60 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Code:
+def good_function_pos_or_named(x: str, y: int) -> None:
+    pass
+
+def good_function_named_only(*, x: str, y: int) -> None:
+    pass
+
+def bad_function_wrong_types(x: bool, y: list) -> None:
+    pass
+
+def bad_function_missing_params(x: str) -> None:
+    pass
+
+def bad_function_extra_params(x: str, y: int, z: int) -> None:
+    pass
+
+def test():
+    accepts_callable_named_xy(good_function_pos_or_named)
+    accepts_callable_named_xy(good_function_named_only)
+    accepts_callable_named_xy(bad_function_wrong_types)
+    accepts_callable_named_xy(bad_function_missing_params)
+    accepts_callable_named_xy(bad_function_extra_params)
+
+Error:
+error: Expected type `typing.Callable["*, x: str, y: int", None]` but got `def(x: bool, y: list) -> None`
+  --> filename:20:31
+   |
+20 |     accepts_callable_named_xy(bad_function_wrong_types)
+   |                               ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+
+Error:
+error: Expected type `typing.Callable["*, x: str, y: int", None]` but got `def(x: str) -> None`
+  --> filename:21:31
+   |
+21 |     accepts_callable_named_xy(bad_function_missing_params)
+   |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+
+Error:
+error: Expected type `typing.Callable["*, x: str, y: int", None]` but got `def(x: str, y: int, z: int) -> None`
+  --> filename:22:31
+   |
+22 |     accepts_callable_named_xy(bad_function_extra_params)
+   |                               ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+
+Compiler typechecker (eval):
+error: Expected type `typing.Callable["*, x: str, y: int", None]` but got `def(x: bool, y: list) -> None`
+  --> filename:20:31
+   |
+20 |     accepts_callable_named_xy(bad_function_wrong_types)
+   |                               ^^^^^^^^^^^^^^^^^^^^^^^^
+   |

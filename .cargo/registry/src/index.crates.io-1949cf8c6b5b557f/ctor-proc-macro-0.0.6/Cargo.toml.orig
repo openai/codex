@@ -1,0 +1,15 @@
+[package]
+name = "ctor-proc-macro"
+version = "0.0.6"
+authors = ["Matt Mastracci <matthew@mastracci.com>"]
+edition = "2021"
+description = "proc-macro support for the ctor crate"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/mmastrac/rust-ctor"
+readme = "README.md"
+
+[features]
+default = []
+
+[lib]
+proc-macro = true

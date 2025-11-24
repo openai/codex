@@ -1,0 +1,21 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Program:
+
+Rec = record(a = int, b = str)
+
+def test():
+    Rec(c = [])
+
+Error:
+
+error: Unexpected parameter named `c`
+ --> assert.bzl:4:9
+  |
+4 |     Rec(c = [])
+  |         ^^^^^^
+  |

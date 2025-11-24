@@ -1,0 +1,5 @@
+[fruit]
+type = "apple"
+
+[fruit.type]
+apple = "yes"

@@ -1,0 +1,9 @@
+error[E0512]: cannot transmute between types of different sizes, or dependently-sized types
+  --> tests/ui-stable/try_transmute-size-increase.rs:19:42
+   |
+19 |     let increase_size: Result<AU16, _> = try_transmute!(0u8);
+   |                                          ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: source type: `u8` (8 bits)
+   = note: target type: `AU16` (16 bits)
+   = note: this error originates in the macro `try_transmute` (in Nightly builds, run with -Z macro-backtrace for more info)

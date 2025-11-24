@@ -1,0 +1,18 @@
+error[E0599]: the method `as_dyn_error` exists for struct `String`, but its trait bounds were not satisfied
+ --> tests/ui/transparent-struct-not-error.rs:4:9
+  |
+4 | #[error(transparent)]
+  |         ^^^^^^^^^^^ method cannot be called on `String` due to unsatisfied trait bounds
+  |
+ ::: $RUST/alloc/src/string.rs
+  |
+  | pub struct String {
+  | ----------------- doesn't satisfy `String: AsDynError<'_>` or `String: std::error::Error`
+  |
+  = note: the following trait bounds were not satisfied:
+          `String: std::error::Error`
+          which is required by `String: AsDynError<'_>`
+          `str: Sized`
+          which is required by `str: AsDynError<'_>`
+          `str: std::error::Error`
+          which is required by `str: AsDynError<'_>`

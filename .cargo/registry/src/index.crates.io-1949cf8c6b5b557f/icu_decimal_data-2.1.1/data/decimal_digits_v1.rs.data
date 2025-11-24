@@ -1,0 +1,56 @@
+// @generated
+/// Implement `DataProvider<DecimalDigitsV1>` on the given struct using the data
+/// hardcoded in this file. This allows the struct to be used with
+/// `icu`'s `_unstable` constructors.
+///
+/// Using this implementation will embed the following data in the binary's data segment:
+/// * 207B for the lookup data structure (27 data identifiers)
+/// * 1080B[^1] for the actual data (27 unique structs)
+///
+/// [^1]: these numbers can be smaller in practice due to linker deduplication
+///
+/// This macro requires the following crates:
+/// * `icu`
+/// * `icu_provider`
+/// * `icu_provider/baked`
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __impl_decimal_digits_v1 {
+    ($ provider : ty) => {
+        #[clippy::msrv = "1.83"]
+        const _: () = <$provider>::MUST_USE_MAKE_PROVIDER_MACRO;
+        #[clippy::msrv = "1.83"]
+        impl $provider {
+            const DATA_DECIMAL_DIGITS_V1: icu_provider::baked::zerotrie::Data<icu::decimal::provider::DecimalDigitsV1> = {
+                const TRIE: icu_provider::baked::zerotrie::ZeroTrieSimpleAscii<&'static [u8]> = icu_provider::baked::zerotrie::ZeroTrieSimpleAscii { store: b"und\x1E\xCEabcdghjklmnotv\x0E\x12\x16\x1A#04>G^co\x8A\xC2dr\x03lm\x80ab\x81ext\x82eng\x83akm\x84eva\x85u\xC2jr\x02r\x86u\x87\xC2am\x06nidec\x88np\x89ava\x8A\xC2hn\x03mr\x8Bda\x8Ca\xC2ot\x02o\x8Dn\x8E\xC4loty\x03\x07\x0Bym\x8Fng\x90\0ei\x90\x01mr\x90\x02koo\x90\x03\xC2lr\x04ck\x90\x04ya\x90\x05\xC4aehi\x07\x0B\x0Fmldec\x90\x06lu\x90\x07ai\x90\x08bt\x90\taii\x90\n" };
+                const VALUES: &'static [<icu::decimal::provider::DecimalDigitsV1 as icu_provider::baked::zerotrie::DynamicDataMarker>::DataStruct] = &[['𞥐', '𞥑', '𞥒', '𞥓', '𞥔', '𞥕', '𞥖', '𞥗', '𞥘', '𞥙'], ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'], ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'], ['০', '১', '২', '৩', '৪', '৫', '৬', '৭', '৮', '৯'], ['𑄶', '𑄷', '𑄸', '𑄹', '𑄺', '𑄻', '𑄼', '𑄽', '𑄾', '𑄿'], ['०', '१', '२', '३', '४', '५', '६', '७', '८', '९'], ['૦', '૧', '૨', '૩', '૪', '૫', '૬', '૭', '૮', '૯'], ['੦', '੧', '੨', '੩', '੪', '੫', '੬', '੭', '੮', '੯'], ['〇', '一', '二', '三', '四', '五', '六', '七', '八', '九'], ['𞅀', '𞅁', '𞅂', '𞅃', '𞅄', '𞅅', '𞅆', '𞅇', '𞅈', '𞅉'], ['꧐', '꧑', '꧒', '꧓', '꧔', '꧕', '꧖', '꧗', '꧘', '꧙'], ['០', '១', '២', '៣', '៤', '៥', '៦', '៧', '៨', '៩'], ['೦', '೧', '೨', '೩', '೪', '೫', '೬', '೭', '೮', '೯'], ['໐', '໑', '໒', '໓', '໔', '໕', '໖', '໗', '໘', '໙'], ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'], ['൦', '൧', '൨', '൩', '൪', '൫', '൬', '൭', '൮', '൯'], ['᠐', '᠑', '᠒', '᠓', '᠔', '᠕', '᠖', '᠗', '᠘', '᠙'], ['꯰', '꯱', '꯲', '꯳', '꯴', '꯵', '꯶', '꯷', '꯸', '꯹'], ['၀', '၁', '၂', '၃', '၄', '၅', '၆', '၇', '၈', '၉'], ['߀', '߁', '߂', '߃', '߄', '߅', '߆', '߇', '߈', '߉'], ['᱐', '᱑', '᱒', '᱓', '᱔', '᱕', '᱖', '᱗', '᱘', '᱙'], ['୦', '୧', '୨', '୩', '୪', '୫', '୬', '୭', '୮', '୯'], ['௦', '௧', '௨', '௩', '௪', '௫', '௬', '௭', '௮', '௯'], ['౦', '౧', '౨', '౩', '౪', '౫', '౬', '౭', '౮', '౯'], ['๐', '๑', '๒', '๓', '๔', '๕', '๖', '๗', '๘', '๙'], ['༠', '༡', '༢', '༣', '༤', '༥', '༦', '༧', '༨', '༩'], ['꘠', '꘡', '꘢', '꘣', '꘤', '꘥', '꘦', '꘧', '꘨', '꘩']];
+                unsafe { icu_provider::baked::zerotrie::Data::from_trie_and_values_unchecked(TRIE, VALUES) }
+            };
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DataProvider<icu::decimal::provider::DecimalDigitsV1> for $provider {
+            fn load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponse<icu::decimal::provider::DecimalDigitsV1>, icu_provider::DataError> {
+                let mut req = req;
+                req.id.locale = Default::default();
+                let metadata = icu_provider::DataResponseMetadata::default();
+                let Some(payload) = icu_provider::baked::DataStore::get(&Self::DATA_DECIMAL_DIGITS_V1, req.id, req.metadata.attributes_prefix_match) else { return Err(icu_provider::DataErrorKind::IdentifierNotFound.with_req(<icu::decimal::provider::DecimalDigitsV1 as icu_provider::DataMarker>::INFO, req)) };
+                Ok(icu_provider::DataResponse { payload, metadata })
+            }
+        }
+    };
+    ($ provider : ty , ITER) => {
+        __impl_decimal_digits_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::decimal::provider::DecimalDigitsV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BTreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok(icu_provider::baked::DataStore::iter(&Self::DATA_DECIMAL_DIGITS_V1).collect())
+            }
+        }
+    };
+    ($ provider : ty , DRY) => {};
+    ($ provider : ty , DRY , ITER) => {
+        __impl_decimal_digits_v1!($provider, ITER);
+    };
+}
+#[doc(inline)]
+pub use __impl_decimal_digits_v1 as impl_decimal_digits_v1;

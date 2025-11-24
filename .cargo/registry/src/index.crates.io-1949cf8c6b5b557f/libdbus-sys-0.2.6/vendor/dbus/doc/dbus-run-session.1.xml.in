@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<!DOCTYPE refentry PUBLIC "-//OASIS//DTD DocBook XML V4.4//EN"
+                   "http://www.oasis-open.org/docbook/xml/4.4/docbookx.dtd">
+<refentry id='dbusrunsession1'>
+<refmeta>
+<refentrytitle>dbus-run-session</refentrytitle>
+<manvolnum>1</manvolnum>
+<refmiscinfo class="manual">User Commands</refmiscinfo>
+<refmiscinfo class="source">D-Bus</refmiscinfo>
+<refmiscinfo class="version">@DBUS_VERSION@</refmiscinfo>
+</refmeta>
+<refnamediv>
+<refname>dbus-run-session</refname>
+<refpurpose>start a process as a new D-Bus session</refpurpose>
+</refnamediv>
+<!-- body begins here -->
+<refsynopsisdiv id='synopsis'>
+<cmdsynopsis>
+  <command>dbus-run-session</command>
+    <arg choice='opt'><arg choice='plain'>--config-file </arg><arg choice='plain'><replaceable>FILENAME</replaceable></arg></arg>
+    <arg choice='opt'><arg choice='plain'>--dbus-daemon </arg><arg choice='plain'><replaceable>BINARY</replaceable></arg></arg>
+    <arg choice='opt'>-- </arg>
+    <arg choice='plain'><replaceable>PROGRAM</replaceable></arg>
+    <arg choice='opt' rep='repeat'><replaceable>ARGUMENTS</replaceable></arg>
+</cmdsynopsis>
+<cmdsynopsis>
+  <command>dbus-run-session</command>    <arg choice='plain'>--help </arg>
+</cmdsynopsis>
+<cmdsynopsis>
+  <command>dbus-run-session</command>    <arg choice='plain'>--version </arg>
+</cmdsynopsis>
+</refsynopsisdiv>
+
+
+<refsect1 id='description'><title>DESCRIPTION</title>
+<para><command>dbus-run-session</command>
+is used to start a session bus instance of
+<emphasis remap='B'>dbus-daemon</emphasis>
+from a shell script, and start a specified program in that session. The
+<emphasis remap='B'>dbus-daemon</emphasis>
+will run for as long as the program does, after which it will terminate.</para>
+
+<para>One use is to run a shell with its own
+<emphasis remap='B'>dbus-daemon</emphasis>
+in a text&hyphen;mode or SSH session, and have the
+<emphasis remap='B'>dbus-daemon</emphasis>
+terminate automatically on leaving the sub&hyphen;shell, like this:</para>
+
+<para>    dbus-run-session -- bash</para>
+
+<para>or to replace the login shell altogether, by combining <command>dbus-run-session</command>
+with the <emphasis remap='B'>exec</emphasis> builtin:</para>
+
+<para>    exec dbus-run-session -- bash</para>
+
+<para>Another use is to run regression tests and similar things in an isolated
+D-Bus session, to avoid either interfering with the "real" D-Bus session
+or relying on there already being a D-Bus session active, for instance:</para>
+
+<para>    dbus-run-session -- make check</para>
+
+<para>or (in
+<citerefentry><refentrytitle>automake</refentrytitle><manvolnum>1</manvolnum></citerefentry>):</para>
+
+<literallayout remap='.nf'>
+  AM_TESTS_ENVIRONMENT = export MY_DEBUG=all;
+  LOG_COMPILER = dbus-run-session
+  AM_LOG_FLAGS = --
+</literallayout></refsect1>
+
+<refsect1 id='options'><title>OPTIONS</title>
+<variablelist remap='TP'>
+  <varlistentry>
+  <term><option>--config-file=</option><replaceable>FILENAME</replaceable>, <option>--config-file</option> <replaceable>FILENAME</replaceable></term>
+  <listitem>
+<para>Pass
+<option>--config-file=</option><replaceable>FILENAME</replaceable>
+to the bus daemon, instead of passing it the
+<option>--session</option>
+argument. See
+<citerefentry><refentrytitle>dbus-daemon</refentrytitle><manvolnum>1</manvolnum></citerefentry>.</para>
+  </listitem>
+  </varlistentry>
+  <varlistentry>
+  <term><option>--dbus-daemon=</option><replaceable>BINARY</replaceable>, <option>--dbus-daemon</option> <replaceable>BINARY</replaceable></term>
+  <listitem>
+<para>Run <emphasis remap='I'>BINARY</emphasis> as <citerefentry><refentrytitle>dbus-daemon</refentrytitle><manvolnum>1</manvolnum></citerefentry>, instead of searching the <envar>PATH</envar>
+in the usual way for an executable called <emphasis remap='B'>dbus-daemon</emphasis>.</para>
+  </listitem>
+  </varlistentry>
+  <varlistentry>
+  <term><option>--help</option></term>
+  <listitem>
+<para>Print usage information and exit.</para>
+  </listitem>
+  </varlistentry>
+  <varlistentry>
+  <term><option>--version</option></term>
+  <listitem>
+<para>Print the version of dbus-run-session and exit.</para>
+  </listitem>
+  </varlistentry>
+</variablelist>
+</refsect1>
+
+<refsect1 id='exit_status'><title>EXIT STATUS</title>
+<para><command>dbus-run-session</command>
+exits with the exit status of
+<emphasis remap='I'>PROGRAM</emphasis>,
+0 if the
+<option>--help</option> or <option>--version</option>
+options were used, 127 on an error within
+<command>dbus-run-session</command>
+itself, or
+128+<emphasis remap='I'>n</emphasis>
+if the
+<emphasis remap='I'>PROGRAM</emphasis>
+was killed by signal
+<emphasis remap='I'>n</emphasis>.</para>
+</refsect1>
+
+<refsect1 id='environment'><title>ENVIRONMENT</title>
+<para><envar>PATH</envar>
+is searched to find
+<emphasis remap='I'>PROGRAM</emphasis>,
+and (if the --dbus-daemon option is not used or its argument does not
+contain a
+<emphasis remap='B'>/</emphasis> character) to find <emphasis remap='B'>dbus-daemon</emphasis>.</para>
+
+<para>The session bus' address is made available to
+<emphasis remap='I'>PROGRAM</emphasis>
+in the environment variable
+<emphasis remap='B'>DBUS_SESSION_BUS_ADDRESS</emphasis>.</para>
+
+<para>The variables
+  <emphasis remap='B'>DBUS_SESSION_BUS_PID</emphasis>,
+  <emphasis remap='B'>DBUS_SESSION_BUS_WINDOWID</emphasis>,
+  <emphasis remap='B'>DBUS_STARTER_BUS_TYPE</emphasis> and
+  <emphasis remap='B'>DBUS_STARTER_ADDRESS</emphasis>
+  are removed from the environment, if present.</para>
+</refsect1>
+
+<refsect1 id='bugs'><title>BUGS</title>
+<para>Please send bug reports to the D-Bus mailing list or bug tracker,
+see <ulink url='http://www.freedesktop.org/software/dbus/'>http://www.freedesktop.org/software/dbus/</ulink></para>
+</refsect1>
+
+<refsect1 id='see_also'><title>SEE ALSO</title>
+<para><citerefentry><refentrytitle>dbus-daemon</refentrytitle><manvolnum>1</manvolnum></citerefentry>,
+<citerefentry><refentrytitle>dbus-launch</refentrytitle><manvolnum>1</manvolnum></citerefentry></para>
+</refsect1>
+</refentry>

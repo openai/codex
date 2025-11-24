@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Maps",
+  "type": "object",
+  "properties": {
+    "s_map": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "boolean"
+      }
+    },
+    "i_map": {
+      "type": "object",
+      "patternProperties": {
+        "^-?\\d+$": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "u_map": {
+      "type": "object",
+      "patternProperties": {
+        "^\\d+$": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "pattern_map": {
+      "type": "object",
+      "patternProperties": {
+        "^[0-9a-f]*$": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "s_map",
+    "i_map",
+    "u_map",
+    "pattern_map"
+  ]
+}

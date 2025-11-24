@@ -1,0 +1,31 @@
+
+To install:
+
+	perl Makefile.PL
+
+to construct the Makefile, then
+
+	make test
+
+to test the package.  If it fails any tests, please send me the output
+of `make test' and `perl -V'.  I'll tell you whether it is safe to go
+ahead, or I'll provide a fix.
+
+If it passes the tests, use
+
+	make install
+
+to install it.
+
+Detailed documentation is at the bottom of the lib/Text/Template.pm
+file.  You may be able to view it with the following command:
+
+        perldoc Text::Template
+ 
+Or:
+
+        perldoc lib/Text/Template.pm
+
+If you have problems, send me mail:
+
+mjd-perl-template+@plover.com

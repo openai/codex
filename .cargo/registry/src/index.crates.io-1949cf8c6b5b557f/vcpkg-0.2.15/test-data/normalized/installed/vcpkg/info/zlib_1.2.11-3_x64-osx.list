@@ -1,0 +1,13 @@
+x64-osx/
+x64-osx/debug/
+x64-osx/debug/lib/
+x64-osx/debug/lib/libz.a
+x64-osx/include/
+x64-osx/include/zconf.h
+x64-osx/include/zlib.h
+x64-osx/lib/
+x64-osx/lib/libz.a
+x64-osx/share/
+x64-osx/share/zlib/
+x64-osx/share/zlib/copyright
+x64-osx/share/zlib/usage

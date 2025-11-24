@@ -1,0 +1,6 @@
+--out src/windows/bindings.rs
+--flat --sys --no-comment
+--filter
+    ComputerNamePhysicalDnsHostname
+    GetComputerNameExW
+    SetComputerNameExW

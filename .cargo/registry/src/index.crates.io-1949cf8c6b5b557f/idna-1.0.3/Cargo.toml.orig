@@ -1,0 +1,48 @@
+[package]
+name = "idna"
+version = "1.0.3"
+authors = ["The rust-url developers"]
+description = "IDNA (Internationalizing Domain Names in Applications) and Punycode."
+keywords = ["no_std", "web", "http"]
+repository = "https://github.com/servo/rust-url/"
+license = "MIT OR Apache-2.0"
+autotests = false
+edition = "2018"
+rust-version = "1.57" # For panic in const context
+
+[lib]
+doctest = false
+
+[features]
+default = ["std", "compiled_data"]
+std = ["alloc"]
+alloc = []
+compiled_data = ["idna_adapter/compiled_data"]
+
+[[test]]
+name = "tests"
+harness = false
+
+[[test]]
+name = "unit"
+
+[[test]]
+name = "unitbis"
+
+[dev-dependencies]
+assert_matches = "1.3"
+bencher = "0.1"
+tester = "0.9"
+serde_json = "1.0"
+
+[dependencies]
+utf8_iter = "1.0.4"
+smallvec = { version = "1.13.1", features = ["const_generics"]}
+idna_adapter = "1"
+
+[[bench]]
+name = "all"
+harness = false
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--generate-link-to-definition"]

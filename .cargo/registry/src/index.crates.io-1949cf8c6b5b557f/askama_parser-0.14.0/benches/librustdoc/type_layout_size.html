@@ -1,0 +1,12 @@
+{% if is_unsized %}
+  (unsized)
+{% else %}
+  {% if size == 1 %}
+    1 byte
+  {% else %}
+    {{ size +}} bytes
+  {% endif %}
+  {% if is_uninhabited %}
+    {# +#} (<a href="https://doc.rust-lang.org/stable/reference/glossary.html#uninhabited">uninhabited</a>)
+  {% endif %}
+{% endif %}

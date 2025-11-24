@@ -1,0 +1,38 @@
+{
+    "multiline_empty_one": {
+        "type": "string",
+        "value": ""
+    },
+    "multiline_empty_two": {
+        "type": "string",
+        "value": ""
+    },
+    "multiline_empty_three": {
+        "type": "string",
+        "value": ""
+    },
+    "multiline_empty_four": {
+        "type": "string",
+        "value": ""
+    },
+    "multiline_empty_five": {
+        "type": "string",
+        "value": ""
+    },
+    "equivalent_one": {
+        "type": "string",
+        "value": "The quick brown fox jumps over the lazy dog."
+    },
+    "equivalent_two": {
+        "type": "string",
+        "value": "The quick brown fox jumps over the lazy dog."
+    },
+    "equivalent_three": {
+        "type": "string",
+        "value": "The quick brown fox jumps over the lazy dog."
+    },
+    "equivalent_four": {
+        "type": "string",
+        "value": "The quick brown fox jumps over the lazy dog."
+    }
+}

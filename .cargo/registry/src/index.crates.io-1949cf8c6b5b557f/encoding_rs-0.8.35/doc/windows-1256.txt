@@ -1,0 +1,6 @@
+/// This is the Arabic encoding for Windows.
+///
+/// [Index visualization](https://encoding.spec.whatwg.org/windows-1256.html),
+/// [Visualization of BMP coverage](https://encoding.spec.whatwg.org/windows-1256-bmp.html)
+///
+/// This encoding matches the Windows code page 1256.

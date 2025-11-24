@@ -1,0 +1,6 @@
+$LIBSSL=../../libssl
+
+SOURCE[$LIBSSL]=poll_immediate.c
+IF[{- !$disabled{quic} -}]
+  SOURCE[$LIBSSL]=rio_notifier.c poll_builder.c
+ENDIF

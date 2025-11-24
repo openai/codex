@@ -1,0 +1,7 @@
+/// This is the MacRoman encoding from Mac OS Classic.
+///
+/// [Index visualization](https://encoding.spec.whatwg.org/macintosh.html),
+/// [Visualization of BMP coverage](https://encoding.spec.whatwg.org/macintosh-bmp.html)
+///
+/// This encoding matches the Windows code page 10000, except Windows decodes
+/// 0xBD to U+2126 OHM SIGN instead of U+03A9 GREEK CAPITAL LETTER OMEGA.

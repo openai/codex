@@ -1,0 +1,24 @@
+Running D-Bus clients with Valgrind
+====
+
+When running programs using libdbus in Valgrind, some special care needs to be
+taken so as to avoid incorrect detection of leaks in libdbus. To avoid these
+false positives, do the following:
+
+* Grab a copy of the D-Bus source code
+
+* Run configure with the --enable-developer and --with-valgrind options
+
+* Run make
+
+* Either make sure your code calls dbus_shutdown() (at least while running in
+  Valgrind) or set DBUS_MESSAGE_CACHE=0 in your environment
+
+* Run Valgrind on your program with the /path/to/dbus/source/dbus/.libs in your
+  LD_LIBRARY_PATH
+
+Your Valgrind log should now be free of any (spurious) libdbus-related leaks.
+
+For the curious, the DBUS_MESSAGE_CACHE=0 is required because by
+default, libdbus uses a recyclable pool of message structs. These help
+performance a bit.

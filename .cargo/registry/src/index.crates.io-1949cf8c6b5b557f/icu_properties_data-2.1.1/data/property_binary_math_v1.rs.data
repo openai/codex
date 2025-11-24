@@ -1,0 +1,83 @@
+// @generated
+/// Implement `DataProvider<PropertyBinaryMathV1>` on the given struct using the data
+/// hardcoded in this file. This allows the struct to be used with
+/// `icu`'s `_unstable` constructors.
+///
+/// Using this implementation will embed the following data in the binary's data segment:
+/// * 878B[^1] for the singleton data struct
+///
+/// [^1]: these numbers can be smaller in practice due to linker deduplication
+///
+/// This macro requires the following crates:
+/// * `icu`
+/// * `icu_provider`
+/// * `zerovec`
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __impl_property_binary_math_v1 {
+    ($ provider : ty) => {
+        #[clippy::msrv = "1.83"]
+        const _: () = <$provider>::MUST_USE_MAKE_PROVIDER_MACRO;
+        #[clippy::msrv = "1.83"]
+        impl $provider {
+            #[doc(hidden)]
+            pub const SINGLETON_PROPERTY_BINARY_MATH_V1: &'static <icu::properties::provider::PropertyBinaryMathV1 as icu_provider::DynamicDataMarker>::DataStruct = &icu::properties::provider::PropertyCodePointSet::InversionList(unsafe {
+                #[allow(unused_unsafe)]
+                icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"+\0\0,\0\0<\0\0?\0\0^\0\0_\0\0|\0\0}\0\0~\0\0\x7F\0\0\xAC\0\0\xAD\0\0\xB1\0\0\xB2\0\0\xD7\0\0\xD8\0\0\xF7\0\0\xF8\0\0\xD0\x03\0\xD3\x03\0\xD5\x03\0\xD6\x03\0\xF0\x03\0\xF2\x03\0\xF4\x03\0\xF7\x03\0\x06\x06\0\t\x06\0\x16 \0\x17 \x002 \x005 \0@ \0A \0D \0E \0R \0S \0a \0e \0z \0\x7F \0\x8A \0\x8F \0\xD0 \0\xDD \0\xE1 \0\xE2 \0\xE5 \0\xE7 \0\xEB \0\xF0 \0\x02!\0\x03!\0\x07!\0\x08!\0\n!\0\x14!\0\x15!\0\x16!\0\x18!\0\x1E!\0$!\0%!\0(!\0*!\0,!\0.!\0/!\x002!\x003!\09!\0<!\0J!\0K!\0L!\0\x90!\0\xA8!\0\xA9!\0\xAF!\0\xB0!\0\xB2!\0\xB6!\0\xB8!\0\xBC!\0\xDC!\0\xDD!\0\xDE!\0\xE4!\0\xE6!\0\xF4!\0\0#\0\x08#\0\x0C#\0 #\0\"#\0|#\0}#\0\x9B#\0\xB6#\0\xB7#\0\xB8#\0\xD0#\0\xD1#\0\xDC#\0\xE3#\0\xA0%\0\xA2%\0\xAE%\0\xB8%\0\xBC%\0\xC2%\0\xC6%\0\xC8%\0\xCA%\0\xCC%\0\xCF%\0\xD4%\0\xE2%\0\xE3%\0\xE4%\0\xE5%\0\xE7%\0\xED%\0\xF8%\0\0&\0\x05&\0\x07&\0@&\0A&\0B&\0C&\0`&\0d&\0m&\0p&\0\xC0'\0\0(\0\0)\0\0+\x000+\0E+\0G+\0M+\0)\xFB\0*\xFB\0a\xFE\0g\xFE\0h\xFE\0i\xFE\0\x0B\xFF\0\x0C\xFF\0\x1C\xFF\0\x1F\xFF\0<\xFF\0=\xFF\0>\xFF\0?\xFF\0\\\xFF\0]\xFF\0^\xFF\0_\xFF\0\xE2\xFF\0\xE3\xFF\0\xE9\xFF\0\xED\xFF\0\x8E\r\x01\x90\r\x01\xF0\xCE\x01\xF1\xCE\x01\0\xD4\x01U\xD4\x01V\xD4\x01\x9D\xD4\x01\x9E\xD4\x01\xA0\xD4\x01\xA2\xD4\x01\xA3\xD4\x01\xA5\xD4\x01\xA7\xD4\x01\xA9\xD4\x01\xAD\xD4\x01\xAE\xD4\x01\xBA\xD4\x01\xBB\xD4\x01\xBC\xD4\x01\xBD\xD4\x01\xC4\xD4\x01\xC5\xD4\x01\x06\xD5\x01\x07\xD5\x01\x0B\xD5\x01\r\xD5\x01\x15\xD5\x01\x16\xD5\x01\x1D\xD5\x01\x1E\xD5\x01:\xD5\x01;\xD5\x01?\xD5\x01@\xD5\x01E\xD5\x01F\xD5\x01G\xD5\x01J\xD5\x01Q\xD5\x01R\xD5\x01\xA6\xD6\x01\xA8\xD6\x01\xCC\xD7\x01\xCE\xD7\x01\0\xD8\x01\0\xEE\x01\x04\xEE\x01\x05\xEE\x01 \xEE\x01!\xEE\x01#\xEE\x01$\xEE\x01%\xEE\x01'\xEE\x01(\xEE\x01)\xEE\x013\xEE\x014\xEE\x018\xEE\x019\xEE\x01:\xEE\x01;\xEE\x01<\xEE\x01B\xEE\x01C\xEE\x01G\xEE\x01H\xEE\x01I\xEE\x01J\xEE\x01K\xEE\x01L\xEE\x01M\xEE\x01P\xEE\x01Q\xEE\x01S\xEE\x01T\xEE\x01U\xEE\x01W\xEE\x01X\xEE\x01Y\xEE\x01Z\xEE\x01[\xEE\x01\\\xEE\x01]\xEE\x01^\xEE\x01_\xEE\x01`\xEE\x01a\xEE\x01c\xEE\x01d\xEE\x01e\xEE\x01g\xEE\x01k\xEE\x01l\xEE\x01s\xEE\x01t\xEE\x01x\xEE\x01y\xEE\x01}\xEE\x01~\xEE\x01\x7F\xEE\x01\x80\xEE\x01\x8A\xEE\x01\x8B\xEE\x01\x9C\xEE\x01\xA1\xEE\x01\xA4\xEE\x01\xA5\xEE\x01\xAA\xEE\x01\xAB\xEE\x01\xBC\xEE\x01\xF0\xEE\x01\xF2\xEE\x01\xD0\xF8\x01\xD9\xF8\x01") }, 2322u32)
+            });
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DataProvider<icu::properties::provider::PropertyBinaryMathV1> for $provider {
+            fn load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponse<icu::properties::provider::PropertyBinaryMathV1>, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponse { payload: icu_provider::DataPayload::from_static_ref(Self::SINGLETON_PROPERTY_BINARY_MATH_V1), metadata: icu_provider::DataResponseMetadata::default() })
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyBinaryMathV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , ITER) => {
+        __impl_property_binary_math_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::properties::provider::PropertyBinaryMathV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+    ($ provider : ty , DRY) => {
+        __impl_property_binary_math_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::properties::provider::PropertyBinaryMathV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyBinaryMathV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , DRY , ITER) => {
+        __impl_property_binary_math_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::properties::provider::PropertyBinaryMathV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyBinaryMathV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::properties::provider::PropertyBinaryMathV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+}
+#[doc(inline)]
+pub use __impl_property_binary_math_v1 as impl_property_binary_math_v1;

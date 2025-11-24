@@ -1,0 +1,75 @@
+[package]
+name = "chrono"
+version = "0.4.42"
+description = "Date and time library for Rust"
+homepage = "https://github.com/chronotope/chrono"
+documentation = "https://docs.rs/chrono/"
+repository = "https://github.com/chronotope/chrono"
+keywords = ["date", "time", "calendar"]
+categories = ["date-and-time"]
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+include = ["src/*", "tests/*.rs", "LICENSE.txt", "CITATION.cff"]
+edition = "2021"
+rust-version = "1.62.0"
+
+[lib]
+name = "chrono"
+
+[features]
+# Don't forget to adjust `ALL_NON_EXCLUSIVE_FEATURES` in CI scripts when adding a feature or an optional dependency.
+default = ["clock", "std", "oldtime", "wasmbind"]
+alloc = []
+libc = []
+winapi = ["windows-link"]
+std = ["alloc"]
+clock = ["winapi", "iana-time-zone", "now"]
+now = ["std"]
+core-error = []
+oldtime = []
+wasmbind = ["wasm-bindgen", "js-sys"]
+unstable-locales = ["pure-rust-locales"]
+# Note that rkyv-16, rkyv-32, and rkyv-64 are mutually exclusive.
+rkyv = ["dep:rkyv", "rkyv/size_32"]
+rkyv-16 = ["dep:rkyv", "rkyv?/size_16"]
+rkyv-32 = ["dep:rkyv", "rkyv?/size_32"]
+rkyv-64 = ["dep:rkyv", "rkyv?/size_64"]
+rkyv-validation = ["rkyv?/validation"]
+# Features for internal use only:
+__internal_bench = []
+
+[dependencies]
+num-traits = { version = "0.2", default-features = false }
+serde = { version = "1.0.99", default-features = false, optional = true }
+pure-rust-locales = { version = "0.8", optional = true }
+rkyv = { version = "0.7.43", optional = true, default-features = false }
+arbitrary = { version = "1.0.0", features = ["derive"], optional = true }
+
+[target.'cfg(all(target_arch = "wasm32", not(any(target_os = "emscripten", target_os = "wasi"))))'.dependencies]
+wasm-bindgen = { version = "0.2", optional = true }
+js-sys = { version = "0.3", optional = true }       # contains FFI bindings for the JS Date API
+
+[target.'cfg(windows)'.dependencies]
+windows-link = { version = "0.2", optional = true }
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-bindgen = { version = "0.63" } # MSRV is 1.74
+
+[target.'cfg(unix)'.dependencies]
+iana-time-zone = { version = "0.1.45", optional = true, features = ["fallback"] }
+
+[dev-dependencies]
+serde_json = { version = "1" }
+serde_derive = { version = "1", default-features = false }
+similar-asserts = { version = "1.6.1" }
+bincode = { version = "1.3.0" }
+
+[target.'cfg(all(target_arch = "wasm32", not(any(target_os = "emscripten", target_os = "wasi"))))'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[package.metadata.docs.rs]
+features = ["arbitrary", "rkyv", "serde", "unstable-locales"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[package.metadata.playground]
+features = ["serde"]

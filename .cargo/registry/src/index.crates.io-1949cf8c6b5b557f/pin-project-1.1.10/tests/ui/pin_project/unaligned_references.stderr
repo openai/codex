@@ -1,0 +1,19 @@
+error[E0793]: reference to packed field is unaligned
+  --> tests/ui/pin_project/unaligned_references.rs:17:13
+   |
+17 |     let _ = &a.f; //~ ERROR reference to packed field is unaligned
+   |             ^^^^
+   |
+   = note: packed structs are only aligned by one byte, and many modern architectures penalize unaligned field accesses
+   = note: creating a misaligned reference is undefined behavior (even if that reference is never dereferenced)
+   = help: copy the field contents to a local variable, or replace the reference with a raw pointer and use `read_unaligned`/`write_unaligned` (loads and stores via `*p` must be properly aligned even when using raw pointers)
+
+error[E0793]: reference to packed field is unaligned
+  --> tests/ui/pin_project/unaligned_references.rs:20:13
+   |
+20 |     let _ = &b.f; //~ ERROR reference to packed field is unaligned
+   |             ^^^^
+   |
+   = note: packed structs are only aligned by one byte, and many modern architectures penalize unaligned field accesses
+   = note: creating a misaligned reference is undefined behavior (even if that reference is never dereferenced)
+   = help: copy the field contents to a local variable, or replace the reference with a raw pointer and use `read_unaligned`/`write_unaligned` (loads and stores via `*p` must be properly aligned even when using raw pointers)

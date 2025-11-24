@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Tuple",
+  "type": "array",
+  "items": [
+    {
+      "type": "boolean"
+    },
+    {
+      "type": "integer",
+      "format": "int32"
+    },
+    {
+      "type": "boolean"
+    }
+  ],
+  "maxItems": 3,
+  "minItems": 3
+}

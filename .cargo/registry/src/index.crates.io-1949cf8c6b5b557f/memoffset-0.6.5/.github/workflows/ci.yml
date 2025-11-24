@@ -1,0 +1,86 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust:
+          - stable
+          - beta
+          - nightly
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust }}
+          override: true
+      - name: Run cargo test
+        run: cargo test
+
+  test-msrv:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust:
+          - 1.19.0  # Oldest supported (first version with numeric fields in struct patterns)
+          - 1.20.0  # Oldest supported with tuple_ty
+          - 1.31.0  # Oldest supported with allow(clippy)
+          - 1.36.0  # Oldest supported with MaybeUninit
+          - 1.40.0  # Oldest supported with cfg(doctest)
+          - 1.51.0  # Oldest supported with ptr::addr_of!
+          - stable
+          - beta
+          - nightly
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust }}
+          override: true
+      - name: Run cargo test
+        # Exclude doctests here, as we don't want to clutter docs themselves
+        # with backwards compatibility workarounds.
+        run: cargo test --lib
+
+  nightly:
+    name: Test Suite (nightly features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          override: true
+      - name: Run cargo test
+        # `--lib` prevents doctests from being run.
+        # This is due to `unstable_const` requiring extra `feature(...)` directives
+        # which the doctests do not have.
+        run: cargo test --all-features --lib
+
+  miri:
+    name: Test Suite (Miri)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Test with Miri
+        run: ci/miri.sh
+
+  style:
+    name: lints and formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+            toolchain: 1.51.0 # pin a version for reproducible results
+            components: rustfmt
+            override: true
+      - name: Check warnings
+        run: RUSTFLAGS="-D warnings" cargo check --all-targets
+      - name: Check formatting
+        run: cargo fmt -- --check

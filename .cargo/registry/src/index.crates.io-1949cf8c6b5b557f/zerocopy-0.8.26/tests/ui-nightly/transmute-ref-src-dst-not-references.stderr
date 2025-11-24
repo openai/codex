@@ -1,0 +1,45 @@
+error[E0308]: mismatched types
+  --> tests/ui-nightly/transmute-ref-src-dst-not-references.rs:17:54
+   |
+17 | const SRC_DST_NOT_REFERENCES: usize = transmute_ref!(0usize);
+   |                                       ---------------^^^^^^-
+   |                                       |              |
+   |                                       |              expected `&_`, found `usize`
+   |                                       expected due to this
+   |
+   = note: expected reference `&_`
+                   found type `usize`
+help: consider borrowing here
+   |
+17 | const SRC_DST_NOT_REFERENCES: usize = transmute_ref!(&0usize);
+   |                                                      +
+
+error[E0308]: mismatched types
+  --> tests/ui-nightly/transmute-ref-src-dst-not-references.rs:17:39
+   |
+17 | const SRC_DST_NOT_REFERENCES: usize = transmute_ref!(0usize);
+   |                                       ^^^^^^^^^^^^^^^^^^^^^^ expected `usize`, found `&_`
+   |
+   = note:   expected type `usize`
+           found reference `&_`
+   = note: this error originates in the macro `transmute_ref` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+  --> tests/ui-nightly/transmute-ref-src-dst-not-references.rs:17:39
+   |
+17 | const SRC_DST_NOT_REFERENCES: usize = transmute_ref!(0usize);
+   |                                       ^^^^^^^^^^^^^^^^^^^^^^ expected `usize`, found `&_`
+   |
+   = note:   expected type `usize`
+           found reference `&_`
+   = note: this error originates in the macro `transmute_ref` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+  --> tests/ui-nightly/transmute-ref-src-dst-not-references.rs:17:39
+   |
+17 | const SRC_DST_NOT_REFERENCES: usize = transmute_ref!(0usize);
+   |                                       ^^^^^^^^^^^^^^^^^^^^^^ expected `usize`, found `&_`
+   |
+   = note:   expected type `usize`
+           found reference `&_`
+   = note: this error originates in the macro `transmute_ref` (in Nightly builds, run with -Z macro-backtrace for more info)

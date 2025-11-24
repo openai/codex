@@ -1,0 +1,1296 @@
+#! /usr/bin/env perl
+# Copyright 2002-2025 The OpenSSL Project Authors. All Rights Reserved.
+#
+# Licensed under the Apache License 2.0 (the "License").  You may not use
+# this file except in compliance with the License.  You can obtain a copy
+# in the file LICENSE in the source distribution or at
+# https://www.openssl.org/source/license.html
+
+
+require 5.10.0;
+use warnings;
+use strict;
+
+use Carp qw(:DEFAULT cluck);
+use Pod::Checker;
+use File::Find;
+use File::Basename;
+use File::Spec::Functions;
+use Getopt::Std;
+use FindBin;
+use lib "$FindBin::Bin/perl";
+
+use OpenSSL::Util::Pod;
+
+use lib '.';
+use configdata;
+
+# Set to 1 for debug output
+my $debug = 0;
+
+# Options.
+our($opt_d);
+our($opt_e);
+our($opt_s);
+our($opt_o);
+our($opt_h);
+our($opt_l);
+our($opt_m);
+our($opt_n);
+our($opt_p);
+our($opt_u);
+our($opt_v);
+our($opt_c);
+our($opt_i);
+
+# Print usage message and exit.
+sub help {
+    print <<EOF;
+Find small errors (nits) in documentation.  Options:
+    -c List undocumented commands, undocumented options and unimplemented options.
+    -d Detailed list of undocumented (implies -u)
+    -e Detailed list of new undocumented (implies -v)
+    -h Print this help message
+    -l Print bogus links
+    -m Name(s) of manuals to focus on. Default: man1,man3,man5,man7
+    -n Print nits in POD pages
+    -o Causes -e/-v to count symbols added since 1.1.1 as new (implies -v)
+    -i Checks for history entries available for symbols added since 3.0.0 as new
+    -u Count undocumented functions
+    -v Count new undocumented functions
+EOF
+    exit;
+}
+
+getopts('cdehlm:noiuv');
+
+help() if $opt_h;
+$opt_u = 1 if $opt_d;
+$opt_v = 1 if $opt_o || $opt_e;
+die "Cannot use both -u and -v"
+    if $opt_u && $opt_v;
+die "Cannot use both -d and -e"
+    if $opt_d && $opt_e;
+
+# We only need to check c, l, n, u and v.
+# Options d, e, o imply one of the above.
+die "Need one of -[cdehlnouv] flags.\n"
+    unless $opt_c or $opt_l or $opt_n or $opt_u or $opt_v;
+
+
+my $temp = '/tmp/docnits.txt';
+my $OUT;
+my $status = 0;
+
+$opt_m = "man1,man3,man5,man7" unless $opt_m;
+die "Argument of -m option may contain only man1, man3, man5, and/or man7"
+    unless $opt_m =~ /^(man[1357][, ]?)*$/;
+my @sections = ( split /[, ]/, $opt_m );
+
+my %mandatory_sections = (
+    '*' => [ 'NAME', 'COPYRIGHT' ],
+    1   => [ 'DESCRIPTION', 'SYNOPSIS', 'OPTIONS' ],
+    3   => [ 'DESCRIPTION', 'SYNOPSIS', 'RETURN VALUES' ],
+    5   => [ 'DESCRIPTION' ],
+    7   => [ ]
+                         );
+
+# Symbols that we ignored.
+# They are reserved macros that we currently don't document
+my $ignored = qr/(?| ^i2d_
+                 |   ^d2i_
+                 |   ^DEPRECATEDIN
+                 |   ^OSSL_DEPRECATED
+                 |   \Q_fnsig(3)\E$
+                 |   ^IMPLEMENT_
+                 |   ^_?DECLARE_
+                 |   ^sk_
+                 |   ^SKM_DEFINE_STACK_OF_INTERNAL
+                 |   ^lh_
+                 |   ^DEFINE_LHASH_OF_(INTERNAL|DEPRECATED)
+                 |   ^OSSL_HTO[BL]E(16|32|64)   # undefed
+                 |   ^OSSL_[BL]E(16|32|64)TOH   # undefed
+                 )/x;
+
+# A common regexp for C symbol names
+my $C_symbol = qr/\b[[:alpha:]][_[:alnum:]]*\b/;
+
+# Collect all POD files, both internal and public, and regardless of location
+# We collect them in a hash table with each file being a key, so we can attach
+# tags to them.  For example, internal docs will have the word "internal"
+# attached to them.
+my %files = ();
+# We collect files names on the fly, on known tag basis
+my %collected_tags = ();
+# We cache results based on tags
+my %collected_results = ();
+
+# files OPTIONS
+#
+# Example:
+#
+#       files(TAGS => 'manual');
+#       files(TAGS => [ 'manual', 'man1' ]);
+#
+# This function returns an array of files corresponding to a set of tags
+# given with the options "TAGS".  The value of this option can be a single
+# word, or an array of several words, which work as inclusive or exclusive
+# selectors.  Inclusive selectors are used to add one more set of files to
+# the returned array, while exclusive selectors limit the set of files added
+# to the array.  The recognised tag values are:
+#
+# 'public_manual'       - inclusive selector, adds public manuals to the
+#                         returned array of files.
+# 'internal_manual'     - inclusive selector, adds internal manuals to the
+#                         returned array of files.
+# 'manual'              - inclusive selector, adds any manual to the returned
+#                         array of files.  This is really a shorthand for
+#                         'public_manual' and 'internal_manual' combined.
+# 'public_header'       - inclusive selector, adds public headers to the
+#                         returned array of files.
+# 'header'              - inclusive selector, adds any header file to the
+#                         returned array of files.  Since we currently only
+#                         care about public headers, this is exactly
+#                         equivalent to 'public_header', but is present for
+#                         consistency.
+#
+# 'man1', 'man3', 'man5', 'man7'
+#                       - exclusive selectors, only applicable together with
+#                         any of the manual selectors.  If any of these are
+#                         present, only the manuals from the given sections
+#                         will be included.  If none of these are present,
+#                         the manuals from all sections will be returned.
+#
+# All returned manual files come from configdata.pm.
+# All returned header files come from looking inside
+# "$config{sourcedir}/include/openssl"
+#
+sub files {
+    my %opts = ( @_ );          # Make a copy of the arguments
+
+    $opts{TAGS} = [ $opts{TAGS} ] if ref($opts{TAGS}) eq '';
+
+    croak "No tags given, or not an array"
+        unless exists $opts{TAGS} && ref($opts{TAGS}) eq 'ARRAY';
+
+    my %tags = map { $_ => 1 } @{$opts{TAGS}};
+    $tags{public_manual} = 1
+        if $tags{manual} && ($tags{public} // !$tags{internal});
+    $tags{internal_manual} = 1
+        if $tags{manual} && ($tags{internal} // !$tags{public});
+    $tags{public_header} = 1
+        if $tags{header} && ($tags{public} // !$tags{internal});
+    delete $tags{manual};
+    delete $tags{header};
+    delete $tags{public};
+    delete $tags{internal};
+
+    my $tags_as_key = join(':', sort keys %tags);
+
+    cluck  "DEBUG[files]: This is how we got here!" if $debug;
+    print STDERR "DEBUG[files]: tags: $tags_as_key\n" if $debug;
+
+    my %tags_to_collect = ( map { $_ => 1 }
+                            grep { !exists $collected_tags{$_} }
+                            keys %tags );
+
+    if ($tags_to_collect{public_manual}) {
+        print STDERR "DEBUG[files]: collecting public manuals\n"
+            if $debug;
+
+        # The structure in configdata.pm is that $unified_info{mandocs}
+        # contains lists of man files, and in turn, $unified_info{depends}
+        # contains hash tables showing which POD file each of those man
+        # files depend on.  We use that information to find the POD files,
+        # and to attach the man section they belong to as tags
+        foreach my $mansect ( @sections ) {
+            foreach ( map { @{$unified_info{depends}->{$_}} }
+                      @{$unified_info{mandocs}->{$mansect}} ) {
+                $files{$_} = { $mansect => 1, public_manual => 1 };
+            }
+        }
+        $collected_tags{public_manual} = 1;
+    }
+
+    if ($tags_to_collect{internal_manual}) {
+        print STDERR "DEBUG[files]: collecting internal manuals\n"
+            if $debug;
+
+        # We don't have the internal docs in configdata.pm.  However, they
+        # are all in the source tree, so they're easy to find.
+        foreach my $mansect ( @sections ) {
+            foreach ( glob(catfile($config{sourcedir},
+                                   'doc', 'internal', $mansect, '*.pod')) ) {
+                $files{$_} = { $mansect => 1, internal_manual => 1 };
+            }
+        }
+        $collected_tags{internal_manual} = 1;
+    }
+
+    if ($tags_to_collect{public_header}) {
+        print STDERR "DEBUG[files]: collecting public headers\n"
+            if $debug;
+
+        foreach ( glob(catfile($config{sourcedir},
+                               'include', 'openssl', '*.h')) ) {
+            $files{$_} = { public_header => 1 };
+        }
+    }
+
+    my @result = @{$collected_results{$tags_as_key} // []};
+
+    if (!@result) {
+        # Produce a result based on caller tags
+        foreach my $type ( ( 'public_manual', 'internal_manual' ) ) {
+            next unless $tags{$type};
+
+            # If caller asked for specific sections, we care about sections.
+            # Otherwise, we give back all of them.
+            my @selected_sections =
+                grep { $tags{$_} } @sections;
+            @selected_sections = @sections unless @selected_sections;
+
+            foreach my $section ( ( @selected_sections ) ) {
+                push @result,
+                    ( sort { basename($a) cmp basename($b) }
+                      grep { $files{$_}->{$type} && $files{$_}->{$section} }
+                      keys %files );
+            }
+        }
+        if ($tags{public_header}) {
+            push @result,
+                ( sort { basename($a) cmp basename($b) }
+                  grep { $files{$_}->{public_header} }
+                  keys %files );
+        }
+
+        if ($debug) {
+            print STDERR "DEBUG[files]: result:\n";
+            print STDERR "DEBUG[files]:     $_\n" foreach @result;
+        }
+        $collected_results{$tags_as_key} = [ @result ];
+    }
+
+    return @result;
+}
+
+# Print error message, set $status.
+sub err {
+    my $t = join(" ", @_);
+    $t =~ s/\n//g;
+    print $t, "\n";
+    $status = 1
+}
+
+# Cross-check functions in the NAME and SYNOPSIS section.
+sub name_synopsis {
+    my $id = shift;
+    my $filename = shift;
+    my $contents = shift;
+
+    # Get NAME section and all words in it.
+    return unless $contents =~ /=head1 NAME(.*)=head1 SYNOPSIS/ms;
+    my $tmp = $1;
+    $tmp =~ tr/\n/ /;
+    err($id, "Trailing comma before - in NAME")
+        if $tmp =~ /, *-/;
+    $tmp =~ s/ -.*//g;
+    err($id, "POD markup among the names in NAME")
+        if $tmp =~ /[<>]/;
+    $tmp =~ s/  */ /g;
+    err($id, "Missing comma in NAME")
+        if $tmp =~ /[^,] /;
+
+    my $dirname = dirname($filename);
+    my $section = basename($dirname);
+    my $simplename = basename($filename, ".pod");
+    my $foundfilename = 0;
+    my %foundfilenames = ();
+    my %names;
+    foreach my $n ( split ',', $tmp ) {
+        $n =~ s/^\s+//;
+        $n =~ s/\s+$//;
+        err($id, "The name '$n' contains white-space")
+            if $n =~ /\s/;
+        $names{$n} = 1;
+        $foundfilename++ if $n eq $simplename;
+        $foundfilenames{$n} = 1
+            if ( ( grep { basename($_) eq "$n.pod" }
+                   files(TAGS => [ 'manual', $section ]) )
+                 && $n ne $simplename );
+    }
+    err($id, "The following exist as other .pod files:",
+         sort keys %foundfilenames)
+        if %foundfilenames;
+    err($id, "$simplename (filename) missing from NAME section")
+        unless $foundfilename;
+
+    # Find all functions in SYNOPSIS
+    return unless $contents =~ /=head1 SYNOPSIS(.*)=head1 DESCRIPTION/ms;
+    my $syn = $1;
+    my $ignore_until = undef;   # If defined, this is a regexp
+    # Remove all non-code lines
+    $syn =~ s/^(?:\s*?|\S.*?)$//msg;
+    # Remove all comments
+    $syn =~ s/\/\*.*?\*\///msg;
+    while ( $syn ) {
+        # "env" lines end at a newline.
+        # Preprocessor lines start with a # and end at a newline.
+        # Other lines end with a semicolon, and may cover more than
+        # one physical line.
+        if ( $syn !~ /^ \s*(env .*?|#.*?|.*?;)\s*$/ms ) {
+            err($id, "Can't parse rest of synopsis:\n$syn\n(declarations not ending with a semicolon (;)?)");
+            last;
+        }
+        my $line = $1;
+        $syn = $';
+
+        print STDERR "DEBUG[name_synopsis] \$line = '$line'\n" if $debug;
+
+        # Special code to skip over documented structures
+        if ( defined $ignore_until) {
+            next if $line !~ /$ignore_until/;
+            $ignore_until = undef;
+            next;
+        }
+        if ( $line =~ /^\s*(?:typedef\s+)?struct(?:\s+\S+)\s*\{/ ) {
+            $ignore_until = qr/\}.*?;/;
+            next;
+        }
+
+        my $sym;
+        my $is_prototype = 1;
+        $line =~ s/LHASH_OF\([^)]+\)/int/g;
+        $line =~ s/STACK_OF\([^)]+\)/int/g;
+        $line =~ s/SPARSE_ARRAY_OF\([^)]+\)/int/g;
+        $line =~ s/__declspec\([^)]+\)//;
+
+        ## We don't prohibit that space, to allow typedefs looking like
+        ## this:
+        ##
+        ## typedef int (fantastically_long_name_breaks_80char_limit)
+        ##     (fantastically_long_name_breaks_80char_limit *something);
+        ##
+        #if ( $line =~ /typedef.*\(\*?\S+\)\s+\(/ ) {
+        #    # a callback function with whitespace before the argument list:
+        #    # typedef ... (*NAME) (...
+        #    # typedef ... (NAME) (...
+        #    err($id, "Function typedef has space before arg list: $line");
+        #}
+
+        if ( $line =~ /env (\S*)=/ ) {
+            # environment variable env NAME=...
+            $sym = $1;
+        } elsif ( $line =~ /typedef.*\(\*?($C_symbol)\)\s*\(/ ) {
+            # a callback function pointer: typedef ... (*NAME)(...
+            # a callback function signature: typedef ... (NAME)(...
+            $sym = $1;
+        } elsif ( $line =~ /typedef.*($C_symbol)\s*\(/ ) {
+            # a callback function signature: typedef ... NAME(...
+            $sym = $1;
+        } elsif ( $line =~ /typedef.*($C_symbol);/ ) {
+            # a simple typedef: typedef ... NAME;
+            $is_prototype = 0;
+            $sym = $1;
+        } elsif ( $line =~ /enum ($C_symbol) \{/ ) {
+            # an enumeration: enum ... {
+            $sym = $1;
+        } elsif ( $line =~ /#\s*(?:define|undef) ($C_symbol)/ ) {
+            $is_prototype = 0;
+            $sym = $1;
+        } elsif ( $line =~ /^[^\(]*?\(\*($C_symbol)\s*\(/ ) {
+            # a function returning a function pointer: TYPE (*NAME(args))(args)
+            $sym = $1;
+        } elsif ( $line =~ /^[^\(]*?($C_symbol)\s*\(/ ) {
+            # a simple function declaration
+            $sym = $1;
+        }
+        else {
+            next;
+        }
+
+        print STDERR "DEBUG[name_synopsis] \$sym = '$sym'\n" if $debug;
+
+        err($id, "$sym missing from NAME section")
+            unless defined $names{$sym};
+        $names{$sym} = 2;
+
+        # Do some sanity checks on the prototype.
+        err($id, "Prototype missing spaces around commas: $line")
+            if $is_prototype && $line =~ /[a-z0-9],[^\s]/;
+    }
+
+    foreach my $n ( keys %names ) {
+        next if $names{$n} == 2;
+        err($id, "$n missing from SYNOPSIS")
+    }
+}
+
+# Check if SECTION ($3) is located before BEFORE ($4)
+sub check_section_location {
+    my $id = shift;
+    my $contents = shift;
+    my $section = shift;
+    my $before = shift;
+
+    return unless $contents =~ /=head1 $section/
+        and $contents =~ /=head1 $before/;
+    err($id, "$section should appear before $before section")
+        if $contents =~ /=head1 $before.*=head1 $section/ms;
+}
+
+# Check if HISTORY section is present and functionname ($2) is present in it
+# or a generic "(f)unction* added" term hints at several new functions in
+# the documentation (yes, this is an approximation only but it works :)
+sub find_functionname_in_history_section {
+    my $contents = shift;
+    my $functionname = shift;
+    my (undef, $rest) = split('=head1 HISTORY\s*', $contents);
+
+    if (not $rest) {
+        # No HISTORY section is a clear error now
+        return 0;
+    }
+    else {
+        my ($histsect, undef) = split('=head1 COPYRIGHT\s*', $rest);
+        if (index($histsect, $functionname) == -1) {
+            # OK, functionname is not in HISTORY section...
+            # last try: Check for presence of "*unction*added*"
+            return 0 if (not $histsect =~ /unction.*added.*/g);
+        }
+    }
+    return 1;
+}
+
+# Check if a =head1 is duplicated, or a =headX is duplicated within a
+# =head1.  Treats =head2 =head3 as equivalent -- it doesn't reset the head3
+# sets if it finds a =head2 -- but that is good enough for now. Also check
+# for proper capitalization, trailing periods, etc.
+sub check_head_style {
+    my $id = shift;
+    my $contents = shift;
+    my %head1;
+    my %subheads;
+
+    foreach my $line ( split /\n+/, $contents ) {
+        next unless $line =~ /^=head/;
+        if ( $line =~ /head1/ ) {
+            err($id, "Duplicate section $line")
+                if defined $head1{$line};
+            $head1{$line} = 1;
+            %subheads = ();
+        } else {
+            err($id, "Duplicate subsection $line")
+                if defined $subheads{$line};
+            $subheads{$line} = 1;
+        }
+        err($id, "Period in =head")
+            if $line =~ /\.[^\w]/ or $line =~ /\.$/;
+        err($id, "not all uppercase in =head1")
+            if $line =~ /head1.*[a-z]/;
+        err($id, "All uppercase in subhead")
+            if $line =~ /head[234][ A-Z0-9]+$/;
+    }
+}
+
+# Because we have options and symbols with extra markup, we need
+# to take that into account, so we need a regexp that extracts
+# markup chunks, including recursive markup.
+# please read up on /(?R)/ in perlre(1)
+# (note: order is important, (?R) needs to come before .)
+# (note: non-greedy is important, or something like 'B<foo> and B<bar>'
+# will be captured as one item)
+my $markup_re =
+    qr/(                        # Capture group
+           [BIL]<               # The start of what we recurse on
+           (?:(?-1)|.)*?        # recurse the whole regexp (referring to
+                                # the last opened capture group, i.e. the
+                                # start of this regexp), or pick next
+                                # character.  Do NOT be greedy!
+           >                    # The end of what we recurse on
+       )/x;                     # (the x allows this sort of split up regexp)
+
+# Options must start with a dash, followed by a letter, possibly
+# followed by letters, digits, dashes and underscores, and the last
+# character must be a letter or a digit.
+# We do also accept the single -? or -n, where n is a digit
+my $option_re =
+    qr/(?:
+            \?                  # Single question mark
+            |
+            \d                  # Single digit
+            |
+            -                   # Single dash (--)
+            |
+            [[:alpha:]](?:[-_[:alnum:]]*?[[:alnum:]])?
+       )/x;
+
+# Helper function to check if a given $thing is properly marked up
+# option.  It returns one of these values:
+#     undef         if it's not an option
+#     ""            if it's a malformed option
+#     $unwrapped    the option with the outermost B<> wrapping removed.
+sub normalise_option {
+    my $id = shift;
+    my $filename = shift;
+    my $thing = shift;
+
+    my $unwrapped = $thing;
+    my $unmarked = $thing;
+
+    # $unwrapped is the option with the outer B<> markup removed
+    $unwrapped =~ s/^B<//;
+    $unwrapped =~ s/>$//;
+    # $unmarked is the option with *all* markup removed
+    $unmarked =~ s/[BIL]<|>//msg;
+
+
+    # If we found an option, check it, collect it
+    if ( $unwrapped =~ /^\s*-/ ) {
+        return $unwrapped       # return option with outer B<> removed
+            if $unmarked =~ /^-${option_re}$/;
+        return "";              # Malformed option
+    }
+    return undef;               # Something else
+}
+
+# Checks of command option (man1) formatting.  The man1 checks are
+# restricted to the SYNOPSIS and OPTIONS sections, the rest is too
+# free form, we simply cannot be too strict there.
+
+sub option_check {
+    my $id = shift;
+    my $filename = shift;
+    my $contents = shift;
+    my $nodups = 1;
+
+    my $synopsis = ($contents =~ /=head1\s+SYNOPSIS(.*?)=head1/s, $1);
+    $nodups = 0 if $synopsis =~ /=for\s+openssl\s+duplicate\s+options/s;
+
+    # Some pages have more than one OPTIONS section, let's make sure
+    # to get them all
+    my $options = '';
+    while ( $contents =~ /=head1\s+[A-Z ]*?OPTIONS$(.*?)(?==head1)/msg ) {
+        $options .= $1;
+    }
+
+    # Look for options with no or incorrect markup
+    while ( $synopsis =~
+            /(?<![-<[:alnum:]])-(?:$markup_re|.)*(?![->[:alnum:]])/msg ) {
+        err($id, "Malformed option [1] in SYNOPSIS: $&");
+    }
+
+    my @synopsis;
+    my %listed;
+    while ( $synopsis =~ /$markup_re/msg ) {
+        my $found = $&;
+        push @synopsis, $found if $found =~ /^B<-/;
+        print STDERR "$id:DEBUG[option_check] SYNOPSIS: found $found\n"
+            if $debug;
+        my $option_uw = normalise_option($id, $filename, $found);
+        if ( defined $option_uw ) {
+            err($id, "Malformed option [2] in SYNOPSIS: $found")
+                if $option_uw eq '';
+            err($id, "Duplicate option in SYNOPSIS $option_uw\n")
+                if $nodups && defined $listed{$option_uw};
+            $listed{$option_uw} = 1;
+        }
+    }
+
+    # In OPTIONS, we look for =item paragraphs.
+    # (?=^\s*$) detects an empty line.
+    my @options;
+    my %described;
+    while ( $options =~ /=item\s+(.*?)(?=^\s*$)/msg ) {
+        my $item = $&;
+
+        while ( $item =~ /(\[\s*)?($markup_re)/msg ) {
+            my $found = $2;
+            print STDERR "$id:DEBUG[option_check] OPTIONS: found $&\n"
+                if $debug;
+            err($id, "Unexpected bracket in OPTIONS =item: $item")
+                if ($1 // '') ne '' && $found =~ /^B<\s*-/;
+
+            my $option_uw = normalise_option($id, $filename, $found);
+            if ( defined $option_uw ) {
+                err($id, "Malformed option in OPTIONS: $found")
+                    if $option_uw eq '';
+                err($id, "Duplicate option in OPTIONS $option_uw\n")
+                    if $nodups && defined $described{$option_uw};
+                $described{$option_uw} = 1;
+            }
+            if ($found =~ /^B<-/) {
+                push @options, $found;
+                err($id, "OPTIONS entry $found missing from SYNOPSIS")
+                    unless (grep /^\Q$found\E$/, @synopsis)
+                         || $id =~ /(openssl|-options)\.pod:1:$/;
+            }
+        }
+    }
+    foreach (@synopsis) {
+        my $option = $_;
+        err($id, "SYNOPSIS entry $option missing from OPTIONS")
+            unless (grep /^\Q$option\E$/, @options);
+    }
+}
+
+# Normal symbol form
+my $symbol_re = qr/[[:alpha:]_][_[:alnum:]]*?/;
+
+# Checks of function name (man3) formatting.  The man3 checks are
+# easier than the man1 checks, we only check the names followed by (),
+# and only the names that have POD markup.
+sub functionname_check {
+    my $id = shift;
+    my $filename = shift;
+    my $contents = shift;
+
+    while ( $contents =~ /($markup_re)\(\)/msg ) {
+        print STDERR "$id:DEBUG[functionname_check] SYNOPSIS: found $&\n"
+            if $debug;
+
+        my $symbol = $1;
+        my $unmarked = $symbol;
+        $unmarked =~ s/[BIL]<|>//msg;
+
+        err($id, "Malformed symbol: $symbol")
+            unless $symbol =~ /^B<.*?>$/ && $unmarked =~ /^${symbol_re}$/
+    }
+
+    # We can't do the kind of collecting coolness that option_check()
+    # does, because there are too many things that can't be found in
+    # name repositories like the NAME sections, such as symbol names
+    # with a variable part (typically marked up as B<foo_I<TYPE>_bar>
+}
+
+# This is from http://man7.org/linux/man-pages/man7/man-pages.7.html
+my %preferred_words = (
+    '16bit'         => '16-bit',
+    'a.k.a.'        => 'aka',
+    'bitmask'       => 'bit mask',
+    'builtin'       => 'built-in',
+   #'epoch'         => 'Epoch', # handled specially, below
+    'fall-back'     => 'fallback',
+    'file name'     => 'filename',
+    'file system'   => 'filesystem',
+    'host name'     => 'hostname',
+    'i-node'        => 'inode',
+    'lower case'    => 'lowercase',
+    'lower-case'    => 'lowercase',
+    'manpage'       => 'man page',
+    'non-blocking'  => 'nonblocking',
+    'non-default'   => 'nondefault',
+    'non-empty'     => 'nonempty',
+    'non-negative'  => 'nonnegative',
+    'non-zero'      => 'nonzero',
+    'path name'     => 'pathname',
+    'pre-allocated' => 'preallocated',
+    'pseudo-terminal' => 'pseudoterminal',
+    'real time'     => 'real-time',
+    'realtime'      => 'real-time',
+    'reserved port' => 'privileged port',
+    'runtime'       => 'run time',
+    'saved group ID'=> 'saved set-group-ID',
+    'saved set-GID' => 'saved set-group-ID',
+    'saved set-UID' => 'saved set-user-ID',
+    'saved user ID' => 'saved set-user-ID',
+    'set-GID'       => 'set-group-ID',
+    'set-UID'       => 'set-user-ID',
+    'setgid'        => 'set-group-ID',
+    'setuid'        => 'set-user-ID',
+    'sub-system'    => 'subsystem',
+    'super block'   => 'superblock',
+    'super-block'   => 'superblock',
+    'super user'    => 'superuser',
+    'super-user'    => 'superuser',
+    'system port'   => 'privileged port',
+    'time stamp'    => 'timestamp',
+    'time zone'     => 'timezone',
+    'upper case'    => 'uppercase',
+    'upper-case'    => 'uppercase',
+    'useable'       => 'usable',
+    'user name'     => 'username',
+    'userspace'     => 'user space',
+    'zeroes'        => 'zeros'
+);
+
+# Search manpage for words that have a different preferred use.
+sub wording {
+    my $id = shift;
+    my $contents = shift;
+
+    foreach my $k ( keys %preferred_words ) {
+        # Sigh, trademark
+        next if $k eq 'file system'
+            and $contents =~ /Microsoft Encrypted File System/;
+        err($id, "Found '$k' should use '$preferred_words{$k}'")
+            if $contents =~ /\b\Q$k\E\b/i;
+    }
+    err($id, "Found 'epoch' should use 'Epoch'")
+        if $contents =~ /\bepoch\b/;
+    if ( $id =~ m@man1/@ ) {
+        err($id, "found 'tool' in NAME, should use 'command'")
+            if $contents =~ /=head1 NAME.*\btool\b.*=head1 SYNOPSIS/s;
+        err($id, "found 'utility' in NAME, should use 'command'")
+            if $contents =~ /NAME.*\butility\b.*=head1 SYNOPSIS/s;
+
+    }
+}
+
+# Perform all sorts of nit/error checks on a manpage
+sub check {
+    my %podinfo = @_;
+    my $filename = $podinfo{filename};
+    my $dirname = basename(dirname($filename));
+    my $contents = $podinfo{contents};
+
+    # Find what section this page is in; presume 3.
+    my $mansect = 3;
+    $mansect = $1 if $filename =~ /man([1-9])/;
+
+    my $id = "${filename}:1:";
+    check_head_style($id, $contents);
+
+    # Check ordering of some sections in man3
+    if ( $mansect == 3 ) {
+        check_section_location($id, $contents, "RETURN VALUES", "EXAMPLES");
+        check_section_location($id, $contents, "SEE ALSO", "HISTORY");
+        check_section_location($id, $contents, "EXAMPLES", "SEE ALSO");
+    }
+
+    # Make sure every link has a man section number.
+    while ( $contents =~ /$markup_re/msg ) {
+        my $target = $1;
+        next unless $target =~ /^L<(.*)>$/;     # Skip if not L<...>
+        $target = $1;                           # Peal away L< and >
+        $target =~ s/\/[^\/]*$//;               # Peal away possible anchor
+        $target =~ s/.*\|//g;                   # Peal away possible link text
+        next if $target eq '';                  # Skip if links within page, or
+        next if $target =~ /::/;                #   links to a Perl module, or
+        next if $target =~ /^https?:/;          #   is a URL link, or
+        next if $target =~ /\([1357]\)$/;       #   it has a section
+        err($id, "Missing man section number (likely, $mansect) in L<$target>")
+    }
+    # Check for proper links to commands.
+    while ( $contents =~ /L<([^>]*)\(1\)(?:\/.*)?>/g ) {
+        my $target = $1;
+        next if $target =~ /openssl-?/;
+        next if ( grep { basename($_) eq "$target.pod" }
+                  files(TAGS => [ 'manual', 'man1' ]) );
+        next if $target =~ /ps|apropos|sha1sum|procmail|perl/;
+        err($id, "Bad command link L<$target(1)>") if grep /man1/, @sections;
+    }
+    # Check for proper in-man-3 API links.
+    while ( $contents =~ /L<([^>]*)\(3\)(?:\/.*)?>/g ) {
+        my $target = $1;
+        err($id, "Bad L<$target>")
+            unless $target =~ /^[_[:alpha:]][_[:alnum:]]*$/
+    }
+
+    unless ( $contents =~ /^=for openssl generic/ms ) {
+        if ( $mansect == 3 ) {
+            name_synopsis($id, $filename, $contents);
+            functionname_check($id, $filename, $contents);
+        } elsif ( $mansect == 1 ) {
+            option_check($id, $filename, $contents)
+        }
+    }
+
+    wording($id, $contents);
+
+    err($id, "Doesn't start with =pod")
+        if $contents !~ /^=pod/;
+    err($id, "Doesn't end with =cut")
+        if $contents !~ /=cut\n$/;
+    err($id, "More than one cut line.")
+        if $contents =~ /=cut.*=cut/ms;
+    err($id, "EXAMPLE not EXAMPLES section.")
+        if $contents =~ /=head1 EXAMPLE[^S]/;
+    err($id, "WARNING not WARNINGS section.")
+        if $contents =~ /=head1 WARNING[^S]/;
+    err($id, "Missing copyright")
+        if $contents !~ /Copyright .* The OpenSSL Project Authors/;
+    err($id, "Copyright not last")
+        if $contents =~ /head1 COPYRIGHT.*=head/ms;
+    err($id, "head2 in All uppercase")
+        if $contents =~ /head2\s+[A-Z ]+\n/;
+    err($id, "Extra space after head")
+        if $contents =~ /=head\d\s\s+/;
+    err($id, "Period in NAME section")
+        if $contents =~ /=head1 NAME.*\.\n.*=head1 SYNOPSIS/ms;
+    err($id, "Duplicate $1 in L<>")
+        if $contents =~ /L<([^>]*)\|([^>]*)>/ && $1 eq $2;
+    err($id, "Bad =over $1")
+        if $contents =~ /=over([^ ][^24])/;
+    err($id, "Possible version style issue")
+        if $contents =~ /OpenSSL version [019]/;
+
+    if ( $contents !~ /=for openssl multiple includes/ ) {
+        # Look for multiple consecutive openssl #include lines
+        # (non-consecutive lines are okay; see man3/MD5.pod).
+        if ( $contents =~ /=head1 SYNOPSIS(.*)=head1 DESCRIPTION/ms ) {
+            my $count = 0;
+            foreach my $line ( split /\n+/, $1 ) {
+                if ( $line =~ m@include <openssl/@ ) {
+                    err($id, "Has multiple includes")
+                        if ++$count == 2;
+                } else {
+                    $count = 0;
+                }
+            }
+        }
+    }
+
+    open my $OUT, '>', $temp
+        or die "Can't open $temp, $!";
+    err($id, "POD errors")
+        if podchecker($filename, $OUT) != 0;
+    close $OUT;
+    open $OUT, '<', $temp
+        or die "Can't read $temp, $!";
+    while ( <$OUT> ) {
+        next if /\(section\) in.*deprecated/;
+        print;
+    }
+    close $OUT;
+    unlink $temp || warn "Can't remove $temp, $!";
+
+    # Find what section this page is in; presume 3.
+    my $section = 3;
+    $section = $1 if $dirname =~ /man([1-9])/;
+
+    foreach ( (@{$mandatory_sections{'*'}}, @{$mandatory_sections{$section}}) ) {
+        err($id, "Missing $_ head1 section")
+            if $contents !~ /^=head1\s+${_}\s*$/m;
+    }
+}
+
+# Information database ###############################################
+
+# Map of links in each POD file; filename => [ "foo(1)", "bar(3)", ... ]
+my %link_map = ();
+# Map of names in each POD file or from "missing" files; possible values are:
+# If found in a POD files, "name(s)" => filename
+# If found in a "missing" file or external, "name(s)" => ''
+my %name_map = ();
+
+# State of man-page names.
+# %state is affected by loading util/*.num and util/*.syms
+# Values may be one of:
+# 'crypto' : belongs in libcrypto (loaded from libcrypto.num)
+# 'ssl' : belongs in libssl (loaded from libssl.num)
+# 'other' : belongs in libcrypto or libssl (loaded from other.syms)
+# 'internal' : Internal
+# 'public' : Public (generic name or external documentation)
+# Any of these values except 'public' may be prefixed with 'missing_'
+# to indicate that they are known to be missing.
+my %state;
+# history contains the same as state above for entries with version info != 3_0_0
+my %history;
+# %missing is affected by loading util/missing*.txt.  Values may be one of:
+# 'crypto' : belongs in libcrypto (loaded from libcrypto.num)
+# 'ssl' : belongs in libssl (loaded from libssl.num)
+# 'other' : belongs in libcrypto or libssl (loaded from other.syms)
+# 'internal' : Internal
+my %missing;
+
+# Parse libcrypto.num, etc., and return sorted list of what's there.
+sub loadnum ($;$) {
+    my $file = shift;
+    my $type = shift;
+    my @symbols;
+
+    open my $IN, '<', catfile($config{sourcedir}, $file)
+        or die "Can't open $file, $!, stopped";
+
+    while ( <$IN> ) {
+        next if /^#/;
+        next if /\bNOEXIST\b/;
+        my @fields = split();
+        if ($type && ($type eq "crypto" || $type eq "ssl")) {
+            # 3rd field is version
+            if (not $fields[2] eq "3_0_0") {
+                $history{$fields[0].'(3)'} = $type.$fields[2];
+            }
+        }
+        die "Malformed line $. in $file: $_"
+            if scalar @fields != 2 && scalar @fields != 4;
+        $state{$fields[0].'(3)'} = $type // 'internal';
+    }
+    close $IN;
+}
+
+# Load file of symbol names that we know aren't documented.
+sub loadmissing($;$)
+{
+    my $missingfile = shift;
+    my $type = shift;
+
+    open FH, catfile($config{sourcedir}, $missingfile)
+        or die "Can't open $missingfile";
+    while ( <FH> ) {
+        chomp;
+        next if /^#/;
+        $missing{$_} = $type // 'internal';
+    }
+    close FH;
+}
+
+# Check that we have consistent public / internal documentation and declaration
+sub checkstate () {
+    # Collect all known names, no matter where they come from
+    my %names = map { $_ => 1 } (keys %name_map, keys %state, keys %missing);
+
+    # Check section 3, i.e. functions and macros
+    foreach ( grep { $_ =~ /\(3\)$/ } sort keys %names ) {
+        next if ( $name_map{$_} // '') eq '' || $_ =~ /$ignored/;
+
+        # If a man-page isn't recorded public or if it's recorded missing
+        # and internal, it's declared to be internal.
+        my $declared_internal =
+            ($state{$_} // 'internal') eq 'internal'
+            || ($missing{$_} // '') eq 'internal';
+        # If a man-page isn't recorded internal or if it's recorded missing
+        # and not internal, it's declared to be public
+        my $declared_public =
+            ($state{$_} // 'internal') ne 'internal'
+            || ($missing{$_} // 'internal') ne 'internal';
+
+        err("$_ is supposedly public but is documented as internal")
+            if ( $declared_public && $name_map{$_} =~ /\/internal\// );
+        err("$_ is supposedly internal (maybe missing from other.syms) but is documented as public")
+            if ( $declared_internal && $name_map{$_} !~ /\/internal\// );
+    }
+}
+
+# Check for undocumented macros; ignore those in the "missing" file
+# and do simple check for #define in our header files.
+sub checkmacros {
+    my $count = 0;
+    my %seen;
+
+    foreach my $f ( files(TAGS => 'public_header') ) {
+        # Skip some internals we don't want to document yet.
+        my $b = basename($f);
+        next if $b eq 'asn1.h';
+        next if $b eq 'asn1t.h';
+        next if $b eq 'err.h';
+        open(IN, $f)
+            or die "Can't open $f, $!";
+        while ( <IN> ) {
+            next unless /^#\s*define\s*(\S+)\(/;
+            my $macro = "$1(3)"; # We know they're all in section 3
+            next if defined $name_map{$macro}
+                || defined $missing{$macro}
+                || defined $seen{$macro}
+                || $macro =~ /$ignored/;
+
+            err("$f:", "macro $macro undocumented")
+                if $opt_d || $opt_e;
+            $count++;
+            $seen{$macro} = 1;
+        }
+        close(IN);
+    }
+    err("# $count macros undocumented (count is approximate)")
+        if $count > 0;
+}
+
+# Find out what is undocumented (filtering out the known missing ones)
+# and display them.
+sub printem ($) {
+    my $type = shift;
+    my $count = 0;
+
+    foreach my $func ( grep { $state{$_} eq $type } sort keys %state ) {
+        err("$type:", "function $func not in any history section")
+            if ($opt_i && defined $history{$func});
+        next if defined $name_map{$func}
+            || defined $missing{$func};
+
+        err("$type:", "function $func undocumented")
+            if $opt_d || $opt_e;
+        $count++;
+    }
+    err("# $count lib$type names are not documented")
+        if $count > 0;
+}
+
+# Collect all the names in a manpage.
+sub collectnames {
+    my %podinfo = @_;
+    my $filename = $podinfo{filename};
+    $filename =~ m|man(\d)/|;
+    my $section = $1;
+    my $simplename = basename($filename, ".pod");
+    my $id = "${filename}:1:";
+    my $is_generic = $podinfo{contents} =~ /^=for openssl generic/ms;
+
+    unless ( grep { $simplename eq $_ } @{$podinfo{names}} ) {
+        err($id, "$simplename not in NAME section");
+        push @{$podinfo{names}}, $simplename;
+    }
+    foreach my $name ( @{$podinfo{names}} ) {
+        next if $name eq "";
+        err($id, "'$name' contains whitespace")
+            if $name =~ /\s/;
+        my $name_sec = "$name($section)";
+        if ( !defined $name_map{$name_sec} ) {
+            $name_map{$name_sec} = $filename;
+            if ($history{$name_sec}) {
+                my $funcname = $name_sec;
+                my $contents = $podinfo{contents};
+                $funcname =~ s/\(.*//;
+                if (find_functionname_in_history_section($contents, $funcname)) {
+                    # mark this function as found/no longer of interest
+                    $history{$name_sec} = undef;
+                }
+            }
+            $state{$name_sec} //=
+                ( $filename =~ /\/internal\// ? 'internal' : 'public' )
+                if $is_generic;
+        } elsif ( $filename eq $name_map{$name_sec} ) {
+            err($id, "$name_sec duplicated in NAME section of",
+                 $name_map{$name_sec});
+        } elsif ( $name_map{$name_sec} ne '' ) {
+            err($id, "$name_sec also in NAME section of",
+                 $name_map{$name_sec});
+        }
+    }
+
+    if ( $podinfo{contents} =~ /=for openssl foreign manual (.*)\n/ ) {
+        foreach my $f ( split / /, $1 ) {
+            $name_map{$f} = ''; # It still exists!
+            $state{$f} = 'public'; # We assume!
+        }
+    }
+
+    my @links = ();
+    # Don't use this regexp directly on $podinfo{contents}, as it causes
+    # a regexp recursion, which fails on really big PODs.  Instead, use
+    # $markup_re to pick up general markup, and use this regexp to check
+    # that the markup that was found is indeed a link.
+    my $linkre = qr/L<
+                    # if the link is of the form L<something|name(s)>,
+                    # then remove 'something'.  Note that 'something'
+                    # may contain POD codes as well...
+                    (?:(?:[^\|]|<[^>]*>)*\|)?
+                    # we're only interested in references that have
+                    # a one digit section number
+                    ([^\/>\(]+\(\d\))
+                   /x;
+    while ( $podinfo{contents} =~ /$markup_re/msg ) {
+        my $x = $1;
+
+        if ($x =~ $linkre) {
+            push @links, $1;
+        }
+    }
+    $link_map{$filename} = [ @links ];
+}
+
+# Look for L<> ("link") references that point to files that do not exist.
+sub checklinks {
+    foreach my $filename ( sort keys %link_map ) {
+        foreach my $link ( @{$link_map{$filename}} ) {
+            err("${filename}:1:", "reference to non-existing $link")
+                unless defined $name_map{$link} || defined $missing{$link};
+            err("${filename}:1:", "reference of internal $link in public documentation $filename")
+                if ( ( ($state{$link} // '') eq 'internal'
+                       || ($missing{$link} // '') eq 'internal' )
+                     && $filename !~ /\/internal\// );
+        }
+    }
+}
+
+# Cipher/digests to skip if they show up as "not implemented"
+# because they are, via the "-*" construct.
+my %skips = (
+    'aes128' => 1,
+    'aes192' => 1,
+    'aes256' => 1,
+    'aria128' => 1,
+    'aria192' => 1,
+    'aria256' => 1,
+    'camellia128' => 1,
+    'camellia192' => 1,
+    'camellia256' => 1,
+    'des' => 1,
+    'des3' => 1,
+    'idea' => 1,
+    'cipher' => 1,
+    'digest' => 1,
+);
+
+my %genopts; # generic options parsed from apps/include/opt.h
+
+# Check the flags of a command and see if everything is in the manpage
+sub checkflags {
+    my $cmd = shift;
+    my $doc = shift;
+    my @cmdopts;
+    my %docopts;
+
+    # Get the list of options in the command source file.
+    my $active = 0;
+    my $expect_helpstr = "";
+    open CFH, "apps/$cmd.c"
+        or die "Can't open apps/$cmd.c to list options for $cmd, $!";
+    while ( <CFH> ) {
+        chop;
+        if ($active) {
+            last if m/^\s*};/;
+            if ($expect_helpstr ne "") {
+                next if m/^\s*#\s*if/;
+                err("$cmd does not implement help for -$expect_helpstr") unless m/^\s*"/;
+                $expect_helpstr = "";
+            }
+            if (m/\{\s*"([^"]+)"\s*,\s*OPT_[A-Z0-9_]+\s*,\s*('[-\/:<>cAEfFlMnNpsuU]'|0)(.*)$/
+                    && !($cmd eq "s_client" && $1 eq "wdebug")) {
+                push @cmdopts, $1;
+                $expect_helpstr = $1;
+                $expect_helpstr = "" if $3 =~ m/^\s*,\s*"/;
+            } elsif (m/[\s,](OPT_[A-Z]+_OPTIONS?)\s*(,|$)/) {
+                push @cmdopts, @{ $genopts{$1} };
+            }
+        } elsif (m/^const\s+OPTIONS\s*/) {
+            $active = 1;
+        }
+    }
+    close CFH;
+
+    # Get the list of flags from the synopsis
+    open CFH, "<$doc"
+        or die "Can't open $doc, $!";
+    while ( <CFH> ) {
+        chop;
+        last if /DESCRIPTION/;
+        my $opt;
+        if ( /\[B<-([^ >]+)/ ) {
+            $opt = $1;
+        } elsif ( /^B<-([^ >]+)/ ) {
+            $opt = $1;
+        } else {
+            next;
+        }
+        $opt = $1 if $opt =~ /I<(.*)/;
+        $docopts{$1} = 1;
+    }
+    close CFH;
+
+    # See what's in the command not the manpage.
+    my @undocced = sort grep { !defined $docopts{$_} } @cmdopts;
+    foreach ( @undocced ) {
+        err("$doc: undocumented $cmd option -$_");
+    }
+
+    # See what's in the manpage not the command.
+    my @unimpl = sort grep { my $e = $_; !(grep /^\Q$e\E$/, @cmdopts) } keys %docopts;
+    foreach ( @unimpl ) {
+        next if $_ eq "-"; # Skip the -- end-of-flags marker
+        next if defined $skips{$_};
+        err("$doc: $cmd does not implement -$_");
+    }
+}
+
+##
+##  MAIN()
+##  Do the work requested by the various getopt flags.
+##  The flags are parsed in alphabetical order, just because we have
+##  to have *some way* of listing them.
+##
+
+if ( $opt_c ) {
+    my @commands = ();
+
+    # Get the lists of generic options.
+    my $active = "";
+    open OFH, catdir($config{sourcedir}, "apps/include/opt.h")
+        or die "Can't open apps/include/opt.h to list generic options, $!";
+    while ( <OFH> ) {
+        chop;
+        push @{ $genopts{$active} }, $1 if $active ne "" && m/^\s+\{\s*"([^"]+)"\s*,\s*OPT_/;
+        $active = $1 if m/^\s*#\s*define\s+(OPT_[A-Z]+_OPTIONS?)\s*\\\s*$/;
+        $active = "" if m/^\s*$/;
+    }
+    close OFH;
+
+    # Get list of commands.
+    opendir(DIR, "apps");
+    @commands = grep(/\.c$/, readdir(DIR));
+    closedir(DIR);
+
+    # See if each has a manpage.
+    foreach my $cmd ( @commands ) {
+        $cmd =~ s/\.c$//;
+        next if $cmd eq 'progs' || $cmd eq 'vms_decc_init';
+        my @doc = ( grep { basename($_) eq "openssl-$cmd.pod"
+                           # For "tsget" and "CA.pl" pod pages
+                           || basename($_) eq "$cmd.pod" }
+                    files(TAGS => [ 'manual', 'man1' ]) );
+        my $num = scalar @doc;
+        if ($num > 1) {
+            err("$num manuals for 'openssl $cmd': ".join(", ", @doc));
+        } elsif ($num < 1) {
+            err("no manual for 'openssl $cmd'");
+        } else {
+            checkflags($cmd, @doc);
+        }
+    }
+}
+
+# Populate %state
+loadnum('util/libcrypto.num', 'crypto');
+loadnum('util/libssl.num', 'ssl');
+loadnum('util/other.syms', 'other');
+loadnum('util/other-internal.syms');
+if ( $opt_o ) {
+    loadmissing('util/missingmacro111.txt', 'crypto');
+    loadmissing('util/missingcrypto111.txt', 'crypto');
+    loadmissing('util/missingssl111.txt', 'ssl');
+} elsif ( !$opt_u ) {
+    loadmissing('util/missingmacro.txt', 'crypto');
+    loadmissing('util/missingcrypto.txt', 'crypto');
+    loadmissing('util/missingssl.txt', 'ssl');
+    loadmissing('util/missingcrypto-internal.txt');
+    loadmissing('util/missingssl-internal.txt');
+}
+
+if ( $opt_n || $opt_l || $opt_u || $opt_v ) {
+    my @files_to_read = ( $opt_n && @ARGV ) ? @ARGV : files(TAGS => 'manual');
+
+    foreach (@files_to_read) {
+        my %podinfo = extract_pod_info($_, { debug => $debug });
+
+        collectnames(%podinfo)
+            if ( $opt_l || $opt_u || $opt_v );
+
+        check(%podinfo)
+            if ( $opt_n );
+    }
+}
+
+if ( $opt_l ) {
+    checklinks();
+}
+
+if ( $opt_n ) {
+    # If not given args, check that all man1 commands are named properly.
+    if ( scalar @ARGV == 0 && grep /man1/, @sections ) {
+        foreach ( files(TAGS => [ 'public_manual', 'man1' ]) ) {
+            next if /openssl\.pod/
+                || /CA\.pl/ || /tsget\.pod/; # these commands are special cases
+            err("$_ doesn't start with openssl-") unless /openssl-/;
+        }
+    }
+}
+
+checkstate();
+
+if ( $opt_u || $opt_v) {
+    printem('crypto');
+    printem('ssl');
+    checkmacros();
+}
+
+exit $status;

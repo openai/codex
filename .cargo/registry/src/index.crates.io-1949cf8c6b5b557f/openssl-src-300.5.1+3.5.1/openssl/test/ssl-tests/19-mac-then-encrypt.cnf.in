@@ -1,0 +1,159 @@
+# -*- mode: perl; -*-
+# Copyright 2016-2025 The OpenSSL Project Authors. All Rights Reserved.
+#
+# Licensed under the Apache License 2.0 (the "License").  You may not use
+# this file except in compliance with the License.  You can obtain a copy
+# in the file LICENSE in the source distribution or at
+# https://www.openssl.org/source/license.html
+
+
+## SSL test configurations
+
+package ssltests;
+
+use OpenSSL::Test::Utils;
+
+our $fips_mode;
+our $fips_3_4;
+
+# Nothing to test with newer fips providers
+return if $fips_3_4;
+
+our @tests = (
+    {
+        name => "disable-encrypt-then-mac-server-sha",
+        server => {
+          "Options" => "-EncryptThenMac",
+        },
+        client => {
+          "CipherString" => "AES128-SHA",
+          "MaxProtocol" => "TLSv1.2"
+        },
+        test   => {
+          "ExpectedResult" => "Success",
+        },
+    },
+    {
+        name => "disable-encrypt-then-mac-client-sha",
+        server => {
+        },
+        client => {
+          "CipherString" => "AES128-SHA",
+          "Options" => "-EncryptThenMac",
+          "MaxProtocol" => "TLSv1.2"
+        },
+        test   => {
+          "ExpectedResult" => "Success",
+        },
+    },
+    {
+        name => "disable-encrypt-then-mac-both-sha",
+        server => {
+          "Options" => "-EncryptThenMac",
+        },
+        client => {
+          "CipherString" => "AES128-SHA",
+          "Options" => "-EncryptThenMac",
+          "MaxProtocol" => "TLSv1.2"
+        },
+        test   => {
+          "ExpectedResult" => "Success",
+        },
+    },
+);
+
+my @tests_tls1_2 = (
+    {
+        name => "disable-encrypt-then-mac-server-sha2",
+        server => {
+          "Options" => "-EncryptThenMac",
+        },
+        client => {
+          "CipherString" => "AES128-SHA256",
+          "MaxProtocol" => "TLSv1.2"
+        },
+        test   => {
+          "ExpectedResult" => "Success",
+        },
+    },
+    {
+        name => "disable-encrypt-then-mac-client-sha2",
+        server => {
+        },
+        client => {
+          "CipherString" => "AES128-SHA256",
+          "Options" => "-EncryptThenMac",
+          "MaxProtocol" => "TLSv1.2"
+        },
+        test   => {
+          "ExpectedResult" => "Success",
+        },
+    },
+    {
+        name => "disable-encrypt-then-mac-both-sha2",
+        server => {
+          "Options" => "-EncryptThenMac",
+        },
+        client => {
+          "CipherString" => "AES128-SHA256",
+          "Options" => "-EncryptThenMac",
+          "MaxProtocol" => "TLSv1.2"
+        },
+        test   => {
+          "ExpectedResult" => "Success",
+        },
+    },
+);
+
+our @tests_tls1 = (
+    {
+        name => "disable-encrypt-then-mac-server-sha-tls1",
+        server => {
+          "CipherString" => 'DEFAULT:@SECLEVEL=0',
+          "Options" => "-EncryptThenMac",
+        },
+        client => {
+          "CipherString" => 'AES128-SHA@SECLEVEL=0',
+          "MinProtocol" => "TLSv1",
+          "MaxProtocol" => "TLSv1"
+        },
+        test   => {
+          "ExpectedResult" => "Success",
+        },
+    },
+    {
+        name => "disable-encrypt-then-mac-client-sha-tls1",
+        server => {
+          "CipherString" => 'DEFAULT:@SECLEVEL=0',
+        },
+        client => {
+          "CipherString" => 'AES128-SHA@SECLEVEL=0',
+          "Options" => "-EncryptThenMac",
+          "MinProtocol" => "TLSv1",
+          "MaxProtocol" => "TLSv1"
+        },
+        test   => {
+          "ExpectedResult" => "Success",
+        },
+    },
+    {
+        name => "disable-encrypt-then-mac-both-sha-tls1",
+        server => {
+          "CipherString" => 'DEFAULT:@SECLEVEL=0',
+          "Options" => "-EncryptThenMac",
+        },
+        client => {
+          "CipherString" => 'AES128-SHA@SECLEVEL=0',
+          "Options" => "-EncryptThenMac",
+          "MinProtocol" => "TLSv1",
+          "MaxProtocol" => "TLSv1"
+        },
+        test   => {
+          "ExpectedResult" => "Success",
+        },
+    },
+);
+
+
+push @tests, @tests_tls1_2 unless disabled("tls1_2");
+push @tests, @tests_tls1 unless disabled("tls1") || $fips_mode;

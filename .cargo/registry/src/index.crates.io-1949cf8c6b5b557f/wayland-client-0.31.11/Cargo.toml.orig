@@ -1,0 +1,30 @@
+[package]
+name = "wayland-client"
+version = "0.31.11"
+documentation = "https://docs.rs/wayland-client/"
+repository = "https://github.com/smithay/wayland-rs"
+authors = ["Elinor Berger <elinor@safaradeg.net>"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.65"
+categories = ["gui", "api-bindings"]
+keywords = ["wayland", "client"]
+description = "Bindings to the standard C implementation of the wayland protocol, client side."
+readme = "README.md"
+
+[dependencies]
+wayland-backend = { version = "0.3.11", path = "../wayland-backend" }
+wayland-scanner = { version = "0.31.7", path = "../wayland-scanner" }
+bitflags = "2"
+rustix = { version = "1.0.2", features = ["event"] }
+log = { version = "0.4", optional = true }
+
+[dev-dependencies]
+wayland-protocols = { path = "../wayland-protocols", features = ["client"] }
+futures-channel = "0.3.16"
+futures-util = "0.3"
+tempfile = "3.2"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

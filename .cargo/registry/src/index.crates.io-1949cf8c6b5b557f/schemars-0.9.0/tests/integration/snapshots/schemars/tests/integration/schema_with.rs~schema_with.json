@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Struct",
+  "type": "object",
+  "properties": {
+    "x": {
+      "type": "string",
+      "pattern": "^-?\\d+$"
+    }
+  },
+  "required": [
+    "x"
+  ]
+}

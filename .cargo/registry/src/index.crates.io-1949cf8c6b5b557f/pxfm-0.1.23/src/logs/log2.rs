@@ -1,0 +1,678 @@
+/*
+ * // Copyright (c) Radzivon Bartoshyk 7/2025. All rights reserved.
+ * //
+ * // Redistribution and use in source and binary forms, with or without modification,
+ * // are permitted provided that the following conditions are met:
+ * //
+ * // 1.  Redistributions of source code must retain the above copyright notice, this
+ * // list of conditions and the following disclaimer.
+ * //
+ * // 2.  Redistributions in binary form must reproduce the above copyright notice,
+ * // this list of conditions and the following disclaimer in the documentation
+ * // and/or other materials provided with the distribution.
+ * //
+ * // 3.  Neither the name of the copyright holder nor the names of its
+ * // contributors may be used to endorse or promote products derived from
+ * // this software without specific prior written permission.
+ * //
+ * // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * // AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * // IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * // DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+ * // FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * // DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * // SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ * // CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+use crate::common::{f_fmla, min_normal_f64};
+use crate::double_double::DoubleDouble;
+use crate::logs::log2dd::log2_dd;
+use crate::logs::log2td::log2_td;
+use crate::polyeval::f_polyeval6;
+
+pub(crate) static LOG_RANGE_REDUCTION: [u64; 128] = [
+    0x3ff0000000000000,
+    0x3fefc00000000000,
+    0x3fef800000000000,
+    0x3fef400000000000,
+    0x3fef000000000000,
+    0x3feec00000000000,
+    0x3fee800000000000,
+    0x3fee400000000000,
+    0x3fee000000000000,
+    0x3fede00000000000,
+    0x3feda00000000000,
+    0x3fed600000000000,
+    0x3fed400000000000,
+    0x3fed000000000000,
+    0x3fecc00000000000,
+    0x3feca00000000000,
+    0x3fec600000000000,
+    0x3fec400000000000,
+    0x3fec000000000000,
+    0x3febe00000000000,
+    0x3feba00000000000,
+    0x3feb800000000000,
+    0x3feb400000000000,
+    0x3feb200000000000,
+    0x3feae00000000000,
+    0x3feac00000000000,
+    0x3fea800000000000,
+    0x3fea600000000000,
+    0x3fea400000000000,
+    0x3fea000000000000,
+    0x3fe9e00000000000,
+    0x3fe9c00000000000,
+    0x3fe9800000000000,
+    0x3fe9600000000000,
+    0x3fe9400000000000,
+    0x3fe9200000000000,
+    0x3fe9000000000000,
+    0x3fe8c00000000000,
+    0x3fe8a00000000000,
+    0x3fe8800000000000,
+    0x3fe8600000000000,
+    0x3fe8400000000000,
+    0x3fe8000000000000,
+    0x3fe7e00000000000,
+    0x3fe7c00000000000,
+    0x3fe7a00000000000,
+    0x3fe7800000000000,
+    0x3fe7600000000000,
+    0x3fe7400000000000,
+    0x3fe7200000000000,
+    0x3fe7000000000000,
+    0x3fe6e00000000000,
+    0x3fe6c00000000000,
+    0x3fe6a00000000000,
+    0x3fe6800000000000,
+    0x3fe6600000000000,
+    0x3fe6400000000000,
+    0x3fe6200000000000,
+    0x3fe6000000000000,
+    0x3fe5e00000000000,
+    0x3fe5c00000000000,
+    0x3fe5a00000000000,
+    0x3fe5800000000000,
+    0x3fe5600000000000,
+    0x3fe5400000000000,
+    0x3fe5400000000000,
+    0x3fe5200000000000,
+    0x3fe5000000000000,
+    0x3fe4e00000000000,
+    0x3fe4c00000000000,
+    0x3fe4a00000000000,
+    0x3fe4a00000000000,
+    0x3fe4800000000000,
+    0x3fe4600000000000,
+    0x3fe4400000000000,
+    0x3fe4200000000000,
+    0x3fe4000000000000,
+    0x3fe4000000000000,
+    0x3fe3e00000000000,
+    0x3fe3c00000000000,
+    0x3fe3a00000000000,
+    0x3fe3a00000000000,
+    0x3fe3800000000000,
+    0x3fe3600000000000,
+    0x3fe3400000000000,
+    0x3fe3400000000000,
+    0x3fe3200000000000,
+    0x3fe3000000000000,
+    0x3fe3000000000000,
+    0x3fe2e00000000000,
+    0x3fe2c00000000000,
+    0x3fe2c00000000000,
+    0x3fe2a00000000000,
+    0x3fe2800000000000,
+    0x3fe2800000000000,
+    0x3fe2600000000000,
+    0x3fe2400000000000,
+    0x3fe2400000000000,
+    0x3fe2200000000000,
+    0x3fe2000000000000,
+    0x3fe2000000000000,
+    0x3fe1e00000000000,
+    0x3fe1c00000000000,
+    0x3fe1c00000000000,
+    0x3fe1a00000000000,
+    0x3fe1a00000000000,
+    0x3fe1800000000000,
+    0x3fe1600000000000,
+    0x3fe1600000000000,
+    0x3fe1400000000000,
+    0x3fe1400000000000,
+    0x3fe1200000000000,
+    0x3fe1000000000000,
+    0x3fe1000000000000,
+    0x3fe0e00000000000,
+    0x3fe0e00000000000,
+    0x3fe0c00000000000,
+    0x3fe0c00000000000,
+    0x3fe0a00000000000,
+    0x3fe0a00000000000,
+    0x3fe0800000000000,
+    0x3fe0800000000000,
+    0x3fe0600000000000,
+    0x3fe0600000000000,
+    0x3fe0400000000000,
+    0x3fe0400000000000,
+    0x3fe0200000000000,
+    0x3fe0000000000000,
+];
+
+/**
+Generated by SageMath:
+```python
+values = LOG_RANGE_REDUCTION
+
+R = RealField(150)
+
+def hex_to_float(h):
+    return struct.unpack('>d', struct.pack('>Q', h))[0]
+
+real_array = [R(hex_to_float(h)) for h in values]
+
+for r in real_array:
+    print_double_double("", -RealField(180)(r).log2())
+```
+**/
+static LOG2_DD: [(u64, u64); 128] = [
+    (0x0, 0x0),
+    (0x3c26d746128b1857, 0x3f872c7ba20f7327),
+    (0x3c2b2a41b08fbe06, 0x3f9743ee861f3556),
+    (0x3c3491f06c085bc2, 0x3fa184b8e4c56af8),
+    (0x3c477970e03f821c, 0x3fa77394c9d958d5),
+    (0x3c0155660710eb2a, 0x3fad6ebd1f1febfe),
+    (0x3c298c5452bbce74, 0x3fb1bb32a600549d),
+    (0x3c2c141e66faaaad, 0x3fb4c560fe68af88),
+    (0x3c59ced1447e30ad, 0x3fb7d60496cfbb4c),
+    (0xbc321ba488a62577, 0x3fb960caf9abb7ca),
+    (0xbc17936311889913, 0x3fbc7b528b70f1c5),
+    (0xbc36cd4d2ae3a2f6, 0x3fbf9c95dc1d1165),
+    (0x3c55d243efd93259, 0x3fc097e38ce60649),
+    (0xbc5696e2866c718e, 0x3fc22dadc2ab3497),
+    (0xbc67a6ed4e1b0936, 0x3fc3c6fb650cde51),
+    (0xbc61562d61af73f8, 0x3fc494f863b8df35),
+    (0x3c354fae008fbb59, 0x3fc633a8bf437ce1),
+    (0xbc60798d1aa21694, 0x3fc7046031c79f85),
+    (0x3c699aa6df8b7d83, 0x3fc8a8980abfbd32),
+    (0xbc6e95734abd2fcc, 0x3fc97c1cb13c7ec1),
+    (0xbc6cc865b3dd0dbb, 0x3fcb2602497d5346),
+    (0x3c2bc0af7b82e7d7, 0x3fcbfc67a7fff4cc),
+    (0xbc0ba8b1f646ab12, 0x3fcdac22d3e441d3),
+    (0xbc6086fce864a1f6, 0x3fce857d3d361368),
+    (0x3c7768994400ca0a, 0x3fd01d9bbcfa61d4),
+    (0xbc53d56efe4338fe, 0x3fd08bce0d95fa38),
+    (0x3c7c8d43e017579b, 0x3fd169c05363f158),
+    (0x3c6ae9804237ec8e, 0x3fd1d982c9d52708),
+    (0x3c734107c0e54aed, 0x3fd249cd2b13cd6c),
+    (0x3c7968925e378d68, 0x3fd32bfee370ee68),
+    (0x3c7fcad2f4710e00, 0x3fd39de8e1559f6f),
+    (0xbc7c658d602e66b0, 0x3fd4106017c3eca3),
+    (0x3c7e393a16b94b52, 0x3fd4f6fbb2cec598),
+    (0xbc78d86531d55da2, 0x3fd56b22e6b578e5),
+    (0x3c710b5b643a6ecb, 0x3fd5dfdcf1eeae0e),
+    (0x3c7ac9080333c605, 0x3fd6552b49986277),
+    (0x3c2b6d40900b2502, 0x3fd6cb0f6865c8ea),
+    (0x3c68f89e2eb553b2, 0x3fd7b89f02cf2aad),
+    (0x3c651d58525aad39, 0x3fd8304d90c11fd3),
+    (0x3c799aa6df8b7d83, 0x3fd8a8980abfbd32),
+    (0x3c7fdc46af571993, 0x3fd921800924dd3b),
+    (0x3c7bca36fd02def0, 0x3fd99b072a96c6b2),
+    (0x3c5817fd3b7d7e5d, 0x3fda8ff971810a5e),
+    (0xbc45e13b838eba7d, 0x3fdb0b67f4f46810),
+    (0xbc501d98c3531027, 0x3fdb877c57b1b070),
+    (0x3c7edf515c63dd87, 0x3fdc043859e2fdb3),
+    (0x3c6c4aec56233279, 0x3fdc819dc2d45fe4),
+    (0x3c78a38b4175d665, 0x3fdcffae611ad12b),
+    (0xbc6e15a52a31604a, 0x3fdd7e6c0abc3579),
+    (0x3c438c8946414c6a, 0x3fddfdd89d586e2b),
+    (0x3c73bed456b24ed1, 0x3fde7df5fe538ab3),
+    (0x3c76d261f1753e0b, 0x3fdefec61b011f85),
+    (0xbc79ca1a3202b3d7, 0x3fdf804ae8d0cd02),
+    (0xbc87398fe685f171, 0x3fe0014332be0033),
+    (0xbc89c32630008a1f, 0x3fe042bd4b9a7c99),
+    (0xbc7f47806a0e4105, 0x3fe08494c66b8ef0),
+    (0xbc48a33c25e8e226, 0x3fe0c6caaf0c5597),
+    (0xbc73aec658457c41, 0x3fe1096015dee4da),
+    (0xbc8fc7d7c3320aab, 0x3fe14c560fe68af9),
+    (0xbc892ba145dcf40b, 0x3fe18fadb6e2d3c2),
+    (0xbc7f9fb952bbbccc, 0x3fe1d368296b5255),
+    (0xbc8568859c64022e, 0x3fe217868b0c37e8),
+    (0xbc84828ddf1fb145, 0x3fe25c0a0463beb0),
+    (0xbc8c348e4aab18b8, 0x3fe2a0f3c340705c),
+    (0xbc83af881af2f3d9, 0x3fe2e644fac04fd8),
+    (0xbc83af881af2f3d9, 0x3fe2e644fac04fd8),
+    (0x3c8968925e378d68, 0x3fe32bfee370ee68),
+    (0xbc869656a0ad70d4, 0x3fe37222bb70747c),
+    (0x3c76d266d6cdc959, 0x3fe3b8b1c68fa6ed),
+    (0xbc69575b04fa6fbd, 0x3fe3ffad4e74f1d6),
+    (0x3c5b90132aeddb58, 0x3fe44716a2c08262),
+    (0x3c5b90132aeddb58, 0x3fe44716a2c08262),
+    (0xbc75e35482d13dc1, 0x3fe48eef19317991),
+    (0xbc8ca44f1db913d3, 0x3fe4d7380dcc422d),
+    (0x3c7817fd3b7d7e5d, 0x3fe51ff2e30214bc),
+    (0x3c804613e33c06c9, 0x3fe5692101d9b4a6),
+    (0xbc8fc9257edfe9b6, 0x3fe5b2c3da19723b),
+    (0xbc8fc9257edfe9b6, 0x3fe5b2c3da19723b),
+    (0x3c8149a1977b5b99, 0x3fe5fcdce2727ddb),
+    (0xbc8b32266d92c0fe, 0x3fe6476d98ad990a),
+    (0x3c821d90b84e7218, 0x3fe6927781d932a8),
+    (0x3c821d90b84e7218, 0x3fe6927781d932a8),
+    (0x3c7f6e91ad16ecff, 0x3fe6ddfc2a78fc63),
+    (0xbc74a31ce1b7e328, 0x3fe729fd26b707c8),
+    (0x3c6a7b47d2c352d9, 0x3fe7767c12967a45),
+    (0x3c6a7b47d2c352d9, 0x3fe7767c12967a45),
+    (0x3c821f9cb2cc5575, 0x3fe7c37a9227e7fb),
+    (0x3c8dc572667587b1, 0x3fe810fa51bf65fd),
+    (0x3c8dc572667587b1, 0x3fe810fa51bf65fd),
+    (0xbc78f93e7aa3bdf8, 0x3fe85efd062c656d),
+    (0x3c5b85a54d7ee2fd, 0x3fe8ad846cf369a4),
+    (0x3c5b85a54d7ee2fd, 0x3fe8ad846cf369a4),
+    (0x3c8bf1d926766301, 0x3fe8fc924c89ac84),
+    (0x3c401ee1343fe7ca, 0x3fe94c287492c4db),
+    (0x3c401ee1343fe7ca, 0x3fe94c287492c4db),
+    (0x3c7fa0a62e6add1b, 0x3fe99c48be2063c8),
+    (0x3c8022ddb71189c5, 0x3fe9ecf50bf43f13),
+    (0x3c8022ddb71189c5, 0x3fe9ecf50bf43f13),
+    (0x3c7ac7fc60a51031, 0x3fea3e2f4ac43f60),
+    (0x3c6817fd3b7d7e5d, 0x3fea8ff971810a5e),
+    (0x3c6817fd3b7d7e5d, 0x3fea8ff971810a5e),
+    (0xbc83138e941643f7, 0x3feae255819f022d),
+    (0x3c8e0ae0d3f8a58b, 0x3feb35458761d479),
+    (0x3c8e0ae0d3f8a58b, 0x3feb35458761d479),
+    (0x3c742b7579f0f8d4, 0x3feb88cb9a2ab521),
+    (0x3c742b7579f0f8d4, 0x3feb88cb9a2ab521),
+    (0x3c6a7610e40bd6ab, 0x3febdce9dcc96187),
+    (0xbc80e5edaecee150, 0x3fec31a27dd00b4a),
+    (0xbc80e5edaecee150, 0x3fec31a27dd00b4a),
+    (0xbc831d962d3728cc, 0x3fec86f7b7ea4a89),
+    (0xbc831d962d3728cc, 0x3fec86f7b7ea4a89),
+    (0xbc857391924a6d9d, 0x3fecdcebd2373995),
+    (0x3c78333ac7d9ebbb, 0x3fed338120a6dd9d),
+    (0x3c78333ac7d9ebbb, 0x3fed338120a6dd9d),
+    (0xbc86c0268890da53, 0x3fed8aba045b01c8),
+    (0xbc86c0268890da53, 0x3fed8aba045b01c8),
+    (0xbc859e7ba5d5ccc9, 0x3fede298ec0bac0d),
+    (0xbc859e7ba5d5ccc9, 0x3fede298ec0bac0d),
+    (0x3c60b07079619c47, 0x3fee3b20546f554a),
+    (0x3c60b07079619c47, 0x3fee3b20546f554a),
+    (0xbc8cc4d81bc25adf, 0x3fee9452c8a71028),
+    (0xbc8cc4d81bc25adf, 0x3fee9452c8a71028),
+    (0xbc776c0a2827d49a, 0x3feeee32e2aeccbf),
+    (0xbc776c0a2827d49a, 0x3feeee32e2aeccbf),
+    (0xbc8314dc4fc42302, 0x3fef48c34bd1e96f),
+    (0xbc8314dc4fc42302, 0x3fef48c34bd1e96f),
+    (0xbc817f8e37b00179, 0x3fefa406bd2443df),
+    (0x0, 0x0),
+];
+
+#[cfg(not(any(
+    all(
+        any(target_arch = "x86", target_arch = "x86_64"),
+        target_feature = "fma"
+    ),
+    all(target_arch = "aarch64", target_feature = "neon")
+)))]
+pub(crate) static LOG_CD: [u64; 128] = [
+    0x0000000000000000,
+    0xbf10000000000000,
+    0xbf30000000000000,
+    0xbf42000000000000,
+    0xbf50000000000000,
+    0xbf59000000000000,
+    0xbf62000000000000,
+    0xbf68800000000000,
+    0xbf70000000000000,
+    0xbf49000000000000,
+    0xbf5f000000000000,
+    0xbf69c00000000000,
+    0xbf30000000000000,
+    0xbf5c000000000000,
+    0xbf6b000000000000,
+    0xbf45000000000000,
+    0xbf64000000000000,
+    0x3f10000000000000,
+    0xbf60000000000000,
+    0x3f3a000000000000,
+    0xbf5e000000000000,
+    0x3f38000000000000,
+    0xbf61000000000000,
+    0xbf00000000000000,
+    0xbf66000000000000,
+    0xbf4a000000000000,
+    0xbf6e000000000000,
+    0xbf5f800000000000,
+    0xbf30000000000000,
+    0xbf6c000000000000,
+    0xbf5f000000000000,
+    0xbf3c000000000000,
+    0xbf70000000000000,
+    0xbf65400000000000,
+    0xbf56000000000000,
+    0xbf24000000000000,
+    0x3f50000000000000,
+    0xbf68800000000000,
+    0xbf60800000000000,
+    0xbf52000000000000,
+    0xbf30000000000000,
+    0x3f42000000000000,
+    0xbf70000000000000,
+    0xbf6ac00000000000,
+    0xbf66000000000000,
+    0xbf61c00000000000,
+    0xbf5c000000000000,
+    0xbf55800000000000,
+    0xbf50000000000000,
+    0xbf47000000000000,
+    0xbf40000000000000,
+    0xbf36000000000000,
+    0xbf30000000000000,
+    0xbf2c000000000000,
+    0xbf30000000000000,
+    0xbf36000000000000,
+    0xbf40000000000000,
+    0xbf47000000000000,
+    0xbf50000000000000,
+    0xbf55800000000000,
+    0xbf5c000000000000,
+    0xbf61c00000000000,
+    0xbf66000000000000,
+    0xbf6ac00000000000,
+    0xbf70000000000000,
+    0x3f55000000000000,
+    0x3f42000000000000,
+    0xbf30000000000000,
+    0xbf52000000000000,
+    0xbf60800000000000,
+    0xbf68800000000000,
+    0x3f60c00000000000,
+    0x3f50000000000000,
+    0xbf24000000000000,
+    0xbf56000000000000,
+    0xbf65400000000000,
+    0xbf70000000000000,
+    0x3f50000000000000,
+    0xbf3c000000000000,
+    0xbf5f000000000000,
+    0xbf6c000000000000,
+    0x3f56800000000000,
+    0xbf30000000000000,
+    0xbf5f800000000000,
+    0xbf6e000000000000,
+    0x3f51000000000000,
+    0xbf4a000000000000,
+    0xbf66000000000000,
+    0x3f60000000000000,
+    0xbf00000000000000,
+    0xbf61000000000000,
+    0x3f64800000000000,
+    0x3f38000000000000,
+    0xbf5e000000000000,
+    0x3f66000000000000,
+    0x3f3a000000000000,
+    0xbf60000000000000,
+    0x3f64800000000000,
+    0x3f10000000000000,
+    0xbf64000000000000,
+    0x3f60000000000000,
+    0xbf45000000000000,
+    0xbf6b000000000000,
+    0x3f51000000000000,
+    0xbf5c000000000000,
+    0x3f65400000000000,
+    0xbf30000000000000,
+    0xbf69c00000000000,
+    0x3f52000000000000,
+    0xbf5f000000000000,
+    0x3f63000000000000,
+    0xbf49000000000000,
+    0xbf70000000000000,
+    0x3f30000000000000,
+    0xbf68800000000000,
+    0x3f52800000000000,
+    0xbf62000000000000,
+    0x3f5f000000000000,
+    0xbf59000000000000,
+    0x3f64c00000000000,
+    0xbf50000000000000,
+    0x3f69000000000000,
+    0xbf42000000000000,
+    0x3f6c400000000000,
+    0xbf30000000000000,
+    0x3f6e800000000000,
+    0xbf10000000000000,
+    0xbf70000000000000,
+];
+
+pub(crate) const LOG_COEFFS: [u64; 6] = [
+    0xbfdfffffffffffff,
+    0x3fd5555555554a9b,
+    0xbfd0000000094567,
+    0x3fc99999dcc9823c,
+    0xbfc55550ac2e537a,
+    0x3fc21a02c4e624d7,
+];
+
+/// Log2(x)
+///
+/// Max found ULP 0.5
+pub fn f_log2(x: f64) -> f64 {
+    let mut x_u = x.to_bits();
+
+    const E_BIAS: u64 = (1u64 << (11 - 1u64)) - 1u64;
+
+    let mut x_e: i64 = -(E_BIAS as i64);
+
+    const MAX_NORMAL: u64 = f64::to_bits(f64::MAX);
+
+    if x_u == 1f64.to_bits() {
+        // log2(1.0) = +0.0
+        return 0.0;
+    }
+    if x_u < min_normal_f64().to_bits() || x_u > MAX_NORMAL {
+        if x == 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        if x < 0. || x.is_nan() {
+            return f64::NAN;
+        }
+        if x.is_infinite() || x.is_nan() {
+            return x + x;
+        }
+        // Normalize denormal inputs.
+        x_u = (x * f64::from_bits(0x4330000000000000)).to_bits();
+        x_e -= 52;
+    }
+
+    // log2(x) = log2(2^x_e * x_m)
+    //         = x_e + log2(x_m)
+    // Range reduction for log2(x_m):
+    // For each x_m, we would like to find r such that:
+    //   -2^-8 <= r * x_m - 1 < 2^-7
+    let shifted = (x_u >> 45) as i64;
+    let index = shifted & 0x7F;
+
+    // Add unbiased exponent. Add an extra 1 if the 8 leading fractional bits are
+    // all 1's.
+    x_e = x_e.wrapping_add(x_u.wrapping_add(1u64 << 45).wrapping_shr(52) as i64);
+    let e_x = x_e as f64;
+
+    // Set m = 1.mantissa.
+    let x_m = (x_u & 0x000F_FFFF_FFFF_FFFFu64) | 0x3FF0_0000_0000_0000u64;
+    let m = f64::from_bits(x_m);
+
+    let u;
+
+    let r = f64::from_bits(LOG_RANGE_REDUCTION[index as usize]);
+
+    #[cfg(any(
+        all(
+            any(target_arch = "x86", target_arch = "x86_64"),
+            target_feature = "fma"
+        ),
+        all(target_arch = "aarch64", target_feature = "neon")
+    ))]
+    {
+        u = f_fmla(r, m, -1.0); // exact   
+    }
+    #[cfg(not(any(
+        all(
+            any(target_arch = "x86", target_arch = "x86_64"),
+            target_feature = "fma"
+        ),
+        all(target_arch = "aarch64", target_feature = "neon")
+    )))]
+    {
+        let c_m = x_m & 0x3FFF_E000_0000_0000u64;
+        let c = f64::from_bits(c_m);
+        u = f_fmla(r, m - c, f64::from_bits(LOG_CD[index as usize])); // exact
+    }
+
+    // Exact sum:
+    let log_vals = DoubleDouble::from_bit_pair(LOG2_DD[index as usize]);
+
+    /*
+       Poly generated in Sollya;
+       d = [-2^-8, 2^-7];
+       f = (log2(1 + x))/x;
+       pf = fpminimax(f, 5, [|D...|], [-2^-8, 2^-7]);
+
+       See ./notes/log2.sollya
+    */
+    const C: [u64; 6] = [
+        0x3ff71547652b82fe,
+        0xbfe71547652b7a07,
+        0x3fdec709dc458db1,
+        0xbfd715479c2266c9,
+        0x3fd2776ae1ddf8f0,
+        0xbfce7b2178870157,
+    ];
+
+    // Degree-7 minimax polynomial
+    let p = f_fmla(
+        f_polyeval6(
+            u,
+            f64::from_bits(C[0]),
+            f64::from_bits(C[1]),
+            f64::from_bits(C[2]),
+            f64::from_bits(C[3]),
+            f64::from_bits(C[4]),
+            f64::from_bits(C[5]),
+        ),
+        u,
+        log_vals.lo,
+    );
+
+    // log2(x) = e + log2(r) + log2(index)
+
+    let rr = DoubleDouble::from_full_exact_add(log_vals.hi, e_x);
+    let r3 = DoubleDouble::add_f64(rr, p);
+
+    let err = f_fmla(
+        r3.hi,
+        f64::from_bits(0x3bf0000000000000), // 2^-64
+        f64::from_bits(0x3c60000000000000), // 2^-57
+    );
+
+    // Lower bound from the result
+    let left = r3.hi + (r3.lo - err);
+    // Upper bound from the result
+    let right = r3.hi + (r3.lo + err);
+
+    // Ziv's test if fast pass is accurate enough.
+    if left == right {
+        return left;
+    }
+
+    log2_hard(x)
+}
+
+#[cold]
+#[inline(never)]
+fn log2_hard(x: f64) -> f64 {
+    let r = log2_dd(x);
+    let err = f_fmla(
+        r.hi,
+        f64::from_bits(0x3b50000000000000), // 2^-74
+        f64::from_bits(0x3990000000000000), // 2^-102
+    );
+    let ub = r.hi + (r.lo + err);
+    let lb = r.hi + (r.lo - err);
+    if ub == lb {
+        return r.to_f64();
+    }
+    log2_hard_slow(x)
+}
+
+#[cold]
+#[inline(never)]
+fn log2_hard_slow(x: f64) -> f64 {
+    log2_td(x).to_f64()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_log2d() {
+        assert_eq!(f_log2(0.7500000000000461), -0.4150374992787552);
+        assert_eq!(f_log2(1.99999999779061), 0.999999998406262);
+        assert_eq!(f_log2(0.7812499981882864), -0.35614381357087554);
+        assert_eq!(f_log2(0.5937499997089616), -0.7520724872635803);
+        assert_eq!(f_log2(0.9983015060407214), -0.0024524921736992287);
+        assert_eq!(f_log2(0.2284926469437778), -2.129780355811612);
+        assert_eq!(f_log2(24.), 4.584962500721156181453738943);
+        assert!((f_log2(0.35) - 0.35f64.log2()).abs() < 1e-8);
+        assert!((f_log2(0.9) - 0.9f64.log2()).abs() < 1e-8);
+        assert_eq!(f_log2(0.), f64::NEG_INFINITY);
+        assert!(f_log2(-1.).is_nan());
+        assert!(f_log2(f64::NAN).is_nan());
+        assert!(f_log2(f64::NEG_INFINITY).is_nan());
+        assert_eq!(f_log2(f64::INFINITY), f64::INFINITY);
+    }
+
+    #[test]
+    fn test_log2_control_values() {
+        assert_eq!(
+            f_log2(f64::from_bits(0x3ff1406d79e1b574)),
+            0.10866415915666149
+        );
+        assert_eq!(
+            f_log2(f64::from_bits(0x3ffb4ebe40c95a01)),
+            0.7712301192941611
+        );
+        assert_eq!(
+            f_log2(f64::from_bits(0x3ff0b541b6746bd1)),
+            0.062470074690080965
+        );
+        assert_eq!(
+            f_log2(f64::from_bits(0x3ff68d778f076021)),
+            0.4952222169409832
+        );
+        assert_eq!(
+            f_log2(f64::from_bits(0x3ff67eaf07ce24d1)),
+            0.4915233709893074
+        );
+        assert_eq!(
+            f_log2(f64::from_bits(0x3ff0b53197bd66c8)),
+            0.062448835548542664
+        );
+        assert_eq!(
+            f_log2(f64::from_bits(0x3fe6b015f8d9a784)),
+            -0.496152942566177
+        );
+        assert_eq!(
+            f_log2(f64::from_bits(0x3ff160732376ad7f)),
+            0.11908694357502585
+        );
+        assert_eq!(
+            f_log2(f64::from_bits(0x3ff0b53f741fb8c4)),
+            0.062467098188572705
+        );
+    }
+}

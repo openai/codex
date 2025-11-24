@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Untagged",
+  "anyOf": [
+    {
+      "type": "null"
+    },
+    {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    {
+      "$ref": "#/$defs/UnitStruct"
+    },
+    {
+      "$ref": "#/$defs/Struct"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "foo": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "bar": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "foo",
+        "bar"
+      ]
+    },
+    {
+      "type": "array",
+      "maxItems": 0
+    },
+    {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "integer",
+          "format": "int32"
+        },
+        {
+          "type": "boolean"
+        }
+      ],
+      "minItems": 2,
+      "maxItems": 2
+    },
+    {
+      "type": "null"
+    },
+    {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    {
+      "type": "string",
+      "pattern": "^\\d+ (true|false)$"
+    }
+  ],
+  "$defs": {
+    "UnitStruct": {
+      "type": "null"
+    },
+    "Struct": {
+      "type": "object",
+      "properties": {
+        "foo": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "bar": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "foo",
+        "bar"
+      ]
+    }
+  }
+}

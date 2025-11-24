@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "InternalEnum",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "const": "READ-ONLY-UNIT"
+        }
+      },
+      "required": [
+        "tag"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "S": {
+          "type": "string"
+        },
+        "tag": {
+          "type": "string",
+          "const": "READ-ONLY-STRUCT"
+        }
+      },
+      "required": [
+        "tag",
+        "S"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "const": "ser_renamed_unit"
+        }
+      },
+      "required": [
+        "tag"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "B": {
+          "type": "boolean"
+        },
+        "tag": {
+          "type": "string",
+          "const": "ser_renamed_struct"
+        }
+      },
+      "required": [
+        "tag",
+        "B"
+      ]
+    }
+  ]
+}

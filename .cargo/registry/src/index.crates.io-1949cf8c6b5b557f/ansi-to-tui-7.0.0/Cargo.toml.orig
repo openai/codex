@@ -1,0 +1,35 @@
+[package]
+name = "ansi-to-tui"
+version = "7.0.0"
+authors = ["Uttarayan Mondal <email@uttarayan.me>"]
+edition = "2018"
+description = "A library to convert ansi color coded text into ratatui::text::Text type from ratatui library"
+keywords = ["ansi", "ascii", "tui", "parser"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/uttarayan21/ansi-to-tui"
+
+[dependencies]
+nom = "7.1"
+tui = { version = "0.29", default-features = false, package = "ratatui" }
+thiserror = "1.0"
+simdutf8 = { version = "0.1", optional = true }
+smallvec = { version = "1.10.0", features = ["const_generics"] }
+
+[dev-dependencies]
+anyhow = "1.0"
+criterion = "0.5"
+pretty_assertions = "1.4.0"
+
+[features]
+simd = ["dep:simdutf8"]
+zero-copy = []
+default = ["zero-copy", "simd"]
+
+
+[[bench]]
+name = "parsing"
+harness = false
+
+[profile.bench]
+debug = true

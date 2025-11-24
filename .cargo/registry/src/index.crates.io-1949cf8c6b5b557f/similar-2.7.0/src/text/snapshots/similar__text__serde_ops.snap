@@ -1,0 +1,38 @@
+---
+source: src/text/mod.rs
+expression: "&json"
+
+---
+[
+  {
+    "op": "insert",
+    "old_index": 0,
+    "new_index": 0,
+    "new_len": 1
+  },
+  {
+    "op": "equal",
+    "old_index": 0,
+    "new_index": 1,
+    "len": 1
+  },
+  {
+    "op": "replace",
+    "old_index": 1,
+    "old_len": 1,
+    "new_index": 2,
+    "new_len": 1
+  },
+  {
+    "op": "equal",
+    "old_index": 2,
+    "new_index": 3,
+    "len": 1
+  },
+  {
+    "op": "delete",
+    "old_index": 3,
+    "old_len": 3,
+    "new_index": 4
+  }
+]

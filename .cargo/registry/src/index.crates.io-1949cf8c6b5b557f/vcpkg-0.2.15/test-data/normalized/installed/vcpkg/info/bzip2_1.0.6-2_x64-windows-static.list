@@ -1,0 +1,15 @@
+x64-windows-static/
+x64-windows-static/debug/
+x64-windows-static/debug/lib/
+x64-windows-static/debug/lib/bz2d.lib
+x64-windows-static/include/
+x64-windows-static/include/bzlib.h
+x64-windows-static/lib/
+x64-windows-static/lib/bz2.lib
+x64-windows-static/share/
+x64-windows-static/share/bzip2/
+x64-windows-static/share/bzip2/copyright
+x64-windows-static/share/bzip2/usage
+x64-windows-static/tools/
+x64-windows-static/tools/bzip2.exe
+x64-windows-static/tools/bzip2recover.exe

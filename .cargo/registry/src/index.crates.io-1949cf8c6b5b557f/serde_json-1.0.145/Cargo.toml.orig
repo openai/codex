@@ -1,0 +1,94 @@
+[package]
+name = "serde_json"
+version = "1.0.145"
+authors = ["Erick Tryzelaar <erick.tryzelaar@gmail.com>", "David Tolnay <dtolnay@gmail.com>"]
+categories = ["encoding", "parser-implementations", "no-std"]
+description = "A JSON serialization file format"
+documentation = "https://docs.rs/serde_json"
+edition = "2021"
+keywords = ["json", "serde", "serialization"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/serde-rs/json"
+rust-version = "1.61"
+
+[dependencies]
+indexmap = { version = "2.2.3", optional = true }
+itoa = "1.0"
+memchr = { version = "2", default-features = false }
+ryu = "1.0"
+serde_core = { version = "1.0.220", default-features = false }
+
+[target.'cfg(any())'.dependencies]
+serde = { version = "1.0.220", default-features = false }
+
+[dev-dependencies]
+automod = "1.0.11"
+indoc = "2.0.2"
+ref-cast = "1.0.18"
+rustversion = "1.0.13"
+serde = { version = "1.0.194", features = ["derive"] }
+serde_bytes = "0.11.10"
+serde_derive = "1.0.166"
+serde_stacker = "0.1.8"
+trybuild = { version = "1.0.108", features = ["diff"] }
+
+[package.metadata.docs.rs]
+features = ["preserve_order", "raw_value", "unbounded_depth"]
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = [
+    "--generate-link-to-definition",
+    "--extern-html-root-url=core=https://doc.rust-lang.org",
+    "--extern-html-root-url=alloc=https://doc.rust-lang.org",
+    "--extern-html-root-url=std=https://doc.rust-lang.org",
+]
+
+[package.metadata.playground]
+features = ["float_roundtrip", "raw_value", "unbounded_depth"]
+
+
+### FEATURES #################################################################
+
+[features]
+default = ["std"]
+
+std = ["memchr/std", "serde_core/std"]
+
+# Provide integration for heap-allocated collections without depending on the
+# rest of the Rust standard library.
+# NOTE: Disabling both `std` *and* `alloc` features is not supported yet.
+alloc = ["serde_core/alloc"]
+
+# Make serde_json::Map use a representation which maintains insertion order.
+# This allows data to be read into a Value and written back to a JSON string
+# while preserving the order of map keys in the input.
+preserve_order = ["indexmap", "std"]
+
+# Use sufficient precision when parsing fixed precision floats from JSON to
+# ensure that they maintain accuracy when round-tripped through JSON. This comes
+# at an approximately 2x performance cost for parsing floats compared to the
+# default best-effort precision.
+#
+# Unlike arbitrary_precision, this feature makes f64 -> JSON -> f64 produce
+# output identical to the input.
+float_roundtrip = []
+
+# Use an arbitrary precision number representation for serde_json::Number. This
+# allows JSON numbers of arbitrary size/precision to be read into a Number and
+# written back to a JSON string without loss of precision.
+#
+# Unlike float_roundtrip, this feature makes JSON -> serde_json::Number -> JSON
+# produce output identical to the input.
+arbitrary_precision = []
+
+# Provide a RawValue type that can hold unprocessed JSON during deserialization.
+raw_value = []
+
+# Provide a method disable_recursion_limit to parse arbitrarily deep JSON
+# structures without any consideration for overflowing the stack. When using
+# this feature, you will want to provide some other way to protect against stack
+# overflows, such as by wrapping your Deserializer in the dynamically growing
+# stack adapter provided by the serde_stacker crate. Additionally you will need
+# to be careful around other recursive operations on the parsed result which may
+# overflow the stack after deserialization has completed, including, but not
+# limited to, Display and Debug and Drop impls.
+unbounded_depth = []

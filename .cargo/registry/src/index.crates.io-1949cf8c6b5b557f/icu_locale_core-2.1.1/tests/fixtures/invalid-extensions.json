@@ -1,0 +1,162 @@
+[
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "cmn-hans-cn-t-ca-u-ca-x_t-u"
+    },
+    "output": {
+      "error": "InvalidExtension",
+      "text": "unused"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "pl-US-x-waytoolongkey"
+    },
+    "output": {
+      "error": "InvalidExtension",
+      "text": "Invalid subtag"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "pl-US-x-@A-3"
+    },
+    "output": {
+      "error": "InvalidExtension",
+      "text": "Invalid subtag"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "pl-US-t-h0"
+    },
+    "output": {
+      "error": "InvalidExtension",
+      "text": "Invalid subtag"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "pl-US-t-h0-x-foo"
+    },
+    "output": {
+      "error": "InvalidExtension",
+      "text": "Invalid subtag"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "pl-US-t-h0"
+    },
+    "output": {
+      "error": "InvalidExtension",
+      "text": "Invalid subtag"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "und-t-m0"
+    },
+    "output": {
+      "error": "InvalidExtension",
+      "text": "Invalid subtag"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "und-t-m0-n0-mixed"
+    },
+    "output": {
+      "error": "InvalidExtension",
+      "text": "Invalid subtag"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "da-u"
+    },
+    "output": {
+      "error": "InvalidExtension",
+      "text": "Invalid subtag"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "da-u--"
+    },
+    "output": {
+      "error": "InvalidExtension",
+      "text": "Invalid subtag"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "da-u-t-latn"
+    },
+    "output": {
+      "error": "InvalidExtension",
+      "text": "Invalid subtag"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "cmn-hans-cn-u-u"
+    },
+    "output": {
+      "error": "InvalidExtension",
+      "text": "Invalid subtag"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "de-u-ca-"
+    },
+    "output": {
+      "error": "InvalidExtension",
+      "text": "Invalid subtag"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "de-u-ca-gregory-"
+    },
+    "output": {
+      "error": "InvalidExtension",
+      "text": "Invalid subtag"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "de-u-ca-gregory-u-hc-hc24"
+    },
+    "output": {
+      "error": "DuplicatedExtension",
+      "text": "Duplicated extension"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "de-l-foo-l-bar"
+    },
+    "output": {
+      "error": "DuplicatedExtension",
+      "text": "Duplicated extension"
+    }
+  }
+]

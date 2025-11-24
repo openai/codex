@@ -1,0 +1,112 @@
+=pod
+
+=head1 NAME
+
+ossl_decoder_get_number, evp_md_get_number, evp_cipher_get_number,
+evp_mac_get_number, evp_rand_get_number, evp_keymgmt_get_number,
+evp_signature_get_number, evp_asym_cipher_get_number, evp_kem_get_number,
+evp_keyexch_get_number, evp_kdf_get_number, ossl_encoder_get_number,
+ossl_store_loader_get_number - EVP get internal identification numbers
+
+=head1 SYNOPSIS
+
+ #include "crypto/evp.h"
+
+ int evp_asym_cipher_get_number(const EVP_ASYM_CIPHER *cipher);
+ int evp_cipher_get_number(const EVP_CIPHER *e);
+ int evp_kdf_get_number(const EVP_KDF *kdf);
+ int evp_kem_get_number(const EVP_KEM *kem);
+ int evp_keyexch_get_number(const EVP_KEYEXCH *exchange);
+ int evp_keymgmt_get_number(const EVP_KEYMGMT *keymgmt);
+ int evp_mac_get_number(const EVP_MAC *mac);
+ int evp_md_get_number(const EVP_MD *md);
+ int evp_rand_get_number(const EVP_RAND *rand);
+ int evp_signature_get_number(const EVP_SIGNATURE *signature);
+ int ossl_decoder_get_number(const OSSL_DECODER *decoder);
+ int ossl_encoder_get_number(const OSSL_ENCODER *encoder);
+ int ossl_store_loader_get_number(const OSSL_STORE_LOADER *loader);
+
+=head1 DESCRIPTION
+
+All provided algorithms get an associated integer identification number.
+This number is dynamic and should be expected to vary from run to run.
+These numbers should only be considered to be unique per provider per
+library context.
+
+=over 4
+
+=item evp_asym_cipher_get_number()
+
+Returns the internal dynamic number assigned to I<cipher>.
+
+=item evp_cipher_get_number()
+
+Returns the internal dynamic number assigned to the I<cipher>.  This is only
+useful with fetched B<EVP_CIPHER>s.
+
+=item evp_kdf_get_number()
+
+Keturns the internal dynamic number assigned to I<kdf>.
+
+=item evp_kem_get_number()
+
+Returns the internal dynamic number assigned to I<kem>.
+
+=item evp_keyexch_get_number()
+
+Returns the internal dynamic number assigned to the I<exchange>.
+
+=item evp_keymgmt_get_number()
+
+Returns the internal dynamic number assigned to the I<keymgmt>.
+
+=item evp_mac_get_number()
+
+Returns the internal dynamic number assigned to I<mac>.
+
+=item evp_md_get_number()
+
+Returns the internal dynamic number assigned to the I<md>.  This is
+only useful with fetched B<EVP_MD>s.
+
+=item evp_rand_get_number()
+
+Returns the internal dynamic number assigned to I<rand>.
+
+=item evp_signature_get_number()
+
+Returns the internal dynamic number assigned to I<signature>.
+
+=item ossl_decoder_get_number()
+
+Returns the internal dynamic number assigned to the given I<decoder>.
+
+=item ossl_encoder_get_number()
+
+Returns the internal dynamic number assigned to the given I<encoder>.
+
+=item ossl_store_loader_get_number()
+
+Returns the internal dynamic number assigned to the given I<loader>.
+
+=back
+
+=head1 RETURN VALUES
+
+All of these functions return the provider specific identification number
+for the specified algorithm.
+
+=head1 HISTORY
+
+This functionality was added to OpenSSL 3.0.
+
+=head1 COPYRIGHT
+
+Copyright 2021 The OpenSSL Project Authors. All Rights Reserved.
+
+Licensed under the Apache License 2.0 (the "License").  You may not use
+this file except in compliance with the License.  You can obtain a copy
+in the file LICENSE in the source distribution or at
+L<https://www.openssl.org/source/license.html>.
+
+=cut

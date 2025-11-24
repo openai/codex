@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+#
+# Copyright 2024 The Fuchsia Authors
+#
+# Licensed under a BSD-style license <LICENSE-BSD>, Apache License, Version 2.0
+# <LICENSE-APACHE or https://www.apache.org/licenses/LICENSE-2.0>, or the MIT
+# license <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your option.
+# This file may not be copied, modified, or distributed except according to
+# those terms.
+
+set -eo pipefail
+echo "Running pre-push git hook: $0"
+# Forego redirecting stdout to /dev/null on check_fmt.sh because the output from
+# `cargo fmt` is useful (and the good stuff is not delivered by stderr).
+#
+# Background all jobs and wait for them so they can run in parallel.
+./ci/check_fmt.sh                              & FMT_PID=$!
+./ci/check_all_toolchains_tested.sh >/dev/null & TOOLCHAINS_PID=$!
+./ci/check_job_dependencies.sh      >/dev/null & JOB_DEPS_PID=$!
+./ci/check_readme.sh                >/dev/null & README_PID=$!
+./ci/check_todo.sh                  >/dev/null & XODO_PID=$!
+./ci/check_versions.sh              >/dev/null & VERSIONS_PID=$!
+
+# `wait <pid>` exits with the same status code as the job it's waiting for.
+# Since we `set -e` above, this will have the effect of causing the entire
+# script to exit with a non-zero status code if any of these jobs does the same.
+# Note that, while `wait` (with no PID argument) waits for all backgrounded
+# jobs, it exits with code 0 even if one of the backgrounded jobs does not, so
+# we can't use it here.
+wait $FMT_PID
+wait $TOOLCHAINS_PID
+wait $JOB_DEPS_PID
+wait $README_PID
+wait $XODO_PID
+wait $VERSIONS_PID
+
+# Ensure that this script calls all scripts in `ci/*`. This isn't a foolproof
+# check since it just checks for the string in this script (e.g., it could be in
+# a comment, which would trigger a false positive), but it should catch obvious
+# errors. Also note that this entire hook is a nice-to-have - failures that
+# aren't caught here will still be caught in CI.
+#
+# This was added because, in #728, we added `ci/check_all_toolchains_tested.sh`
+# without calling it from this script.
+GLOBIGNORE="./*/release_crate_version.sh" # We don't want to run this one
+for f in ./ci/*; do
+    grep "$f" githooks/pre-push >/dev/null || { echo "$f not called from githooks/pre-push" >&2 ; exit 1; }
+done
+unset GLOBIGNORE

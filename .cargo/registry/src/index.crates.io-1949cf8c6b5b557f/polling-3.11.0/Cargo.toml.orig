@@ -1,0 +1,67 @@
+[package]
+name = "polling"
+# When publishing a new version:
+# - Update CHANGELOG.md
+# - Create "v3.x.y" git tag
+version = "3.11.0"
+authors = ["Stjepan Glavina <stjepang@gmail.com>", "John Nunley <dev@notgull.net>"]
+edition = "2021"
+rust-version = "1.71"
+description = "Portable interface to epoll, kqueue, event ports, and IOCP"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/smol-rs/polling"
+keywords = ["mio", "epoll", "kqueue", "iocp"]
+categories = ["asynchronous", "network-programming", "os"]
+exclude = ["/.*"]
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(polling_test_poll_backend)', 'cfg(polling_test_epoll_pipe)'] }
+
+[dependencies]
+cfg-if = "1"
+
+[dependencies.tracing]
+version = "0.1.37"
+default-features = false
+optional = true
+
+[target.'cfg(any(unix, target_os = "fuchsia", target_os = "vxworks"))'.dependencies.rustix]
+version = "1.0.5"
+features = ["event", "fs", "pipe", "process", "std", "time"]
+default-features = false
+
+[target.'cfg(windows)'.dependencies]
+concurrent-queue = "2.2.0"
+pin-project-lite = "0.2.9"
+
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.61"
+features = [
+    "Wdk_Foundation",
+    "Wdk_Storage_FileSystem",
+    "Win32_Foundation",
+    "Win32_Networking_WinSock",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_System_WindowsProgramming",
+]
+
+[target.'cfg(target_os = "hermit")'.dependencies.hermit-abi]
+version = "0.5.0"
+
+[dev-dependencies]
+easy-parallel = "3.1.0"
+fastrand = "2.0.0"
+socket2 = "0.6.0"
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"
+
+[target.'cfg(all(unix, not(target_os="vita")))'.dev-dependencies]
+signal-hook = "0.3.17"

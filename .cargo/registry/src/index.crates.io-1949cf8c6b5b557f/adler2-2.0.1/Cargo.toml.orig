@@ -1,0 +1,71 @@
+[package]
+name = "adler2"
+version = "2.0.1"
+authors = ["Jonas Schievink <jonasschievink@gmail.com>", "oyvindln <oyvindln@users.noreply.github.com>"]
+description = "A simple clean-room implementation of the Adler-32 checksum"
+documentation = "https://docs.rs/adler2/"
+repository = "https://github.com/oyvindln/adler2"
+keywords = ["checksum", "integrity", "hash", "adler32", "zlib"]
+categories = ["algorithms"]
+readme = "README.md"
+license = "0BSD OR MIT OR Apache-2.0"
+edition = "2021"
+exclude = [".*"]
+
+[[bench]]
+name = "bench"
+harness = false
+
+[dependencies]
+# Internal features, only used when building as part of libstd, not part of the
+# stable interface of this crate.
+core = { version = '1.0.0', optional = true, package = 'rustc-std-workspace-core' }
+
+[dev-dependencies]
+## Messes with minimum rust version and drags in deps just for running tests
+## so just comment out for now and enable manually when needed for enabling benches
+## criterion = "0.3.2"
+
+[features]
+# Disable default features to enable `#![no_std]` support.
+default = ["std"]
+std = []
+
+# Internal feature, only used when building as part of libstd, not part of the
+# stable interface of this crate.
+rustc-dep-of-std = ['core']
+
+
+[package.metadata.docs.rs]
+rustdoc-args = [ "--cfg=docsrs" ]
+
+# cargo-release configuration
+[package.metadata.release]
+tag-message = "{{version}}"
+no-dev-version = true
+pre-release-commit-message = "Release {{version}}"
+
+# Change the changelog's `Unreleased` section to refer to this release and
+# prepend a new `Unreleased` section
+[[package.metadata.release.pre-release-replacements]]
+file    = "CHANGELOG.md"
+search  = "## Unreleased\n"
+replace = """
+## Unreleased
+
+No changes.
+
+## [{{version}} - {{date}}](https://github.com/jonas-schievink/adler/releases/tag/v{{version}})
+"""
+
+# Bump the version inside the example manifest in `README.md`
+[[package.metadata.release.pre-release-replacements]]
+file    = "README.md"
+search  = 'adler = "[a-z0-9\\.-]+"'
+replace = 'adler = "{{version}}"'
+
+# Bump the version referenced by the `html_root_url` attribute in `lib.rs`
+[[package.metadata.release.pre-release-replacements]]
+file    = "src/lib.rs"
+search  = "https://docs.rs/adler/[a-z0-9\\.-]+"
+replace = "https://docs.rs/adler/{{version}}"

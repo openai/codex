@@ -1,0 +1,116 @@
+name: Rust
+
+on:
+  push: {}
+  pull_request: {}
+
+env:
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    name: Test Rust ${{ matrix.rust }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        # it's a little tempting to use `matrix` to do a cartesian product with
+        # our `--feature` config here, but doing so will be very slow, as the
+        # free tier only supports up to 20 job runners at a time.
+        include:
+        # versions (all on linux-x86_64)
+        - { rust: 1.34.0, os: ubuntu-latest }
+        - { rust: 1.61.0, os: ubuntu-latest }
+        - { rust: stable, os: ubuntu-latest }
+        - { rust: beta, os: ubuntu-latest }
+        - { rust: nightly, os: ubuntu-latest }
+        # non-linux platforms (ones which don't require `cross`)
+        - { rust: stable, os: macos-latest }
+        - { rust: stable, os: windows-latest }
+        - { rust: stable-x86_64-gnu, os: windows-latest }
+        - { rust: stable-i686-msvc, os: windows-latest }
+        - { rust: stable-i686-gnu, os: windows-latest }
+    steps:
+    - uses: hecrj/setup-rust-action@v1
+      with:
+        rust-version: ${{ matrix.rust }}
+    - uses: actions/checkout@v3
+    - run: cargo test --verbose
+    - run: cargo test --verbose --no-default-features
+    - run: cargo test --verbose
+    - run: cargo test --verbose --features derive
+      if: matrix.rust == '1.61.0'
+    - run: cargo test --verbose --all-features
+      if: matrix.rust == 'nightly'
+    - run: cargo test --verbose --manifest-path=derive/Cargo.toml --all-features
+      if: matrix.rust == 'nightly'
+
+  cross-test:
+    name: Test on ${{ matrix.target }} with cross
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # we once had mips runners for Big-endian coverage but those got demoted to tier 3.
+        target: [i686-unknown-linux-gnu]
+    steps:
+    - uses: hecrj/setup-rust-action@v1
+      with:
+        rust-version: nightly
+    - uses: actions/checkout@v3
+    - run: cargo install cross
+    - run: cross test --verbose --target=${{ matrix.target }} --no-default-features
+    - run: cross test --verbose --target=${{ matrix.target }}
+    - run: cross test --verbose --target=${{ matrix.target }} --all-features
+      if: matrix.rust == 'nightly'
+    - run: cross test --verbose --target=${{ matrix.target }} --manifest-path=derive/Cargo.toml --all-features
+      if: matrix.rust == 'nightly'
+
+  miri-test:
+    name: Test with miri
+    runs-on: ubuntu-latest
+    steps:
+    - uses: hecrj/setup-rust-action@v1
+      with:
+        rust-version: nightly
+        components: miri
+    - uses: actions/checkout@v3
+    # Note(Lokathor): We got some cached json errors, and so we cargo clean for this run.
+    - run: rm -fr target
+    - run: cargo miri test --verbose --no-default-features
+    - run: cargo miri test --verbose --all-features
+    - run: cd derive && rm -fr target && cargo miri test --verbose --all-features
+
+  sanitizer-test:
+    name: Test with -Zsanitizer=${{ matrix.sanitizer }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # leak is disabled because the config got outdated
+        # and bytemuck doesn't really do allocation anyway.
+        sanitizer: [address, memory]
+    steps:
+    - uses: actions/checkout@v3
+    - uses: hecrj/setup-rust-action@v1
+      with:
+        rust-version: nightly
+        components: rust-src
+    - name: Test with sanitizer
+      env:
+        RUSTFLAGS: -Zsanitizer=${{ matrix.sanitizer }}
+        RUSTDOCFLAGS: -Zsanitizer=${{ matrix.sanitizer }}
+        ASAN_OPTIONS: detect_stack_use_after_return=1
+        # Asan's leak detection occasionally complains about some small leaks if
+        # backtraces are captured.
+        RUST_BACKTRACE: 0
+      # We don't run `derive`'s unit tests here the way we do elsewhere (for
+      # example, in `miri-test` above), as at the moment we can't easily build
+      # the `proc_macro` runtime with sanitizers on. IIUC doing this would
+      # require a custom rustc build, and... lol nope.
+      #
+      # This would mean only part of the code running under the sanitizer would
+      # actually include the sanitizer's checks, which is a recipe for false
+      # positives, so we just skip it, the generated code is what we care
+      # about anyway.
+      run: |
+        cargo test -Zbuild-std --verbose --target=x86_64-unknown-linux-gnu --no-default-features
+        cargo test -Zbuild-std --verbose --target=x86_64-unknown-linux-gnu --all-features

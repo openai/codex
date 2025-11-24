@@ -1,0 +1,18 @@
+[package]
+name = "ena"
+description = "Union-find, congruence closure, and other unification code. Based on code from rustc."
+license = "MIT OR Apache-2.0"
+homepage = "https://github.com/rust-lang/ena"
+repository = "https://github.com/rust-lang/ena"
+version = "0.14.3"
+authors = ["Niko Matsakis <niko@alum.mit.edu>"]
+readme = "README.md"
+keywords = ["unification", "union-find"]
+
+[features]
+bench = [ ]
+persistent = [ "dogged" ]
+
+[dependencies]
+dogged = { version = "0.2.0", optional = true }
+log = "0.4"

@@ -1,0 +1,53 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        toolchain: [stable, 1.36]
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: ${{ matrix.toolchain }}
+          components: clippy
+      - name: Build
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+      - name: Test
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+      - name: Clippy
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+      - name: Docs
+        uses: actions-rs/cargo@v1
+        with:
+          command: doc
+      - name: Build for no_std
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --no-default-features
+      - name: Test for no_std
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --no-default-features
+      - name: Clippy for no_std
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: --no-default-features
+      - name: Docs for no_std
+        uses: actions-rs/cargo@v1
+        with:
+          command: doc
+          args: --no-default-features

@@ -1,0 +1,18 @@
+{
+  "language": {
+    "valid": ["en", "it", "pl", "de", "fr", "cs", "csb", "und", "ru", "nb", "NB", "UK", "pL", "Zh", "ES"],
+    "invalid": ["", "1", "$", "a1", "1211", "as_sa^a", "-0we", "3e3", "kk$$22", "testingaverylongstring"]
+  },
+  "script": {
+    "valid": ["Latn", "latn", "Arab", "xxxx", "Flan", "fAlA", "oOoO", "pPlQ", "esta", "RUSS"],
+    "invalid": ["", "1", "$", "a1", "1211", "assaa", "-0we", "3e3", "kk$$22", "testingaverylongstring"]
+  },
+  "region": {
+    "valid": ["DE", "321", "zh", "IA", "fN", "rU", "ru", "RU", "Ru", "CN", "AR"],
+    "invalid": ["", "1", "$", "a1", "1211", "assaa", "-0we", "3e3", "kk$$22", "testingaverylongstring"]
+  },
+  "variant": {
+    "valid": ["macos", "MaCoS", "windows", "posix", "POSIX", "Posix", "linux", "lINUX", "mAcOs", "testing", "WWWWWW"],
+    "invalid": ["", "1", "$", "a1", "a211", "ass__aa", "-0we", "3e3", "kk$$22", "testingaverylongstring"]
+  }
+}

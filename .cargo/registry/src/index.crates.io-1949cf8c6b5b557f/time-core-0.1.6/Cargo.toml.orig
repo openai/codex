@@ -1,0 +1,19 @@
+[package]
+name = "time-core"
+version = "0.1.6"
+authors = ["Jacob Pratt <open-source@jhpratt.dev>", "Time contributors"]
+edition = "2021"
+rust-version = "1.81.0"
+repository = "https://github.com/time-rs/time"
+keywords = ["date", "time", "calendar", "duration"]
+categories = ["date-and-time"]
+license = "MIT OR Apache-2.0"
+description = "This crate is an implementation detail and should not be relied upon directly."
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--generate-link-to-definition"]
+
+[lints]
+workspace = true
+
+[dependencies]

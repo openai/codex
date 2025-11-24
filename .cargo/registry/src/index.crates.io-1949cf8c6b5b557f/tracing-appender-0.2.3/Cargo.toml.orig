@@ -1,0 +1,42 @@
+[package]
+name = "tracing-appender"
+version = "0.2.3"
+authors = [
+    "Zeki Sherif <zekshi@amazon.com>",
+    "Tokio Contributors <team@tokio.rs>"
+]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/tokio-rs/tracing"
+homepage = "https://tokio.rs"
+description = """
+Provides utilities for file appenders and making non-blocking writers.
+"""
+categories = [
+    "development-tools::debugging",
+    "asynchronous",
+]
+keywords = ["logging", "tracing", "file-appender", "non-blocking-writer"]
+edition = "2018"
+rust-version = "1.63.0"
+
+[dependencies]
+crossbeam-channel = "0.5.6"
+time = { version = "0.3.2", default-features = false, features = ["formatting", "parsing"] }
+parking_lot = { optional = true, version = "0.12.1" }
+thiserror = "1"
+
+[dependencies.tracing-subscriber]
+path = "../tracing-subscriber"
+version = "0.3.18"
+default-features = false
+features = ["fmt", "std"]
+
+[dev-dependencies]
+criterion = { version = "0.3.6", default-features = false }
+tracing = { path = "../tracing", version = "0.1.35" }
+tempfile = "3"
+
+[[bench]]
+name = "bench"
+harness = false

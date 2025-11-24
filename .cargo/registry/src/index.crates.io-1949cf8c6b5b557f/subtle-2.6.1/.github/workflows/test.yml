@@ -1,0 +1,64 @@
+on: [push, pull_request]
+
+name: Test
+
+jobs:
+  test:
+    name: cargo test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust:
+          - stable
+          - beta
+          - nightly
+          - 1.60.0
+    steps:
+      - name: checkout
+        uses: actions/checkout@v2
+      - name: toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: ${{ matrix.rust }}
+          target: thumbv7em-none-eabi
+          override: true
+      - name: test
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+      - name: nightly
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --features nightly
+      - name: no-default-features
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --no-default-features
+      - name: std
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --no-default-features --features std
+      - name: std const-generics
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --no-default-features --features "std const-generics"
+      - name: std i128
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --no-default-features --features "std i128"
+      - name: std i128 const-generics
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --no-default-features --features "std i128 const-generics"
+      - name: no std build
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --no-default-features --target thumbv7em-none-eabi

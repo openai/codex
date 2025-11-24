@@ -1,0 +1,38 @@
+[package]
+name = "openssl"
+version = "0.10.73"
+authors = ["Steven Fackler <sfackler@gmail.com>"]
+license = "Apache-2.0"
+description = "OpenSSL bindings"
+repository = "https://github.com/sfackler/rust-openssl"
+readme = "README.md"
+keywords = ["crypto", "tls", "ssl", "dtls"]
+categories = ["cryptography", "api-bindings"]
+edition = "2021"
+rust-version = "1.63.0"
+
+# these are deprecated and don't do anything anymore
+[features]
+v101 = []
+v102 = []
+v110 = []
+v111 = []
+
+vendored = ['ffi/vendored']
+bindgen = ['ffi/bindgen']
+unstable_boringssl = ["ffi/unstable_boringssl"]
+aws-lc = ["ffi/aws-lc"]
+default = []
+
+[dependencies]
+bitflags = "2.2.1"
+cfg-if = "1.0"
+foreign-types = "0.3.1"
+libc = "0.2"
+once_cell = "1.5.2"
+
+openssl-macros = { version = "0.1.1", path = "../openssl-macros" }
+ffi = { package = "openssl-sys", version = "0.9.109", path = "../openssl-sys" }
+
+[dev-dependencies]
+hex = "0.4"

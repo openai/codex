@@ -1,0 +1,29 @@
+[package]
+name = "fd-lock"
+version = "4.0.4"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/yoshuawuyts/fd-lock"
+documentation = "https://docs.rs/fd-lock"
+description = "Advisory cross-platform lock on a file using a file descriptor to it."
+keywords = ["file", "fd", "lock", "windows", "unix"]
+categories = ["filesystem", "os", "os::macos-apis", "os::unix-apis", "os::windows-apis"]
+authors = ["Yoshua Wuyts <yoshuawuyts@gmail.com>"]
+readme = "README.md"
+edition = "2021"
+
+[dependencies]
+cfg-if = "1.0.0"
+
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = ">=0.52.0, <0.60.0"
+features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+]
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.0.0", features = ["fs"] }
+
+[dev-dependencies]
+tempfile = "3.0.8"

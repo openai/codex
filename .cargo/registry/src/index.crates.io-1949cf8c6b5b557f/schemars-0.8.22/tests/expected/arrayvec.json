@@ -1,0 +1,10 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Array_up_to_size_16_of_int32",
+  "type": "array",
+  "items": {
+    "type": "integer",
+    "format": "int32"
+  },
+  "maxItems": 16
+}

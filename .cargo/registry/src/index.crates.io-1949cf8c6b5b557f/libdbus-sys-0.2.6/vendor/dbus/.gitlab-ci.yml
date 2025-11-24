@@ -1,0 +1,186 @@
+# Copyright © 2015-2018 Collabora Ltd.
+#
+# Permission is hereby granted, free of charge, to any person
+# obtaining a copy of this software and associated documentation files
+# (the "Software"), to deal in the Software without restriction,
+# including without limitation the rights to use, copy, modify, merge,
+# publish, distribute, sublicense, and/or sell copies of the Software,
+# and to permit persons to whom the Software is furnished to do so,
+# subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be
+# included in all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+# EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+# NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+# BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+# ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+# CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+image: debian:bullseye-slim
+
+stages:
+  - 'build docker'
+  - build
+
+variables:
+  ci_in_docker: "yes"
+  ci_local_packages: "yes"
+  ci_parallel: "2"
+  ci_sudo: "yes"
+  ci_distro: "debian"
+  ci_suite: "bullseye"
+  ###
+  # IMPORTANT
+  # These are the version tags for the docker images the CI runs against.
+  # If you are hacking on them or need a them to rebuild, its enough
+  # to change any part of the string of the image you want.
+  ###
+  WINDOWS_TAG: "2022-01-07.1"
+
+  UPSTREAM_BRANCH: 'master'
+  UPSTREAM_REPO: 'dbus/dbus'
+  WINDOWS_AMD64_SUFFIX: 'amd64/windows'
+  WINDOWS_IMAGE: "$CI_REGISTRY_IMAGE/$WINDOWS_AMD64_SUFFIX:$WINDOWS_TAG-$UPSTREAM_BRANCH"
+  WINDOWS_UPSTREAM_IMAGE: "$CI_REGISTRY/$UPSTREAM_REPO/$WINDOWS_AMD64_SUFFIX:$WINDOWS_TAG-$UPSTREAM_BRANCH"
+
+
+windows amd64 docker:
+  stage: "build docker"
+  variables:
+    # this file needs to be relative to docker/windows/ subdir
+    # as it makes life easier in the powershell script
+    DOCKERFILE: "tools/docker/windows/Dockerfile"
+  timeout: 2h 30m
+  tags:
+    - windows
+    - shell
+    - "1809"
+  script:
+    # We need to pass an array and to resolve the env vars, so we can't use a variable:
+    - $DOCKER_BUILD_ARGS = @("--build-arg", "DEFAULT_BRANCH=$UPSTREAM_BRANCH")
+
+    - "& tools/docker/windows/container.ps1 $CI_REGISTRY $CI_REGISTRY_USER $CI_REGISTRY_PASSWORD $WINDOWS_IMAGE $WINDOWS_UPSTREAM_IMAGE $DOCKERFILE"
+    - |
+      if (!($?)) {
+        echo "Failed to build the image"
+        Exit 1
+      }
+
+.debian-build:
+  stage: build
+  image: "debian:bullseye-slim"
+  cache:
+    key: ${CI_JOB_NAME}
+    paths:
+      - .ccache/
+  before_script:
+    - ./tools/ci-install.sh
+    - mkdir -p .ccache
+    - export CCACHE_BASEDIR="$(pwd)"
+    - export CCACHE_DIR="$CCACHE_BASEDIR/.ccache"
+    # Debian's ccache package creates symlinks here for all supported
+    # compilers
+    - export PATH="/usr/lib/ccache:$PATH"
+  script:
+    - chown -R user .
+    - runuser -u user ./tools/ci-build.sh
+
+production:
+  extends: .debian-build
+  variables:
+    ci_variant: "production"
+
+debug:
+  extends: .debian-build
+  variables:
+    ci_variant: "debug"
+
+reduced:
+  extends: .debian-build
+  when: manual
+  variables:
+    ci_variant: "reduced"
+
+legacy:
+  extends: .debian-build
+  when: manual
+  variables:
+    ci_variant: "legacy"
+
+cmake:
+  extends: .debian-build
+  variables:
+    ci_buildsys: "cmake-dist"
+
+i686-w64-mingw32-debug:
+  extends: .debian-build
+  variables:
+    ci_host: "i686-w64-mingw32"
+    ci_variant: "debug"
+
+i686-w64-mingw32-cmake:
+  extends: .debian-build
+  when: manual
+  variables:
+    ci_buildsys: "cmake"
+    ci_host: "i686-w64-mingw32"
+
+x86_64-w64-mingw32:
+  extends: .debian-build
+  variables:
+    ci_host: "x86_64-w64-mingw32"
+
+x86_64-w64-mingw32-cmake-debug:
+  extends: .debian-build
+  variables:
+    ci_buildsys: "cmake"
+    ci_host: "x86_64-w64-mingw32"
+    ci_variant: "debug"
+
+buster:
+  extends: .debian-build
+  when: manual
+  image: "debian:buster-slim"
+  variables:
+    ci_suite: "buster"
+
+.win-build:
+  image: $WINDOWS_IMAGE
+  stage: build
+  tags:
+    - 'docker'
+    - 'windows'
+    - '1809'
+  needs:
+    - "windows amd64 docker"
+  timeout: '2h'
+  before_script:
+    - $ErrorActionPreference = "Stop"
+    - $WarningPreference = "Stop"
+    - $env:DBUS_TEST_MALLOC_FAILURES = 0
+    - $env:PATH += ";C:\bin"
+
+windows-cmake-mingw-ucrt64:
+  extends: .win-build
+  script:
+    - $env:MSYSTEM = "UCRT64"
+    - $env:CHERE_INVOKING = "1"
+    - $env:MSYS2_PATH_TYPE = "inherit"
+    - $env:PATH += ";C:\msys64\usr\bin"
+    # FIXME: glib from msys2 has issues, disable it for now
+    - C:\msys64\usr\bin\bash -lc 'cmake -G \"MinGW Makefiles\" -S . -B build -DDBUS_WITH_GLIB=OFF && cmake --build build --config Release'
+
+windows-cmake-vs15:
+  extends: .win-build
+  script:
+    - cmake -DCMAKE_PREFIX_PATH=C:/ -G "Visual Studio 15 2017 Win64" -DCMAKE_BUILD_TYPE=Debug -DDBUS_ENABLE_VERBOSE_MODE=OFF -S . -B build
+    - cmake --build build --config Debug
+    - cmake --install build --config Debug
+    # FIXME: a few tests timeout on gitlab runner for unknown reason
+    - cd build ; ctest -C Debug -VV --timeout 1200 -E '(dbus-daemon|monitor)'
+
+# vim:set sw=2 sts=2 et:

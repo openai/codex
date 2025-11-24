@@ -1,0 +1,478 @@
+# -*- mode: perl; -*-
+# Copyright 2016-2024 The OpenSSL Project Authors. All Rights Reserved.
+#
+# Licensed under the Apache License 2.0 (the "License").  You may not use
+# this file except in compliance with the License.  You can obtain a copy
+# in the file LICENSE in the source distribution or at
+# https://www.openssl.org/source/license.html
+
+
+## Test NPN. Note that NPN is only supported up to TLSv1.2
+
+use strict;
+use warnings;
+
+package ssltests;
+
+our @tests = (
+    {
+        name => "npn-simple",
+        server => {
+            extra => {
+                "NPNProtocols" => "foo",
+            },
+        },
+        client => {
+            extra => {
+                "NPNProtocols" => "foo",
+            },
+            "MaxProtocol" => "TLSv1.2"
+        },
+        test => {
+            "ExpectedNPNProtocol" => "foo",
+        },
+    },
+    {
+        name => "npn-client-finds-match",
+        server => {
+            extra => {
+                "NPNProtocols" => "baz,bar",
+            },
+        },
+        client => {
+            extra => {
+                "NPNProtocols" => "foo,bar",
+            },
+            "MaxProtocol" => "TLSv1.2"
+        },
+        test => {
+            "ExpectedNPNProtocol" => "bar",
+        },
+    },
+    {
+        name => "npn-client-honours-server-pref",
+        server => {
+            extra => {
+                "NPNProtocols" => "bar,foo",
+            },
+        },
+        client => {
+            extra => {
+                "NPNProtocols" => "foo,bar",
+            },
+            "MaxProtocol" => "TLSv1.2"
+        },
+        test => {
+            "ExpectedNPNProtocol" => "bar",
+        },
+    },
+    {
+        name => "npn-client-first-pref-on-mismatch",
+        server => {
+            extra => {
+                "NPNProtocols" => "baz",
+            },
+        },
+        client => {
+            extra => {
+                "NPNProtocols" => "foo,bar",
+            },
+            "MaxProtocol" => "TLSv1.2"
+        },
+        test => {
+            "ExpectedNPNProtocol" => "foo",
+        },
+    },
+    {
+        name => "npn-no-server-support",
+        server => {},
+        client => {
+            extra => {
+                "NPNProtocols" => "foo",
+            },
+            "MaxProtocol" => "TLSv1.2"
+        },
+        test => {
+            "ExpectedNPNProtocol" => undef,
+        },
+    },
+    {
+        name => "npn-no-client-support",
+        server => {
+            extra => {
+                "NPNProtocols" => "foo",
+            },
+        },
+        client => {
+            "MaxProtocol" => "TLSv1.2"
+        },
+        test => {
+            "ExpectedNPNProtocol" => undef,
+        },
+    },
+    {
+        name => "npn-empty-client-list",
+        server => {
+            extra => {
+                "NPNProtocols" => "foo",
+            },
+        },
+        client => {
+            extra => {
+                "NPNProtocols" => "",
+            },
+            "MaxProtocol" => "TLSv1.2"
+        },
+        test => {
+            "ExpectedResult" => "ClientFail",
+            "ExpectedClientAlert" => "HandshakeFailure"
+        },
+    },
+    {
+        name => "npn-empty-server-list",
+        server => {
+            extra => {
+                "NPNProtocols" => "",
+            },
+        },
+        client => {
+            extra => {
+                "NPNProtocols" => "foo",
+            },
+            "MaxProtocol" => "TLSv1.2"
+        },
+        test => {
+            "ExpectedNPNProtocol" => "foo"
+        },
+    },
+    {
+        name => "npn-with-sni-no-context-switch",
+        server => {
+            extra => {
+                "NPNProtocols" => "foo",
+                "ServerNameCallback" => "IgnoreMismatch",
+            },
+        },
+        server2 => {
+            extra => {
+                "NPNProtocols" => "bar",
+            },
+        },
+        client => {
+            extra => {
+                "NPNProtocols" => "foo,bar",
+                "ServerName" => "server1",
+            },
+            "MaxProtocol" => "TLSv1.2"
+        },
+        test => {
+            "ExpectedServerName" => "server1",
+            "ExpectedNPNProtocol" => "foo",
+        },
+    },
+    {
+        name => "npn-with-sni-context-switch",
+        server => {
+            extra => {
+                "NPNProtocols" => "foo",
+                "ServerNameCallback" => "IgnoreMismatch",
+            },
+        },
+        server2 => {
+            extra => {
+                "NPNProtocols" => "bar",
+            },
+        },
+        client => {
+            extra => {
+                "NPNProtocols" => "foo,bar",
+                "ServerName" => "server2",
+            },
+            "MaxProtocol" => "TLSv1.2"
+        },
+        test => {
+            "ExpectedServerName" => "server2",
+            "ExpectedNPNProtocol" => "bar",
+        },
+    },
+    {
+        name => "npn-selected-sni-server-supports-npn",
+        server => {
+            extra => {
+                "ServerNameCallback" => "IgnoreMismatch",
+            },
+        },
+        server2 => {
+            extra => {
+                "NPNProtocols" => "bar",
+            },
+        },
+        client => {
+            extra => {
+                "NPNProtocols" => "foo,bar",
+                "ServerName" => "server2",
+            },
+            "MaxProtocol" => "TLSv1.2"
+        },
+        test => {
+            "ExpectedServerName" => "server2",
+            "ExpectedNPNProtocol" => "bar",
+        },
+    },
+    {
+        name => "npn-selected-sni-server-does-not-support-npn",
+        server => {
+            extra => {
+                "NPNProtocols" => "bar",
+                "ServerNameCallback" => "IgnoreMismatch",
+            },
+        },
+        server2 => { },
+        client => {
+            extra => {
+                "NPNProtocols" => "foo,bar",
+                "ServerName" => "server2",
+            },
+            "MaxProtocol" => "TLSv1.2"
+        },
+        test => {
+             "ExpectedServerName" => "server2",
+             "ExpectedNPNProtocol" => undef,
+        },
+    },
+    {
+        name => "alpn-preferred-over-npn",
+        server => {
+            extra => {
+                "ALPNProtocols" => "foo",
+                "NPNProtocols" => "bar",
+            },
+        },
+        client => {
+            extra => {
+                "ALPNProtocols" => "foo",
+                "NPNProtocols" => "bar",
+            },
+            "MaxProtocol" => "TLSv1.2"
+        },
+        test => {
+            "ExpectedALPNProtocol" => "foo",
+            "ExpectedNPNProtocol" => undef,
+        },
+    },
+    {
+        name => "sni-npn-preferred-over-alpn",
+        server => {
+            extra => {
+                "ServerNameCallback" => "IgnoreMismatch",
+                "ALPNProtocols" => "foo",
+            },
+        },
+        server2 => {
+            extra => {
+                "NPNProtocols" => "bar",
+            },
+        },
+        client => {
+            extra => {
+                "ServerName" => "server2",
+                "ALPNProtocols" => "foo",
+                "NPNProtocols" => "bar",
+            },
+            "MaxProtocol" => "TLSv1.2"
+        },
+        test => {
+            "ExpectedALPNProtocol" => undef,
+            "ExpectedNPNProtocol" => "bar",
+            "ExpectedServerName" => "server2",  
+        },
+    },
+    {
+        name => "npn-simple-resumption",
+        server => {
+            extra => {
+                "NPNProtocols" => "foo",
+            },
+        },
+        client => {
+            extra => {
+                "NPNProtocols" => "foo",
+            },
+            "MaxProtocol" => "TLSv1.2"
+        },
+        test => {
+            "HandshakeMode" => "Resume",
+            "ResumptionExpected" => "Yes",
+            "ExpectedNPNProtocol" => "foo",
+        },
+    },
+    {
+        name => "npn-server-switch-resumption",
+        server => {
+            extra => {
+                "NPNProtocols" => "bar,foo",
+            },
+        },
+        resume_server => {
+            extra => {
+                "NPNProtocols" => "baz,foo",
+            },
+        },
+        client => {
+            extra => {
+                "NPNProtocols" => "foo,bar,baz",
+            },
+            "MaxProtocol" => "TLSv1.2"
+        },
+        test => {
+            "HandshakeMode" => "Resume",
+            "ResumptionExpected" => "Yes",
+            "ExpectedNPNProtocol" => "baz",
+        },
+    },
+    {
+        name => "npn-client-switch-resumption",
+        server => {
+            extra => {
+                "NPNProtocols" => "foo,bar,baz",
+            },
+        },
+        client => {
+            extra => {
+                "NPNProtocols" => "foo,baz",
+            },
+            "MaxProtocol" => "TLSv1.2"
+        },
+        resume_client => {
+            extra => {
+                "NPNProtocols" => "bar,baz",
+            },
+            "MaxProtocol" => "TLSv1.2"
+        },
+        test => {
+            "HandshakeMode" => "Resume",
+            "ResumptionExpected" => "Yes",
+            "ExpectedNPNProtocol" => "bar",
+        },
+    },
+    {
+        name => "npn-client-first-pref-on-mismatch-resumption",
+        server => {
+            extra => {
+                "NPNProtocols" => "bar",
+            },
+        },
+        resume_server => {
+            extra => {
+                "NPNProtocols" => "baz",
+            },
+        },
+        client => {
+            extra => {
+                "NPNProtocols" => "foo,bar",
+            },
+            "MaxProtocol" => "TLSv1.2"
+        },
+        test => {
+            "HandshakeMode" => "Resume",
+            "ResumptionExpected" => "Yes",
+            "ExpectedNPNProtocol" => "foo",
+        },
+    },
+    {
+        name => "npn-no-server-support-resumption",
+        server => {
+            extra => {
+                "NPNProtocols" => "foo",
+            },
+        },
+        resume_server => { },
+        client => {
+            extra => {
+                "NPNProtocols" => "foo",
+            },
+            "MaxProtocol" => "TLSv1.2"
+        },
+        test => {
+            "HandshakeMode" => "Resume",
+            "ResumptionExpected" => "Yes",
+            "ExpectedNPNProtocol" => undef,
+        },
+    },
+    {
+        name => "npn-no-client-support-resumption",
+        server => {
+            extra => {
+                "NPNProtocols" => "foo",
+            },
+        },
+        client => {
+            extra => {
+                "NPNProtocols" => "foo",
+            },
+            "MaxProtocol" => "TLSv1.2"
+        },
+        resume_client => {
+            "MaxProtocol" => "TLSv1.2"
+        },
+        test => {
+            "HandshakeMode" => "Resume",
+            "ResumptionExpected" => "Yes",
+            "ExpectedNPNProtocol" => undef,
+        },
+    },
+    {
+        name => "alpn-preferred-over-npn-resumption",
+        server => {
+            extra => {
+                "NPNProtocols" => "bar",
+            },
+        },
+        resume_server => {
+            extra => {
+                "ALPNProtocols" => "foo",
+                "NPNProtocols" => "baz",
+            },
+        },
+        client => {
+            extra => {
+                "ALPNProtocols" => "foo",
+                "NPNProtocols" => "bar,baz",
+            },
+            "MaxProtocol" => "TLSv1.2"
+        },
+        test => {
+            "HandshakeMode" => "Resume",
+            "ResumptionExpected" => "Yes",
+            "ExpectedALPNProtocol" => "foo",
+            "ExpectedNPNProtocol" => undef,
+        },
+    },
+    {
+        name => "npn-used-if-alpn-not-supported-resumption",
+        server => {
+            extra => {
+                "ALPNProtocols" => "foo",
+                "NPNProtocols" => "bar",
+            },
+        },
+        resume_server => {
+            extra => {
+                "NPNProtocols" => "baz",
+            },
+        },
+        client => {
+            extra => {
+                "ALPNProtocols" => "foo",
+                "NPNProtocols" => "bar,baz",
+            },
+            "MaxProtocol" => "TLSv1.2"
+        },
+        test => {
+            "HandshakeMode" => "Resume",
+            "ResumptionExpected" => "Yes",
+            "ExpectedALPNProtocol" => undef,
+            "ExpectedNPNProtocol" => "baz",
+        },
+    },
+);

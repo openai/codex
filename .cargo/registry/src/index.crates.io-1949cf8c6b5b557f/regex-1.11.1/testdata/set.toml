@@ -1,0 +1,641 @@
+# Basic multi-regex tests.
+
+[[test]]
+name = "basic10"
+regex = ["a", "a"]
+haystack = "a"
+matches = [
+  { id = 0, span = [0, 1] },
+  { id = 1, span = [0, 1] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "basic10-leftmost-first"
+regex = ["a", "a"]
+haystack = "a"
+matches = [
+  { id = 0, span = [0, 1] },
+]
+match-kind = "leftmost-first"
+search-kind = "leftmost"
+
+[[test]]
+name = "basic20"
+regex = ["a", "a"]
+haystack = "ba"
+matches = [
+  { id = 0, span = [1, 2] },
+  { id = 1, span = [1, 2] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "basic30"
+regex = ["a", "b"]
+haystack = "a"
+matches = [
+  { id = 0, span = [0, 1] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "basic40"
+regex = ["a", "b"]
+haystack = "b"
+matches = [
+  { id = 1, span = [0, 1] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "basic50"
+regex = ["a|b", "b|a"]
+haystack = "b"
+matches = [
+  { id = 0, span = [0, 1] },
+  { id = 1, span = [0, 1] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "basic60"
+regex = ["foo", "oo"]
+haystack = "foo"
+matches = [
+  { id = 0, span = [0, 3] },
+  { id = 1, span = [1, 3] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "basic60-leftmost-first"
+regex = ["foo", "oo"]
+haystack = "foo"
+matches = [
+  { id = 0, span = [0, 3] },
+]
+match-kind = "leftmost-first"
+search-kind = "leftmost"
+
+[[test]]
+name = "basic61"
+regex = ["oo", "foo"]
+haystack = "foo"
+matches = [
+  { id = 1, span = [0, 3] },
+  { id = 0, span = [1, 3] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "basic61-leftmost-first"
+regex = ["oo", "foo"]
+haystack = "foo"
+matches = [
+  { id = 1, span = [0, 3] },
+]
+match-kind = "leftmost-first"
+search-kind = "leftmost"
+
+[[test]]
+name = "basic70"
+regex = ["abcd", "bcd", "cd", "d"]
+haystack = "abcd"
+matches = [
+  { id = 0, span = [0, 4] },
+  { id = 1, span = [1, 4] },
+  { id = 2, span = [2, 4] },
+  { id = 3, span = [3, 4] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "basic71"
+regex = ["bcd", "cd", "d", "abcd"]
+haystack = "abcd"
+matches = [
+  { id = 3, span = [0, 4] },
+]
+match-kind = "leftmost-first"
+search-kind = "leftmost"
+
+[[test]]
+name = "basic80"
+regex = ["^foo", "bar$"]
+haystack = "foo"
+matches = [
+  { id = 0, span = [0, 3] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "basic81"
+regex = ["^foo", "bar$"]
+haystack = "foo bar"
+matches = [
+  { id = 0, span = [0, 3] },
+  { id = 1, span = [4, 7] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "basic82"
+regex = ["^foo", "bar$"]
+haystack = "bar"
+matches = [
+  { id = 1, span = [0, 3] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "basic90"
+regex = ["[a-z]+$", "foo"]
+haystack = "01234 foo"
+matches = [
+  { id = 0, span = [8, 9] },
+  { id = 0, span = [7, 9] },
+  { id = 0, span = [6, 9] },
+  { id = 1, span = [6, 9] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "basic91"
+regex = ["[a-z]+$", "foo"]
+haystack = "foo 01234"
+matches = [
+  { id = 1, span = [0, 3] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "basic100"
+regex = [".*?", "a"]
+haystack = "zzza"
+matches = [
+  { id = 0, span = [0, 0] },
+  { id = 0, span = [1, 1] },
+  { id = 0, span = [0, 1] },
+  { id = 0, span = [2, 2] },
+  { id = 0, span = [1, 2] },
+  { id = 0, span = [0, 2] },
+  { id = 0, span = [3, 3] },
+  { id = 0, span = [2, 3] },
+  { id = 0, span = [1, 3] },
+  { id = 0, span = [0, 3] },
+  { id = 0, span = [4, 4] },
+  { id = 0, span = [3, 4] },
+  { id = 0, span = [2, 4] },
+  { id = 0, span = [1, 4] },
+  { id = 0, span = [0, 4] },
+  { id = 1, span = [3, 4] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "basic101"
+regex = [".*", "a"]
+haystack = "zzza"
+matches = [
+  { id = 0, span = [0, 0] },
+  { id = 0, span = [1, 1] },
+  { id = 0, span = [0, 1] },
+  { id = 0, span = [2, 2] },
+  { id = 0, span = [1, 2] },
+  { id = 0, span = [0, 2] },
+  { id = 0, span = [3, 3] },
+  { id = 0, span = [2, 3] },
+  { id = 0, span = [1, 3] },
+  { id = 0, span = [0, 3] },
+  { id = 0, span = [4, 4] },
+  { id = 0, span = [3, 4] },
+  { id = 0, span = [2, 4] },
+  { id = 0, span = [1, 4] },
+  { id = 0, span = [0, 4] },
+  { id = 1, span = [3, 4] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "basic102"
+regex = [".*", "a"]
+haystack = "zzz"
+matches = [
+  { id = 0, span = [0, 0] },
+  { id = 0, span = [1, 1] },
+  { id = 0, span = [0, 1] },
+  { id = 0, span = [2, 2] },
+  { id = 0, span = [1, 2] },
+  { id = 0, span = [0, 2] },
+  { id = 0, span = [3, 3] },
+  { id = 0, span = [2, 3] },
+  { id = 0, span = [1, 3] },
+  { id = 0, span = [0, 3] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "basic110"
+regex = ['\ba\b']
+haystack = "hello a bye"
+matches = [
+  { id = 0, span = [6, 7] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "basic111"
+regex = ['\ba\b', '\be\b']
+haystack = "hello a bye e"
+matches = [
+  { id = 0, span = [6, 7] },
+  { id = 1, span = [12, 13] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "basic120"
+regex = ["a"]
+haystack = "a"
+matches = [
+  { id = 0, span = [0, 1] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "basic121"
+regex = [".*a"]
+haystack = "a"
+matches = [
+  { id = 0, span = [0, 1] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "basic122"
+regex = [".*a", "β"]
+haystack = "β"
+matches = [
+  { id = 1, span = [0, 2] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "basic130"
+regex = ["ab", "b"]
+haystack = "ba"
+matches = [
+  { id = 1, span = [0, 1] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+# These test cases where one of the regexes matches the empty string.
+
+[[test]]
+name = "empty10"
+regex = ["", "a"]
+haystack = "abc"
+matches = [
+  { id = 0, span = [0, 0] },
+  { id = 1, span = [0, 1] },
+  { id = 0, span = [1, 1] },
+  { id = 0, span = [2, 2] },
+  { id = 0, span = [3, 3] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "empty10-leftmost-first"
+regex = ["", "a"]
+haystack = "abc"
+matches = [
+  { id = 0, span = [0, 0] },
+  { id = 0, span = [1, 1] },
+  { id = 0, span = [2, 2] },
+  { id = 0, span = [3, 3] },
+]
+match-kind = "leftmost-first"
+search-kind = "leftmost"
+
+[[test]]
+name = "empty11"
+regex = ["a", ""]
+haystack = "abc"
+matches = [
+  { id = 1, span = [0, 0] },
+  { id = 0, span = [0, 1] },
+  { id = 1, span = [1, 1] },
+  { id = 1, span = [2, 2] },
+  { id = 1, span = [3, 3] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "empty11-leftmost-first"
+regex = ["a", ""]
+haystack = "abc"
+matches = [
+  { id = 0, span = [0, 1] },
+  { id = 1, span = [2, 2] },
+  { id = 1, span = [3, 3] },
+]
+match-kind = "leftmost-first"
+search-kind = "leftmost"
+
+[[test]]
+name = "empty20"
+regex = ["", "b"]
+haystack = "abc"
+matches = [
+  { id = 0, span = [0, 0] },
+  { id = 0, span = [1, 1] },
+  { id = 1, span = [1, 2] },
+  { id = 0, span = [2, 2] },
+  { id = 0, span = [3, 3] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "empty20-leftmost-first"
+regex = ["", "b"]
+haystack = "abc"
+matches = [
+  { id = 0, span = [0, 0] },
+  { id = 0, span = [1, 1] },
+  { id = 0, span = [2, 2] },
+  { id = 0, span = [3, 3] },
+]
+match-kind = "leftmost-first"
+search-kind = "leftmost"
+
+[[test]]
+name = "empty21"
+regex = ["b", ""]
+haystack = "abc"
+matches = [
+  { id = 1, span = [0, 0] },
+  { id = 1, span = [1, 1] },
+  { id = 0, span = [1, 2] },
+  { id = 1, span = [2, 2] },
+  { id = 1, span = [3, 3] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "empty21-leftmost-first"
+regex = ["b", ""]
+haystack = "abc"
+matches = [
+  { id = 1, span = [0, 0] },
+  { id = 0, span = [1, 2] },
+  { id = 1, span = [3, 3] },
+]
+match-kind = "leftmost-first"
+search-kind = "leftmost"
+
+[[test]]
+name = "empty22"
+regex = ["(?:)", "b"]
+haystack = "abc"
+matches = [
+  { id = 0, span = [0, 0] },
+  { id = 0, span = [1, 1] },
+  { id = 1, span = [1, 2] },
+  { id = 0, span = [2, 2] },
+  { id = 0, span = [3, 3] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "empty23"
+regex = ["b", "(?:)"]
+haystack = "abc"
+matches = [
+  { id = 1, span = [0, 0] },
+  { id = 1, span = [1, 1] },
+  { id = 0, span = [1, 2] },
+  { id = 1, span = [2, 2] },
+  { id = 1, span = [3, 3] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "empty30"
+regex = ["", "z"]
+haystack = "abc"
+matches = [
+  { id = 0, span = [0, 0] },
+  { id = 0, span = [1, 1] },
+  { id = 0, span = [2, 2] },
+  { id = 0, span = [3, 3] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "empty30-leftmost-first"
+regex = ["", "z"]
+haystack = "abc"
+matches = [
+  { id = 0, span = [0, 0] },
+  { id = 0, span = [1, 1] },
+  { id = 0, span = [2, 2] },
+  { id = 0, span = [3, 3] },
+]
+match-kind = "leftmost-first"
+search-kind = "leftmost"
+
+[[test]]
+name = "empty31"
+regex = ["z", ""]
+haystack = "abc"
+matches = [
+  { id = 1, span = [0, 0] },
+  { id = 1, span = [1, 1] },
+  { id = 1, span = [2, 2] },
+  { id = 1, span = [3, 3] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "empty31-leftmost-first"
+regex = ["z", ""]
+haystack = "abc"
+matches = [
+  { id = 1, span = [0, 0] },
+  { id = 1, span = [1, 1] },
+  { id = 1, span = [2, 2] },
+  { id = 1, span = [3, 3] },
+]
+match-kind = "leftmost-first"
+search-kind = "leftmost"
+
+[[test]]
+name = "empty40"
+regex = ["c(?:)", "b"]
+haystack = "abc"
+matches = [
+  { id = 1, span = [1, 2] },
+  { id = 0, span = [2, 3] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "empty40-leftmost-first"
+regex = ["c(?:)", "b"]
+haystack = "abc"
+matches = [
+  { id = 1, span = [1, 2] },
+  { id = 0, span = [2, 3] },
+]
+match-kind = "leftmost-first"
+search-kind = "leftmost"
+
+# These test cases where there are no matches.
+
+[[test]]
+name = "nomatch10"
+regex = ["a", "a"]
+haystack = "b"
+matches = []
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "nomatch20"
+regex = ["^foo", "bar$"]
+haystack = "bar foo"
+matches = []
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "nomatch30"
+regex = []
+haystack = "a"
+matches = []
+match-kind = "all"
+search-kind = "overlapping"
+
+[[test]]
+name = "nomatch40"
+regex = ["^rooted$", '\.log$']
+haystack = "notrooted"
+matches = []
+match-kind = "all"
+search-kind = "overlapping"
+
+# These test multi-regex searches with capture groups.
+#
+# NOTE: I wrote these tests in the course of developing a first class API for
+# overlapping capturing group matches, but ultimately removed that API because
+# the semantics for overlapping matches aren't totally clear. However, I've
+# left the tests because I believe the semantics for these patterns are clear
+# and because we can still test our "which patterns matched" APIs with them.
+
+[[test]]
+name = "caps-010"
+regex = ['^(\w+) (\w+)$', '^(\S+) (\S+)$']
+haystack = "Bruce Springsteen"
+matches = [
+  { id = 0, spans = [[0, 17], [0, 5], [6, 17]] },
+  { id = 1, spans = [[0, 17], [0, 5], [6, 17]] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+unicode = false
+utf8 = false
+
+[[test]]
+name = "caps-020"
+regex = ['^(\w+) (\w+)$', '^[A-Z](\S+) [A-Z](\S+)$']
+haystack = "Bruce Springsteen"
+matches = [
+  { id = 0, spans = [[0, 17], [0, 5], [6, 17]] },
+  { id = 1, spans = [[0, 17], [1, 5], [7, 17]] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+unicode = false
+utf8 = false
+
+[[test]]
+name = "caps-030"
+regex = ['^(\w+) (\w+)$', '^([A-Z])(\S+) ([A-Z])(\S+)$']
+haystack = "Bruce Springsteen"
+matches = [
+  { id = 0, spans = [[0, 17], [0, 5], [6, 17]] },
+  { id = 1, spans = [[0, 17], [0, 1], [1, 5], [6, 7], [7, 17]] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+unicode = false
+utf8 = false
+
+[[test]]
+name = "caps-110"
+regex = ['(\w+) (\w+)', '(\S+) (\S+)']
+haystack = "Bruce Springsteen"
+matches = [
+  { id = 0, spans = [[0, 17], [0, 5], [6, 17]] },
+]
+match-kind = "leftmost-first"
+search-kind = "leftmost"
+unicode = false
+utf8 = false
+
+[[test]]
+name = "caps-120"
+regex = ['(\w+) (\w+)', '(\S+) (\S+)']
+haystack = "&ruce $pringsteen"
+matches = [
+  { id = 1, spans = [[0, 17], [0, 5], [6, 17]] },
+]
+match-kind = "leftmost-first"
+search-kind = "leftmost"
+unicode = false
+utf8 = false
+
+[[test]]
+name = "caps-121"
+regex = ['(\w+) (\w+)', '(\S+) (\S+)']
+haystack = "&ruce $pringsteen Foo Bar"
+matches = [
+  { id = 1, spans = [[0, 17], [0, 5], [6, 17]] },
+  { id = 0, spans = [[18, 25], [18, 21], [22, 25]] },
+]
+match-kind = "leftmost-first"
+search-kind = "leftmost"
+unicode = false
+utf8 = false

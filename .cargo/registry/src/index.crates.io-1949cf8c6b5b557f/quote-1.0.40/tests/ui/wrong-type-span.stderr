@@ -1,0 +1,10 @@
+error[E0308]: mismatched types
+ --> tests/ui/wrong-type-span.rs:6:5
+  |
+6 |     quote_spanned!(span=> #x);
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+  |     |
+  |     expected `Span`, found `&str`
+  |     expected due to this
+  |
+  = note: this error originates in the macro `quote_spanned` (in Nightly builds, run with -Z macro-backtrace for more info)

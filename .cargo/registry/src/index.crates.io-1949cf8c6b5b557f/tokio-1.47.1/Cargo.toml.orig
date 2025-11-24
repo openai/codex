@@ -1,0 +1,185 @@
+[package]
+name = "tokio"
+# When releasing to crates.io:
+# - Remove path dependencies
+# - Update doc url
+#   - README.md
+# - Update CHANGELOG.md.
+# - Create "v1.x.y" git tag.
+version = "1.47.1"
+edition = "2021"
+rust-version = "1.70"
+authors = ["Tokio Contributors <team@tokio.rs>"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/tokio-rs/tokio"
+homepage = "https://tokio.rs"
+description = """
+An event-driven, non-blocking I/O platform for writing asynchronous I/O
+backed applications.
+"""
+categories = ["asynchronous", "network-programming"]
+keywords = ["io", "async", "non-blocking", "futures"]
+
+[features]
+# Include nothing by default
+default = []
+
+# enable everything
+full = [
+  "fs",
+  "io-util",
+  "io-std",
+  "macros",
+  "net",
+  "parking_lot",
+  "process",
+  "rt",
+  "rt-multi-thread",
+  "signal",
+  "sync",
+  "time",
+]
+
+fs = []
+io-util = ["bytes"]
+# stdin, stdout, stderr
+io-std = []
+macros = ["tokio-macros"]
+net = [
+  "libc",
+  "mio/os-poll",
+  "mio/os-ext",
+  "mio/net",
+  "socket2",
+  "windows-sys/Win32_Foundation",
+  "windows-sys/Win32_Security",
+  "windows-sys/Win32_Storage_FileSystem",
+  "windows-sys/Win32_System_Pipes",
+  "windows-sys/Win32_System_SystemServices",
+]
+process = [
+  "bytes",
+  "libc",
+  "mio/os-poll",
+  "mio/os-ext",
+  "mio/net",
+  "signal-hook-registry",
+  "windows-sys/Win32_Foundation",
+  "windows-sys/Win32_System_Threading",
+  "windows-sys/Win32_System_WindowsProgramming",
+]
+# Includes basic task execution capabilities
+rt = []
+rt-multi-thread = ["rt"]
+signal = [
+  "libc",
+  "mio/os-poll",
+  "mio/net",
+  "mio/os-ext",
+  "signal-hook-registry",
+  "windows-sys/Win32_Foundation",
+  "windows-sys/Win32_System_Console",
+]
+sync = []
+test-util = ["rt", "sync", "time"]
+time = []
+
+[dependencies]
+tokio-macros = { version = "~2.5.0", path = "../tokio-macros", optional = true }
+
+pin-project-lite = "0.2.11"
+
+# Everything else is optional...
+bytes = { version = "1.2.1", optional = true }
+mio = { version = "1.0.1", optional = true, default-features = false }
+parking_lot = { version = "0.12.0", optional = true }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+socket2 = { version = "0.6.0", optional = true, features = ["all"] }
+
+# Currently unstable. The API exposed by these features may be broken at any time.
+# Requires `--cfg tokio_unstable` to enable.
+[target.'cfg(tokio_unstable)'.dependencies]
+tracing = { version = "0.1.29", default-features = false, features = ["std"], optional = true } # Not in full
+
+[target.'cfg(all(tokio_uring, target_os = "linux"))'.dependencies]
+io-uring = { version = "0.7.6", default-features = false }
+libc = { version = "0.2.168" }
+mio = { version = "1.0.1", default-features = false, features = ["os-poll", "os-ext"] }
+slab = "0.4.9"
+
+# Currently unstable. The API exposed by these features may be broken at any time.
+# Requires `--cfg tokio_unstable` to enable.
+[target.'cfg(tokio_taskdump)'.dependencies]
+backtrace = { version = "0.3.58" }
+
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2.168", optional = true }
+signal-hook-registry = { version = "1.1.1", optional = true }
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = { version = "0.2.168" }
+nix = { version = "0.29.0", default-features = false, features = ["aio", "fs", "socket"] }
+
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.59"
+optional = true
+
+[target.'cfg(windows)'.dev-dependencies.windows-sys]
+version = "0.59"
+features = [
+  "Win32_Foundation",
+  "Win32_Security_Authorization",
+]
+
+[dev-dependencies]
+tokio-test = { version = "0.4.0", path = "../tokio-test" }
+tokio-stream = { version = "0.1", path = "../tokio-stream" }
+futures = { version = "0.3.0", features = ["async-await"] }
+mockall = "0.13.0"
+async-stream = "0.3"
+futures-concurrency = "7.6.3"
+
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+socket2 = "0.6.0"
+tempfile = "3.1.0"
+proptest = "1"
+
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]
+rand = "0.9"
+
+[target.'cfg(all(target_family = "wasm", not(target_os = "wasi")))'.dev-dependencies]
+wasm-bindgen-test = "0.3.0"
+
+[target.'cfg(target_os = "freebsd")'.dev-dependencies]
+mio-aio = { version = "1", features = ["tokio"] }
+
+[target.'cfg(loom)'.dev-dependencies]
+loom = { version = "0.7", features = ["futures", "checkpoint"] }
+
+[target.'cfg(all(tokio_unstable, target_has_atomic = "64"))'.dev-dependencies]
+tracing-mock = "= 0.1.0-beta.1"
+
+[package.metadata.docs.rs]
+all-features = true
+# enable unstable features in the documentation
+rustdoc-args = ["--cfg", "docsrs", "--cfg", "tokio_unstable", "--cfg", "tokio_taskdump"]
+# it's necessary to _also_ pass `--cfg tokio_unstable` and `--cfg tokio_taskdump`
+# to rustc, or else dependencies will not be enabled, and the docs build will fail.
+rustc-args = ["--cfg", "tokio_unstable", "--cfg", "tokio_taskdump"]
+
+[package.metadata.playground]
+features = ["full", "test-util"]
+
+[package.metadata.cargo_check_external_types]
+# The following are types that are allowed to be exposed in Tokio's public API.
+# The standard library is allowed by default.
+allowed_external_types = [
+  "bytes::buf::buf_impl::Buf",
+  "bytes::buf::buf_mut::BufMut",
+  "tokio_macros::*",
+]
+
+[lints]
+workspace = true

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Struct",
+  "type": "object",
+  "properties": {
+    "value": {
+      "foo": "bar"
+    },
+    "int": {
+      "type": [
+        "number",
+        "string"
+      ],
+      "format": "int32"
+    }
+  },
+  "required": [
+    "value",
+    "int"
+  ],
+  "obj": {
+    "array": [
+      null,
+      null
+    ]
+  },
+  "3": 3.0,
+  "pi": 3.14
+}

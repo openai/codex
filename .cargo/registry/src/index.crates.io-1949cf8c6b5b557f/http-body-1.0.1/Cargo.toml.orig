@@ -1,0 +1,30 @@
+[package]
+name = "http-body"
+# When releasing to crates.io:
+# - Remove path dependencies
+# - Update doc url
+#   - Cargo.toml
+#   - README.md
+# - Update CHANGELOG.md.
+# - Create "http-body-x.y.z" git tag.
+version = "1.0.1"
+authors = [
+  "Carl Lerche <me@carllerche.com>",
+  "Lucio Franco <luciofranco14@gmail.com>",
+  "Sean McArthur <sean@seanmonstar.com>",
+]
+edition = "2018"
+readme = "../README.md"
+documentation = "https://docs.rs/http-body"
+repository = "https://github.com/hyperium/http-body"
+license = "MIT"
+description = """
+Trait representing an asynchronous, streaming, HTTP request or response body.
+"""
+keywords = ["http"]
+categories = ["web-programming"]
+rust-version = "1.49"
+
+[dependencies]
+bytes = "1"
+http = "1"

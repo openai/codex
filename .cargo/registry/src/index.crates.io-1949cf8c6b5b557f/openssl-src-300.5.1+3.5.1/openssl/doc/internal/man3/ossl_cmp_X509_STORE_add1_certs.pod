@@ -1,0 +1,44 @@
+=pod
+
+=head1 NAME
+
+ossl_cmp_X509_STORE_add1_certs,
+ossl_cmp_X509_STORE_get1_certs
+- functions manipulating stores of certificates
+
+=head1 SYNOPSIS
+
+  #include <openssl/cmp_util.h>
+
+  int ossl_cmp_X509_STORE_add1_certs(X509_STORE *store, STACK_OF(X509) *certs,
+                                     int only_self_signed);
+  STACK_OF(X509) *ossl_cmp_X509_STORE_get1_certs(X509_STORE *store);
+
+=head1 DESCRIPTION
+
+ossl_cmp_X509_STORE_add1_certs() adds all or only self-signed certificates from
+the given stack to given store. The I<certs> parameter may be NULL.
+
+ossl_cmp_X509_STORE_get1_certs() retrieves a copy of all certificates in the
+given store.
+
+=head1 RETURN VALUES
+
+ossl_cmp_X509_STORE_add1_certs() returns 1 on success, 0 on error.
+
+ossl_cmp_X509_STORE_get1_certs() returns a list of certificates, NULL on error.
+
+=head1 HISTORY
+
+The OpenSSL CMP support was added in OpenSSL 3.0.
+
+=head1 COPYRIGHT
+
+Copyright 2007-2020 The OpenSSL Project Authors. All Rights Reserved.
+
+Licensed under the Apache License 2.0 (the "License").  You may not use
+this file except in compliance with the License.  You can obtain a copy
+in the file LICENSE in the source distribution or at
+L<https://www.openssl.org/source/license.html>.
+
+=cut

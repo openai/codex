@@ -1,0 +1,88 @@
+=pod
+
+=head1 NAME
+
+evp_keymgmt_newdata, evp_keymgmt_freedata,
+evp_keymgmt_get_params,
+evp_keymgmt_has, evp_keymgmt_validate,
+evp_keymgmt_import, evp_keymgmt_import_types,
+evp_keymgmt_export, evp_keymgmt_export_types
+- internal KEYMGMT interface functions
+
+=head1 SYNOPSIS
+
+ #include "crypto/evp.h"
+
+ void *evp_keymgmt_newdata(const EVP_KEYMGMT *keymgmt);
+ void evp_keymgmt_freedata(const EVP_KEYMGMT *keymgmt, void *keyddata);
+ int evp_keymgmt_get_params(const EVP_KEYMGMT *keymgmt,
+                            void *keydata, OSSL_PARAM params[]);
+
+ int evp_keymgmt_has(const EVP_KEYMGMT *keymgmt, void *keyddata, int selection);
+ int evp_keymgmt_validate(const EVP_KEYMGMT *keymgmt, void *keydata,
+                          int selection);
+
+ int evp_keymgmt_import(const EVP_KEYMGMT *keymgmt, void *keydata,
+                        int selection, const OSSL_PARAM params[]);
+ const OSSL_PARAM *evp_keymgmt_import_types(const EVP_KEYMGMT *keymgmt,
+                                            int selection);
+ int evp_keymgmt_export(const EVP_KEYMGMT *keymgmt, void *keydata,
+                        int selection, OSSL_CALLBACK *param_cb, void *cbarg);
+ const OSSL_PARAM *evp_keymgmt_export_types(const EVP_KEYMGMT *keymgmt,
+                                            int selection);
+
+=head1 DESCRIPTION
+
+All these functions are helpers to call the provider's corresponding
+function.  They all have in common that they take a B<EVP_KEYMGMT> as
+first argument, which they also retrieve a provider context from when
+needed.  The rest of the arguments are simply passed on to the
+function they wrap around.
+
+evp_keymgmt_newdata() calls the method's new() function.
+
+evp_keymgmt_freedata() calls the method's free() function.
+
+(the name evp_keymgmt_freedata() was chosen to avoid a clash with
+EVP_KEYMGMT_free() on case insensitive systems, the name
+evp_keymgmt_newdata() was chosen for consistency)
+
+evp_keymgmt_get_params() calls the method's get_params() function.
+
+evp_keymgmt_has() calls the method's has() function.
+
+evp_keymgmt_validate() calls the method's validate() function.
+
+evp_keymgmt_import() calls the method's import() function.
+
+evp_keymgmt_import_types() calls the method's import_types() function.
+
+evp_keymgmt_export() calls the method's export() function.
+
+evp_keymgmt_export_types() calls the method's export_types() function.
+
+=head1 RETURN VALUES
+
+evp_keymgmt_newdata() returns a pointer to a provider side key object,
+or NULL on error.
+
+evp_keymgmt_import_types(), and evp_keymgmt_export_types() return a parameter
+descriptor for importing and exporting key data, or NULL if there are no such
+descriptors.
+
+All other functions return 1 on success and 0 on error.
+
+=head1 HISTORY
+
+The functions described here were all added in OpenSSL 3.0.
+
+=head1 COPYRIGHT
+
+Copyright 2019-2020 The OpenSSL Project Authors. All Rights Reserved.
+
+Licensed under the Apache License 2.0 (the "License").  You may not use
+this file except in compliance with the License.  You can obtain a copy
+in the file LICENSE in the source distribution or at
+L<https://www.openssl.org/source/license.html>.
+
+=cut

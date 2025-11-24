@@ -1,0 +1,17 @@
+error[E0277]: the size for values of type `str` cannot be known at compilation time
+ --> tests/ui/collect-unsized.rs:3:21
+  |
+3 | inventory::collect!(Unsized);
+  |                     ^^^^^^^ doesn't have a size known at compile-time
+  |
+  = help: within `Unsized`, the trait `Sized` is not implemented for `str`
+note: required because it appears within the type `Unsized`
+ --> tests/ui/collect-unsized.rs:1:12
+  |
+1 | pub struct Unsized(str);
+  |            ^^^^^^^
+note: required by a bound in `Collect`
+ --> src/lib.rs
+  |
+  | pub trait Collect: Sync + Sized + 'static {
+  |                           ^^^^^ required by this bound in `Collect`

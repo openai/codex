@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<!DOCTYPE refentry PUBLIC "-//OASIS//DTD DocBook XML V4.4//EN"
+                   "http://www.oasis-open.org/docbook/xml/4.4/docbookx.dtd">
+<refentry id='dbusuuidgen1'>
+
+<!--  dbus&bsol;-uuidgen manual page.
+ Copyright (C) 2006 Red Hat, Inc. -->
+
+<refmeta>
+<refentrytitle>dbus-uuidgen</refentrytitle>
+<manvolnum>1</manvolnum>
+<refmiscinfo class="manual">User Commands</refmiscinfo>
+<refmiscinfo class="source">D-Bus</refmiscinfo>
+<refmiscinfo class="version">@DBUS_VERSION@</refmiscinfo>
+</refmeta>
+<refnamediv>
+<refname>dbus-uuidgen</refname>
+<refpurpose>Utility to generate UUIDs</refpurpose>
+</refnamediv>
+<!-- body begins here -->
+<refsynopsisdiv id='synopsis'>
+<cmdsynopsis>
+  <command>dbus-uuidgen</command>    <arg choice='opt'>--version </arg>
+    <arg choice='opt'><arg choice='plain'>--ensure </arg><arg choice='opt'><replaceable>=FILENAME</replaceable></arg></arg>
+    <arg choice='opt'><arg choice='plain'>--get </arg><arg choice='opt'><replaceable>=FILENAME</replaceable></arg></arg>
+    <sbr/>
+</cmdsynopsis>
+</refsynopsisdiv>
+
+
+<refsect1 id='description'><title>DESCRIPTION</title>
+<para>The <command>dbus-uuidgen</command> command generates or reads a universally unique ID.</para>
+
+
+<para>Note that the D-Bus UUID has no relationship to RFC 4122 and does not generate
+UUIDs compatible with that spec. Many systems have a separate command
+for that (often called "uuidgen").</para>
+
+
+<para>See <ulink url='http://www.freedesktop.org/software/dbus/'>http://www.freedesktop.org/software/dbus/</ulink> for more information
+about D-Bus.</para>
+
+
+<para>The primary usage of <command>dbus-uuidgen</command> is to run in the post-install
+script of a D-Bus package like this:</para>
+<literallayout remap='.nf'>
+  dbus-uuidgen --ensure
+</literallayout> <!-- .fi -->
+
+
+<para>This will ensure that /var/lib/dbus/machine-id exists and has the uuid in it.
+It won't overwrite an existing uuid, since this id should remain fixed
+for a single machine until the next reboot at least.</para>
+
+
+<para>The important properties of the machine UUID are that 1) it remains
+unchanged until the next reboot and 2) it is different for any two
+running instances of the OS kernel. That is, if two processes see the
+same UUID, they should also see the same shared memory, UNIX domain
+sockets, local X displays, localhost.localdomain resolution, process
+IDs, and so forth.</para>
+
+
+<para>If you run <command>dbus-uuidgen</command> with no options it just prints a new uuid made
+up out of thin air.</para>
+
+
+<para>If you run it with --get, it prints the machine UUID by default, or
+the UUID in the specified file if you specify a file.</para>
+
+
+<para>If you try to change an existing machine-id on a running system, it will
+probably result in bad things happening. Don't try to change this file. Also,
+don't make it the same on two different systems; it needs to be different
+anytime there are two different kernels running.</para>
+
+
+<para>The UUID should be different on two different virtual machines,
+because there are two different kernels.</para>
+
+</refsect1>
+
+<refsect1 id='options'><title>OPTIONS</title>
+<para>The following options are supported:</para>
+<variablelist remap='TP'>
+  <varlistentry>
+  <term><option>--get[=FILENAME]</option></term>
+  <listitem>
+<para>If a filename is not given, defaults to localstatedir/lib/dbus/machine-id
+(localstatedir is usually /var). If this file exists and is valid, the
+uuid in the file is printed on stdout. Otherwise, the command exits
+with a nonzero status.</para>
+
+  </listitem>
+  </varlistentry>
+  <varlistentry>
+  <term><option>--ensure[=FILENAME]</option></term>
+  <listitem>
+<para>If a filename is not given, defaults to localstatedir/lib/dbus/machine-id
+(localstatedir is usually /var). If this file exists then it will be
+validated, and a failure code returned if it contains the wrong thing.
+If the file does not exist, it will be created with a new uuid in it.
+On success, prints no output.</para>
+
+  </listitem>
+  </varlistentry>
+  <varlistentry>
+  <term><option>--version</option></term>
+  <listitem>
+<para>Print the version of dbus-uuidgen</para>
+
+  </listitem>
+  </varlistentry>
+</variablelist>
+</refsect1>
+
+<refsect1 id='author'><title>AUTHOR</title>
+<para>See <ulink url='http://www.freedesktop.org/software/dbus/doc/AUTHORS'>http://www.freedesktop.org/software/dbus/doc/AUTHORS</ulink></para>
+
+</refsect1>
+
+<refsect1 id='bugs'><title>BUGS</title>
+<para>Please send bug reports to the D-Bus mailing list or bug tracker,
+see <ulink url='http://www.freedesktop.org/software/dbus/'>http://www.freedesktop.org/software/dbus/</ulink></para>
+</refsect1>
+</refentry>

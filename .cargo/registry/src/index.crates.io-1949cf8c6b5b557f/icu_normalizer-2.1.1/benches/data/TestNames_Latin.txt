@@ -1,0 +1,54 @@
+# This file is part of ICU4X. For terms of use, please see the file
+# called LICENSE at the top level of the ICU4X source tree
+# (online at: https://github.com/unicode-org/icu4x/blob/main/LICENSE ).
+
+González, Joan
+Reinders, Jim
+Applebroog, Ida
+Kidd, Joseph Bartholomew
+Gulácsy, Lajos
+Letendre, Rita
+Zuccaro, Federico
+Apt the Elder, Ulrich
+Drummond, Arthur
+Manley, Thomas
+Broc, Jean
+Ramunno, Tony
+Simone dei Crocifissi
+Lane, Theodore
+Symonds, William Robert
+Johnson, Frank Tenney
+Cox, Gardner
+Bunbury, Charles
+Pedro de la Cuadra
+Payne, William
+Lucas, John Seymour
+Holsman, Elizabeth T.
+de Vries, Auke
+Laszlo, Philip Alexius de
+Shigemasa
+Wolfe, Ruth Mitchell
+Buck, John
+Baselitz, Georg
+Hook, Walter
+Segall, Lasar
+Brush, George deForest
+Master of Jánosrét
+Sutherland, Elizabeth Leveson-Gower, Countess of
+Tuckerman, Jane
+Varley, F.H.
+Fosso, Samuel
+Gardner, Daniel
+Sadler, Walter Dendy
+Clausen, Franciska
+Coman, Charlotte Buell
+Wakelin, Roland
+Payne, Jon, CML
+Campagna, Girolamo
+Wiener, Phyllis
+Sallee, Charles
+Fitzgerald, John Anster
+Gribbroek, Robert
+Laporte, John
+Lévy-Dhurmer, Lucien
+Young, Stephen Scott

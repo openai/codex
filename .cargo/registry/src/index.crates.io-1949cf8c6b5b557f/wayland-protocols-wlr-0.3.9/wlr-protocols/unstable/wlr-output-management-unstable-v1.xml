@@ -1,0 +1,601 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="wlr_output_management_unstable_v1">
+  <copyright>
+    Copyright © 2019 Purism SPC
+
+    Permission to use, copy, modify, distribute, and sell this
+    software and its documentation for any purpose is hereby granted
+    without fee, provided that the above copyright notice appear in
+    all copies and that both that copyright notice and this permission
+    notice appear in supporting documentation, and that the name of
+    the copyright holders not be used in advertising or publicity
+    pertaining to distribution of the software without specific,
+    written prior permission.  The copyright holders make no
+    representations about the suitability of this software for any
+    purpose.  It is provided "as is" without express or implied
+    warranty.
+
+    THE COPYRIGHT HOLDERS DISCLAIM ALL WARRANTIES WITH REGARD TO THIS
+    SOFTWARE, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+    FITNESS, IN NO EVENT SHALL THE COPYRIGHT HOLDERS BE LIABLE FOR ANY
+    SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+    WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN
+    AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+    ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+    THIS SOFTWARE.
+  </copyright>
+
+  <description summary="protocol to configure output devices">
+    This protocol exposes interfaces to obtain and modify output device
+    configuration.
+
+    Warning! The protocol described in this file is experimental and
+    backward incompatible changes may be made. Backward compatible changes
+    may be added together with the corresponding interface version bump.
+    Backward incompatible changes are done by bumping the version number in
+    the protocol and interface names and resetting the interface version.
+    Once the protocol is to be declared stable, the 'z' prefix and the
+    version number in the protocol and interface names are removed and the
+    interface version number is reset.
+  </description>
+
+  <interface name="zwlr_output_manager_v1" version="4">
+    <description summary="output device configuration manager">
+      This interface is a manager that allows reading and writing the current
+      output device configuration.
+
+      Output devices that display pixels (e.g. a physical monitor or a virtual
+      output in a window) are represented as heads. Heads cannot be created nor
+      destroyed by the client, but they can be enabled or disabled and their
+      properties can be changed. Each head may have one or more available modes.
+
+      Whenever a head appears (e.g. a monitor is plugged in), it will be
+      advertised via the head event. Immediately after the output manager is
+      bound, all current heads are advertised.
+
+      Whenever a head's properties change, the relevant wlr_output_head events
+      will be sent. Not all head properties will be sent: only properties that
+      have changed need to.
+
+      Whenever a head disappears (e.g. a monitor is unplugged), a
+      wlr_output_head.finished event will be sent.
+
+      After one or more heads appear, change or disappear, the done event will
+      be sent. It carries a serial which can be used in a create_configuration
+      request to update heads properties.
+
+      The information obtained from this protocol should only be used for output
+      configuration purposes. This protocol is not designed to be a generic
+      output property advertisement protocol for regular clients. Instead,
+      protocols such as xdg-output should be used.
+    </description>
+
+    <event name="head">
+      <description summary="introduce a new head">
+        This event introduces a new head. This happens whenever a new head
+        appears (e.g. a monitor is plugged in) or after the output manager is
+        bound.
+      </description>
+      <arg name="head" type="new_id" interface="zwlr_output_head_v1"/>
+    </event>
+
+    <event name="done">
+      <description summary="sent all information about current configuration">
+        This event is sent after all information has been sent after binding to
+        the output manager object and after any subsequent changes. This applies
+        to child head and mode objects as well. In other words, this event is
+        sent whenever a head or mode is created or destroyed and whenever one of
+        their properties has been changed. Not all state is re-sent each time
+        the current configuration changes: only the actual changes are sent.
+
+        This allows changes to the output configuration to be seen as atomic,
+        even if they happen via multiple events.
+
+        A serial is sent to be used in a future create_configuration request.
+      </description>
+      <arg name="serial" type="uint" summary="current configuration serial"/>
+    </event>
+
+    <request name="create_configuration">
+      <description summary="create a new output configuration object">
+        Create a new output configuration object. This allows to update head
+        properties.
+      </description>
+      <arg name="id" type="new_id" interface="zwlr_output_configuration_v1"/>
+      <arg name="serial" type="uint"/>
+    </request>
+
+    <request name="stop">
+      <description summary="stop sending events">
+        Indicates the client no longer wishes to receive events for output
+        configuration changes. However the compositor may emit further events,
+        until the finished event is emitted.
+
+        The client must not send any more requests after this one.
+      </description>
+    </request>
+
+    <event name="finished" type="destructor">
+      <description summary="the compositor has finished with the manager">
+        This event indicates that the compositor is done sending manager events.
+        The compositor will destroy the object immediately after sending this
+        event, so it will become invalid and the client should release any
+        resources associated with it.
+      </description>
+    </event>
+  </interface>
+
+  <interface name="zwlr_output_head_v1" version="4">
+    <description summary="output device">
+      A head is an output device. The difference between a wl_output object and
+      a head is that heads are advertised even if they are turned off. A head
+      object only advertises properties and cannot be used directly to change
+      them.
+
+      A head has some read-only properties: modes, name, description and
+      physical_size. These cannot be changed by clients.
+
+      Other properties can be updated via a wlr_output_configuration object.
+
+      Properties sent via this interface are applied atomically via the
+      wlr_output_manager.done event. No guarantees are made regarding the order
+      in which properties are sent.
+    </description>
+
+    <event name="name">
+      <description summary="head name">
+        This event describes the head name.
+
+        The naming convention is compositor defined, but limited to alphanumeric
+        characters and dashes (-). Each name is unique among all wlr_output_head
+        objects, but if a wlr_output_head object is destroyed the same name may
+        be reused later. The names will also remain consistent across sessions
+        with the same hardware and software configuration.
+
+        Examples of names include 'HDMI-A-1', 'WL-1', 'X11-1', etc. However, do
+        not assume that the name is a reflection of an underlying DRM
+        connector, X11 connection, etc.
+
+        If the compositor implements the xdg-output protocol and this head is
+        enabled, the xdg_output.name event must report the same name.
+
+        The name event is sent after a wlr_output_head object is created. This
+        event is only sent once per object, and the name does not change over
+        the lifetime of the wlr_output_head object.
+      </description>
+      <arg name="name" type="string"/>
+    </event>
+
+    <event name="description">
+      <description summary="head description">
+        This event describes a human-readable description of the head.
+
+        The description is a UTF-8 string with no convention defined for its
+        contents. Examples might include 'Foocorp 11" Display' or 'Virtual X11
+        output via :1'. However, do not assume that the name is a reflection of
+        the make, model, serial of the underlying DRM connector or the display
+        name of the underlying X11 connection, etc.
+
+        If the compositor implements xdg-output and this head is enabled,
+        the xdg_output.description must report the same description.
+
+        The description event is sent after a wlr_output_head object is created.
+        This event is only sent once per object, and the description does not
+        change over the lifetime of the wlr_output_head object.
+      </description>
+      <arg name="description" type="string"/>
+    </event>
+
+    <event name="physical_size">
+      <description summary="head physical size">
+        This event describes the physical size of the head. This event is only
+        sent if the head has a physical size (e.g. is not a projector or a
+        virtual device).
+      </description>
+      <arg name="width" type="int" summary="width in millimeters of the output"/>
+      <arg name="height" type="int" summary="height in millimeters of the output"/>
+    </event>
+
+    <event name="mode">
+      <description summary="introduce a mode">
+        This event introduces a mode for this head. It is sent once per
+        supported mode.
+      </description>
+      <arg name="mode" type="new_id" interface="zwlr_output_mode_v1"/>
+    </event>
+
+    <event name="enabled">
+      <description summary="head is enabled or disabled">
+        This event describes whether the head is enabled. A disabled head is not
+        mapped to a region of the global compositor space.
+
+        When a head is disabled, some properties (current_mode, position,
+        transform and scale) are irrelevant.
+      </description>
+      <arg name="enabled" type="int" summary="zero if disabled, non-zero if enabled"/>
+    </event>
+
+    <event name="current_mode">
+      <description summary="current mode">
+        This event describes the mode currently in use for this head. It is only
+        sent if the output is enabled.
+      </description>
+      <arg name="mode" type="object" interface="zwlr_output_mode_v1"/>
+    </event>
+
+    <event name="position">
+      <description summary="current position">
+        This events describes the position of the head in the global compositor
+        space. It is only sent if the output is enabled.
+      </description>
+      <arg name="x" type="int"
+        summary="x position within the global compositor space"/>
+      <arg name="y" type="int"
+        summary="y position within the global compositor space"/>
+    </event>
+
+    <event name="transform">
+      <description summary="current transformation">
+        This event describes the transformation currently applied to the head.
+        It is only sent if the output is enabled.
+      </description>
+      <arg name="transform" type="int" enum="wl_output.transform"/>
+    </event>
+
+    <event name="scale">
+      <description summary="current scale">
+        This events describes the scale of the head in the global compositor
+        space. It is only sent if the output is enabled.
+      </description>
+      <arg name="scale" type="fixed"/>
+    </event>
+
+    <event name="finished">
+      <description summary="the head has disappeared">
+        This event indicates that the head is no longer available. The head
+        object becomes inert. Clients should send a destroy request and release
+        any resources associated with it.
+      </description>
+    </event>
+
+    <!-- Version 2 additions -->
+
+    <event name="make" since="2">
+      <description summary="head manufacturer">
+        This event describes the manufacturer of the head.
+
+        This must report the same make as the wl_output interface does in its
+        geometry event.
+
+        Together with the model and serial_number events the purpose is to
+        allow clients to recognize heads from previous sessions and for example
+        load head-specific configurations back.
+
+        It is not guaranteed this event will be ever sent. A reason for that
+        can be that the compositor does not have information about the make of
+        the head or the definition of a make is not sensible in the current
+        setup, for example in a virtual session. Clients can still try to
+        identify the head by available information from other events but should
+        be aware that there is an increased risk of false positives.
+
+        It is not recommended to display the make string in UI to users. For
+        that the string provided by the description event should be preferred.
+      </description>
+      <arg name="make" type="string"/>
+    </event>
+
+    <event name="model" since="2">
+      <description summary="head model">
+        This event describes the model of the head.
+
+        This must report the same model as the wl_output interface does in its
+        geometry event.
+
+        Together with the make and serial_number events the purpose is to
+        allow clients to recognize heads from previous sessions and for example
+        load head-specific configurations back.
+
+        It is not guaranteed this event will be ever sent. A reason for that
+        can be that the compositor does not have information about the model of
+        the head or the definition of a model is not sensible in the current
+        setup, for example in a virtual session. Clients can still try to
+        identify the head by available information from other events but should
+        be aware that there is an increased risk of false positives.
+
+        It is not recommended to display the model string in UI to users. For
+        that the string provided by the description event should be preferred.
+      </description>
+      <arg name="model" type="string"/>
+    </event>
+
+    <event name="serial_number" since="2">
+      <description summary="head serial number">
+        This event describes the serial number of the head.
+
+        Together with the make and model events the purpose is to allow clients
+        to recognize heads from previous sessions and for example load head-
+        specific configurations back.
+
+        It is not guaranteed this event will be ever sent. A reason for that
+        can be that the compositor does not have information about the serial
+        number of the head or the definition of a serial number is not sensible
+        in the current setup. Clients can still try to identify the head by
+        available information from other events but should be aware that there
+        is an increased risk of false positives.
+
+        It is not recommended to display the serial_number string in UI to
+        users. For that the string provided by the description event should be
+        preferred.
+      </description>
+      <arg name="serial_number" type="string"/>
+    </event>
+
+    <!-- Version 3 additions -->
+
+    <request name="release" type="destructor" since="3">
+      <description summary="destroy the head object">
+        This request indicates that the client will no longer use this head
+        object.
+      </description>
+    </request>
+
+    <!-- Version 4 additions -->
+
+    <enum name="adaptive_sync_state" since="4">
+      <entry name="disabled" value="0" summary="adaptive sync is disabled"/>
+      <entry name="enabled" value="1" summary="adaptive sync is enabled"/>
+    </enum>
+
+    <event name="adaptive_sync" since="4">
+      <description summary="current adaptive sync state">
+        This event describes whether adaptive sync is currently enabled for
+        the head or not. Adaptive sync is also known as Variable Refresh
+        Rate or VRR.
+      </description>
+      <arg name="state" type="uint" enum="adaptive_sync_state"/>
+    </event>
+  </interface>
+
+  <interface name="zwlr_output_mode_v1" version="3">
+    <description summary="output mode">
+      This object describes an output mode.
+
+      Some heads don't support output modes, in which case modes won't be
+      advertised.
+
+      Properties sent via this interface are applied atomically via the
+      wlr_output_manager.done event. No guarantees are made regarding the order
+      in which properties are sent.
+    </description>
+
+    <event name="size">
+      <description summary="mode size">
+        This event describes the mode size. The size is given in physical
+        hardware units of the output device. This is not necessarily the same as
+        the output size in the global compositor space. For instance, the output
+        may be scaled or transformed.
+      </description>
+      <arg name="width" type="int" summary="width of the mode in hardware units"/>
+      <arg name="height" type="int" summary="height of the mode in hardware units"/>
+    </event>
+
+    <event name="refresh">
+      <description summary="mode refresh rate">
+        This event describes the mode's fixed vertical refresh rate. It is only
+        sent if the mode has a fixed refresh rate.
+      </description>
+      <arg name="refresh" type="int" summary="vertical refresh rate in mHz"/>
+    </event>
+
+    <event name="preferred">
+      <description summary="mode is preferred">
+        This event advertises this mode as preferred.
+      </description>
+    </event>
+
+    <event name="finished">
+      <description summary="the mode has disappeared">
+        This event indicates that the mode is no longer available. The mode
+        object becomes inert. Clients should send a destroy request and release
+        any resources associated with it.
+      </description>
+    </event>
+
+    <!-- Version 3 additions -->
+
+    <request name="release" type="destructor" since="3">
+      <description summary="destroy the mode object">
+        This request indicates that the client will no longer use this mode
+        object.
+      </description>
+    </request>
+  </interface>
+
+  <interface name="zwlr_output_configuration_v1" version="4">
+    <description summary="output configuration">
+      This object is used by the client to describe a full output configuration.
+
+      First, the client needs to setup the output configuration. Each head can
+      be either enabled (and configured) or disabled. It is a protocol error to
+      send two enable_head or disable_head requests with the same head. It is a
+      protocol error to omit a head in a configuration.
+
+      Then, the client can apply or test the configuration. The compositor will
+      then reply with a succeeded, failed or cancelled event. Finally the client
+      should destroy the configuration object.
+    </description>
+
+    <enum name="error">
+      <entry name="already_configured_head" value="1"
+        summary="head has been configured twice"/>
+      <entry name="unconfigured_head" value="2"
+        summary="head has not been configured"/>
+      <entry name="already_used" value="3"
+        summary="request sent after configuration has been applied or tested"/>
+    </enum>
+
+    <request name="enable_head">
+      <description summary="enable and configure a head">
+        Enable a head. This request creates a head configuration object that can
+        be used to change the head's properties.
+      </description>
+      <arg name="id" type="new_id" interface="zwlr_output_configuration_head_v1"
+        summary="a new object to configure the head"/>
+      <arg name="head" type="object" interface="zwlr_output_head_v1"
+        summary="the head to be enabled"/>
+    </request>
+
+    <request name="disable_head">
+      <description summary="disable a head">
+        Disable a head.
+      </description>
+      <arg name="head" type="object" interface="zwlr_output_head_v1"
+        summary="the head to be disabled"/>
+    </request>
+
+    <request name="apply">
+      <description summary="apply the configuration">
+        Apply the new output configuration.
+
+        In case the configuration is successfully applied, there is no guarantee
+        that the new output state matches completely the requested
+        configuration. For instance, a compositor might round the scale if it
+        doesn't support fractional scaling.
+
+        After this request has been sent, the compositor must respond with an
+        succeeded, failed or cancelled event. Sending a request that isn't the
+        destructor is a protocol error.
+      </description>
+    </request>
+
+    <request name="test">
+      <description summary="test the configuration">
+        Test the new output configuration. The configuration won't be applied,
+        but will only be validated.
+
+        Even if the compositor succeeds to test a configuration, applying it may
+        fail.
+
+        After this request has been sent, the compositor must respond with an
+        succeeded, failed or cancelled event. Sending a request that isn't the
+        destructor is a protocol error.
+      </description>
+    </request>
+
+    <event name="succeeded">
+      <description summary="configuration changes succeeded">
+        Sent after the compositor has successfully applied the changes or
+        tested them.
+
+        Upon receiving this event, the client should destroy this object.
+
+        If the current configuration has changed, events to describe the changes
+        will be sent followed by a wlr_output_manager.done event.
+      </description>
+    </event>
+
+    <event name="failed">
+      <description summary="configuration changes failed">
+        Sent if the compositor rejects the changes or failed to apply them. The
+        compositor should revert any changes made by the apply request that
+        triggered this event.
+
+        Upon receiving this event, the client should destroy this object.
+      </description>
+    </event>
+
+    <event name="cancelled">
+      <description summary="configuration has been cancelled">
+        Sent if the compositor cancels the configuration because the state of an
+        output changed and the client has outdated information (e.g. after an
+        output has been hotplugged).
+
+        The client can create a new configuration with a newer serial and try
+        again.
+
+        Upon receiving this event, the client should destroy this object.
+      </description>
+    </event>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the output configuration">
+        Using this request a client can tell the compositor that it is not going
+        to use the configuration object anymore. Any changes to the outputs
+        that have not been applied will be discarded.
+
+        This request also destroys wlr_output_configuration_head objects created
+        via this object.
+      </description>
+    </request>
+  </interface>
+
+  <interface name="zwlr_output_configuration_head_v1" version="4">
+    <description summary="head configuration">
+      This object is used by the client to update a single head's configuration.
+
+      It is a protocol error to set the same property twice.
+    </description>
+
+    <enum name="error">
+      <entry name="already_set" value="1" summary="property has already been set"/>
+      <entry name="invalid_mode" value="2" summary="mode doesn't belong to head"/>
+      <entry name="invalid_custom_mode" value="3" summary="mode is invalid"/>
+      <entry name="invalid_transform" value="4" summary="transform value outside enum"/>
+      <entry name="invalid_scale" value="5" summary="scale negative or zero"/>
+      <entry name="invalid_adaptive_sync_state" value="6" since="4"
+        summary="invalid enum value used in the set_adaptive_sync request"/>
+    </enum>
+
+    <request name="set_mode">
+      <description summary="set the mode">
+        This request sets the head's mode.
+      </description>
+      <arg name="mode" type="object" interface="zwlr_output_mode_v1"/>
+    </request>
+
+    <request name="set_custom_mode">
+      <description summary="set a custom mode">
+        This request assigns a custom mode to the head. The size is given in
+        physical hardware units of the output device. If set to zero, the
+        refresh rate is unspecified.
+
+        It is a protocol error to set both a mode and a custom mode.
+      </description>
+      <arg name="width" type="int" summary="width of the mode in hardware units"/>
+      <arg name="height" type="int" summary="height of the mode in hardware units"/>
+      <arg name="refresh" type="int" summary="vertical refresh rate in mHz or zero"/>
+    </request>
+
+    <request name="set_position">
+      <description summary="set the position">
+        This request sets the head's position in the global compositor space.
+      </description>
+      <arg name="x" type="int" summary="x position in the global compositor space"/>
+      <arg name="y" type="int" summary="y position in the global compositor space"/>
+    </request>
+
+    <request name="set_transform">
+      <description summary="set the transform">
+        This request sets the head's transform.
+      </description>
+      <arg name="transform" type="int" enum="wl_output.transform"/>
+    </request>
+
+    <request name="set_scale">
+      <description summary="set the scale">
+        This request sets the head's scale.
+      </description>
+      <arg name="scale" type="fixed"/>
+    </request>
+
+    <!-- Version 4 additions -->
+
+    <request name="set_adaptive_sync" since="4">
+      <description summary="enable/disable adaptive sync">
+        This request enables/disables adaptive sync. Adaptive sync is also
+        known as Variable Refresh Rate or VRR.
+      </description>
+      <arg name="state" type="uint" enum="zwlr_output_head_v1.adaptive_sync_state"/>
+    </request>
+  </interface>
+</protocol>

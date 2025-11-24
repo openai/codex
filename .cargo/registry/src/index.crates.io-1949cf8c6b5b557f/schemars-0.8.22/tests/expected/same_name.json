@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Config2",
+  "type": "object",
+  "required": [
+    "a_cfg",
+    "b_cfg"
+  ],
+  "properties": {
+    "a_cfg": {
+      "$ref": "#/definitions/Config"
+    },
+    "b_cfg": {
+      "$ref": "#/definitions/Config2"
+    }
+  },
+  "definitions": {
+    "Config": {
+      "type": "object",
+      "required": [
+        "test"
+      ],
+      "properties": {
+        "test": {
+          "type": "string"
+        }
+      }
+    },
+    "Config2": {
+      "type": "object",
+      "required": [
+        "test2"
+      ],
+      "properties": {
+        "test2": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

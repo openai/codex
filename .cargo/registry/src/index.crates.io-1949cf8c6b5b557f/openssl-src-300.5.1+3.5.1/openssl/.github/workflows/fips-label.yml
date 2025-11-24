@@ -1,0 +1,141 @@
+# Copyright 2021 The OpenSSL Project Authors. All Rights Reserved.
+#
+# Licensed under the Apache License 2.0 (the "License").  You may not use
+# this file except in compliance with the License.  You can obtain a copy
+# in the file LICENSE in the source distribution or at
+# https://www.openssl.org/source/license.html
+
+name: FIPS and ABI Changed Label
+on:
+  workflow_run:
+    workflows: ["FIPS Check and ABIDIFF"]
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+jobs:
+  apply-label:
+    permissions:
+      actions: read
+      pull-requests: write
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.event == 'pull_request' }}
+    steps:
+      - name: 'Download fipscheck artifact'
+        if: ${{ github.event.workflow_run.conclusion == 'success' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            var artifacts = await github.rest.actions.listWorkflowRunArtifacts({
+               owner: context.repo.owner,
+               repo: context.repo.repo,
+               run_id: ${{github.event.workflow_run.id }},
+            });
+            var matchArtifact = artifacts.data.artifacts.filter((artifact) => {
+              return artifact.name == "fips_checksum"
+            })[0];
+            var download = await github.rest.actions.downloadArtifact({
+               owner: context.repo.owner,
+               repo: context.repo.repo,
+               artifact_id: matchArtifact.id,
+               archive_format: 'zip',
+            });
+            var fs = require('fs');
+            fs.writeFileSync('${{github.workspace}}/artifact.zip', Buffer.from(download.data));
+      - run: unzip artifact.zip
+        if: ${{ github.event.workflow_run.conclusion == 'success' }}
+      - name: 'Check artifact and apply'
+        if: ${{ github.event.workflow_run.conclusion == 'success' }}
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+          script: |
+            var fs = require('fs');
+            var pr_num = Number(fs.readFileSync('./pr_num'));
+            if ( fs.existsSync('./fips_changed') ) {
+              github.rest.issues.addLabels({
+                issue_number: pr_num,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: ['severity: fips change']
+              });
+            } else if ( fs.existsSync('./fips_unchanged') ) {
+              var labels = await github.rest.issues.listLabelsOnIssue({
+                issue_number: pr_num,
+                owner: context.repo.owner,
+                repo: context.repo.repo
+              });
+
+              for ( var label in labels.data ) {
+                if (labels.data[label].name == 'severity: fips change') {
+                  github.rest.issues.removeLabel({
+                    issue_number: pr_num,
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    name: 'severity: fips change'
+                  });
+                }
+              }
+            }
+      - name: 'Cleanup artifact'
+        if: ${{ github.event.workflow_run.conclusion == 'success' }}
+        run: rm artifact.zip pr_num
+
+      - name: 'Download abidiff artifact'
+        if: ${{ github.event.workflow_run.conclusion == 'success' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            var artifacts = await github.rest.actions.listWorkflowRunArtifacts({
+               owner: context.repo.owner,
+               repo: context.repo.repo,
+               run_id: ${{github.event.workflow_run.id }},
+            });
+            var matchArtifact = artifacts.data.artifacts.filter((artifact) => {
+              return artifact.name == "abidiff"
+            })[0];
+            var download = await github.rest.actions.downloadArtifact({
+               owner: context.repo.owner,
+               repo: context.repo.repo,
+               artifact_id: matchArtifact.id,
+               archive_format: 'zip',
+            });
+            var fs = require('fs');
+            fs.writeFileSync('${{github.workspace}}/artifact.zip', Buffer.from(download.data));
+      - run: unzip artifact.zip
+        if: ${{ github.event.workflow_run.conclusion == 'success' }}
+      - name: 'Check artifact and apply'
+        if: ${{ github.event.workflow_run.conclusion == 'success' }}
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+          script: |
+            var fs = require('fs');
+            var pr_num = Number(fs.readFileSync('./pr_num'));
+            if ( fs.existsSync('./abi_changed') ) {
+              github.rest.issues.addLabels({
+                issue_number: pr_num,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: ['severity: ABI change']
+              });
+            } else if ( fs.existsSync('./abi_unchanged') ) {
+              var labels = await github.rest.issues.listLabelsOnIssue({
+                issue_number: pr_num,
+                owner: context.repo.owner,
+                repo: context.repo.repo
+              });
+
+              for ( var label in labels.data ) {
+                if (labels.data[label].name == 'severity: ABI change') {
+                  github.rest.issues.removeLabel({
+                    issue_number: pr_num,
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    name: 'severity: ABI change'
+                  });
+                }
+              }
+            }

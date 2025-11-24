@@ -1,0 +1,38 @@
+[package]
+authors = [
+    "Damien Martin-Guillerez <dmarting@google.com>",
+    "Facebook",
+]
+categories = ["parser-implementations", "development-tools"]
+description = "Starlark language AST"
+documentation = "https://docs.rs/starlark"
+edition = "2021"
+keywords = ["starlark", "skylark", "bazel", "language", "interpreter"]
+license = "Apache-2.0"
+name = "starlark_syntax"
+repository = "https://github.com/facebook/starlark-rust"
+version = "0.13.0"
+
+[build-dependencies]
+lalrpop = "0.19.7"
+
+[dependencies]
+annotate-snippets = { version = "0.9.0", features = [] }
+anyhow = { workspace = true }
+derivative = { workspace = true }
+derive_more = { workspace = true }
+lalrpop-util = "0.19.7"
+logos = "0.12"
+lsp-types = "0.94.1"
+memchr = { workspace = true }
+num-bigint = "0.4.3"
+num-traits = "0.2"
+once_cell = "1.8"
+thiserror = "1.0.36"
+
+allocative = { workspace = true }
+dupe = { workspace = true }
+starlark_map = { version = "0.13.0", path = "../starlark_map" }
+
+[dev-dependencies]
+serde_json = "1.0"

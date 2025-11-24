@@ -1,0 +1,5 @@
+disallowed-methods = [
+    # Avoid a repeat of https://github.com/bkchr/proc-macro-crate/issues/57
+    { path = "toml_edit::Item::as_table", reason = "Use .as_table_like instead!" },
+    { path = "toml_edit::Item::is_table", reason = "Use .is_table_like instead!" },
+]

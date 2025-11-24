@@ -1,0 +1,18 @@
+[[slices]]
+source = """
+                        if let DisplayLine::Source {
+                            ref mut inline_marks,
+                        } = body[body_idx]
+"""
+line_start = 139
+origin = "src/display_list.rs"
+fold = false
+[[slices.annotations]]
+label = "missing fields `lineno`, `content`"
+annotation_type = "Error"
+range = [31, 128]
+
+[title]
+label = "pattern does not mention fields `lineno`, `content`"
+id = "E0027"
+annotation_type = "Error"

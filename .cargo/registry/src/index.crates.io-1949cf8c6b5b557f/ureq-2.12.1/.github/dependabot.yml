@@ -1,0 +1,17 @@
+version: 2
+updates:
+- package-ecosystem: cargo
+  directory: "/"
+  schedule:
+    interval: daily
+  open-pull-requests-limit: 10
+  ignore:
+  - dependency-name: webpki
+    versions:
+    - 0.22.0
+  - dependency-name: webpki-roots
+    versions:
+    - 0.22.0
+  - dependency-name: cookie
+    versions:
+    - 0.15.0

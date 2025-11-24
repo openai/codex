@@ -1,0 +1,177 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<!DOCTYPE refentry PUBLIC "-//OASIS//DTD DocBook XML V4.4//EN"
+                   "http://www.oasis-open.org/docbook/xml/4.4/docbookx.dtd">
+<refentry id='dbussend1'>
+
+<!--  dbus&bsol;-send manual page.
+ Copyright (C) 2003 Red Hat, Inc. -->
+
+<refmeta>
+<refentrytitle>dbus-send</refentrytitle>
+<manvolnum>1</manvolnum>
+<refmiscinfo class="manual">User Commands</refmiscinfo>
+<refmiscinfo class="source">D-Bus</refmiscinfo>
+<refmiscinfo class="version">@DBUS_VERSION@</refmiscinfo>
+</refmeta>
+<refnamediv>
+<refname>dbus-send</refname>
+<refpurpose>Send a message to a message bus</refpurpose>
+</refnamediv>
+<!-- body begins here -->
+<refsynopsisdiv id='synopsis'>
+<cmdsynopsis>
+  <command>dbus-send</command>
+  <group choice='opt'><arg choice='plain'>--system </arg><arg choice='plain'>--session </arg><arg choice='plain'>--bus=<replaceable>ADDRESS</replaceable></arg><arg choice='plain'>--peer=<replaceable>ADDRESS</replaceable></arg></group>
+    <arg choice='opt'>--sender=<replaceable>NAME</replaceable></arg>
+    <arg choice='opt'>--dest=<replaceable>NAME</replaceable></arg>
+    <arg choice='opt'><arg choice='plain'>--print-reply </arg><arg choice='opt'><replaceable>=literal</replaceable></arg></arg>
+    <arg choice='opt'>--reply-timeout=<replaceable>MSEC</replaceable></arg>
+    <arg choice='opt'>--type=<replaceable>TYPE</replaceable></arg>
+    <arg choice='plain'><replaceable>OBJECT_PATH</replaceable></arg>
+    <arg choice='plain'><replaceable>INTERFACE.MEMBER</replaceable></arg>
+    <arg choice='opt' rep='repeat'><replaceable>CONTENTS</replaceable></arg>
+    <sbr/>
+</cmdsynopsis>
+</refsynopsisdiv>
+
+
+<refsect1 id='description'><title>DESCRIPTION</title>
+<para>The <command>dbus-send</command> command is used to send a message to a D-Bus message
+bus. See <ulink url='http://www.freedesktop.org/software/dbus/'>http://www.freedesktop.org/software/dbus/</ulink> for more
+information about the big picture.</para>
+
+
+<para>There are two well-known message buses: the systemwide message bus
+(installed on many systems as the "messagebus" service) and the
+per-user-login-session message bus (started each time a user logs in).
+The <option>--system</option> and <option>--session</option> options direct
+<command>dbus-send</command> to send messages to the system or session buses respectively.
+If neither is specified, <command>dbus-send</command> sends to the session bus.</para>
+
+
+<para>Nearly all uses of <command>dbus-send</command> must provide the <option>--dest</option> argument
+which is the name of a connection on the bus to send the message to. If
+<option>--dest</option> is omitted, no destination is set.</para>
+
+
+<para>The object path and the name of the message to send must always be
+specified. Following arguments, if any, are the message contents
+(message arguments).  These are given as type-specified values and
+may include containers (arrays, dicts, and variants) as described below.</para>
+
+<literallayout remap='.nf'>
+&lt;contents&gt;   ::= &lt;item&gt; | &lt;container&gt; [ &lt;item&gt; | &lt;container&gt;...]
+&lt;item&gt;       ::= &lt;type&gt;:&lt;value&gt;
+&lt;container&gt;  ::= &lt;array&gt; | &lt;dict&gt; | &lt;variant&gt;
+&lt;array&gt;      ::= array:&lt;type&gt;:&lt;value&gt;[,&lt;value&gt;...]
+&lt;dict&gt;       ::= dict:&lt;type&gt;:&lt;type&gt;:&lt;key&gt;,&lt;value&gt;[,&lt;key&gt;,&lt;value&gt;...]
+&lt;variant&gt;    ::= variant:&lt;type&gt;:&lt;value&gt;
+&lt;type&gt;       ::= string | int16 | uint16 | int32 | uint32 | int64 | uint64 | double | byte | boolean | objpath
+</literallayout> <!-- .fi -->
+
+<para>D-Bus supports more types than these, but <command>dbus-send</command> currently
+does not.  Also, <command>dbus-send</command> does not permit empty containers
+or nested containers (e.g. arrays of variants).</para>
+
+
+<para>Here is an example invocation:</para>
+<literallayout remap='.nf'>
+
+  dbus-send --dest=org.freedesktop.ExampleName               &bsol;
+            /org/freedesktop/sample/object/name              &bsol;
+            org.freedesktop.ExampleInterface.ExampleMethod   &bsol;
+            int32:47 string:'hello world' double:65.32       &bsol;
+            array:string:"1st item","next item","last item"  &bsol;
+            dict:string:int32:"one",1,"two",2,"three",3      &bsol;
+            variant:int32:-8                                 &bsol;
+            objpath:/org/freedesktop/sample/object/name
+
+</literallayout> <!-- .fi -->
+
+<para>Note that the interface is separated from a method or signal
+name by a dot, though in the actual protocol the interface
+and the interface member are separate fields.</para>
+
+</refsect1>
+
+<refsect1 id='options'><title>OPTIONS</title>
+<para>The following options are supported:</para>
+<variablelist remap='TP'>
+  <varlistentry>
+  <term><option>--dest=</option><replaceable>NAME</replaceable></term>
+  <listitem>
+<para>Specify the name of the connection to receive the message.</para>
+  </listitem>
+  </varlistentry>
+  <varlistentry>
+  <term><option>--print-reply</option></term>
+  <listitem>
+<para>Block for a reply to the message sent, and print any reply received
+in a human-readable form. It also means the message type (<option>--type=</option>) is <emphasis remap='B'>method_call</emphasis>.</para>
+  </listitem>
+  </varlistentry>
+  <varlistentry>
+  <term><option>--print-reply=literal</option></term>
+  <listitem>
+<para>Block for a reply to the message sent, and print the body of the
+reply. If the reply is an object path or a string, it is printed
+literally, with no punctuation, escape characters etc.</para>
+  </listitem>
+  </varlistentry>
+  <varlistentry>
+  <term><option>--reply-timeout=</option><replaceable>MSEC</replaceable></term>
+  <listitem>
+<para>Wait for a reply for up to <emphasis remap='I'>MSEC</emphasis> milliseconds.
+The default is implementation&hyphen;defined, typically 25 seconds.</para>
+  </listitem>
+  </varlistentry>
+  <varlistentry>
+  <term><option>--system</option></term>
+  <listitem>
+<para>Send to the system message bus.</para>
+  </listitem>
+  </varlistentry>
+  <varlistentry>
+  <term><option>--session</option></term>
+  <listitem>
+<para>Send to the session message bus.  (This is the default.)</para>
+  </listitem>
+  </varlistentry>
+  <varlistentry>
+  <term><option>--bus=</option><replaceable>ADDRESS</replaceable></term>
+  <listitem>
+<para>Register on a message bus at <replaceable>ADDRESS</replaceable>, typically a <command>dbus-daemon</command>.</para>
+  </listitem>
+  </varlistentry>
+  <varlistentry>
+  <term><option>--peer=</option><replaceable>ADDRESS</replaceable></term>
+  <listitem>
+<para>Send to a non-message-bus D-Bus server at <replaceable>ADDRESS</replaceable>. In this case <command>dbus-send</command> will not call the <literal>Hello</literal> method.</para>
+  </listitem>
+  </varlistentry>
+  <varlistentry>
+  <term><option>--sender=</option><replaceable>NAME</replaceable></term>
+  <listitem>
+<para>Request ownership of name <replaceable>NAME</replaceable> before sending the message. The name will be released when <command>dbus-send</command> exits.</para>
+  </listitem>
+  </varlistentry>
+  <varlistentry>
+  <term><option>--type=</option><replaceable>TYPE</replaceable></term>
+  <listitem>
+<para>Specify <emphasis remap='B'>method_call</emphasis> or <emphasis remap='B'>signal</emphasis> (defaults to "<emphasis remap='B'>signal</emphasis>").</para>
+
+  </listitem>
+  </varlistentry>
+</variablelist>
+</refsect1>
+
+<refsect1 id='author'><title>AUTHOR</title>
+<para>dbus-send was written by Philip Blundell.</para>
+
+</refsect1>
+
+<refsect1 id='bugs'><title>BUGS</title>
+<para>Please send bug reports to the D-Bus mailing list or bug tracker,
+see <ulink url='http://www.freedesktop.org/software/dbus/'>http://www.freedesktop.org/software/dbus/</ulink></para>
+</refsect1>
+</refentry>

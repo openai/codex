@@ -1,0 +1,509 @@
+// Copyright 2018 The Starlark in Rust Authors.
+// Copyright (c) Facebook, Inc. and its affiliates.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use crate::lexer;
+use crate::codemap::Spanned;
+use crate::syntax::grammar_util;
+use crate::syntax::ast::*;
+use crate::syntax::state::ParserState;
+
+grammar<'a>(state: &mut ParserState<'a>);
+
+#[inline]
+ASTS<E>: AstStmt = <l:@L> <e:E> <r:@R>
+    => e.ast(l, r);
+
+#[inline]
+ASTE<E>: AstExpr = <l:@L> <e:E> <r:@R>
+    => e.ast(l, r);
+
+#[inline]
+ASTP<E>: AstParameter = <l:@L> <e:E> <r:@R>
+    => e.ast(l, r);
+
+#[inline]
+ASTA<E>: AstArgument = <l:@L> <e:E> <r:@R>
+    => e.ast(l, r);
+
+#[inline]
+integer: AstInt = <l:@L> <e:"INTEGER"> <r:@R>
+    => e.ast(l, r);
+
+#[inline]
+float: AstFloat = <l:@L> <e:"FLOAT"> <r:@R>
+    => e.ast(l, r);
+
+#[inline]
+string: AstString = <l:@L> <e:"STRING"> <r:@R>
+    => e.ast(l, r);
+
+#[inline]
+fstring: AstFString = <l:@L> <e:"FSTRING"> <r:@R>
+    => grammar_util::fstring(e, l, r, state);
+
+#[inline]
+identifier: AstString = <l:@L> <e:"IDENTIFIER"> <r:@R>
+    => e.ast(l, r);
+
+Ident: AstIdent = <id:identifier> => Spanned {
+    span: id.span,
+    node: IdentP { ident: id.node, payload: () },
+};
+
+AssignIdent: AstAssignIdent = <id:identifier> => Spanned {
+    span: id.span,
+    node: AssignIdentP { ident: id.node, payload: () },
+};
+
+COMMA<E>: Vec<E> =
+    <v0:(<E> ",")*> <e1:E?>
+        => v0.into_iter().chain(e1).collect();
+
+pub(crate) Starlark: AstStmt = "\n"* <l:@L> <s:(<Stmt> "\n"*)*> <r:@R>
+    => grammar_util::statements(s, l, r);
+
+DefStmt: AstStmt = ASTS<DefStmt_>;
+DefStmt_: Stmt =
+  "def" <name:AssignIdent> "(" <params:COMMA<DefParameter>> ")" <return_type:ReturnType> ":" <stmts:Suite>
+      => StmtP::Def(DefP {
+             name,
+             params,
+             return_type,
+             body: Box::new(stmts),
+             payload: (),
+         });
+
+ReturnType: Option<Box<AstTypeExpr>> = {
+    "->" <TypeExpr> => Some(Box::new(<>)),
+    => None,
+}
+
+// Lambda parameter cannot have type annotations.
+LambdaParameter: AstParameter = ASTP<LambdaParameter_>;
+LambdaParameter_: Parameter = {
+    "/"                          => Parameter::Slash,
+    <n:AssignIdent> "=" <e:Test> => Parameter::Normal(n, None, Some(Box::new(e))),
+    <AssignIdent>                => Parameter::Normal(<>, None, None),
+    "*" <AssignIdent>            => Parameter::Args(<>, None),
+    "*"                          => Parameter::NoArgs,
+    "**" <AssignIdent>           => Parameter::KwArgs(<>, None),
+};
+
+DefParameter: AstParameter = ASTP<DefParameter_>;
+DefParameter_: Parameter = {
+    "/"                                   => Parameter::Slash,
+    <n:AssignIdent> <t:Type> "=" <e:Test> => Parameter::Normal(n, t, Some(Box::new(e))),
+    <AssignIdent> <Type>                  => Parameter::Normal(<>, None),
+    "*" <AssignIdent> <Type>              => Parameter::Args(<>),
+    "*"                                   => Parameter::NoArgs,
+    "**" <AssignIdent> <Type>             => Parameter::KwArgs(<>),
+};
+
+TypeExpr: AstTypeExpr = <Test> =>? Ok(grammar_util::dialect_check_type(state, <>)?);
+
+Type: Option<Box<AstTypeExpr>> = {
+    ":" <TypeExpr> => Some(Box::new(<>)),
+    => None,
+}
+
+Suite: AstStmt = {
+    SimpleStmt<SmallStmt>,
+    "\n"+ "INDENT" <l:@L> "\n"* <v:(<Stmt> "\n"*)+> <r:@R> "DEDENT"
+        => grammar_util::statements(v, l, r)
+};
+
+Stmt: AstStmt = { DefStmt, IfStmt, ForStmt, SimpleStmt<SmallStmt> };
+
+IfBody: AstStmt = ASTS<IfBody_>;
+IfBody_: Stmt = <c:Test> ":" <s:Suite> <el:ElseStmt?> => {
+    match el {
+        None   => Stmt::If(c, Box::new(s)),
+        Some(e) => Stmt::IfElse(c, Box::new((s, e)))
+    }
+};
+
+IfStmt: AstStmt = ASTS<IfStmt_>;
+IfStmt_: Stmt = "if" <IfBody_>;
+
+ElseStmt: AstStmt = {
+    "elif" <IfBody>,
+    "else" ":" <Suite>
+};
+
+ForStmt: AstStmt = ASTS<ForStmt_>;
+ForStmt_: Stmt = "for" <var:ExprList> "in" <over:Test> ":" <body:Suite>
+    =>? Ok(Stmt::For(ForP {
+        var: grammar_util::check_assign(state.codemap, var)?,
+        over,
+        body: Box::new(body),
+    }));
+
+SimpleStmt<S>: AstStmt =
+    <l:@L> <e:S> <v:(";" <S>)*> ";"? <r:@R> "\n" => {
+        if v.is_empty() {
+            e
+        } else {
+            Stmt::Statements(std::iter::once(e).chain(v).collect())
+                .ast(l, r)
+        }
+    };
+
+SmallStmt: AstStmt = {
+    <l:@L> "return" <e:TestList?> <r:@R>
+        => Stmt::Return(e).ast(l, r),
+    <@L> "break" <@R>
+        => Stmt::Break.ast(<>),
+    <@L> "continue" <@R>
+        => Stmt::Continue.ast(<>),
+    <@L> "pass" <@R>
+        => Stmt::Pass.ast(<>),
+    AssignStmt,
+    ExprStmt,
+    LoadStmt,
+};
+
+AssignOp: Option<AssignOp> = {
+    "=" => None,
+    "+=" => Some(AssignOp::Add),
+    "-=" => Some(AssignOp::Subtract),
+    "*=" => Some(AssignOp::Multiply),
+    "/=" => Some(AssignOp::Divide),
+    "//=" => Some(AssignOp::FloorDivide),
+    "%=" => Some(AssignOp::Percent),
+    "&=" => Some(AssignOp::BitAnd),
+    "|=" => Some(AssignOp::BitOr),
+    "^=" => Some(AssignOp::BitXor),
+    "<<=" => Some(AssignOp::LeftShift),
+    ">>=" => Some(AssignOp::RightShift),
+};
+
+AssignStmt: AstStmt = ASTS<AssignStmt_>;
+AssignStmt_: Stmt = <lhs:TestList> <ty:Type> <op:AssignOp> <rhs:TestList>
+        =>? Ok(grammar_util::check_assignment(state.codemap, <>)?);
+
+// In python ExprStmt is an AssignStmt (
+// https://docs.python.org/3/reference/grammar.html). This ExprStmt is
+// according to the spec provided on https://github.com/google/skylark. It
+// enable parsing docstring and method calls.
+ExprStmt: AstStmt = ASTS<ExprStmt_>;
+ExprStmt_: Stmt = <Test> => Stmt::Expression(<>);
+
+Comma: Spanned<Comma> = <@L> "," <@R> => Comma.ast(<>);
+
+LoadStmt: AstStmt = ASTS<LoadStmt_>;
+LoadStmt_: Stmt = {
+    "load" "(" <module:string> ")"
+        => grammar_util::check_load_0(<>, state),
+    "load" "(" <module:string> Comma <args:(<LoadStmtSyms> <Comma>)*> <last:(<LoadStmtSyms>)?> ")"
+        => grammar_util::check_load(<>, state)
+};
+
+LoadStmtBindingName: AstString = <identifier> "=";
+
+LoadStmtSyms: (AstAssignIdent, AstString) = <id:LoadStmtBindingName?> <n:string> => {
+    let id = id.unwrap_or(n.clone());
+    (
+        Spanned { span: id.span, node: AssignIdentP { ident: id.node, payload: () } },
+        n,
+    )
+};
+
+// Expression
+L<E>: AstExpr = <l:@L> <v:(<E> ",")*> <e:E> <f:","?> <r:@R>
+    => {
+        if f.is_some() || !v.is_empty() {
+            Expr::Tuple(v.into_iter().chain(vec![e].into_iter()).collect())
+                .ast(l, r)
+        } else {
+            e
+        }
+    };
+
+ExprList: AstExpr = L<Expr>;
+
+TestList: AstExpr = L<Test>;
+
+
+PrimaryExpr: AstExpr = {
+    <l:@L> <e:PrimaryExpr> "." <i:identifier> <r:@R>
+        => Expr::Dot(Box::new(e), i).ast(l, r),
+    <l:@L> <e:PrimaryExpr> "(" <a:COMMA<Argument>> ")" <r:@R>
+        =>? Ok(Expr::check_call(e, a, state).ast(l, r)),
+    <l:@L> <e:PrimaryExpr> "[" <i1:Test?> ":" <i2:Test?> <i3:(":" <Test?>)?> "]"
+        <r:@R> => {
+          Expr::Slice(Box::new(e), i1.map(|x| Box::new(x)), i2.map(|x| Box::new(x)), i3.unwrap_or(None).map(|x| Box::new(x)))
+              .ast(l, r)
+        },
+    <l:@L> <e:PrimaryExpr> "[" <i:Test> "]" <r:@R>
+        => Expr::Index(Box::new((e, i))).ast(l, r),
+    <l:@L> <e:PrimaryExpr> "[" <i0:Test> "," <i1:Test> "]" <r:@R>
+        => Expr::Index2(Box::new((e, i0, i1))).ast(l, r),
+    Operand
+};
+
+OptionalSlice: AstExpr = ":" <Test>;
+
+// Note that the order of arguments (args, named, *args, **kwargs) is enforced
+// at the syntax evaluation, not by the Grammar.
+Argument: AstArgument = ASTA<Argument_>;
+Argument_: Argument = {
+    <Test>                    => Argument::Positional(<>),
+    <identifier> "=" <Test>   => Argument::Named(<>),
+    "*" <Test>                => Argument::Args(<>),
+    "**" <Test>               => Argument::KwArgs(<>)
+};
+
+Operand: AstExpr = {
+    <l:@L> <i:Ident> <r:@R>
+        => Expr::Identifier(i).ast(l, r),
+    <l:@L> <i:integer> <r:@R>
+        => Expr::Literal(AstLiteral::Int(i)).ast(l, r),
+    <l:@L> <f:float> <r:@R>
+        => Expr::Literal(AstLiteral::Float(f)).ast(l, r),
+    <l:@L> <s:string> <r:@R>
+        => Expr::Literal(AstLiteral::String(s)).ast(l, r),
+    <l:@L> "..." <r:@R>
+        => Expr::Literal(AstLiteral::Ellipsis).ast(l, r),
+    <l:@L> "[" <e:COMMA<Test>> "]" <r:@R>
+        => Expr::List(e).ast(l, r),
+    ListComp,
+    <l:@L> "{" <e:COMMA<DictEntry>> "}" <r:@R>
+        => Expr::Dict(e).ast(l, r),
+    DictComp,
+    <l:@L> "(" <e:TestList?> ")" <r:@R>
+        => match e {
+            Some(t) => t,
+            None => Expr::Tuple(vec![]).ast(l, r)
+        },
+    <l:@L> <f:fstring> <r:@R>
+        => Expr::FString(f).ast(l, r),
+};
+
+DictEntry: (AstExpr, AstExpr) = <Test> ":" <Test> => (<>);
+
+ListComp: AstExpr = ASTE<ListComp_>;
+ListComp_: Expr = "[" <t:Test> <c:CompClause> "]"
+    => Expr::ListComprehension(Box::new(t), Box::new(c.0), c.1);
+
+DictComp: AstExpr = ASTE<DictComp_>;
+DictComp_: Expr = "{" <k:DictEntry> <c:CompClause>"}"
+    => Expr::DictComprehension(Box::new(k), Box::new(c.0), c.1);
+
+// A comprehension must start with a for, otherwise its an error
+CompClause: (ForClause, Vec<Clause>) = <x:ForClause> <xs:Clause*>
+    => (x, xs);
+
+Clause: Clause = {
+    ForClause => Clause::For(<>),
+    "if" <OrTest> => Clause::If(<>),
+};
+ForClause: ForClause = "for" <var:ExprList> "in" <over:OrTest>
+    =>? Ok(ForClause {var: grammar_util::check_assign(state.codemap, var)?, over});
+
+
+// Base expression. Priorities are taken from Python 3 grammar.
+Test: AstExpr = {
+    <l:@L> <e1:OrTest> "if" <t:OrTest> "else" <e2:Test> <r:@R>
+        => Expr::If(Box::new((t, e1, e2))).ast(l, r),
+    OrTest,
+    LambDef
+};
+
+LambDef: AstExpr = ASTE<LambDef_>;
+LambDef_: Expr = "lambda" <p:COMMA<LambdaParameter>> ":" <e:Test> => {
+    Expr::Lambda(LambdaP {
+        params: p,
+        body: Box::new(e),
+        payload: (),
+    })
+};
+
+// Binary operators
+OrTest: AstExpr = {
+    <l:@L> <e1:OrTest> "or" <e2:AndTest> <r:@R>
+        => Expr::Op(Box::new(e1), BinOp::Or, Box::new(e2)).ast(l, r),
+    AndTest,
+};
+
+AndTest: AstExpr =  {
+    <l:@L> <e1:AndTest> "and" <e2:NotTest> <r:@R>
+        => Expr::Op(Box::new(e1), BinOp::And, Box::new(e2)).ast(l, r),
+    NotTest,
+};
+
+NotTest: AstExpr = {
+  <l:@L> "not" <e:NotTest> <r:@R>
+      => Expr::Not(Box::new(e)).ast(l, r),
+  CompTest,
+};
+
+CompTest: AstExpr = {
+    <l:@L> <e1:BitOrExpr> "==" <e2:BitOrExpr> <r:@R>
+        => Expr::Op(Box::new(e1), BinOp::Equal, Box::new(e2)).ast(l, r),
+    <l:@L> <e1:BitOrExpr> "!=" <e2:BitOrExpr> <r:@R>
+        => Expr::Op(Box::new(e1), BinOp::NotEqual, Box::new(e2)).ast(l, r),
+    <l:@L> <e1:BitOrExpr> "<" <e2:BitOrExpr> <r:@R>
+        => Expr::Op(Box::new(e1), BinOp::Less, Box::new(e2)).ast(l, r),
+    <l:@L> <e1:BitOrExpr> ">" <e2:BitOrExpr> <r:@R>
+        => Expr::Op(Box::new(e1), BinOp::Greater, Box::new(e2)).ast(l, r),
+    <l:@L> <e1:BitOrExpr> "<=" <e2:BitOrExpr> <r:@R>
+        => Expr::Op(Box::new(e1), BinOp::LessOrEqual, Box::new(e2)).ast(l, r),
+    <l:@L> <e1:BitOrExpr> ">=" <e2:BitOrExpr> <r:@R>
+        => Expr::Op(Box::new(e1), BinOp::GreaterOrEqual, Box::new(e2))
+                      .ast(l, r),
+    <l:@L> <e1:BitOrExpr> "in" <e2:BitOrExpr> <r:@R>
+        => Expr::Op(Box::new(e1), BinOp::In, Box::new(e2)).ast(l, r),
+    <l:@L> <e1:BitOrExpr> "not" "in" <e2:BitOrExpr> <r:@R>
+        => Expr::Op(Box::new(e1), BinOp::NotIn, Box::new(e2)).ast(l, r),
+    BitOrExpr
+};
+
+Expr = {BitOrExpr};
+
+BitOrExpr: AstExpr = {
+    <l:@L> <e1:BitOrExpr> "|" <e2:BitXorExpr> <r:@R>
+        => Expr::Op(Box::new(e1), BinOp::BitOr, Box::new(e2)).ast(l, r),
+    BitXorExpr,
+};
+
+BitXorExpr: AstExpr = {
+    <l:@L> <e1:BitXorExpr> "^" <e2:BitAndExpr> <r:@R>
+        => Expr::Op(Box::new(e1), BinOp::BitXor, Box::new(e2)).ast(l, r),
+    BitAndExpr,
+};
+
+BitAndExpr: AstExpr = {
+    <l:@L> <e1:BitAndExpr> "&" <e2:ShiftExpr> <r:@R>
+        => Expr::Op(Box::new(e1), BinOp::BitAnd, Box::new(e2)).ast(l, r),
+    ShiftExpr,
+};
+
+ShiftExpr: AstExpr = {
+    <l:@L> <e1:ShiftExpr> "<<" <e2:ArithExpr> <r:@R>
+        => Expr::Op(Box::new(e1), BinOp::LeftShift, Box::new(e2)).ast(l, r),
+    <l:@L> <e1:ShiftExpr> ">>" <e2:ArithExpr> <r:@R>
+        => Expr::Op(Box::new(e1), BinOp::RightShift, Box::new(e2)).ast(l, r),
+    ArithExpr,
+};
+
+ArithExpr: AstExpr = {
+    <l:@L> <e1:ArithExpr> "+" <e2:ProductExpr> <r:@R>
+        => Expr::Op(Box::new(e1), BinOp::Add, Box::new(e2)).ast(l, r),
+    <l:@L> <e1:ArithExpr> "-" <e2:ProductExpr> <r:@R>
+        => Expr::Op(Box::new(e1), BinOp::Subtract, Box::new(e2)).ast(l, r),
+    ProductExpr,
+};
+
+ProductExpr: AstExpr = {
+    <l:@L> <e1:ProductExpr> "*" <e2:FactorExpr> <r:@R>
+        => Expr::Op(Box::new(e1), BinOp::Multiply, Box::new(e2))
+            .ast(l, r),
+    <l:@L> <e1:ProductExpr> "%" <e2:FactorExpr> <r:@R>
+        => Expr::Op(Box::new(e1), BinOp::Percent, Box::new(e2)).ast(l, r),
+    <l:@L> <e1:ProductExpr> "/" <e2:FactorExpr> <r:@R>
+        => Expr::Op(Box::new(e1), BinOp::Divide, Box::new(e2)).ast(l, r),
+    <l:@L> <e1:ProductExpr> "//" <e2:FactorExpr> <r:@R>
+        => Expr::Op(Box::new(e1), BinOp::FloorDivide, Box::new(e2)).ast(l, r),
+    FactorExpr
+};
+
+FactorExpr: AstExpr = {
+    <l:@L> "+" <e:FactorExpr> <r:@R>
+        => Expr::Plus(Box::new(e)).ast(l, r),
+    <l:@L> "-" <e:FactorExpr> <r:@R>
+        => Expr::Minus(Box::new(e)).ast(l, r),
+    <l:@L> "~" <e:FactorExpr> <r:@R>
+        => Expr::BitNot(Box::new(e)).ast(l, r),
+    PrimaryExpr
+};
+
+extern {
+    type Location = usize;
+    type Error = crate::eval_exception::EvalException;
+
+    enum lexer::Token {
+      "INDENT" => lexer::Token::Indent,
+      "DEDENT" => lexer::Token::Dedent,
+      "\n"     => lexer::Token::Newline,
+      // Keywords
+      "and" => lexer::Token::And,
+      "else" => lexer::Token::Else,
+      "load" => lexer::Token::Load,
+      "break" => lexer::Token::Break,
+      "for" => lexer::Token::For,
+      "not" => lexer::Token::Not,
+      "continue" => lexer::Token::Continue,
+      "if" => lexer::Token::If,
+      "or" => lexer::Token::Or,
+      "def" => lexer::Token::Def,
+      "in" => lexer::Token::In,
+      "pass" => lexer::Token::Pass,
+      "elif" => lexer::Token::Elif,
+      "return" => lexer::Token::Return,
+      "lambda" => lexer::Token::Lambda,
+      // Symbols
+      "," => lexer::Token::Comma,
+      ";" => lexer::Token::Semicolon,
+      ":" => lexer::Token::Colon,
+      "+=" => lexer::Token::PlusEqual,
+      "-=" => lexer::Token::MinusEqual,
+      "*=" => lexer::Token::StarEqual,
+      "/=" => lexer::Token::SlashEqual,
+      "//=" => lexer::Token::SlashSlashEqual,
+      "%=" => lexer::Token::PercentEqual,
+      "==" => lexer::Token::EqualEqual,
+      "!=" => lexer::Token::BangEqual,
+      "<=" => lexer::Token::LessEqual,
+      ">=" => lexer::Token::GreaterEqual,
+      "**" => lexer::Token::StarStar,
+      "->" => lexer::Token::MinusGreater,
+      "=" => lexer::Token::Equal,
+      "<" => lexer::Token::LessThan,
+      ">" => lexer::Token::GreaterThan,
+      "-" => lexer::Token::Minus,
+      "+" => lexer::Token::Plus,
+      "*" => lexer::Token::Star,
+      "%" => lexer::Token::Percent,
+      "/" => lexer::Token::Slash,
+      "//" => lexer::Token::SlashSlash,
+      "." => lexer::Token::Dot,
+      "&" => lexer::Token::Ampersand,
+      "|" => lexer::Token::Pipe,
+      "^" => lexer::Token::Caret,
+      "<<" => lexer::Token::LessLess,
+      ">>" => lexer::Token::GreaterGreater,
+      "~" => lexer::Token::Tilde,
+      "&=" => lexer::Token::AmpersandEqual,
+      "|=" => lexer::Token::PipeEqual,
+      "^=" => lexer::Token::CaretEqual,
+      "<<=" => lexer::Token::LessLessEqual,
+      ">>=" => lexer::Token::GreaterGreaterEqual,
+      "..." => lexer::Token::Ellipsis,
+      // Brackets
+      "[" => lexer::Token::OpeningSquare,
+      "{" => lexer::Token::OpeningCurly,
+      "(" => lexer::Token::OpeningRound,
+      "]" => lexer::Token::ClosingSquare,
+      "}" => lexer::Token::ClosingCurly,
+      ")" => lexer::Token::ClosingRound,
+
+
+      "IDENTIFIER" => lexer::Token::Identifier(<String>),
+      "INTEGER" => lexer::Token::Int(<lexer::TokenInt>),
+      "FLOAT" => lexer::Token::Float(<f64>),
+      "STRING" => lexer::Token::String(<String>),
+      "FSTRING" => lexer::Token::FString(<lexer::TokenFString>),
+    }
+}

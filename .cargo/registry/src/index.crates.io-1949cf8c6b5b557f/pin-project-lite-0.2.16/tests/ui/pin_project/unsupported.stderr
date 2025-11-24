@@ -1,0 +1,111 @@
+error: no rules expected `}`
+ --> tests/ui/pin_project/unsupported.rs:5:1
+  |
+5 | / pin_project! {
+6 | |     struct Struct1 {} //~ ERROR no rules expected the token `}`
+7 | | }
+  | |_^ no rules expected this token in macro call
+  |
+note: while trying to match meta-variable `$field_vis:vis`
+ --> src/lib.rs
+  |
+  |                 $field_vis:vis $field:ident: $field_ty:ty
+  |                 ^^^^^^^^^^^^^^
+  = note: this error originates in the macro `$crate::__pin_project_expand` which comes from the expansion of the macro `pin_project` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: no rules expected `}`
+ --> tests/ui/pin_project/unsupported.rs:5:1
+  |
+5 | / pin_project! {
+6 | |     struct Struct1 {} //~ ERROR no rules expected the token `}`
+7 | | }
+  | |_^ no rules expected this token in macro call
+  |
+note: while trying to match meta-variable `$field_vis:vis`
+ --> src/lib.rs
+  |
+  |                 $field_vis:vis $field:ident: $field_ty:ty
+  |                 ^^^^^^^^^^^^^^
+  = note: this error originates in the macro `$crate::__pin_project_expand` which comes from the expansion of the macro `pin_project` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: no rules expected `(`
+  --> tests/ui/pin_project/unsupported.rs:10:19
+   |
+10 |     struct Struct2(); //~ ERROR no rules expected the token `(`
+   |                   ^ no rules expected this token in macro call
+   |
+note: while trying to match `{`
+  --> src/lib.rs
+   |
+   |         {
+   |         ^
+
+error: no rules expected `;`
+  --> tests/ui/pin_project/unsupported.rs:14:19
+   |
+14 |     struct Struct3; //~ ERROR no rules expected the token `;`
+   |                   ^ no rules expected this token in macro call
+   |
+note: while trying to match `{`
+  --> src/lib.rs
+   |
+   |         {
+   |         ^
+
+error: no rules expected `(`
+  --> tests/ui/pin_project/unsupported.rs:19:10
+   |
+19 |         A(u8)
+   |          ^ no rules expected this token in macro call
+   |
+note: while trying to match `}`
+  --> src/lib.rs
+   |
+   |         }
+   |         ^
+
+error: no rules expected `(`
+  --> tests/ui/pin_project/unsupported.rs:19:10
+   |
+19 |         A(u8)
+   |          ^ no rules expected this token in macro call
+   |
+note: while trying to match `}`
+  --> src/lib.rs
+   |
+   |         }
+   |         ^
+
+error: no rules expected identifier `union`
+  --> tests/ui/pin_project/unsupported.rs:23:1
+   |
+23 | / pin_project! {
+24 | |     union Union { //~ ERROR no rules expected the token `union`
+25 | |         x: u8,
+26 | |     }
+27 | | }
+   | |_^ no rules expected this token in macro call
+   |
+note: while trying to match keyword `struct`
+  --> src/lib.rs
+   |
+   |         [$(#[$attrs:meta])* $vis:vis struct $ident:ident]
+   |                                      ^^^^^^
+   = note: this error originates in the macro `$crate::__pin_project_expand` which comes from the expansion of the macro `pin_project` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: no rules expected identifier `union`
+  --> tests/ui/pin_project/unsupported.rs:23:1
+   |
+23 | / pin_project! {
+24 | |     union Union { //~ ERROR no rules expected the token `union`
+25 | |         x: u8,
+26 | |     }
+27 | | }
+   | |_^ no rules expected this token in macro call
+   |
+note: while trying to match keyword `struct`
+  --> src/lib.rs
+   |
+   |         [$(#[$attrs:meta])* $vis:vis struct $ident:ident]
+   |                                      ^^^^^^
+   = note: this error originates in the macro `$crate::__pin_project_expand` which comes from the expansion of the macro `pin_project` (in Nightly builds, run with -Z macro-backtrace for more info)

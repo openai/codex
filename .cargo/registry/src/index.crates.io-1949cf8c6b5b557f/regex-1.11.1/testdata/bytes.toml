@@ -1,0 +1,235 @@
+# These are tests specifically crafted for regexes that can match arbitrary
+# bytes. In some cases, we also test the Unicode variant as well, just because
+# it's good sense to do so. But also, these tests aren't really about Unicode,
+# but whether matches are only reported at valid UTF-8 boundaries. For most
+# tests in this entire collection, utf8 = true. But for these tests, we use
+# utf8 = false.
+
+[[test]]
+name = "word-boundary-ascii"
+regex = ' \b'
+haystack = " δ"
+matches = []
+unicode = false
+utf8 = false
+
+[[test]]
+name = "word-boundary-unicode"
+regex = ' \b'
+haystack = " δ"
+matches = [[0, 1]]
+unicode = true
+utf8 = false
+
+[[test]]
+name = "word-boundary-ascii-not"
+regex = ' \B'
+haystack = " δ"
+matches = [[0, 1]]
+unicode = false
+utf8 = false
+
+[[test]]
+name = "word-boundary-unicode-not"
+regex = ' \B'
+haystack = " δ"
+matches = []
+unicode = true
+utf8 = false
+
+[[test]]
+name = "perl-word-ascii"
+regex = '\w+'
+haystack = "aδ"
+matches = [[0, 1]]
+unicode = false
+utf8 = false
+
+[[test]]
+name = "perl-word-unicode"
+regex = '\w+'
+haystack = "aδ"
+matches = [[0, 3]]
+unicode = true
+utf8 = false
+
+[[test]]
+name = "perl-decimal-ascii"
+regex = '\d+'
+haystack = "1२३9"
+matches = [[0, 1], [7, 8]]
+unicode = false
+utf8 = false
+
+[[test]]
+name = "perl-decimal-unicode"
+regex = '\d+'
+haystack = "1२३9"
+matches = [[0, 8]]
+unicode = true
+utf8 = false
+
+[[test]]
+name = "perl-whitespace-ascii"
+regex = '\s+'
+haystack = " \u1680"
+matches = [[0, 1]]
+unicode = false
+utf8 = false
+
+[[test]]
+name = "perl-whitespace-unicode"
+regex = '\s+'
+haystack = " \u1680"
+matches = [[0, 4]]
+unicode = true
+utf8 = false
+
+# The first `(.+)` matches two Unicode codepoints, but can't match the 5th
+# byte, which isn't valid UTF-8. The second (byte based) `(.+)` takes over and
+# matches.
+[[test]]
+name = "mixed-dot"
+regex = '(.+)(?-u)(.+)'
+haystack = '\xCE\x93\xCE\x94\xFF'
+matches = [
+  [[0, 5], [0, 4], [4, 5]],
+]
+unescape = true
+unicode = true
+utf8 = false
+
+[[test]]
+name = "case-one-ascii"
+regex = 'a'
+haystack = "A"
+matches = [[0, 1]]
+case-insensitive = true
+unicode = false
+utf8 = false
+
+[[test]]
+name = "case-one-unicode"
+regex = 'a'
+haystack = "A"
+matches = [[0, 1]]
+case-insensitive = true
+unicode = true
+utf8 = false
+
+[[test]]
+name = "case-class-simple-ascii"
+regex = '[a-z]+'
+haystack = "AaAaA"
+matches = [[0, 5]]
+case-insensitive = true
+unicode = false
+utf8 = false
+
+[[test]]
+name = "case-class-ascii"
+regex = '[a-z]+'
+haystack = "aA\u212AaA"
+matches = [[0, 2], [5, 7]]
+case-insensitive = true
+unicode = false
+utf8 = false
+
+[[test]]
+name = "case-class-unicode"
+regex = '[a-z]+'
+haystack = "aA\u212AaA"
+matches = [[0, 7]]
+case-insensitive = true
+unicode = true
+utf8 = false
+
+[[test]]
+name = "negate-ascii"
+regex = '[^a]'
+haystack = "δ"
+matches = [[0, 1], [1, 2]]
+unicode = false
+utf8 = false
+
+[[test]]
+name = "negate-unicode"
+regex = '[^a]'
+haystack = "δ"
+matches = [[0, 2]]
+unicode = true
+utf8 = false
+
+# When utf8=true, this won't match, because the implicit '.*?' prefix is
+# Unicode aware and will refuse to match through invalid UTF-8 bytes.
+[[test]]
+name = "dotstar-prefix-ascii"
+regex = 'a'
+haystack = '\xFFa'
+matches = [[1, 2]]
+unescape = true
+unicode = false
+utf8 = false
+
+[[test]]
+name = "dotstar-prefix-unicode"
+regex = 'a'
+haystack = '\xFFa'
+matches = [[1, 2]]
+unescape = true
+unicode = true
+utf8 = false
+
+[[test]]
+name = "null-bytes"
+regex = '(?P<cstr>[^\x00]+)\x00'
+haystack = 'foo\x00'
+matches = [
+  [[0, 4], [0, 3]],
+]
+unescape = true
+unicode = false
+utf8 = false
+
+[[test]]
+name = "invalid-utf8-anchor-100"
+regex = '\xCC?^'
+haystack = '\x8d#;\x1a\xa4s3\x05foobarX\\\x0f0t\xe4\x9b\xa4'
+matches = [[0, 0]]
+unescape = true
+unicode = false
+utf8 = false
+
+[[test]]
+name = "invalid-utf8-anchor-200"
+regex = '^\xf7|4\xff\d\x8a\x8a\x8a\x8a\x8a\x8a\x8a\x8a\x8a\x8a\x8a\x8a\x8a##########[] d\x8a\x8a\x8a\x8a\x8a\x8a\x8a\x8a\x8a\x8a\x8a\x8a\x8a##########\[] #####\x80\S7|$'
+haystack = '\x8d#;\x1a\xa4s3\x05foobarX\\\x0f0t\xe4\x9b\xa4'
+matches = [[22, 22]]
+unescape = true
+unicode = false
+utf8 = false
+
+[[test]]
+name = "invalid-utf8-anchor-300"
+regex = '^|ddp\xff\xffdddddlQd@\x80'
+haystack = '\x8d#;\x1a\xa4s3\x05foobarX\\\x0f0t\xe4\x9b\xa4'
+matches = [[0, 0]]
+unescape = true
+unicode = false
+utf8 = false
+
+[[test]]
+name = "word-boundary-ascii-100"
+regex = '\Bx\B'
+haystack = "áxβ"
+matches = []
+unicode = false
+utf8 = false
+
+[[test]]
+name = "word-boundary-ascii-200"
+regex = '\B'
+haystack = "0\U0007EF5E"
+matches = [[2, 2], [3, 3], [4, 4], [5, 5]]
+unicode = false
+utf8 = false

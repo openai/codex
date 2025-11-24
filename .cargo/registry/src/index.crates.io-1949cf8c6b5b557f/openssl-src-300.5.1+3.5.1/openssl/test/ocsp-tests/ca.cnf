@@ -1,0 +1,34 @@
+HOME               = .
+default_ca         = ca
+config_diagnostics = 1
+
+####################################################################
+
+[ req ]
+x509_extensions	= v3_ca
+
+####################################################################
+
+[ usr_cert ]
+basicConstraints = critical, CA:FALSE
+keyUsage = critical, nonRepudiation, digitalSignature, keyEncipherment
+subjectKeyIdentifier = hash
+##authorityInfoAccess = OCSP;URI:http://127.0.0.1:19254/ocsp
+# we do not include aia in the cert.
+# we use the s_server option "-status_url" to specify the url.
+
+####################################################################
+
+[ v3_ca ]
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always
+basicConstraints = critical,CA:true
+keyUsage = critical, cRLSign, keyCertSign
+
+####################################################################
+
+# Minimal CA entry to allow generation of CRLs.
+[ ca ]
+default_md = sha256
+database = index.txt
+crlnumber = crlnum.txt

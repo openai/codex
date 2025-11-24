@@ -1,0 +1,113 @@
+error: expected validate regex attribute item to be of the form `regex(...)`
+ --> tests/ui/invalid_validation_attrs.rs:5:31
+  |
+5 | pub struct Struct1(#[validate(regex, foo, length(min = 1, equal = 2, bar))] String);
+  |                               ^^^^^
+
+error: expected schemars regex attribute item to be of the form `regex(...)`
+ --> tests/ui/invalid_validation_attrs.rs:9:31
+  |
+9 | pub struct Struct2(#[schemars(regex, foo, length(min = 1, equal = 2, bar))] String);
+  |                               ^^^^^
+
+error: schemars attribute cannot contain both `equal` and `min`
+ --> tests/ui/invalid_validation_attrs.rs:9:59
+  |
+9 | pub struct Struct2(#[schemars(regex, foo, length(min = 1, equal = 2, bar))] String);
+  |                                                           ^^^^^^^^^
+
+error: unknown item in schemars length attribute: `bar`
+ --> tests/ui/invalid_validation_attrs.rs:9:70
+  |
+9 | pub struct Struct2(#[schemars(regex, foo, length(min = 1, equal = 2, bar))] String);
+  |                                                                      ^^^
+
+error: unknown schemars attribute `foo`
+ --> tests/ui/invalid_validation_attrs.rs:9:38
+  |
+9 | pub struct Struct2(#[schemars(regex, foo, length(min = 1, equal = 2, bar))] String);
+  |                                      ^^^
+
+error: unknown schemars attribute `email`
+ --> tests/ui/invalid_validation_attrs.rs:8:12
+  |
+8 | #[schemars(email)]
+  |            ^^^^^
+
+error: expected validate regex attribute item to be of the form `regex(...)`
+  --> tests/ui/invalid_validation_attrs.rs:14:9
+   |
+14 |         regex = "foo",
+   |         ^^^^^^^^^^^^^
+
+error: expected validate contains attribute item to be of the form `contains(...)`
+  --> tests/ui/invalid_validation_attrs.rs:15:9
+   |
+15 |         contains = "bar",
+   |         ^^^^^^^^^^^^^^^^
+
+error: `pattern` is not supported in `validate(regex(...))` attribute - use either `validate(regex(path = ...))` or `schemars(regex(pattern = ...))` instead
+  --> tests/ui/invalid_validation_attrs.rs:16:15
+   |
+16 |         regex(pattern = "baz"),
+   |               ^^^^^^^^^^^^^^^
+
+error: `validate(regex(...))` attribute requires `path = ...`
+  --> tests/ui/invalid_validation_attrs.rs:16:9
+   |
+16 |         regex(pattern = "baz"),
+   |         ^^^^^^^^^^^^^^^^^^^^^^
+
+error: expected schemars regex attribute item to be of the form `regex(...)`
+  --> tests/ui/invalid_validation_attrs.rs:28:9
+   |
+28 |         regex = "foo",
+   |         ^^^^^^^^^^^^^
+
+error: expected schemars contains attribute item to be of the form `contains(...)`
+  --> tests/ui/invalid_validation_attrs.rs:29:9
+   |
+29 |         contains = "bar",
+   |         ^^^^^^^^^^^^^^^^
+
+error: `path` is not supported in `schemars(regex(...))` attribute - use `schemars(regex(pattern = ...))` instead
+  --> tests/ui/invalid_validation_attrs.rs:30:15
+   |
+30 |         regex(path = "baz"),
+   |               ^^^^^^^^^^^^
+
+error: `schemars(regex(...))` attribute requires `pattern = ...`
+  --> tests/ui/invalid_validation_attrs.rs:30:9
+   |
+30 |         regex(path = "baz"),
+   |         ^^^^^^^^^^^^^^^^^^^
+
+error: unexpected value of schemars email attribute item
+  --> tests/ui/invalid_validation_attrs.rs:33:14
+   |
+33 |         email(code = "code_str", message = "message"),
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: unexpected value of schemars email attribute item
+  --> tests/ui/invalid_validation_attrs.rs:34:15
+   |
+34 |         email = "foo",
+   |               ^^^^^^^
+
+error: duplicate schemars attribute item `email`
+  --> tests/ui/invalid_validation_attrs.rs:36:9
+   |
+36 |         email,
+   |         ^^^^^
+
+error: schemars attribute cannot contain both `url` and `email`
+  --> tests/ui/invalid_validation_attrs.rs:37:9
+   |
+37 |         url
+   |         ^^^
+
+error: unknown schemars attribute `phone`
+  --> tests/ui/invalid_validation_attrs.rs:32:9
+   |
+32 |         phone,
+   |         ^^^^^

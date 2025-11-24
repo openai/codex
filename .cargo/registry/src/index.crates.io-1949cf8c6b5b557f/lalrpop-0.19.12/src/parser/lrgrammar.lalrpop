@@ -1,0 +1,521 @@
+use string_cache::DefaultAtom as Atom;
+use crate::grammar::parse_tree::*;
+use crate::grammar::pattern::*;
+use std::iter::once;
+use crate::tok::{self, Tok};
+use crate::util::strip;
+use lalrpop_util::ParseError;
+
+use super::Top;
+
+grammar<'input>(text: &'input str);
+
+pub Top: Top = {
+    "StartGrammar" <Grammar> => Top::Grammar(<>),
+    "StartPattern" <Pattern> => Top::Pattern(<>),
+    "StartMatchMapping" <MatchMapping> => Top::MatchMapping(<>),
+    "StartTypeRef" <TypeRef> => Top::TypeRef(<>),
+    "StartGrammarWhereClauses" <GrammarWhereClauses> => Top::GrammarWhereClauses(<>),
+};
+
+Grammar: Grammar =
+    <module_attributes:ShebangAttribute*>
+    <uses:Use*>
+    <annotations:Annotation*>
+    <lo:@L> "grammar" <hi:@R>
+    <tps:GrammarTypeParameters?>
+    <parameters:GrammarParameters?>
+    <where_clauses:GrammarWhereClauses?>
+    ";"
+    <items:GrammarItem*> => {
+        Grammar { prefix: format!("__"), // adjusted by `parse_grammar`
+                  span: Span(lo, hi),
+                  type_parameters: tps.unwrap_or(vec![]),
+                  parameters: parameters.unwrap_or(vec![]),
+                  where_clauses: where_clauses.unwrap_or(vec![]),
+                  items: uses.into_iter().chain(items).collect(),
+                  annotations,
+                  module_attributes }
+    };
+
+GrammarTypeParameters: Vec<TypeParameter> =
+    "<" <Comma<TypeParameter>> ">";
+
+TypeParameter: TypeParameter = {
+    <l:Lifetime> => TypeParameter::Lifetime(l),
+    <l:Id> => TypeParameter::Id(l)
+};
+
+GrammarWhereClauses: Vec<WhereClause<TypeRef>> =
+    "where" <Comma<GrammarWhereClause>>;
+
+GrammarWhereClause: WhereClause<TypeRef> = {
+    <l:Lifetime> ":" <bounds:Plus<Lifetime>> =>
+        WhereClause::Lifetime { lifetime: l, bounds },
+    <f:ForAll> <ty:TypeRef> ":" <bounds:TypeBounds> =>
+        WhereClause::Type { forall: f, ty, bounds }
+};
+
+#[inline]
+ForAll: Vec<TypeParameter> = {
+    "for" "<" <Comma<TypeParameter>> ">",
+    () => vec![],
+};
+
+TypeBounds: Vec<TypeBound<TypeRef>> =
+    <Plus<TypeBound>>;
+
+TypeBound: TypeBound<TypeRef> = {
+    <l:Lifetime> =>
+        TypeBound::Lifetime(l),
+    <f:ForAll> <p:Path> "(" <params:Comma<TypeRef>> ")" <ret:("->" <TypeRef>)?> =>
+        TypeBound::Fn { forall: f, path: p, parameters: params, ret },
+    <f:ForAll> <p:Path> <params:("<" <Comma<TypeBoundParameter>> ">")?> =>
+        TypeBound::Trait { forall: f, path: p, parameters: params.unwrap_or(vec![]) }
+};
+
+TypeBoundParameter: TypeBoundParameter<TypeRef> = {
+    <l:Lifetime> => TypeBoundParameter::Lifetime(l),
+    <ty:TypeRef> => TypeBoundParameter::TypeParameter(ty),
+    <id:Id> "=" <ty:TypeRef> => TypeBoundParameter::Associated(id, ty),
+};
+
+Plus<T>: Vec<T> = {
+    <mut v:(<T> "+")*> <e:T?> => match e {
+        None => v,
+        Some(e) => { v.push(e); v }
+    }
+};
+
+GrammarParameters: Vec<Parameter> =
+    "(" <Comma<GrammarParameter>> ")";
+
+GrammarParameter: Parameter =
+    <id:Id> ":" <ty:TypeRef> => Parameter { name: id, ty };
+
+GrammarItem: GrammarItem = {
+    Use,
+    MatchToken,
+    ExternToken,
+    Nonterminal
+};
+
+Use: GrammarItem =
+    <u:"use"> ";" => GrammarItem::Use(strip(u).to_string());
+
+Visibility: Visibility = {
+    "pub" "(" <p:Path> ")" => Visibility::Pub(Some(p)),
+    "pub" "(" "in" <p:Path> ")" => Visibility::PubIn(p),
+    "pub" => Visibility::Pub(None),
+    () => Visibility::Priv,
+};
+
+Nonterminal: GrammarItem =
+    <annotations:Annotation*>
+    <v:Visibility> <lo:@L> <n:NonterminalName> <hi:@R>
+    <t:(":" <TypeRef>)?> "=" <a:Alternatives> => {
+        GrammarItem::Nonterminal(NonterminalData { visibility: v,
+                                                   span: Span(lo, hi),
+                                                   name: n.0,
+                                                   annotations,
+                                                   args: n.1,
+                                                   type_decl: t,
+                                                   alternatives: a })
+    };
+
+AnnotationArg: (Atom, String) =
+    "(" <name:Id> "=" <value:"StringLiteral"> ")" => (name, value.into());
+
+Annotation: Annotation =
+    "#" "[" <lo:@L> <id:Id> <arg: AnnotationArg?> <hi:@R> "]" => {
+        Annotation { id_span: Span(lo, hi), id, arg }
+    };
+
+NonterminalName: (NonterminalString, Vec<NonterminalString>) = {
+    <MacroId> "<" <Comma<NotMacroId>> ">",
+    <n:NotMacroId> => (n, vec![]),
+    <"Escape"> => (NonterminalString(Atom::from(<>)), vec![]),
+};
+
+Alternatives: Vec<Alternative> = {
+    <a:Alternative> ";" => vec![a],
+    "{" <Comma<Alternative>> "}" ";"?,
+};
+
+Alternative: Alternative = {
+    <ann:Annotation*>
+    <lo:@L> <s:Symbol+> <c:("if" <Cond>)?> <a:Action?> <hi:@R> => {
+        Alternative {
+            span: Span(lo, hi),
+            expr: ExprSymbol { symbols: s },
+            condition: c,
+            action: a,
+            annotations: ann,
+        }
+    },
+    <lo:@L> <c:("if" <Cond>)?> <a:Action> <hi:@R> => {
+        Alternative {
+            span: Span(lo, hi),
+            expr: ExprSymbol { symbols: vec![] },
+            condition: c,
+            action: Some(a),
+            annotations: vec![],
+        }
+    },
+};
+
+Action: ActionKind = {
+    "=>@L" => ActionKind::Lookahead,
+    "=>@R" => ActionKind::Lookbehind,
+    <c:"=>"> => ActionKind::User(strip(c).to_string()),
+    <c:"=>?"> => ActionKind::Fallible(strip(c).to_string()),
+};
+
+Cond: Condition =
+    <lo:@L> <a:NotMacroId> <op:CondOp> <b:StringLiteral> <hi:@R> => {
+        Condition { span:Span(lo, hi), lhs:a, rhs:b, op }
+    };
+
+CondOp: ConditionOp = {
+    "==" => ConditionOp::Equals,
+    "!=" => ConditionOp::NotEquals,
+    "~~" => ConditionOp::Match,
+    "!~" => ConditionOp::NotMatch,
+};
+
+ExprSymbol: ExprSymbol =
+    Symbol* => ExprSymbol { symbols: <> };
+
+Symbol: Symbol = {
+    <lo:@L> "<" <m:"mut"?> @L <l:Id> ":" <s:Symbol0> ">" <hi:@R> =>
+        Symbol::new(Span(lo, hi), SymbolKind::Name(Name::new(m.is_some(), l), Box::new(s))),
+
+    <lo:@L> "<" <s:Symbol0> ">" <hi:@R> =>
+        Symbol::new(Span(lo, hi), SymbolKind::Choose(Box::new(s))),
+
+    Symbol0,
+};
+
+Symbol0: Symbol = {
+    Symbol1,
+
+    <lhs:Symbol0> <op:RepeatOp> <hi:@R> =>
+        Symbol::new(Span(lhs.span.0, hi),
+                    SymbolKind::Repeat(Box::new(RepeatSymbol { symbol: lhs, op }))),
+};
+
+RepeatOp: RepeatOp = {
+    "+" => RepeatOp::Plus,
+    "*" => RepeatOp::Star,
+    "?" => RepeatOp::Question,
+};
+
+Symbol1: Symbol =
+    <lo:@L> <sk:SymbolKind1> <hi:@R> => Symbol::new(Span(lo, hi), sk);
+
+SymbolKind1: SymbolKind = {
+    <name:MacroId> "<" <args:Comma<Symbol>> ">" =>
+        SymbolKind::Macro(MacroSymbol { name, args }),
+
+    QuotedTerminal =>
+        SymbolKind::Terminal(<>),
+
+    "Id" =>
+        SymbolKind::AmbiguousId(Atom::from(<>)),
+
+    Escape =>
+        SymbolKind::Nonterminal(NonterminalString(<>)),
+
+    "(" <ExprSymbol> ")" =>
+        SymbolKind::Expr(<>),
+
+    "@L" =>
+        SymbolKind::Lookahead,
+
+    "@R" =>
+        SymbolKind::Lookbehind,
+
+    "!" =>
+        SymbolKind::Error,
+};
+
+TypeRef: TypeRef = {
+    "(" <Comma<TypeRef>> ")" =>
+        TypeRef::Tuple(<>),
+
+    "[" <TypeRef> "]" =>
+        TypeRef::Slice(Box::new(<>)),
+
+    "#" <Symbol> "#" => {
+        TypeRef::OfSymbol(<>.kind)
+    },
+
+    "&" <l:Lifetime?> <m:"mut"?> <t:TypeRef> =>
+        TypeRef::Ref { lifetime: l,
+                       mutable: m.is_some(),
+                       referent: Box::new(t) },
+
+    <path:Path> "<" <types:Comma<TypeRefOrLifetime>> ">" =>
+        TypeRef::Nominal { <> },
+
+    <p:Path> =>
+        match p.as_id() {
+            Some(id) => TypeRef::Id(id),
+            None => TypeRef::Nominal { path: p, types: vec![] },
+        },
+
+    "dyn" <path:Path> "<" <types:Comma<TypeRefOrLifetime>> ">" =>
+        TypeRef::TraitObject { <> },
+
+    "dyn" <path:Path> => TypeRef::TraitObject { path, types: vec![] },
+
+    "dyn" <forall:ForAll> <path:Path> "("  <parameters:Comma<TypeRef>> ")" <ret: ("->" <TypeRef>)?> =>
+       TypeRef::Fn { forall, path, parameters, ret: ret.map(Box::new) },
+};
+
+TypeRefOrLifetime: TypeRef = {
+    TypeRef,
+    Lifetime => TypeRef::Lifetime(<>),
+};
+
+Path: Path =
+    <a:"::"?> <h:(<Id> "::")*> <t:Id> => {
+        Path { absolute: a.is_some(),
+               ids: h.into_iter().chain(once(t)).collect() }
+    };
+
+ExternToken: GrammarItem = {
+    <lo:@L> "extern" <hi:@R> "{" <a0:AssociatedType*> <et:EnumToken> <a1:AssociatedType*> "}" => {
+        GrammarItem::ExternToken(ExternToken {
+            span: Span(lo, hi),
+            associated_types: a0.into_iter().chain(a1).collect(),
+            enum_token: Some(et),
+        })
+    },
+    <lo:@L> "extern" <hi:@R> "{" <a0:AssociatedType*> "}" => {
+        GrammarItem::ExternToken(ExternToken {
+            span: Span(lo, hi),
+            associated_types: a0,
+            enum_token: None,
+        })
+    },
+};
+
+MatchToken: GrammarItem =
+    <t:MatchTokenInt> => GrammarItem::MatchToken(t);
+
+MatchTokenInt: MatchToken = {
+    <t:MatchTokenInt> "else" "{" <c:MatchContents> "}" => t.add(c),
+    <lo:@L> "match" <hi:@R> "{" <c:MatchContents> "}"  => MatchToken::new(c, Span(lo, hi)),
+};
+
+MatchContents: MatchContents =
+    <items:Comma<MatchItem>> => MatchContents { items };
+
+MatchItem: MatchItem = {
+    <lo:@L> "_" <hi:@R>             => MatchItem::CatchAll(Span(lo, hi)),
+    <lo:@L> <s:MatchSymbol> <hi:@R> => MatchItem::Unmapped(s, Span(lo, hi)),
+    <lo:@L> <from:MatchSymbol> <start:@L> <p:"=>"> <hi:@R> =>? {
+        let to = super::parse_match_mapping(p, start + 2)?;
+        Ok(MatchItem::Mapped(from, to, Span(lo, hi)))
+    }
+};
+
+MatchSymbol = QuotedLiteral;
+
+MatchMapping: MatchMapping = {
+    Terminal => MatchMapping::Terminal(<>),
+    "{" "}" => MatchMapping::Skip,
+};
+
+EnumToken: EnumToken =
+    "enum" <lo:@L> <t:TypeRef> <hi:@R> "{"
+      <c:Comma<Conversion>>
+    "}" => {
+        EnumToken {
+            type_name: t,
+            type_span: Span(lo, hi),
+            conversions: c,
+        }
+    };
+
+AssociatedType: AssociatedType =
+    "type" <lo:@L> <n:Id> <hi:@R> "=" <t:TypeRef> ";" => {
+        AssociatedType { type_span: Span(lo, hi),
+                         type_name: n,
+                         type_ref: t }
+    };
+
+Conversion: Conversion =
+    <lo:@L> <from:Terminal> <start:@L> <p:"=>"> <hi:@R> =>? {
+        let pattern = super::parse_pattern(p, start + 2)?;
+        Ok(Conversion { span: Span(lo, hi),
+                        from,
+                        to: pattern })
+    };
+
+Pattern: Pattern<TypeRef> =
+    <lo:@L> <k:PatternKind> <hi:@R> => Pattern { span: Span(lo, hi), kind: k };
+
+PatternKind: PatternKind<TypeRef> = {
+    <Path> "(" <Comma<Pattern>> ")" =>
+        PatternKind::Enum(<>),
+
+    <p:Path> "{" <a0:(<FieldPattern> ",")*> <a1:FieldPattern?> "}" =>
+        PatternKind::Struct(p, a0.into_iter().chain(a1).collect(), false),
+
+    <p:Path> "{" <a0:(<FieldPattern> ",")*> ".." "}" =>
+        PatternKind::Struct(p, a0, true),
+
+    "_" =>
+        PatternKind::Underscore,
+
+    ".." =>
+        PatternKind::DotDot,
+
+    "<" <TypeRef> ">" =>
+        PatternKind::Choose(<>),
+
+    "(" <Comma<Pattern>> ")" =>
+        PatternKind::Tuple(<>),
+
+    <c:"CharLiteral"> =>
+        PatternKind::CharLiteral(Atom::from(c)),
+
+    <Path> =>
+        PatternKind::Path(<>),
+
+    <s:StringConstant> =>
+        PatternKind::String(s),
+};
+
+FieldPattern: FieldPattern<TypeRef> =
+    <lo:@L> <id:Id> <hi:@R> ":" <pat:Pattern> => {
+        FieldPattern { field_span: Span(lo, hi),
+                       field_name: id,
+                       pattern: pat }
+    };
+
+MacroId: NonterminalString =
+    <i:"MacroId"> => NonterminalString(Atom::from(i));
+
+NotMacroId: NonterminalString =
+    <i:"Id"> => NonterminalString(Atom::from(i));
+
+Id: Atom = {
+    <i:"Id"> => Atom::from(i),
+    <i:"MacroId"> => Atom::from(i),
+};
+
+Escape: Atom =
+    <i:"Escape"> => Atom::from(i);
+
+Lifetime: Lifetime =
+    <i:"Lifetime"> => Lifetime(Atom::from(i));
+
+Terminal: TerminalString = {
+    QuotedTerminal,
+    <i:"Id"> => TerminalString::Bare(Atom::from(i)),
+};
+
+QuotedTerminal: TerminalString = {
+    QuotedLiteral => TerminalString::Literal(<>),
+};
+
+QuotedLiteral: TerminalLiteral = {
+    <s:StringLiteral> => TerminalLiteral::Quoted(s),
+    <s:RegexLiteral> => TerminalLiteral::Regex(s),
+};
+
+StringLiteral: Atom =
+    <lo:@L> <s:"StringLiteral"> =>? {
+        let text = tok::apply_string_escapes(s, lo + 1)
+            .map_err(|e| ParseError::User { error: e })?;
+        Ok(Atom::from(text))
+    };
+
+StringConstant: String =
+    <lo:@L> <s:"StringLiteral"> =>? {
+        let text = tok::apply_string_escapes(s, lo + 1)
+            .map_err(|e| ParseError::User { error: e })?;
+        Ok(text.into_owned())
+    };
+
+RegexLiteral: Atom =
+    <s:"RegexLiteral"> => Atom::from(s);
+
+Comma<E>: Vec<E> =
+    <v0:(<E> ",")*> <e1:E?> =>
+        v0.into_iter().chain(e1).collect();
+
+ShebangAttribute: String =
+    <s:"#![...]"> => s.to_string();
+
+extern {
+    type Location = usize;
+    type Error = tok::Error;
+    enum Tok<'input> {
+        "enum" => Tok::Enum,
+        "extern" => Tok::Extern,
+        "grammar" => Tok::Grammar,
+        "match" => Tok::Match,
+        "else" => Tok::Else,
+        "if" => Tok::If,
+        "mut" => Tok::Mut,
+        "pub" => Tok::Pub,
+        "in" => Tok::In,
+        "type" => Tok::Type,
+        "where" => Tok::Where,
+        "for" => Tok::For,
+        "!" => Tok::Bang,
+        "use" => Tok::Use(<&'input str>),
+        "dyn" => Tok::Dyn,
+
+        "Escape" => Tok::Escape(<&'input str>),
+        "Id" => Tok::Id(<&'input str>),
+        "MacroId" => Tok::MacroId(<&'input str>),
+        "Lifetime" => Tok::Lifetime(<&'input str>),
+        "StringLiteral" => Tok::StringLiteral(<&'input str>),
+        "CharLiteral" => Tok::CharLiteral(<&'input str>),
+        "RegexLiteral" => Tok::RegexLiteral(<&'input str>),
+
+        "&" => Tok::Ampersand,
+        "!=" => Tok::BangEquals,
+        "!~" => Tok::BangTilde,
+        ":" => Tok::Colon,
+        "::" => Tok::ColonColon,
+        "," => Tok::Comma,
+        ".." => Tok::DotDot,
+        "=" => Tok::Equals,
+        "==" => Tok::EqualsEquals,
+        "=>" => Tok::EqualsGreaterThanCode(<&'input str>),
+        "=>?" => Tok::EqualsGreaterThanQuestionCode(<&'input str>),
+        "=>@L" => Tok::EqualsGreaterThanLookahead,
+        "=>@R" => Tok::EqualsGreaterThanLookbehind,
+        ">" => Tok::GreaterThan,
+        "#" => Tok::Hash,
+        "#![...]" => Tok::ShebangAttribute(<&'input str>),
+        "{" => Tok::LeftBrace,
+        "[" => Tok::LeftBracket,
+        "(" => Tok::LeftParen,
+        "<" => Tok::LessThan,
+        "@L" => Tok::Lookahead,
+        "@R" => Tok::Lookbehind,
+        "->" => Tok::MinusGreaterThan,
+        "+" => Tok::Plus,
+        "?" => Tok::Question,
+        "}" => Tok::RightBrace,
+        "]" => Tok::RightBracket,
+        ")" => Tok::RightParen,
+        ";" => Tok::Semi,
+        "*" => Tok::Star,
+        "~~" => Tok::TildeTilde,
+        "_" => Tok::Underscore,
+
+        "StartGrammar" => Tok::StartGrammar,
+        "StartPattern" => Tok::StartPattern,
+        "StartMatchMapping" => Tok::StartMatchMapping,
+        "StartTypeRef" => Tok::StartTypeRef,
+        "StartGrammarWhereClauses" => Tok::StartGrammarWhereClauses,
+    }
+}

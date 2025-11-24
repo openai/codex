@@ -1,0 +1,49 @@
+name: Tests
+
+on: [push]
+
+jobs:
+  build-latest:
+    name: Test on Latest
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - name: Test
+        run: make test
+
+  build-stable:
+    name: Build on 1.60.0
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.60.0
+      - name: Use Cargo.lock.msrv
+        run: cp Cargo.lock.msrv Cargo.lock
+      - name: Test
+        run: cargo check --all-features
+
+  test-wasi:
+    name: Test on WASI
+    runs-on: ubuntu-latest
+  
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          targets: wasm32-wasip1
+      - uses: Swatinem/rust-cache@v2
+      - name: Install WasmTime
+        run: |
+          curl -LO https://github.com/bytecodealliance/wasmtime/releases/download/v13.0.0/wasmtime-v13.0.0-x86_64-linux.tar.xz
+          tar xvf wasmtime-v13.0.0-x86_64-linux.tar.xz
+          echo `pwd`/wasmtime-v13.0.0-x86_64-linux >> $GITHUB_PATH
+      - name: Test
+        run: make wasi-test

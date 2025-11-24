@@ -1,0 +1,31 @@
+# We make separate GOAL variables for each algorithm, to make it easy to
+# switch each to the Legacy provider when needed.
+
+$DH_GOAL=../../libdefault.a ../../libfips.a
+$ECDH_GOAL=../../libdefault.a ../../libfips.a
+$ECX_GOAL=../../libdefault.a ../../libfips.a
+$KDF_GOAL=../../libdefault.a ../../libfips.a
+
+IF[{- !$disabled{dh} -}]
+  SOURCE[$DH_GOAL]=dh_exch.c
+ENDIF
+
+IF[{- !$disabled{asm} -}]
+  $ECDEF_s390x=S390X_EC_ASM
+
+  # Now that we have defined all the arch specific variables, use the
+  # appropriate one, and define the appropriate macros
+  IF[$ECASM_{- $target{asm_arch} -}]
+    $ECDEF=$ECDEF_{- $target{asm_arch} -}
+  ENDIF
+ENDIF
+
+IF[{- !$disabled{ec} -}]
+  IF[{- !$disabled{ecx} -}]
+    SOURCE[$ECX_GOAL]=ecx_exch.c
+    DEFINE[$ECX_GOAL]=$ECDEF
+  ENDIF
+  SOURCE[$ECDH_GOAL]=ecdh_exch.c
+ENDIF
+
+SOURCE[$KDF_GOAL]=kdf_exch.c

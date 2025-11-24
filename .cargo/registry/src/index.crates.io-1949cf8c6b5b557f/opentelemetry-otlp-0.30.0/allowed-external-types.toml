@@ -1,0 +1,18 @@
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+# This is used with cargo-check-external-types to reduce the surface area of downstream crates from
+# the public API. Ideally this can have a few exceptions as possible.
+allowed_external_types = [
+    "opentelemetry_http::*",
+    "opentelemetry_sdk::*",
+    # serde
+    "serde::de::Deserialize",
+    "serde::ser::Serialize",
+    # tonic is a pre 1.0 crate
+    "tonic::metadata::map::MetadataMap",
+    "tonic::transport::channel::tls::ClientTlsConfig",
+    "tonic::transport::tls::Certificate",
+    "tonic::transport::tls::Identity",
+    "tonic::transport::channel::Channel",
+    "tonic::service::interceptor::Interceptor",
+]

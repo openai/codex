@@ -1,0 +1,1 @@
+The list of changes in each version can be found on GitHub: https://github.com/1Password/sys-locale/releases

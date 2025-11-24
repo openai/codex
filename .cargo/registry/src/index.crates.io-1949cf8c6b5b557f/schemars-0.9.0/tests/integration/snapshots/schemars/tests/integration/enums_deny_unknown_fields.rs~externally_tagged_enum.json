@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "External",
+  "oneOf": [
+    {
+      "type": "string",
+      "enum": [
+        "Unit"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "StringMap": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "StringMap"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "StructNewType": {
+          "$ref": "#/$defs/Struct"
+        }
+      },
+      "required": [
+        "StructNewType"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "StructDenyUnknownFieldsNewType": {
+          "$ref": "#/$defs/StructDenyUnknownFields"
+        }
+      },
+      "required": [
+        "StructDenyUnknownFieldsNewType"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "Struct": {
+          "type": "object",
+          "properties": {
+            "foo": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "bar": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "foo",
+            "bar"
+          ]
+        }
+      },
+      "required": [
+        "Struct"
+      ],
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "Struct": {
+      "type": "object",
+      "properties": {
+        "foo": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "bar": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "foo",
+        "bar"
+      ]
+    },
+    "StructDenyUnknownFields": {
+      "type": "object",
+      "properties": {
+        "baz": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "foobar": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "baz",
+        "foobar"
+      ]
+    }
+  }
+}

@@ -1,0 +1,15 @@
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+
+  <!-- If the Stats interface was enabled at compile-time, only root may use it.
+       Replace USERNAME and copy this file in @EXPANDED_SYSCONFDIR@/dbus-1/system.d/
+       if you want to enable other privileged users to view statistics and
+       debug info -->
+
+  <policy user="USERNAME">
+    <allow send_destination="org.freedesktop.DBus"
+           send_interface="org.freedesktop.DBus.Debug.Stats"/>
+  </policy>
+
+</busconfig>

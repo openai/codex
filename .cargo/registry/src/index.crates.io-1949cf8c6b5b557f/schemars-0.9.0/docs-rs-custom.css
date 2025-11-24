@@ -1,0 +1,4 @@
+/* Hide the `[!NOTE] This branch...` alert at the top of the README, as it's only applicable to users on GitHub */
+h2#schemars + blockquote {
+  display: none;
+}

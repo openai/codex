@@ -1,0 +1,18 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Program:
+load("foo", x="y", z="w")
+y = z
+
+Unused loads:
+
+error: Unused load
+ --> with_rename:1:13
+  |
+1 | load("foo", x="y", z="w")
+  |             ^^^^^
+  |

@@ -1,0 +1,53 @@
+error: no rules expected `(`
+ --> tests/ui/pin_project/invalid.rs:7:14
+  |
+7 |         #[pin()] //~ ERROR no rules expected the token `(`
+  |              ^ no rules expected this token in macro call
+  |
+note: while trying to match `]`
+ --> src/lib.rs
+  |
+  |                 $(#[$pin:ident])?
+  |                               ^
+
+error: no rules expected `(`
+ --> tests/ui/pin_project/invalid.rs:7:14
+  |
+7 |         #[pin()] //~ ERROR no rules expected the token `(`
+  |              ^ no rules expected this token in macro call
+  |
+note: while trying to match `]`
+ --> src/lib.rs
+  |
+  |                 $(#[$pin:ident])?
+  |                               ^
+
+error: no rules expected `#`
+  --> tests/ui/pin_project/invalid.rs:22:9
+   |
+22 |         #[pin] //~ ERROR no rules expected the token `#`
+   |         ^ no rules expected this token in macro call
+   |
+note: while trying to match meta-variable `$field_vis:vis`
+  --> src/lib.rs
+   |
+   |                 $field_vis:vis $field:ident: $field_ty:ty
+   |                 ^^^^^^^^^^^^^^
+
+error: no rules expected `#`
+  --> tests/ui/pin_project/invalid.rs:22:9
+   |
+22 |         #[pin] //~ ERROR no rules expected the token `#`
+   |         ^ no rules expected this token in macro call
+   |
+note: while trying to match meta-variable `$field_vis:vis`
+  --> src/lib.rs
+   |
+   |                 $field_vis:vis $field:ident: $field_ty:ty
+   |                 ^^^^^^^^^^^^^^
+
+error: cannot find attribute `pin` in this scope
+  --> tests/ui/pin_project/invalid.rs:13:7
+   |
+13 |     #[pin] //~ ERROR cannot find attribute `pin` in this scope
+   |       ^^^

@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OuterStruct",
+  "type": "object",
+  "properties": {
+    "maybe_int": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int32",
+      "x-rust-type": "core::option::Option<i32>",
+      "examples": [
+        8,
+        null
+      ]
+    },
+    "values": {
+      "type": "object",
+      "additionalProperties": {
+        "x-rust-type": "serde_json::value::Value"
+      },
+      "x-rust-type": "serde_json::map::Map<alloc::string::String, serde_json::value::Value>"
+    },
+    "value": {
+      "x-rust-type": "serde_json::value::Value"
+    },
+    "inner": {
+      "$ref": "#/$defs/InnerEnum"
+    },
+    "maybe_inner": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/InnerEnum"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "x-rust-type": "core::option::Option<integration::settings::InnerEnum>"
+    },
+    "tuples": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "prefixItems": [
+          {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0,
+            "maximum": 255,
+            "x-rust-type": "u8"
+          },
+          {
+            "type": "integer",
+            "format": "int64",
+            "x-rust-type": "i64"
+          }
+        ],
+        "minItems": 2,
+        "maxItems": 2,
+        "x-rust-type": "(u8, i64)"
+      },
+      "x-rust-type": "alloc::vec::Vec<(u8, i64)>"
+    }
+  },
+  "required": [
+    "values",
+    "value",
+    "inner",
+    "tuples"
+  ],
+  "x-rust-type": "integration::settings::OuterStruct",
+  "$defs": {
+    "InnerEnum": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "UndocumentedUnit1",
+            "UndocumentedUnit2"
+          ]
+        },
+        {
+          "description": "This is a documented unit variant",
+          "type": "string",
+          "const": "DocumentedUnit"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ValueNewType": {
+              "x-rust-type": "serde_json::value::Value"
+            }
+          },
+          "required": [
+            "ValueNewType"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "x-rust-type": "integration::settings::InnerEnum"
+    }
+  }
+}

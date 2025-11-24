@@ -1,0 +1,15 @@
+{
+    "ints-and-floats": {
+        "type": "array",
+        "value": [
+            {
+                "type": "integer",
+                "value": "1"
+            },
+            {
+                "type": "float",
+                "value": "1.1"
+            }
+        ]
+    }
+}

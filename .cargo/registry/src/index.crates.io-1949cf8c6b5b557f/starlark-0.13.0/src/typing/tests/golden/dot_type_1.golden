@@ -1,0 +1,36 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Code:
+def foo(x: list) -> bool:
+    return type(x) == []
+
+def bar():
+    foo(True)
+
+Error:
+error: Expected type `str` but got `list[typing.Never]`
+ --> filename:3:23
+  |
+3 |     return type(x) == []
+  |                       ^^
+  |
+
+Error:
+error: Expected type `list` but got `bool`
+ --> filename:6:9
+  |
+6 |     foo(True)
+  |         ^^^^
+  |
+
+Compiler typechecker (eval):
+error: Expected type `str` but got `list[typing.Never]`
+ --> filename:3:23
+  |
+3 |     return type(x) == []
+  |                       ^^
+  |

@@ -1,0 +1,11 @@
+error: no rules expected `~`
+ --> tests/ui/parse_expr.rs:4:19
+  |
+4 |     json!({ "a" : ~ });
+  |                   ^ no rules expected this token in macro call
+  |
+note: while trying to match meta-variable `$e:expr`
+ --> src/macros.rs
+  |
+  |     ($e:expr , $($tt:tt)*) => {};
+  |      ^^^^^^^

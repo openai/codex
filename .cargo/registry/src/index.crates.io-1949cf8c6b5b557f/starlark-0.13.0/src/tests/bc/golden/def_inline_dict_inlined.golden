@@ -1,0 +1,22 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+def returns_dict():
+    # This should fail at runtime.
+    return {[]: 10}
+
+def test():
+    return returns_dict()
+
+# Bytecode:
+
+Max stack size: 3
+Instructions:
+  0: ListNew ->&1
+  8: Const 10 ->&2
+  32: DictNPop [&1, &2] ->&0
+  48: Return &0
+  56: End

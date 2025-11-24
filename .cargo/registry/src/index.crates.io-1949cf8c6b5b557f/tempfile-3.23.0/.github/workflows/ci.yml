@@ -1,0 +1,164 @@
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+env:
+  CARGO_TARGET_WASM32_WASIP1_RUNNER: "/home/runner/.wasmtime/bin/wasmtime --dir /tmp/"
+  CARGO_TARGET_WASM32_WASIP2_RUNNER: "/home/runner/.wasmtime/bin/wasmtime --dir /tmp/"
+  RUSTFLAGS: "-D warnings"
+  RUSTDOCFLAGS: "-D warnings"
+  NDK_VERSION: "r26d"
+  ANDROID_VERSION: "12.0.0"
+  WASMTIME_BACKTRACE_DETAILS: 1
+
+name: CI
+jobs:
+  deny:
+    name: Cargo deny
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: EmbarkStudios/cargo-deny-action@v2
+    timeout-minutes: 10
+
+  build_and_test:
+    strategy:
+      fail-fast: false
+      matrix:
+        rust-version:
+          - nightly
+          - stable
+          - "1.63"
+        platform:
+          - name: "Linux"
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - name: "Windows"
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - name: "MacOS"
+            os: macos-latest
+            target: aarch64-apple-darwin
+          - name: "Android"
+            os: ubuntu-latest
+            target: x86_64-linux-android
+        exclude:
+          - rust-version: "1.63"
+            platform:
+              name: "Android"
+              os: ubuntu-latest
+              target: x86_64-linux-android
+        include:
+          - rust-version: "nightly"
+            test-flags: --tests
+            platform:
+              name: "WASI P1"
+              os: ubuntu-latest
+              target: wasm32-wasip1
+          - rust-version: "nightly"
+            test-flags: --tests
+            platform:
+              name: "WASI P2"
+              os: ubuntu-latest
+              target: wasm32-wasip2
+    name: Platform Test (${{ matrix.platform.name }} / ${{ matrix.rust-version }})
+    runs-on: ${{ matrix.platform.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust-version }}
+          targets: ${{ matrix.platform.target }}
+      - name: Generating the Cargo.lock
+        run: cargo generate-lockfile
+      - name: Downgrading once_cell
+        if: matrix.rust-version == 1.63
+        run: cargo update -p once_cell --precise 1.20.3
+      - name: Downgrading windows-sys
+        if: matrix.rust-version == 1.63
+        run: cargo update -p windows-sys --precise 0.60.2
+      - name: Install Wasmtime
+        if: ${{ startsWith(matrix.platform.target, 'wasm32-wasi') }}
+        run: curl https://wasmtime.dev/install.sh -sSf | bash
+      - name: Setup Android Environment
+        if: ${{ contains(matrix.platform.target, 'android') }}
+        run: |
+          NDK_URL="https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip"
+          NDK_DIR="${HOME}/android-ndk-${NDK_VERSION}"
+
+          # Download and extract NDK
+          echo "Downloading NDK from $NDK_URL"
+          wget -q "$NDK_URL" -O android-ndk.zip
+          unzip -q android-ndk.zip -d "$HOME"
+
+          # Set ANDROID_NDK_ROOT environment variable
+          echo "ANDROID_NDK_ROOT=$NDK_DIR" >> $GITHUB_ENV
+
+          # Setup & start redroid container
+          sudo apt-get install -y linux-modules-extra-$(uname -r) android-tools-adb
+          sudo modprobe binder_linux devices=binder,hwbinder,vndbinder
+
+          docker run -itd --rm --privileged \
+            --mount "type=bind,src=$(pwd),dst=/data/host$(pwd),ro" \
+            --mount "type=bind,src=/tmp,dst=/data/host/tmp,ro" \
+            --mount "type=bind,src=$(pwd)/.github/workflows/run-on-host.sh,dst=/system/xbin/run-on-host,ro" \
+            --name redroid-test \
+            -p 5555:5555 \
+            redroid/redroid:${ANDROID_VERSION}_64only-latest
+
+          # Start ADB server and connect to our redroid container
+          adb start-server
+          timeout 60 bash -c 'until adb connect localhost:5555; do sleep 2; done'
+
+          # Configure Android environment
+          echo "CARGO_TARGET_X86_64_LINUX_ANDROID_RUNNER=adb -s localhost:5555 shell run-on-host" >> $GITHUB_ENV
+          echo "CC_X86_64_linux_android=$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android34-clang" >> $GITHUB_ENV
+          echo "AR_x86_64_linux_android=$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
+          echo "CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER=$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android34-clang" >> $GITHUB_ENV
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=-C link-arg=-Wl,--as-needed" >> $GITHUB_ENV
+      - name: Build
+        run: cargo build --target ${{ matrix.platform.target }} ${{ matrix.rust-version == 'nightly' && '--features nightly' || '' }}
+      - name: Test
+        run: cargo test --target ${{ matrix.platform.target }} ${{ matrix.rust-version == 'nightly' && '--features nightly' || '' }} ${{ matrix.test-flags }} -- --nocapture
+      - name: Stop the redroid container
+        if: ${{ contains(matrix.platform.target, 'android') }}
+        run: |
+          docker stop redroid-test || true
+  wasm:
+    name: WASM Test Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Build
+        run: cargo build --target wasm32-unknown-unknown
+  lint:
+    name: Clippy, fmt, and docs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Check documentation
+        run: cargo doc --all --no-deps
+      - name: Check for clippy lints
+        run: cargo clippy

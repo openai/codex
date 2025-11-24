@@ -1,0 +1,19 @@
+[package]
+name = "fax"
+version = "0.2.6"
+authors = ["Sebastian K <s3bk@protonmail.com>"]
+edition = "2018"
+description = "Decoder and Encoder for CCITT Group 3 and 4 bi-level image encodings used by fax machines TIFF and PDF."
+license = "MIT"
+keywords = ["CCITT", "fax", "CCITTFaxDecode"]
+repository = "https://github.com/pdf-rs/fax"
+exclude = ["T-REC-T.6-198811-I!!PDF-E.pdf", ".vscode/*", ".gitignore"]
+
+[features]
+debug = []
+
+[dependencies]
+fax_derive = { version = "0.2.0", path = "derive" }
+
+[dev-dependencies]
+tiff = { version = "0.9" }

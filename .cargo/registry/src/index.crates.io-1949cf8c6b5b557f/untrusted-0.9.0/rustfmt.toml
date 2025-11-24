@@ -1,0 +1,5 @@
+edition = "2018"
+max_width = 100
+newline_style = "Unix"
+reorder_imports = true
+use_field_init_shorthand = true

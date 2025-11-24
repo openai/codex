@@ -1,0 +1,28 @@
+[package]
+name = "wayland-scanner"
+version = "0.31.7"
+authors = ["Elinor Berger <elinor@safaradeg.net>"]
+repository = "https://github.com/smithay/wayland-rs"
+documentation = "https://docs.rs/wayland-scanner/"
+description = "Wayland Scanner for generating rust APIs from XML wayland protocol files."
+license = "MIT"
+categories = ["gui", "api-bindings"]
+keywords = ["wayland", "codegen"]
+edition = "2021"
+rust-version = "1.65"
+readme = "README.md"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0.11"
+quote = "1.0"
+quick-xml = "0.37.0"
+
+[dev-dependencies]
+similar = "2"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

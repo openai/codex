@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<!DOCTYPE refentry PUBLIC "-//OASIS//DTD DocBook XML V4.4//EN"
+                   "http://www.oasis-open.org/docbook/xml/4.4/docbookx.dtd">
+<refentry id='dbuscleanupsockets1'>
+
+<!--  dbus&bsol;-cleanup&bsol;-sockets manual page.
+ Copyright (C) 2003 Red Hat, Inc. -->
+
+<refmeta>
+<refentrytitle>dbus-cleanup-sockets</refentrytitle>
+<manvolnum>1</manvolnum>
+<refmiscinfo class="manual">User Commands</refmiscinfo>
+<refmiscinfo class="source">D-Bus</refmiscinfo>
+<refmiscinfo class="version">@DBUS_VERSION@</refmiscinfo>
+</refmeta>
+<refnamediv>
+<refname>dbus-cleanup-sockets</refname>
+<refpurpose>clean up leftover sockets in a directory</refpurpose>
+</refnamediv>
+<!-- body begins here -->
+<refsynopsisdiv id='synopsis'>
+<cmdsynopsis>
+  <command>dbus-cleanup-sockets</command>    <arg choice='opt'><replaceable>DIRECTORY</replaceable></arg>
+    <sbr/>
+</cmdsynopsis>
+</refsynopsisdiv>
+
+
+<refsect1 id='description'><title>DESCRIPTION</title>
+<para>The <command>dbus-cleanup-sockets</command> command cleans up unused D-Bus
+connection sockets. See <ulink url='http://www.freedesktop.org/software/dbus/'>http://www.freedesktop.org/software/dbus/</ulink> for
+more information about the big picture.</para>
+
+
+<para>If given no arguments, <command>dbus-cleanup-sockets</command> cleans up sockets
+in the standard default socket directory for the
+per-user-login-session message bus; this is usually /tmp.
+Optionally, you can pass a different directory on the command line.</para>
+
+
+<para>On Linux, this program is essentially useless, because D-Bus defaults
+to using "abstract sockets" that exist only in memory and don't have a
+corresponding file in /tmp.</para>
+
+
+<para>On most other flavors of UNIX, it's possible for the socket files to
+leak when programs using D-Bus exit abnormally or without closing
+their D-Bus connections. Thus, it might be interesting to run
+dbus-cleanup-sockets in a cron job to mop up any leaked sockets.
+Or you can just ignore the leaked sockets, they aren't really hurting
+anything, other than cluttering the output of "ls /tmp"</para>
+
+</refsect1>
+
+<refsect1 id='author'><title>AUTHOR</title>
+<para>dbus-cleanup-sockets was adapted by Havoc Pennington from
+linc-cleanup-sockets written by Michael Meeks.</para>
+
+</refsect1>
+
+<refsect1 id='bugs'><title>BUGS</title>
+<para>Please send bug reports to the D-Bus mailing list or bug tracker,
+see <ulink url='http://www.freedesktop.org/software/dbus/'>http://www.freedesktop.org/software/dbus/</ulink></para>
+</refsect1>
+</refentry>

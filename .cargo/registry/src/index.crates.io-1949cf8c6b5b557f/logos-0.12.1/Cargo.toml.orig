@@ -1,0 +1,26 @@
+[package]
+name = "logos"
+version = "0.12.1"
+authors = ["Maciej Hirsz <hello@maciej.codes>"]
+license = "MIT OR Apache-2.0"
+description = "Create ridiculously fast Lexers"
+repository = "https://github.com/maciejhirsz/logos"
+documentation = "https://docs.rs/logos"
+keywords = ["lexer", "lexical", "tokenizer", "parser", "no_std"]
+categories = ["parsing", "text-processing"]
+readme = "../README.md"
+edition = "2018"
+
+[dependencies]
+logos-derive = { version = "0.12.1", optional = true }
+
+[features]
+default = ["export_derive", "std"]
+
+# Should the crate use the standard library?
+std = []
+
+# Re-exports the `Logos` derive macro, so that end user only needs to
+# import this crate and `use logos::Logos` to get both the trait and
+# derive proc macro.
+export_derive = ["logos-derive"]

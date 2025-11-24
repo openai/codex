@@ -1,0 +1,20 @@
+error[E0308]: mismatched types
+  --> tests/compile-fail/attrs_with_bad_fn.rs:11:22
+   |
+11 |     #[darling(with = bad_converter)]
+   |                      ^^^^^^^^^^^^^
+   |                      |
+   |                      expected `Result<_, Error>`, found `Vec<Attribute>`
+   |                      arguments to this method are incorrect
+   |
+   = note: expected enum `Result<_, darling::Error>`
+            found struct `Vec<Attribute>`
+note: method defined here
+  --> core/src/error/mod.rs
+   |
+   |     pub fn handle<T>(&mut self, result: Result<T>) -> Option<T> {
+   |            ^^^^^^
+help: try wrapping the expression in `Ok`
+    |
+11  |     #[darling(with = Ok(bad_converter))]
+    |                      +++             +

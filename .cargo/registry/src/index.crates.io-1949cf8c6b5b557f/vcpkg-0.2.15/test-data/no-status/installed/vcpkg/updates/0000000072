@@ -1,0 +1,7 @@
+Package: boost-range
+Version: 1.67.0
+Depends: boost-array, boost-assert, boost-concept-check, boost-config, boost-core, boost-detail, boost-functional, boost-integer, boost-iterator, boost-mpl, boost-optional, boost-preprocessor, boost-regex, boost-static-assert, boost-tuple, boost-type-traits, boost-utility, boost-vcpkg-helpers
+Architecture: x64-windows
+Multi-Arch: same
+Description: Boost range module
+Status: install ok half-installed

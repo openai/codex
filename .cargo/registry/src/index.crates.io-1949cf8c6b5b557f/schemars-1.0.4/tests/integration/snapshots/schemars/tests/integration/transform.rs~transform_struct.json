@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Struct",
+  "type": "object",
+  "properties": {
+    "value": true,
+    "int": {
+      "type": "integer",
+      "format": "int32",
+      "x-propertyCount": 0,
+      "x-upperType": "INTEGER"
+    }
+  },
+  "required": [
+    "value",
+    "int"
+  ],
+  "x-upperType": "OBJECT",
+  "x-propertyCount": 2
+}

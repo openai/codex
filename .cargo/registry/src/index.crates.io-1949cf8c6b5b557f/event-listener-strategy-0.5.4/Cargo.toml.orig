@@ -1,0 +1,36 @@
+[package]
+name = "event-listener-strategy"
+# Make sure to update CHANGELOG.md when the version is bumped here.
+version = "0.5.4"
+edition = "2021"
+authors = ["John Nunley <dev@notgull.net>"]
+rust-version = "1.60"
+description = "Block or poll on event_listener easily"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/smol-rs/event-listener-strategy"
+keywords = ["condvar", "envcount", "wake", "blocking", "park"]
+categories = ["asynchronous", "concurrency"]
+exclude = ["/.*"]
+
+[dependencies]
+event-listener = { version = "5.0.0", default-features = false }
+pin-project-lite = "0.2.12"
+
+[features]
+default = ["std"]
+loom = ["event-listener/loom"]
+std = ["event-listener/std"]
+portable-atomic = ["event-listener/portable-atomic"]
+
+[dev-dependencies]
+futures-lite = "2.0.0"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(wasm_bindgen_unstable_test_coverage)'] }
+
+[target.'cfg(target_family = "wasm")'.dev-dependencies]
+wasm-bindgen-test = "0.3.37"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

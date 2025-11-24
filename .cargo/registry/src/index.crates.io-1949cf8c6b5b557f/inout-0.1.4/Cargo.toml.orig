@@ -1,0 +1,26 @@
+[package]
+name = "inout"
+version = "0.1.4" # Also update html_root_url in lib.rs when bumping this
+description = "Custom reference types for code generic over in-place and buffer-to-buffer modes of operation."
+authors = ["RustCrypto Developers"]
+license = "MIT OR Apache-2.0"
+edition = "2021"
+rust-version = "1.56"
+documentation = "https://docs.rs/inout"
+repository = "https://github.com/RustCrypto/utils"
+keywords = ["custom-reference"]
+
+# Hack to allow this crate to coexist with pre-2021 edition crates
+[workspace]
+members = ["."]
+
+[dependencies]
+generic-array = "0.14"
+block-padding = { version = "0.3", path = "../block-padding", optional = true }
+
+[features]
+std = ["block-padding/std"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

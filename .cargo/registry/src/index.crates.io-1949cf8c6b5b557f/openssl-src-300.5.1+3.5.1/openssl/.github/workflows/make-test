@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -eo pipefail
+
+cleanup() {
+    # Remove if nothing was generated.
+    [ -d artifacts ] && find artifacts -type d -empty -delete
+}
+trap cleanup EXIT
+
+# Make a central directory to store all output artifacts of our test run to
+# avoid having to configure multiple upload-artifacts steps in the workflow
+# file.
+OSSL_CI_ARTIFACTS_PATH="artifacts/"
+if [ -n "${GITHUB_RUN_NUMBER}" ]; then
+    OSSL_CI_ARTIFACTS_PATH="artifacts/github-${GITHUB_JOB}-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ID}/"
+fi
+mkdir -p "$OSSL_CI_ARTIFACTS_PATH"
+export OSSL_CI_ARTIFACTS_PATH="$(cd "$OSSL_CI_ARTIFACTS_PATH"; pwd)"
+
+# Run the tests. This might fail, but we need to capture artifacts anyway.
+set +e
+make test HARNESS_JOBS=${HARNESS_JOBS:-4} "$@"
+RESULT=$?
+set -e
+
+# Move an interesting subset of the test-runs data we want into the artifacts
+# staging directory.
+for test_name in quic_multistream; do
+    if [ -d "test-runs/test_${test_name}" ]; then
+        mv "test-runs/test_${test_name}" "$OSSL_CI_ARTIFACTS_PATH/"
+    fi
+done
+
+# Log the artifact tree.
+echo "::group::List of artifact files generated"
+echo "Test suite exited with $RESULT, artifacts path is $OSSL_CI_ARTIFACTS_PATH"
+(cd "$OSSL_CI_ARTIFACTS_PATH"; find . -type f | sort)
+echo "::endgroup::"
+
+echo "Archive artifacts"
+tar -czf artifacts.tar.gz $OSSL_CI_ARTIFACTS_PATH
+
+exit $RESULT

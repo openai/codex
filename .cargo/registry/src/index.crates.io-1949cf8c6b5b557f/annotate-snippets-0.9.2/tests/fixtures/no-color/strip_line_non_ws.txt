@@ -1,0 +1,6 @@
+error[E0308]: mismatched types
+  --> $DIR/non-whitespace-trimming.rs:4:241
+   |
+LL | ... = (); let _: () = (); let _: () = (); let _: () = 42; let _: () = (); let _: () = (); let _: () = (); let _: () = (); let _: () = ();...
+   |                                                       ^^ expected (), found integer
+   |

@@ -1,0 +1,6 @@
+[Unit]
+Description=D-Bus User Message Bus Socket
+
+[Socket]
+ListenStream=%t/bus
+ExecStartPost=-@SYSTEMCTL@ --user set-environment DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus

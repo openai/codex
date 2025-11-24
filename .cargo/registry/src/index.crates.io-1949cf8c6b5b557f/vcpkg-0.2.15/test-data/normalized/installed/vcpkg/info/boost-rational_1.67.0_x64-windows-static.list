@@ -1,0 +1,7 @@
+x64-windows-static/
+x64-windows-static/include/
+x64-windows-static/include/boost/
+x64-windows-static/include/boost/rational.hpp
+x64-windows-static/share/
+x64-windows-static/share/boost-rational/
+x64-windows-static/share/boost-rational/copyright

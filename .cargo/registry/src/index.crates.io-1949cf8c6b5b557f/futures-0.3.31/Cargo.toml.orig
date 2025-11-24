@@ -1,0 +1,63 @@
+[package]
+name = "futures"
+version = "0.3.31"
+edition = "2018"
+rust-version = "1.56"
+license = "MIT OR Apache-2.0"
+readme = "../README.md"
+keywords = ["futures", "async", "future"]
+repository = "https://github.com/rust-lang/futures-rs"
+homepage = "https://rust-lang.github.io/futures-rs"
+description = """
+An implementation of futures and streams featuring zero allocations,
+composability, and iterator-like interfaces.
+"""
+categories = ["asynchronous"]
+
+[dependencies]
+futures-core = { path = "../futures-core", version = "0.3.31", default-features = false }
+futures-task = { path = "../futures-task", version = "0.3.31", default-features = false }
+futures-channel = { path = "../futures-channel", version = "0.3.31", default-features = false, features = ["sink"] }
+futures-executor = { path = "../futures-executor", version = "0.3.31", default-features = false, optional = true }
+futures-io = { path = "../futures-io", version = "0.3.31", default-features = false }
+futures-sink = { path = "../futures-sink", version = "0.3.31", default-features = false }
+futures-util = { path = "../futures-util", version = "0.3.31", default-features = false, features = ["sink"] }
+
+[dev-dependencies]
+futures-executor = { path = "../futures-executor", features = ["thread-pool"] }
+futures-test = { path = "../futures-test" }
+assert_matches = "1.3.0"
+pin-project = "1.0.11"
+static_assertions = "1"
+tokio = "0.1.11"
+
+[features]
+default = ["std", "async-await", "executor"]
+std = ["alloc", "futures-core/std", "futures-task/std", "futures-io/std", "futures-sink/std", "futures-util/std", "futures-util/io", "futures-util/channel"]
+alloc = ["futures-core/alloc", "futures-task/alloc", "futures-sink/alloc", "futures-channel/alloc", "futures-util/alloc"]
+async-await = ["futures-util/async-await", "futures-util/async-await-macro"]
+compat = ["std", "futures-util/compat"]
+io-compat = ["compat", "futures-util/io-compat"]
+executor = ["std", "futures-executor/std"]
+thread-pool = ["executor", "futures-executor/thread-pool"]
+
+# Unstable features
+# These features are outside of the normal semver guarantees and require the
+# `unstable` feature as an explicit opt-in to unstable API.
+unstable = ["futures-core/unstable", "futures-task/unstable", "futures-channel/unstable", "futures-io/unstable", "futures-util/unstable"]
+bilock = ["futures-util/bilock"]
+write-all-vectored = ["futures-util/write-all-vectored"]
+
+# These features are no longer used.
+# TODO: remove in the next major version.
+cfg-target-has-atomic = []
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[package.metadata.playground]
+features = ["std", "async-await", "compat", "io-compat", "executor", "thread-pool"]
+
+[lints]
+workspace = true

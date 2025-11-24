@@ -1,0 +1,32 @@
+[package]
+name = "cbc"
+version = "0.1.2" # Also update html_root_url in lib.rs when bumping this
+description = "Cipher Block Chaining (CBC) block cipher mode of operation"
+authors = ["RustCrypto Developers"]
+license = "MIT OR Apache-2.0"
+edition = "2021"
+rust-version = "1.56"
+readme = "README.md"
+documentation = "https://docs.rs/cbc"
+repository = "https://github.com/RustCrypto/block-modes"
+keywords = ["crypto", "block-mode", "ciphers"]
+categories = ["cryptography", "no-std"]
+
+[dependencies]
+cipher = "0.4.2"
+
+[dev-dependencies]
+aes = "0.8"
+cipher = { version = "0.4.2", features = ["dev"] }
+hex-literal = "0.3.3"
+
+[features]
+default = ["block-padding"]
+alloc = ["cipher/alloc"]
+std = ["cipher/std", "alloc"]
+block-padding = ["cipher/block-padding"]
+zeroize = ["cipher/zeroize"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

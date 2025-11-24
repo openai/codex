@@ -1,0 +1,7 @@
+Package: libevent
+Version: 2.1.8-3
+Depends: openssl
+Architecture: x64-windows
+Multi-Arch: same
+Description: An event notification library
+Status: install ok installed

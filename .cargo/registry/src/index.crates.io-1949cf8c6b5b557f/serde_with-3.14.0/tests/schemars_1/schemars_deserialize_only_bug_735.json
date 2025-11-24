@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Basic",
+  "type": "object",
+  "properties": {
+    "bare_field": {
+      "description": "Basic field, no attribute",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "both": {
+      "description": "Will emit matching schemars attribute",
+      "$ref": "#/$defs/PickFirst(uint32string)"
+    },
+    "serialize_only": {
+      "description": "Can emit schemars with `serialize_as`, but it will be ignored",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "deserialize_only": {
+      "description": "schemars doesn't support `deserialize_as`",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "serialize_and_deserialize": {
+      "description": "Can emit schemars with `serialize_as`, but it will be ignored\nschemars doesn't support `deserialize_as`",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "bare_field",
+    "both",
+    "serialize_only",
+    "deserialize_only",
+    "serialize_and_deserialize"
+  ],
+  "$defs": {
+    "PickFirst(uint32string)": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        {
+          "writeOnly": true,
+          "allOf": [
+            {
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

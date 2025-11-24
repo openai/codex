@@ -1,0 +1,7 @@
+error: attribute must be applied to a `static` variable
+ --> tests/ui/outer-attr.rs:6:5
+  |
+6 |     #[used(linker)]
+  |     ^^^^^^^^^^^^^^^
+7 |     Thing
+  |     ----- but this is a expression

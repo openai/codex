@@ -1,0 +1,39 @@
+[package]
+name = "toml_datetime"
+version = "0.7.0"
+description = "A TOML-compatible datetime type"
+categories = ["encoding", "parser-implementations", "parsing", "config"]
+keywords = ["encoding", "toml", "no_std"]
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+include.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs", "--generate-link-to-definition"]
+
+[package.metadata.release]
+pre-release-replacements = [
+  {file="CHANGELOG.md", search="Unreleased", replace="{{version}}", min=1},
+  {file="CHANGELOG.md", search="\\.\\.\\.HEAD", replace="...{{tag_name}}", exactly=1},
+  {file="CHANGELOG.md", search="ReleaseDate", replace="{{date}}", min=1},
+  {file="CHANGELOG.md", search="<!-- next-header -->", replace="<!-- next-header -->\n## [Unreleased] - ReleaseDate\n", exactly=1},
+  {file="CHANGELOG.md", search="<!-- next-url -->", replace="<!-- next-url -->\n[Unreleased]: https://github.com/toml-rs/toml/compare/{{tag_name}}...HEAD", exactly=1},
+]
+
+[features]
+default = ["std"]
+alloc = ["serde?/alloc"]
+std = ["alloc", "serde?/std"]
+serde = ["dep:serde"]
+
+[dependencies]
+serde = { version = "1.0.145", default-features = false, optional = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+snapbox = "0.6.21"

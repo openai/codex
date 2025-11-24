@@ -1,0 +1,113 @@
+[[test]]
+name = "100"
+regex = "|b"
+haystack = "abc"
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]
+
+[[test]]
+name = "110"
+regex = "b|"
+haystack = "abc"
+matches = [[0, 0], [1, 2], [3, 3]]
+
+[[test]]
+name = "120"
+regex = "|z"
+haystack = "abc"
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]
+
+[[test]]
+name = "130"
+regex = "z|"
+haystack = "abc"
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]
+
+[[test]]
+name = "200"
+regex = "|"
+haystack = "abc"
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]
+
+[[test]]
+name = "210"
+regex = "||"
+haystack = "abc"
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]
+
+[[test]]
+name = "220"
+regex = "||b"
+haystack = "abc"
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]
+
+[[test]]
+name = "230"
+regex = "b||"
+haystack = "abc"
+matches = [[0, 0], [1, 2], [3, 3]]
+
+[[test]]
+name = "240"
+regex = "||z"
+haystack = "abc"
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]
+
+[[test]]
+name = "300"
+regex = "(?:)|b"
+haystack = "abc"
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]
+
+[[test]]
+name = "310"
+regex = "b|(?:)"
+haystack = "abc"
+matches = [[0, 0], [1, 2], [3, 3]]
+
+[[test]]
+name = "320"
+regex = "(?:|)"
+haystack = "abc"
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]
+
+[[test]]
+name = "330"
+regex = "(?:|)|z"
+haystack = "abc"
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]
+
+[[test]]
+name = "400"
+regex = "a(?:)|b"
+haystack = "abc"
+matches = [[0, 1], [1, 2]]
+
+[[test]]
+name = "500"
+regex = ""
+haystack = ""
+matches = [[0, 0]]
+
+[[test]]
+name = "510"
+regex = ""
+haystack = "a"
+matches = [[0, 0], [1, 1]]
+
+[[test]]
+name = "520"
+regex = ""
+haystack = "abc"
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]
+
+[[test]]
+name = "600"
+regex = '(?:|a)*'
+haystack = "aaa"
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]
+
+[[test]]
+name = "610"
+regex = '(?:|a)+'
+haystack = "aaa"
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]

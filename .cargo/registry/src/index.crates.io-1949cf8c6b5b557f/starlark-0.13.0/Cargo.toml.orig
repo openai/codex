@@ -1,0 +1,59 @@
+[package]
+authors = [
+    "Damien Martin-Guillerez <dmarting@google.com>",
+    "Stepan Koltsov <stepan.koltsov@gmail.com>",
+    "Facebook",
+]
+build = "build.rs"
+categories = ["parser-implementations", "development-tools"]
+description = "An implementation of the Starlark language in Rust."
+documentation = "https://docs.rs/starlark"
+edition = "2021"
+keywords = ["starlark", "skylark", "bazel", "language", "interpreter"]
+license = "Apache-2.0"
+name = "starlark"
+repository = "https://github.com/facebook/starlark-rust"
+version = "0.13.0"
+
+[dependencies]
+anyhow = "1.0.65"
+bumpalo = "3.8"
+debugserver-types = "0.5.0"
+derivative = "2.2"
+derive_more.workspace = true
+display_container = { workspace = true }
+dupe = { workspace = true }
+either = "1.8"
+erased-serde = "0.3.12"
+hashbrown = { version = "0.14.3", features = ["raw"] }
+inventory = "0.3.8"
+itertools = "0.13.0"
+maplit = "1.0.2"
+memoffset = "0.6.4"
+num-bigint = "0.4.3"
+num-traits = "0.2"
+once_cell = "1.8"
+paste = "1.0"
+ref-cast = "1.0.18"
+regex = "1.5.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+starlark_derive = { version = "0.13.0", path = "../starlark_derive" }
+starlark_map = { version = "0.13.0", path = "../starlark_map" }
+starlark_syntax = { version = "0.13.0", path = "../starlark_syntax" }
+static_assertions = "1.1.0"
+strsim = "0.10.0"
+textwrap = "0.11"
+thiserror = "1.0.36"
+
+allocative = { workspace = true, features = ["bumpalo", "num-bigint"] }
+cmp_any = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rustyline = "14.0"
+
+[dev-dependencies]
+rand = { version = "0.8.4", features = ["small_rng"] }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(rust_nightly)"] }

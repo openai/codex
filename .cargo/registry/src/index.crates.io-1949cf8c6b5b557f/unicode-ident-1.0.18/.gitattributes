@@ -1,0 +1,5 @@
+src/tables.rs linguist-generated
+tests/fst/xid_continue.fst linguist-generated
+tests/fst/xid_start.fst linguist-generated
+tests/tables/tables.rs linguist-generated
+tests/trie/trie.rs linguist-generated

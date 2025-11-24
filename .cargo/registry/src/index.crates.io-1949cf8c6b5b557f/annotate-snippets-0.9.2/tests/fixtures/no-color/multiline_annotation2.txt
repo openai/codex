@@ -1,0 +1,9 @@
+error[E0027]: pattern does not mention fields `lineno`, `content`
+   --> src/display_list.rs:139:32
+    |
+139 |                           if let DisplayLine::Source {
+    |  ________________________________^
+140 | |                             ref mut inline_marks,
+141 | |                         } = body[body_idx]
+    | |_________________________^ missing fields `lineno`, `content`
+    |

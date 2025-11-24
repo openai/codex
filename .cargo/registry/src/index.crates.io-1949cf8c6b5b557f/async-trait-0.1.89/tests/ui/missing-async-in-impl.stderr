@@ -1,0 +1,8 @@
+error[E0195]: lifetime parameters or bounds on associated function `method` do not match the trait declaration
+  --> tests/ui/missing-async-in-impl.rs:12:14
+   |
+ 5 |     async fn method();
+   |              -------- lifetimes in impl do not match this associated function in trait
+...
+12 |     fn method() {}
+   |              ^ lifetimes do not match associated function in trait

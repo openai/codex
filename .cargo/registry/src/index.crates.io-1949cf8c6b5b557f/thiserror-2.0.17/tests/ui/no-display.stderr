@@ -1,0 +1,46 @@
+error[E0599]: the method `as_display` exists for reference `&NoDisplay`, but its trait bounds were not satisfied
+ --> tests/ui/no-display.rs:7:9
+  |
+4 | struct NoDisplay;
+  | ---------------- doesn't satisfy `NoDisplay: std::fmt::Display`
+...
+7 | #[error("thread: {thread}")]
+  |         ^^^^^^^^^^^^^^^^^^ method cannot be called on `&NoDisplay` due to unsatisfied trait bounds
+  |
+  = note: the following trait bounds were not satisfied:
+          `NoDisplay: std::fmt::Display`
+          which is required by `&NoDisplay: AsDisplay<'_>`
+note: the trait `std::fmt::Display` must be implemented
+ --> $RUST/core/src/fmt/mod.rs
+  |
+  | pub trait Display: PointeeSized {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = help: items from traits can only be used if the trait is implemented and in scope
+  = note: the following trait defines an item `as_display`, perhaps you need to implement it:
+          candidate #1: `AsDisplay`
+
+error[E0277]: the trait bound `NoDisplay: Octal` is not satisfied
+  --> tests/ui/no-display.rs:13:9
+   |
+12 | #[derive(Error, Debug)]
+   |          ----- in this derive macro expansion
+13 | #[error("thread: {thread:o}")]
+   |         ^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `Octal` is not implemented for `NoDisplay`
+  --> tests/ui/no-display.rs:4:1
+   |
+ 4 | struct NoDisplay;
+   | ^^^^^^^^^^^^^^^^
+   = help: the following other types implement trait `Octal`:
+             &T
+             &mut T
+             NonZero<T>
+             Saturating<T>
+             Wrapping<T>
+             i128
+             i16
+             i32
+           and $N others
+   = note: required for `&NoDisplay` to implement `Octal`
+   = note: this error originates in the macro `$crate::format_args` which comes from the expansion of the derive macro `Error` (in Nightly builds, run with -Z macro-backtrace for more info)

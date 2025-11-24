@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="cursor_shape_v1">
+  <copyright>
+    Copyright 2018 The Chromium Authors
+    Copyright 2023 Simon Ser
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+    The above copyright notice and this permission notice (including the next
+    paragraph) shall be included in all copies or substantial portions of the
+    Software.
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+  </copyright>
+
+  <interface name="wp_cursor_shape_manager_v1" version="2">
+    <description summary="cursor shape manager">
+      This global offers an alternative, optional way to set cursor images. This
+      new way uses enumerated cursors instead of a wl_surface like
+      wl_pointer.set_cursor does.
+
+      Warning! The protocol described in this file is currently in the testing
+      phase. Backward compatible changes may be added together with the
+      corresponding interface version bump. Backward incompatible changes can
+      only be done by creating a new major version of the extension.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the manager">
+        Destroy the cursor shape manager.
+      </description>
+    </request>
+
+    <request name="get_pointer">
+      <description summary="manage the cursor shape of a pointer device">
+        Obtain a wp_cursor_shape_device_v1 for a wl_pointer object.
+
+        When the pointer capability is removed from the wl_seat, the
+        wp_cursor_shape_device_v1 object becomes inert.
+      </description>
+      <arg name="cursor_shape_device" type="new_id" interface="wp_cursor_shape_device_v1"/>
+      <arg name="pointer" type="object" interface="wl_pointer"/>
+    </request>
+
+    <request name="get_tablet_tool_v2">
+      <description summary="manage the cursor shape of a tablet tool device">
+        Obtain a wp_cursor_shape_device_v1 for a zwp_tablet_tool_v2 object.
+
+        When the zwp_tablet_tool_v2 is removed, the wp_cursor_shape_device_v1
+        object becomes inert.
+      </description>
+      <arg name="cursor_shape_device" type="new_id" interface="wp_cursor_shape_device_v1"/>
+      <arg name="tablet_tool" type="object" interface="zwp_tablet_tool_v2"/>
+    </request>
+  </interface>
+
+  <interface name="wp_cursor_shape_device_v1" version="2">
+    <description summary="cursor shape for a device">
+      This interface allows clients to set the cursor shape.
+    </description>
+
+    <enum name="shape">
+      <description summary="cursor shapes">
+        This enum describes cursor shapes.
+
+        The names are taken from the CSS W3C specification:
+        https://w3c.github.io/csswg-drafts/css-ui/#cursor
+        with a few additions.
+
+        Note that there are some groups of cursor shapes that are related:
+        The first group is drag-and-drop cursors which are used to indicate
+        the selected action during dnd operations. The second group is resize
+        cursors which are used to indicate resizing and moving possibilities
+        on window borders. It is recommended that the shapes in these groups
+        should use visually compatible images and metaphors.
+      </description>
+      <entry name="default" value="1" summary="default cursor"/>
+      <entry name="context_menu" value="2" summary="a context menu is available for the object under the cursor"/>
+      <entry name="help" value="3" summary="help is available for the object under the cursor"/>
+      <entry name="pointer" value="4" summary="pointer that indicates a link or another interactive element"/>
+      <entry name="progress" value="5" summary="progress indicator"/>
+      <entry name="wait" value="6" summary="program is busy, user should wait"/>
+      <entry name="cell" value="7" summary="a cell or set of cells may be selected"/>
+      <entry name="crosshair" value="8" summary="simple crosshair"/>
+      <entry name="text" value="9" summary="text may be selected"/>
+      <entry name="vertical_text" value="10" summary="vertical text may be selected"/>
+      <entry name="alias" value="11" summary="drag-and-drop: alias of/shortcut to something is to be created"/>
+      <entry name="copy" value="12" summary="drag-and-drop: something is to be copied"/>
+      <entry name="move" value="13" summary="drag-and-drop: something is to be moved"/>
+      <entry name="no_drop" value="14" summary="drag-and-drop: the dragged item cannot be dropped at the current cursor location"/>
+      <entry name="not_allowed" value="15" summary="drag-and-drop: the requested action will not be carried out"/>
+      <entry name="grab" value="16" summary="drag-and-drop: something can be grabbed"/>
+      <entry name="grabbing" value="17" summary="drag-and-drop: something is being grabbed"/>
+      <entry name="e_resize" value="18" summary="resizing: the east border is to be moved"/>
+      <entry name="n_resize" value="19" summary="resizing: the north border is to be moved"/>
+      <entry name="ne_resize" value="20" summary="resizing: the north-east corner is to be moved"/>
+      <entry name="nw_resize" value="21" summary="resizing: the north-west corner is to be moved"/>
+      <entry name="s_resize" value="22" summary="resizing: the south border is to be moved"/>
+      <entry name="se_resize" value="23" summary="resizing: the south-east corner is to be moved"/>
+      <entry name="sw_resize" value="24" summary="resizing: the south-west corner is to be moved"/>
+      <entry name="w_resize" value="25" summary="resizing: the west border is to be moved"/>
+      <entry name="ew_resize" value="26" summary="resizing: the east and west borders are to be moved"/>
+      <entry name="ns_resize" value="27" summary="resizing: the north and south borders are to be moved"/>
+      <entry name="nesw_resize" value="28" summary="resizing: the north-east and south-west corners are to be moved"/>
+      <entry name="nwse_resize" value="29" summary="resizing: the north-west and south-east corners are to be moved"/>
+      <entry name="col_resize" value="30" summary="resizing: that the item/column can be resized horizontally"/>
+      <entry name="row_resize" value="31" summary="resizing: that the item/row can be resized vertically"/>
+      <entry name="all_scroll" value="32" summary="something can be scrolled in any direction"/>
+      <entry name="zoom_in" value="33" summary="something can be zoomed in"/>
+      <entry name="zoom_out" value="34" summary="something can be zoomed out"/>
+      <entry name="dnd_ask" value="35" summary="drag-and-drop: the user will select which action will be carried out (non-css value)" since="2"/>
+      <entry name="all_resize" value="36" summary="resizing: something can be moved or resized in any direction (non-css value)" since="2"/>
+    </enum>
+
+    <enum name="error">
+      <entry name="invalid_shape" value="1"
+        summary="the specified shape value is invalid"/>
+    </enum>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the cursor shape device">
+        Destroy the cursor shape device.
+
+        The device cursor shape remains unchanged.
+      </description>
+    </request>
+
+    <request name="set_shape">
+      <description summary="set device cursor to the shape">
+        Sets the device cursor to the specified shape. The compositor will
+        change the cursor image based on the specified shape.
+
+        The cursor actually changes only if the input device focus is one of
+        the requesting client's surfaces. If any, the previous cursor image
+        (surface or shape) is replaced.
+
+        The "shape" argument must be a valid enum entry, otherwise the
+        invalid_shape protocol error is raised.
+
+        This is similar to the wl_pointer.set_cursor and
+        zwp_tablet_tool_v2.set_cursor requests, but this request accepts a
+        shape instead of contents in the form of a surface. Clients can mix
+        set_cursor and set_shape requests.
+
+        The serial parameter must match the latest wl_pointer.enter or
+        zwp_tablet_tool_v2.proximity_in serial number sent to the client.
+        Otherwise the request will be ignored.
+      </description>
+      <arg name="serial" type="uint" summary="serial number of the enter event"/>
+      <arg name="shape" type="uint" enum="shape"/>
+    </request>
+  </interface>
+</protocol>

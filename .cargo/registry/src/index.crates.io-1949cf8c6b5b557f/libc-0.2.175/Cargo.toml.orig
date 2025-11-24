@@ -1,0 +1,181 @@
+[package]
+name = "libc"
+version = "0.2.175"
+keywords = ["libc", "ffi", "bindings", "operating", "system"]
+categories = ["external-ffi-bindings", "no-std", "os"]
+exclude = ["/ci/*", "/.github/*", "/.cirrus.yml", "/triagebot.toml"]
+description = "Raw FFI bindings to platform libraries like libc."
+authors = ["The Rust Project Developers"]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rust-lang/libc"
+rust-version = "1.63"
+
+[package.metadata.docs.rs]
+features = ["extra_traits"]
+default-target = "x86_64-unknown-linux-gnu"
+targets = [
+    "aarch64-apple-darwin",
+    "aarch64-apple-ios",
+    "aarch64-linux-android",
+    "aarch64-pc-windows-msvc",
+    "aarch64-unknown-freebsd",
+    "aarch64-unknown-fuchsia",
+    "aarch64-unknown-hermit",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-unknown-linux-musl",
+    "aarch64-unknown-netbsd",
+    "aarch64-unknown-openbsd",
+    "aarch64-wrs-vxworks",
+    "arm-linux-androideabi",
+    "arm-unknown-linux-gnueabi",
+    "arm-unknown-linux-gnueabihf",
+    "arm-unknown-linux-musleabi",
+    "arm-unknown-linux-musleabihf",
+    "armebv7r-none-eabi",
+    "armebv7r-none-eabihf",
+    "armv5te-unknown-linux-gnueabi",
+    "armv5te-unknown-linux-musleabi",
+    "armv7-linux-androideabi",
+    "armv7-unknown-linux-gnueabihf",
+    "armv7-unknown-linux-musleabihf",
+    "armv7-wrs-vxworks-eabihf",
+    "armv7r-none-eabi",
+    "armv7r-none-eabihf",
+    # FIXME(hexagon): excluded due to duplicate symbol errors
+    # "hexagon-unknown-linux-musl",
+    "i586-unknown-linux-gnu",
+    "i586-unknown-linux-musl",
+    "i686-linux-android",
+    "i686-pc-windows-gnu",
+    "i686-pc-windows-msvc",
+    "i686-pc-windows-msvc",
+    "i686-unknown-freebsd",
+    "i686-unknown-haiku",
+    "i686-unknown-linux-gnu",
+    "i686-unknown-linux-musl",
+    "i686-unknown-netbsd",
+    "i686-unknown-openbsd",
+    "i686-wrs-vxworks",
+    "mips-unknown-linux-gnu",
+    "mips-unknown-linux-musl",
+    "mips64-unknown-linux-gnuabi64",
+    "mips64-unknown-linux-muslabi64",
+    "mips64el-unknown-linux-gnuabi64",
+    "mips64el-unknown-linux-muslabi64",
+    "mipsel-sony-psp",
+    "mipsel-unknown-linux-gnu",
+    "mipsel-unknown-linux-musl",
+    "nvptx64-nvidia-cuda",
+    "powerpc-unknown-linux-gnu",
+    "powerpc-unknown-linux-gnuspe",
+    "powerpc-unknown-netbsd",
+    "powerpc-wrs-vxworks",
+    "powerpc-wrs-vxworks-spe",
+    "powerpc64-ibm-aix",
+    "powerpc64-unknown-freebsd",
+    "powerpc64-unknown-linux-gnu",
+    "powerpc64-wrs-vxworks",
+    "powerpc64le-unknown-linux-gnu",
+    "powerpc64le-unknown-linux-musl",
+    "riscv32gc-unknown-linux-gnu",
+    "riscv32i-unknown-none-elf",
+    "riscv32imac-unknown-none-elf",
+    "riscv32imc-unknown-none-elf",
+    "riscv32-wrs-vxworks",
+    "riscv64gc-unknown-freebsd",
+    "riscv64gc-unknown-hermit",
+    "riscv64gc-unknown-linux-gnu",
+    "riscv64gc-unknown-linux-musl",
+    "riscv64gc-unknown-none-elf",
+    "riscv64imac-unknown-none-elf",
+    "riscv64-wrs-vxworks",
+    "s390x-unknown-linux-gnu",
+    "s390x-unknown-linux-musl",
+    "sparc-unknown-linux-gnu",
+    "sparc64-unknown-linux-gnu",
+    "sparc64-unknown-netbsd",
+    "sparcv9-sun-solaris",
+    "thumbv6m-none-eabi",
+    "thumbv7em-none-eabi",
+    "thumbv7em-none-eabihf",
+    "thumbv7m-none-eabi",
+    "thumbv7neon-linux-androideabi",
+    "thumbv7neon-unknown-linux-gnueabihf",
+    "wasm32-unknown-emscripten",
+    "wasm32-unknown-unknown",
+    "x86_64-apple-darwin",
+    "x86_64-apple-ios",
+    "x86_64-fortanix-unknown-sgx",
+    "x86_64-linux-android",
+    "x86_64-pc-solaris",
+    "x86_64-pc-windows-gnu",
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-dragonfly",
+    "x86_64-unknown-freebsd",
+    "x86_64-unknown-fuchsia",
+    "x86_64-unknown-haiku",
+    "x86_64-unknown-hermit",
+    "x86_64-unknown-illumos",
+    "x86_64-unknown-l4re-uclibc",
+    "x86_64-unknown-linux-gnu",
+    "x86_64-unknown-linux-gnux32",
+    "x86_64-unknown-linux-musl",
+    "x86_64-unknown-netbsd",
+    "x86_64-unknown-openbsd",
+    "x86_64-unknown-redox",
+    "x86_64-wrs-vxworks"
+]
+cargo-args = ["-Zbuild-std=core"]
+
+[dependencies]
+rustc-std-workspace-core = { version = "1.0.1", optional = true }
+
+[features]
+default = ["std"]
+std = []
+rustc-dep-of-std = ['align', 'rustc-std-workspace-core']
+extra_traits = []
+
+# `const-extern-function` is deprecated and no longer does anything
+const-extern-fn = []
+
+# `align` is deprecated and no longer does anything
+align = []
+
+# use_std is deprecated, use `std` instead
+use_std = ['std']
+
+[workspace]
+members = [
+    "ctest",
+    "ctest-next",
+    "libc-test",
+]
+
+# FIXME(msrv): These should be renamed as `[workspace.lints.*]` once MSRV is above 1.64
+#       This way all crates can use it with `[lints] workspace=true` section
+
+[lints.rust]
+# FIXME(cleanup): make ident usage consistent in each file
+unused_qualifications = "allow"
+
+[lints.clippy]
+# Enable pedantic lints - use this manually once in a while, but don't enable by default
+# pedantic = { level = "warn", priority = -1 }
+
+# We are okay with the current state of these lints
+explicit_iter_loop = "warn"
+identity_op = "allow"  # some expressions like `0 | x` are clearer for bit ops
+manual_assert = "warn"
+map_unwrap_or = "warn"
+missing_safety_doc = "allow"  # safety? in libc? seriously?
+non_minimal_cfg = "allow"  # for some reason cfg_if! sometimes trigger this
+ptr_as_ptr = "warn"
+unnecessary_semicolon = "warn"
+
+# FIXME(clippy): these should be fixed if possible
+expl_impl_clone_on_copy = "allow"
+uninlined_format_args = "allow"
+unnecessary_cast = "allow"  # some casts like `as usize` are only needed for some targets
+used_underscore_binding = "allow"

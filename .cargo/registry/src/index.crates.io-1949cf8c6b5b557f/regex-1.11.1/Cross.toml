@@ -1,0 +1,7 @@
+[build.env]
+passthrough = [
+    "RUST_BACKTRACE",
+    "RUST_LOG",
+    "REGEX_TEST",
+    "REGEX_TEST_VERBOSE",
+]

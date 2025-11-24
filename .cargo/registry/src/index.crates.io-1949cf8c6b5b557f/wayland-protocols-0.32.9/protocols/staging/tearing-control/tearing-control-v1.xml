@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="tearing_control_v1">
+  <copyright>
+    Copyright © 2021 Xaver Hugl
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice (including the next
+    paragraph) shall be included in all copies or substantial portions of the
+    Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+  </copyright>
+
+  <interface name="wp_tearing_control_manager_v1" version="1">
+    <description summary="protocol for tearing control">
+      For some use cases like games or drawing tablets it can make sense to
+      reduce latency by accepting tearing with the use of asynchronous page
+      flips. This global is a factory interface, allowing clients to inform
+      which type of presentation the content of their surfaces is suitable for.
+
+      Graphics APIs like EGL or Vulkan, that manage the buffer queue and commits
+      of a wl_surface themselves, are likely to be using this extension
+      internally. If a client is using such an API for a wl_surface, it should
+      not directly use this extension on that surface, to avoid raising a
+      tearing_control_exists protocol error.
+
+      Warning! The protocol described in this file is currently in the testing
+      phase. Backward compatible changes may be added together with the
+      corresponding interface version bump. Backward incompatible changes can
+      only be done by creating a new major version of the extension.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy tearing control factory object">
+        Destroy this tearing control factory object. Other objects, including
+        wp_tearing_control_v1 objects created by this factory, are not affected
+        by this request.
+      </description>
+    </request>
+
+    <enum name="error">
+      <entry name="tearing_control_exists" value="0"
+             summary="the surface already has a tearing object associated"/>
+    </enum>
+
+    <request name="get_tearing_control">
+      <description summary="extend surface interface for tearing control">
+        Instantiate an interface extension for the given wl_surface to request
+        asynchronous page flips for presentation.
+
+        If the given wl_surface already has a wp_tearing_control_v1 object
+        associated, the tearing_control_exists protocol error is raised.
+      </description>
+      <arg name="id" type="new_id" interface="wp_tearing_control_v1"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+  </interface>
+
+  <interface name="wp_tearing_control_v1" version="1">
+    <description summary="per-surface tearing control interface">
+      An additional interface to a wl_surface object, which allows the client
+      to hint to the compositor if the content on the surface is suitable for
+      presentation with tearing.
+      The default presentation hint is vsync. See presentation_hint for more
+      details.
+
+      If the associated wl_surface is destroyed, this object becomes inert and
+      should be destroyed.
+    </description>
+
+    <enum name="presentation_hint">
+      <description summary="presentation hint values">
+        This enum provides information for if submitted frames from the client
+        may be presented with tearing.
+      </description>
+      <entry name="vsync" value="0">
+        <description summary="tearing-free presentation">
+          The content of this surface is meant to be synchronized to the
+          vertical blanking period. This should not result in visible tearing
+          and may result in a delay before a surface commit is presented.
+        </description>
+      </entry>
+      <entry name="async" value="1">
+        <description summary="asynchronous presentation">
+          The content of this surface is meant to be presented with minimal
+          latency and tearing is acceptable.
+        </description>
+      </entry>
+    </enum>
+
+    <request name="set_presentation_hint">
+      <description summary="set presentation hint">
+        Set the presentation hint for the associated wl_surface. This state is
+        double-buffered, see wl_surface.commit.
+
+        The compositor is free to dynamically respect or ignore this hint based
+        on various conditions like hardware capabilities, surface state and
+        user preferences.
+      </description>
+      <arg name="hint" type="uint" enum="presentation_hint"/>
+    </request>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy tearing control object">
+        Destroy this surface tearing object and revert the presentation hint to
+        vsync. The change will be applied on the next wl_surface.commit.
+      </description>
+    </request>
+  </interface>
+
+</protocol>

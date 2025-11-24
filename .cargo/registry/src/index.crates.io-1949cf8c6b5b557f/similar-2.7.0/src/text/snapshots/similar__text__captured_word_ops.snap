@@ -1,0 +1,202 @@
+---
+source: src/text/mod.rs
+expression: "&changes"
+---
+[
+    Change {
+        tag: Equal,
+        old_index: Some(
+            0,
+        ),
+        new_index: Some(
+            0,
+        ),
+        value: "Hello",
+    },
+    Change {
+        tag: Equal,
+        old_index: Some(
+            1,
+        ),
+        new_index: Some(
+            1,
+        ),
+        value: " ",
+    },
+    Change {
+        tag: Equal,
+        old_index: Some(
+            2,
+        ),
+        new_index: Some(
+            2,
+        ),
+        value: "World",
+    },
+    Change {
+        tag: Equal,
+        old_index: Some(
+            3,
+        ),
+        new_index: Some(
+            3,
+        ),
+        value: "\n",
+    },
+    Change {
+        tag: Equal,
+        old_index: Some(
+            4,
+        ),
+        new_index: Some(
+            4,
+        ),
+        value: "some",
+    },
+    Change {
+        tag: Equal,
+        old_index: Some(
+            5,
+        ),
+        new_index: Some(
+            5,
+        ),
+        value: " ",
+    },
+    Change {
+        tag: Insert,
+        old_index: None,
+        new_index: Some(
+            6,
+        ),
+        value: "amazing",
+    },
+    Change {
+        tag: Insert,
+        old_index: None,
+        new_index: Some(
+            7,
+        ),
+        value: " ",
+    },
+    Change {
+        tag: Equal,
+        old_index: Some(
+            6,
+        ),
+        new_index: Some(
+            8,
+        ),
+        value: "stuff",
+    },
+    Change {
+        tag: Equal,
+        old_index: Some(
+            7,
+        ),
+        new_index: Some(
+            9,
+        ),
+        value: " ",
+    },
+    Change {
+        tag: Equal,
+        old_index: Some(
+            8,
+        ),
+        new_index: Some(
+            10,
+        ),
+        value: "here",
+    },
+    Change {
+        tag: Equal,
+        old_index: Some(
+            9,
+        ),
+        new_index: Some(
+            11,
+        ),
+        value: "\n",
+    },
+    Change {
+        tag: Equal,
+        old_index: Some(
+            10,
+        ),
+        new_index: Some(
+            12,
+        ),
+        value: "some",
+    },
+    Change {
+        tag: Equal,
+        old_index: Some(
+            11,
+        ),
+        new_index: Some(
+            13,
+        ),
+        value: " ",
+    },
+    Change {
+        tag: Equal,
+        old_index: Some(
+            12,
+        ),
+        new_index: Some(
+            14,
+        ),
+        value: "more",
+    },
+    Change {
+        tag: Equal,
+        old_index: Some(
+            13,
+        ),
+        new_index: Some(
+            15,
+        ),
+        value: " ",
+    },
+    Change {
+        tag: Equal,
+        old_index: Some(
+            14,
+        ),
+        new_index: Some(
+            16,
+        ),
+        value: "stuff",
+    },
+    Change {
+        tag: Equal,
+        old_index: Some(
+            15,
+        ),
+        new_index: Some(
+            17,
+        ),
+        value: " ",
+    },
+    Change {
+        tag: Equal,
+        old_index: Some(
+            16,
+        ),
+        new_index: Some(
+            18,
+        ),
+        value: "here",
+    },
+    Change {
+        tag: Equal,
+        old_index: Some(
+            17,
+        ),
+        new_index: Some(
+            19,
+        ),
+        value: "\n",
+    },
+]

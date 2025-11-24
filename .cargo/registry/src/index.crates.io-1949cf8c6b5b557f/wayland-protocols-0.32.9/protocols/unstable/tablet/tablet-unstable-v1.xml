@@ -1,0 +1,640 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="tablet_unstable_v1">
+
+  <copyright>
+    Copyright 2014 © Stephen "Lyude" Chandler Paul
+    Copyright 2015-2016 © Red Hat, Inc.
+
+    Permission is hereby granted, free of charge, to any person
+    obtaining a copy of this software and associated documentation files
+    (the "Software"), to deal in the Software without restriction,
+    including without limitation the rights to use, copy, modify, merge,
+    publish, distribute, sublicense, and/or sell copies of the Software,
+    and to permit persons to whom the Software is furnished to do so,
+    subject to the following conditions:
+
+    The above copyright notice and this permission notice (including the
+    next paragraph) shall be included in all copies or substantial
+    portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+    EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+    MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+    NONINFRINGEMENT.  IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+    BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+    ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+    CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+  </copyright>
+
+  <description summary="Wayland protocol for graphics tablets">
+    This description provides a high-level overview of the interplay between
+    the interfaces defined this protocol. For details, see the protocol
+    specification.
+
+    More than one tablet may exist, and device-specifics matter. Tablets are
+    not represented by a single virtual device like wl_pointer. A client
+    binds to the tablet manager object which is just a proxy object. From
+    that, the client requests wp_tablet_manager.get_tablet_seat(wl_seat)
+    and that returns the actual interface that has all the tablets. With
+    this indirection, we can avoid merging wp_tablet into the actual Wayland
+    protocol, a long-term benefit.
+
+    The wp_tablet_seat sends a "tablet added" event for each tablet
+    connected. That event is followed by descriptive events about the
+    hardware; currently that includes events for name, vid/pid and
+    a wp_tablet.path event that describes a local path. This path can be
+    used to uniquely identify a tablet or get more information through
+    libwacom. Emulated or nested tablets can skip any of those, e.g. a
+    virtual tablet may not have a vid/pid. The sequence of descriptive
+    events is terminated by a wp_tablet.done event to signal that a client
+    may now finalize any initialization for that tablet.
+
+    Events from tablets require a tool in proximity. Tools are also managed
+    by the tablet seat; a "tool added" event is sent whenever a tool is new
+    to the compositor. That event is followed by a number of descriptive
+    events about the hardware; currently that includes capabilities,
+    hardware id and serial number, and tool type. Similar to the tablet
+    interface, a wp_tablet_tool.done event is sent to terminate that initial
+    sequence.
+
+    Any event from a tool happens on the wp_tablet_tool interface. When the
+    tool gets into proximity of the tablet, a proximity_in event is sent on
+    the wp_tablet_tool interface, listing the tablet and the surface. That
+    event is followed by a motion event with the coordinates. After that,
+    it's the usual motion, axis, button, etc. events. The protocol's
+    serialisation means events are grouped by wp_tablet_tool.frame events.
+
+    Two special events (that don't exist in X) are down and up. They signal
+    "tip touching the surface". For tablets without real proximity
+    detection, the sequence is: proximity_in, motion, down, frame.
+
+    When the tool leaves proximity, a proximity_out event is sent. If any
+    button is still down, a button release event is sent before this
+    proximity event. These button events are sent in the same frame as the
+    proximity event to signal to the client that the buttons were held when
+    the tool left proximity.
+
+    If the tool moves out of the surface but stays in proximity (i.e.
+    between windows), compositor-specific grab policies apply. This usually
+    means that the proximity-out is delayed until all buttons are released.
+
+    Moving a tool physically from one tablet to the other has no real effect
+    on the protocol, since we already have the tool object from the "tool
+    added" event. All the information is already there and the proximity
+    events on both tablets are all a client needs to reconstruct what
+    happened.
+
+    Some extra axes are normalized, i.e. the client knows the range as
+    specified in the protocol (e.g. [0, 65535]), the granularity however is
+    unknown. The current normalized axes are pressure, distance, and slider.
+
+    Other extra axes are in physical units as specified in the protocol.
+    The current extra axes with physical units are tilt, rotation and
+    wheel rotation.
+
+    Since tablets work independently of the pointer controlled by the mouse,
+    the focus handling is independent too and controlled by proximity.
+    The wp_tablet_tool.set_cursor request sets a tool-specific cursor.
+    This cursor surface may be the same as the mouse cursor, and it may be
+    the same across tools but it is possible to be more fine-grained. For
+    example, a client may set different cursors for the pen and eraser.
+
+    Tools are generally independent of tablets and it is
+    compositor-specific policy when a tool can be removed. Common approaches
+    will likely include some form of removing a tool when all tablets the
+    tool was used on are removed.
+
+    Warning! The protocol described in this file is experimental and
+    backward incompatible changes may be made. Backward compatible changes
+    may be added together with the corresponding interface version bump.
+    Backward incompatible changes are done by bumping the version number in
+    the protocol and interface names and resetting the interface version.
+    Once the protocol is to be declared stable, the 'z' prefix and the
+    version number in the protocol and interface names are removed and the
+    interface version number is reset.
+  </description>
+
+  <interface name="zwp_tablet_manager_v1" version="1">
+    <description summary="controller object for graphic tablet devices">
+      An object that provides access to the graphics tablets available on this
+      system. All tablets are associated with a seat, to get access to the
+      actual tablets, use wp_tablet_manager.get_tablet_seat.
+    </description>
+
+    <request name="get_tablet_seat">
+      <description summary="get the tablet seat">
+	Get the wp_tablet_seat object for the given seat. This object
+	provides access to all graphics tablets in this seat.
+      </description>
+      <arg name="tablet_seat" type="new_id" interface="zwp_tablet_seat_v1"/>
+      <arg name="seat" type="object" interface="wl_seat" summary="The wl_seat object to retrieve the tablets for" />
+    </request>
+
+    <request name="destroy" type="destructor">
+      <description summary="release the memory for the tablet manager object">
+	Destroy the wp_tablet_manager object. Objects created from this
+	object are unaffected and should be destroyed separately.
+      </description>
+    </request>
+  </interface>
+
+  <interface name="zwp_tablet_seat_v1" version="1">
+    <description summary="controller object for graphic tablet devices of a seat">
+      An object that provides access to the graphics tablets available on this
+      seat. After binding to this interface, the compositor sends a set of
+      wp_tablet_seat.tablet_added and wp_tablet_seat.tool_added events.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="release the memory for the tablet seat object">
+	Destroy the wp_tablet_seat object. Objects created from this
+	object are unaffected and should be destroyed separately.
+      </description>
+    </request>
+
+    <event name="tablet_added">
+      <description summary="new device notification">
+	This event is sent whenever a new tablet becomes available on this
+	seat. This event only provides the object id of the tablet, any
+	static information about the tablet (device name, vid/pid, etc.) is
+	sent through the wp_tablet interface.
+      </description>
+      <arg name="id" type="new_id" interface="zwp_tablet_v1" summary="the newly added graphics tablet"/>
+    </event>
+
+    <event name="tool_added">
+      <description summary="a new tool has been used with a tablet">
+	This event is sent whenever a tool that has not previously been used
+	with a tablet comes into use. This event only provides the object id
+	of the tool; any static information about the tool (capabilities,
+	type, etc.) is sent through the wp_tablet_tool interface.
+      </description>
+      <arg name="id" type="new_id" interface="zwp_tablet_tool_v1" summary="the newly added tablet tool"/>
+    </event>
+  </interface>
+
+  <interface name="zwp_tablet_tool_v1" version="1">
+    <description summary="a physical tablet tool">
+      An object that represents a physical tool that has been, or is
+      currently in use with a tablet in this seat. Each wp_tablet_tool
+      object stays valid until the client destroys it; the compositor
+      reuses the wp_tablet_tool object to indicate that the object's
+      respective physical tool has come into proximity of a tablet again.
+
+      A wp_tablet_tool object's relation to a physical tool depends on the
+      tablet's ability to report serial numbers. If the tablet supports
+      this capability, then the object represents a specific physical tool
+      and can be identified even when used on multiple tablets.
+
+      A tablet tool has a number of static characteristics, e.g. tool type,
+      hardware_serial and capabilities. These capabilities are sent in an
+      event sequence after the wp_tablet_seat.tool_added event before any
+      actual events from this tool. This initial event sequence is
+      terminated by a wp_tablet_tool.done event.
+
+      Tablet tool events are grouped by wp_tablet_tool.frame events.
+      Any events received before a wp_tablet_tool.frame event should be
+      considered part of the same hardware state change.
+    </description>
+
+    <request name="set_cursor">
+      <description summary="set the tablet tool's surface">
+	Sets the surface of the cursor used for this tool on the given
+	tablet. This request only takes effect if the tool is in proximity
+	of one of the requesting client's surfaces or the surface parameter
+	is the current pointer surface. If there was a previous surface set
+	with this request it is replaced. If surface is NULL, the cursor
+	image is hidden.
+
+	The parameters hotspot_x and hotspot_y define the position of the
+	pointer surface relative to the pointer location. Its top-left corner
+	is always at (x, y) - (hotspot_x, hotspot_y), where (x, y) are the
+	coordinates of the pointer location, in surface-local coordinates.
+
+	On surface.attach requests to the pointer surface, hotspot_x and
+	hotspot_y are decremented by the x and y parameters passed to the
+	request. Attach must be confirmed by wl_surface.commit as usual.
+
+	The hotspot can also be updated by passing the currently set pointer
+	surface to this request with new values for hotspot_x and hotspot_y.
+
+	The current and pending input regions of the wl_surface are cleared,
+	and wl_surface.set_input_region is ignored until the wl_surface is no
+	longer used as the cursor. When the use as a cursor ends, the current
+	and pending input regions become undefined, and the wl_surface is
+	unmapped.
+
+	This request gives the surface the role of a cursor. The role
+	assigned by this request is the same as assigned by
+	wl_pointer.set_cursor meaning the same surface can be
+	used both as a wl_pointer cursor and a wp_tablet cursor. If the
+	surface already has another role, it raises a protocol error.
+	The surface may be used on multiple tablets and across multiple
+	seats.
+      </description>
+      <arg name="serial" type="uint" summary="serial of the enter event"/>
+      <arg name="surface" type="object" interface="wl_surface" allow-null="true"/>
+      <arg name="hotspot_x" type="int" summary="surface-local x coordinate"/>
+      <arg name="hotspot_y" type="int" summary="surface-local y coordinate"/>
+    </request>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the tool object">
+	This destroys the client's resource for this tool object.
+      </description>
+    </request>
+
+    <enum name="type">
+      <description summary="a physical tool type">
+	Describes the physical type of a tool. The physical type of a tool
+	generally defines its base usage.
+
+	The mouse tool represents a mouse-shaped tool that is not a relative
+	device but bound to the tablet's surface, providing absolute
+	coordinates.
+
+	The lens tool is a mouse-shaped tool with an attached lens to
+	provide precision focus.
+      </description>
+      <entry name="pen" value="0x140" summary="Pen"/>
+      <entry name="eraser" value="0x141" summary="Eraser"/>
+      <entry name="brush" value="0x142" summary="Brush"/>
+      <entry name="pencil" value="0x143" summary="Pencil"/>
+      <entry name="airbrush" value="0x144" summary="Airbrush"/>
+      <entry name="finger" value="0x145" summary="Finger"/>
+      <entry name="mouse" value="0x146" summary="Mouse"/>
+      <entry name="lens" value="0x147" summary="Lens"/>
+    </enum>
+
+    <event name="type">
+      <description summary="tool type">
+	The tool type is the high-level type of the tool and usually decides
+	the interaction expected from this tool.
+
+	This event is sent in the initial burst of events before the
+	wp_tablet_tool.done event.
+      </description>
+      <arg name="tool_type" type="uint" enum="type" summary="the physical tool type"/>
+    </event>
+
+    <event name="hardware_serial">
+      <description summary="unique hardware serial number of the tool">
+	If the physical tool can be identified by a unique 64-bit serial
+	number, this event notifies the client of this serial number.
+
+	If multiple tablets are available in the same seat and the tool is
+	uniquely identifiable by the serial number, that tool may move
+	between tablets.
+
+	Otherwise, if the tool has no serial number and this event is
+	missing, the tool is tied to the tablet it first comes into
+	proximity with. Even if the physical tool is used on multiple
+	tablets, separate wp_tablet_tool objects will be created, one per
+	tablet.
+
+	This event is sent in the initial burst of events before the
+	wp_tablet_tool.done event.
+      </description>
+      <arg name="hardware_serial_hi" type="uint" summary="the unique serial number of the tool, most significant bits"/>
+      <arg name="hardware_serial_lo" type="uint" summary="the unique serial number of the tool, least significant bits"/>
+    </event>
+
+    <event name="hardware_id_wacom">
+      <description summary="hardware id notification in Wacom's format">
+	This event notifies the client of a hardware id available on this tool.
+
+	The hardware id is a device-specific 64-bit id that provides extra
+	information about the tool in use, beyond the wl_tool.type
+	enumeration. The format of the id is specific to tablets made by
+	Wacom Inc. For example, the hardware id of a Wacom Grip
+	Pen (a stylus) is 0x802.
+
+	This event is sent in the initial burst of events before the
+	wp_tablet_tool.done event.
+      </description>
+      <arg name="hardware_id_hi" type="uint" summary="the hardware id, most significant bits"/>
+      <arg name="hardware_id_lo" type="uint" summary="the hardware id, least significant bits"/>
+    </event>
+
+    <enum name="capability">
+      <description summary="capability flags for a tool">
+	Describes extra capabilities on a tablet.
+
+	Any tool must provide x and y values, extra axes are
+	device-specific.
+      </description>
+      <entry name="tilt" value="1" summary="Tilt axes"/>
+      <entry name="pressure" value="2" summary="Pressure axis"/>
+      <entry name="distance" value="3" summary="Distance axis"/>
+      <entry name="rotation" value="4" summary="Z-rotation axis"/>
+      <entry name="slider" value="5" summary="Slider axis"/>
+      <entry name="wheel" value="6" summary="Wheel axis"/>
+    </enum>
+
+    <event name="capability">
+      <description summary="tool capability notification">
+	This event notifies the client of any capabilities of this tool,
+	beyond the main set of x/y axes and tip up/down detection.
+
+	One event is sent for each extra capability available on this tool.
+
+	This event is sent in the initial burst of events before the
+	wp_tablet_tool.done event.
+      </description>
+      <arg name="capability" type="uint" enum="capability" summary="the capability"/>
+    </event>
+
+    <event name="done">
+      <description summary="tool description events sequence complete">
+	This event signals the end of the initial burst of descriptive
+	events. A client may consider the static description of the tool to
+	be complete and finalize initialization of the tool.
+      </description>
+    </event>
+
+    <event name="removed">
+      <description summary="tool removed">
+	This event is sent when the tool is removed from the system and will
+	send no further events. Should the physical tool come back into
+	proximity later, a new wp_tablet_tool object will be created.
+
+	It is compositor-dependent when a tool is removed. A compositor may
+	remove a tool on proximity out, tablet removal or any other reason.
+	A compositor may also keep a tool alive until shutdown.
+
+	If the tool is currently in proximity, a proximity_out event will be
+	sent before the removed event. See wp_tablet_tool.proximity_out for
+	the handling of any buttons logically down.
+
+	When this event is received, the client must wp_tablet_tool.destroy
+	the object.
+      </description>
+    </event>
+
+    <event name="proximity_in">
+      <description summary="proximity in event">
+	Notification that this tool is focused on a certain surface.
+
+	This event can be received when the tool has moved from one surface to
+	another, or when the tool has come back into proximity above the
+	surface.
+
+	If any button is logically down when the tool comes into proximity,
+	the respective button event is sent after the proximity_in event but
+	within the same frame as the proximity_in event.
+      </description>
+      <arg name="serial" type="uint"/>
+      <arg name="tablet" type="object" interface="zwp_tablet_v1" summary="The tablet the tool is in proximity of"/>
+      <arg name="surface" type="object" interface="wl_surface" summary="The current surface the tablet tool is over"/>
+    </event>
+
+    <event name="proximity_out">
+      <description summary="proximity out event">
+	Notification that this tool has either left proximity, or is no
+	longer focused on a certain surface.
+
+	When the tablet tool leaves proximity of the tablet, button release
+	events are sent for each button that was held down at the time of
+	leaving proximity. These events are sent before the proximity_out
+	event but within the same wp_tablet.frame.
+
+	If the tool stays within proximity of the tablet, but the focus
+	changes from one surface to another, a button release event may not
+	be sent until the button is actually released or the tool leaves the
+	proximity of the tablet.
+      </description>
+    </event>
+
+    <event name="down">
+      <description summary="tablet tool is making contact">
+	Sent whenever the tablet tool comes in contact with the surface of the
+	tablet.
+
+	If the tool is already in contact with the tablet when entering the
+	input region, the client owning said region will receive a
+	wp_tablet.proximity_in event, followed by a wp_tablet.down
+	event and a wp_tablet.frame event.
+
+	Note that this event describes logical contact, not physical
+	contact. On some devices, a compositor may not consider a tool in
+	logical contact until a minimum physical pressure threshold is
+	exceeded.
+      </description>
+      <arg name="serial" type="uint"/>
+    </event>
+
+    <event name="up">
+      <description summary="tablet tool is no longer making contact">
+	Sent whenever the tablet tool stops making contact with the surface of
+	the tablet, or when the tablet tool moves out of the input region
+	and the compositor grab (if any) is dismissed.
+
+	If the tablet tool moves out of the input region while in contact
+	with the surface of the tablet and the compositor does not have an
+	ongoing grab on the surface, the client owning said region will
+	receive a wp_tablet.up event, followed by a wp_tablet.proximity_out
+	event and a wp_tablet.frame event. If the compositor has an ongoing
+	grab on this device, this event sequence is sent whenever the grab
+	is dismissed in the future.
+
+	Note that this event describes logical contact, not physical
+	contact. On some devices, a compositor may not consider a tool out
+	of logical contact until physical pressure falls below a specific
+	threshold.
+      </description>
+    </event>
+
+    <event name="motion">
+      <description summary="motion event">
+	Sent whenever a tablet tool moves.
+      </description>
+      <arg name="x" type="fixed" summary="surface-local x coordinate"/>
+      <arg name="y" type="fixed" summary="surface-local y coordinate"/>
+    </event>
+
+    <event name="pressure">
+      <description summary="pressure change event">
+	Sent whenever the pressure axis on a tool changes. The value of this
+	event is normalized to a value between 0 and 65535.
+
+	Note that pressure may be nonzero even when a tool is not in logical
+	contact. See the down and up events for more details.
+      </description>
+      <arg name="pressure" type="uint" summary="The current pressure value"/>
+    </event>
+
+    <event name="distance">
+      <description summary="distance change event">
+	Sent whenever the distance axis on a tool changes. The value of this
+	event is normalized to a value between 0 and 65535.
+
+	Note that distance may be nonzero even when a tool is not in logical
+	contact. See the down and up events for more details.
+      </description>
+      <arg name="distance" type="uint" summary="The current distance value"/>
+    </event>
+
+    <event name="tilt">
+      <description summary="tilt change event">
+	Sent whenever one or both of the tilt axes on a tool change. Each tilt
+	value is in 0.01 of a degree, relative to the z-axis of the tablet.
+	The angle is positive when the top of a tool tilts along the
+	positive x or y axis.
+      </description>
+      <arg name="tilt_x" type="int" summary="The current value of the X tilt axis"/>
+      <arg name="tilt_y" type="int" summary="The current value of the Y tilt axis"/>
+    </event>
+
+    <event name="rotation">
+      <description summary="z-rotation change event">
+	Sent whenever the z-rotation axis on the tool changes. The
+	rotation value is in 0.01 of a degree clockwise from the tool's
+	logical neutral position.
+      </description>
+      <arg name="degrees" type="int" summary="The current rotation of the Z axis"/>
+    </event>
+
+    <event name="slider">
+      <description summary="Slider position change event">
+	Sent whenever the slider position on the tool changes. The
+	value is normalized between -65535 and 65535, with 0 as the logical
+	neutral position of the slider.
+
+	The slider is available on e.g. the Wacom Airbrush tool.
+      </description>
+      <arg name="position" type="int" summary="The current position of slider"/>
+    </event>
+
+    <event name="wheel">
+      <description summary="Wheel delta event">
+	Sent whenever the wheel on the tool emits an event. This event
+	contains two values for the same axis change. The degrees value is
+	in 0.01 of a degree in the same orientation as the
+	wl_pointer.vertical_scroll axis. The clicks value is in discrete
+	logical clicks of the mouse wheel. This value may be zero if the
+	movement of the wheel was less than one logical click.
+
+	Clients should choose either value and avoid mixing degrees and
+	clicks. The compositor may accumulate values smaller than a logical
+	click and emulate click events when a certain threshold is met.
+	Thus, wl_tablet_tool.wheel events with non-zero clicks values may
+	have different degrees values.
+      </description>
+      <arg name="degrees" type="int" summary="The wheel delta in 0.01 of a degree"/>
+      <arg name="clicks" type="int" summary="The wheel delta in discrete clicks"/>
+    </event>
+
+    <enum name="button_state">
+      <description summary="physical button state">
+	Describes the physical state of a button that produced the button event.
+      </description>
+      <entry name="released" value="0" summary="button is not pressed"/>
+      <entry name="pressed" value="1" summary="button is pressed"/>
+    </enum>
+
+    <event name="button">
+      <description summary="button event">
+	Sent whenever a button on the tool is pressed or released.
+
+	If a button is held down when the tool moves in or out of proximity,
+	button events are generated by the compositor. See
+	wp_tablet_tool.proximity_in and wp_tablet_tool.proximity_out for
+	details.
+      </description>
+      <arg name="serial" type="uint"/>
+      <arg name="button" type="uint" summary="The button whose state has changed"/>
+      <arg name="state" type="uint" enum="button_state" summary="Whether the button was pressed or released"/>
+    </event>
+
+    <event name="frame">
+      <description summary="frame event">
+	Marks the end of a series of axis and/or button updates from the
+	tablet. The Wayland protocol requires axis updates to be sent
+	sequentially, however all events within a frame should be considered
+	one hardware event.
+      </description>
+      <arg name="time" type="uint" summary="The time of the event with millisecond granularity"/>
+    </event>
+
+    <enum name="error">
+      <entry name="role" value="0" summary="given wl_surface has another role"/>
+    </enum>
+  </interface>
+
+  <interface name="zwp_tablet_v1" version="1">
+    <description summary="graphics tablet device">
+      The wp_tablet interface represents one graphics tablet device. The
+      tablet interface itself does not generate events; all events are
+      generated by wp_tablet_tool objects when in proximity above a tablet.
+
+      A tablet has a number of static characteristics, e.g. device name and
+      pid/vid. These capabilities are sent in an event sequence after the
+      wp_tablet_seat.tablet_added event. This initial event sequence is
+      terminated by a wp_tablet.done event.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the tablet object">
+	This destroys the client's resource for this tablet object.
+      </description>
+    </request>
+
+    <event name="name">
+      <description summary="tablet device name">
+	This event is sent in the initial burst of events before the
+	wp_tablet.done event.
+      </description>
+      <arg name="name" type="string" summary="the device name"/>
+    </event>
+
+    <event name="id">
+      <description summary="tablet device USB vendor/product id">
+	This event is sent in the initial burst of events before the
+	wp_tablet.done event.
+      </description>
+      <arg name="vid" type="uint" summary="USB vendor id"/>
+      <arg name="pid" type="uint" summary="USB product id"/>
+    </event>
+
+    <event name="path">
+      <description summary="path to the device">
+	A system-specific device path that indicates which device is behind
+	this wp_tablet. This information may be used to gather additional
+	information about the device, e.g. through libwacom.
+
+	A device may have more than one device path. If so, multiple
+	wp_tablet.path events are sent. A device may be emulated and not
+	have a device path, and in that case this event will not be sent.
+
+	The format of the path is unspecified, it may be a device node, a
+	sysfs path, or some other identifier. It is up to the client to
+	identify the string provided.
+
+	This event is sent in the initial burst of events before the
+	wp_tablet.done event.
+      </description>
+      <arg name="path" type="string" summary="path to local device"/>
+    </event>
+
+    <event name="done">
+      <description summary="tablet description events sequence complete">
+	This event is sent immediately to signal the end of the initial
+	burst of descriptive events. A client may consider the static
+	description of the tablet to be complete and finalize initialization
+	of the tablet.
+      </description>
+    </event>
+
+    <event name="removed">
+      <description summary="tablet removed event">
+	Sent when the tablet has been removed from the system. When a tablet
+	is removed, some tools may be removed.
+
+	When this event is received, the client must wp_tablet.destroy
+	the object.
+      </description>
+    </event>
+  </interface>
+
+</protocol>

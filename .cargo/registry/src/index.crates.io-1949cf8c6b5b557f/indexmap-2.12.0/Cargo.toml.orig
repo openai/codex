@@ -1,0 +1,76 @@
+[package]
+name = "indexmap"
+edition = "2021"
+version = "2.12.0"
+documentation = "https://docs.rs/indexmap/"
+repository = "https://github.com/indexmap-rs/indexmap"
+license = "Apache-2.0 OR MIT"
+description = "A hash table with consistent order and fast iteration."
+keywords = ["hashmap", "no_std"]
+categories = ["data-structures", "no-std"]
+rust-version = "1.82"
+
+[lib]
+bench = false
+
+[dependencies]
+equivalent = { version = "1.0", default-features = false }
+hashbrown = { version = "0.16", default-features = false }
+
+arbitrary = { version = "1.0", optional = true, default-features = false }
+quickcheck = { version = "1.0", optional = true, default-features = false }
+serde_core = { version = "1.0.220", optional = true, default-features = false }
+rayon = { version = "1.9", optional = true }
+sval = { version = "2", optional = true, default-features = false }
+
+# deprecated: use borsh's "indexmap" feature instead.
+borsh = { version = "1.2", optional = true, default-features = false }
+
+# serde v1.0.220 is the first version that released with `serde_core`.
+# This is required to avoid conflict with other `serde` users which may require an older version.
+[target.'cfg(any())'.dependencies]
+serde = { version = "1.0.220", default-features = false, optional = true }
+
+[dev-dependencies]
+itertools = "0.14"
+fastrand = { version = "2", default-features = false }
+quickcheck = { version = "1.0", default-features = false }
+fnv = "1.0"
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+
+[features]
+default = ["std"]
+std = []
+serde = ["dep:serde_core", "dep:serde"]
+
+# for testing only, of course
+test_debug = []
+
+[profile.bench]
+debug = true
+
+[package.metadata.release]
+allow-branch = ["main"]
+sign-tag = true
+tag-name = "{{version}}"
+
+[package.metadata.docs.rs]
+features = ["arbitrary", "quickcheck", "serde", "borsh", "rayon", "sval"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[workspace]
+members = ["test-nostd", "test-serde", "test-sval"]
+
+[lints.rust]
+private-bounds = "deny"
+private-interfaces = "deny"
+unnameable-types = "deny"
+unreachable-pub = "deny"
+
+# We *mostly* avoid unsafe code, but there are a few fine-grained cases allowed
+unsafe-code = "deny"
+
+rust-2018-idioms = "warn"
+
+[lints.clippy]
+style = "allow"

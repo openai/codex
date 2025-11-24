@@ -1,0 +1,21 @@
+[package]
+name = "ratatui-macros"
+version = "0.6.0"
+edition = "2021"
+authors = ["The Ratatui Developers"]
+description = "Macros for Ratatui"
+license = "MIT"                                              # or any other appropriate license
+repository = "https://github.com/ratatui-org/ratatui-macros"
+documentation = "https://docs.rs/ratatui-macros"
+keywords = ["ratatui", "macros", "tui", "ui"]
+categories = ["command-line-interface"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+# requires alpha version of ratatui for the Into<Style> changes
+ratatui = "0.29.0"
+
+[dev-dependencies]
+trybuild = { version = "1.0.101", features = ["diff"] }
+cargo-husky = { version = "1.5.0", features = ["user-hooks"] }

@@ -1,0 +1,54 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MyStruct",
+  "type": "object",
+  "required": [
+    "myBool",
+    "myNumber"
+  ],
+  "properties": {
+    "myBool": {
+      "type": "boolean"
+    },
+    "myNullableEnum": {
+      "default": null,
+      "anyOf": [
+        {
+          "$ref": "#/definitions/MyEnum"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "myNumber": {
+      "type": "integer",
+      "format": "int32"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "MyEnum": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "required": [
+            "floats"
+          ],
+          "properties": {
+            "floats": {
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "float"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

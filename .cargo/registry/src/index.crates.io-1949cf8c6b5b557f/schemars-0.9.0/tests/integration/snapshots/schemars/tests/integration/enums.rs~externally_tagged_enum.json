@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "External",
+  "oneOf": [
+    {
+      "type": "string",
+      "enum": [
+        "unitOne",
+        "unitTwo"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "stringMap": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "stringMap"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "unitStructNewType": {
+          "$ref": "#/$defs/UnitStruct"
+        }
+      },
+      "required": [
+        "unitStructNewType"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "structNewType": {
+          "$ref": "#/$defs/Struct"
+        }
+      },
+      "required": [
+        "structNewType"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "struct": {
+          "type": "object",
+          "properties": {
+            "foo": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "bar": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "foo",
+            "bar"
+          ]
+        }
+      },
+      "required": [
+        "struct"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "tuple": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "integer",
+              "format": "int32"
+            },
+            {
+              "type": "boolean"
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        }
+      },
+      "required": [
+        "tuple"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "unitAsInt": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "unitAsInt"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "tupleAsStr": {
+          "type": "string",
+          "pattern": "^\\d+ (true|false)$"
+        }
+      },
+      "required": [
+        "tupleAsStr"
+      ],
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "UnitStruct": {
+      "type": "null"
+    },
+    "Struct": {
+      "type": "object",
+      "properties": {
+        "foo": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "bar": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "foo",
+        "bar"
+      ]
+    }
+  }
+}

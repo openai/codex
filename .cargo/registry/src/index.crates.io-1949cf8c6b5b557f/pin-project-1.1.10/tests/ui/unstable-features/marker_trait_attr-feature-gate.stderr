@@ -1,0 +1,10 @@
+error[E0119]: conflicting implementations of trait `Unpin` for type `Struct<_>`
+  --> tests/ui/unstable-features/marker_trait_attr-feature-gate.rs:9:1
+   |
+9  | #[pin_project] //~ ERROR E0119
+   | ^^^^^^^^^^^^^^ conflicting implementation for `Struct<_>`
+...
+16 | impl<T> Unpin for Struct<T> {}
+   | --------------------------- first implementation here
+   |
+   = note: this error originates in the derive macro `::pin_project::__private::__PinProjectInternalDerive` (in Nightly builds, run with -Z macro-backtrace for more info)

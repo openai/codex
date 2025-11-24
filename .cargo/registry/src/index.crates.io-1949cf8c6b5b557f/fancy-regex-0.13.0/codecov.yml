@@ -1,0 +1,2 @@
+# Make codecov not add verbose comments to pull requests
+comment: false

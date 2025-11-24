@@ -1,0 +1,677 @@
+=pod
+
+=head1 NAME
+
+build.info - Building information files
+
+=head1 SYNOPSIS
+
+B<IF[>0|1B<]>
+
+B<ELSIF[>0|1B<]>
+
+B<ELSE>
+
+B<ENDIF>
+
+B<SUBDIRS=> I<dir> ...
+
+B<PROGRAMS=> I<name> ...
+
+B<LIBS=> I<name> ...
+
+B<MODULES=> I<name> ...
+
+B<SCRIPTS=> I<name> ...
+
+B<DEPEND[>I<items>B<]=> I<otheritem> ...
+
+B<GENERATE[>I<item>B<]=> I<generator> I<generator-args> ...
+
+B<SOURCE[>I<item>B<]=> I<file> ...
+
+B<SHARED_SOURCE[>I<item>B<]=> I<file> ...
+
+B<DEFINE[>I<items>B<]=> I<name>[B<=>I<value>] ...
+
+B<INCLUDE[>I<items>B<]=> I<dir> ...
+
+B<$>I<VARIABLE>B<=>I<value>
+
+=head1 DESCRIPTION
+
+OpenSSL's build system revolves around three questions:
+
+=over 4
+
+=item What to build for?
+
+This is about choice of platform (combination of hardware, operating
+system, and toolchain).
+
+=item What to build?
+
+This is about having all the information on what needs to be built and
+from what.
+
+=item How to build it?
+
+This is about build file generation.
+
+=back
+
+This document is all about the second item, "What to build?", and most
+of all, how to specify that information.
+
+For some terms used in this document, please see the L</GLOSSARY> at
+the end.
+
+=head2 F<build.info> files
+
+F<build.info> files are meta data files for OpenSSL's built file
+generators, and are used to specify exactly what end product files
+(programs, libraries, modules or scripts) are to be produced, and from
+what sources.
+
+Intermediate files, such as object files, are seldom referred to at
+all.  They sometimes can be, if there's a need, but this should happen
+very rarely, and support for that sort of thing is added on as-needed
+basis.
+
+Any time a directory or file is expected in a statement value, Unix
+syntax must be used, which means that the slash C</> must be used as
+the directory separator.
+
+=head2 General syntax
+
+=head3 Comments
+
+Comments are any line that start with a hash sign (C<#>).  The hash
+sign may be preceded by any number of horizontal spaces.
+
+=head3 Filenames
+
+F<build.info> files are platform agnostic.  This means that there is
+some information in them that is representative rather than specific.
+
+This is particularly visible with end product names, they work more
+like a tag than as the actual filename that's going to be produced.
+This is because different platforms have different decorations on
+different types of files.
+
+For example, if we say that we want to produce a program C<foo>, it
+would look like this:
+
+    PROGRAM=foo
+
+However, the program filename may end up being just C<foo> (typical
+for Unix), or C<foo.exe> (typical for Windows), or even C<BLAH$FOO.EXE>
+(possible on VMS, depending on policy).
+
+These platform specific decorations are not the concern of
+F<build.info> files.  The build file generators are responsible for
+transforming these platform agnostic names to their platform specific
+counterparts.
+
+=head3 Statements
+
+With the exception of variables and conditions, the general statement
+syntax is one of:
+
+=over 4
+
+=item B<I<KEYWORD>> B<=> I<value> ...
+
+=item B<I<KEYWORD>[>I<items>B<]> B<=> I<value> ...
+
+=back
+
+Every B<I<KEYWORD>> represents some particular type of information.
+
+The first form (sometimes called "plain statement") is used to specify
+information on what end products need to be built, for example:
+
+    PROGRAMS=foo bar
+    LIBS=libpoly libcookie
+    MODULES=awesome-plugin
+    SCRIPTS=tool1 tool2
+    SUBDIRS=dir1 dir2
+
+This says that we want to build programs C<foo> and C<bar>, the
+libraries C<libpoly> and C<libcookie>, an awesome plugin module
+C<awesome-plugin>, a couple of scripts C<tool1> and C<tool2>, and
+finally that there are more F<build.info> files in subdirectories
+C<dir1> and C<dir2>.
+
+The second form (sometimes called "indexed statement") is used to
+specify further details for existing items, for example:
+
+    SOURCE[foo]=foo.c details.c
+    DEPEND[foo]=libcookie
+
+This says that the program C<foo> is built from the source files
+F<foo.c> and F<details.c>, and that it depends on the library
+C<libcookie> (in other words, the library will be included when
+linking that program together).
+
+Multiple space separated items are allowed too:
+
+    SOURCE[foo]=foo.c
+    SOURCE[details]=details.c
+    DEPEND[foo details]=libcookie
+
+For any indexed statement for which the items haven't been specified
+through any plain statement, or where the items exists but the indexed
+statement does not apply, the value is simply ignored by the build
+file generators.
+
+=head3 Statement attributes
+
+Some statements can have attributes added to them, to allow for
+variations on how they are treated.
+
+=over 4
+
+=item B<I<KEYWORD>{> I<attrib> | I<attrib>B<=>I<attrib-value> [,...]B<}>
+B<=> I<value> ...
+
+=item B<I<KEYWORD>[>I<items>B<]{> I<attrib> | I<attrib>B<=>I<attrib-value>
+[,...]B<}> B<=> I<value> ...
+
+=back
+
+Attributes are passed as they are to the build file generators, and
+the exact interpretation of those attributes is entirely up to them
+(see L</Known attributes> below for details).
+
+A current example:
+
+    LIBS{noinst,has_main}=libtestutil.a
+
+This says that the static library C<libtestutil.a> should not be
+installed (C<noinst>), and that it includes an object file that has
+the C<main> symbol (C<has_main>).  Most platforms don't need to know
+the latter, but there are some where the program linker will not look
+for C<main> in libraries unless it's explicitly told so, so this is
+way to tell the build file generator to emit the necessary command
+options to make that happen.
+
+Attributes are accumulated globally.  This means that a library could
+be given like this in different places:
+
+    # Location 1
+    LIBS=libwhatever
+
+    # Location 2
+    LIBS{noinst}=libwhatever
+
+    # Location 3
+    LIBS{has_main}=libwhatever
+
+The end result is that the library C<libwhatever> will have the
+attributes C<noinst> and C<has_main> attached to it.
+
+=head3 Quoting and tokens
+
+Statement values are normally split into a list of tokens, separated
+by spaces.
+
+To avoid having a value split up into several tokens, they may be
+quoted with double (C<">) or single (C<'>) quotes.
+
+For example:
+
+    PROGRAMS=foo "space cadet" bar
+
+This says that we sant to build three programs, C<foo>, C<space cadet>
+and C<bar>.
+
+=head3 Conditionals
+
+F<build.info> files include a very simple condition system, involving
+the following keywords:
+
+=over 4
+
+=item B<IF[>0|1B<]>
+
+=item B<ELSIF[>0|1B<]>
+
+=item B<ELSE>
+
+=item B<ENDIF>
+
+=back
+
+This works like any condition system with similar syntax, and the
+condition value in B<IF> and B<ELSIF> can really be any literal value
+that perl can interpret as true or false.
+
+Conditional statements are nesting.
+
+In itself, this is not very powerful, but together with L</Perl nuggets>,
+it can be.
+
+=head3 Variables
+
+F<build.info> handles simple variables.  They are defined by
+assignment:
+
+=over 4
+
+=item B<$>I<NAME> B<=> I<value>
+
+=back
+
+These variables can then be used as part of any statement value or
+indexed statement item.  This should be used with some care, as
+I<variables are expanded into their values before the value they are
+part of is tokenized>.
+
+I<Variable assignment values are not tokenized.>
+
+Variable references can be one of:
+
+=over 4
+
+=item B<$>I<NAME> or B<${>I<NAME>B<}>
+
+Simple reference; the variable reference is replaced with its value,
+verbatim.
+
+=item B<${>I<NAME>B</>I<str>B</>I<subst>B<}>
+
+Substitution reference; the variable reference is replaced with its
+value, modified by replacing all occurrences of I<str> with I<subst>.
+
+=back
+
+=head2 Scope
+
+Most of the statement values are accumulated globally from all the
+F<build.info> files that are digested.  There are two exceptions,
+F<build.info> variables and B<SUBDIRS> statement, for which the scope
+is the F<build.info> file they are in.
+
+=head2 Perl nuggets
+
+Whenever a F<build.info> file is read, it is passed through the Perl
+template processor L<OpenSSL::Template>, which is a small extension of
+L<Text::Template>.
+
+Perl nuggets are anything between C<{-> and C<-}>, and whatever the
+result from such a nugget is, that value will replace the nugget in
+text form.  This is useful to get dynamically generated F<build.info>
+statements, and is most often seen used together with the B<IF> and
+B<ELSIF> conditional statements.
+
+For example:
+
+    IF[{- $disabled{something} -}]
+      # do whatever's needed when "something" is disabled
+    ELSIF[{- $somethingelse eq 'blah' -}]
+      # do whatever's needed to satisfy this condition
+    ELSE
+      # fallback
+    ENDIF
+
+Normal Perl scope applies, so it's possible to have an initial perl
+nugget that sets diverse global variables that are used in later
+nuggets.  Each nugget is a Perl block of its own, so B<my> definitions
+are only in scope within the same nugget, while B<our> definitions are
+in scope within the whole F<build.info> file.
+
+=head1 REFERENCE
+
+=head2 Conditionals
+
+=over 4
+
+=item B<IF[>0|1B<]>
+
+If the condition is true (represented as C<1> here), everything
+between this B<IF> and the next corresponding B<ELSIF> or B<ELSE>
+applies, and the rest until the corresponding B<ENDIF> is skipped
+over.
+
+If the condition is false (represented as C<0> here), everything
+from this B<IF> is skipped over until the next corresponding B<ELSIF>
+or B<ELSE>, at which point processing continues.
+
+=item B<ELSE>
+
+If F<build.info> statements have been skipped over to this point since
+the corresponding B<IF> or B<ELSIF>, F<build.info> processing starts
+again following this line.
+
+=item B<ELSIF[>0|1B<]>
+
+This is B<ELSE> and B<IF> combined.
+
+=item B<ENDIF>
+
+Marks the end of a conditional.
+
+=back
+
+=head2 Plain statements
+
+=over 4
+
+=item B<SUBDIRS=> I<dir> ...
+
+This instructs the F<build.info> reader to also read the F<build.info>
+file in every specified directory.  All directories should be given
+relative to the location of the current F<build.info> file.
+
+=item B<PROGRAMS=> I<name> ...
+
+Collects names of programs that should be built.
+
+B<PROGRAMS> statements may have attributes, which apply to all the
+programs given in such a statement.  For example:
+
+    PROGRAMS=foo
+    PROGRAMS{noinst}=bar
+
+With those two lines, the program C<foo> will not have the attribute
+C<noinst>, while the program C<bar> will.
+
+=item B<LIBS=> I<name> ...
+
+Collects names of libraries that should be built.
+
+The normal case is that libraries are built in both static and shared
+form.  However, if a name ends with C<.a>, only the static form will
+be produced.
+
+Similarly, libraries may be referred in indexed statements as just the
+plain name, or the name including the ending C<.a>.  If given without
+the ending C<.a>, any form available will be used, but if given with
+the ending C<.a>, the static library form is used unconditionally.
+
+B<LIBS> statements may have attributes, which apply to all the
+libraries given in such a statement.  For example:
+
+    LIBS=libfoo
+    LIBS{noinst}=libbar
+
+With those two lines, the library C<libfoo> will not have the
+attribute C<noinst>, while the library C<libbar> will.
+
+=item B<MODULES=> I<name>
+
+Collects names of dynamically loadable modules that should be built.
+
+B<MODULES> statements may have attributes, which apply to all the
+modules given in such a statement.  For example:
+
+    MODULES=foo
+    MODULES{noinst}=bar
+
+With those two lines, the module C<foo> will not have the attribute
+C<noinst>, while the module C<bar> will.
+
+=item B<SCRIPTS=> I<name>
+
+Collects names of scripts that should be built, or that just exist.
+That is how they differ from programs, as programs are always expected
+to be compiled from multiple sources.
+
+B<SCRIPTS> statements may have attributes, which apply to all the
+scripts given in such a statement.  For example:
+
+    SCRIPTS=foo
+    SCRIPTS{noinst}=bar
+
+With those two lines, the script C<foo> will not have the attribute
+C<noinst>, while the script C<bar> will.
+
+=back
+
+=head2 Indexed statements
+
+=over 4
+
+=item B<DEPEND[>I<items>B<]> B<=> I<file> ...
+
+Collects dependencies, where I<items> depend on the given I<file>s.
+
+As a special case, the I<items> may be empty, for which the build file
+generators should make the whole build depend on the given I<file>s,
+rather than the specific I<items>.
+
+The I<items> may be any program, library, module, script, or any
+filename used as a value anywhere.
+
+The I<items> may also be literal build file targets.  Those are
+recognised by being surrounded be vertical bars (also known as the
+"pipe" character), C<|>.  For example:
+
+    DEPEND[|tests|]=fipsmodule.cnf
+
+B<DEPEND> statements may have attributes, which apply to each
+individual dependency in such a statement.  For example:
+
+    DEPEND[libfoo.a]=libmandatory.a
+    DEPEND[libfoo.a]{weak}=libbar.a libcookie.a
+
+With those statements, the dependency between C<libfoo.a> and
+C<libmandatory.a> is strong, while the dependency between C<libfoo.a>
+and C<libbar.a> and C<libcookie.a> is weak.  See the description of
+B<weak> in L</Known attributes> for more information.
+
+B<DEPEND> is a bit more involving when used with I<item>s that are
+generated with B<GENERATE>.  This is described more in depth below.
+
+=item B<GENERATE[>I<item>B<]> B<=> I<generator> I<generator-arg> ...
+
+This specifies that the I<item> is generated using the I<generator>
+with the I<generator-arg>s as arguments, plus the name of the output
+file as last argument.
+
+The build file generators must be able to recognise the I<generator>.
+Currently, they at least recognise files ending in C<.pl>, and will
+execute them to generate the I<item>, and files ending in C<.in>,
+which will be used as input for L<OpenSSL::Template> to generate
+I<item> (in other words, we use the exact same style of
+L</Perl nuggets> mechanism that is used to read F<build.info> files).
+
+For I<generator>s where this is applicable, any B<INCLUDE> statement
+for the same I<item> will be given to the I<generator> as its
+inclusion directories.
+
+Likewise, For I<generator>s where this is applicable, any B<DEPEND>
+statement for the same I<item> will be given to the I<generator> as an
+extra file or module to load, where this is applicable.
+
+=over 4
+
+=item The B<DEPEND> statement may be problematic:
+
+Depending on what generator is used, a B<DEPEND> statement also acts
+as an B<INCLUDE> statement for the directory where the I<file> is
+located.  In some cases, that's not quite feasible, because a module
+isn't meant to be loaded by filename only and may require a nondefault
+separation between the implied inclusion directory and the intended module
+name.
+
+=item ... but there is a solution:
+
+To enable that sort of separation, B<DEPEND> can use a slightly
+different I<file> syntax, that looks like this:
+
+B<DEPEND[>I<items>B<]> B<=> I<dir>|I<module>
+
+The I<module> must be specified in a way that makes sense for the generator.
+For example, when the generator implies perl (ends with C<.in>) and depends
+on the module F<OpenSSL::foo> - a.k.a. F<OpenSSL/foo.pm> - which lives in
+F<util/perl>, it feasible to have something like this:
+
+    GENERATE[something.c]=something.c.in
+    DEPEND[something.c]=util/perl|OpenSSL/foo.pm
+
+=back
+
+=item B<SOURCE[>I<item>B<]> B<=> I<file> ...
+
+Collects filenames that will be used as source files for I<item>.
+
+The I<item> must be a singular item, and may be any program, library,
+module or script given with B<PROGRAMS>, B<LIBS>, B<MODULES> and
+B<SCRIPTS>.
+
+Static libraries may be sources.  In that case, its object files are
+used directly when building I<item> instead of relying on library
+dependency and symbol resolution (through B<DEPEND> statements).
+
+B<SOURCE> statements may have attributes, which apply to each
+individual dependency in such a statement.  For example:
+
+    SOURCE[prog]=prog_a.c
+    SOURCE[prog]{check}=prog_b.c prog_c.c
+
+With those statements, the association between C<prog> and C<prog_a.c>
+comes with no extra attributes, while the association between C<prog>
+and C<prog_b.c> as well as C<prog_c.c> comes with the extra attribute
+C<check>.
+
+=item B<SHARED_SOURCE[>I<item>B<]> B<=> I<file> ...
+
+Collects filenames that will be used as source files for I<item>.
+
+The I<item> must be a singular item, and may be any library or module
+given with B<LIBS> or B<MODULES>.  For libraries, the given filenames
+are only used for their shared form, so if the item is a library name
+ending with C<.a>, the filenames will be ignored.
+
+B<SHARED_SOURCE> statements may have attributes, just as B<SOURCE>
+statements.
+
+=item B<DEFINE[>I<items>B<]> B<=> I<name>[B<=>I<value>] ...
+
+Collects I<name> / I<value> pairs (or just I<name> with no defined
+value if no I<value> is given) associated with I<items>.
+
+The build file generators will decide what to do with them.  For
+example, these pairs should become C macro definitions whenever a
+C<.c> file is built into an object file.
+
+=item B<INCLUDE[>I<items>B<]> B<=> I<dir> ...
+
+Collects inclusion directories that will be used when building the
+I<items> components (object files and whatever else).  This is used at
+the discretion of the build file generators.
+
+=back
+
+=head2 Known attributes
+
+Note: this will never be a complete list of attributes.
+
+=over 4
+
+=item B<noinst>
+
+This is used to specify that the end products this is set for should
+not be installed, that they are only internal.  This is applicable on
+internal static libraries, or on test programs.
+
+=item B<misc>
+
+This is used with B<SCRIPTS>, to specify that some scripts should be
+installed in the "misc" directory rather than the normal program
+directory.
+
+=item B<engine>
+
+This is used with B<MODULES>, to specify what modules are engines and
+should be installed in the engines directory instead of the modules
+directory.
+
+=item B<weak>
+
+This is used with B<DEPEND> where libraries are involved, to specify
+that the dependency between two libraries is weak and is only there to
+infer order.
+
+Without this attribute, a dependency between two libraries, expressed
+like this, means that if C<libfoo.a> appears in a linking command
+line, so will C<libmandatory.a>:
+
+    DEPEND[libfoo.a]=libmandatory.a
+
+With this attribute, a dependency between two libraries, expressed
+like this, means that if I<both> C<libfoo.a> and C<libmandatory.a>
+appear in a linking command line (because of recursive dependencies
+through other libraries), they will be ordered in such a way that this
+dependency is maintained:
+
+    DEPEND[libfoo.a]{weak}=libfoo.a libcookie.a
+
+This is useful in complex dependency trees where two libraries can be
+used as alternatives for each other.  In this example, C<lib1.a> and
+C<lib2.a> have alternative implementations of the same thing, and
+C<libmandatory.a> has unresolved references to that same thing, and is
+therefore depending on either of them, but not both at the same time:
+
+    DEPEND[program1]=libmandatory.a lib1.a
+    DEPEND[program2]=libmandatory.a lib2.a
+    DEPEND[libmandatory]{weak}=lib1.a lib2.a
+
+=back
+
+=head1 GLOSSARY
+
+=over 4
+
+=item "build file"
+
+This is any platform specific file that describes the complete build,
+with platform specific commands.  On Unix, this is typically
+F<Makefile>; on VMS, this is typically F<descrip.mms>.
+
+=item "build file generator"
+
+Perl code that generates build files, given configuration data and
+data collected from F<build.info> files.
+
+=item "plain statement"
+
+Any F<build.info> statement of the form B<I<KEYWORD>>=I<values>, with
+the exception of conditional statements and variable assignments.
+
+=item "indexed statement"
+
+Any F<build.info> statement of the form B<I<KEYWORD>[>I<items>B<]=>I<values>,
+with the exception of conditional statements.
+
+=item "intermediate file"
+
+Any file that's an intermediate between a source file and an end
+product.
+
+=item "end product"
+
+Any file that is mentioned in the B<PROGRAMS>, B<LIBS>, B<MODULES> or
+B<SCRIPTS>.
+
+=back
+
+=head1 SEE ALSO
+
+For OpenSSL::Template documentation,
+C<perldoc -o man util/perl/OpenSSL/Template.pm>
+
+L<Text::Template|https://metacpan.org/pod/Text::Template>
+
+=head1 COPYRIGHT
+
+Copyright 2019-2023 The OpenSSL Project Authors. All Rights Reserved.
+
+Licensed under the Apache License 2.0 (the "License").  You may not use this
+file except in compliance with the License.  You can obtain a copy in the file
+LICENSE in the source distribution or at
+L<https://www.openssl.org/source/license.html>.
+
+=cut

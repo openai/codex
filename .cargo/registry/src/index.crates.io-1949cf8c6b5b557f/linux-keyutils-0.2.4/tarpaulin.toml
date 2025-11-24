@@ -1,0 +1,6 @@
+[coverage]
+run-types = ["Lib"]
+
+[report]
+out = ["Html", "Xml"]
+

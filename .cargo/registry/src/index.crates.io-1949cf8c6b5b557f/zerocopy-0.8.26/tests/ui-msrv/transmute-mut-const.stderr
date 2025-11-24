@@ -1,0 +1,40 @@
+warning: taking a mutable reference to a `const` item
+  --> tests/ui-msrv/transmute-mut-const.rs:20:52
+   |
+20 | const CONST_CONTEXT: &mut [u8; 2] = transmute_mut!(&mut ARRAY_OF_U8S);
+   |                                                    ^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(const_item_mutation)]` on by default
+   = note: each usage of a `const` item creates a new temporary
+   = note: the mutable reference will refer to this temporary, not the original `const` item
+note: `const` item defined here
+  --> tests/ui-msrv/transmute-mut-const.rs:17:1
+   |
+17 | const ARRAY_OF_U8S: [u8; 2] = [0u8; 2];
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0658]: mutable references are not allowed in constants
+  --> tests/ui-msrv/transmute-mut-const.rs:20:52
+   |
+20 | const CONST_CONTEXT: &mut [u8; 2] = transmute_mut!(&mut ARRAY_OF_U8S);
+   |                                                    ^^^^^^^^^^^^^^^^^
+   |
+   = note: see issue #57349 <https://github.com/rust-lang/rust/issues/57349> for more information
+
+error[E0015]: calls in constants are limited to constant functions, tuple structs and tuple variants
+  --> tests/ui-msrv/transmute-mut-const.rs:20:37
+   |
+20 | const CONST_CONTEXT: &mut [u8; 2] = transmute_mut!(&mut ARRAY_OF_U8S);
+   |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the macro `transmute_mut` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0716]: temporary value dropped while borrowed
+  --> tests/ui-msrv/transmute-mut-const.rs:20:57
+   |
+20 | const CONST_CONTEXT: &mut [u8; 2] = transmute_mut!(&mut ARRAY_OF_U8S);
+   |                                     --------------------^^^^^^^^^^^^-
+   |                                     |                   |
+   |                                     |                   creates a temporary which is freed while still in use
+   |                                     temporary value is freed at the end of this statement
+   |                                     using this value as a constant requires that borrow lasts for `'static`

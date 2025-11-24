@@ -1,0 +1,14 @@
+{
+  "str1": {
+    "type": "string",
+    "value": "\"This,\" she said, \"is just a pointless statement.\""
+  },
+  "str2": {
+    "type": "string",
+    "value": "foo''bar''"
+  },
+  "str3": {
+    "type": "string",
+    "value": "\"\""
+  }
+}

@@ -1,0 +1,216 @@
+# Based on https://github.com/behnam/gitignore-test/blob/master/.gitignore
+
+### file in root
+
+# MATCH /file_root_1
+file_root_00
+
+# NO_MATCH
+file_root_01/
+
+# NO_MATCH
+file_root_02/*
+
+# NO_MATCH
+file_root_03/**
+
+
+# MATCH /file_root_10
+/file_root_10
+
+# NO_MATCH
+/file_root_11/
+
+# NO_MATCH
+/file_root_12/*
+
+# NO_MATCH
+/file_root_13/**
+
+
+# NO_MATCH
+*/file_root_20
+
+# NO_MATCH
+*/file_root_21/
+
+# NO_MATCH
+*/file_root_22/*
+
+# NO_MATCH
+*/file_root_23/**
+
+
+# MATCH /file_root_30
+**/file_root_30
+
+# NO_MATCH
+**/file_root_31/
+
+# NO_MATCH
+**/file_root_32/*
+
+# NO_MATCH
+**/file_root_33/**
+
+
+### file in sub-dir
+
+# MATCH /parent_dir/file_deep_1
+file_deep_00
+
+# NO_MATCH
+file_deep_01/
+
+# NO_MATCH
+file_deep_02/*
+
+# NO_MATCH
+file_deep_03/**
+
+
+# NO_MATCH
+/file_deep_10
+
+# NO_MATCH
+/file_deep_11/
+
+# NO_MATCH
+/file_deep_12/*
+
+# NO_MATCH
+/file_deep_13/**
+
+
+# MATCH /parent_dir/file_deep_20
+*/file_deep_20
+
+# NO_MATCH
+*/file_deep_21/
+
+# NO_MATCH
+*/file_deep_22/*
+
+# NO_MATCH
+*/file_deep_23/**
+
+
+# MATCH /parent_dir/file_deep_30
+**/file_deep_30
+
+# NO_MATCH
+**/file_deep_31/
+
+# NO_MATCH
+**/file_deep_32/*
+
+# NO_MATCH
+**/file_deep_33/**
+
+
+### dir in root
+
+# MATCH /dir_root_00
+dir_root_00
+
+# MATCH /dir_root_01
+dir_root_01/
+
+# MATCH /dir_root_02
+dir_root_02/*
+
+# MATCH /dir_root_03
+dir_root_03/**
+
+
+# MATCH /dir_root_10
+/dir_root_10
+
+# MATCH /dir_root_11
+/dir_root_11/
+
+# MATCH /dir_root_12
+/dir_root_12/*
+
+# MATCH /dir_root_13
+/dir_root_13/**
+
+
+# NO_MATCH
+*/dir_root_20
+
+# NO_MATCH
+*/dir_root_21/
+
+# NO_MATCH
+*/dir_root_22/*
+
+# NO_MATCH
+*/dir_root_23/**
+
+
+# MATCH /dir_root_30
+**/dir_root_30
+
+# MATCH /dir_root_31
+**/dir_root_31/
+
+# MATCH /dir_root_32
+**/dir_root_32/*
+
+# MATCH /dir_root_33
+**/dir_root_33/**
+
+
+### dir in sub-dir
+
+# MATCH /parent_dir/dir_deep_00
+dir_deep_00
+
+# MATCH /parent_dir/dir_deep_01
+dir_deep_01/
+
+# NO_MATCH
+dir_deep_02/*
+
+# NO_MATCH
+dir_deep_03/**
+
+
+# NO_MATCH
+/dir_deep_10
+
+# NO_MATCH
+/dir_deep_11/
+
+# NO_MATCH
+/dir_deep_12/*
+
+# NO_MATCH
+/dir_deep_13/**
+
+
+# MATCH /parent_dir/dir_deep_20
+*/dir_deep_20
+
+# MATCH /parent_dir/dir_deep_21
+*/dir_deep_21/
+
+# MATCH /parent_dir/dir_deep_22
+*/dir_deep_22/*
+
+# MATCH /parent_dir/dir_deep_23
+*/dir_deep_23/**
+
+
+# MATCH /parent_dir/dir_deep_30
+**/dir_deep_30
+
+# MATCH /parent_dir/dir_deep_31
+**/dir_deep_31/
+
+# MATCH /parent_dir/dir_deep_32
+**/dir_deep_32/*
+
+# MATCH /parent_dir/dir_deep_33
+**/dir_deep_33/**

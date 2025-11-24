@@ -1,0 +1,37 @@
+build/
+ssl/test/runner/runner
+*.bk
+*.orig
+*.swp
+*.swo
+doc/*.html
+doc/doc.css
+*~
+
+# Visual Studio Junk
+.vs/
+*.opensdf
+*.psess
+*.sdf
+*.sln.docstates
+*.suo
+*.user
+*.userosscache
+*.VC.db
+*.VC.opendb
+*.vsp
+*.vspx
+*.rsproj
+*.sln
+*.vcxproj
+*.filters
+
+
+# Cargo Junk
+Cargo.lock
+target/
+
+# JetBrains Junk
+.idea
+*.iml
+CMakeLists.txt

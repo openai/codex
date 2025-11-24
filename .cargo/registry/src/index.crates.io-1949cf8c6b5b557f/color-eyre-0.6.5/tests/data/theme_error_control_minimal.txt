@@ -1,0 +1,46 @@
+
+   0: [91mtest[0m
+
+Error:
+   0: [91merror[0m
+
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ BACKTRACE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  [96m                              ⋮ 5 frames hidden ⋮                               [0m
+   6: [91mtheme::get_error::create_report[0m[90m::h43540daddae98383[0m
+      at [35m/home/username/dev/rust/eyre/color-eyre/tests/theme.rs[0m:[35m17[0m
+   7: [91mtheme::get_error::{{closure}}[0m[90m::h40bbef2f4cd93fab[0m
+      at [35m/home/username/dev/rust/eyre/color-eyre/tests/theme.rs[0m:[35m26[0m
+   8: [32mcore::option::Option<T>::ok_or_else[0m[90m::h8aa47839ff49cfbe[0m
+      at [35m/rustc/897e37553bba8b42751c67658967889d11ecd120/library/core/src/option.rs[0m:[35m1087[0m
+   9: [91mtheme::get_error[0m[90m::h78b5b4d52bfbbad0[0m
+      at [35m/home/username/dev/rust/eyre/color-eyre/tests/theme.rs[0m:[35m26[0m
+  10: [91mtheme::test_error_backwards_compatibility[0m[90m::h9de398ce80defffa[0m
+      at [35m/home/username/dev/rust/eyre/color-eyre/tests/theme.rs[0m:[35m45[0m
+  11: [91mtheme::test_error_backwards_compatibility::{{closure}}[0m[90m::hbe7b8ad2562c4dc4[0m
+      at [35m/home/username/dev/rust/eyre/color-eyre/tests/theme.rs[0m:[35m43[0m
+  12: [32mcore::ops::function::FnOnce::call_once[0m[90m::hfc715417a1b707c5[0m
+      at [35m/rustc/897e37553bba8b42751c67658967889d11ecd120/library/core/src/ops/function.rs[0m:[35m248[0m
+  13: [32mcore::ops::function::FnOnce::call_once[0m[90m::h9ee1367930602049[0m
+      at [35m/rustc/897e37553bba8b42751c67658967889d11ecd120/library/core/src/ops/function.rs[0m:[35m248[0m
+  14: [32mtest::__rust_begin_short_backtrace[0m[90m::h35061c5e0f5ad5d6[0m
+      at [35m/rustc/897e37553bba8b42751c67658967889d11ecd120/library/test/src/lib.rs[0m:[35m572[0m
+  15: [32m<alloc::boxed::Box<F,A> as core::ops::function::FnOnce<Args>>::call_once[0m[90m::h98fe3dd14bfe63ea[0m
+      at [35m/rustc/897e37553bba8b42751c67658967889d11ecd120/library/alloc/src/boxed.rs[0m:[35m1940[0m
+  16: [32m<core::panic::unwind_safe::AssertUnwindSafe<F> as core::ops::function::FnOnce<()>>::call_once[0m[90m::h3ab012fb764e8d57[0m
+      at [35m/rustc/897e37553bba8b42751c67658967889d11ecd120/library/core/src/panic/unwind_safe.rs[0m:[35m271[0m
+  17: [32mstd::panicking::try::do_call[0m[90m::h810a5ea64fd04126[0m
+      at [35m/rustc/897e37553bba8b42751c67658967889d11ecd120/library/std/src/panicking.rs[0m:[35m492[0m
+  18: [32mstd::panicking::try[0m[90m::h0b213f9a8c1fe629[0m
+      at [35m/rustc/897e37553bba8b42751c67658967889d11ecd120/library/std/src/panicking.rs[0m:[35m456[0m
+  19: [32mstd::panic::catch_unwind[0m[90m::h00f746771ade371f[0m
+      at [35m/rustc/897e37553bba8b42751c67658967889d11ecd120/library/std/src/panic.rs[0m:[35m137[0m
+  20: [32mtest::run_test_in_process[0m[90m::h5645647f0d0a3da3[0m
+      at [35m/rustc/897e37553bba8b42751c67658967889d11ecd120/library/test/src/lib.rs[0m:[35m595[0m
+  [96m                              ⋮ 15 frames hidden ⋮                              [0m
+
+[96mNote[0m: note
+[93mWarning[0m: warning
+[96mSuggestion[0m: suggestion
+
+Run with COLORBT_SHOW_HIDDEN=1 environment variable to disable frame filtering.
+Run with RUST_BACKTRACE=full to include source snippets.

@@ -1,0 +1,89 @@
+-- Copyright 2022 The OpenSSL Project Authors. All Rights Reserved.
+--
+-- Licensed under the Apache License 2.0 (the "License").  You may not use
+-- this file except in compliance with the License.  You can obtain a copy
+-- in the file LICENSE in the source distribution or at
+-- https://www.openssl.org/source/license.html
+
+-- -------------------------------------------------------------------
+-- Taken from RFC 8017, Appendix C
+-- (https://www.rfc-editor.org/rfc/rfc8017.html#appendix-C)
+
+-- ============================
+--   Basic object identifiers
+-- ============================
+
+-- The DER encoding of this in hexadecimal is:
+-- (0x)06 08
+--        2A 86 48 86 F7 0D 01 01
+--
+pkcs-1    OBJECT IDENTIFIER ::= {
+    iso(1) member-body(2) us(840) rsadsi(113549) pkcs(1) 1
+}
+
+--
+-- When rsaEncryption is used in an AlgorithmIdentifier,
+-- the parameters MUST be present and MUST be NULL.
+--
+rsaEncryption    OBJECT IDENTIFIER ::= { pkcs-1 1 }
+
+--
+-- When id-RSAES-OAEP is used in an AlgorithmIdentifier, the
+-- parameters MUST be present and MUST be RSAES-OAEP-params.
+--
+id-RSAES-OAEP    OBJECT IDENTIFIER ::= { pkcs-1 7 }
+
+--
+-- When id-pSpecified is used in an AlgorithmIdentifier, the
+-- parameters MUST be an OCTET STRING.
+--
+id-pSpecified    OBJECT IDENTIFIER ::= { pkcs-1 9 }
+
+--
+-- When id-RSASSA-PSS is used in an AlgorithmIdentifier, the
+-- parameters MUST be present and MUST be RSASSA-PSS-params.
+--
+id-RSASSA-PSS    OBJECT IDENTIFIER ::= { pkcs-1 10 }
+
+--
+-- When the following OIDs are used in an AlgorithmIdentifier,
+-- the parameters MUST be present and MUST be NULL.
+--
+md2WithRSAEncryption         OBJECT IDENTIFIER ::= { pkcs-1 2 }
+md5WithRSAEncryption         OBJECT IDENTIFIER ::= { pkcs-1 4 }
+sha1WithRSAEncryption        OBJECT IDENTIFIER ::= { pkcs-1 5 }
+sha224WithRSAEncryption      OBJECT IDENTIFIER ::= { pkcs-1 14 }
+sha256WithRSAEncryption      OBJECT IDENTIFIER ::= { pkcs-1 11 }
+sha384WithRSAEncryption      OBJECT IDENTIFIER ::= { pkcs-1 12 }
+sha512WithRSAEncryption      OBJECT IDENTIFIER ::= { pkcs-1 13 }
+sha512-224WithRSAEncryption  OBJECT IDENTIFIER ::= { pkcs-1 15 }
+sha512-256WithRSAEncryption  OBJECT IDENTIFIER ::= { pkcs-1 16 }
+
+--
+-- When id-mgf1 is used in an AlgorithmIdentifier, the parameters
+-- MUST be present and MUST be a HashAlgorithm, for example, sha1.
+--
+id-mgf1    OBJECT IDENTIFIER ::= { pkcs-1 8 }
+
+-- -------------------------------------------------------------------
+-- Taken from https://csrc.nist.gov/projects/computer-security-objects-register/algorithm-registration
+
+id-rsassa-pkcs1-v1_5-with-sha3-224 OBJECT IDENTIFIER ::= { sigAlgs 13 }
+id-rsassa-pkcs1-v1_5-with-sha3-256 OBJECT IDENTIFIER ::= { sigAlgs 14 }
+id-rsassa-pkcs1-v1_5-with-sha3-384 OBJECT IDENTIFIER ::= { sigAlgs 15 }
+id-rsassa-pkcs1-v1_5-with-sha3-512 OBJECT IDENTIFIER ::= { sigAlgs 16 }
+
+
+-- -------------------------------------------------------------------
+-- These OID's exist in the codebase but may need to be deprecated at some point.
+-- md5_sha1 has been omitted as it does not look like valid entry.
+
+md4WithRSAEncryption OBJECT IDENTIFIER ::= { pkcs-1 3 }
+
+ripemd160WithRSAEncryption    OBJECT IDENTIFIER ::= {
+    iso(1) identified-organization(3) teletrust(36) algorithm(3) signatureAlgorithm(3) rsaSignature(1) 2
+}
+
+mdc2WithRSASignature OBJECT IDENTIFIER ::= {
+    iso(1) identified-organization(3) oiw(14) secsig(3) algorithms(2) mdc2WithRSASignature(14)
+}

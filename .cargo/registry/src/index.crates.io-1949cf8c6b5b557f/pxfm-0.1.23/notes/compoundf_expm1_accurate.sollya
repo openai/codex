@@ -1,0 +1,18 @@
+pretty = proc(u) {
+  return ~(floor(u*1000)/1000);
+};
+
+d=[-1/2^6,1/2^6];
+n=8;
+f = 2^x - 1;
+w = 1;
+pf = fpminimax(f, [|1,2,3,4,5,6,7,8|], [|107,107,107,53...|], d, absolute, floating);
+err_p = -log2(dirtyinfnorm(pf*w-f, d));
+
+for i from 1 to degree(pf) do print(coeff(pf, i));
+
+display = decimal;
+print (pf);
+display = decimal;
+print (pretty(err_p));
+

@@ -1,0 +1,20 @@
+[package]
+name = "prost-derive"
+readme = "README.md"
+description = "Generate encoding and decoding implementations for Prost annotated types."
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+anyhow = "1.0.1"
+itertools = ">=0.10.1, <=0.14"
+proc-macro2 = "1.0.60"
+quote = "1"
+syn = { version = "2", features = ["extra-traits"] }

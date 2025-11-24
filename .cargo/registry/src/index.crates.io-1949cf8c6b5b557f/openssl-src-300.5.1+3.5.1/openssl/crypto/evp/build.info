@@ -1,0 +1,72 @@
+LIBS=../../libcrypto
+$COMMON=digest.c evp_enc.c evp_lib.c evp_fetch.c evp_utils.c \
+        mac_lib.c mac_meth.c keymgmt_meth.c keymgmt_lib.c kdf_lib.c kdf_meth.c \
+        skeymgmt_meth.c \
+        pmeth_lib.c signature.c p_lib.c s_lib.c pmeth_gn.c exchange.c \
+        evp_rand.c asymcipher.c kem.c dh_support.c ec_support.c pmeth_check.c
+
+SOURCE[../../libcrypto]=$COMMON\
+        encode.c evp_key.c evp_cnf.c \
+        e_des.c e_bf.c e_idea.c e_des3.c \
+        e_rc4.c e_aes.c names.c e_aria.c e_sm4.c \
+        e_xcbc_d.c e_rc2.c e_cast.c e_rc5.c m_null.c \
+        p_seal.c p_sign.c p_verify.c p_legacy.c \
+        bio_md.c bio_b64.c bio_enc.c evp_err.c e_null.c \
+        c_allc.c c_alld.c bio_ok.c \
+        evp_pkey.c evp_pbe.c p5_crpt.c p5_crpt2.c pbe_scrypt.c \
+        e_aes_cbc_hmac_sha1.c e_aes_cbc_hmac_sha256.c e_rc4_hmac_md5.c \
+        e_chacha20_poly1305.c \
+        legacy_sha.c ctrl_params_translate.c \
+        cmeth_lib.c m_sigver.c
+
+# Diverse type specific ctrl functions.  They are kinda sorta legacy, kinda
+# sorta not.
+SOURCE[../../libcrypto]=dh_ctrl.c dsa_ctrl.c ec_ctrl.c
+
+IF[{- !$disabled{'deprecated-3.0'} -}]
+  SOURCE[../../libcrypto]=p_enc.c p_dec.c
+ENDIF
+IF[{- !$disabled{'deprecated-0.9.8'} -}]
+  SOURCE[../../libcrypto]=e_old.c
+ENDIF
+IF[{- !$disabled{'rsa'} -}]
+  SOURCE[../../libcrypto]=p_open.c
+ENDIF
+IF[{- !$disabled{md2} -}]
+  SOURCE[../../libcrypto]=legacy_md2.c
+ENDIF
+IF[{- !$disabled{md4} -}]
+  SOURCE[../../libcrypto]=legacy_md4.c
+ENDIF
+IF[{- !$disabled{md5} -}]
+  SOURCE[../../libcrypto]=legacy_md5.c legacy_md5_sha1.c
+ENDIF
+IF[{- !$disabled{mdc2} -}]
+  SOURCE[../../libcrypto]=legacy_mdc2.c
+ENDIF
+IF[{- !$disabled{blake2} -}]
+  SOURCE[../../libcrypto]=legacy_blake2.c
+ENDIF
+IF[{- !$disabled{whirlpool} -}]
+  SOURCE[../../libcrypto]=legacy_wp.c
+ENDIF
+IF[{- !$disabled{rmd160} -}]
+  SOURCE[../../libcrypto]=legacy_ripemd.c
+ENDIF
+IF[{- !$disabled{seed} -}]
+  SOURCE[../../libcrypto]=e_seed.c
+ENDIF
+IF[{- !$disabled{camellia} -}]
+  SOURCE[../../libcrypto]=e_camellia.c
+  INCLUDE[e_camellia.o]=.. ../modes
+ENDIF
+
+SOURCE[../../providers/libfips.a]=$COMMON
+
+INCLUDE[e_aes.o]=.. ../modes
+INCLUDE[e_aes_cbc_hmac_sha1.o]=../modes
+INCLUDE[e_aes_cbc_hmac_sha256.o]=../modes
+INCLUDE[e_aria.o]=.. ../modes
+INCLUDE[e_sm4.o]=.. ../modes
+INCLUDE[e_des.o]=..
+INCLUDE[e_des3.o]=..

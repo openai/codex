@@ -1,0 +1,377 @@
+=pod
+
+=head1 NAME
+
+ossl_ht_new, ossl_ht_free,
+ossl_ht_read_lock, ossl_ht_read_unlock,
+ossl_ht_write_lock, ossl_ht_write_unlock,
+ossl_ht_flush, ossl_ht_insert,
+ossl_ht_delete, ossl_ht_count,
+ossl_ht_foreach_until, ossl_ht_filter,
+ossl_ht_value_list_free, ossl_ht_get,
+ossl_ht_put, HT_START_KEY_DEFN,
+HT_END_KEY_DEFN, HT_DEF_KEY_FIELD_CHAR_ARRAY,
+HT_DEF_KEY_FIELD_UINT8T_ARRAY, HT_DEF_KEY_FIELD,
+HT_INIT_KEY, HT_KEY_RESET, HT_SET_KEY_FIELD,
+HT_SET_KEY_STRING, HT_SET_KEY_BLOB,
+TO_HT_KEY, FROM_HT_KEY,
+IMPLEMENT_HT_VALUE_TYPE_FNS
+- internal rcu locked hashtables
+
+=head1 SYNOPSIS
+
+ HT *ossl_ht_new(const HT_CONFIG *conf);
+ void ossl_ht_free(HT *htable);
+ void ossl_ht_read_lock(HT *htable);
+ void ossl_ht_read_unlock(HT *htable);
+ void ossl_ht_write_lock(HT *htable);
+ void ossl_ht_write_unlock(HT *htable);
+ int  ossl_ht_flush(HT *htable);
+ int  ossl_ht_insert(HT *htable, HT_KEY *key, HT_VALUE *data, HT_VALUE **olddata);
+ int ossl_ht_delete(HT *htable, HT_KEY *key);
+ size_t ossl_ht_count(HT *htable);
+ void ossl_ht_foreach_until(HT *htable, int (*cb)(HT_VALUE *obj, void *arg), void *arg);
+ HT_VALUE_LIST *ossl_ht_filter(HT *htable, size_t max_len, int (*filter)(HT_VALUE *obj));
+ void ossl_ht_value_list_free(HT_VALUE_LIST *list);
+ HT_VALUE *ossl_ht_get(HT *htable, HT_KEY *key);
+ void ossl_ht_put(HT_VALUE *value);
+ HT_START_KEY_DEFN(keyname);
+ HT_END_KEY_DEFN(keyname);
+ HT_DEF_KEY_FIELD(name, type);
+ HT_DEF_KEY_FIELD_CHAR_ARRAY(name, size);
+ HT_DEF_KEY_FIELD_UINT8T_ARRAY(name, size);
+ HT_INIT_KEY(key);
+ HT_KEY_RESET(key);
+ HT_SET_KEY_FIELD(key, member, value);
+ HT_SET_KEY_STRING(key, member, value);
+ HT_SET_KEY_BLOB(key, member, value, len);
+ TO_HT_KEY(key);
+ FROM_HT_KEY(key, type);
+ IMPLEMENT_HT_VALUE_TYPE_FNS(vtype, name, pfx);
+
+=head1 DESCRIPTION
+
+This API provides a library-internal implementation of a hashtable that provides
+reference counted object retrieval under the protection of an rcu lock.  API
+type safety is offered via conversion macros to and from the generic B<HT_VALUE>
+type.
+
+=over 2
+
+=item *
+
+ossl_ht_new() returns a new B<HT> (hashtable object) used to store data
+elements based on a defined key.  The call accepts an HT_CONFIG pointer which
+contains configurations options for hashtable.  Current config options consist
+of:
+    I<ht_free_fn> The function to call to free a value, may be NULL.
+    I<ht_hash_fn> The function to generate a hash value for a key, may be NULL.
+    I<init_neighborhoods> The initial number of neighborhoods in the hash table.
+
+Note that init_bucket_len may be set to zero, which will use the default initial
+bucket size, which will be automatically expanded with the hash table load
+average reaches 0.75.
+
+Note that lockless_read operation implies behavioral restrictions. Specifically
+only element additions are allowed, deletion operations will fail
+    Hash table growth is inhibited.  init_bucket_len should be set to an
+    appropriate value to prevent performance degradation
+    The table owner is responsible for ensuring there are no readers during a
+    freeing of the table.
+
+Note that lockless_write operations are done at your own risk.  Lockless
+    operation in a multithreaded environment will cause data corruption.  It
+    is the callers responsibility in this mode of operation to provide thread
+    synchronization.
+
+=item *
+
+ossl_ht_free() frees an allocated hash table.  Each element in the table
+will have its reference count dropped, and, if said count reaches zero, the hash
+tables registered free function will be called to release the element data.
+
+=item *
+
+ossl_ht_read_lock(), ossl_ht_read_unlock(), ossl_ht_write_lock() and
+ossl_ht_write_unlock() lock the table for reading and writing/modification.
+These function are not required for use in the event a table is to be used in a
+lockless fashion, but if they are not used, it is the responsibility of the caller
+to ensure thread synchronization.  Note that an rcu lock is used internally for these
+operations, so for table modifying actions (ossl_ht_flush() and ossl_ht_delete()
+the write lock must be taken and released to ensure rcu synchronization takes
+place.
+
+=item *
+
+ossl_ht_flush() empties a hash table.  All elements will have their
+reference counts decremented, and, on reaching zero, the free function will be
+called to release the element data.
+
+=item *
+
+ossl_ht_insert() inserts an B<HT_VALUE> element into the hash table, to be
+hashed using the corresponding B<HT_KEY> value.
+
+=item *
+
+ossl_ht_delete() deletes an entry from the hashtable indexed by the passed
+B<HT_KEY> value.
+
+=item *
+
+ossl_ht_count() returns the number of elements within the hash table.
+
+=item *
+
+ossl_ht_foreach_until() iterates over all elements in the hash table, calling
+the passed callback function for each. The return value of the callback
+indicates if the iteration should continue or not.  Returning 1 indicates
+iteration should continue, while returning 0 indicates that iteration should
+terminate.
+
+Note that the iteration is done under read lock protection, and as such
+modifications to the table are disallowed in the callback function.
+Modification to the value content are permitted, if the caller is able to
+properly synchronize such modifications with other threads.
+
+=item *
+
+ossl_ht_filter() iterates over all elements of the hash table, calling
+the filter callback for each element.  If the callback returns 1, the
+corresponding B<HT_VALUE> is placed on a list, and its reference count incremented.
+The completed list is returned to the caller as an B<HT_VALUE_LIST> object
+
+=item *
+
+ossl_ht_value_list_free() frees an B<HT_VALUE_LIST>.  For each element on
+the list, its reference count is decremented, and after traversing the list, the
+list object is freed.  Note, NULL elements are allowed on the list, but for any
+element which is taken from the list by a caller, they must call
+ossl_ht_put() on the B<HT_VALUE> to prevent memory leaks.
+
+=item *
+
+ossl_ht_get() performs a lookup of an B<HT_KEY> in the hashtable, returning
+its corresponding value.
+
+=item *
+
+HT_START_KEY_DEFN() Begins the definition of a key type.  the keyname parameter
+defines the structure name, and presets a common key header.
+
+=item *
+
+HT_END_KEY_DEFN() Finalizes a key definition.  the keyname parameter (which may
+differ from the name passed in HT_START_KEY_DEFN(), defines the key type name.
+The resulting type may be converted to an HT_KEY variable via the HT_TO_KEY()
+macro, and back using the HT_FROM_KEY() macro.
+
+=item *
+
+HT_DEF_KEY_FIELD() Allows for the creation of data fields within a key. Note,
+this macro can be used for any data type, but it is recommended that strings and
+binary arrays be created with the HT_DEF_KEY_FIELD_CHAR_ARRAY() and
+HT_DEF_KEY_FIELD_UINT8T_ARRAY() macros to ensure proper in-lining of key data.
+
+=item *
+
+HT_DEF_KEY_FIELD_CHAR_ARRAY() Creates a string field of fixed size
+within a key definition. Note these items will be NULL terminated.
+
+=item *
+
+HT_DEF_KEY_FIELD_UINT8T_ARRAY() Creates an array of uint8_t elements within a
+key.
+
+=item *
+
+HT_INIT_KEY() Initializes a key for use.  Can be called multiple times, but must
+be called at least once before using in any hashtable method.
+
+=item *
+
+HT_KEY_RESET() Resets a key's data to all zeros.
+
+=item *
+
+HT_SET_KEY_FIELD() Sets a field in a key (as defined by HT_DEF_KEY_FIELD()) to a
+given value.
+
+=item *
+
+HT_SET_KEY_STRING() Performs a strncpy() of a source string to the destination
+key field.
+
+=item *
+
+HT_SET_KEY_BLOB() Performs a memcpy() of a source uint8_t buffer to a
+destination key field.
+
+=item *
+
+TO_HT_KEY() Converts a key type as defined by HT_START_KEY_DEFN() and
+HE_END_KEY_DEFN() to the generic HT_KEY type
+
+=item *
+
+FROM_HT_KEY() Converts an HT_KEY back to a specific key type as defined by
+HT_START_KEY_DEFN() and HT_END_KEY_DEFN()
+
+=item *
+
+IMPLEMENT_HT_VALUE_TYPE_FNS() creates template conversion functions for
+manipulating the hashtable using specific data types.  This macro accepts two
+parameters, a NAME, which is used to prefix the hashtable function so that it
+may be associated with a specific hash table, and TYPE which defines the type of
+data the instantiated function accepts.  The list of functions instantiated by
+this macro are below.
+
+=over 2
+
+=item *
+
+int ossl_ht_NAME_TYPE_insert(HT* h, HT_KEY *key, <type> *value, HT_VALUE **olddata)
+Inserts a value to the hash table of type TYPE into the hash table using the
+provided key.  If olddata is not NULL, and a matching key already exists in the
+table, the operation is a replacement, and the old data is returned in this
+pointer
+
+=item *
+
+<TYPE> ossl_ht_NAME_TYPE_get(HT *h, HT_KEY *key, HT_VALUE **v)
+Looks up an item in the hash table based on key, and returns the data it found,
+if any.  v holds a pointer to the B<HT_VALUE> associated with the data.
+
+=item *
+
+<TYPE> *ossl_ht_NAME_TYPE_from_value(HT_VALUE *v)
+Validates that the B<HT_VALUE> provided matches the TYPE specified, and returns the
+value data.  If there is a type mismatch, NULL is returned
+
+=item *
+
+HT_VALUE *ossl_ht_NAME_TYPE_to_value(<TYPE> *data)
+Converts the data pointer provided to an B<HT_VALUE> object
+
+=item *
+
+int ossl_ht_NAME_TYPE_type(HT_VALUE *v)
+Returns true if the B<HT_VALUE> object passed in is of type <TYPE>
+
+=back
+
+=back
+
+=head1 RETURN VALUES
+
+ossl_ht_new() returns an B<HT*> struct on success and NULL on error
+
+void ossl_ht_free(HT *htable);
+
+ossl_ht_flush() and ossl_ht_insert() return 1 on success and 0 on error
+
+ossl_ht_delete() returns 1 if the key was successfully deleted, and 0 if the
+key was not found. 
+
+ossl_ht_count() returns the number of elements in the hash table
+
+ossl_ht_filter() returns an B<HT_VALUE_LIST> of all elements matching the
+provided filter
+
+ossl_ht_get() returns an B<HT_VALUE> pointer, or NULL if the element was not
+found.
+
+ossl_ht_insert() returns 1 if an element was inserted, 0 if the element is
+already present, -1 on fatal errors (memory allocation or growth not allowed).
+
+=head1 EXAMPLES
+
+#include <stdio.h>
+#include <string.h>
+
+#include <openssl/err.h>
+#include <openssl/crypto.h>
+#include <internal/hashtable.h>
+
+HT_START_KEY_DEFN(intkey)
+HT_DEF_KEY_FIELD(myintkey, int)
+HT_END_KEY_DEFN(INTKEY)
+
+IMPLEMENT_HT_VALUE_TYPE_FNS(int, test, static)
+
+static void int_free_fn(HT_VALUE *v)
+{
+    int *i = ossl_crypto_test_int_from_value(v);
+
+    fprintf(stderr, "Freeing an element\n");
+    OPENSSL_free(i);
+}
+
+static int test_int_hashtable(void)
+{
+    /*
+     * our config says:
+     * int_free_fn - Our free handler
+     * NULL - Use default hash fn
+     * 0 - use default initial bucket size
+     */
+    HT_CONFIG hash_conf = {
+        int_free_fn,
+        NULL,
+        0
+    };
+    INTKEY key;
+    HT *ht = NULL;
+    HT_VALUE *v;
+    int rc;
+    int *newval = OPENSSL_malloc(sizeof(int));
+
+    ht = ossl_ht_new(&hash_conf);
+
+    if (ht == NULL)
+        return 0;
+
+    if (newval == NULL)
+        goto out;
+
+    *newval = 1;
+
+    /* insert */
+    HT_INIT_KEY(&key);
+    HT_SET_KEY_FIELD(&key, myintkey, 47);
+    ossl_ht_write_lock(ht);
+    rc = ossl_ht_test_int_insert(ht, TO_HT_KEY(&key), newval, NULL);
+    ossl_ht_write_unlock(ht);
+    if (rc == 0)
+        goto out;
+
+    /* num_items */
+    if (ossl_ht_count(ht) != 1)
+        goto out;
+
+    /* lookup */
+    HT_RESET_KEY(&key);
+    HT_SET_KEY_FIELD(&key, myintkey, 47);
+    ossl_ht_read_lock(ht);
+    v = ossl_ht_get(ht, TO_HT_KEY(&key);
+    fprintf(stderr, "found element with key 47 holding value %d\n",
+            *ossl_ht_test_int_from_value(v));
+    ossl_ht_read_unlock(ht);
+
+    rc = 1;
+end:
+    /* this will call the free function for our element */
+    ossl_ht_free(ht);
+    return rc;
+}
+
+=head1 COPYRIGHT
+
+Copyright 2024 The OpenSSL Project Authors. All Rights Reserved.
+
+Licensed under the Apache License 2.0 (the "License").  You may not use
+this file except in compliance with the License.  You can obtain a copy
+in the file LICENSE in the source distribution or at
+L<https://www.openssl.org/source/license.html>.
+
+=cut

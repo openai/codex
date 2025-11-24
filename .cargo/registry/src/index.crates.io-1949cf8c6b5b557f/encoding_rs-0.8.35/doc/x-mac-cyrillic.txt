@@ -1,0 +1,6 @@
+/// This is the MacUkrainian encoding from Mac OS Classic.
+///
+/// [Index visualization](https://encoding.spec.whatwg.org/x-mac-cyrillic.html),
+/// [Visualization of BMP coverage](https://encoding.spec.whatwg.org/x-mac-cyrillic-bmp.html)
+///
+/// This encoding matches the Windows code page 10017.

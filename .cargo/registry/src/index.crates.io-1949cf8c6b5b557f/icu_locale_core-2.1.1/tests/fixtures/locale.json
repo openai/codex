@@ -1,0 +1,298 @@
+[
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "en-u-hc-h12"
+    },
+    "output": {
+      "type": "Locale",
+      "language": "en",
+      "extensions": {
+        "unicode": {
+          "keywords": {
+            "hc": "h12"
+          }
+        }
+      }
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "en-US-u-hc-h23"
+    },
+    "output": {
+      "type": "Locale",
+      "language": "en",
+      "region": "US",
+      "extensions": {
+        "unicode": {
+          "keywords": {
+            "hc": "h23"
+          }
+        }
+      }
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "en-US-u-foo"
+    },
+    "output": {
+      "type": "Locale",
+      "language": "en",
+      "region": "US",
+      "extensions": {
+        "unicode": {
+          "attributes": [
+            "foo"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "en-US-u-hc-h23-ca-islamic-civil-ss-true"
+    },
+    "output": {
+      "type": "Locale",
+      "language": "en",
+      "region": "US",
+      "extensions": {
+        "unicode": {
+          "keywords": {
+            "hc": "h23",
+            "ca": "islamic-civil",
+            "ss": "true"
+          }
+        }
+      }
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "en-US-t-pl-latn-de"
+    },
+    "output": {
+      "type": "Locale",
+      "language": "en",
+      "region": "US",
+      "extensions": {
+        "transform": {
+          "tlang": "pl-Latn-DE"
+        }
+      }
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "en-US-x-private-foobar"
+    },
+    "output": {
+      "type": "Locale",
+      "language": "en",
+      "region": "US",
+      "extensions": {
+        "private": ["private", "foobar"]
+      }
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "en-US-t-h0-hybrid-k0-platform-s0-true"
+    },
+    "output": {
+      "type": "Locale",
+      "language": "en",
+      "region": "US",
+      "extensions": {
+        "transform": {
+          "tfields": {
+            "h0": "hybrid",
+            "k0": "platform",
+            "s0": "true"
+          }
+        }
+      }
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "en-US-t-es-ar-x-foo"
+    },
+    "output": {
+      "type": "Locale",
+      "language": "en",
+      "region": "US",
+      "extensions": {
+        "transform": {
+          "tlang": "es-AR"
+        },
+        "private": ["foo"]
+      }
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "en-US-u-ca-buddhist-hc-h12-t-es-ar-h0-hybrid-x-private-foobar"
+    },
+    "output": {
+      "type": "Locale",
+      "language": "en",
+      "region": "US",
+      "extensions": {
+        "unicode": {
+          "keywords": {
+            "ca": "buddhist",
+            "hc": "h12"
+          }
+        },
+        "transform": {
+          "tlang": "es-AR",
+          "tfields": {
+            "h0": "hybrid"
+          }
+        },
+        "private": ["private", "foobar"]
+      }
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "language": "es",
+      "region": "MX",
+      "extensions": {
+        "unicode": {
+          "keywords": {
+            "ca": "islamic",
+            "co": "search",
+            "nu": "roman"
+          }
+        }
+      }
+    },
+    "output": {
+      "type": "Locale",
+      "identifier": "es-MX-u-ca-islamic-co-search-nu-roman"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "und-u-kn"
+    },
+    "output": {
+      "type": "Locale",
+      "identifier": "und-u-kn"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "und-u-kn-ca-calendar"
+    },
+    "output": {
+      "type": "Locale",
+      "identifier": "und-u-ca-calendar-kn"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "und-u-kn-nu-arab"
+    },
+    "output": {
+      "type": "Locale",
+      "identifier": "und-u-kn-nu-arab"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "und-t-m0-true"
+    },
+    "output": {
+      "type": "Locale",
+      "identifier": "und-t-m0-true"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "und-t-m0-true-n0-mixed"
+    },
+    "output": {
+      "type": "Locale",
+      "identifier": "und-t-m0-true-n0-mixed"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "und-t-m0-true-c0-mixed"
+    },
+    "output": {
+      "type": "Locale",
+      "identifier": "und-t-c0-mixed-m0-true"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "da-u-ca-gregory-ca-buddhist"
+    },
+    "output": {
+      "type": "Locale",
+      "identifier": "da-u-ca-gregory"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "pt-u-attr2-attr1-ca-gregory"
+    },
+    "output": {
+      "type": "Locale",
+      "identifier": "pt-u-attr1-attr2-ca-gregory"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "pt-u-attr1-attr2-attr1-ca-gregory"
+    },
+    "output": {
+      "type": "Locale",
+      "identifier": "pt-u-attr1-attr2-ca-gregory"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "en-a-not-assigned"
+    },
+    "output": {
+      "type": "Locale",
+      "identifier": "en-a-not-assigned"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "en-w-bar-u-foo-a-bar-x-u-foo"
+    },
+    "output": {
+      "type": "Locale",
+      "identifier": "en-a-bar-u-foo-w-bar-x-u-foo"
+    }
+  }
+]

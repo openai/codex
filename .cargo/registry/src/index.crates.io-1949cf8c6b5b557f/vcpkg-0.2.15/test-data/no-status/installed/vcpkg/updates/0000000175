@@ -1,0 +1,6 @@
+Package: lz4
+Version: 1.8.2
+Architecture: x64-windows
+Multi-Arch: same
+Description: Lossless compression algorithm, providing compression speed at 400 MB/s per core.
+Status: install ok installed

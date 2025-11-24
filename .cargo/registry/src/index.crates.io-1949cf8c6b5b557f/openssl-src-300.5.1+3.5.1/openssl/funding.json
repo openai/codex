@@ -1,0 +1,105 @@
+{
+    "version": "v1.0.0",
+    "entity": {
+        "type": "organisation",
+        "role": "owner",
+        "name": "OpenSSL Software Foundation",
+        "email": "foundation@openssl.org",
+        "description": "The OpenSSL Software Foundation was established in 2014 and is one of two entities that supports the OpenSSL Library. The Foundation relies on donations to fund its software engineers, community manager, and other management staff, and its primary focus is non-commercial communities that use OpenSSL software. It is closely aligned with the OpenSSL Corporation, which focuses on commercial communities. Both organizations share the same mission: We believe everyone should have access to security and privacy tools, whoever they are, wherever they are or whatever their personal beliefs are, as a fundamental human right.",
+        "webpageUrl": {
+            "url": "https://openssl-foundation.org/",
+            "wellKnown": "https://openssl-foundation.org/.well-known/funding-manifest-urls"
+        }
+    },
+    "projects": [{
+        "guid": "openssllibrary",
+        "name": "OpenSSL Library",
+        "description": "The OpenSSL software library is a robust, commercial-grade, full-featured toolkit for general-purpose cryptography and secure communication. It is a fundamental open source component in the global digital infrastructure, widely used by both open source projects and commercial software. OpenSSL provides implementations of several highly important security protocols and standards, including TLS (formerly known as SSL), DTLS, CMS, and QUIC. OpenSSL implements a wide variety of different cryptographic algorithms (including encryption, hashes, key exchange/encapsulation, signatures, key derivation, message authentication codes, etc.) as well as other supporting functionality (such as digital certificates, key generation and key storage). OpenSSL is a mature, battle hardened product that has undergone multiple code audits and stood the test of time since its inception in the 1990s. It contains within it our FIPS provider, a cryptographic module that has undergone the rigorous and extensive FIPS 140-2 validation process. Our seasoned security team is well equipped to professionally and responsibly deal with emerging threats to keep our users safe. The features and capabilities described above represent critically important building blocks that other applications can use to ensure the confidentiality, integrity and authenticity of data they store, transmit and receive. Countless technologies are built with OpenSSL on the back end. It is invisible to end users but nonetheless vital to global digital infrastructure.",
+        "webpageUrl": {
+            "url": "https://openssl-library.org/",
+            "wellKnown": "https://openssl-library.org/.well-known/funding-manifest-urls"
+        },
+        "repositoryUrl": {
+            "url": "https://github.com/openssl/openssl"
+        },
+        "licenses": ["spdx:Apache-2.0"],
+        "tags": ["cryptography", "privacy", "security", "api", "networking"]
+    }],
+    "funding": {
+        "channels": [
+            {
+                "guid": "mybank",
+                "type": "bank",
+                "description": "Will accept direct bank transfers. Please email for details."
+            },
+            {
+                "guid": "github",
+                "type": "payment-provider",
+                "address": "https://github.com/sponsors/openssl",
+                "description": "Payments up to $12,000 USD per month can be made via Github Sponsors."
+            }
+        ],
+        "plans": [
+            {
+                "guid": "premiersponsorship",
+                "status": "active",
+                "name": "Premier Sponsorship",
+                "description": "Organizations that contribute $100,000 USD or more are recognized as Premier Sponsors for one year.",
+                "amount": 100000,
+                "currency": "USD",
+                "frequency": "yearly",
+                "channels": ["mybank", "github"]
+            },
+            {
+                "guid": "platinumsponsorship",
+                "status": "active",
+                "name": "Platinum Sponsorship",
+                "description": "Organizations that contribute $50,000 USD are recognized as Platinum Sponsors for one year.",
+                "amount": 50000,
+                "currency": "USD",
+                "frequency": "yearly",
+                "channels": ["mybank", "github"]
+            },
+            {
+                "guid": "goldsponsorship",
+                "status": "active",
+                "name": "Gold Sponsorship",
+                "description": "Organizations that contribute $25,000 USD or more are recognized as Gold Sponsors for one year.",
+                "amount": 25000,
+                "currency": "USD",
+                "frequency": "yearly",
+                "channels": ["mybank", "github"]
+            },
+            {
+                "guid": "silversponsorship",
+                "status": "active",
+                "name": "Silver Sponsorship",
+                "description": "Organizations that contribute $10,000 USD or more are recognized as Silver Sponsors for one year.",
+                "amount": 10000,
+                "currency": "USD",
+                "frequency": "yearly",
+                "channels": ["mybank", "github"]
+            },
+            {
+                "guid": "bronzesponsorship",
+                "status": "active",
+                "name": "Bronze Sponsorship",
+                "description": "Organizations that contribute $5,000 USD or more are recognized as Bronze Sponsors for one year.",
+                "amount": 5000,
+                "currency": "USD",
+                "frequency": "yearly",
+                "channels": ["mybank", "github"]
+            },
+            {
+                "guid": "coppersponsorship",
+                "status": "active",
+                "name": "Copper Sponsorship",
+                "description": "Organizations that contribute a gift of any amount under $5,000 USD are recognized as Copper Sponsors for one year.",
+                "amount": 0,
+                "currency": "USD",
+                "frequency": "yearly",
+                "channels": ["mybank", "github"]
+            }
+        ]
+    }
+}

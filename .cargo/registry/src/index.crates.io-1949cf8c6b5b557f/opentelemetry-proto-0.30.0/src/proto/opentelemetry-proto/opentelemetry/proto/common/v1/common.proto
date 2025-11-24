@@ -1,0 +1,115 @@
+// Copyright 2019, OpenTelemetry Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package opentelemetry.proto.common.v1;
+
+option csharp_namespace = "OpenTelemetry.Proto.Common.V1";
+option java_multiple_files = true;
+option java_package = "io.opentelemetry.proto.common.v1";
+option java_outer_classname = "CommonProto";
+option go_package = "go.opentelemetry.io/proto/otlp/common/v1";
+
+// AnyValue is used to represent any type of attribute value. AnyValue may contain a
+// primitive value such as a string or integer or it may contain an arbitrary nested
+// object containing arrays, key-value lists and primitives.
+message AnyValue {
+  // The value is one of the listed fields. It is valid for all values to be unspecified
+  // in which case this AnyValue is considered to be "empty".
+  oneof value {
+    string string_value = 1;
+    bool bool_value = 2;
+    int64 int_value = 3;
+    double double_value = 4;
+    ArrayValue array_value = 5;
+    KeyValueList kvlist_value = 6;
+    bytes bytes_value = 7;
+  }
+}
+
+// ArrayValue is a list of AnyValue messages. We need ArrayValue as a message
+// since oneof in AnyValue does not allow repeated fields.
+message ArrayValue {
+  // Array of values. The array may be empty (contain 0 elements).
+  repeated AnyValue values = 1;
+}
+
+// KeyValueList is a list of KeyValue messages. We need KeyValueList as a message
+// since `oneof` in AnyValue does not allow repeated fields. Everywhere else where we need
+// a list of KeyValue messages (e.g. in Span) we use `repeated KeyValue` directly to
+// avoid unnecessary extra wrapping (which slows down the protocol). The 2 approaches
+// are semantically equivalent.
+message KeyValueList {
+  // A collection of key/value pairs of key-value pairs. The list may be empty (may
+  // contain 0 elements).
+  // The keys MUST be unique (it is not allowed to have more than one
+  // value with the same key).
+  repeated KeyValue values = 1;
+}
+
+// KeyValue is a key-value pair that is used to store Span attributes, Link
+// attributes, etc.
+message KeyValue {
+  string key = 1;
+  AnyValue value = 2;
+}
+
+// InstrumentationScope is a message representing the instrumentation scope information
+// such as the fully qualified name and version. 
+message InstrumentationScope {
+  // An empty instrumentation scope name means the name is unknown.
+  string name = 1;
+  string version = 2;
+
+  // Additional attributes that describe the scope. [Optional].
+  // Attribute keys MUST be unique (it is not allowed to have more than one
+  // attribute with the same key).
+  repeated KeyValue attributes = 3;
+  uint32 dropped_attributes_count = 4;
+}
+
+// A reference to an Entity.
+// Entity represents an object of interest associated with produced telemetry: e.g spans, metrics, profiles, or logs.
+//
+// Status: [Development]
+message EntityRef {
+  // The Schema URL, if known. This is the identifier of the Schema that the entity data
+  // is recorded in. To learn more about Schema URL see
+  // https://opentelemetry.io/docs/specs/otel/schemas/#schema-url
+  //
+  // This schema_url applies to the data in this message and to the Resource attributes
+  // referenced by id_keys and description_keys.
+  // TODO: discuss if we are happy with this somewhat complicated definition of what
+  // the schema_url applies to.
+  //
+  // This field obsoletes the schema_url field in ResourceMetrics/ResourceSpans/ResourceLogs.
+  string schema_url = 1;
+
+  // Defines the type of the entity. MUST not change during the lifetime of the entity.
+  // For example: "service" or "host". This field is required and MUST not be empty
+  // for valid entities.
+  string type = 2;
+
+  // Attribute Keys that identify the entity.
+  // MUST not change during the lifetime of the entity. The Id must contain at least one attribute.
+  // These keys MUST exist in the containing {message}.attributes.
+  repeated string id_keys = 3;
+
+  // Descriptive (non-identifying) attribute keys of the entity.
+  // MAY change over the lifetime of the entity. MAY be empty.
+  // These attribute keys are not part of entity's identity.
+  // These keys MUST exist in the containing {message}.attributes.
+  repeated string description_keys = 4;
+}

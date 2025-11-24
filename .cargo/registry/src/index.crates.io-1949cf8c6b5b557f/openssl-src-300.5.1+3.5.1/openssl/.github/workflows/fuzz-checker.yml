@@ -1,0 +1,79 @@
+# Copyright 2021-2025 The OpenSSL Project Authors. All Rights Reserved.
+#
+# Licensed under the Apache License 2.0 (the "License").  You may not use
+# this file except in compliance with the License.  You can obtain a copy
+# in the file LICENSE in the source distribution or at
+# https://www.openssl.org/source/license.html
+
+name: Fuzz-checker CI
+
+on: [push]
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz-checker:
+    strategy:
+      fail-fast: false
+      matrix:
+        fuzzy: [
+          {
+            name: AFL,
+            config: enable-fuzz-afl no-module,
+            install: afl++,
+            cc: afl-clang-fast
+          }, {
+            name: libFuzzer,
+            config: enable-fuzz-libfuzzer enable-asan enable-ubsan -fno-sanitize=function,
+            libs: --with-fuzzer-lib=/usr/lib/llvm-18/lib/libFuzzer.a --with-fuzzer-include=/usr/include/clang/18/include/fuzzer,
+            install: libfuzzer-18-dev,
+            cc: clang-18,
+            linker: clang++-18,
+            tests: -test_memleak
+          }, {
+            name: libFuzzer+,
+            config: enable-fuzz-libfuzzer enable-asan enable-ubsan -fno-sanitize=function -fsanitize-coverage=trace-cmp -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION,
+            libs: --with-fuzzer-lib=/usr/lib/llvm-18/lib/libFuzzer.a --with-fuzzer-include=/usr/include/clang/18/include/fuzzer,
+            extra: enable-fips enable-ec_nistp_64_gcc_128 -fno-sanitize=alignment enable-tls1_3 enable-weak-ssl-ciphers enable-rc5 enable-md2 enable-ssl3 enable-ssl3-method enable-nextprotoneg,
+            install: libfuzzer-18-dev,
+            cc: clang-18,
+            linker: clang++-18,
+            tests: -test_memleak
+          }
+        ]
+    runs-on: ubuntu-24.04
+    steps:
+    - name: install packages
+      run: |
+        sudo apt-get update
+        sudo apt-get -yq --force-yes install ${{ matrix.fuzzy.install }}
+    - name: Adjust ASLR for sanitizer
+      run: |
+        sudo cat /proc/sys/vm/mmap_rnd_bits
+        sudo sysctl -w vm.mmap_rnd_bits=28
+    - uses: actions/checkout@v4
+
+    - name: config
+      run: |
+        CC=${{ matrix.fuzzy.cc }} ./config --banner=Configured no-shared \
+            ${{ matrix.fuzzy.config }} ${{ matrix.fuzzy.libs }} ${{ matrix.fuzzy.extra }}
+
+    - name: config dump
+      run: ./configdata.pm --dump
+    - name: make with explicit linker
+      if: matrix.fuzzy.linker != ''
+      run: LDCMD=${{ matrix.fuzzy.linker }} make -s -j4
+    - name: make sans explicit linker
+      if: matrix.fuzzy.linker == ''
+      run: make -s -j4
+    - name: get cpu info
+      run: |
+        cat /proc/cpuinfo
+        ./util/opensslwrap.sh version -c
+    - name: make test restricted
+      if: matrix.fuzzy.tests != ''
+      run: AFL_MAP_SIZE=300000 make test HARNESS_JOBS=${HARNESS_JOBS:-4} TESTS="${{ matrix.fuzzy.tests }}"
+    - name: make test all
+      if: matrix.fuzzy.tests == ''
+      run: AFL_MAP_SIZE=300000 make test HARNESS_JOBS=${HARNESS_JOBS:-4}

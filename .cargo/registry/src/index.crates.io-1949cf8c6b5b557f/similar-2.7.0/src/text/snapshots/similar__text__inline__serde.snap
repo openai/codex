@@ -1,0 +1,107 @@
+---
+source: src/text/inline.rs
+expression: "&json"
+
+---
+[
+  {
+    "tag": "insert",
+    "old_index": null,
+    "new_index": 0,
+    "values": [
+      [
+        false,
+        "Stuff\n"
+      ]
+    ]
+  },
+  {
+    "tag": "equal",
+    "old_index": 0,
+    "new_index": 1,
+    "values": [
+      [
+        false,
+        "Hello World\n"
+      ]
+    ]
+  },
+  {
+    "tag": "delete",
+    "old_index": 1,
+    "new_index": null,
+    "values": [
+      [
+        false,
+        "some "
+      ],
+      [
+        false,
+        "stuff here\n"
+      ]
+    ]
+  },
+  {
+    "tag": "insert",
+    "old_index": null,
+    "new_index": 2,
+    "values": [
+      [
+        false,
+        "some "
+      ],
+      [
+        true,
+        "amazing "
+      ],
+      [
+        false,
+        "stuff here\n"
+      ]
+    ]
+  },
+  {
+    "tag": "equal",
+    "old_index": 2,
+    "new_index": 3,
+    "values": [
+      [
+        false,
+        "some more stuff here\n"
+      ]
+    ]
+  },
+  {
+    "tag": "delete",
+    "old_index": 3,
+    "new_index": null,
+    "values": [
+      [
+        false,
+        "\n"
+      ]
+    ]
+  },
+  {
+    "tag": "delete",
+    "old_index": 4,
+    "new_index": null,
+    "values": [
+      [
+        false,
+        "Aha stuff here\n"
+      ]
+    ]
+  },
+  {
+    "tag": "delete",
+    "old_index": 5,
+    "new_index": null,
+    "values": [
+      [
+        false,
+        "and more stuff"
+      ]
+    ]
+  }
+]

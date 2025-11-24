@@ -1,0 +1,167 @@
+[
+  {
+    "input": "en",
+    "output": {
+      "type": "LanguageIdentifier",
+      "language": "en"
+    }
+  },
+  {
+    "input": "lij",
+    "output": {
+      "type": "LanguageIdentifier",
+      "language": "lij"
+    }
+  },
+  {
+    "input": "en-Latn",
+    "output": { 
+      "type": "LanguageIdentifier",
+      "language": "en",
+      "script": "Latn"
+    }
+  },
+  {
+    "input": "lij-Arab",
+    "output": { 
+      "type": "LanguageIdentifier",
+      "language": "lij",
+      "script": "Arab"
+    }
+  },
+  {
+    "input": "en-Latn-US",
+    "output": { 
+      "type": "LanguageIdentifier",
+      "language": "en",
+      "script": "Latn",
+      "region": "US"
+    }
+  },
+  {
+    "input": "lij-Arab-FA",
+    "output": { 
+      "type": "LanguageIdentifier",
+      "language": "lij",
+      "script": "Arab",
+      "region": "FA"
+    }
+  },
+  {
+    "input": "en-Latn-US-windows",
+    "output": { 
+      "type": "LanguageIdentifier",
+      "language": "en",
+      "script": "Latn",
+      "region": "US",
+      "variants": ["windows"]
+    }
+  },
+  {
+    "input": "lij-Arab-FA-linux",
+    "output": { 
+      "type": "LanguageIdentifier",
+      "language": "lij",
+      "script": "Arab",
+      "region": "FA",
+      "variants": ["linux"]
+    }
+  },
+  {
+    "input": "lij-Arab-FA-linux-nedis",
+    "output": { 
+      "type": "LanguageIdentifier",
+      "language": "lij",
+      "script": "Arab",
+      "region": "FA",
+      "variants": ["linux", "nedis"]
+    }
+  },
+  {
+    "input": "EN-latn-us",
+    "output": {
+      "type": "LanguageIdentifier",
+      "language": "en",
+      "script": "Latn",
+      "region": "US"
+    }
+  },
+  {
+    "input": "sl-nedis",
+    "output": {
+      "type": "LanguageIdentifier",
+      "language": "sl",
+      "variants": ["nedis"]
+    }
+  },
+  {
+    "input": "de-CH-1996",
+    "output": {
+      "type": "LanguageIdentifier",
+      "language": "de",
+      "region": "CH",
+      "variants": ["1996"]
+    }
+  },
+  {
+    "input": "sr-Latn",
+    "output": {
+      "type": "LanguageIdentifier",
+      "language": "sr",
+      "script": "Latn"
+    }
+  },
+  {
+    "input": "es-419",
+    "output": {
+      "type": "LanguageIdentifier",
+      "language": "es",
+      "region": "419"
+    }
+  },
+  {
+    "input": "und-Latn-US",
+    "output": {
+      "type": "LanguageIdentifier",
+      "script": "Latn",
+      "region": "US"
+    }
+  },
+  {
+    "input": "und",
+    "output": {
+      "type": "LanguageIdentifier"
+    }
+  },
+  {
+    "input": "und-Latn",
+    "output": {
+      "type": "LanguageIdentifier",
+      "script": "Latn"
+    }
+  },
+  {
+    "input": "pl-macos-Windows-nedis-aRabic",
+    "output": {
+      "type": "LanguageIdentifier",
+      "language": "pl",
+      "variants": ["arabic", "macos", "nedis", "windows"]
+    }
+  },
+  {
+    "input": "und-Latn-macos",
+    "output": {
+      "type": "LanguageIdentifier",
+      "script": "Latn",
+      "variants": ["macos"]
+    }
+  },
+  {
+    "input": "und-Latn-312",
+    "output": {
+      "type": "LanguageIdentifier",
+      "script": "Latn",
+      "region": "312"
+    }
+  }
+]

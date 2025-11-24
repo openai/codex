@@ -1,0 +1,217 @@
+=pod
+
+=head1 NAME
+
+EVP_PKEY - an internal description
+
+=head1 SYNOPSIS
+
+ #include "crypto/evp.h"
+
+ typedef struct evp_pkey_st EVP_PKEY;
+
+=head1 DESCRIPTION
+
+I<This is not a complete description yet>
+
+B<EVP_PKEY> is a complex type that's essentially a container for
+private/public key pairs, but has had other uses as well.
+
+=for comment "uses" could as well be "abuses"...
+
+The private/public key pair that an B<EVP_PKEY> contains is referred to
+as its "internal key" or "origin" (the reason for "origin" is
+explained further down, in L</Export cache for provider operations>),
+and it can take one of the following forms:
+
+=over 4
+
+=item legacy origin
+
+This is the form that an B<EVP_PKEY> in OpenSSL prior to 3.0 had.  The
+internal key in the B<EVP_PKEY> is a pointer to the low-level key
+types, such as B<RSA>, B<DSA> and B<EC>, or an engine driven
+structure, and is governed by an associated L<EVP_PKEY_METHOD(3)> and
+an L<EVP_PKEY_ASN1_METHOD(3)>.
+
+The functions available through those two method structures get full
+access to the B<EVP_PKEY> and therefore have a lot of freedom to
+modify whatever they want.  This also means that an B<EVP_PKEY> is a
+shared structure between libcrypto and any ENGINE that serves such
+methods.
+
+=item provider-native origin
+
+This is a new form in OpenSSL 3.0, which permits providers to hold the
+key data (see L<provider-keymgmt(7)>).  The internal key in the
+B<EVP_PKEY> is a pointer to that key data held by the provider, and
+is governed by an associated L<EVP_KEYMGMT(3)> method structure.
+
+The functions available through the L<EVP_KEYMGMT(3)> have no access
+to the B<EVP_PKEY>, and can therefore not make any direct changes.
+Similarly, the key data that the B<EVP_PKEY> points at is only known
+to the functions pointed at in the L<EVP_KEYMGMT(3)>.
+
+=back
+
+These two forms can never co-exist in the same B<EVP_PKEY>, the main
+reason being that having both at the same time will create problems
+with synchronising between the two forms, and potentially make it
+confusing which one of the two is the origin.
+
+=head2 Key mutability
+
+The B<EVP_PKEY> internal keys are mutable.
+
+This is especially visible with internal legacy keys, since they can
+be extracted with functions like L<EVP_PKEY_get0_RSA(3)> and then
+modified at will with functions like L<RSA_set0_key(3)>. Note that if the
+internal key is a provider key then the return value from functions such as
+L<EVP_PKEY_get0_RSA(3)> is a cached copy of the key. Changes to the cached
+copy are not reflected back in the provider key.
+
+Internal provider native keys are also possible to be modified, if the
+associated L<EVP_KEYMGMT(3)> implementation allows it.  This is done
+with L<EVP_PKEY_set_params(3)> and its specialised derivatives.  The
+OpenSSL providers allow it for the following:
+
+=over 4
+
+=item DH, EC, X25519, X448, ML-KEM (512, 768 and 1024):
+
+It is possible to set the encoded public key.  This is supported in
+particular through L<EVP_PKEY_set1_encoded_public_key(3)>.
+
+=item EC:
+
+It's possible to flip the ECDH cofactor mode.
+
+=back
+
+Every time the B<EVP_PKEY> internal key mutates, an internal dirty
+count is incremented.  The need for a dirty count is explained further
+in L</Export cache for provider operations>.
+
+For provider native origin keys, this doesn't require any help from
+the L<EVP_KEYMGMT(3)>, the dirty count is maintained in the B<EVP_PKEY>
+itself, and is incremented every time L<EVP_PKEY_set_params(3)> or its
+specialised derivatives are called.
+For legacy origin keys, this requires the associated
+L<EVP_PKEY_ASN1_METHOD(3)> to implement the dirty_cnt() function.  All
+of OpenSSL's built-in L<EVP_PKEY_ASN1_METHOD(3)> implement this
+function.
+
+=head2 Export cache for provider operations
+
+OpenSSL 3.0 can handle operations such as signing, encrypting, etc in
+diverse providers, potentially others than the provider of the
+L<EVP_KEYMGMT(3)>.  Two providers, possibly from different vendors,
+can't be expected to share internal key structures.  There are
+therefore instances where key data will need to be exported to the
+provider that is going to perform the operation (this also implies
+that every provider that implements a key pair based operation must
+also implement an L<EVP_KEYMGMT(3)>).
+
+For performance reasons, libcrypto tries to minimize the need to
+perform such an export, so it maintains a cache of such exports in the
+B<EVP_PKEY>.  Each cache entry has two items, a pointer to the
+provider side key data and the associated L<EVP_KEYMGMT(3)>.
+
+I<This cache is often referred to as the "operation key cache", and
+the key data that the cached keys came from is the "origin", and since
+there are two forms of the latter, we have the "legacy origin" and the
+"provider native origin".>
+
+The export to the operation key cache can be performed independent of
+what form the origin has.
+For a legacy origin, this requires that the associated
+L<EVP_PKEY_ASN1_METHOD(3)> implements the functions export_to() and
+dirty_cnt().
+For a provider native origin, this requires that the associated
+L<EVP_KEYMGMT(3)> implements the OSSL_FUNC_keymgmt_export() function
+(see L<provider-keymgmt(7)>).
+In all cases, the receiving L<EVP_KEYMGMT(3)> (the one associated with
+the exported key data) must implement OSSL_FUNC_keymgmt_import().
+
+If such caching isn't supported, the operations that can be performed
+with that key are limited to the same backend as the origin key
+(ENGINE for legacy origin keys, provider for provider side origin
+keys).
+
+=head3 Exporting implementation details
+
+
+Exporting a key to the operation cache involves the following:
+
+=over 4
+
+=item 1.
+
+Check if the dirty count for the internal origin key has changed since
+the previous time.  This is done by comparing it with a copy of the
+dirty count, which is maintained by the export function.
+
+If the dirty count has changed, the export cache is cleared.
+
+=item 2.
+
+Check if there's an entry in the export cache with the same
+L<EVP_KEYMGMT(3)> that's the same provider that an export is to be
+made to (which is the provider that's going to perform an operation
+for which the current B<EVP_PKEY> is going to be used).
+
+If such an entry is found, nothing more is done, the key data and
+L<EVP_KEYMGMT(3)> found in that export cache entry will be used for
+the operation to be performed.
+
+=item 3.
+
+Export the internal origin key to the provider, using the appropriate
+method.
+
+For legacy origin keys, that's done with the help of the
+L<EVP_PKEY_ASN1_METHOD(3)> export_to() function.
+
+For provider native origin keys, that's done by retrieving the key
+data in L<OSSL_PARAM(3)> form from the origin keys, using the
+OSSL_FUNC_keymgmt_export() functions of the associated
+L<EVP_KEYMGMT(3)>, and sending that data to the L<EVP_KEYMGMT(3)> of
+the provider that's to perform the operation, using its
+OSSL_FUNC_keymgmt_import() function.
+
+=back
+
+=head2 Changing a key origin
+
+It is never possible to change the origin of a key. An B<EVP_PKEY> with a legacy
+origin will I<never> be upgraded to become an B<EVP_PKEY> with a provider
+native origin. Instead, we have the operation cache as described above, that
+takes care of the needs of the diverse operation the application may want to
+perform.
+
+Similarly an B<EVP_PKEY> with a provider native origin, will I<never> be
+I<transformed> into an B<EVP_PKEY> with a legacy origin. Instead we may have a
+cached copy of the provider key in legacy form. Once the cached copy is created
+it is never updated. Changes made to the provider key are not reflected back in
+the cached legacy copy. Similarly changes made to the cached legacy copy are not
+reflected back in the provider key.
+
+=head1 SEE ALSO
+
+L<provider-keymgmt(7)>,
+L<EVP_PKEY-DH(7)>,
+L<EVP_PKEY-EC(7)>,
+L<EVP_PKEY-X25519(7)>,
+L<EVP_PKEY-ML-DSA(7)>,
+L<EVP_PKEY-ML-KEM(7)>.
+
+=head1 COPYRIGHT
+
+Copyright 2020-2025 The OpenSSL Project Authors. All Rights Reserved.
+
+Licensed under the Apache License 2.0 (the "License").  You may not use
+this file except in compliance with the License.  You can obtain a copy
+in the file LICENSE in the source distribution or at
+L<https://www.openssl.org/source/license.html>.
+
+=cut

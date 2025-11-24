@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Test",
+  "type": "object",
+  "properties": {
+    "data": {
+      "$ref": "#/$defs/KeyValueMap(KvMapEnum)"
+    }
+  },
+  "required": [
+    "data"
+  ],
+  "$defs": {
+    "KeyValueMap(KvMapEnum)": {
+      "type": "object",
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "a": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "a"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "b": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "b"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "c": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "c"
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

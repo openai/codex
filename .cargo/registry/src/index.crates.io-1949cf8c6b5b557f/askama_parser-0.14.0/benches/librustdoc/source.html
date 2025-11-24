@@ -1,0 +1,21 @@
+<div class="example-wrap"> {# #}
+    {# https://developers.google.com/search/docs/crawling-indexing/robots-meta-tag#data-nosnippet-attr
+       Do not show "1 2 3 4 5 ..." in web search results. #}
+    <div data-nosnippet><pre class="src-line-numbers">
+        {% for line in lines.clone() %}
+            {% if embedded %}
+                <span>{{line|safe}}</span>
+            {%~ else %}
+                <a href="#{{line|safe}}" id="{{line|safe}}">{{line|safe}}</a>
+            {%~ endif %}
+        {% endfor %}
+    </pre></div> {# #}
+    <pre class="rust"> {# #}
+        <code>
+            {% if needs_expansion %}
+                <button class="expand">&varr;</button>
+            {% endif %}
+            {{code_html|safe}}
+        </code> {# #}
+    </pre> {# #}
+</div>

@@ -1,0 +1,72 @@
+# This file is part of ICU4X. For terms of use, please see the file
+# called LICENSE at the top level of the ICU4X source tree
+# (online at: https://github.com/unicode-org/icu4x/blob/main/LICENSE ).
+
+[package]
+name = "icu_normalizer"
+description = "API for normalizing text into Unicode Normalization Forms"
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+homepage.workspace = true
+include.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+icu_collections = { workspace = true }
+icu_properties = { workspace = true, optional = true }
+icu_provider = { workspace = true }
+smallvec = { workspace = true } # alloc
+utf16_iter = { workspace = true, optional = true }
+utf8_iter = { workspace = true, optional = true }
+write16 = { workspace = true, features = ["alloc"], optional = true }
+zerovec = { workspace = true }
+
+databake = { workspace = true, features = ["derive"], optional = true }
+serde = { workspace = true, features = ["derive", "alloc"], optional = true }
+
+icu_normalizer_data = { workspace = true, optional = true }
+
+[dev-dependencies]
+arraystring = { workspace = true }
+arrayvec = { workspace = true }
+atoi = { workspace = true }
+detone = { workspace = true }
+icu = { path = "../../components/icu", default-features = false }
+write16 = { workspace = true, features = ["arrayvec", "smallvec"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion = { workspace = true }
+
+[features]
+default = ["compiled_data", "utf8_iter", "utf16_iter"]
+serde = ["dep:serde", "icu_collections/serde", "zerovec/serde", "icu_properties?/serde", "icu_provider/serde"]
+# n.b. "icu_properties" + "icu_properties?/datagen" is equivalent to "icu_properties/datagen", however
+# we specify this explicitly since "optional_dep/feature" is a footgun that leads to us often accidentally enabling features
+datagen = ["serde", "dep:databake", "icu_properties", "icu_collections/databake", "zerovec/databake", "icu_properties?/datagen", "icu_provider/export"]
+experimental = []
+compiled_data = ["dep:icu_normalizer_data", "icu_properties?/compiled_data", "icu_provider/baked"]
+icu_properties = ["dep:icu_properties"]
+# For dealing with UTF16 strings
+utf16_iter = ["dep:utf16_iter", "dep:write16"]
+# For dealing with potentially ill-formed UTF8 strings
+utf8_iter = ["dep:utf8_iter"]
+
+# added by accident
+write16 = []
+
+[[bench]]
+name = "bench"
+harness = false
+required-features = ["utf16_iter", "utf8_iter"]
+
+# Lint to avoid complaining about icu4x_unstable_fast_trie_only for now
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(icu4x_unstable_fast_trie_only)'] }

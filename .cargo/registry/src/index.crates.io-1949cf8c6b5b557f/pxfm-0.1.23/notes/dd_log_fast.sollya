@@ -1,0 +1,23 @@
+pretty = proc(u) {
+  return ~(floor(u*1000)/1000);
+};
+
+d = [-0.0040283203125,0.0040283203125];
+f = log(1+x);
+p0 = x-x^2/2;
+w = 1;
+p = remez(f-p0, 8, d, w);
+pf = p0+fpminimax(f-p0, [|3,4,5,6,7,8,9,10,11,12|], [|107, 107, 107, D...|], d, absolute, floating);
+err_p = -log2(supnorm(pf, log(1+x), d, absolute, 2^(-10)));
+display = hexadecimal;
+print (pf);
+display = decimal;
+print ("absolute error:", pretty(err_p));
+
+f = 1;
+w = 1/log(1+x);
+// err_p = -log2(dirtyinfnorm(pf*w-f, d));
+err_p = -log2(supnorm(pf, log(1+x), d, relative, 2^(-10)));
+print ("relative error:", pretty(err_p));
+
+for i from 1 to degree(pf) do print(coeff(pf, i));

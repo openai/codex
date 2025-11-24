@@ -1,0 +1,150 @@
+=pod
+{- OpenSSL::safe::output_do_not_edit_headers(); -}
+
+=head1 NAME
+
+openssl-verify - certificate verification command
+
+=head1 SYNOPSIS
+
+B<openssl> B<verify>
+[B<-help>]
+[B<-CRLfile> I<filename>|I<uri>]
+[B<-crl_download>]
+[B<-show_chain>]
+[B<-verbose>]
+[B<-trusted> I<filename>|I<uri>]
+[B<-untrusted> I<filename>|I<uri>]
+[B<-vfyopt> I<nm>:I<v>]
+{- $OpenSSL::safe::opt_name_synopsis -}
+{- $OpenSSL::safe::opt_trust_synopsis -}
+{- $OpenSSL::safe::opt_engine_synopsis -}{- $OpenSSL::safe::opt_v_synopsis -}
+{- $OpenSSL::safe::opt_provider_synopsis -}
+[B<-->]
+[I<certificate> ...]
+
+=head1 DESCRIPTION
+
+This command verifies certificate chains. If a certificate chain has multiple
+problems, this program attempts to display all of them.
+
+=head1 OPTIONS
+
+=over 4
+
+=item B<-help>
+
+Print out a usage message.
+
+=item B<-CRLfile> I<filename>|I<uri>
+
+The file or URI should contain one or more CRLs in PEM or DER format.
+This option can be specified more than once to include CRLs from multiple
+sources.
+
+=item B<-crl_download>
+
+Attempt to download CRL information for certificates via their CDP entries.
+
+=item B<-show_chain>
+
+Display information about the certificate chain that has been built (if
+successful). Certificates in the chain that came from the untrusted list will be
+flagged as "untrusted".
+
+=item B<-verbose>
+
+Print extra information about the operations being performed.
+
+=item B<-trusted> I<filename>|I<uri>
+
+A file or URI of (more or less) trusted certificates.
+See L<openssl-verification-options(1)> for more information on trust settings.
+
+This option can be specified more than once to load certificates from multiple
+sources.
+
+=item B<-untrusted> I<filename>|I<uri>
+
+A file or URI of untrusted certificates to use for chain building.
+This option can be specified more than once to load certificates from multiple
+sources.
+
+=item B<-vfyopt> I<nm>:I<v>
+
+Pass options to the signature algorithm during verify operations.
+Names and values of these options are algorithm-specific.
+
+{- $OpenSSL::safe::opt_name_item -}
+
+{- $OpenSSL::safe::opt_engine_item -}
+{- output_off() if $disabled{"deprecated-3.0"}; "" -}
+To load certificates or CRLs that require engine support, specify the
+B<-engine> option before any of the
+B<-trusted>, B<-untrusted> or B<-CRLfile> options.
+{- output_on() if $disabled{"deprecated-3.0"}; "" -}
+
+{- $OpenSSL::safe::opt_trust_item -}
+
+{- $OpenSSL::safe::opt_v_item -}
+
+{- $OpenSSL::safe::opt_provider_item -}
+
+=item B<-->
+
+Indicates the last option. All arguments following this are assumed to be
+certificate files. This is useful if the first certificate filename begins
+with a B<->.
+
+=item I<certificate> ...
+
+One or more target certificates to verify, one per file. If no certificates are
+given, this command will attempt to read a single certificate from standard
+input.
+
+=back
+
+=head1 DIAGNOSTICS
+
+When a verify operation fails the output messages can be somewhat cryptic. The
+general form of the error message is:
+
+ server.pem: /C=AU/ST=Queensland/O=CryptSoft Pty Ltd/CN=Test CA (1024 bit)
+ error 24 at 1 depth lookup:invalid CA certificate
+
+The first line contains the name of the certificate being verified followed by
+the subject name of the certificate. The second line contains the error number
+and the depth. The depth is number of the certificate being verified when a
+problem was detected starting with zero for the target ("leaf") certificate
+itself then 1 for the CA that signed the target certificate and so on.
+Finally a textual version of the error number is presented.
+
+A list of the error codes and messages can be found in
+L<X509_STORE_CTX_get_error(3)>; the full list is defined in the header file
+F<< <openssl/x509_vfy.h> >>.
+
+This command ignores many errors, in order to allow all the problems with a
+certificate chain to be determined.
+
+=head1 SEE ALSO
+
+L<openssl-verification-options(1)>,
+L<openssl-x509(1)>,
+L<ossl_store-file(7)>
+
+=head1 HISTORY
+
+The B<-show_chain> option was added in OpenSSL 1.1.0.
+
+The B<-engine option> was deprecated in OpenSSL 3.0.
+
+=head1 COPYRIGHT
+
+Copyright 2000-2021 The OpenSSL Project Authors. All Rights Reserved.
+
+Licensed under the Apache License 2.0 (the "License").  You may not use
+this file except in compliance with the License.  You can obtain a copy
+in the file LICENSE in the source distribution or at
+L<https://www.openssl.org/source/license.html>.
+
+=cut

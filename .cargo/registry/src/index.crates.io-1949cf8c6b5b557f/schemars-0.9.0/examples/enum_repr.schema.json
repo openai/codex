@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SmallPrime",
+  "type": "integer",
+  "enum": [
+    2,
+    3,
+    5,
+    7
+  ]
+}

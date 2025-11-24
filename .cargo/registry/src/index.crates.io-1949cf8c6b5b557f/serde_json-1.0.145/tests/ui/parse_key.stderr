@@ -1,0 +1,5 @@
+error[E0609]: no field `s` on type `&'static str`
+ --> tests/ui/parse_key.rs:4:16
+  |
+4 |     json!({ "".s : true });
+  |                ^ unknown field

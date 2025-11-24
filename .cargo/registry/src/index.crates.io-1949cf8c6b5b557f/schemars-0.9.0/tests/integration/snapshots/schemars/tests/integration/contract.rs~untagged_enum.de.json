@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "UntaggedEnum",
+  "anyOf": [
+    {
+      "type": "null"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "i": {
+          "type": "integer",
+          "format": "int"
+        }
+      },
+      "required": [
+        "i"
+      ]
+    },
+    {
+      "type": "null"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "b": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "b"
+      ]
+    }
+  ]
+}

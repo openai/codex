@@ -1,0 +1,138 @@
+=pod
+
+=head1 NAME
+
+DEFINE_LIST_OF, OSSL_LIST_MEMBER, OSSL_LIST,
+ossl_list_TYPE_init, ossl_list_TYPE_init_elem,
+ossl_list_TYPE_is_empty, ossl_list_TYPE_num,
+ossl_list_TYPE_head, ossl_list_TYPE_tail,
+ossl_list_TYPE_next, ossl_list_TYPE_prev,
+ossl_list_TYPE_remove, ossl_list_TYPE_insert_head, ossl_list_TYPE_insert_tail,
+ossl_list_TYPE_insert_before, ossl_list_TYPE_after
+- doubly linked list
+
+=head1 SYNOPSIS
+
+=for openssl generic
+
+ #include "internal/list.h"
+
+ OSSL_LIST(name);
+ OSSL_LIST_MEMBER(NAME, TYPE);
+ DEFINE_LIST_OF(NAME, TYPE);
+
+ void ossl_list_TYPE_init(OSSL_LIST(name) *list);
+ void ossl_list_TYPE_init_elem(type *elem);
+
+ int ossl_list_TYPE_is_empty(const OSSL_LIST(name) *list);
+ size_t ossl_list_TYPE_num(const OSSL_LIST(name) *list);
+ type *ossl_list_TYPE_head(const OSSL_LIST(name) *list);
+ type *ossl_list_TYPE_tail(const OSSL_LIST(name) *list);
+
+ type *ossl_list_TYPE_next(const type *elem);
+ type *ossl_list_TYPE_prev(const type *elem);
+
+ void ossl_list_TYPE_remove(OSSL_LIST(name) *list, type *elem);
+ void ossl_list_TYPE_insert_head(OSSL_LIST(name) *list, type *elem);
+ void ossl_list_TYPE_insert_tail(OSSL_LIST(name) *list, type *elem);
+ void ossl_list_TYPE_insert_before(OSSL_LIST(name) *list, type *existing,
+                                   type *elem);
+ void ossl_list_TYPE_insert_after(OSSL_LIST(name) *list, type *existing, type *elem);
+
+=head1 DESCRIPTION
+
+Create type safe linked list.  These macros define typesafe inline
+functions that implement the various list operations. In the description
+here, B<I<TYPE>> is used as a placeholder for any datatype.  Lists are intended to
+be incorporated into other structures and rather than being a standalone data
+structure.
+
+The OSSL_LIST() macro returns the name for a list of the specified
+B<I<TYPE>>.  This is a structure which should be treated as opaque.
+
+DEFINE_LIST_OF() creates a set of functions for a list of B<I<TYPE>>
+elements with the name B<I<TYPE>>.  The type is represented
+by B<OSSL_LIST>(B<I<TYPE>>) and each function name begins with
+B<ossl_list_I<TYPE>_>.  The list's linkages are stored in the
+B<OSSL_LIST_MEMBER>(B<I<TYPE>>, B<I<TYPE>>) field.
+
+B<ossl_list_I<TYPE>_init>() initialises the memory pointed to by I<list>
+to zero which creates an empty list.
+
+B<ossl_list_I<TYPE>_init_elem>() initialises the list related memory pointed
+to by I<elem> to zero which allows it to be used in lists.
+
+B<ossl_list_I<TYPE>_is_empty>() returns nonzero if I<list> has no elements and
+zero otherwise.
+
+B<ossl_list_I<TYPE>_num>() returns the number of elements in I<list>.
+
+B<ossl_list_I<TYPE>_head>() returns the first element in the I<list>
+or NULL if there are no elements.
+
+B<ossl_list_I<TYPE>_tail>() returns the last element in the I<list>
+or NULL if there are no elements.
+
+B<ossl_list_I<TYPE>_remove>() removes the specified element I<elem> from
+the I<list>.  It is illegal to remove an element that isn't in the list.
+
+B<ossl_list_I<TYPE>_insert_head>() inserts the element I<elem>, which
+must not be in the list, into the first position in the I<list>.
+
+B<ossl_list_I<TYPE>_insert_tail>() inserts the element I<elem>, which
+must not be in the list, into the last position in the I<list>.
+
+B<ossl_list_I<TYPE>_insert_before>() inserts the element I<elem>,
+which must not be in the list, into the I<list> immediately before the
+I<existing> element.
+
+B<ossl_list_I<TYPE>_insert_after>() inserts the element I<elem>,
+which must not be in the list, into the I<list> immediately after the
+I<existing> element.
+
+=head1 RETURN VALUES
+
+B<ossl_list_I<TYPE>_is_empty>() returns nonzero if the list is empty and zero
+otherwise.
+
+B<ossl_list_I<TYPE>_num>() returns the number of elements in the
+list.
+
+B<ossl_list_I<TYPE>_head>(), B<ossl_list_I<TYPE>_tail>(),
+B<ossl_list_I<TYPE>_next>() and B<ossl_list_I<TYPE>_prev>() return
+the specified element in the list.
+
+=head1 EXAMPLES
+
+ typedef struct item_st ITEM;
+
+ struct item_st {
+     ...
+     OSSL_LIST_MEMBER(new_items, ITEM);
+     ...
+ };
+
+ DEFINE_LIST_OF(new_items, ITEM);
+
+ OSSL_LIST(new_items) new;
+
+ ITEM *p;
+
+ for (p = ossl_list_new_items_head(&st->new); p != NULL;
+      p = ossl_list_new_items_next(p))
+     /* do something */
+
+=head1 HISTORY
+
+The functions described here were all added in OpenSSL 3.2.
+
+=head1 COPYRIGHT
+
+Copyright 2022 The OpenSSL Project Authors. All Rights Reserved.
+
+Licensed under the Apache License 2.0 (the "License").  You may not use
+this file except in compliance with the License.  You can obtain a copy
+in the file LICENSE in the source distribution or at
+L<https://www.openssl.org/source/license.html>.
+
+=cut

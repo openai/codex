@@ -1,0 +1,8 @@
+/// This the most notable one of the DOS Cyrillic code pages. It has the same
+/// box drawing characters as code page 437, so it can be used for decoding
+/// DOS-era ASCII + box drawing data.
+///
+/// [Index visualization](https://encoding.spec.whatwg.org/ibm866.html),
+/// [Visualization of BMP coverage](https://encoding.spec.whatwg.org/ibm866-bmp.html)
+///
+/// This encoding matches the Windows code page 866.

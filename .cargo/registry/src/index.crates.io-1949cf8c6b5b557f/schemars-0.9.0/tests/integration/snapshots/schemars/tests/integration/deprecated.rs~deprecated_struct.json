@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DeprecatedStruct",
+  "type": "object",
+  "properties": {
+    "foo": {
+      "type": "integer",
+      "format": "int32"
+    },
+    "bar": {
+      "type": "boolean",
+      "deprecated": true
+    }
+  },
+  "required": [
+    "foo",
+    "bar"
+  ],
+  "deprecated": true
+}

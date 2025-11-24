@@ -1,0 +1,48 @@
+name: Linux
+
+on:
+  push:
+    branches-ignore: [ '**win**', '**android**', '**macos**', '**bsd**', '**haiku**', '**wasm**', '**ios**' ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 0 * * SUN'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  RUST_LOG: webbrowser=TRACE
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.event.head_commit.message, '#build-') || contains(github.event.head_commit.message, '#build-linux') }}
+    strategy:
+      max-parallel: 1
+      matrix:
+        rust: [stable, beta, nightly]
+    continue-on-error: ${{ matrix.rust != 'stable' && matrix.rust != 'beta' }}
+    steps:
+      - uses: actions/checkout@v3
+        name: Checkout
+      - name: Install rust version
+        run: |
+          rustup install ${{ matrix.rust }} --profile minimal
+          rustup component add --toolchain ${{ matrix.rust }} rustfmt clippy
+      - name: Compile
+        run: cargo +${{ matrix.rust }} build
+      - name: Run Tests
+        env:
+          BROWSER: firefox --screenshot %s
+        run: cargo +${{ matrix.rust }} test --all --locked --verbose
+      - name: Run Tests (hardened)
+        run: cargo +${{ matrix.rust }} test --features hardened --locked --verbose --test test_unix tests::test_hardened_mode
+      - name: Check compilation with WSL disabled
+        run: cargo +${{ matrix.rust }} build --features disable-wsl
+      - name: Check Code Formatting
+        if: ${{ matrix.rust == 'stable' || matrix.rust == 'beta' }}
+        run: cargo +${{ matrix.rust }} fmt --all -- --check
+      - name: Lints
+        if: ${{ matrix.rust == 'stable' || matrix.rust == 'beta' }}
+        run: cargo +${{ matrix.rust }} clippy --all-targets -- -D warnings

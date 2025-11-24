@@ -1,0 +1,1 @@
+crlDistributionPoints=URI:http://example.com/crl.pem,URI:http://example.com/crl2.pem

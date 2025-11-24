@@ -1,0 +1,25 @@
+
+.docblock pre.rust { background: #eeeeff; }
+pre.trait, pre.fn, pre.struct, pre.enum, pre.typedef { background: #fcfefc; }
+
+/* Small “example” label for doc examples */
+.docblock pre.rust::before {
+    content: "example";
+    float: right;
+    font-style: italic;
+    font-size: 0.8em;
+    margin-top: -10px;
+    margin-right: -5px;
+}
+
+
+/* Fixup where display in trait listing */
+pre.trait .where::before {
+content: '\a         ';
+}
+
+.docblock code {
+    background-color: inherit;
+    font-weight: bold;
+    padding: 0 0.1em;
+}

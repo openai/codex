@@ -1,0 +1,7 @@
+[*.sh]
+# See https://github.com/mvdan/sh/blob/master/cmd/shfmt/shfmt.1.scd#examples
+indent_style = space
+indent_size = 4
+
+switch_case_indent = true
+space_redirects = true

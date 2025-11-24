@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MyStruct",
+  "type": "object",
+  "properties": {
+    "myInt": {
+      "type": "integer"
+    },
+    "myBool": {
+      "type": "boolean"
+    },
+    "myNullableEnum": true,
+    "myInnerStruct": {
+      "type": "object",
+      "properties": {
+        "my_map": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "my_vec": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "my_empty_map": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "my_empty_vec": {
+          "type": "array",
+          "items": true
+        },
+        "my_tuple": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1
+            },
+            {
+              "type": "integer"
+            }
+          ],
+          "maxItems": 2,
+          "minItems": 2
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "myInt": 123,
+      "myBool": true,
+      "myNullableEnum": null,
+      "myInnerStruct": {
+        "my_map": {
+          "k": 1.23
+        },
+        "my_vec": [
+          1.0,
+          2.0,
+          3.0
+        ],
+        "my_empty_map": {},
+        "my_empty_vec": [],
+        "my_tuple": [
+          "💩",
+          42
+        ]
+      }
+    }
+  ]
+}

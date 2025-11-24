@@ -1,0 +1,24 @@
+#content > main > table {
+    position: relative;
+    left: 50%;
+    transform: translateX(-50%);
+
+    margin-left: 0px;
+    margin-right: 0px;
+}
+
+#content > main > table td {
+	vertical-align: top;
+}
+
+#content > main > table .hljs {
+    background: none;
+}
+
+.readme-example {
+    background: #f1f1f1;
+}
+
+table .readme-example > td {
+	border: 1px hsl(0, 0%, 0%) solid;
+}

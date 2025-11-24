@@ -1,0 +1,7 @@
+x64-windows-static/
+x64-windows-static/include/
+x64-windows-static/include/boost/
+x64-windows-static/include/boost/static_assert.hpp
+x64-windows-static/share/
+x64-windows-static/share/boost-static-assert/
+x64-windows-static/share/boost-static-assert/copyright

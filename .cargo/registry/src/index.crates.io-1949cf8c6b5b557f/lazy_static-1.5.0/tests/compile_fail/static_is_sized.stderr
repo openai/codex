@@ -1,0 +1,64 @@
+error[E0277]: the size for values of type `str` cannot be known at compilation time
+ --> tests/compile_fail/static_is_sized.rs:4:1
+  |
+4 | / lazy_static! {
+5 | |     pub static ref FOO: str = panic!();
+6 | | }
+  | |_^ doesn't have a size known at compile-time
+  |
+  = help: the trait `Sized` is not implemented for `str`
+note: required by an implicit `Sized` bound in `Lazy`
+ --> src/inline_lazy.rs
+  |
+  | pub struct Lazy<T: Sync>(Cell<MaybeUninit<T>>, Once);
+  |                 ^ required by the implicit `Sized` requirement on this type parameter in `Lazy`
+  = note: this error originates in the macro `__lazy_static_create` which comes from the expansion of the macro `lazy_static` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the size for values of type `str` cannot be known at compilation time
+ --> tests/compile_fail/static_is_sized.rs:4:1
+  |
+4 | / lazy_static! {
+5 | |     pub static ref FOO: str = panic!();
+6 | | }
+  | |_^ doesn't have a size known at compile-time
+  |
+  = help: the trait `Sized` is not implemented for `str`
+note: required by an implicit `Sized` bound in `Lazy`
+ --> src/inline_lazy.rs
+  |
+  | pub struct Lazy<T: Sync>(Cell<MaybeUninit<T>>, Once);
+  |                 ^ required by the implicit `Sized` requirement on this type parameter in `Lazy`
+  = note: this error originates in the macro `__lazy_static_create` which comes from the expansion of the macro `lazy_static` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the size for values of type `str` cannot be known at compilation time
+ --> tests/compile_fail/static_is_sized.rs:5:25
+  |
+5 |     pub static ref FOO: str = panic!();
+  |                         ^^^ doesn't have a size known at compile-time
+  |
+  = help: the trait `Sized` is not implemented for `str`
+  = note: the return type of a function must have a statically known size
+
+error[E0599]: the method `get` exists for struct `Lazy<str>`, but its trait bounds were not satisfied
+ --> tests/compile_fail/static_is_sized.rs:4:1
+  |
+4 | / lazy_static! {
+5 | |     pub static ref FOO: str = panic!();
+6 | | }
+  | |_^ method cannot be called on `Lazy<str>` due to unsatisfied trait bounds
+  |
+  = note: the following trait bounds were not satisfied:
+          `str: Sized`
+  = note: this error originates in the macro `__lazy_static_internal` which comes from the expansion of the macro `lazy_static` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the size for values of type `str` cannot be known at compilation time
+ --> tests/compile_fail/static_is_sized.rs:4:1
+  |
+4 | / lazy_static! {
+5 | |     pub static ref FOO: str = panic!();
+6 | | }
+  | |_^ doesn't have a size known at compile-time
+  |
+  = help: the trait `Sized` is not implemented for `str`
+  = note: the return type of a function must have a statically known size
+  = note: this error originates in the macro `__lazy_static_internal` which comes from the expansion of the macro `lazy_static` (in Nightly builds, run with -Z macro-backtrace for more info)

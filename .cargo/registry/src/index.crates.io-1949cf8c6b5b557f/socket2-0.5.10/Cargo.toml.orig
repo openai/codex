@@ -1,0 +1,52 @@
+[package]
+name          = "socket2"
+version       = "0.5.10"
+authors       = [
+  "Alex Crichton <alex@alexcrichton.com>",
+  "Thomas de Zeeuw <thomasdezeeuw@gmail.com>"
+]
+license       = "MIT OR Apache-2.0"
+readme        = "README.md"
+repository    = "https://github.com/rust-lang/socket2"
+homepage      = "https://github.com/rust-lang/socket2"
+documentation = "https://docs.rs/socket2"
+description = """
+Utilities for handling networking sockets with a maximal amount of configuration
+possible intended.
+"""
+keywords      = ["io", "socket", "network"]
+categories    = ["api-bindings", "network-programming"]
+edition       = "2021"
+rust-version  = "1.63"
+include       = [
+  "Cargo.toml",
+  "LICENSE-APACHE",
+  "LICENSE-MIT",
+  "README.md",
+  "src/**/*.rs",
+]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+targets = ["aarch64-apple-ios", "aarch64-linux-android", "x86_64-apple-darwin", "x86_64-unknown-fuchsia", "x86_64-pc-windows-msvc", "x86_64-pc-solaris", "x86_64-unknown-freebsd", "x86_64-unknown-illumos", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "x86_64-unknown-netbsd", "x86_64-unknown-redox", "armv7-linux-androideabi", "i686-linux-android"]
+
+[package.metadata.playground]
+features = ["all"]
+
+[target."cfg(unix)".dependencies]
+libc = "0.2.171"
+
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.52"
+features = [
+  "Win32_Foundation",
+  "Win32_Networking_WinSock",
+  "Win32_System_IO",
+  "Win32_System_Threading",
+  "Win32_System_WindowsProgramming",
+]
+
+[features]
+# Enable all API, even ones not available on all OSs.
+all = []

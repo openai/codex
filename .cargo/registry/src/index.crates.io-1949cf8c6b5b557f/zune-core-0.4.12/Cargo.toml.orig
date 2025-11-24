@@ -1,0 +1,22 @@
+[package]
+name = "zune-core"
+version = "0.4.12"
+edition = "2021"
+description = "Core utilities for image processing in the zune family of crates"
+exclude = ["tests/"]
+homepage = "https://github.com/etemesi254/zune-image/tree/dev/zune-core"
+keywords = ["image"]
+categories = ["multimedia::images", "multimedia::encoding"]
+license = "MIT OR Apache-2.0 OR Zlib"
+
+[features]
+# When present, we can use std facilities to detect
+# if a specific feature exists
+# Not enabled by default. Other zune crates can enable dep:zune-core/std by default.
+# But if we enable it here, they can't disable it anymore.
+# See: https://github.com/rust-lang/cargo/issues/8366
+std = []
+
+[dependencies]
+log = { version = "0.4.17", optional = true }
+serde = { version = "1.0.52", optional = true }

@@ -1,0 +1,830 @@
+# See: https://github.com/rust-lang/regex/issues/48
+[[test]]
+name = "invalid-regex-no-crash-100"
+regex = '(*)'
+haystack = ""
+matches = []
+compiles = false
+
+# See: https://github.com/rust-lang/regex/issues/48
+[[test]]
+name = "invalid-regex-no-crash-200"
+regex = '(?:?)'
+haystack = ""
+matches = []
+compiles = false
+
+# See: https://github.com/rust-lang/regex/issues/48
+[[test]]
+name = "invalid-regex-no-crash-300"
+regex = '(?)'
+haystack = ""
+matches = []
+compiles = false
+
+# See: https://github.com/rust-lang/regex/issues/48
+[[test]]
+name = "invalid-regex-no-crash-400"
+regex = '*'
+haystack = ""
+matches = []
+compiles = false
+
+# See: https://github.com/rust-lang/regex/issues/75
+[[test]]
+name = "unsorted-binary-search-100"
+regex = '(?i-u)[a_]+'
+haystack = "A_"
+matches = [[0, 2]]
+
+# See: https://github.com/rust-lang/regex/issues/75
+[[test]]
+name = "unsorted-binary-search-200"
+regex = '(?i-u)[A_]+'
+haystack = "a_"
+matches = [[0, 2]]
+
+# See: https://github.com/rust-lang/regex/issues/76
+[[test]]
+name = "unicode-case-lower-nocase-flag"
+regex = '(?i)\p{Ll}+'
+haystack = "ΛΘΓΔα"
+matches = [[0, 10]]
+
+# See: https://github.com/rust-lang/regex/issues/99
+[[test]]
+name = "negated-char-class-100"
+regex = '(?i)[^x]'
+haystack = "x"
+matches = []
+
+# See: https://github.com/rust-lang/regex/issues/99
+[[test]]
+name = "negated-char-class-200"
+regex = '(?i)[^x]'
+haystack = "X"
+matches = []
+
+# See: https://github.com/rust-lang/regex/issues/101
+[[test]]
+name = "ascii-word-underscore"
+regex = '[[:word:]]'
+haystack = "_"
+matches = [[0, 1]]
+
+# See: https://github.com/rust-lang/regex/issues/129
+[[test]]
+name = "captures-repeat"
+regex = '([a-f]){2}(?P<foo>[x-z])'
+haystack = "abx"
+matches = [
+  [[0, 3], [1, 2], [2, 3]],
+]
+
+# See: https://github.com/rust-lang/regex/issues/153
+[[test]]
+name = "alt-in-alt-100"
+regex = 'ab?|$'
+haystack = "az"
+matches = [[0, 1], [2, 2]]
+
+# See: https://github.com/rust-lang/regex/issues/153
+[[test]]
+name = "alt-in-alt-200"
+regex = '^(?:.*?)(?:\n|\r\n?|$)'
+haystack = "ab\rcd"
+matches = [[0, 3]]
+
+# See: https://github.com/rust-lang/regex/issues/169
+[[test]]
+name = "leftmost-first-prefix"
+regex = 'z*azb'
+haystack = "azb"
+matches = [[0, 3]]
+
+# See: https://github.com/rust-lang/regex/issues/191
+[[test]]
+name = "many-alternates"
+regex = '1|2|3|4|5|6|7|8|9|10|int'
+haystack = "int"
+matches = [[0, 3]]
+
+# See: https://github.com/rust-lang/regex/issues/204
+[[test]]
+name = "word-boundary-alone-100"
+regex = '\b'
+haystack = "Should this (work?)"
+matches = [[0, 0], [6, 6], [7, 7], [11, 11], [13, 13], [17, 17]]
+
+# See: https://github.com/rust-lang/regex/issues/204
+[[test]]
+name = "word-boundary-alone-200"
+regex = '\b'
+haystack = "a b c"
+matches = [[0, 0], [1, 1], [2, 2], [3, 3], [4, 4], [5, 5]]
+
+# See: https://github.com/rust-lang/regex/issues/264
+[[test]]
+name = "word-boundary-ascii-no-capture"
+regex = '\B'
+haystack = "\U00028F3E"
+matches = [[0, 0], [1, 1], [2, 2], [3, 3], [4, 4]]
+unicode = false
+utf8 = false
+
+# See: https://github.com/rust-lang/regex/issues/264
+[[test]]
+name = "word-boundary-ascii-capture"
+regex = '(?:\B)'
+haystack = "\U00028F3E"
+matches = [[0, 0], [1, 1], [2, 2], [3, 3], [4, 4]]
+unicode = false
+utf8 = false
+
+# See: https://github.com/rust-lang/regex/issues/268
+[[test]]
+name = "partial-anchor"
+regex = '^a|b'
+haystack = "ba"
+matches = [[0, 1]]
+
+# See: https://github.com/rust-lang/regex/issues/271
+[[test]]
+name = "endl-or-word-boundary"
+regex = '(?m:$)|(?-u:\b)'
+haystack = "\U0006084E"
+matches = [[4, 4]]
+
+# See: https://github.com/rust-lang/regex/issues/271
+[[test]]
+name = "zero-or-end"
+regex = '(?i-u:\x00)|$'
+haystack = "\U000E682F"
+matches = [[4, 4]]
+
+# See: https://github.com/rust-lang/regex/issues/271
+[[test]]
+name = "y-or-endl"
+regex = '(?i-u:y)|(?m:$)'
+haystack = "\U000B4331"
+matches = [[4, 4]]
+
+# See: https://github.com/rust-lang/regex/issues/271
+[[test]]
+name = "word-boundary-start-x"
+regex = '(?u:\b)^(?-u:X)'
+haystack = "X"
+matches = [[0, 1]]
+
+# See: https://github.com/rust-lang/regex/issues/271
+[[test]]
+name = "word-boundary-ascii-start-x"
+regex = '(?-u:\b)^(?-u:X)'
+haystack = "X"
+matches = [[0, 1]]
+
+# See: https://github.com/rust-lang/regex/issues/271
+[[test]]
+name = "end-not-word-boundary"
+regex = '$\B'
+haystack = "\U0005C124\U000B576C"
+matches = [[8, 8]]
+unicode = false
+utf8 = false
+
+# See: https://github.com/rust-lang/regex/issues/280
+[[test]]
+name = "partial-anchor-alternate-begin"
+regex = '^a|z'
+haystack = "yyyyya"
+matches = []
+
+# See: https://github.com/rust-lang/regex/issues/280
+[[test]]
+name = "partial-anchor-alternate-end"
+regex = 'a$|z'
+haystack = "ayyyyy"
+matches = []
+
+# See: https://github.com/rust-lang/regex/issues/289
+[[test]]
+name = "lits-unambiguous-100"
+regex = '(?:ABC|CDA|BC)X'
+haystack = "CDAX"
+matches = [[0, 4]]
+
+# See: https://github.com/rust-lang/regex/issues/291
+[[test]]
+name = "lits-unambiguous-200"
+regex = '((IMG|CAM|MG|MB2)_|(DSCN|CIMG))(?P<n>[0-9]+)$'
+haystack = "CIMG2341"
+matches = [
+  [[0, 8], [0, 4], [], [0, 4], [4, 8]],
+]
+
+# See: https://github.com/rust-lang/regex/issues/303
+#
+# 2022-09-19: This has now been "properly" fixed in that empty character
+# classes are fully supported as something that can never match. This test
+# used to be marked as 'compiles = false', but now it works.
+[[test]]
+name = "negated-full-byte-range"
+regex = '[^\x00-\xFF]'
+haystack = ""
+matches = []
+compiles = true
+unicode = false
+utf8 = false
+
+# See: https://github.com/rust-lang/regex/issues/321
+[[test]]
+name = "strange-anchor-non-complete-prefix"
+regex = 'a^{2}'
+haystack = ""
+matches = []
+
+# See: https://github.com/rust-lang/regex/issues/321
+[[test]]
+name = "strange-anchor-non-complete-suffix"
+regex = '${2}a'
+haystack = ""
+matches = []
+
+# See: https://github.com/rust-lang/regex/issues/334
+# See: https://github.com/rust-lang/regex/issues/557
+[[test]]
+name = "captures-after-dfa-premature-end-100"
+regex = 'a(b*(X|$))?'
+haystack = "abcbX"
+matches = [
+  [[0, 1], [], []],
+]
+
+# See: https://github.com/rust-lang/regex/issues/334
+# See: https://github.com/rust-lang/regex/issues/557
+[[test]]
+name = "captures-after-dfa-premature-end-200"
+regex = 'a(bc*(X|$))?'
+haystack = "abcbX"
+matches = [
+  [[0, 1], [], []],
+]
+
+# See: https://github.com/rust-lang/regex/issues/334
+# See: https://github.com/rust-lang/regex/issues/557
+[[test]]
+name = "captures-after-dfa-premature-end-300"
+regex = '(aa$)?'
+haystack = "aaz"
+matches = [
+  [[0, 0], []],
+  [[1, 1], []],
+  [[2, 2], []],
+  [[3, 3], []],
+]
+
+# Plucked from "Why aren’t regular expressions a lingua franca? an empirical
+# study on the re-use and portability of regular expressions", The ACM Joint
+# European Software Engineering Conference and Symposium on the Foundations of
+# Software Engineering (ESEC/FSE), 2019.
+#
+# Link: https://dl.acm.org/doi/pdf/10.1145/3338906.3338909
+[[test]]
+name = "captures-after-dfa-premature-end-400"
+regex = '(a)\d*\.?\d+\b'
+haystack = "a0.0c"
+matches = [
+  [[0, 2], [0, 1]],
+]
+
+# See: https://github.com/rust-lang/regex/issues/437
+[[test]]
+name = "literal-panic"
+regex = 'typename type\-parameter\-[0-9]+\-[0-9]+::.+'
+haystack = "test"
+matches = []
+
+# See: https://github.com/rust-lang/regex/issues/527
+[[test]]
+name = "empty-flag-expr"
+regex = '(?:(?:(?x)))'
+haystack = ""
+matches = [[0, 0]]
+
+# See: https://github.com/rust-lang/regex/issues/533
+#[[tests]]
+#name = "blank-matches-nothing-between-space-and-tab"
+#regex = '[[:blank:]]'
+#input = '\x0A\x0B\x0C\x0D\x0E\x0F\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1A\x1B\x1C\x1D\x1E\x1F'
+#match = false
+#unescape = true
+
+# See: https://github.com/rust-lang/regex/issues/533
+#[[tests]]
+#name = "blank-matches-nothing-between-space-and-tab-inverted"
+#regex = '^[[:^blank:]]+$'
+#input = '\x0A\x0B\x0C\x0D\x0E\x0F\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1A\x1B\x1C\x1D\x1E\x1F'
+#match = true
+#unescape = true
+
+# See: https://github.com/rust-lang/regex/issues/555
+[[test]]
+name = "invalid-repetition"
+regex = '(?m){1,1}'
+haystack = ""
+matches = []
+compiles = false
+
+# See: https://github.com/rust-lang/regex/issues/640
+[[test]]
+name = "flags-are-unset"
+regex = '(?:(?i)foo)|Bar'
+haystack = "foo Foo bar Bar"
+matches = [[0, 3], [4, 7], [12, 15]]
+
+# Note that 'Ј' is not 'j', but cyrillic Je
+# https://en.wikipedia.org/wiki/Je_(Cyrillic)
+#
+# See: https://github.com/rust-lang/regex/issues/659
+[[test]]
+name = "empty-group-with-unicode"
+regex = '(?:)Ј01'
+haystack = 'zЈ01'
+matches = [[1, 5]]
+
+# See: https://github.com/rust-lang/regex/issues/579
+[[test]]
+name = "word-boundary-weird"
+regex = '\b..\b'
+haystack = "I have 12, he has 2!"
+matches = [[0, 2], [7, 9], [9, 11], [11, 13], [17, 19]]
+
+# See: https://github.com/rust-lang/regex/issues/579
+[[test]]
+name = "word-boundary-weird-ascii"
+regex = '\b..\b'
+haystack = "I have 12, he has 2!"
+matches = [[0, 2], [7, 9], [9, 11], [11, 13], [17, 19]]
+unicode = false
+utf8 = false
+
+# See: https://github.com/rust-lang/regex/issues/579
+[[test]]
+name = "word-boundary-weird-minimal-ascii"
+regex = '\b..\b'
+haystack = "az,,b"
+matches = [[0, 2], [2, 4]]
+unicode = false
+utf8 = false
+
+# See: https://github.com/BurntSushi/ripgrep/issues/1203
+[[test]]
+name = "reverse-suffix-100"
+regex = '[0-4][0-4][0-4]000'
+haystack = "153.230000"
+matches = [[4, 10]]
+
+# See: https://github.com/BurntSushi/ripgrep/issues/1203
+[[test]]
+name = "reverse-suffix-200"
+regex = '[0-9][0-9][0-9]000'
+haystack = "153.230000\n"
+matches = [[4, 10]]
+
+# This is a tricky case for the reverse suffix optimization, because it
+# finds the 'foobar' match but the reverse scan must fail to find a match by
+# correctly dealing with the word boundary following the 'foobar' literal when
+# computing the start state.
+#
+# This test exists because I tried to break the following assumption that
+# is currently in the code: that if a suffix is found and the reverse scan
+# succeeds, then it's guaranteed that there is an overall match. Namely, the
+# 'is_match' routine does *not* do another forward scan in this case because of
+# this assumption.
+[[test]]
+name = "reverse-suffix-300"
+regex = '\w+foobar\b'
+haystack = "xyzfoobarZ"
+matches = []
+unicode = false
+utf8 = false
+
+# See: https://github.com/BurntSushi/ripgrep/issues/1247
+[[test]]
+name = "stops"
+regex = '\bs(?:[ab])'
+haystack = 's\xE4'
+matches = []
+unescape = true
+utf8 = false
+
+# See: https://github.com/BurntSushi/ripgrep/issues/1247
+[[test]]
+name = "stops-ascii"
+regex = '(?-u:\b)s(?:[ab])'
+haystack = 's\xE4'
+matches = []
+unescape = true
+utf8 = false
+
+# See: https://github.com/rust-lang/regex/issues/850
+[[test]]
+name = "adjacent-line-boundary-100"
+regex = '(?m)^(?:[^ ]+?)$'
+haystack = "line1\nline2"
+matches = [[0, 5], [6, 11]]
+
+# Continued.
+[[test]]
+name = "adjacent-line-boundary-200"
+regex = '(?m)^(?:[^ ]+?)$'
+haystack = "A\nB"
+matches = [[0, 1], [2, 3]]
+
+# There is no issue for this bug.
+[[test]]
+name = "anchored-prefix-100"
+regex = '^a[[:^space:]]'
+haystack = "a "
+matches = []
+
+# There is no issue for this bug.
+[[test]]
+name = "anchored-prefix-200"
+regex = '^a[[:^space:]]'
+haystack = "foo boo a"
+matches = []
+
+# There is no issue for this bug.
+[[test]]
+name = "anchored-prefix-300"
+regex = '^-[a-z]'
+haystack = "r-f"
+matches = []
+
+# Tests that a possible Aho-Corasick optimization works correctly. It only
+# kicks in when we have a lot of literals. By "works correctly," we mean that
+# leftmost-first match semantics are properly respected. That is, samwise
+# should match, not sam.
+#
+# There is no issue for this bug.
+[[test]]
+name = "aho-corasick-100"
+regex = 'samwise|sam|a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q|r|s|t|u|v|w|x|y|z|A|B|C|D|E|F|G|H|I|J|K|L|M|N|O|P|Q|R|S|T|U|V|W|X|Y|Z'
+haystack = "samwise"
+matches = [[0, 7]]
+
+# See: https://github.com/rust-lang/regex/issues/921
+[[test]]
+name = "interior-anchor-capture"
+regex = '(a$)b$'
+haystack = 'ab'
+matches = []
+
+# I found this bug in the course of adding some of the regexes that Ruff uses
+# to rebar. It turns out that the lazy DFA was finding a match that was being
+# rejected by the one-pass DFA. Yikes. I then minimized the regex and haystack.
+#
+# Source: https://github.com/charliermarsh/ruff/blob/a919041ddaa64cdf6f216f90dd0480dab69fd3ba/crates/ruff/src/rules/pycodestyle/rules/whitespace_around_keywords.rs#L52
+[[test]]
+name = "ruff-whitespace-around-keywords"
+regex = '^(a|ab)$'
+haystack = "ab"
+anchored = true
+unicode = false
+utf8 = true
+matches = [[[0, 2], [0, 2]]]
+
+# From: https://github.com/rust-lang/regex/issues/429
+[[test]]
+name = "i429-0"
+regex = '(?:(?-u:\b)|(?u:h))+'
+haystack = "h"
+unicode = true
+utf8 = false
+matches = [[0, 0], [1, 1]]
+
+# From: https://github.com/rust-lang/regex/issues/429
+[[test]]
+name = "i429-1"
+regex = '(?u:\B)'
+haystack = "鋸"
+unicode = true
+utf8 = false
+matches = []
+
+# From: https://github.com/rust-lang/regex/issues/429
+[[test]]
+name = "i429-2"
+regex = '(?:(?u:\b)|(?s-u:.))+'
+haystack = "oB"
+unicode = true
+utf8 = false
+matches = [[0, 0], [1, 2]]
+
+# From: https://github.com/rust-lang/regex/issues/429
+[[test]]
+name = "i429-3"
+regex = '(?:(?-u:\B)|(?su:.))+'
+haystack = "\U000FEF80"
+unicode = true
+utf8 = false
+matches = [[0, 0], [1, 1], [2, 2], [3, 3], [4, 4]]
+
+# From: https://github.com/rust-lang/regex/issues/429
+[[test]]
+name = "i429-3-utf8"
+regex = '(?:(?-u:\B)|(?su:.))+'
+haystack = "\U000FEF80"
+unicode = true
+utf8 = true
+matches = [[0, 0], [4, 4]]
+
+# From: https://github.com/rust-lang/regex/issues/429
+[[test]]
+name = "i429-4"
+regex = '(?m:$)(?m:^)(?su:.)'
+haystack = "\n‣"
+unicode = true
+utf8 = false
+matches = [[0, 1]]
+
+# From: https://github.com/rust-lang/regex/issues/429
+[[test]]
+name = "i429-5"
+regex = '(?m:$)^(?m:^)'
+haystack = "\n"
+unicode = true
+utf8 = false
+matches = [[0, 0]]
+
+# From: https://github.com/rust-lang/regex/issues/429
+[[test]]
+name = "i429-6"
+regex = '(?P<kp>(?iu:do)(?m:$))*'
+haystack = "dodo"
+unicode = true
+utf8 = false
+matches = [
+  [[0, 0], []],
+  [[1, 1], []],
+  [[2, 4], [2, 4]],
+]
+
+# From: https://github.com/rust-lang/regex/issues/429
+[[test]]
+name = "i429-7"
+regex = '(?u:\B)'
+haystack = "䡁"
+unicode = true
+utf8 = false
+matches = []
+
+# From: https://github.com/rust-lang/regex/issues/429
+[[test]]
+name = "i429-8"
+regex = '(?:(?-u:\b)|(?u:[\u{0}-W]))+'
+haystack = "0"
+unicode = true
+utf8 = false
+matches = [[0, 0], [1, 1]]
+
+# From: https://github.com/rust-lang/regex/issues/429
+[[test]]
+name = "i429-9"
+regex = '((?m:$)(?-u:\B)(?s-u:.)(?-u:\B)$)'
+haystack = "\n\n"
+unicode = true
+utf8 = false
+matches = [
+  [[1, 2], [1, 2]],
+]
+
+# From: https://github.com/rust-lang/regex/issues/429
+[[test]]
+name = "i429-10"
+regex = '(?m:$)(?m:$)^(?su:.)'
+haystack = "\n\u0081¨\u200a"
+unicode = true
+utf8 = false
+matches = [[0, 1]]
+
+# From: https://github.com/rust-lang/regex/issues/429
+[[test]]
+name = "i429-11"
+regex = '(?-u:\B)(?m:^)'
+haystack = "0\n"
+unicode = true
+utf8 = false
+matches = [[2, 2]]
+
+# From: https://github.com/rust-lang/regex/issues/429
+[[test]]
+name = "i429-12"
+regex = '(?:(?u:\b)|(?-u:.))+'
+haystack = "0"
+unicode = true
+utf8 = false
+matches = [[0, 0], [1, 1]]
+
+# From: https://github.com/rust-lang/regex/issues/969
+[[test]]
+name = "i969"
+regex = 'c.*d\z'
+haystack = "ababcd"
+bounds = [4, 6]
+search-kind = "earliest"
+matches = [[4, 6]]
+
+# I found this during the regex-automata migration. This is the fowler basic
+# 154 test, but without anchored = true and without a match limit.
+#
+# This test caught a subtle bug in the hybrid reverse DFA search, where it
+# would skip over the termination condition if it entered a start state. This
+# was a double bug. Firstly, the reverse DFA shouldn't have had start states
+# specialized in the first place, and thus it shouldn't have possible to detect
+# that the DFA had entered a start state. The second bug was that the start
+# state handling was incorrect by jumping over the termination condition.
+[[test]]
+name = "fowler-basic154-unanchored"
+regex = '''a([bc]*)c*'''
+haystack = '''abc'''
+matches = [[[0, 3], [1, 3]]]
+
+# From: https://github.com/rust-lang/regex/issues/981
+#
+# This was never really a problem in the new architecture because the
+# regex-automata engines are far more principled about how they deal with
+# look-around. (This was one of the many reasons I wanted to re-work the
+# original regex crate engines.)
+[[test]]
+name = "word-boundary-interact-poorly-with-literal-optimizations"
+regex = '(?i:(?:\b|_)win(?:32|64|dows)?(?:\b|_))'
+haystack = 'ubi-Darwin-x86_64.tar.gz'
+matches = []
+
+# This was found during fuzz testing of regex. It provoked a panic in the meta
+# engine as a result of the reverse suffix optimization. Namely, it hit a case
+# where a suffix match was found, a corresponding reverse match was found, but
+# the forward search turned up no match. The forward search should always match
+# if the suffix and reverse search match.
+#
+# This in turn uncovered an inconsistency between the PikeVM and the DFA (lazy
+# and fully compiled) engines. It was caused by a mishandling of the collection
+# of NFA state IDs in the generic determinization code (which is why both types
+# of DFA were impacted). Namely, when a fail state was encountered (that's the
+# `[^\s\S]` in the pattern below), then it would just stop collecting states.
+# But that's not correct since a later state could lead to a match.
+[[test]]
+name = "impossible-branch"
+regex = '.*[^\s\S]A|B'
+haystack = "B"
+matches = [[0, 1]]
+
+# This was found during fuzz testing in regex-lite. The regex crate never
+# suffered from this bug, but it causes regex-lite to incorrectly compile
+# captures.
+[[test]]
+name = "captures-wrong-order"
+regex = '(a){0}(a)'
+haystack = 'a'
+matches = [[[0, 1], [], [0, 1]]]
+
+# This tests a bug in how quit states are handled in the DFA. At some point
+# during development, the DFAs were tweaked slightly such that if they hit
+# a quit state (which means, they hit a byte that the caller configured should
+# stop the search), then it might not return an error necessarily. Namely, if a
+# match had already been found, then it would be returned instead of an error.
+#
+# But this is actually wrong! Why? Because even though a match had been found,
+# it wouldn't be fully correct to return it once a quit state has been seen
+# because you can't determine whether the match offset returned is the correct
+# greedy/leftmost-first match. Since you can't complete the search as requested
+# by the caller, the DFA should just stop and return an error.
+#
+# Interestingly, this does seem to produce an unavoidable difference between
+# 'try_is_match().unwrap()' and 'try_find().unwrap().is_some()' for the DFAs.
+# The former will stop immediately once a match is known to occur and return
+# 'Ok(true)', where as the latter could find the match but quit with an
+# 'Err(..)' first.
+#
+# Thankfully, I believe this inconsistency between 'is_match()' and 'find()'
+# cannot be observed in the higher level meta regex API because it specifically
+# will try another engine that won't fail in the case of a DFA failing.
+#
+# This regression happened in the regex crate rewrite, but before anything got
+# released.
+[[test]]
+name = "negated-unicode-word-boundary-dfa-fail"
+regex = '\B.*'
+haystack = "!\u02D7"
+matches = [[0, 3]]
+
+# This failure was found in the *old* regex crate (prior to regex 1.9), but
+# I didn't investigate why. My best guess is that it's a literal optimization
+# bug. It didn't occur in the rewrite.
+[[test]]
+name = "missed-match"
+regex = 'e..+e.ee>'
+haystack = 'Zeee.eZZZZZZZZeee>eeeeeee>'
+matches = [[1, 26]]
+
+# This test came from the 'ignore' crate and tripped a bug in how accelerated
+# DFA states were handled in an overlapping search.
+[[test]]
+name = "regex-to-glob"
+regex = ['(?-u)^path1/[^/]*$']
+haystack = "path1/foo"
+matches = [[0, 9]]
+utf8 = false
+match-kind = "all"
+search-kind = "overlapping"
+
+# See: https://github.com/rust-lang/regex/issues/1060
+[[test]]
+name = "reverse-inner-plus-shorter-than-expected"
+regex = '(?:(\d+)[:.])?(\d{1,2})[:.](\d{2})'
+haystack = '102:12:39'
+matches = [[[0, 9], [0, 3], [4, 6], [7, 9]]]
+
+# Like reverse-inner-plus-shorter-than-expected, but using a far simpler regex
+# to demonstrate the extent of the rot. Sigh.
+#
+# See: https://github.com/rust-lang/regex/issues/1060
+[[test]]
+name = "reverse-inner-short"
+regex = '(?:([0-9][0-9][0-9]):)?([0-9][0-9]):([0-9][0-9])'
+haystack = '102:12:39'
+matches = [[[0, 9], [0, 3], [4, 6], [7, 9]]]
+
+# This regression test was found via the RegexSet APIs. It triggered a
+# particular code path where a regex was compiled with 'All' match semantics
+# (to support overlapping search), but got funneled down into a standard
+# leftmost search when calling 'is_match'. This is fine on its own, but the
+# leftmost search will use a prefilter and that's where this went awry.
+#
+# Namely, since 'All' semantics were used, the aho-corasick prefilter was
+# incorrectly compiled with 'Standard' semantics. This was wrong because
+# 'Standard' immediately attempts to report a match at every position, even if
+# that would mean reporting a match past the leftmost match before reporting
+# the leftmost match. This breaks the prefilter contract of never having false
+# negatives and leads overall to the engine not finding a match.
+#
+# See: https://github.com/rust-lang/regex/issues/1070
+[[test]]
+name = "prefilter-with-aho-corasick-standard-semantics"
+regex = '(?m)^ *v [0-9]'
+haystack = 'v 0'
+matches = [
+  { id = 0, spans = [[0, 3]] },
+]
+match-kind = "all"
+search-kind = "overlapping"
+unicode = true
+utf8 = true
+
+# This tests that the PikeVM and the meta regex agree on a particular regex.
+# This test previously failed when the ad hoc engines inside the meta engine
+# did not handle quit states correctly. Namely, the Unicode word boundary here
+# combined with a non-ASCII codepoint provokes the quit state. The ad hoc
+# engines were previously returning a match even after entering the quit state
+# if a match had been previously detected, but this is incorrect. The reason
+# is that if a quit state is found, then the search must give up *immediately*
+# because it prevents the search from finding the "proper" leftmost-first
+# match. If it instead returns a match that has been found, it risks reporting
+# an improper match, as it did in this case.
+#
+# See: https://github.com/rust-lang/regex/issues/1046
+[[test]]
+name = "non-prefix-literal-quit-state"
+regex = '.+\b\n'
+haystack = "β77\n"
+matches = [[0, 5]]
+
+# This is a regression test for some errant HIR interval set operations that
+# were made in the regex-syntax 0.8.0 release and then reverted in 0.8.1. The
+# issue here is that the HIR produced from the regex had out-of-order ranges.
+#
+# See: https://github.com/rust-lang/regex/issues/1103
+# Ref: https://github.com/rust-lang/regex/pull/1051
+# Ref: https://github.com/rust-lang/regex/pull/1102
+[[test]]
+name = "hir-optimization-out-of-order-class"
+regex = '^[[:alnum:]./-]+$'
+haystack = "a-b"
+matches = [[0, 3]]
+
+# This is a regression test for an improper reverse suffix optimization. This
+# occurred when I "broadened" the applicability of the optimization to include
+# multiple possible literal suffixes instead of only sticking to a non-empty
+# longest common suffix. It turns out that, at least given how the reverse
+# suffix optimization works, we need to stick to the longest common suffix for
+# now.
+#
+# See: https://github.com/rust-lang/regex/issues/1110
+# See also: https://github.com/astral-sh/ruff/pull/7980
+[[test]]
+name = 'improper-reverse-suffix-optimization'
+regex = '(\\N\{[^}]+})|([{}])'
+haystack = 'hiya \N{snowman} bye'
+matches = [[[5, 16], [5, 16], []]]

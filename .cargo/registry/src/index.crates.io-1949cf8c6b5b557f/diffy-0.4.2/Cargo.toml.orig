@@ -1,0 +1,16 @@
+[package]
+name = "diffy"
+version = "0.4.2"
+authors = ["Brandon Williams <bwilliams.eng@gmail.com>"]
+license = "MIT OR Apache-2.0"
+description = "Tools for finding and manipulating differences between files"
+documentation = "https://docs.rs/diffy"
+repository = "https://github.com/bmwill/diffy"
+readme = "README.md"
+keywords = ["diff", "patch", "merge"]
+categories = ["text-processing"]
+rust-version = "1.62.1"
+edition = "2021"
+
+[dependencies]
+nu-ansi-term = "0.50"

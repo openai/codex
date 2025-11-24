@@ -1,0 +1,11 @@
+name,crate,revision,profile,duration,size,relative-size
+regex__dev__std_perf_unicode,regex,f1f99af2bc,dev,1.834267609s,3799536,3477608
+regex__dev__std,regex,f1f99af2bc,dev,1.263958602s,1427928,1106000
+regex__dev__std_perf,regex,f1f99af2bc,dev,1.631302845s,3234288,2912360
+regex__dev__std_unicode,regex,f1f99af2bc,dev,1.550536696s,1997272,1675344
+regex__dev__std_unicode-case_unicode-perl,regex,f1f99af2bc,dev,1.341622852s,1739224,1417296
+regex__release__std_perf_unicode,regex,f1f99af2bc,release,2.475080323s,1755480,1433632
+regex__release__std,regex,f1f99af2bc,release,1.45990031s,731456,409608
+regex__release__std_perf,regex,f1f99af2bc,release,2.421787211s,1259864,938016
+regex__release__std_unicode,regex,f1f99af2bc,release,1.693972619s,1227072,905224
+regex__release__std_unicode-case_unicode-perl,regex,f1f99af2bc,release,1.528003306s,969024,647176

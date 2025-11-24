@@ -1,0 +1,75 @@
+[changelog]
+trim = true
+header = """
+# Changelog\n
+All notable changes to this project will be documented in this file.\n
+See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.\n
+"""
+body = """
+---
+{% if version %}\
+    {% if previous.version %}\
+        ## [{{ version | trim_start_matches(pat="v") }}]($REPO/compare/{{ previous.version }}..{{ version }}) - {{ timestamp | date(format="%Y-%m-%d") }}
+    {% else %}\
+        ## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+    {% endif %}\
+{% else %}\
+    ## [unreleased]
+{% endif %}
+{% raw %}\n{% endraw %}\
+
+{%- for commit in commits | sort(attribute="group") %}
+	{%- if commit.scope -%}
+	{% else -%}
+        - **{{commit.group | striptags | trim | upper_first}}:** \
+			{% if commit.breaking %} [**⚠️ breaking ⚠️**] {% endif %}\
+			{{ commit.message | upper_first }} - ([{{ commit.id | truncate(length=7, end="") }}]($REPO/commit/{{ commit.id }}))
+	{% endif -%}
+{% endfor -%}
+
+{% for scope, commits in commits | filter(attribute="group") | group_by(attribute="scope") %}
+    ### {{ scope | striptags | trim | upper_first }}
+    {% for commit in commits | sort(attribute="group") %}
+        - **{{commit.group | striptags | trim | upper_first}}:** \
+			{% if commit.breaking %} [**⚠️ breaking ⚠️**] {% endif %}\
+            {{ commit.message | upper_first }} - ([{{ commit.id | truncate(length=7, end="") }}]($REPO/commit/{{ commit.id }}))
+    {%- endfor -%}
+    {% raw %}\n{% endraw %}\
+{% endfor %}\n
+"""
+postprocessors = [
+  { pattern = '\$REPO', replace = "https://github.com/watchexec/process-wrap" }, # replace repository URL
+]
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+split_commits = true
+protect_breaking_commits = true
+filter_commits = true
+tag_pattern = "v[0-9].*"
+sort_commits = "oldest"
+
+link_parsers = [
+	{ pattern = "#(\\d+)", href = "https://github.com/watchexec/process-wrap/issues/$1"},
+	{ pattern = "RFC(\\d+)", text = "ietf-rfc$1", href = "https://datatracker.ietf.org/doc/html/rfc$1"},
+]
+
+commit_parsers = [
+  { message = "^api", group = "API change" },
+  { message = "^feat", group = "Feature" },
+  { message = "^fix", group = "Bugfix" },
+  { message = "^tweak", group = "Tweak" },
+  { message = "^doc", group = "Documentation" },
+  { message = "^perf", group = "Performance" },
+  { message = "^refactor", group = "Refactor" },
+  { message = "^(draft|wip)", skip = true },
+  { message = "^style", group = "Style" },
+  { message = "^test", group = "Test" },
+  { message = "^deps", group = "Deps" },
+  { message = "^repo: Initial commit", skip = true },
+  { message = "^repo", group = "Repo" },
+  { message = "^(release|merge|fmt|chore|ci)", skip = true },
+  { body = ".*security", group = "Security" },
+  { message = "^revert", group = "Revert" },
+]

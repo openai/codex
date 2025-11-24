@@ -1,0 +1,7 @@
+Package: boost-foreach
+Version: 1.67.0
+Depends: boost-config, boost-core, boost-detail, boost-iterator, boost-mpl, boost-range, boost-type-traits, boost-utility, boost-vcpkg-helpers
+Architecture: x64-windows
+Multi-Arch: same
+Description: Boost foreach module
+Status: install ok half-installed

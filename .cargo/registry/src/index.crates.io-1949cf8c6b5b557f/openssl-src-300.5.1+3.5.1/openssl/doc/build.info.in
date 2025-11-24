@@ -1,0 +1,80 @@
+SUBDIRS = man1
+
+{-
+ use File::Spec::Functions qw(:DEFAULT abs2rel rel2abs);
+ use File::Basename;
+
+ my $sourcedir = catdir($config{sourcedir}, 'doc');
+
+ foreach my $section ((1, 3, 5, 7)) {
+     my @imagefiles = ();
+     my @htmlfiles = ();
+     my @manfiles = ();
+     my %pngfiles =
+         map { $_ => 1 } glob catfile($sourcedir, "man$section", "img", "*.png");
+     my %podfiles =
+         map { $_ => 1 } glob catfile($sourcedir, "man$section", "*.pod");
+     my %podinfiles =
+         map { $_ => 1 } glob catfile($sourcedir, "man$section", "*.pod.in");
+
+     foreach (keys %podinfiles) {
+         (my $p = $_) =~ s|\.in$||i;
+         $podfiles{$p} = 1;
+     }
+
+     foreach my $p (sort keys %podfiles) {
+         my $podfile = abs2rel($p, $sourcedir);
+         my $podname = basename($podfile, '.pod');
+         my $podinfile = $podinfiles{"$p.in"} ? "$podfile.in" : undef;
+
+         my $podname = basename($podfile, ".pod");
+
+         my $htmlfile = abs2rel(catfile($buildtop, "doc", "html", "man$section",
+                                        "$podname.html"),
+                                catdir($buildtop, "doc"));
+         my $manfile = abs2rel(catfile($buildtop, "doc", "man", "man$section",
+                                       "$podname.$section"),
+                               catdir($buildtop, "doc"));
+
+         # The build.info format requires file specs to be in Unix format.
+         # Especially, since VMS file specs use [ and ], the build.info parser
+         # will otherwise get terribly confused.
+         if ($^O eq 'VMS') {
+             $htmlfile = VMS::Filespec::unixify($htmlfile);
+             $manfile = VMS::Filespec::unixify($manfile);
+             $podfile = VMS::Filespec::unixify($podfile);
+             $podinfile = VMS::Filespec::unixify($podinfile)
+                 if defined $podinfile;
+         } elsif ($^O eq 'MSWin32') {
+             $htmlfile =~ s|\\|/|g;
+             $manfile =~ s|\\|/|g;
+             $podfile =~ s|\\|/|g;
+             $podinfile =~ s|\\|/|g
+                 if defined $podinfile;
+         }
+         push @htmlfiles, $htmlfile;
+         push @manfiles, $manfile;
+         $OUT .= << "_____";
+DEPEND[$htmlfile]=$podfile
+GENERATE[$htmlfile]=$podfile
+DEPEND[$manfile]=$podfile
+GENERATE[$manfile]=$podfile
+_____
+         $OUT .= << "_____" if $podinfile;
+DEPEND[$podfile]{pod}=$podinfile
+GENERATE[$podfile]=$podinfile
+_____
+     }
+
+     foreach my $p (sort keys %pngfiles) {
+         my $relpath = abs2rel($p, $sourcedir);
+         my $imagefile = abs2rel(catfile($buildtop, "doc", "$relpath"),
+                                 catdir($buildtop, "doc"));
+         push @imagefiles, $imagefile;
+     }
+
+     $OUT .= "IMAGEDOCS[man$section]=" . join(" \\\n", @imagefiles) . "\n";
+     $OUT .= "HTMLDOCS[man$section]=" . join(" \\\n", @htmlfiles) . "\n";
+     $OUT .= "MANDOCS[man$section]=" . join(" \\\n", @manfiles) . "\n";
+ }
+ -}

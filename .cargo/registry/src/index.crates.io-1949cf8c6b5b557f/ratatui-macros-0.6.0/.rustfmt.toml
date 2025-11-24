@@ -1,0 +1,2 @@
+format_macro_bodies = true
+format_macro_matchers = true

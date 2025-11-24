@@ -1,0 +1,285 @@
+=pod
+
+=head1 NAME
+
+evp_generic_fetch, evp_generic_fetch_from_prov
+- generic algorithm fetchers and method creators for EVP
+
+=head1 SYNOPSIS
+
+ /* Only for EVP source */
+ #include "evp_local.h"
+
+ void *evp_generic_fetch(OSSL_LIB_CTX *libctx, int operation_id,
+                         const char *name, const char *properties,
+                         void *(*new_method)(int name_id,
+                                             const OSSL_DISPATCH *fns,
+                                             OSSL_PROVIDER *prov,
+                                             void *method_data),
+                         void *method_data,
+                         int (*up_ref_method)(void *),
+                         void (*free_method)(void *));
+
+ void *evp_generic_fetch_from_prov(OSSL_PROVIDER *prov, int operation_id,
+                                   int name_id, const char *properties,
+                                   void *(*new_method)(int name_id,
+                                                       const OSSL_DISPATCH *fns,
+                                                       OSSL_PROVIDER *prov,
+                                                       void *method_data),
+                                   void *method_data,
+                                   int (*up_ref_method)(void *),
+                                   void (*free_method)(void *));
+
+=head1 DESCRIPTION
+
+evp_generic_fetch() calls ossl_method_construct() with the given
+I<libctx>, I<operation_id>, I<name>, and I<properties> and uses
+it to create an EVP method with the help of the functions
+I<new_method>, I<up_ref_method>, and I<free_method>.
+
+evp_generic_fetch_from_prov() does the same thing as evp_generic_fetch(),
+but limits the search of methods to the provider given with I<prov>.
+This is meant to be used when one method needs to fetch an associated
+method in the same provider.
+
+The three functions I<new_method>, I<up_ref_method>, and
+I<free_method> are supposed to:
+
+=over 4
+
+=item new_method()
+
+creates an internal method from function pointers found in the
+dispatch table I<fns>, with name identity I<name_id>.
+The provider I<prov> and I<method_data> are also passed to be used as
+new_method() sees fit.
+
+=item up_ref_method()
+
+increments the reference counter for the given method, if there is
+one.
+
+=item free_method()
+
+frees the given method.
+
+=back
+
+=head1 RETURN VALUES
+
+evp_generic_fetch() returns a method on success, or NULL on error.
+
+=head1 EXAMPLES
+
+This is a short example of the fictitious EVP API and operation called
+B<EVP_FOO>.
+
+To begin with, let's assume something like this in
+F<include/openssl/core_dispatch.h>:
+
+    #define OSSL_OP_FOO                           100
+
+    #define OSSL_FUNC_FOO_NEWCTX_FUNC            2001
+    #define OSSL_FUNC_FOO_INIT                   2002
+    #define OSSL_FUNC_FOO_OPERATE                2003
+    #define OSSL_FUNC_FOO_CLEANCTX_FUNC          2004
+    #define OSSL_FUNC_FOO_FREECTX_FUNC           2005
+
+    OSSL_CORE_MAKE_FUNC(void *, foo_newctx, (void))
+    OSSL_CORE_MAKE_FUNC(int, foo_init, (void *vctx))
+    OSSL_CORE_MAKE_FUNC(int, foo_operate, (void *vctx,
+                                           unsigned char *out, size_t *out_l,
+                                           unsigned char *in, size_t in_l))
+    OSSL_CORE_MAKE_FUNC(void, foo_cleanctx, (void *vctx))
+    OSSL_CORE_MAKE_FUNC(void, foo_freectx, (void *vctx))
+
+And here's the implementation of the FOO method fetcher:
+
+    /* typedef struct evp_foo_st EVP_FOO */
+    struct evp_foo_st {
+        OSSL_PROVIDER *prov;
+        int name_id;
+	CRYPTO_REF_COUNT refcnt;
+        OSSL_FUNC_foo_newctx_fn *newctx;
+        OSSL_FUNC_foo_init_fn *init;
+        OSSL_FUNC_foo_operate_fn *operate;
+        OSSL_FUNC_foo_cleanctx_fn *cleanctx;
+        OSSL_FUNC_foo_freectx_fn *freectx;
+    };
+
+    /*
+     * In this example, we have a public method creator and destructor.
+     * It's not absolutely necessary, but is in the spirit of OpenSSL.
+     */
+    EVP_FOO *EVP_FOO_meth_from_algorithm(int name_id,
+                                         const OSSL_DISPATCH *fns,
+                                         OSSL_PROVIDER *prov,
+                                         void *data)
+    {
+        EVP_FOO *foo = NULL;
+
+        if ((foo = OPENSSL_zalloc(sizeof(*foo))) == NULL)
+            return NULL;
+
+        if (!CRYPTO_NEW_REF(&foo->refcnt, 1))
+            goto err;
+
+        foo->name_id = name_id;
+
+        for (; fns->function_id != 0; fns++) {
+            switch (fns->function_id) {
+            case OSSL_FUNC_FOO_NEWCTX:
+                foo->newctx = OSSL_FUNC_foo_newctx(fns);
+                break;
+            case OSSL_FUNC_FOO_INIT:
+                foo->init = OSSL_FUNC_foo_init(fns);
+                break;
+            case OSSL_FUNC_FOO_OPERATE:
+                foo->operate = OSSL_FUNC_foo_operate(fns);
+                break;
+            case OSSL_FUNC_FOO_CLEANCTX:
+                foo->cleanctx = OSSL_FUNC_foo_cleanctx(fns);
+                break;
+            case OSSL_FUNC_FOO_FREECTX:
+                foo->freectx = OSSL_FUNC_foo_freectx(fns);
+                break;
+            }
+        }
+        if (prov != NULL && !ossl_provider_up_ref(prov))
+            goto err;
+
+        foo->prov = prov;
+
+        return foo;
+
+    err:
+        if (foo != NULL)
+            CRYPTO_FREE_REF(&foo->refcnt);
+        OPENSSL_free(foo);
+        return NULL
+    }
+
+    EVP_FOO_meth_free(EVP_FOO *foo)
+    {
+        int i;
+
+        if (foo != NULL) {
+            OSSL_PROVIDER *prov = foo->prov;
+
+            CRYPTO_DOWN_REF(&foo->refcnt, &i);
+            if (i > 0)
+                return;
+
+            CRYPTO_FREE_REF(&foo->refcnt);
+            OPENSSL_free(foo);
+            ossl_provider_free(prov);
+        }
+    }
+
+    static void *foo_from_algorithm(const OSSL_DISPATCH *fns,
+                                    OSSL_PROVIDER *prov)
+    {
+        return EVP_FOO_meth_from_algorithm(fns, prov);
+    }
+
+    static int foo_up_ref(void *vfoo)
+    {
+        EVP_FOO *foo = vfoo;
+        int ref = 0;
+
+        CRYPTO_UP_REF(&foo->refcnt, &ref);
+        return 1;
+    }
+
+    static void foo_free(void *vfoo)
+    {
+        EVP_FOO_meth_free(vfoo);
+    }
+
+    EVP_FOO *EVP_FOO_fetch(OSSL_LIB_CTX *ctx,
+                           const char *name,
+                           const char *properties)
+    {
+        EVP_FOO *foo =
+            evp_generic_fetch(ctx, OSSL_OP_FOO, name, properties,
+                              foo_from_algorithm, foo_up_ref, foo_free);
+
+        /*
+         * If this method exists in legacy form, with a constant NID for the
+         * given |name|, this is the spot to find that NID and set it in
+         * the newly constructed EVP_FOO instance.
+         */
+
+        return foo;
+
+    }
+
+And finally, the library functions:
+
+    /* typedef struct evp_foo_st EVP_FOO_CTX */
+    struct evp_foo_ctx_st {
+        const EVP_FOO *foo;
+        void *provctx;		/* corresponding provider context */
+    };
+
+    int EVP_FOO_CTX_reset(EVP_FOO_CTX *c)
+    {
+        if (c == NULL)
+            return 1;
+        if (c->foo != NULL && c->foo->cleanctx != NULL)
+            c->foo->cleanctx(c->provctx);
+        return 1;
+    }
+
+    EVP_FOO_CTX *EVP_FOO_CTX_new(void)
+    {
+        return OPENSSL_zalloc(sizeof(EVP_FOO_CTX));
+    }
+
+    void EVP_FOO_CTX_free(EVP_FOO_CTX *c)
+    {
+        EVP_FOO_CTX_reset(c);
+        c->foo->freectx(c->provctx);
+        OPENSSL_free(c);
+    }
+
+    int EVP_FooInit(EVP_FOO_CTX *c, const EVP_FOO *foo)
+    {
+        int ok = 1;
+
+        c->foo = foo;
+        if (c->provctx == NULL)
+            c->provctx = c->foo->newctx();
+
+        ok = c->foo->init(c->provctx);
+
+        return ok;
+    }
+
+    int EVP_FooOperate(EVP_FOO_CTX *c, unsigned char *out, size_t *outl,
+                       const unsigned char *in, size_t inl)
+    {
+        int ok = 1;
+
+        ok = c->foo->update(c->provctx, out, inl, &outl, in, inl);
+        return ok;
+    }
+
+=head1 SEE ALSO
+
+L<ossl_method_construct(3)>
+
+=head1 HISTORY
+
+The functions described here were all added in OpenSSL 3.0.
+
+=head1 COPYRIGHT
+
+Copyright 2019-2025 The OpenSSL Project Authors. All Rights Reserved.
+
+Licensed under the Apache License 2.0 (the "License").  You may not use
+this file except in compliance with the License.  You can obtain a copy
+in the file LICENSE in the source distribution or at
+L<https://www.openssl.org/source/license.html>.
+
+=cut

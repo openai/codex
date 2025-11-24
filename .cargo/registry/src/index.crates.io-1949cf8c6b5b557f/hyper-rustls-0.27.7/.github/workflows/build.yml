@@ -1,0 +1,182 @@
+name: rustls
+
+permissions:
+  contents: read
+
+on:
+  push:
+  pull_request:
+  merge_group:
+  schedule:
+    - cron: '23 6 * * 5'
+
+jobs:
+  build:
+    name: Build+test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # test a bunch of toolchains on ubuntu
+        rust:
+          - stable
+          - beta
+          - nightly
+        os: [ubuntu-latest]
+        # but only stable on macos/windows (slower platforms)
+        include:
+          - os: macos-latest
+            rust: stable
+          - os: windows-latest
+            rust: stable
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install ${{ matrix.rust }} toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+
+      - name: Install NASM for aws-lc-rs on Windows
+        if: runner.os == 'Windows'
+        uses: ilammy/setup-nasm@v1
+
+      - name: Install ninja-build tool for aws-lc-fips-sys on Windows
+        if: runner.os == 'Windows'
+        uses: seanmiddleditch/gha-setup-ninja@v6
+
+      - name: cargo check (default features)
+        run: cargo check --all-targets
+
+      - name: cargo test (debug; default features)
+        run: cargo test
+        env:
+          RUST_BACKTRACE: 1
+
+      - name: cargo test (debug; native-tokio only)
+        run: cargo test --no-default-features --features native-tokio
+        env:
+          RUST_BACKTRACE: 1
+
+      - name: cargo test (debug; webpki-tokio only)
+        run: cargo test --no-default-features --features webpki-tokio
+        env:
+          RUST_BACKTRACE: 1
+
+      - name: cargo test (debug; defaults+ring)
+        run: cargo test --no-default-features --features ring,native-tokio,http1,tls12,logging
+        env:
+          RUST_BACKTRACE: 1
+
+      - name: cargo test (debug; all features)
+        if: runner.os == 'Linux'
+        run: cargo test --all-features
+        env:
+          RUST_BACKTRACE: 1
+
+      - name: cargo test (debug; all features, excluding FIPS)
+        if: runner.os != 'Linux'
+        run: cargo test --features aws-lc-rs,http1,http2,webpki-tokio,native-tokio,ring,tls12,logging
+        env:
+          RUST_BACKTRACE: 1
+
+      - name: cargo build (debug; no default features)
+        run: cargo build --no-default-features
+
+      - name: cargo test (debug; no default features; no run)
+        run: cargo test --no-default-features --no-run
+
+      - name: cargo test (release; no run)
+        run: cargo test --release --no-run
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.71"
+
+      - name: Check MSRV
+        run: cargo check --lib --all-features
+
+  semver:
+    name: Check semver compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check semver
+        uses: obi1kenobi/cargo-semver-checks-action@v2
+
+  docs:
+    name: Check for documentation errors
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: cargo doc (all features)
+        # keep features in sync with Cargo.toml `[package.metadata.docs.rs]` section
+        run: cargo doc --no-default-features --features http1,http2,webpki-tokio,native-tokio,ring,tls12,logging --no-deps
+        env:
+          RUSTDOCFLAGS: -Dwarnings
+
+  format:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: cargo clippy --all-features -- --deny warnings
+
+  features:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-hack
+        uses: taiki-e/install-action@cargo-hack
+      - name: Check feature powerset
+        run: cargo hack --no-dev-deps check --feature-powerset --depth 2

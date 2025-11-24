@@ -1,0 +1,18 @@
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+# This is used with cargo-check-external-types to reduce the surface area of downstream crates from
+# the public API. Ideally this can have a few exceptions as possible.
+allowed_external_types = [
+    "opentelemetry::*",
+    "async_channel::Receiver",
+    "async_channel::Sender",
+    "async_std::stream::interval::Interval",
+    "futures_channel::oneshot::Sender", # TODO: This is a pre-1.0 crate, we can't easily stabilize with this in the public API
+    "futures_core::future::BoxFuture", # TODO: This is a pre-1.0 crate, we can't easily stabilize with this in the public API
+    "futures_core::stream::Stream", # TODO: This is a pre-1.0 crate, we can't easily stabilize with this in the public API
+    "opentelemetry_http::HttpClient", # TODO: We probably shouldn't be depending on another SDK not in the API from the SDK.
+    "tokio_stream::wrappers::interval::IntervalStream", # TODO: This is a pre-1.0 crate, we can't easily stabilize with this in the public API
+    "tokio_stream::wrappers::mpsc_bounded::ReceiverStream", # TODO: This is a pre-1.0 crate, we can't easily stabilize with this in the public API
+    "tokio::sync::mpsc::bounded::Sender",
+    "tokio::time::sleep::Sleep",
+]

@@ -1,0 +1,488 @@
+# Generated with generate_ssl_tests.pl
+
+num_tests = 14
+
+test-0 = 0-server-auth-TLSv1.3
+test-1 = 1-client-auth-TLSv1.3-request
+test-2 = 2-client-auth-TLSv1.3-require-fail
+test-3 = 3-client-auth-TLSv1.3-require
+test-4 = 4-client-auth-TLSv1.3-require-non-empty-names
+test-5 = 5-client-auth-TLSv1.3-noroot
+test-6 = 6-client-auth-TLSv1.3-request-post-handshake
+test-7 = 7-client-auth-TLSv1.3-require-fail-post-handshake
+test-8 = 8-client-auth-TLSv1.3-require-post-handshake
+test-9 = 9-client-auth-TLSv1.3-require-non-empty-names-post-handshake
+test-10 = 10-client-auth-TLSv1.3-noroot-post-handshake
+test-11 = 11-client-auth-TLSv1.3-request-force-client-post-handshake
+test-12 = 12-client-auth-TLSv1.3-request-force-server-post-handshake
+test-13 = 13-client-auth-TLSv1.3-request-force-both-post-handshake
+# ===========================================================
+
+[0-server-auth-TLSv1.3]
+ssl_conf = 0-server-auth-TLSv1.3-ssl
+
+[0-server-auth-TLSv1.3-ssl]
+server = 0-server-auth-TLSv1.3-server
+client = 0-server-auth-TLSv1.3-client
+
+[0-server-auth-TLSv1.3-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[0-server-auth-TLSv1.3-client]
+CipherString = DEFAULT
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-0]
+ExpectedResult = Success
+
+
+# ===========================================================
+
+[1-client-auth-TLSv1.3-request]
+ssl_conf = 1-client-auth-TLSv1.3-request-ssl
+
+[1-client-auth-TLSv1.3-request-ssl]
+server = 1-client-auth-TLSv1.3-request-server
+client = 1-client-auth-TLSv1.3-request-client
+
+[1-client-auth-TLSv1.3-request-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+VerifyMode = Request
+
+[1-client-auth-TLSv1.3-request-client]
+CipherString = DEFAULT
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-1]
+ExpectedResult = Success
+
+
+# ===========================================================
+
+[2-client-auth-TLSv1.3-require-fail]
+ssl_conf = 2-client-auth-TLSv1.3-require-fail-ssl
+
+[2-client-auth-TLSv1.3-require-fail-ssl]
+server = 2-client-auth-TLSv1.3-require-fail-server
+client = 2-client-auth-TLSv1.3-require-fail-client
+
+[2-client-auth-TLSv1.3-require-fail-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/root-cert.pem
+VerifyMode = Require
+
+[2-client-auth-TLSv1.3-require-fail-client]
+CipherString = DEFAULT
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-2]
+ExpectedResult = ServerFail
+ExpectedServerAlert = CertificateRequired
+
+
+# ===========================================================
+
+[3-client-auth-TLSv1.3-require]
+ssl_conf = 3-client-auth-TLSv1.3-require-ssl
+
+[3-client-auth-TLSv1.3-require-ssl]
+server = 3-client-auth-TLSv1.3-require-server
+client = 3-client-auth-TLSv1.3-require-client
+
+[3-client-auth-TLSv1.3-require-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+ClientSignatureAlgorithms = pSS+SHA256
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/root-cert.pem
+VerifyMode = Request
+
+[3-client-auth-TLSv1.3-require-client]
+Certificate = ${ENV::TEST_CERTS_DIR}/ee-client-chain.pem
+CipherString = DEFAULT
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+PrivateKey = ${ENV::TEST_CERTS_DIR}/ee-key.pem
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-3]
+ExpectedClientCANames = empty
+ExpectedClientCertType = RSA
+ExpectedClientSignHash = SHA256
+ExpectedClientSignType = RSA-PSS
+ExpectedResult = Success
+
+
+# ===========================================================
+
+[4-client-auth-TLSv1.3-require-non-empty-names]
+ssl_conf = 4-client-auth-TLSv1.3-require-non-empty-names-ssl
+
+[4-client-auth-TLSv1.3-require-non-empty-names-ssl]
+server = 4-client-auth-TLSv1.3-require-non-empty-names-server
+client = 4-client-auth-TLSv1.3-require-non-empty-names-client
+
+[4-client-auth-TLSv1.3-require-non-empty-names-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+ClientCAFile = ${ENV::TEST_CERTS_DIR}/root-cert.pem
+ClientSignatureAlgorithms = pSS+SHA256
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/root-cert.pem
+VerifyMode = Request
+
+[4-client-auth-TLSv1.3-require-non-empty-names-client]
+Certificate = ${ENV::TEST_CERTS_DIR}/ee-client-chain.pem
+CipherString = DEFAULT
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+PrivateKey = ${ENV::TEST_CERTS_DIR}/ee-key.pem
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-4]
+ExpectedClientCANames = ${ENV::TEST_CERTS_DIR}/root-cert.pem
+ExpectedClientCertType = RSA
+ExpectedClientSignHash = SHA256
+ExpectedClientSignType = RSA-PSS
+ExpectedResult = Success
+
+
+# ===========================================================
+
+[5-client-auth-TLSv1.3-noroot]
+ssl_conf = 5-client-auth-TLSv1.3-noroot-ssl
+
+[5-client-auth-TLSv1.3-noroot-ssl]
+server = 5-client-auth-TLSv1.3-noroot-server
+client = 5-client-auth-TLSv1.3-noroot-client
+
+[5-client-auth-TLSv1.3-noroot-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+VerifyMode = Require
+
+[5-client-auth-TLSv1.3-noroot-client]
+Certificate = ${ENV::TEST_CERTS_DIR}/ee-client-chain.pem
+CipherString = DEFAULT
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+PrivateKey = ${ENV::TEST_CERTS_DIR}/ee-key.pem
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-5]
+ExpectedResult = ServerFail
+ExpectedServerAlert = UnknownCA
+
+
+# ===========================================================
+
+[6-client-auth-TLSv1.3-request-post-handshake]
+ssl_conf = 6-client-auth-TLSv1.3-request-post-handshake-ssl
+
+[6-client-auth-TLSv1.3-request-post-handshake-ssl]
+server = 6-client-auth-TLSv1.3-request-post-handshake-server
+client = 6-client-auth-TLSv1.3-request-post-handshake-client
+
+[6-client-auth-TLSv1.3-request-post-handshake-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+VerifyMode = RequestPostHandshake
+
+[6-client-auth-TLSv1.3-request-post-handshake-client]
+CipherString = DEFAULT
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-6]
+ExpectedResult = ServerFail
+HandshakeMode = PostHandshakeAuth
+
+
+# ===========================================================
+
+[7-client-auth-TLSv1.3-require-fail-post-handshake]
+ssl_conf = 7-client-auth-TLSv1.3-require-fail-post-handshake-ssl
+
+[7-client-auth-TLSv1.3-require-fail-post-handshake-ssl]
+server = 7-client-auth-TLSv1.3-require-fail-post-handshake-server
+client = 7-client-auth-TLSv1.3-require-fail-post-handshake-client
+
+[7-client-auth-TLSv1.3-require-fail-post-handshake-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/root-cert.pem
+VerifyMode = RequirePostHandshake
+
+[7-client-auth-TLSv1.3-require-fail-post-handshake-client]
+CipherString = DEFAULT
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-7]
+ExpectedResult = ServerFail
+HandshakeMode = PostHandshakeAuth
+
+
+# ===========================================================
+
+[8-client-auth-TLSv1.3-require-post-handshake]
+ssl_conf = 8-client-auth-TLSv1.3-require-post-handshake-ssl
+
+[8-client-auth-TLSv1.3-require-post-handshake-ssl]
+server = 8-client-auth-TLSv1.3-require-post-handshake-server
+client = 8-client-auth-TLSv1.3-require-post-handshake-client
+
+[8-client-auth-TLSv1.3-require-post-handshake-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+ClientSignatureAlgorithms = pss+SHA256
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/root-cert.pem
+VerifyMode = RequestPostHandshake
+
+[8-client-auth-TLSv1.3-require-post-handshake-client]
+Certificate = ${ENV::TEST_CERTS_DIR}/ee-client-chain.pem
+CipherString = DEFAULT
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+PrivateKey = ${ENV::TEST_CERTS_DIR}/ee-key.pem
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-8]
+ExpectedClientCANames = empty
+ExpectedClientCertType = RSA
+ExpectedClientSignHash = SHA256
+ExpectedClientSignType = RSA-PSS
+ExpectedResult = Success
+HandshakeMode = PostHandshakeAuth
+client = 8-client-auth-TLSv1.3-require-post-handshake-client-extra
+
+[8-client-auth-TLSv1.3-require-post-handshake-client-extra]
+EnablePHA = Yes
+
+
+# ===========================================================
+
+[9-client-auth-TLSv1.3-require-non-empty-names-post-handshake]
+ssl_conf = 9-client-auth-TLSv1.3-require-non-empty-names-post-handshake-ssl
+
+[9-client-auth-TLSv1.3-require-non-empty-names-post-handshake-ssl]
+server = 9-client-auth-TLSv1.3-require-non-empty-names-post-handshake-server
+client = 9-client-auth-TLSv1.3-require-non-empty-names-post-handshake-client
+
+[9-client-auth-TLSv1.3-require-non-empty-names-post-handshake-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+ClientCAFile = ${ENV::TEST_CERTS_DIR}/root-cert.pem
+ClientSignatureAlgorithms = psS+SHA256
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/root-cert.pem
+VerifyMode = RequestPostHandshake
+
+[9-client-auth-TLSv1.3-require-non-empty-names-post-handshake-client]
+Certificate = ${ENV::TEST_CERTS_DIR}/ee-client-chain.pem
+CipherString = DEFAULT
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+PrivateKey = ${ENV::TEST_CERTS_DIR}/ee-key.pem
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-9]
+ExpectedClientCANames = ${ENV::TEST_CERTS_DIR}/root-cert.pem
+ExpectedClientCertType = RSA
+ExpectedClientSignHash = SHA256
+ExpectedClientSignType = RSA-PSS
+ExpectedResult = Success
+HandshakeMode = PostHandshakeAuth
+client = 9-client-auth-TLSv1.3-require-non-empty-names-post-handshake-client-extra
+
+[9-client-auth-TLSv1.3-require-non-empty-names-post-handshake-client-extra]
+EnablePHA = Yes
+
+
+# ===========================================================
+
+[10-client-auth-TLSv1.3-noroot-post-handshake]
+ssl_conf = 10-client-auth-TLSv1.3-noroot-post-handshake-ssl
+
+[10-client-auth-TLSv1.3-noroot-post-handshake-ssl]
+server = 10-client-auth-TLSv1.3-noroot-post-handshake-server
+client = 10-client-auth-TLSv1.3-noroot-post-handshake-client
+
+[10-client-auth-TLSv1.3-noroot-post-handshake-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+VerifyMode = RequirePostHandshake
+
+[10-client-auth-TLSv1.3-noroot-post-handshake-client]
+Certificate = ${ENV::TEST_CERTS_DIR}/ee-client-chain.pem
+CipherString = DEFAULT
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+PrivateKey = ${ENV::TEST_CERTS_DIR}/ee-key.pem
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-10]
+ExpectedResult = ServerFail
+ExpectedServerAlert = UnknownCA
+HandshakeMode = PostHandshakeAuth
+client = 10-client-auth-TLSv1.3-noroot-post-handshake-client-extra
+
+[10-client-auth-TLSv1.3-noroot-post-handshake-client-extra]
+EnablePHA = Yes
+
+
+# ===========================================================
+
+[11-client-auth-TLSv1.3-request-force-client-post-handshake]
+ssl_conf = 11-client-auth-TLSv1.3-request-force-client-post-handshake-ssl
+
+[11-client-auth-TLSv1.3-request-force-client-post-handshake-ssl]
+server = 11-client-auth-TLSv1.3-request-force-client-post-handshake-server
+client = 11-client-auth-TLSv1.3-request-force-client-post-handshake-client
+
+[11-client-auth-TLSv1.3-request-force-client-post-handshake-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+VerifyMode = RequestPostHandshake
+
+[11-client-auth-TLSv1.3-request-force-client-post-handshake-client]
+CipherString = DEFAULT
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-11]
+ExpectedResult = Success
+HandshakeMode = PostHandshakeAuth
+client = 11-client-auth-TLSv1.3-request-force-client-post-handshake-client-extra
+
+[11-client-auth-TLSv1.3-request-force-client-post-handshake-client-extra]
+EnablePHA = Yes
+
+
+# ===========================================================
+
+[12-client-auth-TLSv1.3-request-force-server-post-handshake]
+ssl_conf = 12-client-auth-TLSv1.3-request-force-server-post-handshake-ssl
+
+[12-client-auth-TLSv1.3-request-force-server-post-handshake-ssl]
+server = 12-client-auth-TLSv1.3-request-force-server-post-handshake-server
+client = 12-client-auth-TLSv1.3-request-force-server-post-handshake-client
+
+[12-client-auth-TLSv1.3-request-force-server-post-handshake-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+VerifyMode = RequestPostHandshake
+
+[12-client-auth-TLSv1.3-request-force-server-post-handshake-client]
+CipherString = DEFAULT
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-12]
+ExpectedResult = ClientFail
+HandshakeMode = PostHandshakeAuth
+server = 12-client-auth-TLSv1.3-request-force-server-post-handshake-server-extra
+
+[12-client-auth-TLSv1.3-request-force-server-post-handshake-server-extra]
+ForcePHA = Yes
+
+
+# ===========================================================
+
+[13-client-auth-TLSv1.3-request-force-both-post-handshake]
+ssl_conf = 13-client-auth-TLSv1.3-request-force-both-post-handshake-ssl
+
+[13-client-auth-TLSv1.3-request-force-both-post-handshake-ssl]
+server = 13-client-auth-TLSv1.3-request-force-both-post-handshake-server
+client = 13-client-auth-TLSv1.3-request-force-both-post-handshake-client
+
+[13-client-auth-TLSv1.3-request-force-both-post-handshake-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+VerifyMode = RequestPostHandshake
+
+[13-client-auth-TLSv1.3-request-force-both-post-handshake-client]
+CipherString = DEFAULT
+MaxProtocol = TLSv1.3
+MinProtocol = TLSv1.3
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-13]
+ExpectedResult = Success
+HandshakeMode = PostHandshakeAuth
+server = 13-client-auth-TLSv1.3-request-force-both-post-handshake-server-extra
+client = 13-client-auth-TLSv1.3-request-force-both-post-handshake-client-extra
+
+[13-client-auth-TLSv1.3-request-force-both-post-handshake-server-extra]
+ForcePHA = Yes
+
+[13-client-auth-TLSv1.3-request-force-both-post-handshake-client-extra]
+EnablePHA = Yes
+
+

@@ -1,0 +1,56 @@
+[package]
+name = "crossbeam-epoch"
+# When publishing a new version:
+# - Update CHANGELOG.md
+# - Update README.md
+# - Create "crossbeam-epoch-X.Y.Z" git tag
+version = "0.9.18"
+edition = "2021"
+rust-version = "1.61"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/crossbeam-rs/crossbeam"
+homepage = "https://github.com/crossbeam-rs/crossbeam/tree/master/crossbeam-epoch"
+description = "Epoch-based garbage collection"
+keywords = ["lock-free", "rcu", "atomic", "garbage"]
+categories = ["concurrency", "memory-management", "no-std"]
+
+[features]
+default = ["std"]
+
+# Enable to use APIs that require `std`.
+# This is enabled by default.
+std = ["alloc", "crossbeam-utils/std"]
+
+# Enable to use APIs that require `alloc`.
+# This is enabled by default and also enabled if the `std` feature is enabled.
+#
+# NOTE: Disabling both `std` *and* `alloc` features is not supported yet.
+alloc = []
+
+# These features are no longer used.
+# TODO: remove in the next major version.
+# Enable to use of unstable functionality.
+# This is disabled by default and requires recent nightly compiler.
+#
+# NOTE: This feature is outside of the normal semver guarantees and minor or
+# patch versions of crossbeam may make breaking changes to them at any time.
+nightly = ["crossbeam-utils/nightly"]
+
+# Enable the use of loom for concurrency testing.
+#
+# NOTE: This feature is outside of the normal semver guarantees and minor or
+# patch versions of crossbeam may make breaking changes to them at any time.
+loom = ["loom-crate", "crossbeam-utils/loom"]
+
+[dependencies]
+crossbeam-utils = { version = "0.8.18", path = "../crossbeam-utils", default-features = false }
+
+# Enable the use of loom for concurrency testing.
+#
+# NOTE: This feature is outside of the normal semver guarantees and minor or
+# patch versions of crossbeam may make breaking changes to them at any time.
+[target.'cfg(crossbeam_loom)'.dependencies]
+loom-crate = { package = "loom", version = "0.7.1", optional = true }
+
+[dev-dependencies]
+rand = "0.8"

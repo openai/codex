@@ -1,0 +1,22 @@
+# Lock files
+*.lock
+
+# Python build artifacts
+*.egg-info/
+build/
+dist/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+.venv/
+.env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

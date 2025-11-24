@@ -1,0 +1,146 @@
+# Generated with generate_ssl_tests.pl
+
+num_tests = 4
+
+test-0 = 0-session-ticket-app-data12
+test-1 = 1-session-ticket-app-data12
+test-2 = 2-session-ticket-app-data13
+test-3 = 3-session-ticket-app-data13
+# ===========================================================
+
+[0-session-ticket-app-data12]
+ssl_conf = 0-session-ticket-app-data12-ssl
+
+[0-session-ticket-app-data12-ssl]
+server = 0-session-ticket-app-data12-server
+client = 0-session-ticket-app-data12-client
+resume-server = 0-session-ticket-app-data12-server
+resume-client = 0-session-ticket-app-data12-client
+
+[0-session-ticket-app-data12-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+Options = SessionTicket
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[0-session-ticket-app-data12-client]
+CipherString = DEFAULT
+MaxProtocol = TLSv1.2
+Options = SessionTicket
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-0]
+ExpectedResult = Success
+ExpectedSessionTicketAppData = HelloWorld
+HandshakeMode = Resume
+ResumptionExpected = Yes
+SessionTicketExpected = Yes
+server = 0-session-ticket-app-data12-server-extra
+resume-server = 0-session-ticket-app-data12-server-extra
+
+[0-session-ticket-app-data12-server-extra]
+SessionTicketAppData = HelloWorld
+
+
+# ===========================================================
+
+[1-session-ticket-app-data12]
+ssl_conf = 1-session-ticket-app-data12-ssl
+
+[1-session-ticket-app-data12-ssl]
+server = 1-session-ticket-app-data12-server
+client = 1-session-ticket-app-data12-client
+resume-server = 1-session-ticket-app-data12-server
+resume-client = 1-session-ticket-app-data12-client
+
+[1-session-ticket-app-data12-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+Options = SessionTicket
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[1-session-ticket-app-data12-client]
+CipherString = DEFAULT
+MaxProtocol = TLSv1.2
+Options = SessionTicket
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-1]
+ExpectedResult = Success
+ExpectedSessionTicketAppData = 
+HandshakeMode = Resume
+ResumptionExpected = Yes
+SessionTicketExpected = Yes
+
+
+# ===========================================================
+
+[2-session-ticket-app-data13]
+ssl_conf = 2-session-ticket-app-data13-ssl
+
+[2-session-ticket-app-data13-ssl]
+server = 2-session-ticket-app-data13-server
+client = 2-session-ticket-app-data13-client
+resume-server = 2-session-ticket-app-data13-server
+resume-client = 2-session-ticket-app-data13-client
+
+[2-session-ticket-app-data13-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+Options = SessionTicket
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[2-session-ticket-app-data13-client]
+CipherString = DEFAULT
+MaxProtocol = TLSv1.3
+Options = SessionTicket
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-2]
+ExpectedResult = Success
+ExpectedSessionTicketAppData = HelloWorld
+HandshakeMode = Resume
+ResumptionExpected = Yes
+SessionTicketExpected = Yes
+server = 2-session-ticket-app-data13-server-extra
+resume-server = 2-session-ticket-app-data13-server-extra
+
+[2-session-ticket-app-data13-server-extra]
+SessionTicketAppData = HelloWorld
+
+
+# ===========================================================
+
+[3-session-ticket-app-data13]
+ssl_conf = 3-session-ticket-app-data13-ssl
+
+[3-session-ticket-app-data13-ssl]
+server = 3-session-ticket-app-data13-server
+client = 3-session-ticket-app-data13-client
+resume-server = 3-session-ticket-app-data13-server
+resume-client = 3-session-ticket-app-data13-client
+
+[3-session-ticket-app-data13-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+Options = SessionTicket
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[3-session-ticket-app-data13-client]
+CipherString = DEFAULT
+MaxProtocol = TLSv1.3
+Options = SessionTicket
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-3]
+ExpectedResult = Success
+ExpectedSessionTicketAppData = 
+HandshakeMode = Resume
+ResumptionExpected = Yes
+SessionTicketExpected = Yes
+
+

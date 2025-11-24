@@ -1,0 +1,58 @@
+{
+    "backspace": {
+        "type": "string",
+        "value": "This string has a \u0008 backspace character."
+    },
+    "tab": {
+        "type": "string",
+        "value": "This string has a \u0009 tab character."
+    },
+    "newline": {
+        "type": "string",
+        "value": "This string has a \u000A new line character."
+    },
+    "formfeed": {
+        "type": "string",
+        "value": "This string has a \u000C form feed character."
+    },
+    "carriage": {
+        "type": "string",
+        "value": "This string has a \u000D carriage return character."
+    },
+    "quote": {
+        "type": "string",
+        "value": "This string has a \u0022 quote character."
+    },
+    "slash": {
+        "type": "string",
+        "value": "This string has a \u002F slash character."
+    },
+    "backslash": {
+        "type": "string",
+        "value": "This string has a \u005C backslash character."
+    },
+    "notunicode1": {
+        "type": "string",
+        "value": "This string does not have a unicode \\u escape."
+    },
+    "notunicode2": {
+        "type": "string",
+        "value": "This string does not have a unicode \u005Cu escape."
+    },
+    "notunicode3": {
+        "type": "string",
+        "value": "This string does not have a unicode \\u0075 escape."
+    },
+    "notunicode4": {
+        "type": "string",
+        "value": "This string does not have a unicode \\\u0075 escape."
+    },
+    "delete": {
+        "type": "string",
+        "value": "This string has a \u007f delete control code."
+    },
+    "unitseparator": {
+        "type": "string",
+        "value": "This string has a \u001f unit separator control code."
+    }
+}

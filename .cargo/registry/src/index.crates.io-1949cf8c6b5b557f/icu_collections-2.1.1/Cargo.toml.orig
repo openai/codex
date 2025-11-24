@@ -1,0 +1,66 @@
+# This file is part of ICU4X. For terms of use, please see the file
+# called LICENSE at the top level of the ICU4X source tree
+# (online at: https://github.com/unicode-org/icu4x/blob/main/LICENSE ).
+
+[package]
+name = "icu_collections"
+description = "Collection of API for use in ICU libraries."
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+homepage.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+displaydoc = { workspace = true }
+yoke = { workspace = true, features = ["derive"] }
+zerofrom = { workspace = true, features = ["derive"] }
+zerovec = { workspace = true, features = ["derive", "yoke"] }
+potential_utf = { workspace = true, features = ["zerovec"] }
+
+serde = { workspace = true, features = ["derive"], optional = true }
+databake = { workspace = true, features = ["derive"], optional = true }
+
+[dev-dependencies]
+iai = { workspace = true }
+icu = { path = "../../components/icu", default-features = false }
+icu_properties = { path = "../../components/properties" }
+postcard = { workspace = true, features = ["alloc"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+toml = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion = { workspace = true }
+
+[features]
+serde = ["dep:serde", "zerovec/serde", "potential_utf/serde", "alloc"]
+databake = ["dep:databake", "zerovec/databake"]
+alloc = ["serde?/alloc", "zerovec/alloc"]
+
+[lib]
+bench = false  # This option is required for Benchmark CI
+
+[[bench]]
+name = "codepointtrie"
+harness = false
+path = "benches/codepointtrie.rs"
+
+[[bench]]
+name = "iai_cpt"
+harness = false
+path = "benches/iai_cpt.rs"
+
+[[bench]]
+name = "inv_list"
+harness = false
+path = "benches/inv_list.rs"

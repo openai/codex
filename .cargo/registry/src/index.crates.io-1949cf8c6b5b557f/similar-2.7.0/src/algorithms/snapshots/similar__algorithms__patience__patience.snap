@@ -1,0 +1,45 @@
+---
+source: src/algorithms/patience.rs
+expression: d.into_inner().ops()
+---
+[
+    Replace {
+        old_index: 0,
+        old_len: 1,
+        new_index: 0,
+        new_len: 1,
+    },
+    Equal {
+        old_index: 1,
+        new_index: 1,
+        len: 3,
+    },
+    Replace {
+        old_index: 4,
+        old_len: 1,
+        new_index: 4,
+        new_len: 2,
+    },
+    Equal {
+        old_index: 5,
+        new_index: 6,
+        len: 2,
+    },
+    Replace {
+        old_index: 7,
+        old_len: 2,
+        new_index: 8,
+        new_len: 1,
+    },
+    Equal {
+        old_index: 9,
+        new_index: 9,
+        len: 1,
+    },
+    Replace {
+        old_index: 10,
+        old_len: 1,
+        new_index: 10,
+        new_len: 1,
+    },
+]

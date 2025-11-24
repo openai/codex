@@ -1,0 +1,12 @@
+error: expected one of `.`, `;`, `?`, or an operator, found `for`
+ --> /code/rust/src/test/ui/annotate-snippet/suggestion.rs:4:5
+  |
+4 | let x = vec![1];
+  |     - move occurs because `x` has type `std::vec::Vec<i32>`, which does not implement the `Copy` trait
+  |
+7 | let y = x;
+  |         - value moved here
+  |
+9 | x;
+  | ^ value used here after move
+  |

@@ -1,0 +1,28 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Code:
+def test():
+    x = 0x60000000000000000000000 | 1.0
+
+Error:
+error: Binary operator `|` is not available on the types `int` and `float`
+ --> filename:3:9
+  |
+3 |     x = 0x60000000000000000000000 | 1.0
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+
+Types:
+x: typing.Never
+
+Compiler typechecker (eval):
+error: Binary operator `|` is not available on the types `int` and `float`
+ --> filename:3:9
+  |
+3 |     x = 0x60000000000000000000000 | 1.0
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |

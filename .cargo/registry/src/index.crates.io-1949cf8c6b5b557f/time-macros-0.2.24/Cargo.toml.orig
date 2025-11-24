@@ -1,0 +1,33 @@
+[package]
+name = "time-macros"
+version = "0.2.24"
+authors = ["Jacob Pratt <open-source@jhpratt.dev>", "Time contributors"]
+edition = "2021"
+rust-version = "1.81.0"
+repository = "https://github.com/time-rs/time"
+keywords = ["date", "time", "calendar", "duration"]
+categories = ["date-and-time"]
+license = "MIT OR Apache-2.0"
+description = """
+    Procedural macros for the time crate.
+    This crate is an implementation detail and should not be relied upon directly.
+"""
+
+[features]
+formatting = []
+large-dates = []
+parsing = []
+serde = []
+
+[lib]
+proc-macro = true
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--generate-link-to-definition"]
+
+[lints]
+workspace = true
+
+[dependencies]
+time-core = { workspace = true }
+num-conv = { workspace = true }

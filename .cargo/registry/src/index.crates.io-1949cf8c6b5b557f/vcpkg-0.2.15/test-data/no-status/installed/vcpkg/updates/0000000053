@@ -1,0 +1,7 @@
+Package: boost-typeof
+Version: 1.67.0
+Depends: boost-config, boost-mpl, boost-preprocessor, boost-type-traits, boost-utility, boost-vcpkg-helpers
+Architecture: x64-windows
+Multi-Arch: same
+Description: Boost typeof module
+Status: install ok installed

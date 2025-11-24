@@ -1,0 +1,77 @@
+[package]
+name = "itertools"
+version = "0.13.0"
+
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rust-itertools/itertools"
+documentation = "https://docs.rs/itertools/"
+authors = ["bluss"]
+readme = "README.md"
+
+description = "Extra iterator adaptors, iterator methods, free functions, and macros."
+
+keywords = ["iterator", "data-structure", "zip", "product"]
+categories = ["algorithms", "rust-patterns", "no-std", "no-std::no-alloc"]
+
+edition = "2018"
+
+# When bumping, please resolve all `#[allow(clippy::*)]` that are newly resolvable.
+rust-version = "1.43.1"
+
+[lib]
+bench = false
+test = false
+
+[dependencies]
+either = { version = "1.0", default-features = false }
+
+[dev-dependencies]
+rand = "0.7"
+criterion = "0.4.0"
+paste = "1.0.0"  # Used in test_std to instantiate generic tests
+permutohedron = "0.2"
+quickcheck = { version = "0.9", default_features = false }
+
+[features]
+default = ["use_std"]
+use_std = ["use_alloc", "either/use_std"]
+use_alloc = []
+
+[profile]
+bench = { debug = true }
+
+[[bench]]
+name = "tuple_combinations"
+harness = false
+
+[[bench]]
+name = "tuples"
+harness = false
+
+[[bench]]
+name = "fold_specialization"
+harness = false
+
+[[bench]]
+name = "combinations_with_replacement"
+harness = false
+
+[[bench]]
+name = "tree_reduce"
+harness = false
+
+[[bench]]
+name = "bench1"
+harness = false
+
+[[bench]]
+name = "combinations"
+harness = false
+
+[[bench]]
+name = "powerset"
+harness = false
+
+[[bench]]
+name = "specializations"
+harness = false

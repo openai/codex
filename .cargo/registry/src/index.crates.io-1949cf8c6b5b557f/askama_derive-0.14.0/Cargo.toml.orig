@@ -1,0 +1,57 @@
+[package]
+name = "askama_derive"
+version = "0.14.0"
+description = "Procedural macro package for Askama"
+homepage = "https://github.com/askama-rs/askama"
+repository = "https://github.com/askama-rs/askama"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+edition = "2021"
+rust-version = "1.83"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--generate-link-to-definition", "--cfg=docsrs"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+parser = { package = "askama_parser", version = "=0.14.0", path = "../askama_parser" }
+
+basic-toml = { version = "0.1.1", optional = true }
+pulldown-cmark = { version = "0.13.0", optional = true, default-features = false }
+serde = { version = "1.0", optional = true }
+serde_derive = { version = "1.0", optional = true }
+
+memchr = "2"
+quote = { version = "1", default-features = false }
+rustc-hash = "2.0.0"
+syn = { version = "2.0.41", default-features = false, features = ["clone-impls", "derive", "parsing", "printing"] }
+
+# in `askama_derive_standalone` we opt out of the default features, because we need no native `proc-macro` support
+proc-macro2 = "1"
+
+[dev-dependencies]
+console = "0.15.8"
+prettyplease = "0.2.20"
+similar = "2.6.0"
+syn = { version = "2.0.41", features = ["full"] }
+
+# must be the same feature list as for askama
+[features]
+default = ["config", "derive", "std", "urlencode"]
+full = ["default", "blocks", "code-in-doc", "serde_json"]
+
+alloc = []
+blocks = ["syn/full"]
+code-in-doc = ["dep:pulldown-cmark"]
+config = ["dep:basic-toml", "dep:serde", "dep:serde_derive", "parser/config"]
+derive = []
+serde_json = []
+std = ["alloc"]
+urlencode = []
+
+[lints.rust]
+# Used in `askama_derive_standalone` which uses the same source folder, but is not a proc-macro.
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("__standalone"))'] }

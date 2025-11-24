@@ -1,0 +1,12 @@
+---
+source: src/algorithms/lcs.rs
+assertion_line: 235
+expression: d.ops()
+---
+[
+    Equal {
+        old_index: 0,
+        new_index: 0,
+        len: 8,
+    },
+]

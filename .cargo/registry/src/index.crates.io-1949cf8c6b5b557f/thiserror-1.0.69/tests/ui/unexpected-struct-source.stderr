@@ -1,0 +1,5 @@
+error: not expected here; the #[source] attribute belongs on a specific field
+ --> tests/ui/unexpected-struct-source.rs:4:1
+  |
+4 | #[source]
+  | ^^^^^^^^^

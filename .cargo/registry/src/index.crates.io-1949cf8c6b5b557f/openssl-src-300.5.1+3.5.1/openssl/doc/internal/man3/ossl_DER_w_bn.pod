@@ -1,0 +1,66 @@
+=pod
+
+=head1 NAME
+
+ossl_DER_w_boolean, ossl_DER_w_uint32, ossl_DER_w_bn, ossl_DER_w_null,
+ossl_DER_w_octet_string, ossl_DER_w_octet_string_uint32
+- internal DER writers for DER primitives
+
+=head1 SYNOPSIS
+
+ #include "internal/der.h"
+
+ int ossl_DER_w_boolean(WPACKET *pkt, int tag, int b);
+ int ossl_DER_w_uint32(WPACKET *pkt, int tag, uint32_t v);
+ int ossl_DER_w_bn(WPACKET *pkt, int tag, const BIGNUM *v);
+ int ossl_DER_w_null(WPACKET *pkt, int tag);
+ int ossl_DER_w_octet_string(WPACKET *pkt, int tag,
+                             const unsigned char *data, size_t data_n);
+ int ossl_DER_w_octet_string_uint32(WPACKET *pkt, int tag, uint32_t value);
+
+=head1 DESCRIPTION
+
+All functions described here behave the same way, they prepend
+(remember that DER writers are used backwards) the DER encoding of
+their respective value to the already written output buffer held by
+I<pkt>.
+
+ossl_DER_w_boolean() writes the primitive BOOLEAN using the value I<b>.
+Any value that evaluates as true will render a B<true> BOOLEAN,
+otherwise a B<false> BOOLEAN.
+
+ossl_DER_w_uint32() and ossl_DER_w_bn() both write the primitive INTEGER using
+the value I<v>.
+
+=for comment Other similar functions for diverse C integers should be
+added.
+
+ossl_DER_w_null() writes the primitive NULL.
+
+ossl_DER_w_octet_string() writes the primitive OCTET STRING using the bytes
+from I<data> with a length of I<data_n>.
+
+ossl_DER_w_octet_string_uint32() writes the primitive OCTET STRING using a
+32 bit value in I<value>.
+
+=head1 RETURN VALUES
+
+All the functions return 1 on success and 0 on failure.  Failure may
+mean that the buffer held by the I<pkt> is too small, but may also
+mean that the values given to the functions are invalid, such as the provided
+I<tag> value being too large for the implementation.
+
+=head1 SEE ALSO
+
+L<DERlib(7)>
+
+=head1 COPYRIGHT
+
+Copyright 2020 The OpenSSL Project Authors. All Rights Reserved.
+
+Licensed under the Apache License 2.0 (the "License").  You may not use
+this file except in compliance with the License.  You can obtain a copy
+in the file LICENSE in the source distribution or at
+L<https://www.openssl.org/source/license.html>.
+
+=cut

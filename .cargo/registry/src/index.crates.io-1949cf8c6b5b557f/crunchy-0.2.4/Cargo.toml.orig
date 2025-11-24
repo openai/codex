@@ -1,0 +1,23 @@
+[package]
+name = "crunchy"
+version = "0.2.4"
+authors = ["Eira Fransham <jackefransham@gmail.com>"]
+description = "Crunchy unroller: deterministically unroll constant loops"
+repository = "https://github.com/eira-fransham/crunchy"
+homepage = "https://github.com/eira-fransham/crunchy"
+readme = "README.md"
+license = "MIT"
+build = "build.rs"
+edition = "2021"
+
+[dependencies]
+
+[features]
+"std" = []
+"limit_64" = []
+"limit_128" = []
+"limit_256" = []
+"limit_512" = []
+"limit_1024" = []
+"limit_2048" = []
+"default" = ["limit_128"]

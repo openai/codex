@@ -1,0 +1,5 @@
+error: must be a unit variant to use serde_repr derive
+ --> tests/ui/non_unit_variant.rs:6:5
+  |
+6 |     Two(u8),
+  |     ^^^

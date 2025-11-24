@@ -1,0 +1,18 @@
+-- Copyright 2022 The OpenSSL Project Authors. All Rights Reserved.
+--
+-- Licensed under the Apache License 2.0 (the "License").  You may not use
+-- this file except in compliance with the License.  You can obtain a copy
+-- in the file LICENSE in the source distribution or at
+-- https://www.openssl.org/source/license.html
+
+oscca  OBJECT IDENTIFIER ::= { iso(1) member-body(2) cn(156) 10197 }
+
+sm-scheme OBJECT IDENTIFIER ::= { oscca 1 }
+
+-- OID for SM2 signatures with SM3
+
+sm2-with-SM3 OBJECT IDENTIFIER ::= { sm-scheme 501 }
+
+-- Named Elliptic Curves of SM2
+
+curveSM2 OBJECT IDENTIFIER ::= { sm-scheme 301 }

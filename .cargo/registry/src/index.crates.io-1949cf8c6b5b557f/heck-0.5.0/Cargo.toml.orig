@@ -1,0 +1,11 @@
+[package]
+name = "heck"
+version = "0.5.0"
+edition = "2021"
+rust-version = "1.56"
+license = "MIT OR Apache-2.0"
+description = "heck is a case conversion library."
+repository = "https://github.com/withoutboats/heck"
+keywords = ["string", "case", "camel", "snake", "unicode"]
+categories = ["no-std"]
+include = ["src/**/*", "LICENSE-*", "README.md", "CHANGELOG.md"]

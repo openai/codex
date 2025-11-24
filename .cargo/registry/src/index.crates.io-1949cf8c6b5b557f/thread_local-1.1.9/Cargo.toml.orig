@@ -1,0 +1,27 @@
+[package]
+name = "thread_local"
+version = "1.1.9"
+authors = ["Amanieu d'Antras <amanieu@gmail.com>"]
+description = "Per-object thread-local storage"
+documentation = "https://docs.rs/thread_local/"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Amanieu/thread_local-rs"
+readme = "README.md"
+keywords = ["thread_local", "concurrent", "thread"]
+edition = "2021"
+rust-version = "1.63"
+
+[features]
+# this feature provides performance improvements using nightly features
+nightly = []
+
+[dependencies]
+# this is required to gate `nightly` related code paths
+cfg-if = "1.0.0"
+
+[dev-dependencies]
+criterion = "0.5.1"
+
+[[bench]]
+name = "thread_local"
+harness = false

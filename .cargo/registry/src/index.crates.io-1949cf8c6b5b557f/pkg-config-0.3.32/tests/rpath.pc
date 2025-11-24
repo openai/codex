@@ -1,0 +1,7 @@
+prefix=/usr/local
+
+Name: rpath
+Version: 4.2.0
+Description: RPath example library
+Libs: -L${prefix}/lib -Wl,-rpath,${prefix}/lib -lrpath
+Cflags: -I${prefix}/include

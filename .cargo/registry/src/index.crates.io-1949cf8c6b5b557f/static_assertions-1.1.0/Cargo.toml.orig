@@ -1,0 +1,22 @@
+[package]
+name = "static_assertions"
+version = "1.1.0"
+authors = ["Nikolai Vazquez"]
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+homepage = "https://github.com/nvzqz/static-assertions-rs"
+repository = "https://github.com/nvzqz/static-assertions-rs"
+documentation = "https://docs.rs/static_assertions/"
+categories = ["no-std", "rust-patterns", "development-tools::testing"]
+keywords = ["assert", "static", "testing"]
+description = "Compile-time assertions to ensure that invariants are met."
+include = ["Cargo.toml", "src/**/*.rs", "README.md", "CHANGELOG.md", "LICENSE*"]
+
+[badges]
+travis-ci = { repository = "nvzqz/static-assertions-rs" }
+is-it-maintained-open-issues = { repository = "nvzqz/static-assertions-rs" }
+is-it-maintained-issue-resolution = { repository = "nvzqz/static-assertions-rs" }
+maintenance = { status = "passively-maintained" }
+
+[features]
+nightly = []

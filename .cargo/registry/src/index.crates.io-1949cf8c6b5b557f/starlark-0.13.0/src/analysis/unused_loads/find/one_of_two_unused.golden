@@ -1,0 +1,18 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Program:
+load("foo", "x", "y")
+print(x)
+
+Unused loads:
+
+error: Unused load
+ --> one_of_two_unused:1:18
+  |
+1 | load("foo", "x", "y")
+  |                  ^^^
+  |

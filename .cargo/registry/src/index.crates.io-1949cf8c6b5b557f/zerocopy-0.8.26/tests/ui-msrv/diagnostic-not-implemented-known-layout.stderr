@@ -1,0 +1,11 @@
+error[E0277]: the trait bound `NotZerocopy: zerocopy::KnownLayout` is not satisfied
+  --> tests/ui-msrv/diagnostic-not-implemented-known-layout.rs:18:26
+   |
+18 |     takes_known_layout::<NotZerocopy>();
+   |                          ^^^^^^^^^^^ the trait `zerocopy::KnownLayout` is not implemented for `NotZerocopy`
+   |
+note: required by a bound in `takes_known_layout`
+  --> tests/ui-msrv/diagnostic-not-implemented-known-layout.rs:21:26
+   |
+21 | fn takes_known_layout<T: KnownLayout>() {}
+   |                          ^^^^^^^^^^^ required by this bound in `takes_known_layout`

@@ -1,0 +1,25 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Traceback (most recent call last):
+  * assert.bzl:3, in <module>
+      should_fail()
+  * imported.bzl:9, in should_fail
+      rust_failure()
+error: rust failure
+ --> imported.bzl:9:5
+  |
+9 |     rust_failure()
+  |     ^^^^^^^^^^^^^^
+  |
+
+
+rust failure
+
+Caused by:
+    0: fail 3
+    1: fail 2
+    2: fail 1

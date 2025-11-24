@@ -1,0 +1,7 @@
+/// This is the Thai encoding for Windows. It is an extension of TIS-620 / ISO-8859-11.
+///
+/// [Index visualization](https://encoding.spec.whatwg.org/windows-874.html),
+/// [Visualization of BMP coverage](https://encoding.spec.whatwg.org/windows-874-bmp.html)
+///
+/// This encoding matches the Windows code page 874, except Windows decodes
+/// unassigned code points to the Private Use Area of Unicode.

@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Test",
+  "type": "object",
+  "required": [
+    "tuple0",
+    "tuple1",
+    "tuple2",
+    "tuple3"
+  ],
+  "properties": {
+    "tuple0": {
+      "type": "null"
+    },
+    "tuple1": {
+      "type": "array",
+      "items": [
+        {
+          "type": "integer",
+          "format": "int32"
+        }
+      ],
+      "maxItems": 1,
+      "minItems": 1
+    },
+    "tuple2": {
+      "type": "array",
+      "items": [
+        {
+          "type": "integer",
+          "format": "int32"
+        },
+        {
+          "type": "integer",
+          "format": "int32"
+        }
+      ],
+      "maxItems": 2,
+      "minItems": 2
+    },
+    "tuple3": {
+      "type": "array",
+      "items": [
+        {
+          "type": "integer",
+          "format": "int32"
+        },
+        {
+          "type": "integer",
+          "format": "int32"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "maxItems": 3,
+      "minItems": 3
+    }
+  }
+}

@@ -1,0 +1,73 @@
+[package]
+name = "similar"
+version = "2.7.0"
+authors = [
+    "Armin Ronacher <armin.ronacher@active-4.com>",
+    "Pierre-Étienne Meunier <pe@pijul.org>",
+    "Brandon Williams <bwilliams.eng@gmail.com>",
+]
+edition = "2018"
+rust-version = "1.60"
+license = "Apache-2.0"
+description = "A diff library for Rust"
+repository = "https://github.com/mitsuhiko/similar"
+keywords = ["diff", "difference", "patience", "compare", "changes"]
+readme = "README.md"
+exclude = ["assets/*"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+default = ["text"]
+text = []
+inline = ["text"]
+wasm32_web_time = ["web-time"]
+unicode = ["text", "unicode-segmentation", "bstr?/unicode", "bstr?/std"]
+bytes = ["bstr", "text"]
+
+[dev-dependencies]
+insta = "1.10.0"
+console = "0.15.0"
+serde_json = "1.0.68"
+
+[dependencies]
+unicode-segmentation = { version = "1.7.1", optional = true }
+bstr = { version = "1.5.0", optional = true, default-features = false }
+serde = { version = "1.0.130", optional = true, features = ["derive"] }
+web-time = { version = "1.1", optional = true }
+
+[[example]]
+name = "patience"
+required-features = ["text", "inline"]
+
+[[example]]
+name = "terminal"
+required-features = ["text"]
+
+[[example]]
+name = "terminal-inline"
+required-features = ["text", "inline", "bytes"]
+
+[[example]]
+name = "original-slices"
+required-features = ["text"]
+
+[[example]]
+name = "udiff"
+required-features = ["text", "bytes"]
+
+[[example]]
+name = "close-matches"
+required-features = ["text"]
+
+[[example]]
+name = "large"
+required-features = ["text"]
+
+[[example]]
+name = "serde"
+required-features = ["text", "serde"]
+
+[profile.release]
+debug = true

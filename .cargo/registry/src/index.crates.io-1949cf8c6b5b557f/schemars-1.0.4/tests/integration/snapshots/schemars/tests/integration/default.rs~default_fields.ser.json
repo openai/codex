@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MyStruct",
+  "type": "object",
+  "properties": {
+    "integer": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "default": 0
+    },
+    "boolean": {
+      "type": "boolean",
+      "default": false
+    },
+    "option_string": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "string_skip_empty": {
+      "type": "string"
+    },
+    "struct2": {
+      "type": "string",
+      "pattern": "^\\d+ (true|false)$",
+      "default": "0 false"
+    }
+  },
+  "required": [
+    "integer",
+    "boolean",
+    "option_string",
+    "struct2"
+  ]
+}

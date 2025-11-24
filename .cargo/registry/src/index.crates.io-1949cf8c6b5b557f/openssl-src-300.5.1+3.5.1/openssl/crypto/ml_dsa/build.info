@@ -1,0 +1,10 @@
+LIBS=../../libcrypto
+
+$COMMON=ml_dsa_encoders.c ml_dsa_key_compress.c ml_dsa_key.c \
+        ml_dsa_matrix.c ml_dsa_ntt.c ml_dsa_params.c ml_dsa_sample.c \
+        ml_dsa_sign.c
+
+IF[{- !$disabled{'ml-dsa'} -}]
+  SOURCE[../../libcrypto]=$COMMON
+  SOURCE[../../providers/libfips.a]=$COMMON
+ENDIF

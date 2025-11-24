@@ -1,0 +1,38 @@
+[package]
+name = "async-trait"
+version = "0.1.89"
+authors = ["David Tolnay <dtolnay@gmail.com>"]
+categories = ["asynchronous", "no-std"]
+description = "Type erasure for async trait methods"
+documentation = "https://docs.rs/async-trait"
+edition = "2021"
+exclude = ["build.rs"]
+keywords = ["async"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/dtolnay/async-trait"
+rust-version = "1.56"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0.74"
+quote = "1.0.35"
+syn = { version = "2.0.46", default-features = false, features = ["clone-impls", "full", "parsing", "printing", "proc-macro", "visit-mut"] }
+
+[dev-dependencies]
+futures = "0.3.30"
+rustversion = "1.0.13"
+tracing = "0.1.40"
+tracing-attributes = "0.1.27"
+trybuild = { version = "1.0.81", features = ["diff"] }
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = [
+    "--generate-link-to-definition",
+    "--extern-html-root-url=core=https://doc.rust-lang.org",
+    "--extern-html-root-url=alloc=https://doc.rust-lang.org",
+    "--extern-html-root-url=std=https://doc.rust-lang.org",
+    "--extern-html-root-url=proc_macro=https://doc.rust-lang.org",
+]

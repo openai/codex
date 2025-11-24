@@ -1,0 +1,52 @@
+[package]
+name = "flate2"
+authors = ["Alex Crichton <alex@alexcrichton.com>", "Josh Triplett <josh@joshtriplett.org>"]
+version = "1.1.2"
+edition = "2018"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+rust-version = "1.67.0"
+keywords = ["gzip", "deflate", "zlib", "zlib-ng", "encoding"]
+categories = ["compression", "api-bindings"]
+repository = "https://github.com/rust-lang/flate2-rs"
+homepage = "https://github.com/rust-lang/flate2-rs"
+documentation = "https://docs.rs/flate2"
+description = """
+DEFLATE compression and decompression exposed as Read/BufRead/Write streams.
+Supports miniz_oxide and multiple zlib implementations. Supports zlib, gzip,
+and raw deflate streams.
+"""
+exclude = [".*"]
+
+[dependencies]
+libz-sys = { version = "1.1.20", optional = true, default-features = false }
+libz-ng-sys = { version = "1.1.16", optional = true }
+# this matches the default features, but we don't want to depend on the default features staying the same
+libz-rs-sys = { version = "0.5.1", optional = true, default-features = false, features = ["std", "rust-allocator"] }
+cloudflare-zlib-sys = { version = "0.3.5", optional = true }
+miniz_oxide = { version = "0.8.5", optional = true, default-features = false, features = ["with-alloc"] }
+crc32fast = "1.2.0"
+
+[target.'cfg(all(target_arch = "wasm32", not(target_os = "emscripten")))'.dependencies]
+miniz_oxide = { version = "0.8.5", default-features = false, features = ["with-alloc"] }
+
+[dev-dependencies]
+rand = "0.9"
+quickcheck = { version = "1.0", default-features = false }
+
+[features]
+default = ["rust_backend"]
+any_zlib = ["any_impl"] # note: this is not a real user-facing feature
+any_impl = [] # note: this is not a real user-facing feature
+zlib = ["any_zlib", "libz-sys"]
+zlib-default = ["any_zlib", "libz-sys/default"]
+zlib-ng-compat = ["zlib", "libz-sys/zlib-ng"]
+zlib-ng = ["any_zlib", "libz-ng-sys"]
+zlib-rs = ["any_zlib", "libz-rs-sys"]
+cloudflare_zlib = ["any_zlib", "cloudflare-zlib-sys"]
+rust_backend = ["miniz_oxide", "any_impl"]
+miniz-sys = ["rust_backend"] # For backwards compatibility
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

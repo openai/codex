@@ -1,0 +1,666 @@
+=pod
+{- OpenSSL::safe::output_do_not_edit_headers(); -}
+
+=head1 NAME
+
+openssl-ts - Time Stamping Authority command
+
+=head1 SYNOPSIS
+
+=for openssl duplicate options
+
+B<openssl> B<ts>
+B<-help>
+
+B<openssl> B<ts>
+B<-query>
+[B<-config> I<configfile>]
+[B<-data> I<file_to_hash>]
+[B<-digest> I<digest_bytes>]
+[B<-I<digest>>]
+[B<-tspolicy> I<object_id>]
+[B<-no_nonce>]
+[B<-cert>]
+[B<-in> I<request.tsq>]
+[B<-out> I<request.tsq>]
+[B<-text>]
+{- $OpenSSL::safe::opt_r_synopsis -}
+{- $OpenSSL::safe::opt_provider_synopsis -}
+
+B<openssl> B<ts>
+B<-reply>
+[B<-config> I<configfile>]
+[B<-section> I<tsa_section>]
+[B<-queryfile> I<request.tsq>]
+[B<-passin> I<password_src>]
+[B<-signer> I<tsa_cert.pem>]
+[B<-inkey> I<filename>|I<uri>]
+[B<-I<digest>>]
+[B<-chain> I<certs_file.pem>]
+[B<-tspolicy> I<object_id>]
+[B<-in> I<response.tsr>]
+[B<-token_in>]
+[B<-out> I<response.tsr>]
+[B<-token_out>]
+[B<-text>]
+{- $OpenSSL::safe::opt_engine_synopsis -}{- $OpenSSL::safe::opt_provider_synopsis -}
+
+B<openssl> B<ts>
+B<-verify>
+[B<-data> I<file_to_hash>]
+[B<-digest> I<digest_bytes>]
+[B<-queryfile> I<request.tsq>]
+[B<-in> I<response.tsr>]
+[B<-token_in>]
+[B<-untrusted> I<files>|I<uris>]
+[B<-CAfile> I<file>]
+[B<-CApath> I<dir>]
+[B<-CAstore> I<uri>]
+{- $OpenSSL::safe::opt_v_synopsis -}
+{- $OpenSSL::safe::opt_provider_synopsis -}
+
+=head1 DESCRIPTION
+
+This command is a basic Time Stamping Authority (TSA) client and
+server application as specified in RFC 3161 (Time-Stamp Protocol, TSP). A
+TSA can be part of a PKI deployment and its role is to provide long
+term proof of the existence of a certain datum before a particular
+time. Here is a brief description of the protocol:
+
+=over 4
+
+=item 1.
+
+The TSA client computes a one-way hash value for a data file and sends
+the hash to the TSA.
+
+=item 2.
+
+The TSA attaches the current date and time to the received hash value,
+signs them and sends the timestamp token back to the client. By
+creating this token the TSA certifies the existence of the original
+data file at the time of response generation.
+
+=item 3.
+
+The TSA client receives the timestamp token and verifies the
+signature on it. It also checks if the token contains the same hash
+value that it had sent to the TSA.
+
+=back
+
+There is one DER encoded protocol data unit defined for transporting a
+timestamp request to the TSA and one for sending the timestamp response
+back to the client. This command has three main functions:
+creating a timestamp request based on a data file,
+creating a timestamp response based on a request, verifying if a
+response corresponds to a particular request or a data file.
+
+There is no support for sending the requests/responses automatically
+over HTTP or TCP yet as suggested in RFC 3161. The users must send the
+requests either by ftp or e-mail.
+
+=head1 OPTIONS
+
+=over 4
+
+=item B<-help>
+
+Print out a usage message.
+
+=item B<-query>
+
+Generate a TS query. For details see L</Timestamp Request generation>.
+
+=item B<-reply>
+
+Generate a TS reply. For details see L</Timestamp Response generation>.
+
+=item B<-verify>
+
+Verify a TS response. For details see L</Timestamp Response verification>.
+
+=back
+
+=head2 Timestamp Request generation
+
+The B<-query> command can be used for creating and printing a timestamp
+request with the following options:
+
+=over 4
+
+=item B<-config> I<configfile>
+
+The configuration file to use.
+Optional; for a description of the default value,
+see L<openssl(1)/COMMAND SUMMARY>.
+
+=item B<-data> I<file_to_hash>
+
+The data file for which the timestamp request needs to be
+created. stdin is the default if neither the B<-data> nor the B<-digest>
+parameter is specified. (Optional)
+
+=item B<-digest> I<digest_bytes>
+
+It is possible to specify the message imprint explicitly without the data
+file. The imprint must be specified in a hexadecimal format, two characters
+per byte, the bytes optionally separated by colons (e.g. 1A:F6:01:... or
+1AF601...). The number of bytes must match the message digest algorithm
+in use. (Optional)
+
+=item B<-I<digest>>
+
+The message digest to apply to the data file.
+Any digest supported by the L<openssl-dgst(1)> command can be used.
+The default is SHA-256. (Optional)
+
+=item B<-tspolicy> I<object_id>
+
+The policy that the client expects the TSA to use for creating the
+timestamp token. Either the dotted OID notation or OID names defined
+in the config file can be used. If no policy is requested the TSA will
+use its own default policy. (Optional)
+
+=item B<-no_nonce>
+
+No nonce is specified in the request if this option is
+given. Otherwise, a 64-bit long pseudo-random nonce is
+included in the request. It is recommended to use a nonce to
+protect against replay attacks. (Optional)
+
+=item B<-cert>
+
+The TSA is expected to include its signing certificate in the
+response. (Optional)
+
+=item B<-in> I<request.tsq>
+
+This option specifies a previously created timestamp request in DER
+format that will be printed into the output file. Useful when you need
+to examine the content of a request in human-readable
+format. (Optional)
+
+=item B<-out> I<request.tsq>
+
+Name of the output file to which the request will be written. Default
+is stdout. (Optional)
+
+=item B<-text>
+
+If this option is specified the output is human-readable text format
+instead of DER. (Optional)
+
+{- $OpenSSL::safe::opt_r_item -}
+
+=back
+
+=head2 Timestamp Response generation
+
+A timestamp response (TimeStampResp) consists of a response status
+and the timestamp token itself (ContentInfo), if the token generation was
+successful. The B<-reply> command is for creating a timestamp
+response or timestamp token based on a request and printing the
+response/token in human-readable format. If B<-token_out> is not
+specified the output is always a timestamp response (TimeStampResp),
+otherwise it is a timestamp token (ContentInfo).
+
+=over 4
+
+=item B<-config> I<configfile>
+
+The configuration file to use.
+Optional; for a description of the default value,
+see L<openssl(1)/COMMAND SUMMARY>.
+See L</CONFIGURATION FILE OPTIONS> for configurable variables.
+
+=item B<-section> I<tsa_section>
+
+The name of the config file section containing the settings for the
+response generation. If not specified the default TSA section is
+used, see L</CONFIGURATION FILE OPTIONS> for details. (Optional)
+
+=item B<-queryfile> I<request.tsq>
+
+The name of the file containing a DER encoded timestamp request. (Optional)
+
+=item B<-passin> I<password_src>
+
+Specifies the password source for the private key of the TSA. See
+description in L<openssl(1)>. (Optional)
+
+=item B<-signer> I<tsa_cert.pem>
+
+The signer certificate of the TSA in PEM format. The TSA signing
+certificate must have exactly one extended key usage assigned to it:
+timeStamping. The extended key usage must also be critical, otherwise
+the certificate is going to be refused. Overrides the B<signer_cert>
+variable of the config file. (Optional)
+
+=item B<-inkey> I<filename>|I<uri>
+
+The signer private key of the TSA in PEM format. Overrides the
+B<signer_key> config file option. (Optional)
+
+=item B<-I<digest>>
+
+Signing digest to use. Overrides the B<signer_digest> config file
+option. (Mandatory unless specified in the config file)
+
+=item B<-chain> I<certs_file.pem>
+
+The collection of certificates in PEM format that will all
+be included in the response in addition to the signer certificate if
+the B<-cert> option was used for the request. This file is supposed to
+contain the certificate chain for the signer certificate from its
+issuer upwards. The B<-reply> command does not build a certificate
+chain automatically. (Optional)
+
+=item B<-tspolicy> I<object_id>
+
+The default policy to use for the response unless the client
+explicitly requires a particular TSA policy. The OID can be specified
+either in dotted notation or with its name. Overrides the
+B<default_policy> config file option. (Optional)
+
+=item B<-in> I<response.tsr>
+
+Specifies a previously created timestamp response or timestamp token
+(if B<-token_in> is also specified) in DER format that will be written
+to the output file. This option does not require a request, it is
+useful e.g. when you need to examine the content of a response or
+token or you want to extract the timestamp token from a response. If
+the input is a token and the output is a timestamp response a default
+'granted' status info is added to the token. (Optional)
+
+=item B<-token_in>
+
+This flag can be used together with the B<-in> option and indicates
+that the input is a DER encoded timestamp token (ContentInfo) instead
+of a timestamp response (TimeStampResp). (Optional)
+
+=item B<-out> I<response.tsr>
+
+The response is written to this file. The format and content of the
+file depends on other options (see B<-text>, B<-token_out>). The default is
+stdout. (Optional)
+
+=item B<-token_out>
+
+The output is a timestamp token (ContentInfo) instead of timestamp
+response (TimeStampResp). (Optional)
+
+=item B<-text>
+
+If this option is specified the output is human-readable text format
+instead of DER. (Optional)
+
+{- $OpenSSL::safe::opt_engine_item -}
+
+{- $OpenSSL::safe::opt_provider_item -}
+
+=back
+
+=head2 Timestamp Response verification
+
+The B<-verify> command is for verifying if a timestamp response or
+timestamp token is valid and matches a particular timestamp request or
+data file. The B<-verify> command does not use the configuration file.
+
+=over 4
+
+=item B<-data> I<file_to_hash>
+
+The response or token must be verified against file_to_hash. The file
+is hashed with the message digest algorithm specified in the token.
+The B<-digest> and B<-queryfile> options must not be specified with this one.
+(Optional)
+
+=item B<-digest> I<digest_bytes>
+
+The response or token must be verified against the message digest specified
+with this option. The number of bytes must match the message digest algorithm
+specified in the token. The B<-data> and B<-queryfile> options must not be
+specified with this one. (Optional)
+
+=item B<-queryfile> I<request.tsq>
+
+The original timestamp request in DER format. The B<-data> and B<-digest>
+options must not be specified with this one. (Optional)
+
+=item B<-in> I<response.tsr>
+
+The timestamp response that needs to be verified in DER format. (Mandatory)
+
+=item B<-token_in>
+
+This flag can be used together with the B<-in> option and indicates
+that the input is a DER encoded timestamp token (ContentInfo) instead
+of a timestamp response (TimeStampResp). (Optional)
+
+=item B<-untrusted> I<files>|I<uris>
+
+A set of additional untrusted certificates which may be
+needed when building the certificate chain for the TSA's signing certificate.
+These do not need to contain the TSA signing certificate and intermediate CA
+certificates as far as the response already includes them.
+(Optional)
+
+Multiple sources may be given, separated by commas and/or whitespace.
+Each file may contain multiple certificates.
+
+=item B<-CAfile> I<file>, B<-CApath> I<dir>, B<-CAstore> I<uri>
+
+See L<openssl-verification-options(1)/Trusted Certificate Options> for details.
+At least one of B<-CAfile>, B<-CApath> or B<-CAstore> must be specified.
+
+{- $OpenSSL::safe::opt_v_item -}
+
+Any verification errors cause the command to exit.
+
+=back
+
+=head1 CONFIGURATION FILE OPTIONS
+
+The B<-query> and B<-reply> commands make use of a configuration file.
+See L<config(5)>
+for a general description of the syntax of the config file. The
+B<-query> command uses only the symbolic OID names section
+and it can work without it. However, the B<-reply> command needs the
+config file for its operation.
+
+When there is a command line switch equivalent of a variable the
+switch always overrides the settings in the config file.
+
+=over 4
+
+=item B<tsa> section, B<default_tsa>
+
+This is the main section and it specifies the name of another section
+that contains all the options for the B<-reply> command. This default
+section can be overridden with the B<-section> command line switch. (Optional)
+
+=item B<oid_file>
+
+This specifies a file containing additional B<OBJECT IDENTIFIERS>.
+Each line of the file should consist of the numerical form of the
+object identifier followed by whitespace then the short name followed
+by whitespace and finally the long name. (Optional)
+
+=item B<oid_section>
+
+This specifies a section in the configuration file containing extra
+object identifiers. Each line should consist of the short name of the
+object identifier followed by B<=> and the numerical form. The short
+and long names are the same when this option is used. (Optional)
+
+=item B<RANDFILE>
+
+At startup the specified file is loaded into the random number generator,
+and at exit 256 bytes will be written to it. (Note: Using a RANDFILE is
+not necessary anymore, see the L</HISTORY> section.
+
+=item B<serial>
+
+The name of the file containing the hexadecimal serial number of the
+last timestamp response created. This number is incremented by 1 for
+each response. If the file does not exist at the time of response
+generation a new file is created with serial number 1. (Mandatory)
+
+=item B<crypto_device>
+
+Specifies the OpenSSL engine that will be set as the default for
+all available algorithms. The default value is built-in, you can specify
+any other engines supported by OpenSSL (e.g. use chil for the NCipher HSM).
+(Optional)
+
+=item B<signer_cert>
+
+TSA signing certificate in PEM format. The same as the B<-signer>
+command line option. (Optional)
+
+=item B<certs>
+
+A file containing a set of PEM encoded certificates that need to be
+included in the response. The same as the B<-chain> command line
+option. (Optional)
+
+=item B<signer_key>
+
+The private key of the TSA in PEM format. The same as the B<-inkey>
+command line option. (Optional)
+
+=item B<signer_digest>
+
+Signing digest to use. The same as the
+B<-I<digest>> command line option. (Mandatory unless specified on the command
+line)
+
+=item B<default_policy>
+
+The default policy to use when the request does not mandate any
+policy. The same as the B<-tspolicy> command line option. (Optional)
+
+=item B<other_policies>
+
+Comma separated list of policies that are also acceptable by the TSA
+and used only if the request explicitly specifies one of them. (Optional)
+
+=item B<digests>
+
+The list of message digest algorithms that the TSA accepts. At least
+one algorithm must be specified. (Mandatory)
+
+=item B<accuracy>
+
+The accuracy of the time source of the TSA in seconds, milliseconds
+and microseconds. E.g. secs:1, millisecs:500, microsecs:100. If any of
+the components is missing zero is assumed for that field. (Optional)
+
+=item B<clock_precision_digits>
+
+Specifies the maximum number of digits, which represent the fraction of
+seconds, that  need to be included in the time field. The trailing zeros
+must be removed from the time, so there might actually be fewer digits,
+or no fraction of seconds at all. Supported only on UNIX platforms.
+The maximum value is 6, default is 0.
+(Optional)
+
+=item B<ordering>
+
+If this option is yes the responses generated by this TSA can always
+be ordered, even if the time difference between two responses is less
+than the sum of their accuracies. Default is no. (Optional)
+
+=item B<tsa_name>
+
+Set this option to yes if the subject name of the TSA must be included in
+the TSA name field of the response. Default is no. (Optional)
+
+=item B<ess_cert_id_chain>
+
+The SignedData objects created by the TSA always contain the
+certificate identifier of the signing certificate in a signed
+attribute (see RFC 2634, Enhanced Security Services).
+If this variable is set to no, only this signing certificate identifier
+is included in the SigningCertificate signed attribute.
+If this variable is set to yes and the B<certs> variable or the B<-chain> option
+is specified then the certificate identifiers of the chain will also
+be included, where the B<-chain> option overrides the B<certs> variable.
+Default is no.  (Optional)
+
+=item B<ess_cert_id_alg>
+
+This option specifies the hash function to be used to calculate the TSA's
+public key certificate identifier. Default is sha256. (Optional)
+
+=back
+
+=head1 EXAMPLES
+
+All the examples below presume that B<OPENSSL_CONF> is set to a proper
+configuration file, e.g. the example configuration file
+F<openssl/apps/openssl.cnf> will do.
+
+=head2 Timestamp Request
+
+To create a timestamp request for F<design1.txt> with SHA-256 digest,
+without nonce and policy, and without requirement for a certificate
+in the response:
+
+  openssl ts -query -data design1.txt -no_nonce \
+        -out design1.tsq
+
+To create a similar timestamp request with specifying the message imprint
+explicitly:
+
+  openssl ts -query -digest b7e5d3f93198b38379852f2c04e78d73abdd0f4b \
+         -no_nonce -out design1.tsq
+
+To print the content of the previous request in human readable format:
+
+  openssl ts -query -in design1.tsq -text
+
+To create a timestamp request which includes the SHA-512 digest
+of F<design2.txt>, requests the signer certificate and nonce, and
+specifies a policy id (assuming the tsa_policy1 name is defined in the
+OID section of the config file):
+
+  openssl ts -query -data design2.txt -sha512 \
+        -tspolicy tsa_policy1 -cert -out design2.tsq
+
+=head2 Timestamp Response
+
+Before generating a response a signing certificate must be created for
+the TSA that contains the B<timeStamping> critical extended key usage extension
+without any other key usage extensions. You can add this line to the
+user certificate section of the config file to generate a proper certificate;
+
+   extendedKeyUsage = critical,timeStamping
+
+See L<openssl-req(1)>, L<openssl-ca(1)>, and L<openssl-x509(1)> for
+instructions. The examples below assume that F<cacert.pem> contains the
+certificate of the CA, F<tsacert.pem> is the signing certificate issued
+by F<cacert.pem> and F<tsakey.pem> is the private key of the TSA.
+
+To create a timestamp response for a request:
+
+  openssl ts -reply -queryfile design1.tsq -inkey tsakey.pem \
+        -signer tsacert.pem -out design1.tsr
+
+If you want to use the settings in the config file you could just write:
+
+  openssl ts -reply -queryfile design1.tsq -out design1.tsr
+
+To print a timestamp reply to stdout in human readable format:
+
+  openssl ts -reply -in design1.tsr -text
+
+To create a timestamp token instead of timestamp response:
+
+  openssl ts -reply -queryfile design1.tsq -out design1_token.der -token_out
+
+To print a timestamp token to stdout in human readable format:
+
+  openssl ts -reply -in design1_token.der -token_in -text -token_out
+
+To extract the timestamp token from a response:
+
+  openssl ts -reply -in design1.tsr -out design1_token.der -token_out
+
+To add 'granted' status info to a timestamp token thereby creating a
+valid response:
+
+  openssl ts -reply -in design1_token.der -token_in -out design1.tsr
+
+=head2 Timestamp Verification
+
+To verify a timestamp reply against a request:
+
+  openssl ts -verify -queryfile design1.tsq -in design1.tsr \
+        -CAfile cacert.pem -untrusted tsacert.pem
+
+To verify a timestamp reply that includes the certificate chain:
+
+  openssl ts -verify -queryfile design2.tsq -in design2.tsr \
+        -CAfile cacert.pem
+
+To verify a timestamp token against the original data file:
+
+  openssl ts -verify -data design2.txt -in design2.tsr \
+        -CAfile cacert.pem
+
+To verify a timestamp token against a message imprint:
+
+  openssl ts -verify -digest b7e5d3f93198b38379852f2c04e78d73abdd0f4b \
+         -in design2.tsr -CAfile cacert.pem
+
+You could also look at the 'test' directory for more examples.
+
+=head1 BUGS
+
+=for openssl foreign manual procmail(1) perl(1)
+
+=over 2
+
+=item *
+
+No support for timestamps over SMTP, though it is quite easy
+to implement an automatic e-mail based TSA with L<procmail(1)>
+and L<perl(1)>. HTTP server support is provided in the form of
+a separate apache module. HTTP client support is provided by
+L<tsget(1)>. Pure TCP/IP protocol is not supported.
+
+=item *
+
+The file containing the last serial number of the TSA is not
+locked when being read or written. This is a problem if more than one
+instance of L<openssl(1)> is trying to create a timestamp
+response at the same time. This is not an issue when using the apache
+server module, it does proper locking.
+
+=item *
+
+Look for the FIXME word in the source files.
+
+=item *
+
+The source code should really be reviewed by somebody else, too.
+
+=item *
+
+More testing is needed, I have done only some basic tests (see
+test/testtsa).
+
+=back
+
+=head1 HISTORY
+
+OpenSSL 1.1.1 introduced a new random generator (CSPRNG) with an improved
+seeding mechanism. The new seeding mechanism makes it unnecessary to
+define a RANDFILE for saving and restoring randomness. This option is
+retained mainly for compatibility reasons.
+
+The B<-engine> option was deprecated in OpenSSL 3.0.
+
+=head1 SEE ALSO
+
+L<openssl(1)>,
+L<tsget(1)>,
+L<openssl-req(1)>,
+L<openssl-x509(1)>,
+L<openssl-ca(1)>,
+L<openssl-genrsa(1)>,
+L<config(5)>,
+L<ossl_store-file(7)>
+
+=head1 COPYRIGHT
+
+Copyright 2006-2025 The OpenSSL Project Authors. All Rights Reserved.
+
+Licensed under the Apache License 2.0 (the "License").  You may not use
+this file except in compliance with the License.  You can obtain a copy
+in the file LICENSE in the source distribution or at
+L<https://www.openssl.org/source/license.html>.
+
+=cut

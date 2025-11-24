@@ -1,0 +1,9 @@
+[licenses]
+version = 2
+allow = ["Apache-2.0", "MIT", "MIT-0", "Unicode-3.0"]
+private = { ignore = true }
+
+[[licenses.clarify]]
+name = "ring"
+expression = "ISC AND MIT AND OpenSSL"
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]

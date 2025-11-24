@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Untagged",
+  "anyOf": [
+    {
+      "title": "UnitOne",
+      "type": "null"
+    },
+    {
+      "title": "StringMap",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    {
+      "title": "UnitStructNewType",
+      "$ref": "#/$defs/UnitStruct"
+    },
+    {
+      "title": "StructNewType",
+      "$ref": "#/$defs/Struct"
+    },
+    {
+      "title": "Struct",
+      "type": "object",
+      "properties": {
+        "foo": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "bar": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "foo",
+        "bar"
+      ]
+    },
+    {
+      "title": "EmptyTuple",
+      "type": "array",
+      "maxItems": 0
+    },
+    {
+      "title": "Tuple",
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "integer",
+          "format": "int32"
+        },
+        {
+          "type": "boolean"
+        }
+      ],
+      "minItems": 2,
+      "maxItems": 2
+    },
+    {
+      "title": "UnitTwo",
+      "type": "null"
+    },
+    {
+      "title": "UnitAsInt",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    {
+      "title": "TupleAsStr",
+      "type": "string",
+      "pattern": "^\\d+ (true|false)$"
+    }
+  ],
+  "$defs": {
+    "UnitStruct": {
+      "type": "null"
+    },
+    "Struct": {
+      "type": "object",
+      "properties": {
+        "foo": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "bar": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "foo",
+        "bar"
+      ]
+    }
+  }
+}

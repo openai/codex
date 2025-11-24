@@ -1,0 +1,3 @@
+[submodule "iri-string-tests/uritemplate-test"]
+	path = iri-string-tests/assets/uritemplate-test
+	url = https://github.com/uri-templates/uritemplate-test.git

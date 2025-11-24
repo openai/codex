@@ -1,0 +1,65 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Program:
+unknown $&%+ operator
+
+Error:
+error: Parse error: invalid input `$`
+ --> x:1:9
+  |
+1 | unknown $&%+ operator
+  |         ^
+  |
+
+
+Program:
+an 'incomplete string
+ends
+
+Error:
+error: Parse error: unfinished string literal
+ --> x:1:4
+  |
+1 | an 'incomplete string
+  |    ^^^^^^^^^^^^^^^^^^
+  |
+
+
+Program:
+an + 'invalid escape \x3  character'
+
+Error:
+error: Parse error: invalid string escape sequence `x3 `
+ --> x:1:22
+  |
+1 | an + 'invalid escape \x3  character'
+  |                      ^^^^
+  |
+
+
+Program:
+leading_zero = 003 + 8
+
+Error:
+error: Parse error: integer cannot have leading 0, got `003`
+ --> x:1:16
+  |
+1 | leading_zero = 003 + 8
+  |                ^^^
+  |
+
+
+Program:
+reserved_word = raise + 1
+
+Error:
+error: Parse error: cannot use reserved keyword `raise`
+ --> x:1:17
+  |
+1 | reserved_word = raise + 1
+  |                 ^^^^^
+  |

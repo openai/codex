@@ -1,0 +1,87 @@
+[package]
+edition = "2018"
+description = "An implementation of Keccak derived functions."
+homepage = "https://github.com/debris/tiny-keccak"
+license = "CC0-1.0"
+name = "tiny-keccak"
+version = "2.0.2"
+authors = ["debris <marek.kotewicz@gmail.com>"]
+keywords = ["hash", "sha3", "keccak", "crypto", "kangarootwelve"]
+categories = ["cryptography", "no-std"]
+
+[dependencies]
+crunchy = "0.2.2"
+
+[profile.dev]
+opt-level = 3  # Controls the --opt-level the compiler builds with
+debug = false   # Controls whether the compiler passes `-g`
+
+[profile.test]
+opt-level = 3  # Controls the --opt-level the compiler builds with
+debug = false   # Controls whether the compiler passes `-g`
+
+[workspace]
+members = ["comparison"]
+
+[badges]
+travis-ci = { repository = "debris/tiny-keccak", branch = "master"}
+
+[features]
+default = []
+cshake = []
+fips202 = ["keccak", "shake", "sha3"]
+k12 = []
+keccak = []
+kmac = ["cshake"]
+parallel_hash = ["cshake"]
+sha3 = []
+shake = []
+sp800 = ["cshake", "kmac", "tuple_hash"]
+tuple_hash = ["cshake"]
+
+[[test]]
+name = "keccak"
+required-features = ["keccak"]
+
+[[test]]
+name = "cshake"
+required-features = ["cshake"]
+
+[[test]]
+name = "tuple_hash"
+required-features = ["tuple_hash"]
+
+[[test]]
+name = "kangaroo"
+required-features = ["k12"]
+
+[[test]]
+name = "sha3"
+required-features = ["sha3"]
+
+[[test]]
+name = "shake"
+required-features = ["shake"]
+
+[[test]]
+name = "kmac"
+required-features = ["kmac"]
+
+[[test]]
+name = "parallel_hash"
+required-features = ["parallel_hash"]
+
+[[bench]]
+name = "keccak"
+required-features = ["keccak"]
+
+[[bench]]
+name = "kangaroo"
+required-features = ["k12"]
+
+[[example]]
+name = "sha3"
+required-features = ["sha3"]
+
+[package.metadata.docs.rs]
+all-features = true

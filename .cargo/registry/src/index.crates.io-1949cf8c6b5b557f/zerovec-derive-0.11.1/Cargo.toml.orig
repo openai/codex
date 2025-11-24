@@ -1,0 +1,49 @@
+# This file is part of ICU4X. For terms of use, please see the file
+# called LICENSE at the top level of the ICU4X source tree
+# (online at: https://github.com/unicode-org/icu4x/blob/main/LICENSE ).
+
+[package]
+name = "zerovec-derive"
+description = "Custom derive for the zerovec crate"
+version = "0.11.1"
+authors = ["Manish Goregaokar <manishsmail@gmail.com>"]
+categories = ["rust-patterns", "memory-management", "caching", "no-std", "data-structures"]
+keywords = ["zerocopy", "serialization", "zero-copy", "serde"]
+
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[package.metadata.workspaces]
+independent = true
+
+[lib]
+proc-macro = true
+path = "src/lib.rs"
+
+[dependencies]
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true, features = ["extra-traits"]}
+
+[dev-dependencies]
+zerovec = { path = "..", features = ["serde", "derive"] }
+serde = { workspace = true, features = ["derive"] }
+zerofrom = { path = "../../../utils/zerofrom" }
+bincode = { workspace = true }
+serde_json = { workspace = true }
+
+[[example]]
+name = "derives"
+harness = false
+test = true
+
+[[example]]
+name = "make"
+harness = false
+test = true
+
+[[example]]
+name = "make_var"
+harness = false
+test = true

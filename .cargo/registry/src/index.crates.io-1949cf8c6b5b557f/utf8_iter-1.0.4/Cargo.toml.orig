@@ -1,0 +1,13 @@
+[package]
+name = "utf8_iter"
+version = "1.0.4"
+edition = "2021"
+description = "Iterator by char over potentially-invalid UTF-8 in &[u8]"
+authors = ["Henri Sivonen <hsivonen@hsivonen.fi>"]
+license = "Apache-2.0 OR MIT"
+readme = "README.md"
+documentation = "https://docs.rs/utf8_iter/"
+homepage = "https://docs.rs/utf8_iter/"
+repository = "https://github.com/hsivonen/utf8_iter"
+keywords = ["encoding", "UTF-8", "unicode", "iterator"]
+categories = ["text-processing", "encoding", "internationalization"]

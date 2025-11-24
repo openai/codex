@@ -1,0 +1,61 @@
+[package]
+name = "futures-util"
+version = "0.3.31"
+edition = "2018"
+rust-version = "1.56"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rust-lang/futures-rs"
+homepage = "https://rust-lang.github.io/futures-rs"
+description = """
+Common utilities and extension traits for the futures-rs library.
+"""
+
+[features]
+default = ["std", "async-await", "async-await-macro"]
+std = ["alloc", "futures-core/std", "futures-task/std", "slab"]
+alloc = ["futures-core/alloc", "futures-task/alloc"]
+async-await = []
+async-await-macro = ["async-await", "futures-macro"]
+compat = ["std", "futures_01"]
+io-compat = ["io", "compat", "tokio-io"]
+sink = ["futures-sink"]
+io = ["std", "futures-io", "memchr"]
+channel = ["std", "futures-channel"]
+portable-atomic = ["futures-core/portable-atomic"]
+
+# Unstable features
+# These features are outside of the normal semver guarantees and require the
+# `unstable` feature as an explicit opt-in to unstable API.
+unstable = ["futures-core/unstable", "futures-task/unstable"]
+bilock = []
+write-all-vectored = ["io"]
+
+# These features are no longer used.
+# TODO: remove in the next major version.
+cfg-target-has-atomic = []
+
+[dependencies]
+futures-core = { path = "../futures-core", version = "0.3.31", default-features = false }
+futures-task = { path = "../futures-task", version = "0.3.31", default-features = false }
+futures-channel = { path = "../futures-channel", version = "0.3.31", default-features = false, features = ["std"], optional = true }
+futures-io = { path = "../futures-io", version = "0.3.31", default-features = false, features = ["std"], optional = true }
+futures-sink = { path = "../futures-sink", version = "0.3.31", default-features = false, optional = true }
+futures-macro = { path = "../futures-macro", version = "=0.3.31", default-features = false, optional = true }
+slab = { version = "0.4.2", optional = true }
+memchr = { version = "2.2", optional = true }
+futures_01 = { version = "0.1.25", optional = true, package = "futures" }
+tokio-io = { version = "0.1.9", optional = true }
+pin-utils = "0.1.0"
+pin-project-lite = "0.2.6"
+
+[dev-dependencies]
+futures = { path = "../futures", features = ["async-await", "thread-pool"] }
+futures-test = { path = "../futures-test" }
+tokio = "0.1.11"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true

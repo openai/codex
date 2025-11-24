@@ -1,0 +1,31 @@
+error: lifetime may not live long enough
+  --> tests/ui-nightly/ptr-is-invariant-over-v.rs:10:5
+   |
+6  | fn _when_exclusive<'big: 'small, 'small>(
+   |                    ----          ------ lifetime `'small` defined here
+   |                    |
+   |                    lifetime `'big` defined here
+...
+10 |     _small = big;
+   |     ^^^^^^^^^^^^ assignment requires that `'small` must outlive `'big`
+   |
+   = help: consider adding the following bound: `'small: 'big`
+   = note: requirement occurs because of the type `Ptr<'_, &u32, (invariant::Exclusive, Aligned, Valid)>`, which makes the generic argument `&u32` invariant
+   = note: the struct `Ptr<'a, T, I>` is invariant over the parameter `T`
+   = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+
+error: lifetime may not live long enough
+  --> tests/ui-nightly/ptr-is-invariant-over-v.rs:17:5
+   |
+13 | fn _when_shared<'big: 'small, 'small>(
+   |                 ----          ------ lifetime `'small` defined here
+   |                 |
+   |                 lifetime `'big` defined here
+...
+17 |     _small = big;
+   |     ^^^^^^^^^^^^ assignment requires that `'small` must outlive `'big`
+   |
+   = help: consider adding the following bound: `'small: 'big`
+   = note: requirement occurs because of the type `Ptr<'_, &u32, (Shared, Aligned, Valid)>`, which makes the generic argument `&u32` invariant
+   = note: the struct `Ptr<'a, T, I>` is invariant over the parameter `T`
+   = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance

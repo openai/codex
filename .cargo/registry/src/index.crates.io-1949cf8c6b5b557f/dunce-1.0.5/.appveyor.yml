@@ -1,0 +1,32 @@
+os: Visual Studio 2015
+
+environment:
+  matrix:
+  # Stable 64-bit MSVC
+    - channel: stable
+      target: x86_64-pc-windows-msvc
+  # Nightly 32-bit MSVC
+    - channel: nightly
+      target: i686-pc-windows-msvc
+  # Beta 32-bit GNU
+    - channel: beta
+      target: i686-pc-windows-gnu
+
+matrix:
+  allow_failures:
+    - channel: nightly
+    - channel: beta
+
+install:
+  - appveyor DownloadFile https://win.rustup.rs/ -FileName rustup-init.exe
+  - rustup-init -yv --default-toolchain %channel% --default-host %target%
+  - set PATH=%PATH%;%USERPROFILE%\.cargo\bin
+  - rustc -vV
+  - cargo -vV
+
+# Uses 'cargo test' to run tests and build. Alternatively, the project may call compiled programs
+# directly or perform other testing commands. Rust will automatically be placed in the PATH
+# environment variable.
+build: false
+test_script:
+  - cargo test --all --verbose

@@ -1,0 +1,81 @@
+// @generated
+/// Implement `DataProvider<PropertyNameParseGeneralCategoryV1>` on the given struct using the data
+/// hardcoded in this file. This allows the struct to be used with
+/// `icu`'s `_unstable` constructors.
+///
+/// Using this implementation will embed the following data in the binary's data segment:
+/// * 619B[^1] for the singleton data struct
+///
+/// [^1]: these numbers can be smaller in practice due to linker deduplication
+///
+/// This macro requires the following crates:
+/// * `icu`
+/// * `icu_provider`
+/// * `zerotrie`
+/// * `zerovec`
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __impl_property_name_parse_general_category_v1 {
+    ($ provider : ty) => {
+        #[clippy::msrv = "1.83"]
+        const _: () = <$provider>::MUST_USE_MAKE_PROVIDER_MACRO;
+        #[clippy::msrv = "1.83"]
+        impl $provider {
+            #[doc(hidden)]
+            pub const SINGLETON_PROPERTY_NAME_PARSE_GENERAL_CATEGORY_V1: &'static <icu::properties::provider::PropertyNameParseGeneralCategoryV1 as icu_provider::DynamicDataMarker>::DataStruct = &icu::properties::provider::names::PropertyValueNameToEnumMap { map: zerotrie::ZeroTrieSimpleAscii { store: unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"\xE1pCDEFILMNOPSTUZcd\0\0\0\0\0\0\x01\x01\x01\x01\x01\x01\x02\x02\x02Rs\x81\x9C\xB0\xEB\x1B2q\xAE\xE4\xF4\x10\x19\x1E\xC7cflnosu\x01\x03\x14\x1535\x8F\x90\0ose_Punctuation\x90\x05\x80\x90\x01n\xC2nt\x13ector_Punctuation\x90\x06rol\x8F\x90\x02rrency_Symbol\x90\t\xC2ae\x10sh_Punctuation\x90\x03cimal_Number\x89nclosing_Mark\x87\xC2io\x11nal_Punctuation\x90\rrmat\x90\0nitial_Punctuation\x90\x0C\xC7eilmotu\x0C\x19\x1A\x1B+,tter_Number\x8Ane_Separator\x8D\x82\x84\x85wercase_Letter\x82\x83\x81\xC5aceno\x0B\x0C\r\x0Eth_Symbol\x90\x08\x88\x87\x86difier_\xC2LS\x06etter\x84ymbol\x90\n\xC3dlo\x01\x02\x89\x8A\x8Bnspacing_Mark\x86\xC2pt\x10en_Punctuation\x90\x04her_\xC4LNPS\x06\x0C\x18etter\x85umber\x8Bunctuation\x90\x07ymbol\x90\x0B\xC9acdefiors\x12\x14\x16\x18\x1A\x1C\x1E)ragraph_Separator\x8E\x90\x06\x90\x03\x90\x05\x90\r\x90\x0C\x90\x07ivate_Use\x90\x01\x90\x04\xC6ckmopu\x02\x04\x06\x08!\x90\t\x90\n\x90\x08\x90\x0Bac\xC2ei\x0B_Separator\x8Cng_Mark\x88rrogate\x90\x02itlecase_Letter\x83\xC2np\tassigned\x80percase_Letter\x81\xC3lps\x01\x02\x8D\x8E\x8Cntrl\x8Figit\x89") } } };
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DataProvider<icu::properties::provider::PropertyNameParseGeneralCategoryV1> for $provider {
+            fn load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponse<icu::properties::provider::PropertyNameParseGeneralCategoryV1>, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponse { payload: icu_provider::DataPayload::from_static_ref(Self::SINGLETON_PROPERTY_NAME_PARSE_GENERAL_CATEGORY_V1), metadata: icu_provider::DataResponseMetadata::default() })
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyNameParseGeneralCategoryV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , ITER) => {
+        __impl_property_name_parse_general_category_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::properties::provider::PropertyNameParseGeneralCategoryV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+    ($ provider : ty , DRY) => {
+        __impl_property_name_parse_general_category_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::properties::provider::PropertyNameParseGeneralCategoryV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyNameParseGeneralCategoryV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , DRY , ITER) => {
+        __impl_property_name_parse_general_category_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::properties::provider::PropertyNameParseGeneralCategoryV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyNameParseGeneralCategoryV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::properties::provider::PropertyNameParseGeneralCategoryV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+}
+#[doc(inline)]
+pub use __impl_property_name_parse_general_category_v1 as impl_property_name_parse_general_category_v1;

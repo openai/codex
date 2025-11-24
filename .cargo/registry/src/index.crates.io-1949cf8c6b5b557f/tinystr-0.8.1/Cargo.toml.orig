@@ -1,0 +1,72 @@
+# This file is part of ICU4X. For terms of use, please see the file
+# called LICENSE at the top level of the ICU4X source tree
+# (online at: https://github.com/unicode-org/icu4x/blob/main/LICENSE ).
+
+[package]
+name = "tinystr"
+description = "A small ASCII-only bounded length string representation."
+version = "0.8.1"
+keywords = ["string", "str", "small", "tiny", "no_std"]
+categories = ["data-structures"]
+
+authors.workspace = true
+edition.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.workspaces]
+independent = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+displaydoc = { workspace = true }
+
+serde = { workspace = true, features = ["alloc"], optional = true }
+zerovec = { workspace = true, optional = true }
+databake = { workspace = true, optional = true }
+
+[dev-dependencies]
+bincode = { workspace = true }
+postcard = { workspace = true, features = ["use-std"] }
+rand = { workspace = true, features = ["small_rng"] }
+serde_json = { workspace = true, features = ["alloc"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion = { workspace = true }
+
+[features]
+default = ["alloc"]
+alloc = ["zerovec?/alloc"]
+zerovec = ["dep:zerovec"]
+databake = ["dep:databake"]
+serde = ["dep:serde"]
+# No longer does anything
+std = []
+
+[lib]
+bench = false  # This option is required for Benchmark CI
+
+[[test]]
+name = "serde"
+required-features = ["serde"]
+
+[[bench]]
+name = "overview"
+harness = false
+
+[[bench]]
+name = "construct"
+harness = false
+
+[[bench]]
+name = "read"
+harness = false
+
+[[bench]]
+name = "serde"
+harness = false
+required-features = ["serde"]

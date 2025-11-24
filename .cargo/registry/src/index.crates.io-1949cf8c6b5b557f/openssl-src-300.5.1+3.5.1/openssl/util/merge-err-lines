@@ -1,0 +1,29 @@
+#! /usr/bin/env perl
+# Copyright 2019 The OpenSSL Project Authors. All Rights Reserved.
+#
+# Licensed under the Apache License 2.0 (the "License").  You may not use
+# this file except in compliance with the License.  You can obtain a copy
+# in the file LICENSE in the source distribution or at
+# https://www.openssl.org/source/license.html
+
+# Sometimes calls to XXXerr() are split into two lines, because the define'd
+# names are very long.  This script looks for those lines and merges them.
+# It should be run before the "err-to-raise" script.
+
+# Run this program like this:
+#       perl -pi util/merge-err-lines files...
+# or
+#       git grep -l '[A-Z0-9]err([^)]*$' | xargs perl -pi util/merge-err-lines
+
+use strict;
+use warnings;
+
+# Look for "{whitespace}XXXerr(no-close-paren{WHITESPACE}" lines
+if ( /^ *[_A-Z0-9]+err\([^)]+ *$/ ) {
+    my $copy = $_;
+    chop($copy);
+    $copy =~ s/ +$//;
+    my $next = <>;
+    $next =~ s/^ +//;
+    $_ = $copy . ' ' . $next;
+}

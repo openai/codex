@@ -1,0 +1,28 @@
+[package]
+name = "fdeflate"
+version = "0.3.7"
+edition = "2021"
+
+# note: when changed, also update test runner in `.github/workflows/rust.yml`
+rust-version = "1.67.0"
+
+license = "MIT OR Apache-2.0"
+description = "Fast specialized deflate implementation"
+authors = ["The image-rs Developers"]
+include = ["/src", "/tests", "README.md", "LICENSE-APACHE", "LICENSE-MIT"]
+
+# crates.io metadata
+documentation = "https://docs.rs/fdeflate"
+repository = "https://github.com/image-rs/fdeflate"
+homepage = "https://github.com/image-rs/fdeflate"
+categories = ["compression"]
+
+[dependencies]
+simd-adler32 = "0.3.4"
+
+[dev-dependencies]
+miniz_oxide = "0.7.1"
+rand = "0.8.5"
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(fuzzing)'] }

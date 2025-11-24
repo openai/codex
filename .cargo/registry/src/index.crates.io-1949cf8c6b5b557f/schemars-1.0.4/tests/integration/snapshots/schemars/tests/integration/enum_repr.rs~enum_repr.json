@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "EnumWithReprAttr",
+  "description": "Description from comment",
+  "type": "integer",
+  "enum": [
+    0,
+    1,
+    5,
+    6,
+    3
+  ]
+}

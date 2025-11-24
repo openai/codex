@@ -1,0 +1,176 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "External",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/unitOne"
+    },
+    {
+      "$ref": "#/$defs/stringMap"
+    },
+    {
+      "$ref": "#/$defs/unitStructNewType"
+    },
+    {
+      "$ref": "#/$defs/structNewType"
+    },
+    {
+      "$ref": "#/$defs/struct"
+    },
+    {
+      "$ref": "#/$defs/tuple"
+    },
+    {
+      "$ref": "#/$defs/unitTwo"
+    },
+    {
+      "$ref": "#/$defs/unitAsInt"
+    },
+    {
+      "$ref": "#/$defs/tupleAsStr"
+    }
+  ],
+  "$defs": {
+    "unitOne": {
+      "type": "string",
+      "const": "unitOne"
+    },
+    "stringMap": {
+      "type": "object",
+      "properties": {
+        "stringMap": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "stringMap"
+      ],
+      "additionalProperties": false
+    },
+    "unitStructNewType": {
+      "type": "object",
+      "properties": {
+        "unitStructNewType": {
+          "$ref": "#/$defs/UnitStruct"
+        }
+      },
+      "required": [
+        "unitStructNewType"
+      ],
+      "additionalProperties": false
+    },
+    "UnitStruct": {
+      "type": "null"
+    },
+    "structNewType": {
+      "type": "object",
+      "properties": {
+        "structNewType": {
+          "$ref": "#/$defs/Struct"
+        }
+      },
+      "required": [
+        "structNewType"
+      ],
+      "additionalProperties": false
+    },
+    "Struct": {
+      "type": "object",
+      "properties": {
+        "foo": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "bar": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "foo",
+        "bar"
+      ]
+    },
+    "struct": {
+      "type": "object",
+      "properties": {
+        "struct": {
+          "type": "object",
+          "properties": {
+            "foo": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "bar": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "foo",
+            "bar"
+          ]
+        }
+      },
+      "required": [
+        "struct"
+      ],
+      "additionalProperties": false
+    },
+    "tuple": {
+      "type": "object",
+      "properties": {
+        "tuple": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "integer",
+              "format": "int32"
+            },
+            {
+              "type": "boolean"
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        }
+      },
+      "required": [
+        "tuple"
+      ],
+      "additionalProperties": false
+    },
+    "unitTwo": {
+      "type": "string",
+      "const": "unitTwo"
+    },
+    "unitAsInt": {
+      "type": "object",
+      "properties": {
+        "unitAsInt": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "unitAsInt"
+      ],
+      "additionalProperties": false
+    },
+    "tupleAsStr": {
+      "type": "object",
+      "properties": {
+        "tupleAsStr": {
+          "type": "string",
+          "pattern": "^\\d+ (true|false)$"
+        }
+      },
+      "required": [
+        "tupleAsStr"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

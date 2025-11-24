@@ -1,0 +1,161 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="xwayland_shell_v1">
+
+  <copyright>
+    Copyright © 2022 Joshua Ashton
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice (including the next
+    paragraph) shall be included in all copies or substantial portions of the
+    Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+  </copyright>
+
+  <description summary="Protocol for associating X11 windows to wl_surfaces">
+    This protocol adds a xwayland_surface role which allows an Xwayland
+    server to associate an X11 window to a wl_surface.
+    
+    Before this protocol, this would be done via the Xwayland server
+    providing the wl_surface's resource id via the a client message with
+    the WL_SURFACE_ID atom on the X window.
+    This was problematic as a race could occur if the wl_surface
+    associated with a WL_SURFACE_ID for a window was destroyed before the
+    client message was processed by the compositor and another surface
+    (or other object) had taken its id due to recycling.
+    
+    This protocol solves the problem by moving the X11 window to wl_surface
+    association step to the Wayland side, which means that the association
+    cannot happen out-of-sync with the resource lifetime of the wl_surface.
+    
+    This protocol avoids duplicating the race on the other side by adding a
+    non-zero monotonic serial number which is entirely unique that is set on
+    both the wl_surface (via. xwayland_surface_v1's set_serial method) and
+    the X11 window (via. the `WL_SURFACE_SERIAL` client message) that can be
+    used to associate them, and synchronize the two timelines.
+
+    The key words "must", "must not", "required", "shall", "shall not",
+    "should", "should not", "recommended",  "may", and "optional" in this
+    document are to be interpreted as described in IETF RFC 2119.
+
+    Warning! The protocol described in this file is currently in the testing
+    phase. Backward compatible changes may be added together with the
+    corresponding interface version bump. Backward incompatible changes can
+    only be done by creating a new major version of the extension.
+  </description>
+
+  <interface name="xwayland_shell_v1" version="1">
+    <description summary="context object for Xwayland shell">
+      xwayland_shell_v1 is a singleton global object that
+      provides the ability to create a xwayland_surface_v1 object
+      for a given wl_surface.
+
+      This interface is intended to be bound by the Xwayland server.
+
+      A compositor must not allow clients other than Xwayland to
+      bind to this interface. A compositor should hide this global
+      from other clients' wl_registry.
+      A client the compositor does not consider to be an Xwayland
+      server attempting to bind this interface will result in
+      an implementation-defined error.
+
+      An Xwayland server that has bound this interface must not
+      set the `WL_SURFACE_ID` atom on a window.
+    </description>
+
+    <enum name="error">
+      <entry name="role" value="0" summary="given wl_surface has another role"/>
+    </enum>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the Xwayland shell object">
+        Destroy the xwayland_shell_v1 object.
+
+        The child objects created via this interface are unaffected.
+      </description>
+    </request>
+
+    <request name="get_xwayland_surface">
+      <description summary="assign the xwayland_surface surface role">
+        Create an xwayland_surface_v1 interface for a given wl_surface
+        object and gives it the xwayland_surface role.
+        
+        It is illegal to create an xwayland_surface_v1 for a wl_surface
+        which already has an assigned role and this will result in the
+        `role` protocol error.
+
+        See the documentation of xwayland_surface_v1 for more details
+        about what an xwayland_surface_v1 is and how it is used.
+      </description>
+
+      <arg name="id" type="new_id" interface="xwayland_surface_v1"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+  </interface>
+
+  <interface name="xwayland_surface_v1" version="1">
+    <description summary="interface for associating Xwayland windows to wl_surfaces">
+      An Xwayland surface is a surface managed by an Xwayland server.
+      It is used for associating surfaces to Xwayland windows.
+
+      The Xwayland server associated with actions in this interface is
+      determined by the Wayland client making the request.
+
+      The client must call wl_surface.commit on the corresponding wl_surface
+      for the xwayland_surface_v1 state to take effect.
+    </description>
+
+    <enum name="error">
+      <entry name="already_associated" value="0" summary="given wl_surface is already associated with an X11 window"/>
+      <entry name="invalid_serial" value="1" summary="serial was not valid"/>
+    </enum>
+
+    <request name="set_serial">
+      <description summary="associates a Xwayland window to a wl_surface">
+        Associates an Xwayland window to a wl_surface.
+        The association state is double-buffered, see wl_surface.commit.
+
+        The `serial_lo` and `serial_hi` parameters specify a non-zero
+        monotonic serial number which is entirely unique and provided by the
+        Xwayland server equal to the serial value provided by a client message
+        with a message type of the `WL_SURFACE_SERIAL` atom on the X11 window
+        for this surface to be associated to.
+
+        The serial value in the `WL_SURFACE_SERIAL` client message is specified
+        as having the lo-bits specified in `l[0]` and the hi-bits specified
+        in `l[1]`.
+
+        If the serial value provided by `serial_lo` and `serial_hi` is not
+        valid, the `invalid_serial` protocol error will be raised.
+
+        An X11 window may be associated with multiple surfaces throughout its
+        lifespan. (eg. unmapping and remapping a window).
+        
+        For each wl_surface, this state must not be committed more than once,
+        otherwise the `already_associated` protocol error will be raised.
+      </description>
+      <arg name="serial_lo" type="uint" summary="The lower 32-bits of the serial number associated with the X11 window"/>
+      <arg name="serial_hi" type="uint" summary="The upper 32-bits of the serial number associated with the X11 window"/>
+    </request>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the Xwayland surface object">
+        Destroy the xwayland_surface_v1 object.
+
+        Any already existing associations are unaffected by this action.
+      </description>
+    </request>
+  </interface>
+</protocol>

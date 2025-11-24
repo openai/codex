@@ -1,0 +1,4 @@
+[alias]
+
+# The list of features should be the same as the one under `[package.metadata.docs.rs]`
+nightly_docs = "doc --no-deps -F nightly_docs,latest_stable_rust,extern_crate_alloc,extern_crate_std"

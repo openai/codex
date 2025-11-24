@@ -1,0 +1,7 @@
+Package: boost-conversion
+Version: 1.67.0
+Depends: boost-vcpkg-helpers
+Architecture: x64-windows
+Multi-Arch: same
+Description: Boost conversion module
+Status: install ok half-installed

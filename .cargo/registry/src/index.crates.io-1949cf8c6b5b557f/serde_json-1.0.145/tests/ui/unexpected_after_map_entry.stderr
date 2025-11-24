@@ -1,0 +1,7 @@
+error: no rules expected `=>`
+ --> tests/ui/unexpected_after_map_entry.rs:4:23
+  |
+4 |     json!({ "k": true => });
+  |                       ^^ no rules expected this token in macro call
+  |
+  = note: while trying to match end of macro

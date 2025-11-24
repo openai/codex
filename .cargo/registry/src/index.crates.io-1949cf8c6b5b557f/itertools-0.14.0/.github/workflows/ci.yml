@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  pull_request:
+    paths-ignore:
+      - "**.md"
+  merge_group:
+    paths-ignore:
+      - "**.md"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        features:
+          [
+            "",
+            "--no-default-features",
+            "--no-default-features --features use_alloc",
+            "--all-targets --all-features",
+          ]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: RUSTFLAGS="--deny warnings" cargo clippy ${{ matrix.features }}
+
+  doc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: RUSTDOCFLAGS="-Dwarnings" cargo doc --all-features
+
+  msrv:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_NET_GIT_FETCH_WITH_CLI: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@cargo-no-dev-deps
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          # Here, it does not trigger a PR from dependabot.
+          toolchain: 1.63.0
+      - run: cargo no-dev-deps check
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --all-features
+
+  miri:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: miri
+      - uses: taiki-e/install-action@nextest
+      - run: |
+          cargo miri nextest run --all-features
+          cargo miri test --doc
+
+  check-format:
+    name: check format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: rustfmt
+      - run: cargo fmt --check
+
+  semver-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: obi1kenobi/cargo-semver-checks-action@v2.4
+        with:
+          rust-toolchain: manual
+          feature-group: all-features
+
+  # Used to signal to branch protections that all other jobs have succeeded.
+  all-jobs-succeed:
+    name: All checks succeeded
+    if: success()
+    runs-on: ubuntu-latest
+    needs: [check, msrv, test, check-format, doc]
+    steps:
+      - name: Mark the job as successful
+        run: exit 0

@@ -1,0 +1,9 @@
+error: expected one of `.`, `;`, `?`, or an operator, found `for`
+   --> src/format_color.rs:171:9
+    |
+169 |         })
+    |           - expected one of `.`, `;`, `?`, or an operator here
+170 | 
+171 |         for line in &self.body {
+    |         ^^^ unexpected token
+    |

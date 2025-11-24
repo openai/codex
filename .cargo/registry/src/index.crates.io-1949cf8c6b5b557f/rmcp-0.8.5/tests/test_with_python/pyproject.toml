@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "test_with_python"
+version = "0.1.0"
+description = "Test Python client for RMCP"
+dependencies = [
+  "fastmcp",
+]
+
+[tool.setuptools]
+py-modules = ["client", "server"]

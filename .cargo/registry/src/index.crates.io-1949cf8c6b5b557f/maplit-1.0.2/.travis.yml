@@ -1,0 +1,31 @@
+language: rust
+sudo: false
+matrix:
+  include:
+    - rust: 1.14.0
+    - rust: 1.30.1
+    - rust: 1.37.0
+      env:
+        - TEST_ED2018=1
+    - rust: stable
+      env:
+        - TEST_ED2018=1
+    - rust: beta
+      env:
+        - TEST_ED2018=1
+    - rust: nightly
+      env:
+        - TEST_ED2018=1
+branches:
+  only:
+    - master
+script:
+  - |
+      cargo build --verbose --features "$FEATURES" &&
+      cargo test --verbose --features "$FEATURES" &&
+      ([ "$BENCH" != 1 ] || cargo bench --verbose --features "$FEATURES") &&
+      cargo doc --verbose --features "$FEATURES" &&
+      (cd rust2015user/; cargo build -v ) &&
+      if [ -n "$TEST_ED2018" ]; then
+        (cd rust2018user/; cargo build -v );
+      fi

@@ -1,0 +1,107 @@
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+name: CI
+
+jobs:
+  all-succeeded:
+    name: All Succeeded
+    if: always()
+    runs-on: ubuntu-latest
+    needs:
+    - test-linux
+    - test-non-linux
+    - lint
+
+    steps:
+      - name: Check if all jubs succeeded
+        uses: re-actors/alls-green@release/v1
+        with:
+          jobs: ${{ toJSON(needs) }}
+
+  test-linux:
+    name: Test Linux
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        rust:
+          - stable
+          - beta
+          - nightly
+        mb_const_generics:
+          - ""
+          - "--features const-generics"
+        target:
+          - x86_64
+          - i686
+          - sparc64
+        include:
+          - mb_const_generics: ""
+            rust: 1.37.0
+            target: x86_64
+    steps:
+      - uses: actions/checkout@v3
+      - if: matrix.rust == '1.37.0'
+        # Rust 1.37 doesn't like modern lock files :(
+        run: rm Cargo.lock
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+      - uses: actions-rs/cargo@v1
+        with:
+          use-cross: ${{ matrix.target != 'x86_64' }}
+          command: test
+          args: --verbose --features "strict" ${{ matrix.mb_const_generics }} --target ${{ matrix.target }}-unknown-linux-gnu
+      - uses: actions-rs/cargo@v1
+        with:
+          use-cross: ${{ matrix.target != 'x86_64' }}
+          command: doc
+          args: --features "strict" ${{ matrix.mb_const_generics }} --target ${{ matrix.target }}-unknown-linux-gnu
+
+  test-non-linux:
+    name: Test non-Linux
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os:
+          - macos-latest
+          - windows-latest
+        rust:
+          - stable
+        mb_const_generics:
+          - ""
+          - "--features const-generics"
+    steps:
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+      - uses: extractions/setup-just@v2
+      - run: just test ${{ matrix.mb_const_generics }}
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+      - uses: extractions/setup-just@v2
+      - run: just lint
+
+  test-generated:
+    name: Test Generated
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: extractions/setup-just@v2
+      - run: just gen
+      - run: git diff --exit-code

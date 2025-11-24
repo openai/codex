@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SoundOfMusic",
+  "oneOf": [
+    {
+      "title": "A deer",
+      "description": "A female deer",
+      "type": "string",
+      "enum": [
+        "Do"
+      ]
+    },
+    {
+      "description": "A drop of golden sun",
+      "type": "string",
+      "enum": [
+        "Re"
+      ]
+    },
+    {
+      "description": "A name I call myself",
+      "type": "string",
+      "enum": [
+        "Mi"
+      ]
+    }
+  ]
+}

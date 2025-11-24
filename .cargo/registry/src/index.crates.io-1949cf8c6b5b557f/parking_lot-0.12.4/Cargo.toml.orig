@@ -1,0 +1,42 @@
+[package]
+name = "parking_lot"
+version = "0.12.4"
+authors = ["Amanieu d'Antras <amanieu@gmail.com>"]
+description = "More compact and efficient implementations of the standard synchronization primitives."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Amanieu/parking_lot"
+readme = "README.md"
+keywords = ["mutex", "condvar", "rwlock", "once", "thread"]
+categories = ["concurrency"]
+edition = "2021"
+rust-version = "1.64"
+
+[package.metadata.docs.rs]
+features = ["arc_lock", "serde", "deadlock_detection"]
+rustdoc-args = ["--generate-link-to-definition"]
+
+[package.metadata.playground]
+features = ["arc_lock", "serde", "deadlock_detection"]
+
+[dependencies]
+parking_lot_core = { path = "core", version = "0.9.11" }
+lock_api = { path = "lock_api", version = "0.4.13" }
+
+[dev-dependencies]
+rand = "0.8.3"
+
+# Used when testing out serde support.
+bincode = "1.3.3"
+
+[features]
+default = []
+arc_lock = ["lock_api/arc_lock"]
+owning_ref = ["lock_api/owning_ref"]
+nightly = ["parking_lot_core/nightly", "lock_api/nightly"]
+deadlock_detection = ["parking_lot_core/deadlock_detection"]
+serde = ["lock_api/serde"]
+send_guard = []
+hardware-lock-elision = []
+
+[workspace]
+exclude = ["benchmark"]

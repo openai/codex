@@ -1,0 +1,399 @@
+# These test the UTF-8 modes expose by regex-automata. Namely, when utf8 is
+# true, then we promise that the haystack is valid UTF-8. (Otherwise behavior
+# is unspecified.) This also corresponds to building the regex engine with the
+# following two guarantees:
+#
+# 1) For any non-empty match reported, its span is guaranteed to correspond to
+# valid UTF-8.
+# 2) All empty or zero-width matches reported must never split a UTF-8
+# encoded codepoint. If the haystack has invalid UTF-8, then this results in
+# unspecified behavior.
+#
+# The (2) is in particular what we focus our testing on since (1) is generally
+# guaranteed by regex-syntax's AST-to-HIR translator and is well tested there.
+# The thing with (2) is that it can't be described in the HIR, so the regex
+# engines have to handle that case. Thus, we test it here.
+#
+# Note that it is possible to build a regex that has property (1) but not
+# (2), and vice versa. This is done by building the HIR with 'utf8=true' but
+# building the Thompson NFA with 'utf8=false'. We don't test that here because
+# the harness doesn't expose a way to enable or disable UTF-8 mode with that
+# granularity. Instead, those combinations are lightly tested via doc examples.
+# That's not to say that (1) without (2) is uncommon. Indeed, ripgrep uses it
+# because it cannot guarantee that its haystack is valid UTF-8.
+
+# This tests that an empty regex doesn't split a codepoint.
+[[test]]
+name = "empty-utf8yes"
+regex = ''
+haystack = '☃'
+matches = [[0, 0], [3, 3]]
+unicode = true
+utf8 = true
+
+# Tests the overlapping case of the above.
+[[test]]
+name = "empty-utf8yes-overlapping"
+regex = ''
+haystack = '☃'
+matches = [[0, 0], [3, 3]]
+unicode = true
+utf8 = true
+match-kind = "all"
+search-kind = "overlapping"
+
+# This tests that an empty regex DOES split a codepoint when utf=false.
+[[test]]
+name = "empty-utf8no"
+regex = ''
+haystack = '☃'
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]
+unicode = true
+utf8 = false
+
+# Tests the overlapping case of the above.
+[[test]]
+name = "empty-utf8no-overlapping"
+regex = ''
+haystack = '☃'
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]
+unicode = true
+utf8 = false
+match-kind = "all"
+search-kind = "overlapping"
+
+# This tests that an empty regex doesn't split a codepoint, even if we give
+# it bounds entirely within the codepoint.
+#
+# This is one of the trickier cases and is what motivated the current UTF-8
+# mode design. In particular, at one point, this test failed the 'is_match'
+# variant of the test but not 'find'. This is because the 'is_match' code path
+# is specifically optimized for "was a match found" rather than "where is the
+# match." In the former case, you don't really care about the empty-vs-non-empty
+# matches, and thus, the codepoint splitting filtering logic wasn't getting
+# applied. (In multiple ways across multiple regex engines.) In this way, you
+# can wind up with a situation where 'is_match' says "yes," but 'find' says,
+# "I didn't find anything." Which is... not great.
+#
+# I could have decided to say that providing boundaries that themselves split
+# a codepoint would have unspecified behavior. But I couldn't quite convince
+# myself that such boundaries were the only way to get an inconsistency between
+# 'is_match' and 'find'.
+#
+# Note that I also tried to come up with a test like this that fails without
+# using `bounds`. Specifically, a test where 'is_match' and 'find' disagree.
+# But I couldn't do it, and I'm tempted to conclude it is impossible. The
+# fundamental problem is that you need to simultaneously produce an empty match
+# that splits a codepoint while *not* matching before or after the codepoint.
+[[test]]
+name = "empty-utf8yes-bounds"
+regex = ''
+haystack = '𝛃'
+bounds = [1, 3]
+matches = []
+unicode = true
+utf8 = true
+
+# Tests the overlapping case of the above.
+[[test]]
+name = "empty-utf8yes-bounds-overlapping"
+regex = ''
+haystack = '𝛃'
+bounds = [1, 3]
+matches = []
+unicode = true
+utf8 = true
+match-kind = "all"
+search-kind = "overlapping"
+
+# This tests that an empty regex splits a codepoint when the bounds are
+# entirely within the codepoint.
+[[test]]
+name = "empty-utf8no-bounds"
+regex = ''
+haystack = '𝛃'
+bounds = [1, 3]
+matches = [[1, 1], [2, 2], [3, 3]]
+unicode = true
+utf8 = false
+
+# Tests the overlapping case of the above.
+[[test]]
+name = "empty-utf8no-bounds-overlapping"
+regex = ''
+haystack = '𝛃'
+bounds = [1, 3]
+matches = [[1, 1], [2, 2], [3, 3]]
+unicode = true
+utf8 = false
+match-kind = "all"
+search-kind = "overlapping"
+
+# In this test, we anchor the search. Since the start position is also a UTF-8
+# boundary, we get a match.
+[[test]]
+name = "empty-utf8yes-anchored"
+regex = ''
+haystack = '𝛃'
+matches = [[0, 0]]
+anchored = true
+unicode = true
+utf8 = true
+
+# Tests the overlapping case of the above.
+[[test]]
+name = "empty-utf8yes-anchored-overlapping"
+regex = ''
+haystack = '𝛃'
+matches = [[0, 0]]
+anchored = true
+unicode = true
+utf8 = true
+match-kind = "all"
+search-kind = "overlapping"
+
+# Same as above, except with UTF-8 mode disabled. It almost doesn't change the
+# result, except for the fact that since this is an anchored search and we
+# always find all matches, the test harness will keep reporting matches until
+# none are found. Because it's anchored, matches will be reported so long as
+# they are directly adjacent. Since with UTF-8 mode the next anchored search
+# after the match at [0, 0] fails, iteration stops (and doesn't find the last
+# match at [4, 4]).
+[[test]]
+name = "empty-utf8no-anchored"
+regex = ''
+haystack = '𝛃'
+matches = [[0, 0], [1, 1], [2, 2], [3, 3], [4, 4]]
+anchored = true
+unicode = true
+utf8 = false
+
+# Tests the overlapping case of the above.
+#
+# Note that overlapping anchored searches are a little weird, and it's not
+# totally clear what their semantics ought to be. For now, we just test the
+# current behavior of our test shim that implements overlapping search. (This
+# is one of the reasons why we don't really expose regex-level overlapping
+# searches.)
+[[test]]
+name = "empty-utf8no-anchored-overlapping"
+regex = ''
+haystack = '𝛃'
+matches = [[0, 0]]
+anchored = true
+unicode = true
+utf8 = false
+match-kind = "all"
+search-kind = "overlapping"
+
+# In this test, we anchor the search, but also set bounds. The bounds start the
+# search in the middle of a codepoint, so there should never be a match.
+[[test]]
+name = "empty-utf8yes-anchored-bounds"
+regex = ''
+haystack = '𝛃'
+matches = []
+bounds = [1, 3]
+anchored = true
+unicode = true
+utf8 = true
+
+# Tests the overlapping case of the above.
+[[test]]
+name = "empty-utf8yes-anchored-bounds-overlapping"
+regex = ''
+haystack = '𝛃'
+matches = []
+bounds = [1, 3]
+anchored = true
+unicode = true
+utf8 = true
+match-kind = "all"
+search-kind = "overlapping"
+
+# Same as above, except with UTF-8 mode disabled. Without UTF-8 mode enabled,
+# matching within a codepoint is allowed. And remember, as in the anchored test
+# above with UTF-8 mode disabled, iteration will report all adjacent matches.
+# The matches at [0, 0] and [4, 4] are not included because of the bounds of
+# the search.
+[[test]]
+name = "empty-utf8no-anchored-bounds"
+regex = ''
+haystack = '𝛃'
+bounds = [1, 3]
+matches = [[1, 1], [2, 2], [3, 3]]
+anchored = true
+unicode = true
+utf8 = false
+
+# Tests the overlapping case of the above.
+#
+# Note that overlapping anchored searches are a little weird, and it's not
+# totally clear what their semantics ought to be. For now, we just test the
+# current behavior of our test shim that implements overlapping search. (This
+# is one of the reasons why we don't really expose regex-level overlapping
+# searches.)
+[[test]]
+name = "empty-utf8no-anchored-bounds-overlapping"
+regex = ''
+haystack = '𝛃'
+bounds = [1, 3]
+matches = [[1, 1]]
+anchored = true
+unicode = true
+utf8 = false
+match-kind = "all"
+search-kind = "overlapping"
+
+# This tests that we find the match at the end of the string when the bounds
+# exclude the first match.
+[[test]]
+name = "empty-utf8yes-startbound"
+regex = ''
+haystack = '𝛃'
+bounds = [1, 4]
+matches = [[4, 4]]
+unicode = true
+utf8 = true
+
+# Tests the overlapping case of the above.
+[[test]]
+name = "empty-utf8yes-startbound-overlapping"
+regex = ''
+haystack = '𝛃'
+bounds = [1, 4]
+matches = [[4, 4]]
+unicode = true
+utf8 = true
+match-kind = "all"
+search-kind = "overlapping"
+
+# Same as above, except since UTF-8 mode is disabled, we also find the matches
+# inbetween that split the codepoint.
+[[test]]
+name = "empty-utf8no-startbound"
+regex = ''
+haystack = '𝛃'
+bounds = [1, 4]
+matches = [[1, 1], [2, 2], [3, 3], [4, 4]]
+unicode = true
+utf8 = false
+
+# Tests the overlapping case of the above.
+[[test]]
+name = "empty-utf8no-startbound-overlapping"
+regex = ''
+haystack = '𝛃'
+bounds = [1, 4]
+matches = [[1, 1], [2, 2], [3, 3], [4, 4]]
+unicode = true
+utf8 = false
+match-kind = "all"
+search-kind = "overlapping"
+
+# This tests that we don't find any matches in an anchored search, even when
+# the bounds include a match (at the end).
+[[test]]
+name = "empty-utf8yes-anchored-startbound"
+regex = ''
+haystack = '𝛃'
+bounds = [1, 4]
+matches = []
+anchored = true
+unicode = true
+utf8 = true
+
+# Tests the overlapping case of the above.
+[[test]]
+name = "empty-utf8yes-anchored-startbound-overlapping"
+regex = ''
+haystack = '𝛃'
+bounds = [1, 4]
+matches = []
+anchored = true
+unicode = true
+utf8 = true
+match-kind = "all"
+search-kind = "overlapping"
+
+# Same as above, except since UTF-8 mode is disabled, we also find the matches
+# inbetween that split the codepoint. Even though this is an anchored search,
+# since the matches are adjacent, we find all of them.
+[[test]]
+name = "empty-utf8no-anchored-startbound"
+regex = ''
+haystack = '𝛃'
+bounds = [1, 4]
+matches = [[1, 1], [2, 2], [3, 3], [4, 4]]
+anchored = true
+unicode = true
+utf8 = false
+
+# Tests the overlapping case of the above.
+#
+# Note that overlapping anchored searches are a little weird, and it's not
+# totally clear what their semantics ought to be. For now, we just test the
+# current behavior of our test shim that implements overlapping search. (This
+# is one of the reasons why we don't really expose regex-level overlapping
+# searches.)
+[[test]]
+name = "empty-utf8no-anchored-startbound-overlapping"
+regex = ''
+haystack = '𝛃'
+bounds = [1, 4]
+matches = [[1, 1]]
+anchored = true
+unicode = true
+utf8 = false
+match-kind = "all"
+search-kind = "overlapping"
+
+# This tests that we find the match at the end of the haystack in UTF-8 mode
+# when our bounds only include the empty string at the end of the haystack.
+[[test]]
+name = "empty-utf8yes-anchored-endbound"
+regex = ''
+haystack = '𝛃'
+bounds = [4, 4]
+matches = [[4, 4]]
+anchored = true
+unicode = true
+utf8 = true
+
+# Tests the overlapping case of the above.
+[[test]]
+name = "empty-utf8yes-anchored-endbound-overlapping"
+regex = ''
+haystack = '𝛃'
+bounds = [4, 4]
+matches = [[4, 4]]
+anchored = true
+unicode = true
+utf8 = true
+match-kind = "all"
+search-kind = "overlapping"
+
+# Same as above, but with UTF-8 mode disabled. Results remain the same since
+# the only possible match does not split a codepoint.
+[[test]]
+name = "empty-utf8no-anchored-endbound"
+regex = ''
+haystack = '𝛃'
+bounds = [4, 4]
+matches = [[4, 4]]
+anchored = true
+unicode = true
+utf8 = false
+
+# Tests the overlapping case of the above.
+[[test]]
+name = "empty-utf8no-anchored-endbound-overlapping"
+regex = ''
+haystack = '𝛃'
+bounds = [4, 4]
+matches = [[4, 4]]
+anchored = true
+unicode = true
+utf8 = false
+match-kind = "all"
+search-kind = "overlapping"

@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<!DOCTYPE refentry PUBLIC "-//OASIS//DTD DocBook XML V4.4//EN"
+                   "http://www.oasis-open.org/docbook/xml/4.4/docbookx.dtd">
+<refentry id='dbusmonitor1'>
+
+<!--  dbus&bsol;-monitor manual page.
+ Copyright (C) 2003 Red Hat, Inc. -->
+
+<refmeta>
+<refentrytitle>dbus-monitor</refentrytitle>
+<manvolnum>1</manvolnum>
+<refmiscinfo class="manual">User Commands</refmiscinfo>
+<refmiscinfo class="source">D-Bus</refmiscinfo>
+<refmiscinfo class="version">@DBUS_VERSION@</refmiscinfo>
+</refmeta>
+<refnamediv>
+<refname>dbus-monitor</refname>
+<refpurpose>debug probe to print message bus messages</refpurpose>
+</refnamediv>
+<!-- body begins here -->
+<refsynopsisdiv id='synopsis'>
+<cmdsynopsis>
+  <command>dbus-monitor</command>
+    <group choice='opt'><arg choice='plain'>--system </arg><arg choice='plain'>--session </arg><arg choice='plain'>--address <replaceable>ADDRESS</replaceable></arg></group>
+    <group choice='opt'><arg choice='plain'>--profile </arg><arg choice='plain'>--monitor </arg><arg choice='plain'>--pcap </arg><arg choice='plain'>--binary </arg></group>
+    <arg choice='opt'><arg choice='plain'><replaceable>watch</replaceable></arg><arg choice='plain'><replaceable>expressions</replaceable></arg></arg>
+    <sbr/>
+</cmdsynopsis>
+</refsynopsisdiv>
+
+
+<refsect1 id='description'><title>DESCRIPTION</title>
+<para>The <command>dbus-monitor</command> command is used to monitor messages going
+through a D-Bus message bus.  See
+<ulink url='http://www.freedesktop.org/software/dbus/'>http://www.freedesktop.org/software/dbus/</ulink> for more information about
+the big picture.</para>
+
+
+<para>There are two well-known message buses: the systemwide message bus
+(installed on many systems as the "messagebus" service) and the
+per-user-login-session message bus (started each time a user logs in).
+The --system and --session options direct <command>dbus-monitor</command> to
+monitor the system or session buses respectively.  If neither is
+specified, <command>dbus-monitor</command> monitors the session bus.</para>
+
+
+<para><command>dbus-monitor</command> has two different text output
+modes: the 'classic'-style
+monitoring mode, and profiling mode. The profiling format is a compact
+format with a single line per message and microsecond-resolution timing
+information. The --profile and --monitor options select the profiling
+and monitoring output format respectively.</para>
+
+<para><command>dbus-monitor</command> also has two binary output modes.
+  The binary mode, selected by <literal>--binary</literal>, outputs the
+  entire binary message stream (without the initial authentication handshake).
+  The PCAP mode, selected by <literal>--pcap</literal>, adds a
+  PCAP file header to the beginning of the output, and prepends a PCAP
+  message header to each message; this produces a binary file that can
+  be read by, for instance, Wireshark.</para>
+
+<para>If no mode is specified,
+<command>dbus-monitor</command> uses the monitoring output format.</para>
+
+
+<para>In order to get <command>dbus-monitor</command> to see the messages you are interested
+in, you should specify a set of watch expressions as you would expect to
+be passed to the <emphasis remap='I'>dbus_bus_add_match</emphasis> function.</para>
+
+
+<para>The message bus configuration may keep <command>dbus-monitor</command> from seeing
+all messages, especially if you run the monitor as a non-root user.</para>
+
+</refsect1>
+
+<refsect1 id='options'><title>OPTIONS</title>
+<variablelist remap='TP'>
+  <varlistentry>
+  <term><option>--system</option></term>
+  <listitem>
+<para>Monitor the system message bus.</para>
+  </listitem>
+  </varlistentry>
+  <varlistentry>
+  <term><option>--session</option></term>
+  <listitem>
+<para>Monitor the session message bus.  (This is the default.)</para>
+  </listitem>
+  </varlistentry>
+  <varlistentry>
+  <term><option>--address ADDRESS</option></term>
+  <listitem>
+<para>Monitor an arbitrary message bus given at ADDRESS.</para>
+  </listitem>
+  </varlistentry>
+  <varlistentry>
+  <term><option>--profile</option></term>
+  <listitem>
+<para>Use the profiling output format.</para>
+  </listitem>
+  </varlistentry>
+  <varlistentry>
+  <term><option>--monitor</option></term>
+  <listitem>
+<para>Use the monitoring output format.  (This is the default.)</para>
+
+  </listitem>
+  </varlistentry>
+</variablelist>
+</refsect1>
+
+<refsect1 id='example'><title>EXAMPLE</title>
+<para>Here is an example of using dbus-monitor to watch for the gnome typing
+monitor to say things</para>
+<literallayout remap='.nf'>
+
+  dbus-monitor "type='signal',sender='org.gnome.TypingMonitor',interface='org.gnome.TypingMonitor'"
+
+</literallayout> <!-- .fi -->
+
+</refsect1>
+
+<refsect1 id='author'><title>AUTHOR</title>
+<para>dbus-monitor was written by Philip Blundell.
+The profiling output mode was added by Olli Salli.</para>
+
+</refsect1>
+
+<refsect1 id='bugs'><title>BUGS</title>
+<para>Please send bug reports to the D-Bus mailing list or bug tracker,
+see <ulink url='http://www.freedesktop.org/software/dbus/'>http://www.freedesktop.org/software/dbus/</ulink></para>
+</refsect1>
+</refentry>

@@ -1,0 +1,13 @@
+error: no rules expected `"2"`
+ --> tests/ui/missing_comma.rs:4:21
+  |
+4 |     json!({ "1": "" "2": "" });
+  |                    -^^^ no rules expected this token in macro call
+  |                    |
+  |                    help: missing comma here
+  |
+note: while trying to match `,`
+ --> src/macros.rs
+  |
+  |     ($e:expr , $($tt:tt)*) => {};
+  |              ^

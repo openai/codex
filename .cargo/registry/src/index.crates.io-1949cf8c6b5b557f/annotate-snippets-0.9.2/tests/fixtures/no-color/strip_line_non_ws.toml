@@ -1,0 +1,25 @@
+[title]
+id = "E0308"
+label = "mismatched types"
+annotation_type = "Error"
+
+[[slices]]
+source = "    let _: () = (); let _: () = (); let _: () = (); let _: () = (); let _: () = (); let _: () = (); let _: () = (); let _: () = (); let _: () = (); let _: () = (); let _: () = (); let _: () = (); let _: () = (); let _: () = (); let _: () = 42; let _: () = (); let _: () = (); let _: () = (); let _: () = (); let _: () = (); let _: () = (); let _: () = (); let _: () = ();"
+line_start = 4
+origin = "$DIR/non-whitespace-trimming.rs"
+
+[[slices.annotations]]
+label = "expected (), found integer"
+annotation_type = "Error"
+range = [240, 242]
+
+[opt]
+color = false
+anonymized_line_numbers = true
+[opt.margin]
+whitespace_left = 4
+span_left = 240
+span_right = 242
+label_right = 271
+column_width = 140
+max_line_len = 371

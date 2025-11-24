@@ -1,0 +1,19 @@
+pretty = proc(u) {
+  return ~(floor(u*1000)/1000);
+};
+
+d = [-2^-12.905,2^-12.905];
+f = exp(x);
+w = 1;
+p = remez(f, 4, d, w);
+pf = fpminimax(f, [|0,1,2,3,4|], [|53...|], d, absolute, floating, 0, p);
+err_p = -log2(dirtyinfnorm(pf*w-f, d));
+display = hexadecimal;
+print (pf);
+display = decimal;
+print ("absolute error:",pretty(err_p));
+f = 1;
+w = 1/exp(x);
+err_p = -log2(dirtyinfnorm(pf*w-f, d));
+print ("relative error:",pretty(err_p));
+

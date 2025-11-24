@@ -1,0 +1,13 @@
+{%- macro examples(entity) -%}
+    {% if entity.examples %}
+# Examples
+
+        {% if entity.examples is sequence %}
+            {% for example in entity.examples %}
+ - `{{ example | pprint }}`
+            {% endfor %}
+        {% else %}
+ - `{{ entity.examples | pprint }}`
+        {% endif %}
+    {% endif %}
+{% endmacro %}

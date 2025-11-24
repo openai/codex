@@ -1,0 +1,34 @@
+[package]
+name = "ref-cast"
+version = "1.0.24"
+authors = ["David Tolnay <dtolnay@gmail.com>"]
+categories = ["rust-patterns", "no-std", "no-std::no-alloc"]
+description = "Safely cast &T to &U where the struct U contains a single field of type T."
+documentation = "https://docs.rs/ref-cast"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/dtolnay/ref-cast"
+rust-version = "1.56"
+
+[dependencies]
+ref-cast-impl = { version = "=1.0.24", path = "derive" }
+
+[dev-dependencies]
+ref-cast-test-suite = { version = "0", path = "tests/helper" }
+rustversion = "1.0.13"
+trybuild = { version = "1.0.81", features = ["diff"] }
+
+[workspace]
+members = ["derive", "tests/helper"]
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = [
+    "--generate-link-to-definition",
+    "--extern-html-root-url=core=https://doc.rust-lang.org",
+    "--extern-html-root-url=alloc=https://doc.rust-lang.org",
+    "--extern-html-root-url=std=https://doc.rust-lang.org",
+]
+
+[patch.crates-io]
+ref-cast = { path = "." }

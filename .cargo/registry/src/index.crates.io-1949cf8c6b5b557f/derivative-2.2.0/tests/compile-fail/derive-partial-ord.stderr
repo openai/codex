@@ -1,0 +1,5 @@
+error: can't use `#[derivative(PartialOrd)]` on an enumeration without `feature_allow_slow_enum`; see the documentation for more details
+ --> $DIR/derive-partial-ord.rs:5:1
+  |
+5 | #[derivative(PartialOrd)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^

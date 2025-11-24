@@ -1,0 +1,141 @@
+$ECASM=
+IF[{- !$disabled{asm} -}]
+  $ECASM_x86=ecp_nistz256.c ecp_nistz256-x86.S
+  $ECDEF_x86=ECP_NISTZ256_ASM
+
+  $ECASM_x86_64=ecp_nistz256.c ecp_nistz256-x86_64.s
+  $ECDEF_x86_64=ECP_NISTZ256_ASM
+  IF[{- !$disabled{'ecx'} -}]
+    $ECASM_x86_64=$ECASM_x86_64 x25519-x86_64.s
+    $ECDEF_x86_64=$ECDEF_x86_64 X25519_ASM
+  ENDIF
+  $ECASM_ia64=
+
+  $ECASM_sparcv9=ecp_nistz256.c ecp_nistz256-sparcv9.S
+  $ECDEF_sparcv9=ECP_NISTZ256_ASM
+
+  $ECASM_sparcv8=
+
+  $ECASM_alpha=
+
+  $ECASM_mips32=
+  $ECASM_mips64=
+
+  $ECASM_s390x=ecp_s390x_nistp.c
+  IF[{- !$disabled{'ecx'} -}]
+    $ECASM_s390x=$ECASM_s390x ecx_s390x.c
+  ENDIF
+  $ECDEF_s390x=S390X_EC_ASM
+
+  $ECASM_armv4=ecp_nistz256.c ecp_nistz256-armv4.S
+  $ECDEF_armv4=ECP_NISTZ256_ASM
+  $ECASM_aarch64=ecp_nistz256.c ecp_nistz256-armv8.S
+  $ECDEF_aarch64=ECP_NISTZ256_ASM
+  IF[{- !$disabled{'sm2'} -}]
+    $ECASM_aarch64=$ECASM_aarch64 ecp_sm2p256.c ecp_sm2p256-armv8.S
+    IF[{- !$disabled{'sm2-precomp'} -}]
+      $ECASM_aarch64=$ECASM_aarch64 ecp_sm2p256_table.c
+    ENDIF
+    $ECDEF_aarch64=$ECDEF_aarch64 ECP_SM2P256_ASM
+  ENDIF
+
+  $ECASM_parisc11=
+  $ECASM_parisc20_64=
+
+  $ECASM_ppc32=
+  $ECASM_ppc64=ecp_nistz256.c ecp_ppc.c ecp_nistz256-ppc64.s
+  $ECDEF_ppc64=ECP_NISTZ256_ASM
+  IF[{- !$disabled{'ec_nistp_64_gcc_128'} -}]
+    $ECASM_ppc64=$ECASM_ppc64 ecp_nistp384-ppc64.s ecp_nistp521-ppc64.s
+    $ECDEF_ppc64=$ECDEF_ppc64 ECP_NISTP384_ASM ECP_NISTP521_ASM
+    INCLUDE[ecp_nistp384.o]=..
+    INCLUDE[ecp_nistp521.o]=..
+  ENDIF
+  IF[{- !$disabled{'ecx'} -}]
+    $ECASM_ppc64=$ECASM_ppc64 x25519-ppc64.s
+    $ECDEF_ppc64=$ECDEF_ppc64 X25519_ASM
+    INCLUDE[ecx_s390x.o]=..
+  ENDIF
+
+  $ECASM_c64xplus=
+
+  # Now that we have defined all the arch specific variables, use the
+  # appropriate one, and define the appropriate macros
+  IF[$ECASM_{- $target{asm_arch} -}]
+    $ECASM=$ECASM_{- $target{asm_arch} -}
+    $ECDEF=$ECDEF_{- $target{asm_arch} -}
+  ENDIF
+ENDIF
+
+$COMMON=ec_lib.c ecp_smpl.c ecp_mont.c ecp_nist.c ec_cvt.c ec_mult.c \
+        ec_curve.c ec_check.c ec_key.c ec_kmeth.c ec_asn1.c \
+        ec2_smpl.c \
+        ecp_oct.c ec2_oct.c ec_oct.c ecdh_ossl.c \
+        ecdsa_ossl.c ecdsa_sign.c ecdsa_vrf.c \
+        $ECASM ec_backend.c ecdh_kdf.c
+
+IF[{- !$disabled{'ecx'} -}]
+  $COMMON=$COMMON curve25519.c curve448/f_generic.c curve448/scalar.c \
+  curve448/arch_64/f_impl64.c ecx_backend.c curve448/arch_32/f_impl32.c \
+  curve448/curve448_tables.c curve448/eddsa.c curve448/curve448.c \
+  ecx_key.c
+ENDIF
+
+IF[{- !$disabled{'ec_nistp_64_gcc_128'} -}]
+  $COMMON=$COMMON ecp_nistp224.c ecp_nistp256.c ecp_nistp384.c ecp_nistp521.c ecp_nistputil.c
+ENDIF
+
+SOURCE[../../libcrypto]=$COMMON ec_ameth.c ec_pmeth.c \
+                        ec_err.c eck_prn.c \
+                        ec_deprecated.c ec_print.c
+IF[{- !$disabled{'ecx'} -}]
+  SOURCE[../../libcrypto]=ecx_meth.c
+ENDIF
+SOURCE[../../providers/libfips.a]=$COMMON
+
+# Implementations are now spread across several libraries, so the defines
+# need to be applied to all affected libraries and modules.
+DEFINE[../../libcrypto]=$ECDEF
+DEFINE[../../providers/libfips.a]=$ECDEF
+DEFINE[../../providers/libdefault.a]=$ECDEF
+# We only need to include the ECDEF stuff in the legacy provider when
+# it's a separate module and it's dynamically linked with libcrypto.
+# Otherwise, it already gets everything that the static libcrypto.a
+# has, and doesn't need it added again.
+IF[{- !$disabled{module} && !$disabled{shared} -}]
+  DEFINE[../../providers/liblegacy.a]=$ECDEF
+ENDIF
+
+GENERATE[ecp_nistz256-x86.S]=asm/ecp_nistz256-x86.pl
+
+GENERATE[ecp_nistz256-x86_64.s]=asm/ecp_nistz256-x86_64.pl
+
+GENERATE[ecp_nistz256-avx2.s]=asm/ecp_nistz256-avx2.pl
+
+GENERATE[ecp_nistz256-sparcv9.S]=asm/ecp_nistz256-sparcv9.pl
+INCLUDE[ecp_nistz256-sparcv9.o]=..
+
+INCLUDE[ecp_s390x_nistp.o]=..
+IF[{- !$disabled{'ecx'} -}]
+  INCLUDE[ecx_meth.o]=..
+  INCLUDE[ecx_key.o]=..
+ENDIF
+
+GENERATE[ecp_nistz256-armv4.S]=asm/ecp_nistz256-armv4.pl
+INCLUDE[ecp_nistz256-armv4.o]=..
+GENERATE[ecp_nistz256-armv8.S]=asm/ecp_nistz256-armv8.pl
+INCLUDE[ecp_nistz256-armv8.o]=..
+GENERATE[ecp_nistz256-ppc64.s]=asm/ecp_nistz256-ppc64.pl
+
+GENERATE[ecp_nistp384-ppc64.s]=asm/ecp_nistp384-ppc64.pl
+GENERATE[ecp_nistp521-ppc64.s]=asm/ecp_nistp521-ppc64.pl
+
+IF[{- !$disabled{'ecx'} -}]
+GENERATE[x25519-x86_64.s]=asm/x25519-x86_64.pl
+GENERATE[x25519-ppc64.s]=asm/x25519-ppc64.pl
+ENDIF
+
+IF[{- !$disabled{'sm2'} -}]
+  GENERATE[ecp_sm2p256-armv8.S]=asm/ecp_sm2p256-armv8.pl
+  INCLUDE[ecp_sm2p256-armv8.o]=..
+ENDIF

@@ -1,0 +1,43 @@
+[package]
+name = "erased-serde"
+version = "0.3.31"
+authors = ["David Tolnay <dtolnay@gmail.com>"]
+categories = ["encoding", "rust-patterns", "no-std"]
+description = "Type-erased Serialize and Serializer traits"
+documentation = "https://docs.rs/erased-serde"
+edition = "2021"
+keywords = ["serde", "erasure"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/dtolnay/erased-serde"
+rust-version = "1.56"
+
+[dependencies]
+serde = { version = "1.0.166", default-features = false }
+
+[dev-dependencies]
+rustversion = "1.0.13"
+serde_cbor = "0.11.2"
+serde_derive = "1.0.166"
+serde_json = "1.0.99"
+trybuild = { version = "1.0.83", features = ["diff"] }
+
+[features]
+# Note: at least one of "std" or "alloc" must be enabled.
+default = ["std"]
+std = ["serde/std"]
+alloc = ["serde/alloc"] # requires Rust 1.36+
+unstable-debug = []
+
+[[test]]
+name = "test"
+path = "tests/readme.rs"
+
+[workspace]
+members = ["explanation", "tests/crate"]
+
+[lib]
+doc-scrape-examples = false
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--generate-link-to-definition"]

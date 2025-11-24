@@ -1,0 +1,6 @@
+LIBS=../../libcrypto
+
+$COMMON=cmac.c
+
+SOURCE[../../libcrypto]=$COMMON
+SOURCE[../../providers/libfips.a]=$COMMON

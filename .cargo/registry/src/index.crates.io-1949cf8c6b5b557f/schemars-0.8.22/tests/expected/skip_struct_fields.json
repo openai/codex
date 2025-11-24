@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MyStruct",
+  "type": "object",
+  "required": [
+    "included",
+    "writable"
+  ],
+  "properties": {
+    "readable": {
+      "default": "",
+      "readOnly": true,
+      "type": "string"
+    },
+    "writable": {
+      "writeOnly": true,
+      "type": "number",
+      "format": "float"
+    },
+    "included": {
+      "type": "null"
+    }
+  }
+}

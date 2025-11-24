@@ -1,0 +1,119 @@
+// @generated
+/// Implement `DataProvider<LocaleAliasesV1>` on the given struct using the data
+/// hardcoded in this file. This allows the struct to be used with
+/// `icu`'s `_unstable` constructors.
+///
+/// Using this implementation will embed the following data in the binary's data segment:
+/// * 8474B[^1] for the singleton data struct
+///
+/// [^1]: these numbers can be smaller in practice due to linker deduplication
+///
+/// This macro requires the following crates:
+/// * `icu`
+/// * `icu_provider`
+/// * `zerovec`
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __impl_locale_aliases_v1 {
+    ($ provider : ty) => {
+        #[clippy::msrv = "1.83"]
+        const _: () = <$provider>::MUST_USE_MAKE_PROVIDER_MACRO;
+        #[clippy::msrv = "1.83"]
+        impl $provider {
+            #[doc(hidden)]
+            pub const SINGLETON_LOCALE_ALIASES_V1: &'static <icu::locale::provider::LocaleAliasesV1 as icu_provider::DynamicDataMarker>::DataStruct = &icu::locale::provider::Aliases {
+                language_variants: unsafe { zerovec::vecs::VarZeroVec16::from_bytes_unchecked(b"\x13\0\r\0\x1B\0*\09\0F\0T\0r\0~\0\x8B\0\x98\0\xA9\0\xB8\0\xC7\0\xD5\0\xE2\0\xF0\0\xFF\0\x0C\x01aa\0\x05\0saahossyart\x06\0lojbanjbocel\x07\0gaulishxtghy\0\x07\0arevmdahywno\0\x06\0bokmalnbno\0\x07\0nynorsknnund\x0E\0hepburn-heplocund-alalc97zh\0\x05\0guoyuzhzh\0\x05\0hakkahakzh\0\x05\0xianghsnund\x06\0aalandund-AXund\x07\0arevelaundund\x07\0arevmdaundund\x06\0bokmalundund\x05\0hakkaundund\x06\0lojbanundund\x07\0nynorskundund\x05\0saahoundund\x05\0xiangund") },
+                sgn_region: unsafe {
+                    #[allow(unused_unsafe)]
+                    zerovec::ZeroMap::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"BR\0CO\0DE\0DK\0ES\0FR\0GB\0GR\0IE\0IT\0JP\0MX\0NI\0NL\0NO\0PT\0SE\0US\0ZA\0") }, unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"bzscsngsgdslsspfslbfigssisgisejslmfsncsdsensipsrswlasesfs") })
+                },
+                language_len2: unsafe {
+                    #[allow(unused_unsafe)]
+                    zerovec::ZeroMap::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"bhiniwjijwmoshtltw") }, unsafe { zerovec::vecs::VarZeroVec16::from_bytes_unchecked(b"\t\0\x03\0\x05\0\x07\0\t\0\x0B\0\r\0\x14\0\x17\0bhoidheyijvrosr-Latnfilak") })
+                },
+                language_len3: unsafe {
+                    #[allow(unused_unsafe)]
+                    zerovec::ZeroMap::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"aamaarabkadpafragpaisajpajtajuakaalbalsamharaarbargarmasdasmaueavaaveaymayrayxazeazjbakbambaqbazbccbclbelbenbgmbhkbicbihbisbjdbjqbkbblgbodbosbrebtbbulburbxkbxrcatccqceschachechichuchvcjrckacldclscmkcmncnrcorcoscoycqucrecwdcymczedafdandapdekdeudgodhddikdiqditdivdjldkldrhdrrdrwduddujdutdwldzoekkellelpemkengepoeskesteusewefaofasfatfijfinfrafrefryfucfulgavgazgbcgbogeogergfxggnggoggrgioglagleglggliglvgnogomgregrngtiguggujguvgyahathauhbshdnheahebherhimhinhmohrrhrvhunhyeibiiboiceidoiiiikeikuileillilwinaindipkislitaizijarjavjegjpnkalkankaskatkaukazkdvkgckgdkghkgmkhkkhmkikkinkirkmrknckngkojkomkonkorkppkpvkrmktrkuakurkvskwqkxekxlkzhkzjkztlaklaolatlavlbklegliilimlinlitllolmmltzlubluglvsmacmahmalmaomarmaymegmgxmhrmkdmlgmltmntmofmolmonmrimsamstmupmwdmwjmyamydmytnadnaunavnbfnblnbxncpndendonepnldnlnnlrnnonnsnnxnobnomnoonornpintentsnxunyaociojgojioriormoryossounpanpatpbupcrperpesplipltpmcpmkpmupnbpolporppapprprpprsprypuspuzquequzrmrrmyrohronrumrunrussagsansapscasccscrsglsinskkslksloslvsmdsmesmosnasnbsndsomsotspaspysqisrcsrdsrpsswsulsumsunswaswcsweswhszdtahtamtattduteltggtgktglthathcthwthxtibtidtietirtkktlwtmktmptnetnftontpwtsftsntsottqtukturtwiuigukrumuunpuokurduzbuznvenvievolwelwgwwitwiwwlnwolxbaxhoxiaxkhxpexrqxsjxslxssybdyddyenyidyiyymaymtyoryosyuuzaizhazhozirzkbzsmzulzyb") }, unsafe { zerovec::vecs::VarZeroVec16::from_bytes_unchecked(b"\xAA\x01\x03\0\x05\0\x07\0\t\0\x0B\0\x0E\0\x11\0\x14\0\x17\0\x1A\0\x1C\0\x1E\0 \0\"\0$\0&\0(\0*\0-\0/\x002\x004\x006\08\0:\0=\0?\0A\0C\0E\0G\0J\0M\0P\0R\0T\0W\0Z\0]\0`\0b\0e\0h\0k\0n\0p\0r\0t\0w\0y\0{\0~\0\x81\0\x83\0\x86\0\x88\0\x8A\0\x8C\0\x8E\0\x90\0\x92\0\x95\0\x98\0\x9B\0\x9D\0\xA0\0\xA2\0\xA7\0\xA9\0\xAB\0\xAE\0\xB1\0\xB3\0\xB5\0\xB7\0\xB9\0\xBC\0\xBE\0\xC1\0\xC4\0\xC6\0\xC9\0\xCC\0\xCF\0\xD2\0\xD5\0\xD7\0\xDA\0\xDD\0\xDF\0\xE2\0\xE7\0\xEA\0\xED\0\xEF\0\xF2\0\xF4\0\xF6\0\xF8\0\xFB\0\xFE\0\0\x01\x02\x01\x04\x01\x06\x01\x08\x01\n\x01\x0C\x01\x0E\x01\x10\x01\x12\x01\x14\x01\x16\x01\x18\x01\x1A\x01\x1C\x01\x1E\x01!\x01#\x01&\x01)\x01+\x01-\x010\x013\x016\x019\x01<\x01>\x01@\x01B\x01E\x01G\x01J\x01M\x01O\x01Q\x01T\x01V\x01X\x01[\x01^\x01`\x01b\x01i\x01l\x01o\x01q\x01s\x01v\x01x\x01z\x01}\x01\x7F\x01\x81\x01\x83\x01\x86\x01\x88\x01\x8A\x01\x8C\x01\x8E\x01\x90\x01\x92\x01\x94\x01\x97\x01\x9A\x01\x9C\x01\x9E\x01\xA0\x01\xA2\x01\xA4\x01\xA7\x01\xAA\x01\xAC\x01\xAF\x01\xB1\x01\xB3\x01\xB5\x01\xB7\x01\xB9\x01\xBB\x01\xBD\x01\xC0\x01\xC3\x01\xC6\x01\xC9\x01\xCC\x01\xCE\x01\xD0\x01\xD2\x01\xD4\x01\xD6\x01\xD8\x01\xDA\x01\xDC\x01\xDF\x01\xE1\x01\xE3\x01\xE5\x01\xE8\x01\xEA\x01\xED\x01\xF0\x01\xF2\x01\xF4\x01\xF7\x01\xFA\x01\xFD\x01\0\x02\x03\x02\x06\x02\t\x02\x0C\x02\x0E\x02\x10\x02\x12\x02\x15\x02\x18\x02\x1B\x02\x1D\x02\x1F\x02!\x02$\x02'\x02)\x02+\x02-\x02/\x021\x023\x025\x027\x029\x02;\x02>\x02A\x02D\x02F\x02H\x02J\x02M\x02P\x02R\x02T\x02V\x02X\x02[\x02^\x02a\x02d\x02f\x02i\x02l\x02o\x02q\x02s\x02v\x02x\x02{\x02~\x02\x80\x02\x82\x02\x84\x02\x86\x02\x89\x02\x8C\x02\x8E\x02\x91\x02\x94\x02\x96\x02\x99\x02\x9C\x02\x9E\x02\xA0\x02\xA3\x02\xA6\x02\xA9\x02\xAB\x02\xAD\x02\xAF\x02\xB1\x02\xB3\x02\xB5\x02\xB7\x02\xB9\x02\xBC\x02\xBE\x02\xC1\x02\xC3\x02\xC6\x02\xC8\x02\xCA\x02\xCC\x02\xCE\x02\xD1\x02\xD4\x02\xD7\x02\xDA\x02\xDC\x02\xDE\x02\xE1\x02\xE4\x02\xE6\x02\xEB\x02\xEE\x02\xF0\x02\xF3\x02\xF5\x02\xF7\x02\xFA\x02\xFD\x02\xFF\x02\x01\x03\x03\x03\x05\x03\x07\x03\t\x03\x0B\x03\x0E\x03\x11\x03\x13\x03\x15\x03\x18\x03\x1A\x03\x1D\x03\x1F\x03!\x03#\x03&\x03(\x03*\x03,\x03/\x031\x033\x035\x037\x03:\x03<\x03>\x03@\x03B\x03D\x03G\x03J\x03L\x03N\x03S\x03U\x03W\x03Z\x03\\\x03^\x03`\x03c\x03e\x03h\x03j\x03m\x03o\x03r\x03u\x03x\x03z\x03}\x03\x80\x03\x82\x03\x85\x03\x88\x03\x8B\x03\x8E\x03\x91\x03\x96\x03\x98\x03\x9B\x03\x9E\x03\xA0\x03\xA2\x03\xA5\x03\xA7\x03\xA9\x03\xAB\x03\xAD\x03\xAF\x03\xB2\x03\xB5\x03\xB8\x03\xBA\x03\xBC\x03\xBE\x03\xC0\x03\xC2\x03\xC4\x03\xC6\x03\xC9\x03\xCC\x03\xCF\x03\xD1\x03\xD3\x03\xD6\x03\xD8\x03\xDB\x03\xDE\x03\xE1\x03\xE4\x03\xE7\x03\xEA\x03\xED\x03\xF0\x03\xF2\x03\xF5\x03\xF7\x03\xFA\x03\xFD\x03\0\x04\x02\x04\x05\x04\x08\x04\x0B\x04\r\x04\x0F\x04\x12\x04\x15\x04\x17\x04\x19\x04aasaaabdzafapfamiapcaebjrbaksqsqamararanhysnzasktzavaeayaynunazazbabmeunvobalbikbebnbcgfblbirbhobidrlbzcebkibabobsbrbebbgmyluybuacarkicschcezhcucvmomcmrsyrsaxchzhsr-MEkwcopijquhcrcrcycsdnjdanjzsqmdedoimwrdinzzadifdvdzeaqdmnkzkfa-AFuthdwunldbtdzetelamqmaneneoiketeueefofaakfjfifrfrfyffffdevomwnygrbkadevajgvresggtuaougdgaglkzkgvgonkokelgnnycgnguduzgbahthasr-Latnhaihmnhehzsrxhihojalhrhuhyopaigisioiiiuiuieilmgaliaidikisitezajgkjvoybjaklknkskakrkkzkdtdfncqkmlplumnkmkirwkykukrkgkwvkvkgkojkmkvbmfdtpkjkugdjyamtvdkrudgldtpdtpksplolalvbncenlraqlilnltngtrmxlblulglvmkmhmlmimrmscirjbkchmmkmgmtwnnxntromnmimsmryrajdmwvajmyaogmryxnynanvnrunrgllkdzndngnenlazdnrknnnbrngvnbcbrdtdnoneekopijbppnyocojojoromorosvajpakxrpsadxfafapimghuwcrrphrlahplptbfylcqgufa-AFprtpspubququemxromrmrorornrusgsaaqthlesrhrisksioybskskslkmbsesmsnibasdsostesklnsqscscsrsssgdulwsuswsw-CDsvswumitytattdtptebjptgfilthtpoolaoybboitdrastitwmweotdgtyjkakfa-AFtotpntajtntstmhtktrakugukdelwroemauruzuzvevivocywgbnolnwowawocaxxhacnwawkpedmwsujdenzkorkiyiynqyiyrmlrrmtmyozomyugzapzazhscvkjhmszuza") })
+                },
+                language: zerovec::vecs::VarZeroVec16::new(),
+                script: unsafe {
+                    #[allow(unused_unsafe)]
+                    zerovec::ZeroMap::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"Qaai") }, unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"Zinh") })
+                },
+                region_alpha: unsafe {
+                    #[allow(unused_unsafe)]
+                    zerovec::ZeroMap::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"BUCTDDDYFXHVJTMINHNQPUPZQURHTPUKVDWKYDZR") }, unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"MM\0KI\0DE\0BJ\0FR\0BF\0UM\0UM\0VU\0AQ\0UM\0PA\0EU\0ZW\0TL\0GB\0VN\0UM\0YE\0CD\0") })
+                },
+                region_num: unsafe {
+                    #[allow(unused_unsafe)]
+                    zerovec::ZeroMap::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"004008010012016020024028031032036040044048050051052056060064068070072074076084086090092096100104108112116120124132136140144148152156158162166170174175178180184188191192196203204208212214218222226230231232233234238239242246248249250254258260262266268270275276278280288292296300304308312316320324328332334336340344348352356360364368372376380384388392398400404408410414417418422426428430434438440442446450454458462466470474478480484492496498499500504508512516520524528531533534535540548554558562566570574578580581583584585586591598600604608612616620624626630634638642643646652654659660662663666670674678682686688690694702703704705706710716720724728729732736740744748752756760762764768772776780784788792795796798800804807818826831832833834840850854858860862876882886887894958959960962963964965966967968969970971972973974975976977978979980981982983984985986987988989990991992993994995996997998999") }, unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"AF\0AL\0AQ\0DZ\0AS\0AD\0AO\0AG\0AZ\0AR\0AU\0AT\0BS\0BH\0BD\0AM\0BB\0BE\0BM\0BT\0BO\0BA\0BW\0BV\0BR\0BZ\0IO\0SB\0VG\0BN\0BG\0MM\0BI\0BY\0KH\0CM\0CA\0CV\0KY\0CF\0LK\0TD\0CL\0CN\0TW\0CX\0CC\0CO\0KM\0YT\0CG\0CD\0CK\0CR\0HR\0CU\0CY\0CZ\0BJ\0DK\0DM\0DO\0EC\0SV\0GQ\0ET\0ET\0ER\0EE\0FO\0FK\0GS\0FJ\0FI\0AX\0FR\0FR\0GF\0PF\0TF\0DJ\0GA\0GE\0GM\0PS\0DE\0DE\0DE\0GH\0GI\0KI\0GR\0GL\0GD\0GP\0GU\0GT\0GN\0GY\0HT\0HM\0VA\0HN\0HK\0HU\0IS\0IN\0ID\0IR\0IQ\0IE\0IL\0IT\0CI\0JM\0JP\0KZ\0JO\0KE\0KP\0KR\0KW\0KG\0LA\0LB\0LS\0LV\0LR\0LY\0LI\0LT\0LU\0MO\0MG\0MW\0MY\0MV\0ML\0MT\0MQ\0MR\0MU\0MX\0MC\0MN\0MD\0ME\0MS\0MA\0MZ\0OM\0NA\0NR\0NP\0NL\0CW\0AW\0SX\0BQ\0NC\0VU\0NZ\0NI\0NE\0NG\0NU\0NF\0NO\0MP\0UM\0FM\0MH\0PW\0PK\0PA\0PG\0PY\0PE\0PH\0PN\0PL\0PT\0GW\0TL\0PR\0QA\0RE\0RO\0RU\0RW\0BL\0SH\0KN\0AI\0LC\0MF\0PM\0VC\0SM\0ST\0SA\0SN\0RS\0SC\0SL\0SG\0SK\0VN\0SI\0SO\0ZA\0ZW\0YE\0ES\0SS\0SD\0EH\0SD\0SR\0SJ\0SZ\0SE\0CH\0SY\0TJ\0TH\0TG\0TK\0TO\0TT\0AE\0TN\0TR\0TM\0TC\0TV\0UG\0UA\0MK\0EG\0GB\0GG\0JE\0IM\0TZ\0US\0VI\0BF\0UY\0UZ\0VE\0WF\0WS\0YE\0YE\0ZM\0AA\0QM\0QN\0QP\0QQ\0QR\0QS\0QT\0EU\0QV\0QW\0QX\0QY\0QZ\0XA\0XB\0XC\0XD\0XE\0XF\0XG\0XH\0XI\0XJ\0XK\0XL\0XM\0XN\0XO\0XP\0XQ\0XR\0XS\0XT\0XU\0XV\0XW\0XX\0XY\0XZ\0ZZ\0") })
+                },
+                complex_region: unsafe {
+                    #[allow(unused_unsafe)]
+                    zerovec::ZeroMap::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"062172200530532536582810830890891AN\0CS\0FQ\0NT\0PC\0SU\0YU\0") }, unsafe { zerovec::vecs::VarZeroVec16::from_bytes_unchecked(b"\x12\0\x06\0*\x000\09\0B\0H\0T\0\x81\0\x87\0\x99\0\x9F\0\xA8\0\xAE\0\xB4\0\xBA\0\xC6\0\xF3\x00034143RU\0AM\0AZ\0BY\0GE\0KG\0KZ\0MD\0TJ\0TM\0UA\0UZ\0CZ\0SK\0CW\0SX\0BQ\0CW\0SX\0BQ\0SA\0IQ\0FM\0MH\0MP\0PW\0RU\0AM\0AZ\0BY\0EE\0GE\0KZ\0KG\0LV\0LT\0MD\0TJ\0TM\0UA\0UZ\0JE\0GG\0RS\0ME\0SI\0HR\0MK\0BA\0RS\0ME\0CW\0SX\0BQ\0RS\0ME\0AQ\0TF\0SA\0IQ\0FM\0MH\0MP\0PW\0RU\0AM\0AZ\0BY\0EE\0GE\0KZ\0KG\0LV\0LT\0MD\0TJ\0TM\0UA\0UZ\0RS\0ME\0") })
+                },
+                variant: unsafe {
+                    #[allow(unused_unsafe)]
+                    zerovec::ZeroMap::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"heploc\0\0polytoni") }, unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"alalc97\0polyton\0") })
+                },
+                subdivision: unsafe {
+                    #[allow(unused_unsafe)]
+                    zerovec::ZeroMap::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"cn11\0\0\0cn12\0\0\0cn13\0\0\0cn14\0\0\0cn15\0\0\0cn21\0\0\0cn22\0\0\0cn23\0\0\0cn31\0\0\0cn32\0\0\0cn33\0\0\0cn34\0\0\0cn35\0\0\0cn36\0\0\0cn37\0\0\0cn41\0\0\0cn42\0\0\0cn43\0\0\0cn44\0\0\0cn45\0\0\0cn46\0\0\0cn50\0\0\0cn51\0\0\0cn52\0\0\0cn53\0\0\0cn54\0\0\0cn61\0\0\0cn62\0\0\0cn63\0\0\0cn64\0\0\0cn65\0\0\0cn71\0\0\0cn91\0\0\0cn92\0\0\0cz10a\0\0cz10b\0\0cz10c\0\0cz10d\0\0cz10e\0\0cz10f\0\0cz611\0\0cz612\0\0cz613\0\0cz614\0\0cz615\0\0cz621\0\0cz622\0\0cz623\0\0cz624\0\0cz626\0\0cz627\0\0czjc\0\0\0czjm\0\0\0czka\0\0\0czkr\0\0\0czli\0\0\0czmo\0\0\0czol\0\0\0czpa\0\0\0czpl\0\0\0czpr\0\0\0czst\0\0\0czus\0\0\0czvy\0\0\0czzl\0\0\0fi01\0\0\0fra\0\0\0\0frb\0\0\0\0frbl\0\0\0frc\0\0\0\0frcp\0\0\0frd\0\0\0\0fre\0\0\0\0frf\0\0\0\0frg\0\0\0\0frgf\0\0\0frgp\0\0\0frgua\0\0frh\0\0\0\0fri\0\0\0\0frj\0\0\0\0frk\0\0\0\0frl\0\0\0\0frlre\0\0frm\0\0\0\0frmay\0\0frmf\0\0\0frmq\0\0\0frn\0\0\0\0frnc\0\0\0fro\0\0\0\0frp\0\0\0\0frpf\0\0\0frpm\0\0\0frq\0\0\0\0frr\0\0\0\0frre\0\0\0frs\0\0\0\0frt\0\0\0\0frtf\0\0\0fru\0\0\0\0frv\0\0\0\0frwf\0\0\0fryt\0\0\0laxn\0\0\0lud\0\0\0\0lug\0\0\0\0lul\0\0\0\0mrnkc\0\0nlaw\0\0\0nlcw\0\0\0nlsx\0\0\0no23\0\0\0nzn\0\0\0\0nzs\0\0\0\0omba\0\0\0omsh\0\0\0plds\0\0\0plkp\0\0\0pllb\0\0\0plld\0\0\0pllu\0\0\0plma\0\0\0plmz\0\0\0plop\0\0\0plpd\0\0\0plpk\0\0\0plpm\0\0\0plsk\0\0\0plsl\0\0\0plwn\0\0\0plwp\0\0\0plzp\0\0\0shta\0\0\0tteto\0\0ttrcm\0\0ttwto\0\0twkhq\0\0twtnq\0\0twtpq\0\0twtxq\0\0usas\0\0\0usgu\0\0\0usmp\0\0\0uspr\0\0\0usum\0\0\0usvi\0\0\0") }, unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"cnbj\0\0\0cntj\0\0\0cnhe\0\0\0cnsx\0\0\0cnmn\0\0\0cnln\0\0\0cnjl\0\0\0cnhl\0\0\0cnsh\0\0\0cnjs\0\0\0cnzj\0\0\0cnah\0\0\0cnfj\0\0\0cnjx\0\0\0cnsd\0\0\0cnha\0\0\0cnhb\0\0\0cnhn\0\0\0cngd\0\0\0cngx\0\0\0cnhi\0\0\0cncq\0\0\0cnsc\0\0\0cngz\0\0\0cnyn\0\0\0cnxz\0\0\0cnsn\0\0\0cngs\0\0\0cnqh\0\0\0cnnx\0\0\0cnxj\0\0\0twzzzz\0hkzzzz\0mozzzz\0cz110\0\0cz111\0\0cz112\0\0cz113\0\0cz114\0\0cz115\0\0cz663\0\0cz632\0\0cz633\0\0cz634\0\0cz635\0\0cz641\0\0cz642\0\0cz643\0\0cz644\0\0cz646\0\0cz647\0\0cz31\0\0\0cz64\0\0\0cz41\0\0\0cz52\0\0\0cz51\0\0\0cz80\0\0\0cz71\0\0\0cz53\0\0\0cz32\0\0\0cz10\0\0\0cz20\0\0\0cz42\0\0\0cz63\0\0\0cz72\0\0\0axzzzz\0frges\0\0frnaq\0\0blzzzz\0frara\0\0cpzzzz\0frbfc\0\0frbre\0\0frcvl\0\0frges\0\0gfzzzz\0gpzzzz\0gpzzzz\0frcor\0\0frbfc\0\0fridf\0\0frocc\0\0frnaq\0\0rezzzz\0frges\0\0ytzzzz\0mfzzzz\0mqzzzz\0frocc\0\0nczzzz\0frhdf\0\0frnor\0\0pfzzzz\0pmzzzz\0frnor\0\0frpdl\0\0rezzzz\0frhdf\0\0frnaq\0\0tfzzzz\0frpac\0\0frara\0\0wfzzzz\0ytzzzz\0laxs\0\0\0lucl\0\0\0luec\0\0\0luca\0\0\0mr13\0\0\0awzzzz\0cwzzzz\0sxzzzz\0no50\0\0\0nzauk\0\0nzcan\0\0ombj\0\0\0omsj\0\0\0pl02\0\0\0pl04\0\0\0pl08\0\0\0pl10\0\0\0pl06\0\0\0pl12\0\0\0pl14\0\0\0pl16\0\0\0pl20\0\0\0pl18\0\0\0pl22\0\0\0pl26\0\0\0pl24\0\0\0pl28\0\0\0pl30\0\0\0pl32\0\0\0tazzzz\0tttob\0\0ttmrc\0\0tttob\0\0twkhh\0\0twtnn\0\0twnwt\0\0twtxg\0\0aszzzz\0guzzzz\0mpzzzz\0przzzz\0umzzzz\0vizzzz\0") })
+                },
+            };
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DataProvider<icu::locale::provider::LocaleAliasesV1> for $provider {
+            fn load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponse<icu::locale::provider::LocaleAliasesV1>, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponse { payload: icu_provider::DataPayload::from_static_ref(Self::SINGLETON_LOCALE_ALIASES_V1), metadata: icu_provider::DataResponseMetadata::default() })
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::locale::provider::LocaleAliasesV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , ITER) => {
+        __impl_locale_aliases_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::locale::provider::LocaleAliasesV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+    ($ provider : ty , DRY) => {
+        __impl_locale_aliases_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::locale::provider::LocaleAliasesV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::locale::provider::LocaleAliasesV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , DRY , ITER) => {
+        __impl_locale_aliases_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::locale::provider::LocaleAliasesV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::locale::provider::LocaleAliasesV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::locale::provider::LocaleAliasesV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+}
+#[doc(inline)]
+pub use __impl_locale_aliases_v1 as impl_locale_aliases_v1;

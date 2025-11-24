@@ -1,0 +1,20 @@
+[package]
+name = "sentry-panic"
+version = "0.34.0"
+authors = ["Sentry <hello@sentry.io>"]
+license = "Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/getsentry/sentry-rust"
+homepage = "https://sentry.io/welcome/"
+description = """
+Sentry integration for capturing panics.
+"""
+edition = "2021"
+rust-version = "1.73"
+
+[dependencies]
+sentry-core = { version = "0.34.0", path = "../sentry-core" }
+sentry-backtrace = { version = "0.34.0", path = "../sentry-backtrace" }
+
+[dev-dependencies]
+sentry = { path = "../sentry", default-features = false, features = ["test"] }

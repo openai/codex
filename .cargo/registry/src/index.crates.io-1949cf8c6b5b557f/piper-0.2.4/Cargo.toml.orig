@@ -1,0 +1,38 @@
+[package]
+authors = ["Stjepan Glavina <stjepang@gmail.com>", "John Nunley <dev@notgull.net>"]
+description = "Async pipes, channels, mutexes, and more."
+edition = "2018"
+license = "MIT OR Apache-2.0"
+name = "piper"
+repository = "https://github.com/smol-rs/piper"
+version = "0.2.4"
+rust-version = "1.36"
+
+[features]
+default = ["std"]
+std = ["fastrand/std", "futures-io"]
+portable-atomic = ["atomic-waker/portable-atomic", "portable_atomic_crate", "portable-atomic-util"]
+
+[dependencies]
+atomic-waker = "1.1.0"
+fastrand = { version = "2.0.0", default-features = false }
+futures-io = { version = "0.3.28", optional = true }
+portable-atomic-util = { version = "0.2.0", features = ["alloc"], optional = true }
+
+[dependencies.portable_atomic_crate]
+package = "portable-atomic"
+version = "1.2.0"
+default-features = false
+optional = true
+
+[dev-dependencies]
+async-channel = "2.0.0"
+async-executor = "1.5.1"
+async-io = "2.0.0"
+criterion = { version = "0.4.0", default-features = false, features = ["cargo_bench_support"] }
+easy-parallel = "3.2.0"
+futures-lite = "2.0.0"
+
+[[bench]]
+name = "pipe_comparison"
+harness = false

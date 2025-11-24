@@ -1,0 +1,91 @@
+[package]
+name = "opentelemetry-otlp"
+version = "0.30.0"
+description = "Exporter for the OpenTelemetry Collector"
+homepage = "https://github.com/open-telemetry/opentelemetry-rust/tree/main/opentelemetry-otlp"
+repository = "https://github.com/open-telemetry/opentelemetry-rust/tree/main/opentelemetry-otlp"
+readme = "README.md"
+categories = [
+    "development-tools::debugging",
+    "development-tools::profiling",
+    "asynchronous",
+]
+keywords = ["opentelemetry", "otlp", "logging", "tracing", "metrics"]
+license = "Apache-2.0"
+edition = "2021"
+rust-version = "1.75.0"
+autotests = false
+autobenches = false
+
+[[test]]
+name = "smoke"
+path = "tests/smoke.rs"
+required-features = ["integration-testing"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+opentelemetry = { version = "0.30", default-features = false, path = "../opentelemetry" }
+opentelemetry_sdk = { version = "0.30", default-features = false, path = "../opentelemetry-sdk" }
+opentelemetry-http = { version = "0.30", path = "../opentelemetry-http", optional = true }
+opentelemetry-proto = { version = "0.30", path = "../opentelemetry-proto", default-features = false }
+tracing = {workspace = true, optional = true}
+
+prost = { workspace = true, optional = true }
+tonic = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["sync", "rt"], optional = true }
+
+reqwest = { workspace = true, optional = true }
+http = { workspace = true, optional = true }
+serde = { workspace = true, features = ["derive"], optional = true }
+thiserror = { workspace = true }
+serde_json = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio-stream = { workspace = true, features = ["net"] }
+# need tokio runtime to run smoke tests.
+opentelemetry_sdk = { features = ["trace", "rt-tokio", "testing"], path = "../opentelemetry-sdk" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+futures-util = { workspace = true }
+temp-env = { workspace = true }
+tonic = { workspace = true, features = ["router", "server"] }
+
+[features]
+# telemetry pillars and functions
+trace = ["opentelemetry/trace", "opentelemetry_sdk/trace", "opentelemetry-proto/trace"]
+metrics = ["opentelemetry/metrics", "opentelemetry_sdk/metrics", "opentelemetry-proto/metrics"]
+logs = ["opentelemetry/logs", "opentelemetry_sdk/logs", "opentelemetry-proto/logs"]
+internal-logs = ["tracing", "opentelemetry/internal-logs"]
+
+# add ons
+serialize = ["serde", "serde_json"]
+
+default = ["http-proto", "reqwest-blocking-client", "trace", "metrics", "logs", "internal-logs"]
+
+# grpc using tonic
+grpc-tonic = ["tonic", "prost", "http", "tokio", "opentelemetry-proto/gen-tonic"]
+gzip-tonic = ["tonic/gzip"]
+zstd-tonic = ["tonic/zstd"]
+tls = ["tonic/tls-ring"]
+tls-roots = ["tls", "tonic/tls-native-roots"]
+tls-webpki-roots = ["tls", "tonic/tls-webpki-roots"]
+
+# http binary
+http-proto = ["prost", "opentelemetry-http", "opentelemetry-proto/gen-tonic-messages", "http", "trace", "metrics"]
+http-json = ["serde_json", "prost", "opentelemetry-http", "opentelemetry-proto/gen-tonic-messages", "opentelemetry-proto/with-serde", "http", "trace", "metrics"]
+reqwest-blocking-client = ["reqwest/blocking", "opentelemetry-http/reqwest"]
+reqwest-client = ["reqwest", "opentelemetry-http/reqwest"]
+reqwest-rustls = ["reqwest", "opentelemetry-http/reqwest-rustls"]
+reqwest-rustls-webpki-roots = ["reqwest", "opentelemetry-http/reqwest-rustls-webpki-roots"]
+hyper-client = ["opentelemetry-http/hyper"]
+
+# test
+integration-testing = ["tonic", "prost", "tokio/full", "trace", "logs"]
+
+[lints]
+workspace = true
+
+[lib]
+bench = false

@@ -1,0 +1,45 @@
+[package]
+name = "os_info"
+version = "3.12.0"
+authors = ["Jan Schulte <hello@unexpected-co.de>", "Stanislav Tkach <stanislav.tkach@gmail.com>"]
+description = "Detect the operating system type and version."
+documentation = "https://docs.rs/os_info"
+homepage = "https://github.com/stanislav-tkach/os_info"
+repository = "https://github.com/stanislav-tkach/os_info"
+readme = "README.md"
+keywords = ["os", "os_type", "os_version", "os_info"]
+categories = ["os"]
+license = "MIT"
+edition = "2018"
+rust-version = "1.60"
+include = [
+    "Cargo.toml",
+    "LICENSE",
+    "src/**/*.rs",
+    "README.md",
+]
+
+[features]
+default = ["serde"]
+
+[dependencies]
+log.workspace = true
+serde = { version = "1", features = ["derive"], optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_System_SystemInformation",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+plist = "1.5.1"
+
+[dev-dependencies]
+pretty_assertions = "1"
+doc-comment = "0.3"

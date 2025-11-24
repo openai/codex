@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "StructDenyUnknownFields",
+  "type": "object",
+  "properties": {
+    "READ-ONLY": {
+      "type": "boolean",
+      "readOnly": true,
+      "default": false
+    },
+    "DEFAULT": {
+      "type": "boolean",
+      "default": false
+    },
+    "SKIP-SERIALIZING-IF": {
+      "type": "boolean"
+    },
+    "ser_renamed": {
+      "type": "boolean"
+    },
+    "OPTION": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "READ-ONLY",
+    "DEFAULT",
+    "ser_renamed",
+    "OPTION"
+  ]
+}

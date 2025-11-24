@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OuterStruct",
+  "type": "object",
+  "properties": {
+    "maybe_int": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int32",
+      "examples": [
+        8,
+        null
+      ]
+    },
+    "values": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "value": true,
+    "inner": {
+      "$ref": "#/$defs/InnerEnum"
+    },
+    "maybe_inner": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/InnerEnum"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "tuples": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "prefixItems": [
+          {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0,
+            "maximum": 255
+          },
+          {
+            "type": "integer",
+            "format": "int64"
+          }
+        ],
+        "minItems": 2,
+        "maxItems": 2
+      }
+    }
+  },
+  "required": [
+    "values",
+    "value",
+    "inner",
+    "tuples"
+  ],
+  "$defs": {
+    "InnerEnum": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "UndocumentedUnit1",
+            "UndocumentedUnit2"
+          ]
+        },
+        {
+          "description": "This is a documented unit variant",
+          "type": "string",
+          "const": "DocumentedUnit"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ValueNewType": true
+          },
+          "required": [
+            "ValueNewType"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

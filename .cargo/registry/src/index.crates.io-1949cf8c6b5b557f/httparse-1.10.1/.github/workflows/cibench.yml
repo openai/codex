@@ -1,0 +1,123 @@
+name: CI Benchmarks
+on:
+  pull_request:
+    branches: [master]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-C target-cpu=native"
+
+jobs:
+  benchmark:
+    name: Run benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
+      - name: Install critcmp
+        run: cargo install critcmp
+
+      - name: Run benchmarks (master)
+        run: |
+          git checkout master
+          cargo bench --bench parse -- --save-baseline master
+
+      - name: Run benchmarks (PR)
+        run: |
+          git checkout ${{ github.event.pull_request.head.sha }}
+          cargo bench --bench parse -- --save-baseline pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+
+      - name: Compare benchmarks
+        run: |
+          critcmp -t 5 master pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+
+  benchmark-x64:
+    name: Run x64 benchmarks
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        feature: [swar, sse42, avx2]
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
+      - name: Install critcmp
+        run: cargo install critcmp
+
+      - name: Run benchmarks (master)
+        run: |
+          git checkout master
+          cargo bench --bench parse -- --save-baseline master-${{ matrix.feature }}
+        env:
+          CARGO_CFG_HTTPARSE_DISABLE_SIMD: ${{ matrix.feature == 'swar' && '1' || '0' }}
+          RUSTFLAGS: ${{ matrix.feature != 'swar' && format('-C target-feature=+{0}', matrix.feature) || '' }}
+
+      - name: Run benchmarks (PR)
+        run: |
+          git checkout ${{ github.event.pull_request.head.sha }}
+          cargo bench --bench parse -- --save-baseline pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}-${{ matrix.feature }}
+        env:
+          CARGO_CFG_HTTPARSE_DISABLE_SIMD: ${{ matrix.feature == 'swar' && '1' || '0' }}
+          RUSTFLAGS: ${{ matrix.feature != 'swar' && format('-C target-feature=+{0}', matrix.feature) || '' }}
+
+      - name: Compare benchmarks
+        run: |
+          critcmp -t 5 master-${{ matrix.feature }} pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}-${{ matrix.feature }}
+
+  benchmark-aarch64:
+    name: Run aarch64 benchmarks
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        feature: [swar, neon]
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
+      - name: Install critcmp
+        run: cargo install critcmp
+
+      - name: Run benchmarks (master)
+        run: |
+          git checkout master
+          cargo bench --bench parse -- --save-baseline master-aarch64-${{ matrix.feature }}
+        env:
+          CARGO_CFG_HTTPARSE_DISABLE_SIMD: ${{ matrix.feature == 'swar' && '1' || '0' }}
+          RUSTFLAGS: ${{ matrix.feature == 'neon' && '-C target-feature=+neon' || '' }}
+
+      - name: Run benchmarks (PR)
+        run: |
+          git checkout ${{ github.event.pull_request.head.sha }}
+          cargo bench --bench parse -- --save-baseline pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}-aarch64-${{ matrix.feature }}
+        env:
+          CARGO_CFG_HTTPARSE_DISABLE_SIMD: ${{ matrix.feature == 'swar' && '1' || '0' }}
+          RUSTFLAGS: ${{ matrix.feature == 'neon' && '-C target-feature=+neon' || '' }}
+
+      - name: Compare benchmarks
+        run: |
+          critcmp -t 5 master-aarch64-${{ matrix.feature }} pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}-aarch64-${{ matrix.feature }}

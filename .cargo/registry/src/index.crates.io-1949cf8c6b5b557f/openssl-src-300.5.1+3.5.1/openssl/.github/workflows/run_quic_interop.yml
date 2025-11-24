@@ -1,0 +1,71 @@
+name: "Run openssl quic interop testing"
+
+on:
+  workflow_run:
+    workflows: ["Build openssl interop container from master"]
+    types: [completed]
+  workflow_dispatch:
+
+jobs:
+  run_quic_interop_openssl_client:
+    strategy:
+      matrix:
+        tests: [http3, transfer, handshake, retry, chacha20, resumption, multiplexing, ipv6]
+        servers: [quic-go, ngtcp2, mvfst, quiche, nginx, msquic, haproxy]
+        exclude:
+          - servers: msquic
+            tests: retry
+      fail-fast: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+         repository: 'quic-interop/quic-interop-runner'
+         fetch-depth: 0
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          sudo add-apt-repository ppa:wireshark-dev/stable
+          sudo apt-get update
+          sudo apt-get install -y tshark
+      - name: Patch implementations file
+        run: |
+          jq '.openssl = { image: "quay.io/openssl-ci/openssl-quic-interop"
+                         , url: "https://github.com/openssl/openssl"
+                         , role: "both"
+                         }' ./implementations.json > ./implementations.tmp
+          mv ./implementations.tmp implementations.json
+      - name: "run interop with openssl client"
+        run: |
+          python3 ./run.py -c openssl -t ${{ matrix.tests }} -s ${{ matrix.servers }} --log-dir ./logs-client -d
+  run_quic_interop_openssl_server:
+    strategy:
+      matrix:
+        tests: [http3, transfer, handshake, retry, chacha20, resumption, amplificationlimit, ipv6]
+        clients: [quic-go, ngtcp2, mvfst, quiche, msquic, openssl, chrome]
+        exclude:
+          - clients: mvfst
+            tests: amplificationlimit
+      fail-fast: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+         repository: 'quic-interop/quic-interop-runner'
+         fetch-depth: 0
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          sudo add-apt-repository ppa:wireshark-dev/stable
+          sudo apt-get update
+          sudo apt-get install -y tshark
+      - name: Patch implementations file
+        run: |
+          jq '.openssl = { image: "quay.io/openssl-ci/openssl-quic-interop"
+                         , url: "https://github.com/openssl/openssl"
+                         , role: "both"
+                         }' ./implementations.json > ./implementations.tmp
+          mv ./implementations.tmp implementations.json
+      - name: "run interop with openssl server"
+        run: |
+          python3 ./run.py -s openssl -t ${{ matrix.tests }} -c ${{ matrix.clients }} --log-dir ./logs-server -d

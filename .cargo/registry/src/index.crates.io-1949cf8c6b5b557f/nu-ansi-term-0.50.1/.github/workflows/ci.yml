@@ -1,0 +1,29 @@
+on: pull_request
+
+name: Continuous integration
+
+jobs:
+  ci:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        rust:
+          - stable
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: rustfmt, clippy
+
+      - run: cargo fmt --check --all
+      - run: cargo clippy -- -D warnings
+      - run: cargo build --all-features
+      - run: cargo test
+      - run: cargo test --all-features
+      - run: cargo run --example 256_colors
+      - run: cargo run --example hyperlink
+      - run: cargo run --example title

@@ -1,0 +1,5 @@
+error: field will not be populated because `forward_attrs` is not set on the struct
+ --> tests/compile-fail/attrs_without_forward_attrs.rs:7:5
+  |
+7 |     attrs: Vec<Attribute>,
+  |     ^^^^^

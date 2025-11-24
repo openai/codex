@@ -1,0 +1,262 @@
+[package]
+name = "quick-xml"
+version = "0.37.5"
+description = "High performance xml reader and writer"
+edition = "2021"
+
+documentation = "https://docs.rs/quick-xml"
+repository = "https://github.com/tafia/quick-xml"
+
+keywords = ["xml", "serde", "parser", "writer", "html"]
+categories = ["asynchronous", "encoding", "parsing", "parser-implementations"]
+license = "MIT"
+rust-version = "1.56"
+# We exclude tests & examples & benches to reduce the size of a package.
+# Unfortunately, this is source of warnings in latest cargo when packaging:
+# > warning: ignoring {context} `{name}` as `{path}` is not included in the published package
+# That may become unnecessary once https://github.com/rust-lang/cargo/issues/13491
+# will be resolved
+include = ["src/*", "LICENSE-MIT.md", "README.md"]
+
+[dependencies]
+arbitrary = { version = "1", features = ["derive"], optional = true }
+document-features = { version = "0.2", optional = true }
+encoding_rs = { version = "0.8", optional = true }
+serde = { version = ">=1.0.139", optional = true }
+tokio = { version = "1.10", optional = true, default-features = false, features = ["io-util"] }
+memchr = "2.1"
+
+[dev-dependencies]
+criterion = "0.4"
+pretty_assertions = "1.4"
+regex = "1"
+# https://github.com/serde-rs/serde/issues/1904 is fixed since 1.0.206
+# serde does not follow semver in numbering and their dependencies, so we specifying patch here
+serde_derive = { version = "1.0.206" }
+serde-value = "0.7"
+tokio = { version = "1.21", default-features = false, features = ["macros", "rt"] }
+tokio-test = "0.4"
+
+[lib]
+bench = false
+
+[[bench]]
+name = "microbenches"
+harness = false
+path = "benches/microbenches.rs"
+
+[[bench]]
+name = "macrobenches"
+harness = false
+path = "benches/macrobenches.rs"
+
+[features]
+default = []
+
+## Enables support for asynchronous reading and writing from `tokio`'s IO-Traits by enabling
+## [reading events] from types implementing [`tokio::io::AsyncBufRead`].
+##
+## [reading events]: crate::reader::Reader::read_event_into_async
+async-tokio = ["tokio"]
+
+## Enables support of non-UTF-8 encoded documents. Encoding will be inferred from
+## the XML declaration if it is found, otherwise UTF-8 is assumed.
+##
+## Currently, only ASCII-compatible encodings are supported. For example,
+## UTF-16 will not work (therefore, `quick-xml` is not [standard compliant]).
+##
+## Thus, quick-xml supports all encodings of [`encoding_rs`] except these:
+## - [UTF-16BE]
+## - [UTF-16LE]
+## - [ISO-2022-JP]
+##
+## You should stop processing a document when one of these encodings is detected,
+## because generated events can be wrong and do not reflect a real document structure!
+##
+## Because these are the only supported encodings that are not ASCII compatible, you can
+## check for them:
+##
+## ```
+## use quick_xml::events::Event;
+## use quick_xml::reader::Reader;
+##
+## # fn to_utf16le_with_bom(string: &str) -> Vec<u8> {
+## #     let mut bytes = Vec::new();
+## #     bytes.extend_from_slice(&[0xFF, 0xFE]); // UTF-16 LE BOM
+## #     for ch in string.encode_utf16() {
+## #         bytes.extend_from_slice(&ch.to_le_bytes());
+## #     }
+## #     bytes
+## # }
+## let xml = to_utf16le_with_bom(r#"<?xml encoding='UTF-16'><element/>"#);
+## let mut reader = Reader::from_reader(xml.as_ref());
+## reader.config_mut().trim_text(true);
+##
+## let mut buf = Vec::new();
+## let mut unsupported = false;
+## loop {
+##     if !reader.decoder().encoding().is_ascii_compatible() {
+##         unsupported = true;
+##         break;
+##     }
+##     buf.clear();
+##     match reader.read_event_into(&mut buf).unwrap() {
+##         Event::Eof => break,
+##         _ => {}
+##     }
+## }
+## assert_eq!(unsupported, true);
+## ```
+## This restriction will be eliminated once issue [#158] is resolved.
+##
+## [standard compliant]: https://www.w3.org/TR/xml11/#charencoding
+## [UTF-16BE]: encoding_rs::UTF_16BE
+## [UTF-16LE]: encoding_rs::UTF_16LE
+## [ISO-2022-JP]: encoding_rs::ISO_2022_JP
+## [#158]: https://github.com/tafia/quick-xml/issues/158
+encoding = ["encoding_rs"]
+
+## Enables support for recognizing all [HTML 5 entities] in [`unescape`]
+## function. The full list of entities also can be found in
+## <https://html.spec.whatwg.org/entities.json>.
+##
+## [HTML 5 entities]: https://dev.w3.org/html5/html-author/charref
+## [`unescape`]: crate::escape::unescape
+escape-html = []
+
+## This feature is for the Serde deserializer that enables support for deserializing
+## lists where tags are overlapped with tags that do not correspond to the list.
+##
+## When this feature is enabled, the XML:
+## ```xml
+## <any-name>
+##   <item/>
+##   <another-item/>
+##   <item/>
+##   <item/>
+## </any-name>
+## ```
+## could be deserialized to a struct:
+## ```no_run
+## # use serde::Deserialize;
+## #[derive(Deserialize)]
+## #[serde(rename_all = "kebab-case")]
+## struct AnyName {
+##   item: Vec<()>,
+##   another_item: (),
+## }
+## ```
+##
+## When this feature is not enabled (default), only the first element will be
+## associated with the field, and the deserialized type will report an error
+## (duplicated field) when the deserializer encounters a second `<item/>`.
+##
+## Note, that enabling this feature can lead to high and even unlimited memory
+## consumption, because deserializer needs to check all events up to the end of a
+## container tag (`</any-name>` in this example) to figure out that there are no
+## more items for a field. If `</any-name>` or even EOF is not encountered, the
+## parsing will never end which can lead to a denial-of-service (DoS) scenario.
+##
+## Having several lists and overlapped elements for them in XML could also lead
+## to quadratic parsing time, because the deserializer must check the list of
+## events as many times as the number of sequence fields present in the schema.
+##
+## To reduce negative consequences, always [limit] the maximum number of events
+## that [`Deserializer`] will buffer.
+##
+## This feature works only with `serialize` feature and has no effect if `serialize`
+## is not enabled.
+##
+## [limit]: crate::de::Deserializer::event_buffer_size
+## [`Deserializer`]: crate::de::Deserializer
+overlapped-lists = []
+
+## Enables serialization of some quick-xml types using [`serde`]. This feature
+## is rarely needed.
+##
+## This feature does NOT provide XML serializer or deserializer. You should use
+## the `serialize` feature for that instead.
+# Cannot name "serde" to avoid clash with dependency.
+# "dep:" prefix only avalible from Rust 1.60
+serde-types = ["serde/derive"]
+
+## Enables support for [`serde`] serialization and deserialization. When this
+## feature is enabled, quick-xml provides serializer and deserializer for XML.
+##
+## This feature does NOT enables serializaton of the types inside quick-xml.
+## If you need that, use the `serde-types` feature.
+serialize = ["serde"] # "dep:" prefix only avalible from Rust 1.60
+
+[package.metadata.docs.rs]
+# document all features
+all-features = true
+
+# Tests, benchmarks and examples doesn't included in package on crates.io,
+# so we need to specify a path, otherwise `cargo package` complains
+# That may become unnecessary once https://github.com/rust-lang/cargo/issues/13491
+# will be resolved
+
+[[test]]
+name = "async-tokio"
+required-features = ["async-tokio"]
+path = "tests/async-tokio.rs"
+
+[[test]]
+name = "encodings"
+required-features = ["encoding"]
+path = "tests/encodings.rs"
+
+[[test]]
+name = "html"
+required-features = ["escape-html"]
+path = "tests/html.rs"
+
+[[test]]
+name = "serde_roundtrip"
+required-features = ["serialize"]
+path = "tests/serde_roundtrip.rs"
+
+[[test]]
+name = "serde-de"
+required-features = ["serialize"]
+path = "tests/serde-de.rs"
+
+[[test]]
+name = "serde-de-enum"
+required-features = ["serialize"]
+path = "tests/serde-de-enum.rs"
+
+[[test]]
+name = "serde-de-seq"
+required-features = ["serialize"]
+path = "tests/serde-de-seq.rs"
+
+[[test]]
+name = "serde-de-xsi"
+required-features = ["serialize"]
+path = "tests/serde-de-xsi.rs"
+
+[[test]]
+name = "serde-se"
+required-features = ["serialize"]
+path = "tests/serde-se.rs"
+
+[[test]]
+name = "serde-migrated"
+required-features = ["serialize"]
+path = "tests/serde-migrated.rs"
+
+[[test]]
+name = "serde-issues"
+required-features = ["serialize"]
+path = "tests/serde-issues.rs"
+
+[[example]]
+name = "read_nodes_serde"
+required-features = ["serialize"]
+path = "examples/read_nodes_serde.rs"
+
+[[example]]
+name = "flattened_enum"
+required-features = ["serialize"]
+path = "examples/flattened_enum.rs"

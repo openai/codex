@@ -1,0 +1,5 @@
+---
+source: notify/src/event.rs
+expression: json
+---
+{"type":"remove","kind":"file","paths":[],"attrs":{}}

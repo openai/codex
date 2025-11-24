@@ -1,0 +1,16 @@
+pretty = proc(u) {
+  return ~(floor(u*1000)/1000);
+};
+
+f = sin(x) / x;
+
+d = [0.0; 0.000443633];
+pf = fpminimax(f, [|0, 2|], [|1, D...|], d, relative, floating);
+
+err_p = -log2(dirtyinfnorm(pf-f, d));
+print("Sinc [0, 0.000443633]");
+print(pf);
+display = decimal;
+print ("absolute error:",pretty(err_p));
+
+for i from 0 to degree(pf) by 2 do printdouble(coeff(pf, i));

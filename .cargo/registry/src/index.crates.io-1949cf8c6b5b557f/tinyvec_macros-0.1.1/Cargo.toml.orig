@@ -1,0 +1,8 @@
+[package]
+name = "tinyvec_macros"
+version = "0.1.1"
+authors = ["Soveu <marx.tomasz@gmail.com>"]
+edition = "2018"
+license = "MIT OR Apache-2.0 OR Zlib"
+repository = "https://github.com/Soveu/tinyvec_macros"
+description = "Some macros for tiny containers"

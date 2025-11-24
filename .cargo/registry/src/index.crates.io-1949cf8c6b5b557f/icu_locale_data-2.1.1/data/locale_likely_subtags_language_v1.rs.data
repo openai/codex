@@ -1,0 +1,95 @@
+// @generated
+/// Implement `DataProvider<LocaleLikelySubtagsLanguageV1>` on the given struct using the data
+/// hardcoded in this file. This allows the struct to be used with
+/// `icu`'s `_unstable` constructors.
+///
+/// Using this implementation will embed the following data in the binary's data segment:
+/// * 2440B[^1] for the singleton data struct
+///
+/// [^1]: these numbers can be smaller in practice due to linker deduplication
+///
+/// This macro requires the following crates:
+/// * `icu`
+/// * `icu_locale_core`
+/// * `icu_provider`
+/// * `zerovec`
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __impl_locale_likely_subtags_language_v1 {
+    ($ provider : ty) => {
+        #[clippy::msrv = "1.83"]
+        const _: () = <$provider>::MUST_USE_MAKE_PROVIDER_MACRO;
+        #[clippy::msrv = "1.83"]
+        impl $provider {
+            #[doc(hidden)]
+            pub const SINGLETON_LOCALE_LIKELY_SUBTAGS_LANGUAGE_V1: &'static <icu::locale::provider::LocaleLikelySubtagsLanguageV1 as icu_provider::DynamicDataMarker>::DataStruct = &icu::locale::provider::LikelySubtagsForLanguage {
+                language_script: unsafe {
+                    #[allow(unused_unsafe)]
+                    zerovec::ZeroMap::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"az\0Araben\0Shawff\0Adlmkk\0Arabku\0Arabku\0Cyrlku\0Yeziky\0Arabky\0Latnmn\0Mongpa\0Arabsd\0Devasd\0Khojsd\0Sindtg\0Arabug\0Cyrluz\0ArabyueHanszh\0Bopozh\0Hanbzh\0Hant") }, unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"IR\0GB\0GN\0CN\0IQ\0AM\0GE\0CN\0TR\0CN\0PK\0IN\0IN\0IN\0PK\0KZ\0AF\0CN\0TW\0TW\0TW\0") })
+                },
+                language_region: unsafe {
+                    #[allow(unused_unsafe)]
+                    zerovec::ZeroMap::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"az\0IQ\0az\0IR\0az\0RU\0ha\0CM\0ha\0SD\0kk\0AF\0kk\0CN\0kk\0IR\0kk\0MN\0ku\0AM\0ku\0AZ\0ku\0GE\0ku\0IQ\0ku\0IR\0ku\0LB\0ku\0TM\0ky\0CN\0ky\0TR\0mn\0CN\0ms\0CC\0pa\0PK\0sd\0IN\0sr\0ME\0sr\0RO\0sr\0TR\0tg\0PK\0ug\0KZ\0ug\0MN\0uz\0AF\0uz\0CN\0yueCN\0zh\0AU\0zh\0BN\0zh\0GB\0zh\0GF\0zh\0HK\0zh\0ID\0zh\0MO\0zh\0PA\0zh\0PF\0zh\0PH\0zh\0SR\0zh\0TH\0zh\0TW\0zh\0US\0zh\0VN\0") }, unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"ArabArabCyrlArabArabArabArabArabArabCyrlCyrlCyrlArabArabArabCyrlArabLatnMongArabArabDevaLatnLatnLatnArabCyrlCyrlArabCyrlHansHantHantHantHantHantHantHantHantHantHantHantHantHantHantHant") })
+                },
+                language: unsafe {
+                    #[allow(unused_unsafe)]
+                    zerovec::ZeroMap::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"af\0ak\0am\0ar\0as\0astaz\0ba\0balbe\0bg\0bgcbhoblobn\0br\0brxbs\0buaca\0cebchrcs\0cswcv\0cy\0da\0de\0doidsbee\0el\0en\0eo\0es\0et\0eu\0fa\0ff\0fi\0filfo\0fr\0fy\0ga\0gaagd\0gl\0gu\0ha\0he\0hi\0hr\0hsbhu\0hy\0ia\0id\0ie\0ig\0ii\0is\0it\0ja\0jv\0ka\0keakgpkk\0km\0kn\0ko\0kokks\0ku\0kxvky\0lb\0lijlmolo\0lt\0lv\0maimi\0mk\0ml\0mn\0mnimr\0ms\0mt\0my\0ndsne\0nl\0nn\0no\0nqonsooc\0om\0or\0pa\0pcmpl\0pmsps\0pt\0qu\0rajrm\0ro\0ru\0rw\0sa\0sahsatsc\0scnsd\0shnsi\0sk\0sl\0so\0sq\0sr\0st\0su\0sv\0sw\0syrszlta\0te\0tg\0th\0ti\0tk\0tn\0to\0tr\0tt\0tyvug\0uk\0ur\0uz\0vecvi\0vmwwo\0xh\0xnryo\0yrlyueza\0zh\0zu\0") }, unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"LatnZA\0LatnGH\0EthiET\0ArabEG\0BengIN\0LatnES\0LatnAZ\0CyrlRU\0ArabPK\0CyrlBY\0CyrlBG\0DevaIN\0DevaIN\0LatnBJ\0BengBD\0LatnFR\0DevaIN\0LatnBA\0CyrlRU\0LatnES\0LatnPH\0CherUS\0LatnCZ\0CansCA\0CyrlRU\0LatnGB\0LatnDK\0LatnDE\0DevaIN\0LatnDE\0LatnGH\0GrekGR\0LatnUS\0Latn001LatnES\0LatnEE\0LatnES\0ArabIR\0LatnSN\0LatnFI\0LatnPH\0LatnFO\0LatnFR\0LatnNL\0LatnIE\0LatnGH\0LatnGB\0LatnES\0GujrIN\0LatnNG\0HebrIL\0DevaIN\0LatnHR\0LatnDE\0LatnHU\0ArmnAM\0Latn001LatnID\0LatnEE\0LatnNG\0YiiiCN\0LatnIS\0LatnIT\0JpanJP\0LatnID\0GeorGE\0LatnCV\0LatnBR\0CyrlKZ\0KhmrKH\0KndaIN\0KoreKR\0DevaIN\0ArabIN\0LatnTR\0LatnIN\0CyrlKG\0LatnLU\0LatnIT\0LatnIT\0LaooLA\0LatnLT\0LatnLV\0DevaIN\0LatnNZ\0CyrlMK\0MlymIN\0CyrlMN\0BengIN\0DevaIN\0LatnMY\0LatnMT\0MymrMM\0LatnDE\0DevaNP\0LatnNL\0LatnNO\0LatnNO\0NkooGN\0LatnZA\0LatnFR\0LatnET\0OryaIN\0GuruIN\0LatnNG\0LatnPL\0LatnIT\0ArabAF\0LatnBR\0LatnPE\0DevaIN\0LatnCH\0LatnRO\0CyrlRU\0LatnRW\0DevaIN\0CyrlRU\0OlckIN\0LatnIT\0LatnIT\0ArabPK\0MymrMM\0SinhLK\0LatnSK\0LatnSI\0LatnSO\0LatnAL\0CyrlRS\0LatnZA\0LatnID\0LatnSE\0LatnTZ\0SyrcIQ\0LatnPL\0TamlIN\0TeluIN\0CyrlTJ\0ThaiTH\0EthiET\0LatnTM\0LatnZA\0LatnTO\0LatnTR\0CyrlRU\0CyrlRU\0ArabCN\0CyrlUA\0ArabPK\0LatnUZ\0LatnIT\0LatnVN\0LatnMZ\0LatnSN\0LatnZA\0DevaIN\0LatnNG\0LatnBR\0HantHK\0LatnCN\0HansCN\0LatnZA\0") })
+                },
+                und: (icu_locale_core::subtags::language!("en"), icu_locale_core::subtags::script!("Latn"), icu_locale_core::subtags::region!("US")),
+            };
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DataProvider<icu::locale::provider::LocaleLikelySubtagsLanguageV1> for $provider {
+            fn load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponse<icu::locale::provider::LocaleLikelySubtagsLanguageV1>, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponse { payload: icu_provider::DataPayload::from_static_ref(Self::SINGLETON_LOCALE_LIKELY_SUBTAGS_LANGUAGE_V1), metadata: icu_provider::DataResponseMetadata::default() })
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::locale::provider::LocaleLikelySubtagsLanguageV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , ITER) => {
+        __impl_locale_likely_subtags_language_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::locale::provider::LocaleLikelySubtagsLanguageV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+    ($ provider : ty , DRY) => {
+        __impl_locale_likely_subtags_language_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::locale::provider::LocaleLikelySubtagsLanguageV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::locale::provider::LocaleLikelySubtagsLanguageV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , DRY , ITER) => {
+        __impl_locale_likely_subtags_language_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::locale::provider::LocaleLikelySubtagsLanguageV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::locale::provider::LocaleLikelySubtagsLanguageV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::locale::provider::LocaleLikelySubtagsLanguageV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+}
+#[doc(inline)]
+pub use __impl_locale_likely_subtags_language_v1 as impl_locale_likely_subtags_language_v1;

@@ -1,0 +1,83 @@
+// @generated
+/// Implement `DataProvider<PropertyBinaryExtenderV1>` on the given struct using the data
+/// hardcoded in this file. This allows the struct to be used with
+/// `icu`'s `_unstable` constructors.
+///
+/// Using this implementation will embed the following data in the binary's data segment:
+/// * 290B[^1] for the singleton data struct
+///
+/// [^1]: these numbers can be smaller in practice due to linker deduplication
+///
+/// This macro requires the following crates:
+/// * `icu`
+/// * `icu_provider`
+/// * `zerovec`
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __impl_property_binary_extender_v1 {
+    ($ provider : ty) => {
+        #[clippy::msrv = "1.83"]
+        const _: () = <$provider>::MUST_USE_MAKE_PROVIDER_MACRO;
+        #[clippy::msrv = "1.83"]
+        impl $provider {
+            #[doc(hidden)]
+            pub const SINGLETON_PROPERTY_BINARY_EXTENDER_V1: &'static <icu::properties::provider::PropertyBinaryExtenderV1 as icu_provider::DynamicDataMarker>::DataStruct = &icu::properties::provider::PropertyCodePointSet::InversionList(unsafe {
+                #[allow(unused_unsafe)]
+                icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"\xB7\0\0\xB8\0\0\xD0\x02\0\xD2\x02\0@\x06\0A\x06\0\xFA\x07\0\xFB\x07\0q\n\0r\n\0\xFB\n\0\xFC\n\0U\x0B\0V\x0B\0F\x0E\0G\x0E\0\xC6\x0E\0\xC7\x0E\0\n\x18\0\x0B\x18\0C\x18\0D\x18\0\xA7\x1A\0\xA8\x1A\x006\x1C\x007\x1C\0{\x1C\0|\x1C\0\x050\0\x060\x0010\x0060\0\x9D0\0\x9F0\0\xFC0\0\xFF0\0\x15\xA0\0\x16\xA0\0\x0C\xA6\0\r\xA6\0\xCF\xA9\0\xD0\xA9\0\xE6\xA9\0\xE7\xA9\0p\xAA\0q\xAA\0\xDD\xAA\0\xDE\xAA\0\xF3\xAA\0\xF5\xAA\0p\xFF\0q\xFF\0\x81\x07\x01\x83\x07\x01N\r\x01O\r\x01j\r\x01k\r\x01o\r\x01p\r\x017\x12\x018\x12\x01]\x13\x01^\x13\x01\xD2\x13\x01\xD4\x13\x01\xC6\x15\x01\xC9\x15\x01\x98\x1A\x01\x99\x1A\x01\xD9\x1D\x01\xDA\x1D\x01Bk\x01Dk\x01\xE0o\x01\xE2o\x01\xE3o\x01\xE4o\x01\xF2o\x01\xF4o\x01<\xE1\x01>\xE1\x01\xEF\xE5\x01\xF0\xE5\x01D\xE9\x01G\xE9\x01") }, 62u32)
+            });
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DataProvider<icu::properties::provider::PropertyBinaryExtenderV1> for $provider {
+            fn load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponse<icu::properties::provider::PropertyBinaryExtenderV1>, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponse { payload: icu_provider::DataPayload::from_static_ref(Self::SINGLETON_PROPERTY_BINARY_EXTENDER_V1), metadata: icu_provider::DataResponseMetadata::default() })
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyBinaryExtenderV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , ITER) => {
+        __impl_property_binary_extender_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::properties::provider::PropertyBinaryExtenderV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+    ($ provider : ty , DRY) => {
+        __impl_property_binary_extender_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::properties::provider::PropertyBinaryExtenderV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyBinaryExtenderV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , DRY , ITER) => {
+        __impl_property_binary_extender_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::properties::provider::PropertyBinaryExtenderV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyBinaryExtenderV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::properties::provider::PropertyBinaryExtenderV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+}
+#[doc(inline)]
+pub use __impl_property_binary_extender_v1 as impl_property_binary_extender_v1;

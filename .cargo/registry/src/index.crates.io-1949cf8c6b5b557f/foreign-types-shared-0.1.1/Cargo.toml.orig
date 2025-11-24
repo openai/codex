@@ -1,0 +1,9 @@
+[package]
+name = "foreign-types-shared"
+version = "0.1.1"
+authors = ["Steven Fackler <sfackler@gmail.com>"]
+license = "MIT/Apache-2.0"
+description = "An internal crate used by foreign-types"
+repository = "https://github.com/sfackler/foreign-types"
+
+[dependencies]

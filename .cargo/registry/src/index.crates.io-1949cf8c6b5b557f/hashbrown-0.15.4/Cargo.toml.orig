@@ -1,0 +1,77 @@
+[package]
+name = "hashbrown"
+version = "0.15.4"
+authors = ["Amanieu d'Antras <amanieu@gmail.com>"]
+description = "A Rust port of Google's SwissTable hash map"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rust-lang/hashbrown"
+readme = "README.md"
+keywords = ["hash", "no_std", "hashmap", "swisstable"]
+categories = ["data-structures", "no-std"]
+exclude = [".github", "/ci/*"]
+edition = "2021"
+rust-version = "1.65.0"
+
+[dependencies]
+# For the default hasher
+foldhash = { version = "0.1.2", default-features = false, optional = true }
+
+# For external trait impls
+rayon = { version = "1.2", optional = true }
+serde = { version = "1.0.25", default-features = false, optional = true }
+
+# When built as part of libstd
+core = { version = "1.0.0", optional = true, package = "rustc-std-workspace-core" }
+alloc = { version = "1.0.0", optional = true, package = "rustc-std-workspace-alloc" }
+
+# Support for allocators that use allocator-api2
+allocator-api2 = { version = "0.2.9", optional = true, default-features = false, features = [
+    "alloc",
+] }
+
+# Equivalent trait which can be shared with other hash table implementations.
+equivalent = { version = "1.0", optional = true, default-features = false }
+
+[dev-dependencies]
+lazy_static = "1.4"
+rand = { version = "0.9.0", features = ["small_rng"] }
+rayon = "1.2"
+fnv = "1.0.7"
+serde_test = "1.0"
+doc-comment = "0.3.1"
+bumpalo = { version = "3.13.0", features = ["allocator-api2"] }
+
+[features]
+default = ["default-hasher", "inline-more", "allocator-api2", "equivalent", "raw-entry"]
+
+# Enables use of nightly features. This is only guaranteed to work on the latest
+# version of nightly Rust.
+nightly = ["bumpalo/allocator_api"]
+
+# Enables the RustcEntry API used to provide the standard library's Entry API.
+rustc-internal-api = []
+
+# Internal feature used when building as part of the standard library.
+rustc-dep-of-std = [
+    "nightly",
+    "core",
+    "alloc",
+    "rustc-internal-api",
+]
+
+# Enables the deprecated RawEntry API.
+raw-entry = []
+
+# Provides a default hasher. Currently this is foldhash but this is subject to
+# change in the future. Note that the default hasher does *not* provide HashDoS
+# resistance, unlike the one in the standard library.
+default-hasher = ["dep:foldhash"]
+
+# Enables usage of `#[inline]` on far more functions than by default in this
+# crate. This may lead to a performance increase but often comes at a compile
+# time cost.
+inline-more = []
+
+[package.metadata.docs.rs]
+features = ["nightly", "rayon", "serde", "raw-entry"]
+rustdoc-args = ["--generate-link-to-definition"]

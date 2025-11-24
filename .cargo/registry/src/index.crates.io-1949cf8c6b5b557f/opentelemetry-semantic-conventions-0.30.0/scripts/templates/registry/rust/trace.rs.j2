@@ -1,0 +1,41 @@
+{%- import 'macros.j2' as attr_macros -%}
+// DO NOT EDIT, this is an auto-generated file
+//
+// If you want to update the file:
+// - Edit the template at scripts/templates/registry/rust/attributes.rs.j2
+// - Run the script at scripts/generate-consts-from-spec.sh
+
+//! # Trace Semantic Conventions
+//!
+//! The [trace semantic conventions] define a set of standardized attributes to
+//! be used in `Span`s.
+//!
+//! [trace semantic conventions]: https://opentelemetry.io/docs/specs/semconv/general/trace/
+//!
+//! ## Usage
+//!
+//! ```rust
+//! use opentelemetry::KeyValue;
+//! use opentelemetry::{global, trace::Tracer as _};
+//! use opentelemetry_semantic_conventions as semconv;
+//!
+//! let tracer = global::tracer("my-component");
+//! let _span = tracer
+//!     .span_builder("span-name")
+//!     .with_attributes([
+//!         KeyValue::new(semconv::trace::CLIENT_ADDRESS, "example.org"),
+//!         KeyValue::new(semconv::trace::CLIENT_PORT, 80i64),
+//!     ])
+//!     .start(&tracer);
+//! ```
+
+{% for attr in ctx | rejectattr("name", "in", params.excluded_attributes) %}
+    {% if attr is experimental %}
+#[cfg(feature = "semconv_experimental")]
+    {% endif %}
+    {% if attr is deprecated %}
+#[allow(deprecated)]
+    {% endif %}
+pub use crate::attribute::{{ attr.name | screaming_snake_case }};
+
+{% endfor %}

@@ -1,0 +1,5 @@
+error: JsonSchema_repr: must be a unit variant
+ --> $DIR/repr_non_unit_variant.rs:7:5
+  |
+7 |     EmptyTuple(),
+  |     ^^^^^^^^^^^^

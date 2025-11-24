@@ -1,0 +1,35 @@
+[package]
+name = "digest"
+description = "Traits for cryptographic hash functions and message authentication codes"
+version = "0.10.7"
+authors = ["RustCrypto Developers"]
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+edition = "2018"
+documentation = "https://docs.rs/digest"
+repository = "https://github.com/RustCrypto/traits"
+keywords = ["digest", "crypto", "hash"]
+categories = ["cryptography", "no-std"]
+
+[dependencies]
+crypto-common = { version = "0.1.3", path = "../crypto-common" }
+
+# optional dependencies
+block-buffer = { version = "0.10", optional = true }
+subtle = { version = "2.4", default-features = false, optional = true }
+blobby = { version = "0.3", optional = true }
+const-oid = { version = "0.9", optional = true }
+
+[features]
+default = ["core-api"]
+core-api = ["block-buffer"] # Enable Core API traits
+mac = ["subtle"] # Enable MAC traits
+rand_core = ["crypto-common/rand_core"] # Enable random key generation methods
+oid = ["const-oid"] # OID support. WARNING: Bumps MSRV to 1.57
+alloc = []
+std = ["alloc", "crypto-common/std"]
+dev = ["blobby"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

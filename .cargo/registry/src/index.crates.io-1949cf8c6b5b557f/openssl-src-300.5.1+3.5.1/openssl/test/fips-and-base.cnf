@@ -1,0 +1,22 @@
+openssl_conf = openssl_init
+
+# Comment out the next line to ignore configuration errors
+config_diagnostics = 1
+
+.include fipsmodule.cnf
+
+[openssl_init]
+providers = provider_sect
+# You MUST uncomment the following line to operate in a FIPS approved manner,
+# It is commented out here purely for testing purposes.
+#alg_section = evp_properties
+
+[evp_properties]
+default_properties = "fips=yes"
+
+[provider_sect]
+fips = fips_sect
+base = base_sect
+
+[base_sect]
+activate = 1

@@ -1,0 +1,97 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Adjacent",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "c",
+        "t"
+      ],
+      "properties": {
+        "c": {
+          "type": "object",
+          "required": [
+            "foo"
+          ],
+          "properties": {
+            "foo": {
+              "type": "boolean"
+            }
+          }
+        },
+        "t": {
+          "type": "string",
+          "enum": [
+            "Struct"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "c",
+        "t"
+      ],
+      "properties": {
+        "c": {
+          "type": "boolean"
+        },
+        "t": {
+          "type": "string",
+          "enum": [
+            "NewType"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "c",
+        "t"
+      ],
+      "properties": {
+        "c": {
+          "type": "array",
+          "items": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer",
+              "format": "int32"
+            }
+          ],
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "t": {
+          "type": "string",
+          "enum": [
+            "Tuple"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "c",
+        "t"
+      ],
+      "properties": {
+        "c": {
+          "type": "boolean"
+        },
+        "t": {
+          "type": "string",
+          "enum": [
+            "Unit"
+          ]
+        }
+      }
+    }
+  ]
+}

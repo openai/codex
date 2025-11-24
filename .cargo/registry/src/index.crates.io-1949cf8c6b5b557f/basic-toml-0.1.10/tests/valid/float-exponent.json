@@ -1,0 +1,11 @@
+{
+    "lower": {"type": "float", "value": "300.0"},
+    "upper": {"type": "float", "value": "300.0"},
+    "neg": {"type": "float", "value": "0.03"},
+    "pos": {"type": "float", "value": "300.0"},
+    "zero": {"type": "float", "value": "3.0"},
+    "pointlower": {"type": "float", "value": "310.0"},
+    "pointupper": {"type": "float", "value": "310.0"},
+    "prefix-zero-exp": {"type": "float", "value": "1000000.0"},
+    "prefix-zero-exp-plus": {"type": "float", "value": "1000000.0"}
+}

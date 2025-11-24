@@ -1,0 +1,34 @@
+[package]
+name = "crossbeam-deque"
+# When publishing a new version:
+# - Update CHANGELOG.md
+# - Update README.md (when increasing major or minor version)
+# - Run './tools/publish.sh crossbeam-deque <version>'
+version = "0.8.6"
+edition = "2021"
+rust-version = "1.61"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/crossbeam-rs/crossbeam"
+homepage = "https://github.com/crossbeam-rs/crossbeam/tree/master/crossbeam-deque"
+description = "Concurrent work-stealing deque"
+keywords = ["chase-lev", "lock-free", "scheduler", "scheduling"]
+categories = ["algorithms", "concurrency", "data-structures"]
+
+[features]
+default = ["std"]
+
+# Enable to use APIs that require `std`.
+# This is enabled by default.
+#
+# NOTE: Disabling `std` feature is not supported yet.
+std = ["crossbeam-epoch/std", "crossbeam-utils/std"]
+
+[dependencies]
+crossbeam-epoch = { version = "0.9.17", path = "../crossbeam-epoch", default-features = false }
+crossbeam-utils = { version = "0.8.18", path = "../crossbeam-utils", default-features = false }
+
+[dev-dependencies]
+rand = "0.8"
+
+[lints]
+workspace = true

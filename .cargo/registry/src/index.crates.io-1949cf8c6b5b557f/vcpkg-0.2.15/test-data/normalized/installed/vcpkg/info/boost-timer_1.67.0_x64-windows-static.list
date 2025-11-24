@@ -1,0 +1,16 @@
+x64-windows-static/
+x64-windows-static/debug/
+x64-windows-static/debug/lib/
+x64-windows-static/debug/lib/boost_timer-vc140-mt-gd.lib
+x64-windows-static/include/
+x64-windows-static/include/boost/
+x64-windows-static/include/boost/progress.hpp
+x64-windows-static/include/boost/timer.hpp
+x64-windows-static/include/boost/timer/
+x64-windows-static/include/boost/timer/config.hpp
+x64-windows-static/include/boost/timer/timer.hpp
+x64-windows-static/lib/
+x64-windows-static/lib/boost_timer-vc140-mt.lib
+x64-windows-static/share/
+x64-windows-static/share/boost-timer/
+x64-windows-static/share/boost-timer/copyright

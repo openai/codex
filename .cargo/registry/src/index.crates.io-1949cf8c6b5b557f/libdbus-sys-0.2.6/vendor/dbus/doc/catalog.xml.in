@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<catalog xmlns="urn:oasis:names:tc:entity:xmlns:xml:catalog" prefer="public">
+    <public publicId="-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" uri="@DBUS_DTD_DIR@/introspect.dtd"/>
+
+    <system systemId="http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd" uri="@DBUS_DTD_DIR@/introspect.dtd"/>
+
+    <public publicId="-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN" uri="@DBUS_DTD_DIR@/busconfig.dtd"/>
+
+    <system systemId="http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd" uri="@DBUS_DTD_DIR@/busconfig.dtd"/>
+</catalog>

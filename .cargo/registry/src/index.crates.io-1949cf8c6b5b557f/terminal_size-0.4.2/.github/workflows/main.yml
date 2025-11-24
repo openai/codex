@@ -1,0 +1,62 @@
+name: CI
+on:
+  # Trigger the workflow on push or pull request,
+  # but only for the master branch
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  build:
+    name: Build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        toolchain: [1.63.0, stable, beta, nightly]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+      - name: Cargo build
+        run: cargo build
+
+  cross:
+    name: Cross
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [1.63.0, stable, beta, nightly]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install toolchain and targets
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          targets: aarch64-linux-android,i686-unknown-linux-gnu
+      - name: Cargo check (aarch64)
+        run: cargo check --target aarch64-linux-android
+      - name: Cargo check (i686)
+        run: cargo check --target i686-unknown-linux-gnu
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install faketty
+        run: cargo install faketty
+      - name: Cargo test (under faketty)
+        run: faketty cargo test -- --nocapture

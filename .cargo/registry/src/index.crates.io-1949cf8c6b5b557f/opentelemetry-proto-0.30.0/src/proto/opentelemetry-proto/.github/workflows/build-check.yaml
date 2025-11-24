@@ -1,0 +1,148 @@
+name: Build Check
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  docker-pull:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Run docker pull
+        run: make docker-pull
+
+  gen-cpp:
+    needs: docker-pull
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Generate C++
+        run: make gen-cpp
+
+  gen-csharp:
+    needs: docker-pull
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Generate C#
+        run: make gen-csharp
+
+  gen-go:
+    needs: docker-pull
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Generate GoLang
+        run: make gen-go
+
+  gen-java:
+    needs: docker-pull
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Generate Java
+        run: make gen-java
+
+  gen-objc:
+    needs: docker-pull
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Generate ObjC
+        run: make gen-objc
+
+  gen-openapi:
+    needs: docker-pull
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Generate OpenAPI
+        run: make gen-openapi
+
+  gen-php:
+    needs: docker-pull
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Generate PhP
+        run: make gen-php
+
+  gen-python:
+    needs: docker-pull
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Generate Python
+        run: make gen-python
+
+  gen-ruby:
+    needs: docker-pull
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Generate Ruby
+        run: make gen-ruby
+    
+  gen-kotlin:
+    needs: docker-pull
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Generate Kotlin
+        run: make gen-kotlin
+
+  breaking-change:
+    needs: docker-pull
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # breaking-change checks against last published release which is determined
+      # using the last published tag
+      - name: Get tags
+        run: git fetch --tags origin
+      - name: Run make breaking-change with json output to annotate PR
+        # Formats JSON output into Github workflow commands
+       # https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#setting-an-error-message
+        run: >
+          BUF_FLAGS="--error-format json" make -s breaking-change
+          | jq -rs '.[] | "::error file=\(.path),line=\(.start_line),endLine=\(.end_line),title=Buf detected breaking change \(.type)::\(.message)"'
+          ; (exit ${PIPESTATUS[0]})
+
+  markdown-link-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: install dependencies
+        run: npm install
+
+      - name: run markdown-link-check
+        run: make markdown-link-check
+
+  markdownlint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: install dependencies
+        run: npm install
+
+      - name: run markdownlint
+        run: make markdownlint

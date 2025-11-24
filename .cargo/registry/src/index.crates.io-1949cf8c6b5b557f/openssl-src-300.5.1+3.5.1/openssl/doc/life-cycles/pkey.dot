@@ -1,0 +1,49 @@
+strict digraph pkey {
+    bgcolor="transparent";
+    layout=circo
+
+    begin [label=start, color="#deeaee", style="filled"];
+    newed [fontcolor="#c94c4c", style="solid"];
+    digestsign [label="digest sign", fontcolor="#AB3910", color="#AB3910"]
+    verify [fontcolor="#F8CF2C", color="#F8CF2C"]
+    verifyrecover [label="verify recover", fontcolor="#B19FF9", color="#B19FF9"]
+    encrypt [fontcolor="#63AAC0", color="#63AAC0"]
+    decrypt [fontcolor="#425F06", color="#425F06"]
+    derive [fontcolor="#FEA303", color="#FEA303"]
+    encapsulate [fontcolor="#D95980", color="#D95980"]
+    decapsulate [fontcolor="#A16AE8", color="#A16AE8"]
+    paramgen [label="parameter\ngeneration", fontcolor="#2879C0", color="#2879C0"]
+    keygen [label="key\ngeneration", fontcolor="#2F7604", color="#2F7604"]
+
+    begin -> newed [label="EVP_PKEY_CTX_new"];
+
+    newed -> digestsign [label="EVP_PKEY_sign_init", color="#AB3910", fontcolor="#AB3910"];
+    digestsign -> digestsign [label="EVP_PKEY_sign", color="#AB3910", fontcolor="#AB3910"];
+
+    newed -> verify [label="EVP_PKEY_verify_init", fontcolor="#F8CF2C", color="#F8CF2C"];
+    verify -> verify [label="EVP_PKEY_verify", fontcolor="#F8CF2C", color="#F8CF2C"];
+
+    newed -> verifyrecover [label="EVP_PKEY_verify_recover_init", fontcolor="#B19FF9", color="#B19FF9"];
+    verifyrecover -> verifyrecover [label="EVP_PKEY_verify_recover", fontcolor="#B19FF9", color="#B19FF9"];
+
+    newed -> encrypt [label="EVP_PKEY_encrypt_init", fontcolor="#63AAC0", color="#63AAC0"];
+    encrypt -> encrypt [label="EVP_PKEY_encrypt", fontcolor="#63AAC0", color="#63AAC0"];
+
+    newed -> decrypt [label="EVP_PKEY_decrypt_init", fontcolor="#425F06", color="#425F06"];
+    decrypt -> decrypt [label="EVP_PKEY_decrypt", fontcolor="#425F06", color="#425F06"];
+
+    newed -> derive [label="EVP_PKEY_derive_init", fontcolor="#FEA303", color="#FEA303"];
+    derive -> derive [label="EVP_PKEY_derive\nEVP_PKEY_derive_set_peer", fontcolor="#FEA303", color="#FEA303"];
+
+    newed -> encapsulate [label="EVP_PKEY_encapsulate_init", fontcolor="#D95980", color="#D95980"];
+    encapsulate -> encapsulate [label="EVP_PKEY_encapsulate", fontcolor="#D95980", color="#D95980"];
+
+    newed -> decapsulate [label="EVP_PKEY_decapsulate_init", fontcolor="#A16AE8", color="#A16AE8"];
+    decapsulate -> decapsulate [label="EVP_PKEY_decapsulate", fontcolor="#A16AE8", color="#A16AE8"];
+
+    newed -> paramgen [label="EVP_PKEY_paramgen_init", fontcolor="#2879C0", color="#2879C0"];
+    paramgen -> paramgen [label="EVP_PKEY_paramgen\nEVP_PKEY_gen", fontcolor="#2879C0", color="#2879C0"];
+
+    newed -> keygen [label="EVP_PKEY_keygen_init", fontcolor="#2F7604", color="#2F7604"];
+    keygen -> keygen [label="EVP_PKEY_keygen\nEVP_PKEY_gen", fontcolor="#2F7604", color="#2F7604"];
+}

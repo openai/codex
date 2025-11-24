@@ -1,0 +1,39 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Opcode[0],Opcode[1],Count,Count / Total
+"CallFrozenNativePos","Continue",200,"0.269"
+"Continue","CallFrozenNativePos",180,"0.242"
+"LoadModule","CallPos",24,"0.032"
+"Const","Multiply",20,"0.027"
+"Const","Iter",20,"0.027"
+"Mov","ListOfConsts",20,"0.027"
+"Mov","Continue",20,"0.027"
+"AddAssign","Mov",20,"0.027"
+"Multiply","CallFrozenNativePos",20,"0.027"
+"ListOfConsts","Const",20,"0.027"
+"IfNotBr","Const",20,"0.027"
+"Iter","CallFrozenNativePos",20,"0.027"
+"Continue","ReturnConst",20,"0.027"
+"ReturnConst","Mov",20,"0.027"
+"CallPos","CallFrozenNativePos",20,"0.027"
+"CallFrozenNativePos","AddAssign",20,"0.027"
+"CallFrozenNativePos","IfNotBr",20,"0.027"
+"Continue","LoadModule",16,"0.022"
+"ListNew","ListOfConsts",4,"0.005"
+"ListOfConsts","CallFrozenNativePos",4,"0.005"
+"Iter","LoadModule",4,"0.005"
+"Continue","Return",4,"0.005"
+"CallPos","ListNew",4,"0.005"
+"CallFrozenNativePos","Iter",4,"0.005"
+"PossibleGc","LoadModule",4,"0.005"
+"StoreModuleAndExport","ReturnConst",3,"0.004"
+"Return","Return",3,"0.004"
+"Return","PossibleGc",3,"0.004"
+"ReturnConst","PossibleGc",2,"0.003"
+"Def","StoreModuleAndExport",2,"0.003"
+"PossibleGc","Def",2,"0.003"
+"Return","StoreModuleAndExport",1,"0.001"

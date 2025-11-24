@@ -1,0 +1,5 @@
+error[E0277]: the trait bound `Struct: PinnedDrop` is not satisfied
+ --> tests/ui/pinned_drop/forget-pinned-drop-impl.rs:5:15
+  |
+5 | #[pin_project(PinnedDrop)] //~ ERROR E0277
+  |               ^^^^^^^^^^ the trait `PinnedDrop` is not implemented for `Struct`

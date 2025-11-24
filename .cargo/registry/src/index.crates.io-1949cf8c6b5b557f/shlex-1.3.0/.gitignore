@@ -1,0 +1,8 @@
+nocommit/
+target/
+artifacts/
+corpus/
+/Cargo.lock
+**/*.rs.bk
+.*.sw?
+.sw?

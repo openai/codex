@@ -1,0 +1,332 @@
+# # cargo-make config for CI.
+#
+# ## Variables to maintain
+# * `MSRV`
+#     + Minimal supported rust version.
+#     + This should be consistent with `package.rust-version` field of `Cargo.toml`.
+#
+# ## Controllable variables
+# * `VERBOSE`
+#     + If set to non-`false` or non-`0`, `--verbose` options are added for build and test.
+#
+# ## Profiles
+# Profiles are mainly used to change features and dependencies.
+#
+# * `default`
+#     + Default features.
+#     + Up-to-date deps.
+# * `feat-none`
+#     + No features.
+#     + Up-to-date deps.
+# * `feat-alloc`
+#     + `alloc` feature.
+#     + Up-to-date deps.
+# * `feat-std`
+#     + `std` feature.
+#     + Up-to-date deps.
+# * `feat-memchr`
+#     + `memchr` feature.
+#     + Up-to-date deps.
+# * `feat-serde`
+#     + `serde` feature.
+#     + Up-to-date deps.
+# * `feat-serde-alloc`
+#     + `serde` and `alloc` features.
+#     + Up-to-date deps.
+# * `feat-serde-std`
+#     + `serde` and `std` features.
+#     + Up-to-date deps.
+# * `feat-all`
+#     + All features.
+#     + Up-to-date deps.
+# * `minimal-deps-feat-none`
+#     + No features.
+#     + Minimal versions deps.
+# * `minimal-deps-default`
+#     + Default features.
+#     + Minimal versions deps.
+# * `minimal-deps-feat-all`
+#     + All features.
+#     + Minimal versions deps.
+#
+# ## Tasks
+#
+# ### For CLI
+# * `manual-ci-all`
+#     + Invokes all required CI tasks, with required rust versions.
+# * `ci-all-profiles`
+#     + Invokes required CI tasks for all profiles.
+# * `ci-all-profiles`
+#     + Invokes required CI tasks for all profiles.
+#
+# ### For automated CI
+# * `ci-once`
+#     + CI task that should be run at least once for one commit.
+#     + This does not need to be run with multiple tasks, or
+#       with multiple rust versions.
+# * `ci`
+#     + CI task that should (or recommended to) be run for each profiles and/or
+#       for each toolchain.
+
+################################################################
+
+[env]
+# Minimal supported rust version.
+MSRV = "1.60.0"
+
+FEATURES = ""
+ALL_FEATURES = false
+# `FEATURES = "default,..."` is recommended to enable default features.
+# `ALL_FEATURES = true` does NOT require this to be `false`.
+NO_DEFAULT_FEATURES = true
+USE_MINIMAL_DEPENDENCIES = false
+
+[env.default]
+FEATURES = "default"
+
+[env.feat-none]
+FEATURES = ""
+
+[env.feat-alloc]
+FEATURES = "alloc"
+
+[env.feat-std]
+FEATURES = "std"
+
+[env.feat-memchr]
+FEATURES = "memchr"
+
+[env.feat-serde]
+FEATURES = "serde"
+
+[env.feat-serde-alloc]
+FEATURES = "serde,alloc"
+
+[env.feat-serde-std]
+FEATURES = "serde,std"
+
+[env.feat-all]
+ALL_FEATURES = true
+
+[env.minimal-deps-feat-none]
+FEATURES = ""
+USE_MINIMAL_DEPENDENCIES = true
+
+[env.minimal-deps-feat-default]
+FEATURES = "default"
+USE_MINIMAL_DEPENDENCIES = true
+
+[env.minimal-deps-feat-all]
+ALL_FEATURES = true
+USE_MINIMAL_DEPENDENCIES = true
+
+################################################################
+
+# For manual invocation from CLI.
+[tasks.manual-ci-all]
+VERBOSE = { value = "false", condition = { env_not_set = ["VERBOSE"] } }
+script = [
+'''
+cargo +${MSRV} make ci-once
+cargo +${MSRV} make ci-all-profiles
+cargo +stable make --profile default ci
+cargo +stable make --profile feat-all ci
+cargo +stable make --profile minimal-deps-feat-all ci
+cargo +beta make --profile feat-all ci
+cargo +nightly make --profile feat-all ci
+cargo +nightly make --profile default check-miri
+cargo +nightly make --profile feat-none check-miri
+'''
+]
+
+# For manual invocation from CLI.
+[tasks.ci-all-profiles]
+VERBOSE = { value = "false", condition = { env_not_set = ["VERBOSE"] } }
+script = [
+'''
+cargo make --profile default ci
+cargo make --profile feat-none ci
+cargo make --profile feat-alloc ci
+cargo make --profile feat-std ci
+cargo make --profile feat-memchr ci
+cargo make --profile feat-serde ci
+cargo make --profile feat-serde-alloc ci
+cargo make --profile feat-serde-std ci
+cargo make --profile feat-all ci
+cargo make --profile minimal-deps-feat-none ci
+cargo make --profile minimal-deps-feat-default ci
+cargo make --profile minimal-deps-feat-all ci
+'''
+]
+
+# CI tasks to run only once per commit.
+# Recommended to be run before `ci` task.
+[tasks.ci-once]
+dependencies = [
+    "print-makers-env",
+    "ci-once-check",
+]
+
+# CI tasks to run per profile.
+[tasks.ci]
+dependencies = [
+    "print-makers-env",
+    "print-rust-version",
+    "prepare-dependencies",
+    "ci-check",
+    "ci-build",
+    "ci-test",
+    { name = "check-miri", condition = { channels = ["nightly"] } },
+]
+
+[tasks.ci-once-check]
+dependencies = [
+    "check-rustfmt",
+]
+
+[tasks.ci-check]
+dependencies = [
+    "check-clippy",
+]
+
+[tasks.ci-build]
+dependencies = [
+    "build",
+]
+
+[tasks.ci-test]
+dependencies = [
+    "test",
+]
+
+[tasks.print-makers-env]
+script = [
+'''
+echo "Environment:"
+echo "    PROFILE_NAME: ${CARGO_MAKE_PROFILE}"
+echo "    ALL_FEATURES: ${ALL_FEATURES}"
+echo "    NO_DEFAULT_FEATURES: ${NO_DEFAULT_FEATURES}"
+echo "    FEATURES: ${FEATURES}"
+echo "    VERBOSE: ${VERBOSE:-}"
+echo "    Rust version: ${CARGO_MAKE_RUST_VERSION}"
+echo "    Rust channel: ${CARGO_MAKE_RUST_CHANNEL}"
+'''
+]
+
+[tasks.prepare-dependencies]
+run_task = [
+    { name = "prepare-minimal-dependencies", condition = { env_true = ["USE_MINIMAL_DEPENDENCIES"] } },
+    { name = "prepare-latest-dependencies" },
+]
+
+[tasks.prepare-minimal-dependencies]
+condition = { env_true = ["USE_MINIMAL_DEPENDENCIES"] }
+toolchain = "nightly"
+command = "cargo"
+args = ["update", "-Z", "minimal-versions"]
+
+[tasks.prepare-latest-dependencies]
+command = "cargo"
+args = ["update"]
+
+[tasks.cargo-clean]
+command = "cargo"
+args = ["clean"]
+
+[tasks.check-rustfmt]
+run_task = [
+    { name = "check-rustfmt-strict", condition = { rust_version = { equal = "$MSRV" } } },
+    { name = "check-rustfmt-ignore-errors" },
+]
+
+[tasks.check-rustfmt-strict]
+dependencies = ["print-rustfmt-version"]
+command = "cargo"
+args = ["fmt", "--all", "--", "--check"]
+
+[tasks.check-rustfmt-ignore-errors]
+dependencies = ["print-rustfmt-version"]
+command = "cargo"
+args = ["fmt", "--all", "--", "--check"]
+
+[tasks.print-rustfmt-version]
+install_crate = { rustup_component_name = "rustfmt" }
+command = "cargo"
+args = ["fmt", "--version"]
+
+[tasks.check-miri]
+dependencies = ["print-miri-version", "cargo-clean"]
+toolchain = "nightly"
+command = "cargo"
+args = [
+    "miri",
+    "test",
+    "@@decode(NO_DEFAULT_FEATURES,true,--no-default-features,)",
+    "@@decode(ALL_FEATURES,true,--all-features,)",
+    "@@decode(FEATURES,,,--features=${FEATURES})",
+]
+
+[tasks.print-miri-version]
+install_crate = { rustup_component_name = "miri" }
+toolchain = "nightly"
+command = "cargo"
+args = ["miri", "--version"]
+
+[tasks.check-clippy]
+run_task = [
+    { name = "check-clippy-strict", condition = { rust_version = { equal = "$MSRV" } } },
+    { name = "check-clippy-ignore-errors" },
+]
+
+[tasks.check-clippy-strict]
+dependencies = ["print-clippy-version"]
+command = "cargo"
+args = [
+    "clippy",
+    "@@decode(NO_DEFAULT_FEATURES,true,--no-default-features,)",
+    "@@decode(ALL_FEATURES,true,--all-features,)",
+    "@@decode(FEATURES,,,--features=${FEATURES})",
+    "--",
+    "--deny",
+    "warnings",
+]
+
+[tasks.check-clippy-ignore-errors]
+dependencies = ["print-clippy-version"]
+command = "cargo"
+args = [
+    "clippy",
+    "@@decode(NO_DEFAULT_FEATURES,true,--no-default-features,)",
+    "@@decode(ALL_FEATURES,true,--all-features,)",
+    "@@decode(FEATURES,,,--features=${FEATURES})",
+]
+ignore_errors = true
+
+[tasks.print-clippy-version]
+install_crate = { rustup_component_name = "clippy" }
+command = "cargo"
+args = ["clippy", "--version"]
+
+[tasks.print-rust-version]
+command = "rustc"
+args = ["--version"]
+
+[tasks.build]
+command = "cargo"
+args = [
+    "build",
+    "@@decode(NO_DEFAULT_FEATURES,true,--no-default-features,)",
+    "@@decode(ALL_FEATURES,true,--all-features,)",
+    "@@decode(FEATURES,,,--features=${FEATURES})",
+    "@@decode(VERBOSE,false,,0,,--verbose)",
+]
+
+[tasks.test]
+command = "cargo"
+args = [
+    "test",
+    "@@decode(NO_DEFAULT_FEATURES,true,--no-default-features,)",
+    "@@decode(ALL_FEATURES,true,--all-features,)",
+    "@@decode(FEATURES,,,--features=${FEATURES})",
+    "@@decode(VERBOSE,false,,0,,--verbose)",
+]

@@ -1,0 +1,5 @@
+error: #[error(fmt = ...)] is only supported in enums; for a struct, handwrite your own Display impl
+ --> tests/ui/struct-with-fmt.rs:4:1
+  |
+4 | #[error(fmt = core::fmt::Octal::fmt)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

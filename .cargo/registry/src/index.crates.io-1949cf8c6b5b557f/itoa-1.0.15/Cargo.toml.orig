@@ -1,0 +1,25 @@
+[package]
+name = "itoa"
+version = "1.0.15"
+authors = ["David Tolnay <dtolnay@gmail.com>"]
+categories = ["value-formatting", "no-std", "no-std::no-alloc"]
+description = "Fast integer primitive to string conversion"
+documentation = "https://docs.rs/itoa"
+edition = "2018"
+exclude = ["performance.png", "chart/**"]
+keywords = ["integer"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/dtolnay/itoa"
+rust-version = "1.36"
+
+[dependencies]
+no-panic = { version = "0.1", optional = true }
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = [
+    "--generate-link-to-definition",
+    "--extern-html-root-url=core=https://doc.rust-lang.org",
+    "--extern-html-root-url=alloc=https://doc.rust-lang.org",
+    "--extern-html-root-url=std=https://doc.rust-lang.org",
+]

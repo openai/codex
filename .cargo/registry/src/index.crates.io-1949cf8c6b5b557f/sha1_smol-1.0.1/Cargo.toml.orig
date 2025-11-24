@@ -1,0 +1,24 @@
+[package]
+name = "sha1_smol"
+version = "1.0.1"
+authors = ["Armin Ronacher <armin.ronacher@active-4.com>"]
+keywords = ["sha1"]
+description = "Minimal dependency-free implementation of SHA1 for Rust."
+license = "BSD-3-Clause"
+repository = "https://github.com/mitsuhiko/sha1-smol"
+edition = "2018"
+
+[features]
+std = ["alloc"]
+alloc = []
+
+[dependencies]
+serde = { version = "1.0", optional = true }
+
+[dev-dependencies]
+openssl = "0.10"
+rand = "0.4"
+serde_json = "1.0"
+
+[package.metadata.docs.rs]
+all-features = true

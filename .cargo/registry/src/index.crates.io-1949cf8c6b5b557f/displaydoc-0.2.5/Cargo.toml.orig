@@ -1,0 +1,81 @@
+[package]
+name = "displaydoc"
+version = "0.2.5"
+rust-version = "1.56.0"
+authors = ["Jane Lusby <jlusby@yaah.dev>"]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/yaahc/displaydoc"
+homepage = "https://github.com/yaahc/displaydoc"
+documentation = "https://docs.rs/displaydoc"
+keywords = ["display", "derive"]
+description = """
+A derive macro for implementing the display Trait via a doc comment and string interpolation
+"""
+
+[lib]
+proc-macro = true
+path = "src/lib.rs"
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+syn = "2.0"
+quote = "1.0"
+proc-macro2 = "1.0"
+
+[dev-dependencies]
+trybuild = "1.0"
+static_assertions = "1.1"
+libc = { version = "0.2", default-features = false }
+rustversion = "1.0.0"
+pretty_assertions = "0.6.1"
+thiserror = "1.0.24"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[package.metadata.release]
+no-dev-version = true
+pre-release-hook = ["./update-readme.sh"]
+
+[[package.metadata.release.pre-release-replacements]]
+file = "CHANGELOG.md"
+search = "Unreleased"
+replace="{{version}}"
+
+[[package.metadata.release.pre-release-replacements]]
+file = "src/lib.rs"
+search = "#!\\[doc\\(html_root_url.*"
+replace = "#![doc(html_root_url = \"https://docs.rs/{{crate_name}}/{{version}}\")]"
+exactly = 1
+
+[[package.metadata.release.pre-release-replacements]]
+file = "CHANGELOG.md"
+search = "ReleaseDate"
+replace="{{date}}"
+
+[[package.metadata.release.pre-release-replacements]]
+file="CHANGELOG.md"
+search="<!-- next-header -->"
+replace="<!-- next-header -->\n\n# [Unreleased] - ReleaseDate"
+exactly=1
+
+# Disable this replacement on the very first release
+[[package.metadata.release.pre-release-replacements]]
+file = "CHANGELOG.md"
+search = "\\.\\.\\.HEAD"
+replace="...{{tag_name}}"
+exactly = 1
+# END SECTION, do not comment out the replacement below this, and do not reorder them
+
+[[package.metadata.release.pre-release-replacements]]
+file="CHANGELOG.md"
+search="<!-- next-url -->"
+replace="<!-- next-url -->\n[Unreleased]: https://github.com/yaahc/{{crate_name}}/compare/{{tag_name}}...HEAD"
+exactly=1
+

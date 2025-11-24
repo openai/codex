@@ -1,0 +1,11 @@
+error: non-static lifetimes are not allowed in the source of an error, because std::error::Error requires the source is dyn Error + 'static
+ --> tests/ui/lifetime.rs:6:26
+  |
+6 | struct Error<'a>(#[from] Inner<'a>);
+  |                          ^^^^^^^^^
+
+error: non-static lifetimes are not allowed in the source of an error, because std::error::Error requires the source is dyn Error + 'static
+  --> tests/ui/lifetime.rs:15:17
+   |
+15 |     Foo(#[from] Generic<&'a str>),
+   |                 ^^^^^^^^^^^^^^^^

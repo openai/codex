@@ -1,0 +1,68 @@
+[package]
+authors = ["Nick Fitzgerald <fitzgen@gmail.com>"]
+categories = ["memory-management", "rust-patterns", "no-std"]
+description = "A fast bump allocation arena for Rust."
+documentation = "https://docs.rs/bumpalo"
+edition = "2021"
+exclude = ["/.github/*", "/benches", "/tests", "valgrind.supp", "bumpalo.png"]
+license = "MIT OR Apache-2.0"
+name = "bumpalo"
+readme = "README.md"
+repository = "https://github.com/fitzgen/bumpalo"
+rust-version = "1.71.1"
+version = "3.19.0"
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lib]
+path = "src/lib.rs"
+bench = false
+
+[[bench]]
+name = "benches"
+path = "benches/benches.rs"
+harness = false
+required-features = ["collections"]
+
+[[bench]]
+name = "allocator_api"
+path = "benches/allocator_api.rs"
+harness = false
+required-features = ["bench_allocator_api"]
+
+[[test]]
+name = "try_alloc"
+path = "tests/try_alloc.rs"
+harness = false
+
+[dependencies]
+# This dependency provides a version of the unstable nightly Rust `Allocator`
+# trait on stable Rust. Enabling this feature means that `bumpalo` will
+# implement its `Allocator` trait.
+allocator-api2 = { version = "0.2.8", default-features = false, optional = true }
+
+# This dependency is here to allow integration with Serde, if the `serde` feature is enabled
+serde = { version = "1.0.171", optional = true }
+
+[dev-dependencies]
+quickcheck = "1.0.3"
+criterion = "0.3.6"
+rand = "0.8.5"
+serde = { version = "1.0.197", features = ["derive"] }
+serde_json = "1.0.115"
+blink-alloc = { version = "=0.3.1" }
+
+[features]
+default = []
+collections = []
+boxed = []
+allocator_api = []
+std = []
+serde = ["dep:serde"]
+
+# Feature for bumpalo's internal development only. Do not use!
+bench_allocator_api = ["allocator_api", "blink-alloc/nightly"]
+
+# [profile.bench]
+# debug = true

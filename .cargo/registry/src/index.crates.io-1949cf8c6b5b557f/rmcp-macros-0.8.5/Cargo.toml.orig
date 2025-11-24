@@ -1,0 +1,25 @@
+
+
+[package]
+name = "rmcp-macros"
+license = { workspace = true }
+version = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+homepage = { workspace = true }
+readme = { workspace = true }
+description = "Rust SDK for Model Context Protocol macros library"
+documentation = "https://docs.rs/rmcp-macros"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = {version = "2", features = ["full"]}
+quote = "1"
+proc-macro2 = "1"
+serde_json = "1.0"
+darling = { version = "0.21" }
+
+[features]
+[dev-dependencies]

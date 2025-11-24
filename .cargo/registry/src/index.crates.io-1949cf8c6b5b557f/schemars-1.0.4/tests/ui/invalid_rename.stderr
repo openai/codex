@@ -1,0 +1,23 @@
+error: invalid name format string: unmatched `}` found
+ --> tests/ui/invalid_rename.rs:6:21
+  |
+6 | #[schemars(rename = "} } {T} {U} {T::test} } {T")]
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: invalid name format string: expected generic param, found `U`
+ --> tests/ui/invalid_rename.rs:6:21
+  |
+6 | #[schemars(rename = "} } {T} {U} {T::test} } {T")]
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: invalid name format string: expected generic param, found `T::test`
+ --> tests/ui/invalid_rename.rs:6:21
+  |
+6 | #[schemars(rename = "} } {T} {U} {T::test} } {T")]
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: invalid name format string: found `{` without matching `}`
+ --> tests/ui/invalid_rename.rs:6:21
+  |
+6 | #[schemars(rename = "} } {T} {U} {T::test} } {T")]
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^

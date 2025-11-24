@@ -1,0 +1,23 @@
+error: duplicate schemars attribute item `!default`
+ --> tests/ui/invalid_unset_attrs.rs:5:75
+  |
+5 | #[schemars(!unknown, deny_unknown_fields, !deny_unknown_fields, !default, !default, !from)]
+  |                                                                           ^^^^^^^^
+
+error: schemars attribute cannot contain both `deny_unknown_fields` and `!deny_unknown_fields`
+ --> tests/ui/invalid_unset_attrs.rs:5:43
+  |
+5 | #[schemars(!unknown, deny_unknown_fields, !deny_unknown_fields, !default, !default, !from)]
+  |                                           ^^^^^^^^^^^^^^^^^^^^
+
+error: useless `!from` - no serde attribute containing `from` is present
+ --> tests/ui/invalid_unset_attrs.rs:5:85
+  |
+5 | #[schemars(!unknown, deny_unknown_fields, !deny_unknown_fields, !default, !default, !from)]
+  |                                                                                     ^^^^^
+
+error: useless `!unknown` - no serde attribute containing `unknown` is present
+ --> tests/ui/invalid_unset_attrs.rs:5:12
+  |
+5 | #[schemars(!unknown, deny_unknown_fields, !deny_unknown_fields, !default, !default, !from)]
+  |            ^^^^^^^^

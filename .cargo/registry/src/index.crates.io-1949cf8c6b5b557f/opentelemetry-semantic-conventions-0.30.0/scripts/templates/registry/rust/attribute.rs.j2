@@ -1,0 +1,26 @@
+{%- import 'macros.j2' as attr_macros -%}
+// DO NOT EDIT, this is an auto-generated file
+//
+// If you want to update the file:
+// - Edit the template at scripts/templates/registry/rust/attributes.rs.j2
+// - Run the script at scripts/generate-consts-from-spec.sh
+
+//! # Semantic Attributes
+//!
+//! The entire set of semantic attributes (or [conventions](https://opentelemetry.io/docs/concepts/semantic-conventions/)) defined by the project. The resource, metric, and trace modules reference these attributes.
+
+{% for root_ns in ctx %}
+    {% for attr in root_ns.attributes | rejectattr("name", "in", params.excluded_attributes) %}
+{# Escape any `<...>` tags to `[...]` to avoid Rustdoc warnings and HTML parsing issues. #}
+{% set safe_note = attr.note | replace('<', '[') | replace('>', ']') %}
+{{ [attr.brief, concat_if("\n\n## Notes\n\n", safe_note), attr_macros.examples(attr)] | comment }}
+        {% if attr is experimental %}
+#[cfg(feature = "semconv_experimental")]
+        {% endif %}
+        {% if attr is deprecated %}
+#[deprecated(note="{{ attr.deprecated | replace('\n', ' ') | replace('"', '') | trim }}")]
+        {% endif %}
+pub const {{ attr.name | screaming_snake_case }}: &str = "{{ attr.name }}";
+
+    {% endfor %}
+{% endfor %}

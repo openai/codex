@@ -1,0 +1,8 @@
+error[E0119]: conflicting implementations of trait `PinnedDrop` for type `S`
+  --> tests/ui/pinned_drop/pinned-drop-no-attr-arg.rs:14:1
+   |
+7  | #[pin_project]
+   | -------------- first implementation here
+...
+14 | impl PinnedDrop for S {
+   | ^^^^^^^^^^^^^^^^^^^^^ conflicting implementation for `S`

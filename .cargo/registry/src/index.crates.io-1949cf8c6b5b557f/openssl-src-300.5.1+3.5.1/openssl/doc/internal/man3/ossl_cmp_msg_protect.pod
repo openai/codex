@@ -1,0 +1,69 @@
+=pod
+
+=head1 NAME
+
+ossl_cmp_calc_protection,
+ossl_cmp_msg_protect,
+ossl_cmp_msg_add_extraCerts
+- functions for producing CMP message protection
+
+=head1 SYNOPSIS
+
+ #include "cmp_local.h"
+
+ ASN1_BIT_STRING *ossl_cmp_calc_protection(const OSSL_CMP_CTX *ctx,
+                                           const OSSL_CMP_MSG *msg);
+ int ossl_cmp_msg_protect(OSSL_CMP_CTX *ctx, OSSL_CMP_MSG *msg);
+ int ossl_cmp_msg_add_extraCerts(OSSL_CMP_CTX *ctx, OSSL_CMP_MSG *msg);
+
+=head1 DESCRIPTION
+
+ossl_cmp_calc_protection() calculates the protection for the given I<msg>
+according to the algorithm and parameters in the message header's protectionAlg
+using the credentials, library context, and property criteria in the I<ctx>.
+Unless I<msg->header->protectionAlg> is B<PasswordBasedMAC>,
+its value is completed according to I<ctx->pkey> and I<ctx->digest>,
+where the latter irrelevant in the case of Edwards curves.
+
+ossl_cmp_msg_protect() (re-)protects the given message I<msg> using an algorithm
+depending on the available context information given in the I<ctx>.
+If there is a secretValue it selects PBMAC, else if there is a protection cert
+it selects Signature and uses ossl_cmp_msg_add_extraCerts (see below).
+It also sets the protectionAlg field in the message header accordingly.
+
+ossl_cmp_msg_add_extraCerts() adds elements to the extraCerts field in I<msg>.
+If signature-based message protection is used it adds first the CMP signer cert
+ctx->cert and then its chain ctx->chain. If this chain is not present in I<ctx>
+tries to build it using ctx->untrusted and caches the result in ctx->chain.
+In any case all the certificates explicitly specified to be sent out (i.e.,
+I<ctx->extraCertsOut>) are added. Note that it will NOT add the root certificate
+of the chain, i.e, the trust anchor (unless it is part of extraCertsOut).
+
+=head1 NOTES
+
+CMP is defined in RFC 4210 (and CRMF in RFC 4211).
+
+The I<ctx> parameter of ossl_cmp_msg_add_extraCerts()
+and thus also of ossl_cmp_msg_protect() cannot be made I<const>
+because I<ctx->chain> may get adapted to cache the chain of the CMP signer cert.
+
+=head1 RETURN VALUES
+
+ossl_cmp_calc_protection() returns the protection on success, else NULL.
+
+All other functions return 1 on success, 0 on error.
+
+=head1 HISTORY
+
+The OpenSSL CMP support was added in OpenSSL 3.0.
+
+=head1 COPYRIGHT
+
+Copyright 2007-2023 The OpenSSL Project Authors. All Rights Reserved.
+
+Licensed under the Apache License 2.0 (the "License").  You may not use
+this file except in compliance with the License.  You can obtain a copy
+in the file LICENSE in the source distribution or at
+L<https://www.openssl.org/source/license.html>.
+
+=cut

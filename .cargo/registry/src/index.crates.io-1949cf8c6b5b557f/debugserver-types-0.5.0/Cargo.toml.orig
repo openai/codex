@@ -1,0 +1,21 @@
+[package]
+name = "debugserver-types"
+version = "0.5.0"
+authors = ["Markus Westerlind <marwes91@gmail.com>"]
+edition = "2018"
+
+description = "Type definitions for Visual Code's debug server."
+readme = "README.md"
+
+license = "MIT"
+
+repository = "https://github.com/Marwes/debugserver-types"
+documentation = "https://docs.rs/debugserver-types"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+schemafy = "0.5.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

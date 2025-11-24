@@ -1,0 +1,35 @@
+[package]
+name = "hmac"
+version = "0.12.1" # Also update html_root_url in lib.rs when bumping this
+description = "Generic implementation of Hash-based Message Authentication Code (HMAC)"
+authors = ["RustCrypto Developers"]
+license = "MIT OR Apache-2.0"
+edition = "2018"
+readme = "README.md"
+documentation = "https://docs.rs/hmac"
+repository = "https://github.com/RustCrypto/MACs"
+keywords = ["crypto", "mac", "hmac", "digest"]
+categories = ["cryptography", "no-std"]
+
+# Hack to allow this crate to coexist with 2021 edition crates
+[workspace]
+members = ["."]
+
+[dependencies]
+digest = { version = "0.10.3", features = ["mac"] }
+
+[dev-dependencies]
+digest = { version = "0.10", features = ["dev"] }
+md-5 = { version = "0.10", default-features = false }
+sha-1 = { version = "0.10", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+streebog = { version = "0.10", default-features = false }
+hex-literal = "0.2.2"
+
+[features]
+std = ["digest/std"]
+reset = [] # Enable ability to reset HMAC instances
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

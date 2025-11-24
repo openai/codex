@@ -1,0 +1,7 @@
+sign-tag = true
+consolidate-commits = false
+pre-release-commit-message = "[{{crate_name}}] version {{version}}"
+tag-message = "[{{crate_name}}] version {{version}}"
+tag-name = "v{{version}}"
+publish = false
+dependent-version = "upgrade"

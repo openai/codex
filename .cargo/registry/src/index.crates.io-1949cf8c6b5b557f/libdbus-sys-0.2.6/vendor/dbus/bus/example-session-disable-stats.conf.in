@@ -1,0 +1,15 @@
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+
+  <!-- If the Stats interface was enabled at compile-time, users can use it on
+       the session bus by default. Systems providing isolation of processes
+       with LSMs might want to restrict this. This can be achieved by copying
+       this file in @EXPANDED_SYSCONFDIR@/dbus-1/session.d/ -->
+
+  <policy context="default">
+    <deny send_destination="org.freedesktop.DBus"
+          send_interface="org.freedesktop.DBus.Debug.Stats"/>
+  </policy>
+
+</busconfig>

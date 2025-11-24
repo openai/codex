@@ -1,0 +1,21 @@
+[package]
+name = "zvariant_utils"
+version = "2.1.0"
+authors = [
+    "Zeeshan Ali Khan <zeeshanak@gnome.org>",
+    "turbocooler <turbocooler@cocaine.ninja>",
+]
+edition = "2021"
+rust-version = "1.75"
+
+description = "Various utilities used internally by the zvariant crate."
+repository = "https://github.com/dbus2/zbus/"
+keywords = ["D-Bus", "DBus", "IPC", "GVariant"]
+license = "MIT"
+categories = ["data-structures", "encoding", "parsing"]
+readme = "README.md"
+
+[dependencies]
+proc-macro2 = "1.0.81"
+syn = { version = "2.0.64", features = ["extra-traits", "full"] }
+quote = "1.0.36"

@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "a-new-name-Array_of_String-int32-int32",
+  "type": "object",
+  "required": [
+    "inner",
+    "t",
+    "u",
+    "v",
+    "w"
+  ],
+  "properties": {
+    "t": {
+      "type": "integer",
+      "format": "int32"
+    },
+    "u": {
+      "type": "null"
+    },
+    "v": {
+      "type": "boolean"
+    },
+    "w": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "inner": {
+      "$ref": "#/definitions/another-new-name"
+    }
+  },
+  "definitions": {
+    "another-new-name": {
+      "type": "object",
+      "required": [
+        "foo"
+      ],
+      "properties": {
+        "foo": {
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,63 @@
+=pod
+
+=head1 NAME
+
+ossl_algorithm_do_all - generic algorithm implementation iterator
+
+=head1 SYNOPSIS
+
+ void ossl_algorithm_do_all(OSSL_LIB_CTX *libctx, int operation_id,
+                            OSSL_PROVIDER *provider,
+                            void (*fn)(OSSL_PROVIDER *provider,
+                                       const OSSL_ALGORITHM *algo,
+                                       int no_store, void *data),
+                            void *data);
+
+=head1 DESCRIPTION
+
+ossl_algorithm_do_all() looks up every algorithm it can find, given a
+library context I<libctx>, an operation identity I<operation_id> and a
+provider I<provider>.
+I<libctx> may be NULL to signify that the default library context should
+be used.
+I<operation_id> may be zero to signify that all kinds of operations
+will be looked up.
+I<provider> may be NULL to signify that all loaded providers will be
+queried.
+
+For each implementation found, the function I<fn> is called with the
+I<provider> for the implementation, the algorithm descriptor I<algo>,
+the flag I<no_store> indicating whether the algorithm descriptor may
+be remembered or not, and the caller I<data> that was passed to
+ossl_algorithm_do_all().
+
+=head1 RETURN VALUES
+
+ossl_algorithm_do_all() doesn't return any value.
+
+=head1 NOTES
+
+The function described here are mainly useful for discovery, and
+possibly display of what has been discovered, for example an
+application that wants to display the loaded providers and what they
+may offer, but also for constructors, such as
+L<ossl_method_construct(3)>.
+
+=head1 SEE ALSO
+
+L<ossl_method_construct(3)>, L<EVP_MAC_do_all_provided(3)>
+
+=head1 HISTORY
+
+This functionality was added to OpenSSL 3.0.
+
+=head1 COPYRIGHT
+
+Copyright 2019-2020 The OpenSSL Project Authors. All Rights Reserved.
+
+Licensed under the Apache License 2.0 (the "License").  You may not use this
+file except in compliance with the License.  You can obtain a copy in the file
+LICENSE in the source distribution or at
+L<https://www.openssl.org/source/license.html>.
+
+=cut

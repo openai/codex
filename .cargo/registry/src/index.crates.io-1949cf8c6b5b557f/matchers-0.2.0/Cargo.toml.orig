@@ -1,0 +1,24 @@
+[package]
+name = "matchers"
+version = "0.2.0"
+authors = ["Eliza Weisman <eliza@buoyant.io>"]
+edition = "2018"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/hawkw/matchers"
+homepage = "https://github.com/hawkw/matchers"
+documentation = "https://docs.rs/matchers/"
+description = """
+Regex matching on character and byte streams.
+"""
+categories = ["text-processing"]
+keywords = ["regex", "match", "pattern", "streaming"]
+
+[badges]
+maintenance = { status = "experimental" }
+
+[dependencies]
+regex-automata = { version = "0.4", default-features = false, features = ["syntax", "dfa-build", "dfa-search"] }
+
+[features]
+unicode = ["regex-automata/unicode"]

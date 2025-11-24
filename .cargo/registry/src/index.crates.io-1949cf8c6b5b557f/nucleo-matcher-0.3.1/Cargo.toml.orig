@@ -1,0 +1,22 @@
+[package]
+name = "nucleo-matcher"
+description = "plug and play high performance fuzzy matcher"
+authors = ["Pascal Kuthe <pascalkuthe@pm.me>"]
+version = "0.3.1"
+edition = "2021"
+license = "MPL-2.0"
+repository = "https://github.com/helix-editor/nucleo"
+readme = "../README.md"
+
+[dependencies]
+memchr = "2.5.0"
+unicode-segmentation = { version  = "1.10", optional = true }
+
+[features]
+default = ["unicode-normalization", "unicode-casefold", "unicode-segmentation"]
+unicode-normalization = []
+unicode-casefold = []
+unicode-segmentation = ["dep:unicode-segmentation"]
+
+[dev-dependencies]
+cov-mark = { version = "1.1.0", default-features = true }

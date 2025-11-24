@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MyStruct",
+  "type": "object",
+  "properties": {
+    "definitely_string": {
+      "type": "string"
+    },
+    "maybe_string": {
+      "type": "string"
+    },
+    "my_int": {
+      "type": "integer",
+      "format": "int32"
+    },
+    "my_read_only_bool": {
+      "type": "boolean",
+      "default": false,
+      "readOnly": true
+    }
+  },
+  "required": [
+    "my_int",
+    "my_read_only_bool",
+    "definitely_string"
+  ]
+}

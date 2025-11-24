@@ -1,0 +1,16 @@
+[package]
+name = "fax_derive"
+version = "0.2.0"
+authors = ["Sebastian K <s3bk@protonmail.com>"]
+edition = "2018"
+description = "Bitstream matcher for the fax crate"
+license = "MIT"
+repository = "https://github.com/pdf-rs/fax"
+
+[dependencies]
+syn = "2.0"
+quote = "1.0"
+proc-macro2 = "1.0"
+
+[lib]
+proc-macro = true

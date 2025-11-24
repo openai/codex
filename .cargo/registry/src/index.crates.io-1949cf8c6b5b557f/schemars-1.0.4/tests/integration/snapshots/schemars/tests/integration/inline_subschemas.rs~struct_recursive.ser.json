@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RecursiveOuter",
+  "type": "object",
+  "properties": {
+    "direct": {
+      "anyOf": [
+        {
+          "$ref": "#"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "indirect": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "recursive": {
+          "$ref": "#"
+        }
+      },
+      "required": [
+        "recursive"
+      ]
+    }
+  },
+  "required": [
+    "direct",
+    "indirect"
+  ]
+}

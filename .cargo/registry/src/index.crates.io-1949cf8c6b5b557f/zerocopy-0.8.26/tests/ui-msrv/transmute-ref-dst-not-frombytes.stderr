@@ -1,0 +1,12 @@
+error[E0277]: the trait bound `Dst: zerocopy::FromBytes` is not satisfied
+  --> tests/ui-msrv/transmute-ref-dst-not-frombytes.rs:23:34
+   |
+23 | const DST_NOT_FROM_BYTES: &Dst = transmute_ref!(&AU16(0));
+   |                                  ^^^^^^^^^^^^^^^^^^^^^^^^ the trait `zerocopy::FromBytes` is not implemented for `Dst`
+   |
+note: required by `AssertDstIsFromBytes`
+  --> tests/ui-msrv/transmute-ref-dst-not-frombytes.rs:23:34
+   |
+23 | const DST_NOT_FROM_BYTES: &Dst = transmute_ref!(&AU16(0));
+   |                                  ^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the macro `transmute_ref` (in Nightly builds, run with -Z macro-backtrace for more info)

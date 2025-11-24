@@ -1,0 +1,23 @@
+# This file represent tests that may be expensive to run on some regex engines.
+# For example, tests that build a full DFA ahead of time and minimize it can
+# take a horrendously long time on regexes that are large (or result in an
+# explosion in the number of states). We group these tests together so that
+# such engines can simply skip these tests.
+
+# See: https://github.com/rust-lang/regex/issues/98
+[[test]]
+name = "regression-many-repeat-no-stack-overflow"
+regex = '^.{1,2500}'
+haystack = "a"
+matches = [[0, 1]]
+
+# This test is meant to blow the bounded backtracker's visited capacity. In
+# order to do that, we need a somewhat sizeable regex. The purpose of this
+# is to make sure there's at least one test that exercises this path in the
+# backtracker. All other tests (at time of writing) are small enough that the
+# backtracker can handle them fine.
+[[test]]
+name = "backtrack-blow-visited-capacity"
+regex = '\pL{50}'
+haystack = "abcdefghijklmnopqrstuvwxyabcdefghijklmnopqrstuvwxyabcdefghijklmnopqrstuvwxyabcdefghijklmnopqrstuvwxyabcdefghijklmnopqrstuvwxyabcdefghijklmnopqrstuvwxyZZ"
+matches = [[0, 50], [50, 100], [100, 150]]

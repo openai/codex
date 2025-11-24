@@ -1,0 +1,159 @@
+error[E0277]: the trait bound `T: zerocopy::TryFromBytes` is not satisfied
+  --> tests/ui-msrv/invalid-impls/../../../src/util/macros.rs
+   |
+   |             impl<$($tyvar $(: $(? $optbound +)* $($bound +)*)?),*> Subtrait for $ty {}
+   |                                                                    ^^^^^^^^ the trait `zerocopy::TryFromBytes` is not implemented for `T`
+   |
+  ::: tests/ui-msrv/invalid-impls/invalid-impls.rs:27:5
+   |
+27 |     impl_or_verify!(T => TryFromBytes for Foo<T>);
+   |     ---------------------------------------------- in this macro invocation
+   |
+note: required because of the requirements on the impl of `zerocopy::TryFromBytes` for `Foo<T>`
+  --> tests/ui-msrv/invalid-impls/invalid-impls.rs:22:10
+   |
+22 | #[derive(FromBytes, IntoBytes, Unaligned)]
+   |          ^^^^^^^^^
+note: required by a bound in `_::Subtrait`
+  --> tests/ui-msrv/invalid-impls/../../../src/util/macros.rs
+   |
+   |             trait Subtrait: $trait {}
+   |                             ^^^^^^ required by this bound in `_::Subtrait`
+   |
+  ::: tests/ui-msrv/invalid-impls/invalid-impls.rs:27:5
+   |
+27 |     impl_or_verify!(T => TryFromBytes for Foo<T>);
+   |     ---------------------------------------------- in this macro invocation
+   = note: this error originates in the macro `impl_or_verify` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider restricting type parameter `T`
+   |
+27 |     impl_or_verify!(T: zerocopy::TryFromBytes => TryFromBytes for Foo<T>);
+   |                      ++++++++++++++++++++++++
+
+error[E0277]: the trait bound `T: zerocopy::FromZeros` is not satisfied
+  --> tests/ui-msrv/invalid-impls/../../../src/util/macros.rs
+   |
+   |             impl<$($tyvar $(: $(? $optbound +)* $($bound +)*)?),*> Subtrait for $ty {}
+   |                                                                    ^^^^^^^^ the trait `zerocopy::FromZeros` is not implemented for `T`
+   |
+  ::: tests/ui-msrv/invalid-impls/invalid-impls.rs:28:5
+   |
+28 |     impl_or_verify!(T => FromZeros for Foo<T>);
+   |     ------------------------------------------- in this macro invocation
+   |
+note: required because of the requirements on the impl of `zerocopy::FromZeros` for `Foo<T>`
+  --> tests/ui-msrv/invalid-impls/invalid-impls.rs:22:10
+   |
+22 | #[derive(FromBytes, IntoBytes, Unaligned)]
+   |          ^^^^^^^^^
+note: required by a bound in `_::Subtrait`
+  --> tests/ui-msrv/invalid-impls/../../../src/util/macros.rs
+   |
+   |             trait Subtrait: $trait {}
+   |                             ^^^^^^ required by this bound in `_::Subtrait`
+   |
+  ::: tests/ui-msrv/invalid-impls/invalid-impls.rs:28:5
+   |
+28 |     impl_or_verify!(T => FromZeros for Foo<T>);
+   |     ------------------------------------------- in this macro invocation
+   = note: this error originates in the macro `impl_or_verify` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider restricting type parameter `T`
+   |
+28 |     impl_or_verify!(T: zerocopy::FromZeros => FromZeros for Foo<T>);
+   |                      +++++++++++++++++++++
+
+error[E0277]: the trait bound `T: zerocopy::FromBytes` is not satisfied
+  --> tests/ui-msrv/invalid-impls/../../../src/util/macros.rs
+   |
+   |             impl<$($tyvar $(: $(? $optbound +)* $($bound +)*)?),*> Subtrait for $ty {}
+   |                                                                    ^^^^^^^^ the trait `zerocopy::FromBytes` is not implemented for `T`
+   |
+  ::: tests/ui-msrv/invalid-impls/invalid-impls.rs:29:5
+   |
+29 |     impl_or_verify!(T => FromBytes for Foo<T>);
+   |     ------------------------------------------- in this macro invocation
+   |
+note: required because of the requirements on the impl of `zerocopy::FromBytes` for `Foo<T>`
+  --> tests/ui-msrv/invalid-impls/invalid-impls.rs:22:10
+   |
+22 | #[derive(FromBytes, IntoBytes, Unaligned)]
+   |          ^^^^^^^^^
+note: required by a bound in `_::Subtrait`
+  --> tests/ui-msrv/invalid-impls/../../../src/util/macros.rs
+   |
+   |             trait Subtrait: $trait {}
+   |                             ^^^^^^ required by this bound in `_::Subtrait`
+   |
+  ::: tests/ui-msrv/invalid-impls/invalid-impls.rs:29:5
+   |
+29 |     impl_or_verify!(T => FromBytes for Foo<T>);
+   |     ------------------------------------------- in this macro invocation
+   = note: this error originates in the macro `impl_or_verify` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider restricting type parameter `T`
+   |
+29 |     impl_or_verify!(T: zerocopy::FromBytes => FromBytes for Foo<T>);
+   |                      +++++++++++++++++++++
+
+error[E0277]: the trait bound `T: zerocopy::IntoBytes` is not satisfied
+  --> tests/ui-msrv/invalid-impls/../../../src/util/macros.rs
+   |
+   |             impl<$($tyvar $(: $(? $optbound +)* $($bound +)*)?),*> Subtrait for $ty {}
+   |                                                                    ^^^^^^^^ the trait `zerocopy::IntoBytes` is not implemented for `T`
+   |
+  ::: tests/ui-msrv/invalid-impls/invalid-impls.rs:30:5
+   |
+30 |     impl_or_verify!(T => IntoBytes for Foo<T>);
+   |     ------------------------------------------- in this macro invocation
+   |
+note: required because of the requirements on the impl of `zerocopy::IntoBytes` for `Foo<T>`
+  --> tests/ui-msrv/invalid-impls/invalid-impls.rs:22:21
+   |
+22 | #[derive(FromBytes, IntoBytes, Unaligned)]
+   |                     ^^^^^^^^^
+note: required by a bound in `_::Subtrait`
+  --> tests/ui-msrv/invalid-impls/../../../src/util/macros.rs
+   |
+   |             trait Subtrait: $trait {}
+   |                             ^^^^^^ required by this bound in `_::Subtrait`
+   |
+  ::: tests/ui-msrv/invalid-impls/invalid-impls.rs:30:5
+   |
+30 |     impl_or_verify!(T => IntoBytes for Foo<T>);
+   |     ------------------------------------------- in this macro invocation
+   = note: this error originates in the macro `impl_or_verify` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider restricting type parameter `T`
+   |
+30 |     impl_or_verify!(T: zerocopy::IntoBytes => IntoBytes for Foo<T>);
+   |                      +++++++++++++++++++++
+
+error[E0277]: the trait bound `T: zerocopy::Unaligned` is not satisfied
+  --> tests/ui-msrv/invalid-impls/../../../src/util/macros.rs
+   |
+   |             impl<$($tyvar $(: $(? $optbound +)* $($bound +)*)?),*> Subtrait for $ty {}
+   |                                                                    ^^^^^^^^ the trait `zerocopy::Unaligned` is not implemented for `T`
+   |
+  ::: tests/ui-msrv/invalid-impls/invalid-impls.rs:31:5
+   |
+31 |     impl_or_verify!(T => Unaligned for Foo<T>);
+   |     ------------------------------------------- in this macro invocation
+   |
+note: required because of the requirements on the impl of `zerocopy::Unaligned` for `Foo<T>`
+  --> tests/ui-msrv/invalid-impls/invalid-impls.rs:22:32
+   |
+22 | #[derive(FromBytes, IntoBytes, Unaligned)]
+   |                                ^^^^^^^^^
+note: required by a bound in `_::Subtrait`
+  --> tests/ui-msrv/invalid-impls/../../../src/util/macros.rs
+   |
+   |             trait Subtrait: $trait {}
+   |                             ^^^^^^ required by this bound in `_::Subtrait`
+   |
+  ::: tests/ui-msrv/invalid-impls/invalid-impls.rs:31:5
+   |
+31 |     impl_or_verify!(T => Unaligned for Foo<T>);
+   |     ------------------------------------------- in this macro invocation
+   = note: this error originates in the macro `impl_or_verify` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider restricting type parameter `T`
+   |
+31 |     impl_or_verify!(T: zerocopy::Unaligned => Unaligned for Foo<T>);
+   |                      +++++++++++++++++++++

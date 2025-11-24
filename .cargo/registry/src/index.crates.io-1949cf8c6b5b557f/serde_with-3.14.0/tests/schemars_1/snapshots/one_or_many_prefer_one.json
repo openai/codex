@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Test",
+  "$ref": "#/$defs/OneOrMany(int32,PreferOne)",
+  "$defs": {
+    "OneOrMany(int32,PreferOne)": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "format": "int32"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      ]
+    }
+  }
+}

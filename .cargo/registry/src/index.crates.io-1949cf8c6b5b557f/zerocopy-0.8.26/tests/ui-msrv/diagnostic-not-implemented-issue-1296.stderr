@@ -1,0 +1,11 @@
+error[E0277]: the trait bound `NotZerocopy: zerocopy::Immutable` is not satisfied
+  --> tests/ui-msrv/diagnostic-not-implemented-issue-1296.rs:52:19
+   |
+52 |     Foo.write_obj(NotZerocopy(()));
+   |                   ^^^^^^^^^^^^^^^ the trait `zerocopy::Immutable` is not implemented for `NotZerocopy`
+
+error[E0277]: the trait bound `NotZerocopy: zerocopy::IntoBytes` is not satisfied
+  --> tests/ui-msrv/diagnostic-not-implemented-issue-1296.rs:52:19
+   |
+52 |     Foo.write_obj(NotZerocopy(()));
+   |                   ^^^^^^^^^^^^^^^ the trait `zerocopy::IntoBytes` is not implemented for `NotZerocopy`

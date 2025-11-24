@@ -1,0 +1,143 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="fifo_v1">
+  <copyright>
+    Copyright © 2023 Valve Corporation
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice (including the next
+    paragraph) shall be included in all copies or substantial portions of the
+    Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+  </copyright>
+
+  <interface name="wp_fifo_manager_v1" version="1">
+    <description summary="protocol for fifo constraints">
+      When a Wayland compositor considers applying a content update,
+      it must ensure all the update's readiness constraints (fences, etc)
+      are met.
+
+      This protocol provides a way to use the completion of a display refresh
+      cycle as an additional readiness constraint.
+
+      Warning! The protocol described in this file is currently in the testing
+      phase. Backward compatible changes may be added together with the
+      corresponding interface version bump. Backward incompatible changes can
+      only be done by creating a new major version of the extension.
+    </description>
+
+    <enum name="error">
+      <description summary="fatal presentation error">
+        These fatal protocol errors may be emitted in response to
+        illegal requests.
+      </description>
+      <entry name="already_exists" value="0"
+             summary="fifo manager already exists for surface"/>
+    </enum>
+
+    <request name="destroy" type="destructor">
+      <description summary="unbind from the manager interface">
+        Informs the server that the client will no longer be using
+        this protocol object. Existing objects created by this object
+        are not affected.
+      </description>
+    </request>
+
+    <request name="get_fifo">
+      <description summary="request fifo interface for surface">
+        Establish a fifo object for a surface that may be used to add
+        display refresh constraints to content updates.
+
+        Only one such object may exist for a surface and attempting
+        to create more than one will result in an already_exists
+        protocol error. If a surface is acted on by multiple software
+        components, general best practice is that only the component
+        performing wl_surface.attach operations should use this protocol.
+      </description>
+      <arg name="id" type="new_id" interface="wp_fifo_v1"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+  </interface>
+
+  <interface name="wp_fifo_v1" version="1">
+    <description summary="fifo interface">
+      A fifo object for a surface that may be used to add
+      display refresh constraints to content updates.
+    </description>
+
+    <enum name="error">
+      <description summary="fatal error">
+        These fatal protocol errors may be emitted in response to
+        illegal requests.
+      </description>
+      <entry name="surface_destroyed" value="0"
+             summary="the associated surface no longer exists"/>
+    </enum>
+
+    <request name="set_barrier">
+      <description summary="sets the start point for a fifo constraint">
+        When the content update containing the "set_barrier" is applied,
+        it sets a "fifo_barrier" condition on the surface associated with
+        the fifo object. The condition is cleared immediately after the
+        following latching deadline for non-tearing presentation.
+
+        The compositor may clear the condition early if it must do so to
+        ensure client forward progress assumptions.
+
+        To wait for this condition to clear, use the "wait_barrier" request.
+
+        "set_barrier" is double-buffered state, see wl_surface.commit.
+
+        Requesting set_barrier after the fifo object's surface is
+        destroyed will generate a "surface_destroyed" error.
+      </description>
+    </request>
+
+    <request name="wait_barrier">
+      <description summary="adds a fifo constraint to a content update">
+        Indicate that this content update is not ready while a
+        "fifo_barrier" condition is present on the surface.
+
+        This means that when the content update containing "set_barrier"
+        was made active at a latching deadline, it will be active for
+        at least one refresh cycle. A content update which is allowed to
+        tear might become active after a latching deadline if no content
+        update became active at the deadline.
+
+        The constraint must be ignored if the surface is a subsurface in
+        synchronized mode. If the surface is not being updated by the
+        compositor (off-screen, occluded) the compositor may ignore the
+        constraint. Clients must use an additional mechanism such as
+        frame callbacks or timestamps to ensure throttling occurs under
+        all conditions.
+
+        "wait_barrier" is double-buffered state, see wl_surface.commit.
+
+        Requesting "wait_barrier" after the fifo object's surface is
+        destroyed will generate a "surface_destroyed" error.
+      </description>
+    </request>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the fifo interface">
+        Informs the server that the client will no longer be using
+        this protocol object.
+
+        Surface state changes previously made by this protocol are
+        unaffected by this object's destruction.
+      </description>
+    </request>
+  </interface>
+</protocol>

@@ -1,0 +1,7 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "title": "enum-names",
+    "type": "object",
+    "enum": ["1", "2"],
+    "enumNames": ["a", "b"]
+}

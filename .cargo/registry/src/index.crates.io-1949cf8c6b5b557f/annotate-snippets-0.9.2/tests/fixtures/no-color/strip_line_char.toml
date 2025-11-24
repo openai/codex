@@ -1,0 +1,25 @@
+[title]
+id = "E0308"
+label = "mismatched types"
+annotation_type = "Error"
+
+[[slices]]
+source = "                                                                                                                                                                                    let _: () = 42ñ"
+line_start = 4
+origin = "$DIR/whitespace-trimming.rs"
+
+[[slices.annotations]]
+label = "expected (), found integer"
+annotation_type = "Error"
+range = [192, 194]
+
+[opt]
+color = false
+anonymized_line_numbers = true
+[opt.margin]
+whitespace_left = 180
+span_left = 192
+span_right = 194
+label_right = 221
+column_width = 140
+max_line_len = 195

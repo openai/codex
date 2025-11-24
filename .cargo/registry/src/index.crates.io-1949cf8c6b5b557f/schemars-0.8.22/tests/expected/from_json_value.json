@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "examples": [
+    {
+      "bool": true,
+      "minusOne": -1,
+      "null": null,
+      "object": {
+        "array": [
+          "foo",
+          "bar"
+        ]
+      },
+      "one": 1,
+      "zero": 0,
+      "zeroPointZero": 0.0
+    }
+  ],
+  "type": "object",
+  "properties": {
+    "bool": {
+      "type": "boolean"
+    },
+    "minusOne": {
+      "type": "integer"
+    },
+    "null": true,
+    "object": {
+      "type": "object",
+      "properties": {
+        "array": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "one": {
+      "type": "integer"
+    },
+    "zero": {
+      "type": "integer"
+    },
+    "zeroPointZero": {
+      "type": "number"
+    }
+  }
+}

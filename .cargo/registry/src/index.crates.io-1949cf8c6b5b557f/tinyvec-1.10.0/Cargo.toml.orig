@@ -1,0 +1,116 @@
+[package]
+name = "tinyvec"
+description = "`tinyvec` provides 100% safe vec-like data structures."
+version = "1.10.0"
+authors = ["Lokathor <zefria@gmail.com>"]
+edition = "2018"
+license = "Zlib OR Apache-2.0 OR MIT"
+keywords = ["vec", "no_std", "no-std"]
+categories = ["data-structures", "no-std"]
+repository = "https://github.com/Lokathor/tinyvec"
+exclude = ["/.github", "/*.py", "/*.sh", "/src-backup"]
+
+[dependencies]
+tinyvec_macros = { version = "0.1", optional = true }
+# Provides `Serialize` and `Deserialize` implementations
+serde = { version = "1.0", optional = true, default-features = false }
+# Provides derived `Arbitrary` implementations
+arbitrary = { version = "1", optional = true }
+# Provides `BorshSerialize` and `BorshDeserialize implementations
+borsh = { version = "1.2.0", optional = true, default-features = false }
+# Implements the trait `Array` for `GenericArray` struct.
+generic-array = { version = "1.1.1", optional = true, default-features = false }
+
+
+[features]
+default = []
+
+# Provide things that utilize the `alloc` crate, namely `TinyVec`.
+alloc = ["tinyvec_macros"]
+
+# Provide things that require Rust's `std` module
+std = ["alloc"]
+
+# (not part of Vec!) Extra methods to let you grab the slice of memory after the
+# "active" portion of an `ArrayVec` or `SliceVec`.
+grab_spare_slice = []
+
+# obsolete feature that has to stay for semver reasons
+rustc_1_40 = []
+
+# obsolete feature that has to stay for semver reasons
+rustc_1_55 = []
+
+# features that require rustc 1.57
+# add try_reserve functions to types that heap allocate.
+rustc_1_57 = []
+
+# features that require rustc 1.61
+# add retain_mut function to TinyVec
+rustc_1_61 = ["rustc_1_57"]
+
+# We're done with per-version featuring, this feature opts in to all the
+# abilities of the latest release of Stable rust, and we don't need a million
+# features forever now.
+latest_stable_rust = ["rustc_1_61"]
+
+# allow use of nightly feature `slice_partition_dedup`,
+# will become useless once that is stabilized:
+# https://github.com/rust-lang/rust/issues/54279
+nightly_slice_partition_dedup = []
+
+# allow use of nightly feature `debugger_visualizer`,
+# will become useless once that is stabilized:
+# https://github.com/rust-lang/rust/issues/95939
+debugger_visualizer = []
+
+# EXPERIMENTAL: Not part of SemVer. It adds `core::fmt::Write` to `ArrayVec`
+# and `SliceVec`. It works on Stable Rust, but Vec normally supports the
+# `std::io::Write` trait instead of `core::fmt::Write`, so we're keeping it as
+# an experimental impl only for now.
+experimental_write_impl = []
+
+# Some benchmarks are optimized away with the stable black_box function
+# which is based on read_volatile. This feature requires inline assembly
+# and thus a nightly compiler, but is only used in benchmarks.
+real_blackbox = ["criterion/real_blackbox"]
+
+[package.metadata.docs.rs]
+features = ["alloc", "std", "grab_spare_slice", "latest_stable_rust", "serde", "borsh"]
+rustdoc-args = ["--cfg","docs_rs"]
+
+[package.metadata.playground]
+features = ["alloc", "std", "grab_spare_slice", "latest_stable_rust", "serde", "borsh"]
+
+[profile.bench]
+debug = 2
+
+[workspace]
+members = ["fuzz"]
+
+[dev-dependencies]
+criterion = "0.3.0"
+serde_test = "1.0"
+smallvec = "1"
+debugger_test = "0.1"
+debugger_test_parser = "0.1"
+
+[[test]]
+name = "tinyvec"
+required-features = ["alloc", "std"]
+
+[[bench]]
+name = "macros"
+harness = false
+required-features = ["alloc"]
+
+[[bench]]
+name = "smallvec"
+harness = false
+required-features = ["alloc", "real_blackbox"]
+
+[[test]]
+path = "tests/debugger_visualizer.rs"
+name = "debugger_visualizer"
+required-features = ["debugger_visualizer"]
+test = false

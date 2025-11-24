@@ -1,0 +1,23 @@
+error: unused pinned boxed `Future` trait object that must be used
+  --> tests/ui/must-use.rs:18:5
+   |
+18 |     Thing.f();
+   |     ^^^^^^^^^
+   |
+   = note: futures do nothing unless you `.await` or poll them
+note: the lint level is defined here
+  --> tests/ui/must-use.rs:1:9
+   |
+ 1 | #![deny(unused_must_use)]
+   |         ^^^^^^^^^^^^^^^
+
+error: unused return value of `Interface::f` that must be used
+  --> tests/ui/must-use.rs:18:5
+   |
+18 |     Thing.f();
+   |     ^^^^^^^^^
+   |
+help: use `let _ = ...` to ignore the resulting value
+   |
+18 |     let _ = Thing.f();
+   |     +++++++

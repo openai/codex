@@ -1,0 +1,5 @@
+error[E0412]: cannot find type `__Origin` in this scope
+  --> tests/ui/pin_project/unpin_sneaky.rs:12:16
+   |
+12 | impl Unpin for __Origin {} //~ ERROR E0412,E0321
+   |                ^^^^^^^^ not found in this scope

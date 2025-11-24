@@ -1,0 +1,8 @@
+error: there is no argument named `world`
+ --> tests/ui/capture-var-nested.rs:5:21
+  |
+5 |     println!(indoc!("Hello {world}"));
+  |                     ^^^^^^^^^^^^^^^
+  |
+  = note: did you intend to capture a variable `world` from the surrounding scope?
+  = note: to avoid ambiguity, `format_args!` cannot capture variables when the format string is expanded from a macro

@@ -1,0 +1,109 @@
+=pod
+
+=head1 NAME
+
+OSSL_SAFE_MATH_SIGNED, OSSL_SAFE_MATH_UNSIGNED,
+safe_add_TYPE, safe_sub_TYPE, safe_mul_TYPE, safe_div_TYPE, safe_mod_TYPE,
+safe_div_round_up_TYPE, safe_neg_TYPE
+- create helper functions to safely perform non-overflowing integer operations
+
+=head1 SYNOPSIS
+
+=for openssl generic
+
+ #include "internal/safe_math.h"
+
+ OSSL_SAFE_MATH_SIGNED(NAME, TYPE)
+ OSSL_SAFE_MATH_UNSIGNED(NAME, TYPE)
+
+ TYPE safe_add_TYPE(TYPE a, TYPE b, int *err);
+ TYPE safe_sub_TYPE(TYPE a, TYPE b, int *err);
+ TYPE safe_mul_TYPE(TYPE a, TYPE b, int *err);
+ TYPE safe_div_TYPE(TYPE a, TYPE b, int *err);
+ TYPE safe_mod_TYPE(TYPE a, TYPE b, int *err);
+ TYPE safe_div_round_up_TYPE(TYPE a, TYPE b, int *err);
+ TYPE safe_muldiv_TYPE(TYPE a, TYPE b, TYPE c, int *err);
+ TYPE safe_neg_TYPE(TYPE a, int *err);
+ TYPE safe_abs_TYPE(TYPE a, int *err);
+
+=head1 DESCRIPTION
+
+Define helper functions to assist with handling integer overflow detection.
+All of these functions perform an arithmetic operation on its arguments and
+return the result of the operation.  If the operation cannot be
+correctly represented, the error I<err> flag is set.  No behaviour that is
+undefined as per the C standard will take place.
+
+OSSL_SAFE_MATH_SIGNED() creates helper functions for the B<I<TYPE>> with the
+suffix B<I<NAME>>.
+
+OSSL_SAFE_MATH_UNSIGNED() creates helper functions for the B<I<TYPE>> with the
+suffix B<I<NAME>>.
+
+safe_add_TYPE() adds the two arguments I<a> and I<b> together.
+
+safe_sub_TYPE() subtracts I<b> from I<a>.
+
+safe_mul_TYPE() multiplies the two arguments I<a> and I<b> together.
+
+safe_div_TYPE() divides I<a> by I<b>.
+
+safe_mod_TYPE() calculates the remainder when I<a> is divided by I<b>.
+
+safe_div_round_up_TYPE() calculates I<a> / I<b> + (I<a> % I<b> != 0).
+I.e. it computes the quotient of I<a> and I<b> rounding any remainder towards
+positive infinity.
+
+safe_muldiv_TYPE() multiplies I<a> and I<b> together and divides the
+result by I<c>.
+
+safe_neg_TYPE() calculates the negation of I<a>.
+
+safe_abs_TYPE() calculates the absolute value of I<a>.
+
+=head1 NOTES
+
+The safe_muldiv_TYPE() function is not perfect.  There exist inputs where
+a valid result could be computed with infinite length integers but this
+function returns an error condition.  Such instances should, however,
+be rare in practice.  The converse is not true.  An invalid result will
+always be flagged as an error.
+
+=head1 RETURN VALUES
+
+All these functions return the result of the operation, if the operation
+is well defined.  They return an arbitrary value if not.
+
+=head1 EXAMPLES
+
+This example is of a function that computes the size of a record that
+has a four byte element count which is followed by that many elements.
+It returns zero on overflow.
+
+ OSSL_SAFE_MATH_UNSIGNED(sizet, size_t, SIZE_MAX)
+
+ size_t compute_record_size(uint32_t n)
+ {
+    int err = 0;
+    size_t result, product;
+
+    product = safe_mul_sizet(n, sizeof(struct widget), &err);
+    result = safe_add_sizet(product, sizeof(n), &err);
+
+    return err ? 0 : result;
+ }
+
+=head1 HISTORY
+
+The functions described here were all added in OpenSSL 3.2.
+
+=head1 COPYRIGHT
+
+Copyright 2021-2022 The OpenSSL Project Authors. All Rights Reserved.
+
+Licensed under the Apache License 2.0 (the "License").  You may not use
+this file except in compliance with the License.  You can obtain a copy
+in the file LICENSE in the source distribution or at
+L<https://www.openssl.org/source/license.html>.
+
+=cut

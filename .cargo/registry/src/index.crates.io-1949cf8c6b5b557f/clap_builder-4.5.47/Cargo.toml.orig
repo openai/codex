@@ -1,0 +1,77 @@
+[package]
+name = "clap_builder"
+version = "4.5.47"
+description = "A simple to use, efficient, and full-featured Command Line Argument Parser"
+categories = ["command-line-interface"]
+keywords = [
+  "argument",
+  "cli",
+  "arg",
+  "parser",
+  "parse"
+]
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+include.workspace = true
+
+[package.metadata.docs.rs]
+features = ["unstable-doc"]
+rustdoc-args = ["--cfg", "docsrs"]
+cargo-args = ["-Zunstable-options", "-Zrustdoc-scrape-examples"]
+
+[package.metadata.playground]
+features = ["unstable-doc"]
+
+[package.metadata.release]
+shared-version = true
+dependent-version = "upgrade"
+tag-name = "v{{version}}"
+
+[features]
+default = ["std", "color", "help", "usage", "error-context", "suggestions"]
+debug = ["dep:backtrace"] # Enables debug messages
+unstable-doc = ["cargo", "wrap_help", "env", "unicode", "string", "unstable-ext"] # for docs.rs
+
+# Used in default
+std = ["anstyle/std"] # support for no_std in a backwards-compatible way
+color = ["dep:anstream"]
+help = []
+usage = []
+error-context = []
+suggestions = ["dep:strsim", "error-context"]
+
+# Optional
+deprecated = [] # Guided experience to prepare for next breaking release (at different stages of development, this may become default)
+cargo = [] # Disable if you're not using Cargo, enables Cargo-env-var-dependent macros
+wrap_help = ["help", "dep:terminal_size"]
+env = [] # Use environment variables during arg parsing
+unicode = ["dep:unicode-width", "dep:unicase"]  # Support for unicode characters in arguments and help messages
+string = []  # Allow runtime generated strings
+
+# In-work features
+unstable-v5 = ["deprecated"]
+unstable-ext = []
+unstable-styles = ["color"]  # deprecated
+
+[lib]
+bench = false
+
+[dependencies]
+clap_lex = { path = "../clap_lex", version = "0.7.4" }
+unicase = { version = "2.6.0", optional = true }
+strsim = { version = "0.11.0",  optional = true }
+anstream = { version = "0.6.7", optional = true }
+anstyle = "1.0.8"
+terminal_size = { version = "0.4.0", optional = true }
+backtrace = { version = "0.3.73", optional = true }
+unicode-width = { version = "0.2.0", optional = true }
+
+[dev-dependencies]
+static_assertions = "1.1.0"
+unic-emoji-char = "0.9.0"
+color-print = "0.3.6"
+
+[lints]
+workspace = true

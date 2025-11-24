@@ -1,0 +1,15 @@
+error[E0782]: expected a type, found a trait
+  --> tests/ui/bare-trait-object.rs:11:16
+   |
+11 | impl Trait for Send + Sync {
+   |                ^^^^^^^^^^^
+   |
+help: you can add the `dyn` keyword if you want a trait object
+   |
+11 | impl Trait for dyn Send + Sync {
+   |                +++
+help: alternatively use a blanket implementation to implement `Trait` for all types that also implement `Send + Sync`
+   |
+11 - impl Trait for Send + Sync {
+11 + impl<T: Send + Sync> Trait for T {
+   |

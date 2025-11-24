@@ -1,0 +1,11 @@
+/// This is the Greek part of the ISO/IEC 8859 encoding family.
+///
+/// [Index visualization](https://encoding.spec.whatwg.org/iso-8859-7.html),
+/// [Visualization of BMP coverage](https://encoding.spec.whatwg.org/iso-8859-7-bmp.html)
+///
+/// This encoding roughly matches the Windows code page 28597. Windows decodes
+/// unassigned code points, the currency signs at 0xA4 and 0xA5 as well as
+/// 0xAA, which should be U+037A GREEK YPOGEGRAMMENI, to the Private Use Area
+/// of Unicode. Windows decodes 0xA1 to U+02BD MODIFIER LETTER REVERSED COMMA
+/// instead of U+2018 LEFT SINGLE QUOTATION MARK and 0xA2 to U+02BC MODIFIER
+/// LETTER APOSTROPHE instead of U+2019 RIGHT SINGLE QUOTATION MARK.

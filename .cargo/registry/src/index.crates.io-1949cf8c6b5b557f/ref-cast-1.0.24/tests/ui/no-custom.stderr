@@ -1,0 +1,35 @@
+error[E0277]: the trait bound `&Thing: ref_cast::custom::RefCastOkay<&String>` is not satisfied
+ --> tests/ui/no-custom.rs:8:36
+  |
+8 |     pub fn ref_cast(s: &String) -> &Self;
+  |                                    ^^^^^ the trait `RefCastCustom<String>` is not implemented for `Thing`
+  |
+  = help: the following other types implement trait `ref_cast::custom::RefCastOkay<From>`:
+            `&'a To` implements `ref_cast::custom::RefCastOkay<&'a From>`
+            `&'a mut To` implements `ref_cast::custom::RefCastOkay<&'a mut From>`
+  = note: required for `&Thing` to implement `ref_cast::custom::RefCastOkay<&String>`
+note: required by a bound in `ref_cast_custom`
+ --> src/custom.rs
+  |
+  | pub fn ref_cast_custom<From, To>(_arg: From)
+  |        --------------- required by a bound in this function
+  | where
+  |     To: RefCastOkay<From>,
+  |         ^^^^^^^^^^^^^^^^^ required by this bound in `ref_cast_custom`
+
+error[E0071]: expected struct, variant or union type, found inferred type
+ --> tests/ui/no-custom.rs:8:41
+  |
+8 |     pub fn ref_cast(s: &String) -> &Self;
+  |                                         ^ not a struct
+
+error[E0277]: the trait bound `Thing: RefCastCustom<String>` is not satisfied
+ --> tests/ui/no-custom.rs:8:41
+  |
+8 |     pub fn ref_cast(s: &String) -> &Self;
+  |                                         ^ the trait `RefCastCustom<String>` is not implemented for `Thing`
+  |
+  = help: the following other types implement trait `ref_cast::custom::RefCastOkay<From>`:
+            `&'a To` implements `ref_cast::custom::RefCastOkay<&'a From>`
+            `&'a mut To` implements `ref_cast::custom::RefCastOkay<&'a mut From>`
+  = note: required for `&Thing` to implement `ref_cast::custom::RefCastOkay<&String>`

@@ -1,0 +1,32 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Program:
+0in 1and 2else 3load 4break 5for 6not 7not  in 8continue 10identifier11
+
+Tokens:
+integer literal '0'        # 0
+keyword 'in'               # in
+integer literal '1'        # 1
+keyword 'and'              # and
+integer literal '2'        # 2
+keyword 'else'             # else
+integer literal '3'        # 3
+keyword 'load'             # load
+integer literal '4'        # 4
+keyword 'break'            # break
+integer literal '5'        # 5
+keyword 'for'              # for
+integer literal '6'        # 6
+keyword 'not'              # not
+integer literal '7'        # 7
+keyword 'not'              # not
+keyword 'in'               # in
+integer literal '8'        # 8
+keyword 'continue'         # continue
+integer literal '10'       # 10
+identifier 'identifier11'  # identifier11
+new line                   #

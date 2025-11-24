@@ -1,0 +1,5 @@
+error: duplicate #[source] attribute
+ --> tests/ui/duplicate-struct-source.rs:7:5
+  |
+7 |     #[source]
+  |     ^^^^^^^^^

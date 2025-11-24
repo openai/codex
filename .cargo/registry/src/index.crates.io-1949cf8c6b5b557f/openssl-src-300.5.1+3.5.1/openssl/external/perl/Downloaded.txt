@@ -1,0 +1,14 @@
+Intro
+-----
+
+If we find a useful Perl module that isn't one of the core Perl
+modules, we may choose to bundle it with the OpenSSL source.
+They remain unmodified and retain their copyright and license.
+
+Here, we simply list those modules and where we got them from.
+
+Downloaded and bundled Perl modules
+-----------------------------------
+
+Text::Template 1.56 was downloaded from
+https://cpan.metacpan.org/authors/id/M/MS/MSCHOUT/Text-Template-1.56.tar.gz

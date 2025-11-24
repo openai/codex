@@ -1,0 +1,16 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+def test():
+    # Test this expression is compiled to constant, not to `FormatOne` instruction.
+    return "x{}y".format(1)
+
+# Bytecode:
+
+Max stack size: 0
+Instructions:
+  0: ReturnConst "x1y"
+  16: End

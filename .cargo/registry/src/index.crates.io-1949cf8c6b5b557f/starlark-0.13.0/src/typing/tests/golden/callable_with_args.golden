@@ -1,0 +1,35 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Code:
+def accept_f(x: typing.Callable[[int, str], str]):
+    pass
+
+def good_function(x: int, y: str) -> str:
+    return ""
+
+def bad_function(x: int, y: bool) -> str:
+    return ""
+
+def test():
+    accept_f(good_function)
+    accept_f(bad_function)
+
+Error:
+error: Expected type `typing.Callable[[int, str], str]` but got `def(x: int, y: bool) -> str`
+  --> filename:13:14
+   |
+13 |     accept_f(bad_function)
+   |              ^^^^^^^^^^^^
+   |
+
+Compiler typechecker (eval):
+error: Expected type `typing.Callable[[int, str], str]` but got `def(x: int, y: bool) -> str`
+  --> filename:13:14
+   |
+13 |     accept_f(bad_function)
+   |              ^^^^^^^^^^^^
+   |

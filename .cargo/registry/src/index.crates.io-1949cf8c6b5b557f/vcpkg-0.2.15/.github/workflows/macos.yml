@@ -1,0 +1,23 @@
+name: macOS
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "35 2 * * *"
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v2
+      - name: Run build
+        run: cargo build --verbose
+      - name: Run unit tests
+        run: cargo test --verbose
+      - name: Install vcpkg
+        run: |
+          git clone https://github.com/Microsoft/vcpkg.git vcp
+          vcp/bootstrap-vcpkg.sh
+      - name: Run integration tests
+        run: tests/run.sh

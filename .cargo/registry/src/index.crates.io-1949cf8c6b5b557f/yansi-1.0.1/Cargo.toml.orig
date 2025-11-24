@@ -1,0 +1,31 @@
+[package]
+name = "yansi"
+version = "1.0.1"
+authors = ["Sergio Benitez <sb@sergio.bz>"]
+repository = "https://github.com/SergioBenitez/yansi"
+documentation = "https://docs.rs/yansi"
+description = "A dead simple ANSI terminal color painting library."
+keywords = ["ansi", "terminal", "color", "format", "paint"]
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+categories = ["command-line-interface"]
+rust-version = "1.63"
+edition = "2021"
+resolver = "2"
+
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+default = ["std"]
+detect-tty = ["is-terminal", "std"]
+detect-env = ["std"]
+hyperlink = ["std"]
+std = ["alloc"]
+alloc = []
+
+# hidden feature to enable nightly doc cfg
+_nightly = []
+
+[dependencies]
+is-terminal = { version = "0.4.11", optional = true }

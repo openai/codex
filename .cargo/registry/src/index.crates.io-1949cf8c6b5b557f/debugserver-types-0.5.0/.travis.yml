@@ -1,0 +1,11 @@
+language: Rust
+cache: cargo
+sudo: false
+env:
+- RUST_BACKTRACE=1
+rust:
+- stable
+- beta
+- nightly
+before_script:
+  - rustup component add rustfmt

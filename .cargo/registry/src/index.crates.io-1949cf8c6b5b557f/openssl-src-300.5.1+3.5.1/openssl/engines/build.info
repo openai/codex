@@ -1,0 +1,103 @@
+IF[{- !$disabled{"engine"} -}]
+  $PADLOCKASM=
+  IF[{- !$disabled{asm} -}]
+    $PADLOCKASM_x86=e_padlock-x86.S
+    $PADLOCKASM_x86_64=e_padlock-x86_64.s
+
+    # Now that we have defined all the arch specific variables, use the
+    # appropriate one, and define the appropriate macros
+    IF[$PADLOCKASM_{- $target{asm_arch} -}]
+      $PADLOCKASM=$PADLOCKASM_{- $target{asm_arch} -}
+      $PADLOCKDEF=PADLOCK_ASM
+    ENDIF
+  ENDIF
+
+  IF[{- $disabled{"dynamic-engine"} -}]
+    LIBS=../libcrypto
+    IF[{- !$disabled{padlockeng} -}]
+      SOURCE[../libcrypto]=e_padlock.c $PADLOCKASM
+      DEFINE[../libcrypto]=$PADLOCKDEF
+    ENDIF
+    IF[{- !$disabled{capieng} -}]
+      SOURCE[../libcrypto]=e_capi.c
+    ENDIF
+    IF[{- !$disabled{afalgeng} -}]
+      SOURCE[../libcrypto]=e_afalg.c
+    ENDIF
+    IF[{- !$disabled{"devcryptoeng"} -}]
+      SOURCE[../libcrypto]=e_devcrypto.c
+    ENDIF
+  ELSE
+    IF[{- !$disabled{padlockeng} -}]
+      MODULES{engine}=padlock
+      SOURCE[padlock]=e_padlock.c $PADLOCKASM
+      DEFINE[padlock]=$PADLOCKDEF
+      DEPEND[padlock]=../libcrypto
+      INCLUDE[padlock]=../include
+      IF[{- defined $target{shared_defflag} -}]
+        SOURCE[padlock]=padlock.ld
+        GENERATE[padlock.ld]=../util/engines.num
+      ENDIF
+    ENDIF
+    IF[{- !$disabled{capieng} -}]
+      MODULES{engine}=capi
+      SOURCE[capi]=e_capi.c
+      DEPEND[capi]=../libcrypto
+      INCLUDE[capi]=../include
+      IF[{- defined $target{shared_defflag} -}]
+        SOURCE[capi]=capi.ld
+        GENERATE[capi.ld]=../util/engines.num
+      ENDIF
+    ENDIF
+    IF[{- !$disabled{afalgeng} -}]
+      MODULES{engine}=afalg
+      SOURCE[afalg]=e_afalg.c
+      DEPEND[afalg]=../libcrypto
+      INCLUDE[afalg]= ../include
+      IF[{- defined $target{shared_defflag} -}]
+        SOURCE[afalg]=afalg.ld
+        GENERATE[afalg.ld]=../util/engines.num
+      ENDIF
+    ENDIF
+    IF[{- !$disabled{"devcryptoeng"} -}]
+      MODULES{engine}=devcrypto
+      SOURCE[devcrypto]=e_devcrypto.c
+      DEPEND[devcrypto]=../libcrypto
+      INCLUDE[devcrypto]=../include
+      IF[{- defined $target{shared_defflag} -}]
+        SOURCE[devcrypto]=devcrypto.ld
+        GENERATE[devcrypto.ld]=../util/engines.num
+      ENDIF
+    ENDIF
+    IF[{- !$disabled{"loadereng"} -}]
+      MODULES{engine}=loader_attic
+      SOURCE[loader_attic]=e_loader_attic.c ../crypto/pem/pvkfmt.c
+      DEFINE[loader_attic]=OPENSSL_NO_PROVIDER_CODE
+      DEPEND[loader_attic]=../libcrypto
+      INCLUDE[loader_attic]=../include
+      IF[{- defined $target{shared_defflag} -}]
+        SOURCE[loader_attic]=loader_attic.ld
+        GENERATE[loader_attic.ld]=../util/engines.num
+      ENDIF
+    ENDIF
+
+    MODULES{noinst,engine}=ossltest dasync
+    SOURCE[dasync]=e_dasync.c
+    DEPEND[dasync]=../libcrypto
+    INCLUDE[dasync]=../include
+    IF[{- defined $target{shared_defflag} -}]
+      SOURCE[dasync]=dasync.ld
+      GENERATE[dasync.ld]=../util/engines.num
+    ENDIF
+
+    SOURCE[ossltest]=e_ossltest.c
+    DEPEND[ossltest]=../libcrypto
+    INCLUDE[ossltest]=../include
+    IF[{- defined $target{shared_defflag} -}]
+      SOURCE[ossltest]=ossltest.ld
+      GENERATE[ossltest.ld]=../util/engines.num
+    ENDIF
+  ENDIF
+  GENERATE[e_padlock-x86.S]=asm/e_padlock-x86.pl
+  GENERATE[e_padlock-x86_64.s]=asm/e_padlock-x86_64.pl
+ENDIF

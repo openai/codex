@@ -1,0 +1,97 @@
+[ssltest_default]
+
+[ssltest_good]
+client = ssltest_good_client_extra
+server = ssltest_good_server_extra
+resume-server2 = ssltest_good_resume_server2_extra
+resume-client = ssltest_good_resume_client_extra
+
+Method = DTLS
+HandshakeMode = Resume
+ApplicationData = 1024
+MaxFragmentSize = 2048
+
+ExpectedResult = ServerFail
+ExpectedClientAlert = UnknownCA
+ExpectedProtocol = TLSv1.1
+ExpectedServerName = server2
+SessionTicketExpected = Yes
+ResumptionExpected = Yes
+
+[ssltest_good_client_extra]
+VerifyCallback = RejectAll
+ServerName = server2
+NPNProtocols = foo,bar
+
+[ssltest_good_resume_client_extra]
+CTValidation = Strict
+
+[ssltest_good_server_extra]
+ServerNameCallback = IgnoreMismatch
+BrokenSessionTicket = Yes
+
+[ssltest_good_resume_server2_extra]
+ALPNProtocols = baz
+
+[ssltest_unknown_option]
+UnknownOption = Foo
+
+[ssltest_wrong_section]
+server = ssltest_wrong_section_server
+
+[ssltest_wrong_section_server]
+VerifyCallback = RejectAll
+
+[ssltest_unknown_expected_result]
+ExpectedResult = Foo
+
+[ssltest_unknown_alert]
+ExpectedServerAlert = Foo
+
+[ssltest_unknown_protocol]
+Protocol = Foo
+
+[ssltest_unknown_verify_callback]
+client = ssltest_unknown_verify_callback_client
+
+[ssltest_unknown_verify_callback_client]
+VerifyCallback = Foo
+
+[ssltest_unknown_servername]
+client = ssltest_unknown_servername_client
+
+[ssltest_unknown_servername_client]
+ServerName = Foo
+
+[ssltest_unknown_servername_callback]
+server = ssltest_unknown_servername_server
+
+[ssltest_unknown_servername_server]
+ServerNameCallback = Foo
+
+[ssltest_unknown_session_ticket_expected]
+SessionTicketExpected = Foo
+
+[ssltest_unknown_compression_expected]
+CompressionExpected = Foo
+
+[ssltest_unknown_session_id_expected]
+SessionIdExpected = Foo
+
+[ssltest_unknown_method]
+Method = TLS2
+
+[ssltest_unknown_handshake_mode]
+HandshakeMode = Foo
+
+[ssltest_unknown_resumption_expected]
+ResumptionExpected = Foo
+
+[ssltest_unknown_ct_validation]
+client = ssltest_unknown_ct_validation_client
+
+[ssltest_unknown_ct_validation_client]
+CTCallback = Foo
+
+[ssltest_invalid_max_fragment_len]
+MaxFragmentLenExt = 421

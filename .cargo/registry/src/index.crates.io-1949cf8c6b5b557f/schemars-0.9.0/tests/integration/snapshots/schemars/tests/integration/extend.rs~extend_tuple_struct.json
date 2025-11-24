@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TupleStruct",
+  "type": "array",
+  "prefixItems": [
+    {
+      "foo": "bar"
+    },
+    {
+      "type": [
+        "number",
+        "string"
+      ],
+      "format": "uint",
+      "minimum": 0
+    }
+  ],
+  "minItems": 2,
+  "maxItems": 2,
+  "obj": {
+    "array": [
+      null,
+      null
+    ]
+  },
+  "3": 3.0,
+  "pi": 3.14
+}

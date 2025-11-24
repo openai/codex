@@ -1,0 +1,78 @@
+[package]
+name = "ureq"
+version = "2.12.1"
+authors = ["Martin Algesten <martin@algesten.se>", "Jacob Hoffman-Andrews <ureq@hoffman-andrews.com>"]
+description = "Simple, safe HTTP client"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/algesten/ureq"
+readme = "README.md"
+keywords = ["web", "request", "https", "http", "client"]
+categories = ["web-programming::http-client"]
+edition = "2018"
+exclude = ["/cargo_deny.sh", "/deny.toml", "/test.sh"]
+
+
+# MSRV
+rust-version = "1.71"
+
+[package.metadata.docs.rs]
+features = ["tls", "native-tls", "json", "charset", "cookies", "socks-proxy", "gzip", "brotli", "http-interop", "http-crate"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+default = ["tls", "gzip"]
+tls = ["dep:webpki-roots", "dep:rustls", "dep:rustls-pki-types"]
+native-certs = ["dep:rustls-native-certs"]
+native-tls = ["dep:native-tls"]
+json = ["dep:serde", "dep:serde_json"]
+charset = ["dep:encoding_rs"]
+cookies = ["dep:cookie", "dep:cookie_store"]
+socks-proxy = ["dep:socks"]
+gzip = ["dep:flate2"]
+brotli = ["dep:brotli-decompressor"]
+# http-interop is for http crate version 0.2 (backwards compat with last pre-release)
+# Consider this feature deprecated. In time, we will remove it. Use `http-crate` instead.
+http-interop = ["dep:http-02"]
+# http-crate is for http crate version 1.0 (full release)
+http-crate = ["dep:http"]
+proxy-from-env = []
+# Doc tests require hootbin.
+testdeps = ["dep:hootbin"]
+
+[dependencies]
+base64 = "0.22"
+cookie = { version = "0.18", default-features = false, optional = true }
+once_cell = "1"
+socks = { version = "0.3", optional = true }
+serde = { version = "1", optional = true }
+serde_json = { version = "1.0.97", optional = true }
+encoding_rs = { version = "0.8", optional = true }
+cookie_store = { version = "0.21.1", optional = true, default-features = false, features = ["preserve_order", "serde_json"] }
+log = "0.4"
+webpki-roots = { version = "0.26", optional = true }
+rustls-pki-types = { version = "1", optional = true }
+rustls-native-certs = { version = "0.7", optional = true }
+native-tls = { version = "0.2", optional = true }
+flate2 = { version = "1.0.22", optional = true }
+brotli-decompressor = { version = "4.0.0", optional = true }
+http-02 = { package = "http", version = "0.2", optional = true }
+http = { version = "1.1", optional = true }
+url = "2.5.0"
+rustls = { version = "0.23.19", optional = true, default-features = false, features = ["ring", "logging", "std", "tls12"] }
+
+# This can't be in dev-dependencies due to doc tests.
+hootbin = { version = "0.1.5", optional = true }
+
+[dev-dependencies]
+env_logger = { version = "<=0.9", default-features = false, features = ["humantime"] }
+serde = { version = "1", features = ["derive"] }
+rustls = { version = "0.23.5", default-features = false, features = ["std", "ring"] }
+rustls-pemfile = { version = "2.0" }
+
+[[example]]
+name = "cureq"
+required-features = ["charset", "cookies", "socks-proxy", "native-tls"]
+
+[[example]]
+name = "tls_config"
+required-features = ["tls", "native-tls"]

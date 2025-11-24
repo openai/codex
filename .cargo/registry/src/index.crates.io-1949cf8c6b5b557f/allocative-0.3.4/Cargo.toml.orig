@@ -1,0 +1,42 @@
+[package]
+authors = ["Meta"]
+description = "Inspect rust object tree and output it as flamegraph"
+documentation = "https://docs.rs/allocative"
+edition = "2021"
+license = { workspace = true }
+name = "allocative"
+repository = "https://github.com/facebookexperimental/allocative"
+version = "0.3.4"
+
+[dependencies]
+allocative_derive = { path = "../allocative_derive", version = "=0.3.3" }
+
+ctor = { workspace = true }
+
+anyhow = { version = "1.0.65", optional = true }
+bumpalo = { version = "3.11.1", optional = true }
+compact_str = { version = "0.8", optional = true }
+dashmap = { version = "5.5.3", optional = true }
+either = { version = "1.8", optional = true }
+futures = { version = "0.3.24", optional = true }
+hashbrown = { version = "0.14.3", features = ["raw"], optional = true }
+indexmap = { version = "2.2.6", optional = true }
+num-bigint = { version = "0.4.3", optional = true }
+once_cell = { version = "1.15.0", optional = true }
+parking_lot = { version = "0.11.2", optional = true }
+prost-types = { version = "0.11.2", optional = true }
+relative-path = { version = "1.7.0", optional = true }
+serde_json = { version = "1.0.48", optional = true }
+slab = { version = "0.4.7", optional = true }
+smallvec = { version = "1.10.0", optional = true }
+sorted_vector_map.optional = true
+# @oss-disable: sorted_vector_map.path = "../../../common/rust/shed/sorted_vector_map"
+sorted_vector_map.version = "0.2"
+tokio = { version = "1.5", optional = true, features = ["sync"] }
+triomphe = { version = "0.1.8", optional = true }
+
+[dev-dependencies]
+inferno = { version = "0.11.11", default-features = false }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(rust_nightly)"] }

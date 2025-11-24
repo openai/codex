@@ -1,0 +1,6 @@
+base
+test unify::tests::big_array_bench ... bench:     740,192 ns/iter (+/- 35,823)
+test unify::tests::big_array_bench ... bench:     745,031 ns/iter (+/- 240,463)
+test unify::tests::big_array_bench ... bench:     762,031 ns/iter (+/- 240,463)
+test unify::tests::big_array_bench ... bench:     756,234 ns/iter (+/- 264,710)
+

@@ -1,0 +1,15 @@
+pretty = proc(u) {
+  return ~(floor(u*1000)/1000);
+};
+
+d = [0, 0.25];
+f_cos = cos(y*pi);
+Q = fpminimax(f_cos, [|0, 2, 4, 6, 8, 10, 12|], [|1, D...|], d, relative, floating);
+
+err_p = -log2(dirtyinfnorm(Q-f_cos, d));
+display = decimal;
+print (Q);
+display = decimal;
+print ("absolute error:",pretty(err_p));
+
+for i from 0 to degree(Q) by 2 do printdouble(coeff(Q, i));

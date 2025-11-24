@@ -1,0 +1,16 @@
+error: expected attribute arguments in parentheses: #[error(...)]
+ --> tests/ui/fallback-impl-with-display.rs:5:3
+  |
+5 | #[error]
+  |   ^^^^^
+
+error[E0119]: conflicting implementations of trait `std::fmt::Display` for type `MyError`
+ --> tests/ui/fallback-impl-with-display.rs:4:10
+  |
+4 | #[derive(Error, Debug)]
+  |          ^^^^^ conflicting implementation for `MyError`
+...
+8 | impl Display for MyError {
+  | ------------------------ first implementation here
+  |
+  = note: this error originates in the derive macro `Error` (in Nightly builds, run with -Z macro-backtrace for more info)

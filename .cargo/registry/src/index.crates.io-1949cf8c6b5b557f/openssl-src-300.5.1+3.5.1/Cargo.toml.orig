@@ -1,0 +1,63 @@
+[package]
+name = "openssl-src"
+version = "300.5.1+3.5.1"
+authors = ["Alex Crichton <alex@alexcrichton.com>"]
+license = "MIT/Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/alexcrichton/openssl-src-rs"
+edition = "2021"
+description = """
+Source of OpenSSL and logic to build it.
+"""
+exclude = [
+  'openssl/fuzz/corpora/*',
+  'openssl/pyca-cryptography/*',
+  'openssl/wycheproof/*',
+  'openssl/boringssl/*',
+  'openssl/krb5/*',
+  'openssl/test/recipes/*',
+  'openssl/gost-engine/*',
+  'openssl/demos/*',
+  'openssl/tlslite-ng/*',
+  'openssl/tlsfuzzer/*',
+  'openssl/python-ecdsa/*',
+  'openssl/oqs-provider/*',
+  'openssl/cloudflare-quiche/*',
+  'openssl/pkcs11-provider/*',
+# The current upload size limit for *.crate files is 10MB. Therefore, exclude
+# some unused documentation to meet this constraint.
+  'openssl/doc/man{3,5,7}',
+]
+
+[features]
+default = []
+# Enables compilation of the legacy provider, which must be loaded at runtime to use various
+# uncommon or insecure algorithms.
+legacy = []
+# Enables compilation of some older algorithms: md2 (hash), rc5 (block cypher) and enabled use of
+# some weaker algorithms in SSL connections. These are generally not recommended for use.
+weak-crypto = []
+# Enables compilation of SSLv3, which is disabled by default.
+ssl3 = []
+# Enables compilation of the Camellia symmetric key block cypher. Since hardware acceleration for
+# it is not available on most systems, this is not as used as AES.
+camellia = []
+# Enables compilation of International Data Encryption Algorithm (IDEA), a symmetric key block
+# cypher sometimes used as an AES128 alternative.
+idea = []
+# Enables compilation of SEED, a symmetric key block cypher mostly used in South Korea, but
+# otherwise not widely supported.
+seed = []
+# Forces configuring Engine module support.
+force-engine = []
+# Enable kTLS support
+ktls = []
+# Disable DSO API support
+no-dso = []
+
+[workspace]
+members = ['testcrate']
+exclude = ['target']
+
+[dependencies]
+cc = "1.0.79"

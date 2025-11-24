@@ -1,0 +1,8 @@
+target
+Cargo.lock
+bench-log
+.*.swp
+wiki
+tags
+examples/debug.rs
+tmp/

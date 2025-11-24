@@ -1,0 +1,5 @@
+basicConstraints = critical, CA:true
+keyUsage = cRLSign, keyCertSign
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always
+

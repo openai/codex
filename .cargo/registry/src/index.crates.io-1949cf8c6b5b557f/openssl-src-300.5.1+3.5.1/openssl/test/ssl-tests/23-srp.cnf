@@ -1,0 +1,148 @@
+# Generated with generate_ssl_tests.pl
+
+num_tests = 4
+
+test-0 = 0-srp
+test-1 = 1-srp-bad-password
+test-2 = 2-srp-auth
+test-3 = 3-srp-auth-bad-password
+# ===========================================================
+
+[0-srp]
+ssl_conf = 0-srp-ssl
+
+[0-srp-ssl]
+server = 0-srp-server
+client = 0-srp-client
+
+[0-srp-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = SRP
+MaxProtocol = TLSv1.2
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[0-srp-client]
+CipherString = SRP
+MaxProtocol = TLSv1.2
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-0]
+ExpectedResult = Success
+server = 0-srp-server-extra
+client = 0-srp-client-extra
+
+[0-srp-server-extra]
+SRPPassword = password
+SRPUser = user
+
+[0-srp-client-extra]
+SRPPassword = password
+SRPUser = user
+
+
+# ===========================================================
+
+[1-srp-bad-password]
+ssl_conf = 1-srp-bad-password-ssl
+
+[1-srp-bad-password-ssl]
+server = 1-srp-bad-password-server
+client = 1-srp-bad-password-client
+
+[1-srp-bad-password-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = SRP
+MaxProtocol = TLSv1.2
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[1-srp-bad-password-client]
+CipherString = SRP
+MaxProtocol = TLSv1.2
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-1]
+ExpectedResult = ServerFail
+server = 1-srp-bad-password-server-extra
+client = 1-srp-bad-password-client-extra
+
+[1-srp-bad-password-server-extra]
+SRPPassword = password
+SRPUser = user
+
+[1-srp-bad-password-client-extra]
+SRPPassword = passw0rd
+SRPUser = user
+
+
+# ===========================================================
+
+[2-srp-auth]
+ssl_conf = 2-srp-auth-ssl
+
+[2-srp-auth-ssl]
+server = 2-srp-auth-server
+client = 2-srp-auth-client
+
+[2-srp-auth-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = aSRP
+MaxProtocol = TLSv1.2
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[2-srp-auth-client]
+CipherString = aSRP
+MaxProtocol = TLSv1.2
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-2]
+ExpectedResult = Success
+server = 2-srp-auth-server-extra
+client = 2-srp-auth-client-extra
+
+[2-srp-auth-server-extra]
+SRPPassword = password
+SRPUser = user
+
+[2-srp-auth-client-extra]
+SRPPassword = password
+SRPUser = user
+
+
+# ===========================================================
+
+[3-srp-auth-bad-password]
+ssl_conf = 3-srp-auth-bad-password-ssl
+
+[3-srp-auth-bad-password-ssl]
+server = 3-srp-auth-bad-password-server
+client = 3-srp-auth-bad-password-client
+
+[3-srp-auth-bad-password-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = aSRP
+MaxProtocol = TLSv1.2
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[3-srp-auth-bad-password-client]
+CipherString = aSRP
+MaxProtocol = TLSv1.2
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-3]
+ExpectedResult = ServerFail
+server = 3-srp-auth-bad-password-server-extra
+client = 3-srp-auth-bad-password-client-extra
+
+[3-srp-auth-bad-password-server-extra]
+SRPPassword = password
+SRPUser = user
+
+[3-srp-auth-bad-password-client-extra]
+SRPPassword = passw0rd
+SRPUser = user
+
+

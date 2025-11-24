@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  release:
+    types: [ created ]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  RUST_LOG: webbrowser=TRACE
+
+jobs:
+  crates:
+    name: Crates Publish
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust: [stable]
+    continue-on-error: ${{ matrix.rust != 'stable' && matrix.rust != 'beta' }}
+    steps:
+      - uses: actions/checkout@v3
+        name: Checkout
+      - name: Install rust version
+        run: |
+          rustup install ${{ matrix.rust }} --profile minimal
+          rustup component add --toolchain ${{ matrix.rust }} rustfmt clippy
+
+      # Check compilation
+      - name: Compile
+        run: cargo +${{ matrix.rust }} build
+
+      # Run tests
+      - name: Run Tests
+        env:
+          BROWSER: firefox --screenshot %s
+        run: cargo +${{ matrix.rust }} test --all --locked --verbose
+
+      # Code format and lints
+      - name: Check Code Formatting
+        if: ${{ matrix.rust == 'stable' || matrix.rust == 'beta' }}
+        run: cargo +${{ matrix.rust }} fmt --all -- --check
+      - name: Lints
+        if: ${{ matrix.rust == 'stable' || matrix.rust == 'beta' }}
+        run: cargo +${{ matrix.rust }} clippy --all-targets -- -D warnings
+
+      # Publish to crates.io
+      - name: Publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_TOKEN }}
+        run: cargo publish --no-verify

@@ -1,0 +1,15 @@
+error: expected attribute arguments in parentheses: `pin(...)`
+ --> tests/ui/pin_project/add-attr-to-struct.rs:9:1
+  |
+9 | #[add_pin_attr(struct)] //~ ERROR expected attribute arguments in parentheses
+  | ^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `add_pin_attr` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: #[pin] attribute may only be used on fields of structs or variants
+  --> tests/ui/pin_project/add-attr-to-struct.rs:15:1
+   |
+15 | #[add_pin_attr(struct)] //~ ERROR #[pin] attribute may only be used on fields of structs or variants
+   | ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `add_pin_attr` (in Nightly builds, run with -Z macro-backtrace for more info)

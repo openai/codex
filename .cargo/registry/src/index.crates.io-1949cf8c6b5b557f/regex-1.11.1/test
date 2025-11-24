@@ -1,0 +1,46 @@
+#!/bin/bash
+
+set -e
+
+# cd to the directory containing this crate's Cargo.toml so that we don't need
+# to pass --manifest-path to every `cargo` command.
+cd "$(dirname "$0")"
+
+# This is a convenience script for running a broad swath of tests across
+# features. We don't test the complete space, since the complete space is quite
+# large. Hopefully once we migrate the test suite to better infrastructure
+# (like regex-automata), we'll be able to test more of the space.
+echo "===== DEFAULT FEATURES ====="
+cargo test
+
+# no-std mode is annoyingly difficult to test. Currently, the integration tests
+# don't run. So for now, we just test that library tests run. (There aren't
+# many because `regex` is just a wrapper crate.)
+cargo test --no-default-features --lib
+
+echo "===== DOC TESTS ====="
+cargo test --doc
+
+features=(
+    "std"
+    "std unicode"
+    "std unicode-perl"
+    "std perf"
+    "std perf-cache"
+    "std perf-dfa"
+    "std perf-inline"
+    "std perf-literal"
+    "std perf-dfa-full"
+    "std perf-onepass"
+    "std perf-backtrack"
+)
+for f in "${features[@]}"; do
+    echo "===== FEATURE: $f ====="
+    cargo test --test integration --no-default-features --features "$f"
+done
+
+# And test the probably-forever-nightly-only 'pattern' feature...
+if rustc --version | grep -q nightly; then
+    echo "===== FEATURE: std,pattern,unicode-perl ====="
+    cargo test --test integration --no-default-features --features std,pattern,unicode-perl
+fi

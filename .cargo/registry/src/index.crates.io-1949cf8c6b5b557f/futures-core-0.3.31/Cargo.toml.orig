@@ -1,0 +1,34 @@
+[package]
+name = "futures-core"
+version = "0.3.31"
+edition = "2018"
+rust-version = "1.36"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rust-lang/futures-rs"
+homepage = "https://rust-lang.github.io/futures-rs"
+description = """
+The core traits and types in for the `futures` library.
+"""
+
+[features]
+default = ["std"]
+std = ["alloc"]
+alloc = []
+
+# These features are no longer used.
+# TODO: remove in the next major version.
+unstable = []
+cfg-target-has-atomic = []
+
+[dependencies]
+portable-atomic = { version = "1.3", optional = true, default-features = false, features = ["require-cas"] }
+
+[dev-dependencies]
+futures = { path = "../futures" }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true

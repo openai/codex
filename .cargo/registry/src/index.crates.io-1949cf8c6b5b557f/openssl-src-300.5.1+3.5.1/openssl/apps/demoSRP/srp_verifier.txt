@@ -1,0 +1,6 @@
+# This is a file that will be filled by the openssl srp routine.
+# You can initialize the file with additional groups, these are
+# records starting with an 'I' followed by the 'g' and 'N' values and the ID.
+# The exact values ... you have to dig this out from the source of srp.c
+# or srp_vfy.c
+# The last value of an 'I' is used as the default group for new users.

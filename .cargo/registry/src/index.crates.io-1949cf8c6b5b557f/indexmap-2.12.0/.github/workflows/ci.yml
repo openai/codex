@@ -1,0 +1,153 @@
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  merge_group:
+
+name: CI
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - rust: 1.82.0 # MSRV
+            features:
+          - rust: stable
+            features: arbitrary
+          - rust: stable
+            features: quickcheck
+          - rust: stable
+            features: rayon
+          - rust: stable
+            features: serde
+          - rust: stable
+            features: sval
+          - rust: stable
+            features: borsh
+          - rust: stable
+            features: std
+          - rust: beta
+            features:
+          - rust: nightly
+            bench: test build benchmarks
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lock MSRV-compatible dependencies
+        if: matrix.rust == '1.82.0'
+        env:
+          CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
+        # Note that this uses the runner's pre-installed stable cargo
+        run: cargo generate-lockfile
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+      - name: Tests
+        run: |
+          cargo build --verbose --features "${{ matrix.features }}"
+          cargo doc --verbose --features "${{ matrix.features }}"
+          cargo test --verbose --features "${{ matrix.features }}"
+          cargo test --release --verbose --features "${{ matrix.features }}"
+      - name: Tests (serde)
+        if: matrix.features == 'serde'
+        run: |
+          cargo test --verbose -p test-serde
+      - name: Tests (sval)
+        if: matrix.features == 'sval'
+        run: |
+          cargo test --verbose -p test-sval
+      - name: Test run benchmarks
+        if: matrix.bench != ''
+        run: cargo test -v --benches
+
+  nostd_build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - rust: 1.82.0
+            target: thumbv6m-none-eabi
+          - rust: stable
+            target: thumbv6m-none-eabi
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lock MSRV-compatible dependencies
+        if: matrix.rust == '1.82.0'
+        env:
+          CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
+        # Note that this uses the runner's pre-installed stable cargo
+        run: cargo generate-lockfile
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+          target: ${{ matrix.target }}
+      - name: Tests
+        run: |
+          cargo build -vv --target=${{ matrix.target }} --no-default-features
+          cargo build -v -p test-nostd --target=${{ matrix.target }}
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@beta
+        with:
+          components: clippy
+      - run: cargo clippy --all-features
+
+  miri:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri, rust-src
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+        if: github.event_name == 'merge_group'
+      - run: cargo miri nextest run
+        if: github.event_name == 'merge_group'
+      - run: cargo miri test --doc
+
+  minimal-versions:
+    name: Check MSRV and minimal-versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@1.82.0 # MSRV
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-hack
+      - name: Lock minimal direct dependencies
+        run: cargo +nightly hack generate-lockfile --remove-dev-deps -Z direct-minimal-versions
+        env:
+          CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
+      - name: Build (nightly)
+        run: cargo +nightly build --verbose --all-features
+      - name: Build (MSRV)
+        run: cargo build --verbose --features arbitrary,quickcheck,serde,sval,rayon
+
+  # One job that "summarizes" the success state of this pipeline. This can then be added to branch
+  # protection, rather than having to add each job separately.
+  success:
+    name: Success
+    runs-on: ubuntu-latest
+    needs: [tests, nostd_build, clippy, miri, minimal-versions]
+    # Github branch protection is exceedingly silly and treats "jobs skipped because a dependency
+    # failed" as success. So we have to do some contortions to ensure the job fails if any of its
+    # dependencies fails.
+    if: always() # make sure this is never "skipped"
+    steps:
+      # Manually check the status of all dependencies. `if: failure()` does not work.
+      - name: check if any dependency failed
+        run: jq --exit-status 'all(.result == "success")' <<< '${{ toJson(needs) }}'

@@ -1,0 +1,2 @@
+[toolchain]
+components = ["rust-src"]

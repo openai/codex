@@ -1,0 +1,65 @@
+name: CI
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  merge_group:
+    types: [checks_requested]
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+env:
+  RUST_BACKTRACE: 1
+  SHELL: /bin/bash
+
+jobs:
+  ci:
+    name: Build and Test
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        rust: [1.70.0, nightly, beta, stable]
+
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 2
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust }}
+          default: true
+          override: true
+      - name: Build
+        run: |
+          cargo build --no-default-features
+          cargo build
+          cargo build --features malloc_size_of
+      - uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --all
+      - name: Build codegen
+        run: |
+          cd string-cache-codegen && cargo build && cd ..
+
+          if [ ${{ matrix.rust }} = nightly ]; then
+            cd integration-tests && cargo test --features unstable && cd ..;
+          fi
+
+
+  build_result:
+    name: Result
+    runs-on: ubuntu-latest
+    needs:
+      - "ci"
+
+    steps:
+      - name: Mark the job as successful
+        run: exit 0
+        if: success()
+      - name: Mark the job as unsuccessful
+        run: exit 1
+        if: "!success()"

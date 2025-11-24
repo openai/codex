@@ -1,0 +1,33 @@
+test bench::anchored_literal_long_match      ... bench:         225 ns/iter (+/- 22)
+test bench::anchored_literal_long_non_match  ... bench:          62 ns/iter (+/- 1)
+test bench::anchored_literal_short_match     ... bench:         225 ns/iter (+/- 1)
+test bench::anchored_literal_short_non_match ... bench:          60 ns/iter (+/- 1)
+test bench::easy0_1K                         ... bench:      29,984 ns/iter (+/- 190) = 34 MB/s
+test bench::easy0_1MB                        ... bench:  30,641,690 ns/iter (+/- 110,535) = 33 MB/s
+test bench::easy0_32                         ... bench:         981 ns/iter (+/- 12) = 32 MB/s
+test bench::easy0_32K                        ... bench:     957,358 ns/iter (+/- 2,633) = 34 MB/s
+test bench::easy1_1K                         ... bench:      29,636 ns/iter (+/- 150) = 34 MB/s
+test bench::easy1_1MB                        ... bench:  30,295,321 ns/iter (+/- 98,181) = 34 MB/s
+test bench::easy1_32                         ... bench:         971 ns/iter (+/- 30) = 32 MB/s
+test bench::easy1_32K                        ... bench:     947,307 ns/iter (+/- 4,258) = 34 MB/s
+test bench::hard_1K                          ... bench:      54,856 ns/iter (+/- 209) = 18 MB/s
+test bench::hard_1MB                         ... bench:  56,126,571 ns/iter (+/- 224,163) = 17 MB/s
+test bench::hard_32                          ... bench:       1,776 ns/iter (+/- 23) = 18 MB/s
+test bench::hard_32K                         ... bench:   1,753,833 ns/iter (+/- 54,427) = 18 MB/s
+test bench::literal                          ... bench:       1,516 ns/iter (+/- 6)
+test bench::match_class                      ... bench:       2,429 ns/iter (+/- 11)
+test bench::match_class_in_range             ... bench:       2,398 ns/iter (+/- 4)
+test bench::match_class_unicode              ... bench:      12,915 ns/iter (+/- 29)
+test bench::medium_1K                        ... bench:      31,914 ns/iter (+/- 276) = 32 MB/s
+test bench::medium_1MB                       ... bench:  32,617,173 ns/iter (+/- 68,114) = 31 MB/s
+test bench::medium_32                        ... bench:       1,046 ns/iter (+/- 42) = 30 MB/s
+test bench::medium_32K                       ... bench:   1,019,516 ns/iter (+/- 3,788) = 32 MB/s
+test bench::no_exponential                   ... bench:     303,239 ns/iter (+/- 518)
+test bench::not_literal                      ... bench:       1,756 ns/iter (+/- 115)
+test bench::one_pass_long_prefix             ... bench:         834 ns/iter (+/- 7)
+test bench::one_pass_long_prefix_not         ... bench:         858 ns/iter (+/- 15)
+test bench::one_pass_short_a                 ... bench:       1,597 ns/iter (+/- 9)
+test bench::one_pass_short_a_not             ... bench:       1,950 ns/iter (+/- 21)
+test bench::one_pass_short_b                 ... bench:       1,077 ns/iter (+/- 5)
+test bench::one_pass_short_b_not             ... bench:       1,596 ns/iter (+/- 9)
+test bench::replace_all                      ... bench:       1,288 ns/iter (+/- 13)

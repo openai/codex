@@ -1,0 +1,29 @@
+name: Publish releases to GitHub
+on:
+    push:
+        tags:
+            - "*"
+
+jobs:
+    datatest-stable-release:
+        if: github.repository_owner == 'owo-colors' && startsWith(github.ref_name, 'v')
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  persist-credentials: false
+            - uses: taiki-e/install-action@v2
+              with:
+                  tool: cargo-release@0.25
+            - uses: taiki-e/create-gh-release-action@v1
+              with:
+                  changelog: CHANGELOG.md
+                  title: owo-colors $version
+                  branch: main
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            - run: ./scripts/cargo-release-publish.sh
+              env:
+                  CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

@@ -1,0 +1,614 @@
+D-Bus 1.0.0 (08 November 2006)
+==
+- Documents updated with API/ABI garuntees 
+- Added missing patch FreeBSD need to run out of the box
+- dbus-monitor now has a profile mode
+- AUTHORS file updated with names from the ChangeLog
+  Thanks to everyone who helped get us here
+
+D-Bus 1.0 RC 3 (0.95) (02 November 2006)
+==
+- DBUS_API_SUBJECT_TO_CHANGE no longer needs to be defined when building apps
+- ./configure checks now work when cross compiling
+- dbus-uuidgen --ensure is now run in the init script so there is no need to
+  run it in a post script
+- dbus-uuidgen now writes out to /var/lib/dbus to work with systems that do not
+  have a writable /etc. Packages should install and own the /var/lib/dbus 
+  directory
+- recursive locks are now used when dbus_threads_init_default is called
+- standard_session_servicedirs tag added to the session.conf
+  under a normal build this specifies these service directories:
+    /usr/local/share/dbus-1/services
+    /usr/share/dbus-1/services
+    $HOME/.local/share/dbus-1/services
+- fixed crash when a service directory is specified more than once
+- fixed a crash in *BSD when watching config directories for changes
+- fixed Irix build by using dirp->__dd_fd to get the file descriptor
+- cleaned up the LOCAL_CREDS vs CMGCRED credential code so *BSD's don't 
+  crash here anymore
+- dbus_message_iter_get_array_len deprecated
+- cleanup-man-pages.sh added so packagers can clean up Doxygen man page output
+  from 7 to 2 megs
+- large documentation improvements
+- numerous bug fixes
+
+D-Bus 1.0 RC 2 (0.94) (14 October 2006)
+==
+- dbus-uuidgen binary added for future remote machine identification
+  packagers should call dbus-uuidgen --ensure in their post
+- GetMachineId peer method added to the bus API
+- dbus_connection_set_route_peer_messages API added to let the bus send
+  peer messages directly to an app
+- Autolaunch abilities added to dbus-launch with the --autolaunch flag
+  This feature allows libdbus to start a session bus if none can be found
+  This is an internal feature and should not be used by scripts
+  DBUS_SESSION_BUS_ADDRESS is still the correct way to specify a session bus
+- dbus-launch now prints out a simple key value pairs instead of shell scripts
+  if one of the shell flags aren't used
+- support DBUS_BLOCK_ON_ABORT env variable to cause blocking waiting for gdb
+- weak ref are now held for shared connections so the right things happen
+  this fixes some pretty major bugs with the way connections were handled
+- Some refactoring for Windows (doesn't effect Unix)
+- Solaris build fixes
+- MacOSX build fixes
+- Cross compile build fixes.  We now assume getpwnam_r is posix and va_lists
+  can be copied by value since we can't check this in a cross compile.  If
+  this is not true for a particular target is up to the developer to patch.
+- Bug fixing all around
+
+D-Bus 1.0 RC 1 (0.93) (14 September 2006)
+==
+- dbus_threads_init_default added for initalizing threads without the need for
+  bindings
+- Filters are now properly removed
+- dbus_connection_open now holds a hard ref to shared connections
+- We now print out a warning and do nothing when someone tries to close a 
+  shared connection
+- The --introspect switch has been added to the bus for printing out 
+  introspection data without actually running the bus
+- LOCAL_CREDS socket credentials are now supported for systems which 
+  support it such as NetBSD
+- Generalize kqueue support so it works with NetBSD as well as FreeBSD
+- Numerous bug fixes and memory leaks patched
+
+D-Bus 0.92 (18 August 2006)
+==
+- Proper thread locking added to pending calls
+- Threading semantics changed from init early to init before the second thread
+  is started
+- Correctly error out when an application tries to acquire or release the
+  org.freedesktop.DBus name instead of sending false result codes
+- kqueue directory watching code can now be used to monitor config file changes
+  on FreeBSD
+- --with-dbus-daemondir configure switch added so the daemon can be installed
+  separate from the user binaries
+- Makefiles fixed for cygwin 
+- Various fixes for the ongoing Windows port 
+- Fixed docs and comments to use the D-Bus spelling instead of D-BUS
+- Many memleaks and bugs fixed
+
+D-Bus 0.91 (24 July 2006)
+==
+- Remove some lingering bits left over from the bindings split
+- Fix assertion causing D-Bus applications to crash when checks are enabled
+- Fix a timeout bug which would block applications from being auto started
+
+D-Bus 0.90 (17 July 2006)
+==
+- API/ABI freeze for 1.0
+- Bindings are now split out into seperate packages
+- ListActivatableNames added as a method on the bus
+- Removed deprecated dbus_connection_disconnect (use dbus_connection_close)
+- Shared connections are now unreffed on disconnect
+- Fixed pending calls for threaded enviornments
+- Pending calls get timed out on connection disconnect
+- dbus_connection_send_with_reply returns TRUE and a NULL pending call
+  if you call it on a connection object which has been disconnected already
+  (it returns FALSE on Out of Memory errors only)
+- dbus-monitor now correctly catches methods, not just signals
+- dbus-monitor now prints object paths 
+
+D-BUS 0.62 (12 June 2006)
+==
+- Doc fixes
+- Added support for all data-types for the dbus tools
+- Fixed eavesdropping on method calls (dbus-monitor)
+- Fixed silent dropping of method calls with interface=NULL
+- Fixed console ownership problems in Solaris
+- Fixed installation of dbus-signature.h and #include it in dbus/dbus.h
+- Flush the user database cache on config reload
+- GLib bindings:
+  - Fix memory leaks
+  - Fix properties in DBusGProxy so that they can be given in any
+    order
+  - Added lots of assertions to ensure correct use
+  - Remove duplicated code
+  - Fix static string pointer uses in GPtrArray-based collections
+- Python bindings:
+  - Remove reference to sys/cdefs.h
+- Qt4 bindings:
+  - Code reorganized
+  - Added the dbusidl2cpp, dbuscpp2xml and dbus tools
+  - Added example programs (ping-pong, complex ping-pong, listnames, chat)
+  - Updated selftests
+  - Fixed compilation and .moc- and .ui-file processing and cleaning
+  - Made central classes derive from QObject
+  - Enhance error reporting
+  - Many bugfixes
+- Mono bindings:
+  - Minor bugfixes
+
+D-BUS 0.61 (24 Febuary 2006)
+==
+- Documentation all around
+- dbus-launch now produces correct sh and csh syntax
+- Nested arrays now work correctly
+- GLib bindings:
+  - Inheriting from DBusGProxy is now possible
+  - GPtrArrays can now be marshalled
+  - org.freedesktop.DBus.GLib.ClientCSymbol annotation added
+  - Openning connections to arbitrary addresses now supported
+- Python bindings:
+  - sender_keyword and path_keyword keywords added to signal listener API
+  - Byte types now demarshal to unsigned char
+  - calling methods now do the correct thing
+- Qt bindings:
+  - both Qt3 and Qt4 bindings can be built at the same time
+  - Use the standard org.freedesktop.DBus.Method.NoReply annotation 
+    for the "async" calls instead of creating one for us.
+- Mono bindings:
+  - 64bit arch fixes
+- Massive bug fixing all around
+
+D-BUS 0.60 (30 November 2005)
+==
+
+- major ABI/API changes - sonames changed
+- RequestName queuing behavior has changed (refer to dbus-specification)
+  - DBUS_NAME_FLAG_PROHIBIT_REPLACEMENT has been removed and
+    DBUS_NAME_FLAG_ALLOW_REPLACEMENT has been added to the flags
+- signals emitted by the bus now show up in the introspect data
+- auth EXTERNAL now supported on BSD varients
+- ReleaseName method added to the bus to allow a service
+  to remove itself as owner of a bus name
+- dbus_connection_read_write added for getting messages off the bus 
+  in the absence of a mainloop
+- Qt4 bindings added and the Qt3 bindings have been depricated
+- python bindings:
+  - marshal using introspect data if available
+  - better exception handling and propigation
+  - private connections are now supported
+  - UTF-8 cleanups
+  - out_signature added to method decorators for specifying
+    how the return values should be marshaled
+  - sender_keyword added to method decorators for specifying
+    and argument to provide the unique name of the method caller
+  - async_callbacks added to method decorators 
+  - multiple inheritance of classes now supported 
+- GLib bindings:
+  - respect NoReply annotations
+  - dbus_g_method_return_get_reply and dbus_g_method_return_send_reply
+    added to the lowlevel code for use when the dbus-glib marshalling
+    code is not adiquate
+- numerous bug fixes all around
+
+D-BUS 0.50 (06 September 2005)
+===
+This is a minor release from 0.36.2.  The series number has changed 
+not because of any technical reasons but as an indication that we
+are moving closer to 1.0.  It is hoped that this will be the last
+series to see major changes, most of which will be isolated to the
+GLib and Python bindings, as we transition to concentrate more on
+bug busting and code auditing.
+
+- D-Bus builds on the Cygwin platform
+- Makefile cleanups
+- Various bug fixes
+- Optimization of the dbus object tree 
+- Memleaks and GIL crasher bugs have been fixed in the Python bindings
+
+D-BUS 0.36.2 (29 August 2005)
+===
+- Security: Restrict other users from connecting to another users 
+  session bus
+
+D-BUS 0.36.1 (24 August 2005)
+===
+- Python Bindings:
+  - fixed to work with hal-device-manager
+  - For 64bit builds everything is installed to lib64/python2.4/
+    since Python can't handle multilib
+
+D-BUS 0.36 (23 August 2005)
+===
+- Maximum sized of cached messages have been reduced to 10K
+- Match rules now allow matching on arguments inside the message
+- introspect.xsl XSLT style sheet added for formatting introspection
+  data into XHTML for analysis
+- Python bindings:
+  - now have working type objects for explicit
+    typecasting
+  - Variant type has been added
+  - Dictionaries, Variants and Arrays can all be passed the signiture or
+    type(s) of their children
+  - the optional timeout= keyword has been added when making method calls
+  - match on args has been implemented
+  - a .pth file has been added for dealing with libraries and python files
+    being in different directories such as in 64bit installs
+  - various bug fixes
+- GLib bindings:
+  - deeply recursive types now supported
+  - many symbols are no longer exported as part of the public API
+  - various memleak and other bug fixes
+
+D-BUS 0.35.2 (17 July 2005)
+===
+- Rename Unix Security Context to SELinux Security Context in API
+- Fixed more dist errors that distcheck didn't pick up on
+- Fixed various bugs in the python bindings that prevented them from working
+
+D-BUS 0.35.1 (16 July 2005)
+===
+- Fixed dist error where python/dbus_bindings.pxd was being shipped 
+  instead of dbus_bindings.pxd.in
+- Use this instead of the 0.35 tarball 
+
+D-BUS 0.35 (15 July 2005)
+===
+- --with-dbus-user added to the configure scripts for configuring the 
+  user the system bus runs on
+- --with-console-auth-dir added to configure scripts for configuring the
+  directory to look in for console user locks
+- service files for auto-starting D-Bus services now has the ability to pass
+  in command line arguments to the executable
+- Huge auto-start bug squashed which caused some services not to start when
+  requested in rapid succession
+- SE-Linux security contexts can now be appended to messages for inspection
+  by services that enforce their own security policies
+- Colin says the GLib binding are ready for general consumption
+- New GLib tutorial
+- New GLib example code
+- Python bindings are now version (0,42,0)
+- Python bindings API has changed on the service side
+- dbus.service has been split out as a seperate module
+- dbus.service.Service is renamed to dbus.service.BusName
+- dbus.service.Object has swapped the bus_name and object_path constructor
+  parameters to make it easier to do inheritance over the bus
+- dbus.glib has been seperated out in order to lessen the dependency on glib
+  and to allow other mainloops to be integrated with the bindings including
+  a planned generic mainloop for non-gui apps.
+- Python bindings now aquire the GIL when calling back into the python
+  interpreter.  Fixes crashes when using threading and other random segfaults.
+- New Python tutorial
+- Numerous D-Bus bug fixes all around
+
+D-BUS 0.34 (15 June 2005)
+===
+- dbus_connection_disconnect is deprecated in favor of dbus_connection_close
+- The bus can now use D_NOTIFY (if available) to check when configuration files 
+  have changed and reload them
+- New dbus_message_has_path/member/interface API added
+- The Ping message from the org.freedesktop.DBus.Peer interface is now handled
+- Complete glib bindings overhaul (and are still under construction)
+- Tutorial now has an updated GLib section 
+- GLib bindings can now send/receive hash tables, arrays and other complex types
+- Python bindings overhaul (most public facing API's done)
+- Python bindings have been split up into separate files
+- Python added new type classes for hinting to the marshaler what type
+  to send over the wire
+- Python bindings now have decorators for specifying exported methods and signals
+- Numerous bug fixes
+
+D-BUS 0.33 (25 Apr 2005)
+===
+
+- downgrade requirement from GTK+-2.6 to 2.4 for building gtk components
+- python binding API's have been overhalled to be more "pythonic" and cleaner
+- python bindings now export dbus.version which is set to (0,40,0)
+- python bindings now implement the org.freedesktop.DBus.Introspectable interface
+- python binding match rules are now more flexable
+- make check has been fixed
+- many, many major bug fixes
+
+D-BUS 0.32 (29 Mar 2005)
+===
+
+- mono bindings now compiles correctly
+- mono binding cleanups
+- glib bindings generates wrappers for bus methods in dbus-glib-bindings.h
+- glib binding cleanus
+- users and groups can now be specified by UID and GID in config files
+- numerous memory leak fixes
+- various other fixes
+
+D-BUS 0.31 (07 Mar 2005)
+===
+
+- land the new message args API and recursive type system
+- add docs and fixed Doxygen warnings throught source
+- split out some functions not needed in libdbus to *-util.c source files
+- take out type convienience functions
+- libdbus now back below 150K
+- booleans are now 32-bit instead of 8-bit
+- specification updated
+- grand renaming to strip out the use of "service"
+  just say "name" instead (or "bus name" when ambiguous)
+- rename dbus-daemon-1 to dbus-daemon throughout
+- rename activation to auto-start
+- auto-start on by default now
+- note that libdbus is the low-level API
+- python bindings updated to the new API
+- mono bindings updated to the new API
+- add 16 bit types
+- dictionaries are now ARRAYS of DICT_ENTRY
+- dbus-glib-tool renamed to dbus-binding-tool
+- massive rewrite of the glib bindings
+- saner names for the dbus interface, object path and service defines
+- new functions for handling type signitures
+- bump sonames for libdbus and libdbus-glib
+- various small fixes
+
+D-BUS 0.23 (11 Jan 2005)
+===
+
+- add setgroups() to drop supplementary groups
+- updated SELinux support
+- add an "at console" security policy
+- fix a bug where org.freedesktop.DBus wasn't recognized as an existing
+  service.
+- error out if --enable-mono is explicitly set and mono libs can't be found
+- set the max_match_rules_per_connection limit from the config file.
+- removed dbus_bug_get_with_g_main since it's been replaced by
+  dbus_g_bus_get
+- fix fd leaks in socket code
+- lots and lots of mono binding updates, including fixes to make it
+  compatible with Mono 1.1.3
+- added --nofork option to override config file setting at runtime
+- added support for int64 and uint64 to the python bindings
+- lots of python binding updates
+- config file DTD updates
+- use SerivceOwnerChanges signal instead of ServiceCreated and
+  ServiceDeleted
+- fixes to the authentication code
+- new init script for Slackware
+- print out the pid even when --fork is passed
+- increase preallocation sizes in DBusMessage to heavily reduce
+  reallocs
+- lots of performance enhancements
+- lots more small bug fixes
+
+D-BUS 0.22
+===
+
+- add --reply-timeout to dbus-send
+- fix a memleak
+- fix Solaris/Forte build
+- switch to AFL 2.1 rather than 2.0 to address patent termination clause 
+  concerns
+- add SELinux support
+- mostly repair libxml backend for config parser, still doesn't 
+  pass out of memory tests
+- fix distcheck to include language bindings
+- add GetConnectionUnixUser method on bus driver
+- also for UnixProcessID
+- lots of Python, Mono, other binding fixes
+- change GLib bindings to not include dbus/dbus.h (fully encapsulate libdbus)
+- pass paths as strings, not arrays of string
+- add message signature header field
+- cleanups to marshaling code
+- clean up authentication code
+- reload conf files on SIGHUP
+- rename SERVICE/SENDER_SERVICE to DESTINATION/SENDER
+- fix circular conf file inclusion
+- allow empty arrays
+- tons of other small bugfixes
+
+D-BUS 0.21
+===
+
+- implement "auto activation" flag on messages, so the destination 
+  service can be launched automatically
+- fix a bug in custom type marshaling
+- optimize case where multiple apps activate the same service
+  (avoid "thundering herd")
+- add dynamic service file discovery/reloading
+- fix a busy loop when blocking for a reply
+- fix a 64-bit crash involving varargs
+- fix a bus crash when processing an AcquireService
+- allow appending TYPE_BYTE via append_args_valist
+- fix dicts-inside-dicts
+- enhancements to Python and Qt bindings
+
+D-BUS 0.20
+===
+
+This release lands some very large API changes and numerous bugfixes.
+The list of changes is too large to fully document here; please refer
+to the documentation, and message-bus-list archives.
+
+D-BUS 0.13
+===
+
+This is probably the last release before landing the large API changes
+on the "dbus-object-names" branch.
+
+- fix system bus to always use filesystem socket; anyone 
+  can create any abstract socket, which isn't secure 
+  since if you can crash the system bus you'd be able
+  to replace it.
+- add DTD for configuration file
+- improve specification a bit
+
+D-BUS 0.12
+===
+
+- fix "service messagebus status" on Red Hat
+- fix demarshaling of DBUS_TYPE_NAMED
+- fix "eval `dbus-launch --exit-with-session`" to exit properly
+- fix build without --prefix
+- useless fooling with Mono bindings
+- useless fooling with gcj bindings
+- fix srcdir != builddir
+- fix various compiler warnings and other issues
+- add get/set data to DBusMessage
+- fix headers for C++
+- OS X build fixes
+- abstract domain sockets support (Linux only)
+- add dbus-cleanup-sockets utility for people
+  not using linux
+- be consistent about defaulting to --session/--system 
+  with command line tools
+- merge in policies from included config files
+- fix build on non-x86
+- docs updates
+- lots of other bugfixes
+
+D-BUS 0.11
+===
+
+- add --enable-docs to turn off/on the docbook stuff
+  (doesn't cover doxygen stuff yet)
+- make people define DBUS_API_SUBJECT_TO_CHANGE
+  and read warning in README so they don't 
+  expect the API to be frozen already
+- rename .pc files to "dbus-1.pc" instead of 
+  "dbus-1.0.pc" etc. - this will require changing 
+  pkg-config invocations
+- some docs cleanups
+- add man pages for all executables
+- allow send to/from bus driver in the default system.conf
+- fix user lookup bug
+- implement dbus-launch to launch the session message bus
+- fix some thread deadlocks
+- some performance profiling/optimization
+- add dbus_bus_activate_service() function
+- fix some minor bugs here and there
+- install Red Hat initscript in the right place
+
+D-BUS 0.10
+===
+
+- reversed order of args to dbus_message_new()
+- renamed dbus_message_name_is() and some other
+  functions
+- change DBusWatch to have dbus_watch_handle() 
+  similar to dbus_timeout_handle(), drop 
+  connection/server-specific handle routines
+- change message serials to be unsigned
+- implemented <allow>/<deny>/<limit> features for 
+  config file; system bus now has a deny-all policy 
+  by default.
+- system.conf has <includedir>system.d</includedir>
+  so packages can install additions to the default 
+  policy to <allow> the messages they need. e.g.
+  CUPS might install a cups.conf - see 
+  test/data/valid-config-files/system.d/test.conf 
+  for an example.
+- add timeouts for authentication, activation
+- add glib-style "checks" on public API, enable 
+  those by default, disable assertions by default
+- add GMainContext argument to GLib setup functions, 
+  can be NULL for default context. Needed for threads.
+- add 64-bit integer type
+- validate type of standard message header fields
+- consider messages in the org.freedesktop.Local
+  namespace to be invalid (to avoid fake disconnect 
+  messages for example)
+- fix assorted memory leaks and other bugs in 
+  the SHA-1 auth mechanism
+- cache user database information (groups user is 
+  in, etc.) helps a lot with NIS
+- always store uid_t, pid_t, gid_t in "ulong" 
+  rather than "int"
+- implement config file settings for which 
+  users can connect
+- SHA-1 unit test
+- dbus-send, dbus-monitor command line utilities
+- fixed lots of misc crashes and other bugs
+
+D-BUS 0.9
+===
+
+- implemented a test case for service activation,
+  and fixed many bugs exposed by that
+- implemented recursive argument marshaling/demarshaling 
+  for messages, allowing multidimensional arrays
+- fixed up integration of message dispatch with 
+  main loop by adding a callback on change of 
+  dispatch status
+- add a pidfile feature to daemon
+- some build fixes
+- clean up unix domain sockets on exit
+- add --print-address and the ability 
+  to create a random server address 
+  in a temporary directory
+
+D-BUS 0.8
+===
+
+- fix dumb bug in 0.7
+
+D-BUS 0.7
+===
+
+- implement configuration file used to control bus characteristics
+- implement daemon mode, changing user ID, and other system
+  bus features
+- add init scripts for systemwide bus
+- add "make check-coverage" target to check test coverage
+- more test suite additions
+- many, many bugfixes
+- many API changes/fixes
+
+D-BUS 0.6
+===
+- Vastly improved bus daemon test suite
+- Lots of misc. bugfixes and memory leak fixes
+- Support for marshalling key/value data
+- Activation improvements.
+
+D-BUS 0.5
+===
+
+- Specification updates
+- port to OS X and other BSD variants
+- port to Solaris
+- Partial work on cookie-based authentication
+- Thread safety fixes
+- Lots of misc. bugfixes
+- Support for more array types
+- Add data slots to DBusServer
+- DBusString security audit fixes
+- Fix for systems (or valgrind) with unaligned malloc blocks
+
+D-BUS 0.4
+===
+
+- Preliminary activation support.
+- Better authentication test suite
+- Bus test program
+- Specification updates
+- Thread safety
+- Bug fixes
+
+D-BUS 0.3
+===
+
+ - Preliminary limitations 
+ - Message sending works
+ - Bus client
+ - Array marshalling/demarshalling
+ - Services
+ - Better OOM handling in the bus
+ - In-proc debug transport
+ - Transport/server address support
+
+D-BUS 0.2
+===
+
+ - Include test code in the tarball.
+
+D-BUS 0.1
+===
+
+ - Initial release.

@@ -1,0 +1,3 @@
+wrap_match_arms = true
+struct_lit_multiline_style = "ForceMulti"
+wrap_comments = false

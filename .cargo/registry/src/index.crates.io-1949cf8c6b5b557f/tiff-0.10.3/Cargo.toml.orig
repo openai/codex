@@ -1,0 +1,47 @@
+[package]
+name = "tiff"
+version = "0.10.3"
+edition = "2021"
+resolver = "2"
+
+# note: when changed, also update test runner in `.github/workflows/rust.yml`
+rust-version = "1.74.0"
+
+license = "MIT"
+description = "TIFF decoding and encoding library in pure Rust"
+authors = ["The image-rs Developers"]
+
+repository = "https://github.com/image-rs/image-tiff"
+categories = ["multimedia::images", "multimedia::encoding"]
+
+exclude = ["tests/images/*", "tests/fuzz_images/*"]
+
+[dependencies]
+half = { version = "2.4.1" }
+quick-error = "2.0.1"
+
+# Rename to avoid confusion with the feature name.
+fax34 = { package = "fax", version = "0.2.6", optional = true }
+flate2 = { version = "1.0.20", optional = true }
+weezl = { version = "0.1.10", optional = true }
+zstd = { version = "0.13", optional = true }
+zune-jpeg = { version = "0.4.17", optional = true }
+
+[dev-dependencies]
+criterion = "0.3.1"
+# We may already depend on this via flate2
+crc32fast = "1.5"
+
+[features]
+default = ["deflate", "fax", "jpeg", "lzw"]
+
+# Compression algorithms
+deflate = ["dep:flate2"]
+fax = ["dep:fax34"]
+jpeg = ["dep:zune-jpeg"]
+lzw = ["dep:weezl"]
+zstd = ["dep:zstd"]
+
+[[bench]]
+name = "lzw"
+harness = false

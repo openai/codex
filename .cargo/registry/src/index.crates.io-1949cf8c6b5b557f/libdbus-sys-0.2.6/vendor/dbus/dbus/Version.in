@@ -1,0 +1,10 @@
+LIBDBUS_1_@SOVERSION@ {
+  global:
+    dbus_*;
+  local:
+    *;
+};
+LIBDBUS_PRIVATE_@DBUS_VERSION@ {
+  global:
+    _dbus_*;
+};

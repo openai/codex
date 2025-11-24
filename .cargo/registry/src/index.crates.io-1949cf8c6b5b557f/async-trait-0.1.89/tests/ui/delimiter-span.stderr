@@ -1,0 +1,21 @@
+error: no rules expected `{`
+  --> tests/ui/delimiter-span.rs:19:16
+   |
+ 5 | macro_rules! picky {
+   | ------------------ when calling this macro
+...
+19 |         picky!({ 123, self });
+   |                ^ no rules expected this token in macro call
+   |
+   = note: while trying to match sequence start
+
+error: no rules expected `{`
+  --> tests/ui/delimiter-span.rs:20:16
+   |
+ 5 | macro_rules! picky {
+   | ------------------ when calling this macro
+...
+20 |         picky!({ 123 });
+   |                ^ no rules expected this token in macro call
+   |
+   = note: while trying to match sequence start

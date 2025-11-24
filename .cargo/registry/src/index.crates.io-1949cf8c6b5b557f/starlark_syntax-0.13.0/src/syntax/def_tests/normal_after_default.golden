@@ -1,0 +1,15 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Program:
+def test(x, y=1, z): pass
+
+Error: error: positional parameter after non positional
+ --> test.star:1:18
+  |
+1 | def test(x, y=1, z): pass
+  |                  ^
+  |

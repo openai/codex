@@ -1,0 +1,57 @@
+/* versioninfo.rc.in - for dbus
+ * Copyright (C) 2005 g10 Code GmbH
+ * 
+ * This file is free software; as a special exception the author gives
+ * unlimited permission to copy and/or distribute it, with or without
+ * modifications, as long as this notice is preserved.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY, to the extent permitted by law; without even the
+ * implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ */
+ 
+/* This file is processed by configure to create versioninfo.rc */
+
+/* The file content uses UTF-8 encoding */
+#pragma code_page(65001)
+
+#include <windows.h>
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION @BUILD_FILEVERSION@
+ PRODUCTVERSION @BUILD_FILEVERSION@
+ FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+ FILEFLAGS VS_FF_DEBUG
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS VOS__WINDOWS32
+ FILETYPE @DBUS_VER_FILE_TYPE@
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        /* string need to match concated hex values in 'VarFileInfo' block */
+        BLOCK "040904e4"
+        BEGIN
+            VALUE "Comments", "Provided under the terms of the GNU General Public License >= 2.0 or Academic Free License version 2.1\0"
+            VALUE "CompanyName", "freedesktop.org\0"
+            VALUE "FileDescription", "dbus - FreeDesktop message bus system\0"
+            VALUE "FileVersion", "@DBUS_VERSION@\0"
+            VALUE "InternalName", "@DBUS_VER_INTERNAL_NAME@\0"
+            VALUE "LegalCopyright", "Copyright © 1994-2020 dbus contributors, see dbus source code for details\0"
+            VALUE "LegalTrademarks", "\0"
+            VALUE "OriginalFilename", "@DBUS_VER_ORIGINAL_NAME@\0"
+            VALUE "ProductName", "dbus\0"
+            VALUE "ProductVersion", "@DBUS_VERSION@\0"
+            VALUE "SpecialBuild", "@BUILD_TIMESTAMP@\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        /* supports English language (0x409) in the Windows ANSI codepage (1252). */
+        VALUE "Translation", 0x409, 1252
+    END
+END
+

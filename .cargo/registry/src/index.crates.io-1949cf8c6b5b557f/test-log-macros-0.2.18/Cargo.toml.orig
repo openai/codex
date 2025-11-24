@@ -1,0 +1,27 @@
+[package]
+name = "test-log-macros"
+version = "0.2.18"
+authors = ["Daniel Mueller <deso@posteo.net>"]
+edition = "2021"
+rust-version = "1.71"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/d-e-s-o/test-log.git"
+description = """
+Supporting procedural macro crate for test-log.
+"""
+
+[lib]
+proc-macro = true
+
+[features]
+trace = []
+log = []
+unstable = []
+
+[dependencies]
+proc-macro2 = {version = "1.0.32", default-features = false}
+quote = {version = "1.0", default-features = false}
+syn = {version = "2.0", default-features = false, features = ["full", "parsing", "printing", "proc-macro"]}
+
+[lints]
+workspace = true

@@ -1,0 +1,16 @@
+error[E0277]: the size for values of type `[u8]` cannot be known at compilation time
+  --> tests/ui-nightly/transmute-ref-dst-unsized.rs:17:28
+   |
+17 | const DST_UNSIZED: &[u8] = transmute_ref!(&[0u8; 1]);
+   |                            ^^^^^^^^^^^^^^^^^^^^^^^^^ doesn't have a size known at compile-time
+   |
+   = help: the trait `Sized` is not implemented for `[u8]`
+note: required by a bound in `Wrap::<&'a Src, &'a Dst>::transmute_ref`
+  --> src/util/macro_util.rs
+   |
+   | impl<'a, Src, Dst> Wrap<&'a Src, &'a Dst> {
+   |               ^^^ required by this bound in `Wrap::<&Src, &Dst>::transmute_ref`
+...
+   |     pub const unsafe fn transmute_ref(self) -> &'a Dst {
+   |                         ------------- required by a bound in this associated function
+   = note: this error originates in the macro `transmute_ref` (in Nightly builds, run with -Z macro-backtrace for more info)

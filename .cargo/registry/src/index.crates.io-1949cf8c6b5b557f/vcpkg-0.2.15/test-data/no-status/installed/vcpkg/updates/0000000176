@@ -1,0 +1,7 @@
+Package: libmysql
+Version: 8.0.4-2
+Depends: boost-algorithm, boost-geometry, boost-optional, boost-functional, boost-graph, openssl, icu, libevent, liblzma, lz4, zlib
+Architecture: x64-windows
+Multi-Arch: same
+Description: A MySQL client library for C development.
+Status: install ok half-installed

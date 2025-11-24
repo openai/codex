@@ -1,0 +1,20 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+def test():
+    return returns_list()
+
+# Also test function is inlined if it is defined after the caller.
+def returns_list():
+    return [10, True]
+
+# Bytecode:
+
+Max stack size: 1
+Instructions:
+  0: ListOfConsts [10, True] ->&0
+  32: Return &0
+  40: End

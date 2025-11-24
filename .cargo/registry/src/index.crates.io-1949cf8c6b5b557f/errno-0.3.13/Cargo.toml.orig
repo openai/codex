@@ -1,0 +1,39 @@
+[package]
+
+name = "errno"
+version = "0.3.13"
+authors = ["Chris Wong <lambda.fairy@gmail.com>", "Dan Gohman <dev@sunfishcode.online>"]
+
+license = "MIT OR Apache-2.0"
+edition = "2018"
+documentation = "https://docs.rs/errno"
+repository = "https://github.com/lambda-fairy/rust-errno"
+description = "Cross-platform interface to the `errno` variable."
+categories = ["no-std", "os"]
+rust-version = "1.56"
+
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2", default-features = false }
+
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = ">=0.52, <=0.60"
+features = [
+  "Win32_Foundation",
+  "Win32_System_Diagnostics_Debug",
+]
+
+[target.'cfg(target_os="wasi")'.dependencies]
+libc = { version = "0.2", default-features = false }
+
+[target.'cfg(target_os="hermit")'.dependencies]
+libc = { version = "0.2", default-features = false }
+
+[features]
+default = ["std"]
+std = ["libc/std"]
+
+# TODO: Remove this exemption when Cygwin support lands in Rust stable
+# https://github.com/rust-lang/rust/pull/134999
+[lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = ['cfg(target_os, values("cygwin"))']

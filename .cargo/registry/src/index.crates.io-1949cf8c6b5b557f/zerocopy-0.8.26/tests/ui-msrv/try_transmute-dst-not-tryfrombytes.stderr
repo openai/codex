@@ -1,0 +1,37 @@
+error[E0277]: the trait bound `NotZerocopy: zerocopy::TryFromBytes` is not satisfied
+  --> tests/ui-msrv/try_transmute-dst-not-tryfrombytes.rs:17:58
+   |
+17 |     let dst_not_try_from_bytes: Result<NotZerocopy, _> = try_transmute!(AU16(0));
+   |                                                          ^^^^^^^^^^^^^^^^^^^^^^^ the trait `zerocopy::TryFromBytes` is not implemented for `NotZerocopy`
+   |
+note: required by a bound in `try_transmute`
+  --> src/util/macro_util.rs
+   |
+   |     Dst: TryFromBytes,
+   |          ^^^^^^^^^^^^ required by this bound in `try_transmute`
+   = note: this error originates in the macro `try_transmute` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `NotZerocopy: zerocopy::TryFromBytes` is not satisfied
+  --> tests/ui-msrv/try_transmute-dst-not-tryfrombytes.rs:17:33
+   |
+17 |     let dst_not_try_from_bytes: Result<NotZerocopy, _> = try_transmute!(AU16(0));
+   |                                 ^^^^^^^^^^^^^^^^^^^^^^ the trait `zerocopy::TryFromBytes` is not implemented for `NotZerocopy`
+   |
+note: required by a bound in `ValidityError`
+  --> src/error.rs
+   |
+   | pub struct ValidityError<Src, Dst: ?Sized + TryFromBytes> {
+   |                                             ^^^^^^^^^^^^ required by this bound in `ValidityError`
+
+error[E0277]: the trait bound `NotZerocopy: zerocopy::TryFromBytes` is not satisfied
+  --> tests/ui-msrv/try_transmute-dst-not-tryfrombytes.rs:17:58
+   |
+17 |     let dst_not_try_from_bytes: Result<NotZerocopy, _> = try_transmute!(AU16(0));
+   |                                                          ^^^^^^^^^^^^^^^^^^^^^^^ the trait `zerocopy::TryFromBytes` is not implemented for `NotZerocopy`
+   |
+note: required by a bound in `ValidityError`
+  --> src/error.rs
+   |
+   | pub struct ValidityError<Src, Dst: ?Sized + TryFromBytes> {
+   |                                             ^^^^^^^^^^^^ required by this bound in `ValidityError`
+   = note: this error originates in the macro `try_transmute` (in Nightly builds, run with -Z macro-backtrace for more info)

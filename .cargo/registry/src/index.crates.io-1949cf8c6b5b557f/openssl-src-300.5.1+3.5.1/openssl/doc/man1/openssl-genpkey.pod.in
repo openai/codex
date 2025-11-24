@@ -1,0 +1,566 @@
+=pod
+
+=begin comment
+{- join("\n", @autowarntext) -}
+
+=end comment
+
+=head1 NAME
+
+openssl-genpkey - generate a private key or key pair
+
+=head1 SYNOPSIS
+
+B<openssl> B<genpkey>
+[B<-help>]
+[B<-out> I<filename>]
+[B<-outpubkey> I<filename>]
+[B<-outform> B<DER>|B<PEM>]
+[B<-verbose>]
+[B<-quiet>]
+[B<-pass> I<arg>]
+[B<-I<cipher>>]
+[B<-paramfile> I<file>]
+[B<-algorithm> I<alg>]
+[B<-pkeyopt> I<opt>:I<value>]
+[B<-genparam>]
+[B<-text>]
+{- $OpenSSL::safe::opt_r_synopsis -}
+{- $OpenSSL::safe::opt_engine_synopsis -}
+{- $OpenSSL::safe::opt_provider_synopsis -}
+{- $OpenSSL::safe::opt_config_synopsis -}
+
+=head1 DESCRIPTION
+
+This command generates a private key or key pair.
+
+=head1 OPTIONS
+
+=over 4
+
+=item B<-help>
+
+Print out a usage message.
+
+=item B<-out> I<filename>
+
+Output the private key to the specified file. If this argument is not
+specified then standard output is used.
+
+=item B<-outpubkey> I<filename>
+
+Output the public key to the specified file. If this argument is not
+specified then the public key is not output.
+
+=item B<-outform> B<DER>|B<PEM>
+
+The output format, except when B<-genparam> is given; the default is B<PEM>.
+See L<openssl-format-options(1)> for details.
+
+When B<-genparam> is given, B<-outform> is ignored.
+
+=item B<-verbose>
+
+Output "status dots" while generating keys.
+
+=item B<-quiet>
+
+Do not output "status dots" while generating keys.
+
+=item B<-pass> I<arg>
+
+The output file password source. For more information about the format of I<arg>
+see L<openssl-passphrase-options(1)>.
+
+=item B<-I<cipher>>
+
+This option encrypts the private key with the supplied cipher. Any algorithm
+name accepted by EVP_get_cipherbyname() is acceptable such as B<des3>.
+
+=item B<-algorithm> I<alg>
+
+Public key algorithm to use such as RSA, DSA, DH or DHX. If used this option must
+precede any B<-pkeyopt> options. The options B<-paramfile> and B<-algorithm>
+are mutually exclusive. Engines or providers may add algorithms in addition to
+the standard built-in ones.
+
+Valid built-in algorithm names for private key generation are RSA, RSA-PSS, EC,
+X25519, X448, ED25519, ED448, ML-DSA and ML-KEM.
+
+Valid built-in algorithm names for parameter generation (see the B<-genparam>
+option) are DH, DSA and EC.
+
+Note that the algorithm name X9.42 DH may be used as a synonym for DHX keys and
+PKCS#3 refers to DH Keys. Some options are not shared between DH and DHX keys.
+
+=item B<-pkeyopt> I<opt>:I<value>
+
+Set the public key algorithm option I<opt> to I<value>. The precise set of
+options supported depends on the public key algorithm used and its
+implementation. See L</KEY GENERATION OPTIONS> and
+L</PARAMETER GENERATION OPTIONS> below for more details.
+
+To list the possible I<opt> values for an algorithm use:
+B<openssl> B<genpkey> -algorithm XXX -help
+
+=item B<-genparam>
+
+Generate a set of parameters instead of a private key. If used this option must
+precede any B<-algorithm>, B<-paramfile> or B<-pkeyopt> options.
+
+=item B<-paramfile> I<filename>
+
+Some public key algorithms generate a private key based on a set of parameters.
+They can be supplied using this option. If this option is used the public key
+algorithm used is determined by the parameters. If used this option must
+precede any B<-pkeyopt> options. The options B<-paramfile> and B<-algorithm>
+are mutually exclusive.
+
+=item B<-text>
+
+Print an (unencrypted) text representation of private and public keys and
+parameters along with the PEM or DER structure.
+
+{- $OpenSSL::safe::opt_r_item -}
+
+{- $OpenSSL::safe::opt_engine_item -}
+
+{- $OpenSSL::safe::opt_provider_item -}
+
+{- $OpenSSL::safe::opt_config_item -}
+
+=back
+
+=head1 KEY GENERATION OPTIONS
+
+The options supported by each algorithm and indeed each implementation of an
+algorithm can vary. The options for the OpenSSL implementations are detailed
+below. There are no key generation options defined for the X25519, X448, ED25519
+or ED448 algorithms.
+
+=head2 RSA Key Generation Options
+
+=over 4
+
+=item B<rsa_keygen_bits:numbits>
+
+The number of bits in the generated key. If not specified 2048 is used.
+
+=item B<rsa_keygen_primes:numprimes>
+
+The number of primes in the generated key. If not specified 2 is used.
+
+=item B<rsa_keygen_pubexp:value>
+
+The RSA public exponent value. This can be a large decimal or
+hexadecimal value if preceded by C<0x>. Default value is 65537.
+
+=back
+
+=head2 RSA-PSS Key Generation Options
+
+Note: by default an B<RSA-PSS> key has no parameter restrictions.
+
+=over 4
+
+=item B<rsa_keygen_bits>:I<numbits>, B<rsa_keygen_primes>:I<numprimes>,
+B<rsa_keygen_pubexp>:I<value>
+
+These options have the same meaning as the B<RSA> algorithm.
+
+=item B<rsa_pss_keygen_md>:I<digest>
+
+If set the key is restricted and can only use I<digest> for signing.
+
+=item B<rsa_pss_keygen_mgf1_md>:I<digest>
+
+If set the key is restricted and can only use I<digest> as it's MGF1
+parameter.
+
+=item B<rsa_pss_keygen_saltlen>:I<len>
+
+If set the key is restricted and I<len> specifies the minimum salt length.
+
+=back
+
+=head2 EC Key Generation Options
+
+The EC key generation options can also be used for parameter generation.
+
+=over 4
+
+=item B<ec_paramgen_curve>:I<curve>
+
+The EC curve to use. OpenSSL supports NIST curve names such as "P-256".
+
+=item B<ec_param_enc>:I<encoding>
+
+The encoding to use for parameters. The I<encoding> parameter must be either
+B<named_curve> or B<explicit>. The default value is B<named_curve>.
+
+=back
+
+=head2 ML-DSA Key Generation Options
+
+=over 4
+
+=item B<hexseed>:I<seed>
+
+This specifies the optional ML-DSA I<seed> in hexadecimal form.  The seed is 32
+bytes, giving 64 hexadecimal digits.
+When generated from an explicit seed the key is completely determined by the
+seed value.
+If other users can see the command-line arguments of the running process, this
+option may compromise the secret key, it is best avoided, tests-aside.
+
+See L<EVP_PKEY-ML-DSA(7)> for more detail.
+
+=back
+
+=head2 ML-KEM Key Generation Options
+
+=over 4
+
+=item B<hexseed>:I<seed>
+
+This specifies the optional ML-KEM I<seed> in hexadecimal form.  The seed is 64
+bytes, giving 128 hexadecimal digits.
+When generated from an explicit seed the key is completely determined by the
+seed value.
+If other users can see the command-line arguments of the running process, this
+option may compromise the secret key, it is best avoided, tests-aside.
+
+See L<EVP_PKEY-ML-KEM(7)> for more detail.
+
+=back
+
+=head2 DH Key Generation Options
+
+=over 4
+
+=item B<group>:I<name>
+
+The B<paramfile> option is not required if a named group is used here.
+See the L</DH Parameter Generation Options> section below.
+
+=back
+
+
+=head1 PARAMETER GENERATION OPTIONS
+
+The options supported by each algorithm and indeed each implementation of an
+algorithm can vary. The options for the OpenSSL implementations are detailed
+below.
+
+=head2 DSA Parameter Generation Options
+
+=over 4
+
+=item B<dsa_paramgen_bits>:I<numbits>
+
+The number of bits in the generated prime. If not specified 2048 is used.
+
+=item B<dsa_paramgen_q_bits>:I<numbits>
+
+=item B<qbits>:I<numbits>
+
+The number of bits in the q parameter. Must be one of 160, 224 or 256. If not
+specified 224 is used.
+
+=item B<dsa_paramgen_md>:I<digest>
+
+=item B<digest>:I<digest>
+
+The digest to use during parameter generation. Must be one of B<sha1>, B<sha224>
+or B<sha256>. If set, then the number of bits in B<q> will match the output size
+of the specified digest and the B<dsa_paramgen_q_bits> parameter will be
+ignored. If not set, then a digest will be used that gives an output matching
+the number of bits in B<q>, i.e. B<sha1> if q length is 160, B<sha224> if it 224
+or B<sha256> if it is 256.
+
+=item B<properties>:I<query>
+
+The I<digest> property I<query> string to use when fetching a digest from a provider.
+
+=item B<type>:I<type>
+
+The type of generation to use. Set this to 1 to use legacy FIPS186-2 parameter
+generation. The default of 0 uses FIPS186-4 parameter generation.
+
+=item B<gindex>:I<index>
+
+The index to use for canonical generation and verification of the generator g.
+Set this to a positive value ranging from 0..255 to use this mode. Larger values
+will only use the bottom byte.
+This I<index> must then be reused during key validation to verify the value of g.
+If this value is not set then g is not verifiable. The default value is -1.
+
+=item B<hexseed>:I<seed>
+
+The seed I<seed> data to use instead of generating a random seed internally.
+This should be used for testing purposes only. This will either produced fixed
+values for the generated parameters OR it will fail if the seed did not
+generate valid primes.
+
+=back
+
+=head2 DH Parameter Generation Options
+
+For most use cases it is recommended to use the B<group> option rather than
+the B<type> options. Note that the B<group> option is not used by default if
+no parameter generation options are specified.
+
+=over 4
+
+=item B<group>:I<name>
+
+=item B<dh_param>:I<name>
+
+Use a named DH group to select constant values for the DH parameters.
+All other options will be ignored if this value is set.
+
+Valid values that are associated with the B<algorithm> of B<"DH"> are:
+"ffdhe2048", "ffdhe3072", "ffdhe4096", "ffdhe6144", "ffdhe8192",
+"modp_1536", "modp_2048", "modp_3072", "modp_4096", "modp_6144", "modp_8192".
+
+Valid values that are associated with the B<algorithm> of B<"DHX"> are the
+RFC5114 names "dh_1024_160", "dh_2048_224", "dh_2048_256".
+
+=item B<dh_rfc5114>:I<num>
+
+If this option is set, then the appropriate RFC5114 parameters are used
+instead of generating new parameters. The value I<num> can be one of
+1, 2 or 3 that are equivalent to using the option B<group> with one of
+"dh_1024_160", "dh_2048_224" or "dh_2048_256".
+All other options will be ignored if this value is set.
+
+=item B<pbits>:I<numbits>
+
+=item B<dh_paramgen_prime_len>:I<numbits>
+
+The number of bits in the prime parameter I<p>. The default is 2048.
+
+=item B<qbits>:I<numbits>
+
+=item B<dh_paramgen_subprime_len>:I<numbits>
+
+The number of bits in the sub prime parameter I<q>. The default is 224.
+Only relevant if used in conjunction with the B<dh_paramgen_type> option to
+generate DHX parameters.
+
+=item B<safeprime-generator>:I<value>
+
+=item B<dh_paramgen_generator>:I<value>
+
+The value to use for the generator I<g>. The default is 2.
+The B<algorithm> option must be B<"DH"> for this parameter to be used.
+
+=item B<type>:I<string>
+
+The type name of DH parameters to generate. Valid values are:
+
+=over 4
+
+=item "generator"
+
+Use a safe prime generator with the option B<safeprime_generator>
+The B<algorithm> option must be B<"DH">.
+
+=item "fips186_4"
+
+FIPS186-4 parameter generation.
+The B<algorithm> option must be B<"DHX">.
+
+=item "fips186_2"
+
+FIPS186-4 parameter generation.
+The B<algorithm> option must be B<"DHX">.
+
+=item "group"
+
+Can be used with the option B<pbits> to select one of
+"ffdhe2048", "ffdhe3072", "ffdhe4096", "ffdhe6144" or "ffdhe8192".
+The B<algorithm> option must be B<"DH">.
+
+=item "default"
+
+Selects a default type based on the B<algorithm>. This is used by the
+OpenSSL default provider to set the type for backwards compatibility.
+If B<algorithm> is B<"DH"> then B<"generator"> is used.
+If B<algorithm> is B<"DHX"> then B<"fips186_2"> is used.
+
+=back
+
+=item B<dh_paramgen_type>:I<value>
+
+The type of DH parameters to generate. Valid values are 0, 1, 2 or 3
+which correspond to setting the option B<type> to
+"generator", "fips186_2", "fips186_4" or "group".
+
+=item B<digest>:I<digest>
+
+The digest to use during parameter generation. Must be one of B<sha1>, B<sha224>
+or B<sha256>. If set, then the number of bits in B<qbits> will match the output
+size of the specified digest and the B<qbits> parameter will be
+ignored. If not set, then a digest will be used that gives an output matching
+the number of bits in B<q>, i.e. B<sha1> if q length is 160, B<sha224> if it is
+224 or B<sha256> if it is 256.
+This is only used by "fips186_4" and "fips186_2" key generation.
+
+=item B<properties>:I<query>
+
+The I<digest> property I<query> string to use when fetching a digest from a provider.
+This is only used by "fips186_4" and "fips186_2" key generation.
+
+=item B<gindex>:I<index>
+
+The index to use for canonical generation and verification of the generator g.
+Set this to a positive value ranging from 0..255 to use this mode. Larger values
+will only use the bottom byte.
+This I<index> must then be reused during key validation to verify the value of g.
+If this value is not set then g is not verifiable. The default value is -1.
+This is only used by "fips186_4" and "fips186_2" key generation.
+
+=item B<hexseed>:I<seed>
+
+The seed I<seed> data to use instead of generating a random seed internally.
+This should be used for testing purposes only. This will either produced fixed
+values for the generated parameters OR it will fail if the seed did not
+generate valid primes.
+This is only used by "fips186_4" and "fips186_2" key generation.
+
+=back
+
+=head2 EC Parameter Generation Options
+
+The EC parameter generation options are the same as for key generation. See
+L</EC Key Generation Options> above.
+
+=head1 NOTES
+
+The use of the genpkey program is encouraged over the algorithm specific
+utilities because additional algorithm options and ENGINE provided algorithms
+can be used.
+
+=head1 EXAMPLES
+
+Generate an RSA private key using default parameters:
+
+ openssl genpkey -algorithm RSA -out key.pem
+
+Encrypt output private key using 128 bit AES and the passphrase "hello":
+
+ openssl genpkey -algorithm RSA -out key.pem -aes-128-cbc -pass pass:hello
+
+Generate a 2048 bit RSA key using 3 as the public exponent:
+
+ openssl genpkey -algorithm RSA -out key.pem \
+     -pkeyopt rsa_keygen_bits:2048 -pkeyopt rsa_keygen_pubexp:3
+
+Generate 2048 bit DSA parameters that can be validated: The output values for
+gindex and seed are required for key validation purposes and are not saved to
+the output pem file).
+
+ openssl genpkey -genparam -algorithm DSA -out dsap.pem -pkeyopt pbits:2048 \
+     -pkeyopt qbits:224 -pkeyopt digest:SHA256 -pkeyopt gindex:1 -text
+
+Generate DSA key from parameters:
+
+ openssl genpkey -paramfile dsap.pem -out dsakey.pem
+
+Generate 4096 bit DH Key using safe prime group ffdhe4096:
+
+ openssl genpkey -algorithm DH -out dhkey.pem -pkeyopt group:ffdhe4096
+
+Generate 2048 bit X9.42 DH key with 256 bit subgroup using RFC5114 group3:
+
+ openssl genpkey -algorithm DHX -out dhkey.pem -pkeyopt dh_rfc5114:3
+
+Generate a DH key using a DH parameters file:
+
+ openssl genpkey -paramfile dhp.pem -out dhkey.pem
+
+Output DH parameters for safe prime group ffdhe2048:
+
+ openssl genpkey -genparam -algorithm DH -out dhp.pem -pkeyopt group:ffdhe2048
+
+Output 2048 bit X9.42 DH parameters with 224 bit subgroup using RFC5114 group2:
+
+ openssl genpkey -genparam -algorithm DHX -out dhp.pem -pkeyopt dh_rfc5114:2
+
+Output 2048 bit X9.42 DH parameters with 224 bit subgroup using FIP186-4 keygen:
+
+ openssl genpkey -genparam -algorithm DHX -out dhp.pem -text \
+     -pkeyopt pbits:2048 -pkeyopt qbits:224 -pkeyopt digest:SHA256 \
+     -pkeyopt gindex:1 -pkeyopt dh_paramgen_type:2
+
+Output 1024 bit X9.42 DH parameters with 160 bit subgroup using FIP186-2 keygen:
+
+ openssl genpkey -genparam -algorithm DHX -out dhp.pem -text \
+     -pkeyopt pbits:1024 -pkeyopt qbits:160 -pkeyopt digest:SHA1 \
+     -pkeyopt gindex:1 -pkeyopt dh_paramgen_type:1
+
+Output 2048 bit DH parameters:
+
+ openssl genpkey -genparam -algorithm DH -out dhp.pem \
+     -pkeyopt dh_paramgen_prime_len:2048
+
+Output 2048 bit DH parameters using a generator:
+
+ openssl genpkey -genparam -algorithm DH -out dhpx.pem \
+     -pkeyopt dh_paramgen_prime_len:2048 \
+     -pkeyopt dh_paramgen_type:1
+
+Generate EC parameters:
+
+ openssl genpkey -genparam -algorithm EC -out ecp.pem \
+        -pkeyopt ec_paramgen_curve:secp384r1 \
+        -pkeyopt ec_param_enc:named_curve
+
+Generate EC key from parameters:
+
+ openssl genpkey -paramfile ecp.pem -out eckey.pem
+
+Generate EC key directly:
+
+ openssl genpkey -algorithm EC -out eckey.pem \
+        -pkeyopt ec_paramgen_curve:P-384 \
+        -pkeyopt ec_param_enc:named_curve
+
+Generate an X25519 private key:
+
+ openssl genpkey -algorithm X25519 -out xkey.pem
+
+Generate an ED448 private key:
+
+ openssl genpkey -algorithm ED448 -out xkey.pem
+
+Generate an ML-DSA-65 private key:
+
+ openssl genpkey -algorithm ML-DSA-65 -out ml-dsa-key.pem
+
+Generate an ML-KEM-768 private key:
+
+ openssl genpkey -algorithm ML-KEM-768 -out ml-kem-key.pem
+
+=head1 HISTORY
+
+The ability to use NIST curve names, and to generate an EC key directly,
+were added in OpenSSL 1.0.2.
+The ability to generate X25519 keys was added in OpenSSL 1.1.0.
+The ability to generate X448, ED25519 and ED448 keys was added in OpenSSL 1.1.1.
+
+The B<-engine> option was deprecated in OpenSSL 3.0.
+
+Support for B<ML-DSA> and B<ML-KEM> was added in OpenSSL 3.5.
+
+=head1 COPYRIGHT
+
+Copyright 2006-2025 The OpenSSL Project Authors. All Rights Reserved.
+
+Licensed under the Apache License 2.0 (the "License").  You may not use
+this file except in compliance with the License.  You can obtain a copy
+in the file LICENSE in the source distribution or at
+L<https://www.openssl.org/source/license.html>.
+
+=cut

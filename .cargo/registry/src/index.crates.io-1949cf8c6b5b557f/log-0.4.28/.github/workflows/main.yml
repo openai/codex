@@ -1,0 +1,134 @@
+name: CI
+on: [push, pull_request]
+
+# Ensure only read permission is granted
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - build: stable
+            os: ubuntu-latest
+            rust: stable
+          - build: beta
+            os: ubuntu-latest
+            rust: beta
+          - build: nightly
+            os: ubuntu-latest
+            rust: nightly
+          - build: macos
+            os: macos-latest
+            rust: stable
+          - build: win32
+            os: windows-latest
+            rust: stable-i686-pc-windows-msvc
+          - build: win64
+            os: windows-latest
+            rust: stable-x86_64-pc-windows-msvc
+          - build: mingw
+            os: windows-latest
+            rust: stable-x86_64-pc-windows-gnu
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install toolchain
+      run: |
+        rustup update ${{ matrix.rust }} --no-self-update
+        rustup default ${{ matrix.rust }}
+        cargo +stable install cargo-hack --locked
+    - run: cargo hack test --feature-powerset --exclude-features max_level_off,max_level_error,max_level_warn,max_level_info,max_level_debug,max_level_trace,release_max_level_off,release_max_level_error,release_max_level_warn,release_max_level_info,release_max_level_debug,release_max_level_trace
+    - run: cargo run --verbose --manifest-path test_max_level_features/Cargo.toml
+    - run: cargo run --verbose --manifest-path test_max_level_features/Cargo.toml --release
+
+  check:
+    name: Check Format and Clippy
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install toolchain
+      run: |
+        rustup update stable --no-self-update
+        rustup default stable
+        rustup component add clippy rustfmt
+    - run: cargo fmt -- --check
+    - run: cargo fmt --manifest-path test_max_level_features/Cargo.toml -- --check
+    - run: cargo clippy --verbose
+    - run: cargo clippy --verbose --manifest-path test_max_level_features/Cargo.toml
+
+  doc:
+    name: Check Documentation
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install toolchain
+      run: |
+        rustup update stable --no-self-update
+        rustup default stable
+        rustup component add rust-docs
+    - name: Run rustdoc
+      env:
+        RUSTDOCFLAGS: "-D warnings"
+      run: cargo doc --verbose --features std,serde,sval,sval_ref,value-bag,kv,kv_std,kv_sval,kv_serde
+
+  features:
+    name: Feature check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: |
+          rustup update nightly --no-self-update
+          rustup default nightly
+      - run: cargo build --verbose -Z avoid-dev-deps --features kv
+      - run: cargo build --verbose -Z avoid-dev-deps --features "kv std"
+      - run: cargo build --verbose -Z avoid-dev-deps --features "kv kv_sval"
+      - run: cargo build --verbose -Z avoid-dev-deps --features "kv kv_serde"
+      - run: cargo build --verbose -Z avoid-dev-deps --features "kv kv_std"
+      - run: cargo build --verbose -Z avoid-dev-deps --features "kv kv_sval kv_serde"
+
+  minimalv:
+    name: Minimal versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: |
+          rustup update nightly --no-self-update
+          rustup default nightly
+      - run: cargo build --verbose -Z minimal-versions --features kv
+      - run: cargo build --verbose -Z minimal-versions --features "kv std"
+      - run: cargo build --verbose -Z minimal-versions --features "kv kv_sval"
+      - run: cargo build --verbose -Z minimal-versions --features "kv kv_serde"
+      - run: cargo build --verbose -Z minimal-versions --features "kv kv_std"
+      - run: cargo build --verbose -Z minimal-versions --features "kv kv_sval kv_serde"
+
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: |
+          rustup update 1.61.0 --no-self-update
+          rustup default 1.61.0
+          cargo +stable install cargo-hack --locked
+      - run: cargo hack test --feature-powerset --exclude-features max_level_off,max_level_error,max_level_warn,max_level_info,max_level_debug,max_level_trace,release_max_level_off,release_max_level_error,release_max_level_warn,release_max_level_info,release_max_level_debug,release_max_level_trace
+      - run: cargo run --verbose --manifest-path test_max_level_features/Cargo.toml
+      - run: cargo run --verbose --manifest-path test_max_level_features/Cargo.toml --release
+
+  embedded:
+    name: Embedded
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+      - run: rustup target add thumbv6m-none-eabi riscv32imc-unknown-none-elf
+      - run: cargo build --verbose --target=thumbv6m-none-eabi
+      - run: cargo build --verbose --target=riscv32imc-unknown-none-elf

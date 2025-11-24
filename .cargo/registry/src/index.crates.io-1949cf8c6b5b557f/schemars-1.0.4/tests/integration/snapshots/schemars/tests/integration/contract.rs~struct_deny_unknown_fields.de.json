@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "StructDenyUnknownFields",
+  "type": "object",
+  "properties": {
+    "write_only": {
+      "type": "boolean",
+      "writeOnly": true
+    },
+    "default": {
+      "type": "boolean",
+      "default": false
+    },
+    "skip_serializing_if": {
+      "type": "boolean"
+    },
+    "de_renamed": {
+      "type": "boolean"
+    },
+    "option": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "write_only",
+    "skip_serializing_if",
+    "de_renamed"
+  ]
+}

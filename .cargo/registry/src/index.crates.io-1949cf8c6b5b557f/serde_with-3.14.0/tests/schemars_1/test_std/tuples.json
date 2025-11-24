@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Test",
+  "type": "object",
+  "properties": {
+    "tuple0": {
+      "type": "null"
+    },
+    "tuple1": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "integer",
+          "format": "int32"
+        }
+      ],
+      "minItems": 1,
+      "maxItems": 1
+    },
+    "tuple2": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "integer",
+          "format": "int32"
+        },
+        {
+          "type": "integer",
+          "format": "int32"
+        }
+      ],
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "tuple3": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "integer",
+          "format": "int32"
+        },
+        {
+          "type": "integer",
+          "format": "int32"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "minItems": 3,
+      "maxItems": 3
+    }
+  },
+  "required": [
+    "tuple0",
+    "tuple1",
+    "tuple2",
+    "tuple3"
+  ]
+}

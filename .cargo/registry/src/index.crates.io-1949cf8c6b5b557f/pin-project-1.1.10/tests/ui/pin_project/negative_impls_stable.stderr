@@ -1,0 +1,10 @@
+error[E0119]: conflicting implementations of trait `Unpin` for type `Foo<MyPhantomPinned, ()>`
+  --> tests/ui/pin_project/negative_impls_stable.rs:5:1
+   |
+5  | #[pin_project::pin_project]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ conflicting implementation for `Foo<MyPhantomPinned, ()>`
+...
+14 | impl Unpin for Foo<MyPhantomPinned, ()> {}
+   | --------------------------------------- first implementation here
+   |
+   = note: this error originates in the derive macro `::pin_project::__private::__PinProjectInternalDerive` (in Nightly builds, run with -Z macro-backtrace for more info)

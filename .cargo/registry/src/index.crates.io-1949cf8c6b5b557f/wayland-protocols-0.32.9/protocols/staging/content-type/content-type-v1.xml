@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="content_type_v1">
+  <copyright>
+    Copyright © 2021 Emmanuel Gil Peyrot
+    Copyright © 2022 Xaver Hugl
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice (including the next
+    paragraph) shall be included in all copies or substantial portions of the
+    Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+  </copyright>
+
+  <interface name="wp_content_type_manager_v1" version="1">
+    <description summary="surface content type manager">
+      This interface allows a client to describe the kind of content a surface
+      will display, to allow the compositor to optimize its behavior for it.
+
+      Warning! The protocol described in this file is currently in the testing
+      phase. Backward compatible changes may be added together with the
+      corresponding interface version bump. Backward incompatible changes can
+      only be done by creating a new major version of the extension.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the content type manager object">
+        Destroy the content type manager. This doesn't destroy objects created
+        with the manager.
+      </description>
+    </request>
+
+    <enum name="error">
+      <entry name="already_constructed" value="0"
+             summary="wl_surface already has a content type object"/>
+    </enum>
+
+    <request name="get_surface_content_type">
+      <description summary="create a new content type object">
+        Create a new content type object associated with the given surface.
+
+        Creating a wp_content_type_v1 from a wl_surface which already has one
+        attached is a client error: already_constructed.
+      </description>
+      <arg name="id" type="new_id" interface="wp_content_type_v1"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+  </interface>
+
+  <interface name="wp_content_type_v1" version="1">
+    <description summary="content type object for a surface">
+      The content type object allows the compositor to optimize for the kind
+      of content shown on the surface. A compositor may for example use it to
+      set relevant drm properties like "content type".
+
+      The client may request to switch to another content type at any time.
+      When the associated surface gets destroyed, this object becomes inert and
+      the client should destroy it.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the content type object">
+        Switch back to not specifying the content type of this surface. This is
+        equivalent to setting the content type to none, including double
+        buffering semantics. See set_content_type for details.
+      </description>
+    </request>
+
+    <enum name="type">
+      <description summary="possible content types">
+        These values describe the available content types for a surface.
+      </description>
+      <entry name="none" value="0">
+        <description summary="no content type applies">
+          The content type none means that either the application has no data
+          about the content type, or that the content doesn't fit into one of
+          the other categories.
+        </description>
+      </entry>
+      <entry name="photo" value="1">
+        <description summary="photo content type">
+          The content type photo describes content derived from digital still
+          pictures and may be presented with minimal processing.
+        </description>
+      </entry>
+      <entry name="video" value="2">
+        <description summary="video content type">
+          The content type video describes a video or animation and may be
+          presented with more accurate timing to avoid stutter. Where scaling
+          is needed, scaling methods more appropriate for video may be used.
+        </description>
+      </entry>
+      <entry name="game" value="3">
+        <description summary="game content type">
+          The content type game describes a running game. Its content may be
+          presented with reduced latency.
+        </description>
+      </entry>
+    </enum>
+
+    <request name="set_content_type">
+      <description summary="specify the content type">
+        Set the surface content type. This informs the compositor that the
+        client believes it is displaying buffers matching this content type.
+
+        This is purely a hint for the compositor, which can be used to adjust
+        its behavior or hardware settings to fit the presented content best.
+
+        The content type is double-buffered state, see wl_surface.commit for
+        details.
+      </description>
+      <arg name="content_type" type="uint" enum="type"
+           summary="the content type"/>
+    </request>
+  </interface>
+</protocol>

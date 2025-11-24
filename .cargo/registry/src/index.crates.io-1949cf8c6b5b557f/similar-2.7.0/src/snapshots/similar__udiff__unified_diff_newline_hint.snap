@@ -1,0 +1,11 @@
+---
+source: src/udiff.rs
+expression: "&diff.unified_diff().header(\"a.txt\", \"b.txt\").to_string()"
+---
+--- a.txt
++++ b.txt
+@@ -1 +1 @@
+-a
++b
+\ No newline at end of file
+

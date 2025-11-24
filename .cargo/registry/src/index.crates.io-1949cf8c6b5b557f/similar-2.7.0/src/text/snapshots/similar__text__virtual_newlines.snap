@@ -1,0 +1,32 @@
+---
+source: src/text/mod.rs
+expression: "&changes"
+---
+[
+    Change {
+        tag: Equal,
+        old_index: Some(
+            0,
+        ),
+        new_index: Some(
+            0,
+        ),
+        value: "a\n",
+    },
+    Change {
+        tag: Delete,
+        old_index: Some(
+            1,
+        ),
+        new_index: None,
+        value: "b",
+    },
+    Change {
+        tag: Insert,
+        old_index: None,
+        new_index: Some(
+            1,
+        ),
+        value: "c\n",
+    },
+]

@@ -1,0 +1,15 @@
+error[E0277]: the trait bound `NotZerocopy: zerocopy::FromBytes` is not satisfied
+  --> tests/ui-msrv/transmute-dst-not-frombytes.rs:19:41
+   |
+19 | const DST_NOT_FROM_BYTES: NotZerocopy = transmute!(AU16(0));
+   |                                         ^^^^^^^^^^^^^^^^^^^ the trait `zerocopy::FromBytes` is not implemented for `NotZerocopy`
+   |
+note: required by a bound in `DST_NOT_FROM_BYTES::transmute`
+  --> tests/ui-msrv/transmute-dst-not-frombytes.rs:19:41
+   |
+19 | const DST_NOT_FROM_BYTES: NotZerocopy = transmute!(AU16(0));
+   |                                         ^^^^^^^^^^^^^^^^^^^
+   |                                         |
+   |                                         required by a bound in this
+   |                                         required by this bound in `DST_NOT_FROM_BYTES::transmute`
+   = note: this error originates in the macro `transmute` (in Nightly builds, run with -Z macro-backtrace for more info)

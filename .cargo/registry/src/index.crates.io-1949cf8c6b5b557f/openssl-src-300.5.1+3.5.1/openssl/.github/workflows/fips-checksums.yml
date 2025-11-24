@@ -1,0 +1,119 @@
+# Copyright 2021-2024 The OpenSSL Project Authors. All Rights Reserved.
+#
+# Licensed under the Apache License 2.0 (the "License").  You may not use
+# this file except in compliance with the License.  You can obtain a copy
+# in the file LICENSE in the source distribution or at
+# https://www.openssl.org/source/license.html
+
+name: FIPS Check and ABIDIFF
+on: [pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  compute-checksums:
+    runs-on: ubuntu-latest
+    steps:
+      - name: install unifdef
+        run: |
+            sudo apt-get update
+            sudo apt-get -yq --no-install-suggests --no-install-recommends --force-yes install unifdef
+      - name: create build dirs
+        run: |
+          mkdir ./build-pristine
+          mkdir ./source-pristine
+          mkdir ./build
+          mkdir ./source
+          mkdir ./artifact
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.base.repo.full_name }}
+          ref: ${{ github.event.pull_request.base.ref }}
+          path: source-pristine
+      - name: config pristine
+        run: ../source-pristine/config enable-fips
+        working-directory: ./build-pristine
+      - name: config pristine dump
+        run: ./configdata.pm --dump
+        working-directory: ./build-pristine
+      - name: make build_generated pristine
+        run: make -s build_generated
+        working-directory: ./build-pristine
+      - name: make fips-checksums pristine
+        run: make fips-checksums
+        working-directory: ./build-pristine
+      - uses: actions/checkout@v4
+        with:
+          path: source
+      - name: config
+        run: ../source/config enable-fips
+        working-directory: ./build
+      - name: config dump
+        run: ./configdata.pm --dump
+        working-directory: ./build
+      - name: make build_generated
+        run: make -s build_generated
+        working-directory: ./build
+      - name: make fips-checksums
+        run: make fips-checksums
+        working-directory: ./build
+      - name: update checksums
+        run: |
+          cp -a build-pristine/providers/fips.module.sources.new source/providers/fips.module.sources
+          cp -a build-pristine/providers/fips-sources.checksums.new source/providers/fips-sources.checksums
+          cp -a build-pristine/providers/fips.checksum.new source/providers/fips.checksum
+      - name: make diff-fips-checksums
+        run: make diff-fips-checksums && touch ../artifact/fips_unchanged || ( touch ../artifact/fips_changed ; echo FIPS CHANGED )
+        working-directory: ./build
+      - name: save PR number
+        run: echo ${{ github.event.number }} > ./artifact/pr_num
+      - name: save artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fips_checksum
+          path: artifact/
+
+  compute-abidiff:
+    runs-on: ubuntu-latest
+    env:
+      BUILD_OPTS: -g --strict-warnings enable-ktls enable-fips enable-egd enable-ec_nistp_64_gcc_128 enable-md2 enable-rc5 enable-sctp enable-ssl3 enable-ssl3-method enable-trace enable-zlib enable-zstd
+    steps:
+      - name: create build dirs
+        run: |
+          mkdir ./build-pristine
+          mkdir ./source-pristine
+          mkdir ./build
+          mkdir ./source
+          mkdir ./artifact
+      - name: install extra config support
+        run: sudo apt-get -y install libsctp-dev abigail-tools libzstd-dev zstd
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.base.repo.full_name }}
+          ref: ${{ github.event.pull_request.base.ref }}
+          path: source-pristine
+      - name: config pristine
+        run: ../source-pristine/config --banner=Configured $BUILD_OPTS && perl configdata.pm --dump
+        working-directory: ./build-pristine
+      - name: make pristine
+        run: make -s -j4
+        working-directory: ./build-pristine
+      - uses: actions/checkout@v4
+        with:
+          path: source
+      - name: config
+        run: ../source/config --banner=Configured $BUILD_OPTS && perl configdata.pm --dump
+        working-directory: ./build
+      - name: make
+        run: make -s -j4
+        working-directory: ./build
+      - name: abidiff
+        run: abidiff --headers-dir1 build-pristine/include/openssl --headers-dir2 build/include/openssl --drop-private-types ./build-pristine/libcrypto.so ./build/libcrypto.so && abidiff --headers-dir1 build-pristine/include/openssl --headers-dir2 build/include/openssl --drop-private-types ./build-pristine/libssl.so ./build/libssl.so && touch ./artifact/abi_unchanged || ( touch ./artifact/abi_changed ; echo ABI CHANGED )
+      - name: save PR number
+        run: echo ${{ github.event.number }} > ./artifact/pr_num
+      - name: save artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: abidiff
+          path: artifact/

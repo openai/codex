@@ -1,0 +1,70 @@
+[package]
+name = "serde_core"
+version = "1.0.228"
+authors = ["Erick Tryzelaar <erick.tryzelaar@gmail.com>", "David Tolnay <dtolnay@gmail.com>"]
+build = "build.rs"
+categories = ["encoding", "no-std", "no-std::no-alloc"]
+description = "Serde traits only, with no support for derive -- use the `serde` crate instead"
+documentation = "https://docs.rs/serde_core"
+edition = "2021"
+homepage = "https://serde.rs"
+keywords = ["serde", "serialization", "no_std"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/serde-rs/serde"
+rust-version = "1.56"
+
+[dev-dependencies]
+serde = { version = "1", path = "../serde" }
+serde_derive = { version = "1", path = "../serde_derive" }
+
+[package.metadata.playground]
+features = ["rc", "result"]
+
+[package.metadata.docs.rs]
+features = ["rc", "result", "unstable"]
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = [
+    "--generate-link-to-definition",
+    "--generate-macro-expansion",
+    "--extern-html-root-url=core=https://doc.rust-lang.org",
+    "--extern-html-root-url=alloc=https://doc.rust-lang.org",
+    "--extern-html-root-url=std=https://doc.rust-lang.org",
+]
+
+# This cfg cannot be enabled, but it still forces Cargo to keep serde_derive's
+# version in lockstep with serde's, even if someone depends on the two crates
+# separately with serde's "derive" feature disabled. Every serde_derive release
+# is compatible with exactly one serde release because the generated code
+# involves nonpublic APIs which are not bound by semver.
+[target.'cfg(any())'.dependencies]
+serde_derive = { version = "=1.0.228", path = "../serde_derive" }
+
+
+### FEATURES #################################################################
+
+[features]
+default = ["std", "result"]
+
+# Provide impls for common standard library types like Vec<T> and HashMap<K, V>.
+# Requires a dependency on the Rust standard library.
+std = []
+
+# Provide impls for types that require unstable functionality. For tracking and
+# discussion of unstable functionality please refer to this issue:
+#
+#    https://github.com/serde-rs/serde/issues/812
+unstable = []
+
+# Provide impls for types in the Rust core allocation and collections library
+# including String, Box<T>, Vec<T>, and Cow<T>. This is a subset of std but may
+# be enabled without depending on all of std.
+alloc = []
+
+# Opt into impls for Rc<T> and Arc<T>. Serializing and deserializing these types
+# does not preserve identity and may result in multiple copies of the same data.
+# Be sure that this is what you want before enabling this feature.
+rc = []
+
+# Provide impls for Result<T, E>. Convenient in some contexts but can lead to
+# confusion if ? or unwrap are used incautiously.
+result = []

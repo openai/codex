@@ -1,0 +1,38 @@
+[package]
+name = "owo-colors"
+version = "4.2.2"
+rust-version = "1.70"
+authors = ["jam1garner <8260240+jam1garner@users.noreply.github.com>"]
+edition = "2021"
+documentation = "https://docs.rs/owo-colors"
+repository = "https://github.com/owo-colors/owo-colors"
+description = "Zero-allocation terminal colors that'll make people go owo"
+license = "MIT"
+readme = "README.md"
+keywords = ["cli", "color", "no-std", "terminal", "ansi_term"]
+categories = ["command-line-interface", "no-std::no-alloc"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "doc_cfg"]
+
+[[example]]
+name = "supports_color"
+required-features = ["supports-colors"]
+
+[[example]]
+name = "override"
+required-features = ["supports-colors"]
+
+[features]
+# Enable conversions from all versions of supports-color, but only use the latest to determine if
+# colors are actually supported.
+#
+# Don't use dep:supports-color because it's possible there's a broken crate in the wild which uses
+# the nonfunctional "supports-color" feature.
+supports-colors = ["dep:supports-color-2", "supports-color"]
+alloc = []
+
+[dependencies]
+supports-color-2 = { package = "supports-color", version = "2.0", optional = true }
+supports-color = { version = "3.0.0", optional = true }

@@ -1,0 +1,42 @@
+[package]
+
+name = "dbus"
+version = "0.9.9"
+authors = ["David Henningsson <diwic@ubuntu.com>"]
+
+description = "Bindings to D-Bus, which is a bus commonly used on Linux for inter-process communication."
+repository = "https://github.com/diwic/dbus-rs"
+documentation = "https://docs.rs/dbus"
+keywords = ["D-Bus", "DBus", "IPC"]
+license = "Apache-2.0/MIT"
+categories = ["os::unix-apis", "api-bindings"]
+readme = "../README.md"
+edition = "2018"
+
+[dependencies]
+libc = "0.2.66"
+libdbus-sys = { path = "../libdbus-sys", version = "0.2.6" }
+futures-util = { version = "0.3", optional = true, default-features = false }
+futures-channel = { version = "0.3", optional = true }
+futures-executor = { version = "0.3", optional = true }
+# dbus-native-channel = { path = "../dbus-native-channel", version = "0.1", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59.0", features = ["Win32_Networking_WinSock"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[features]
+no-string-validation = []
+stdfd = []
+vendored = ["libdbus-sys/vendored"]
+futures = ["futures-util", "futures-channel"]
+# Not ready yet
+# native-channel = ["futures-executor", "futures-util/io", "dbus-native-channel"]
+
+[badges]
+maintenance = { status = "actively-developed" }
+
+[package.metadata.docs.rs]
+features = [ "futures" ]

@@ -1,0 +1,24 @@
+[package]
+name = "futures-macro"
+version = "0.3.31"
+edition = "2018"
+rust-version = "1.56"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rust-lang/futures-rs"
+homepage = "https://rust-lang.github.io/futures-rs"
+description = """
+The futures-rs procedural macro implementations.
+"""
+
+[lib]
+proc-macro = true
+
+[features]
+
+[dependencies]
+proc-macro2 = "1.0.60"
+quote = "1.0"
+syn = { version = "2.0.52", features = ["full"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,11 @@
+error: expected rustc release number like 1.85, or nightly date like 2025-02-25
+ --> tests/ui/bad-bound.rs:1:22
+  |
+1 | #[rustversion::since(stable)]
+  |                      ^^^^^^
+
+error: expected rustc release number like 1.85, or nightly date like 2025-02-25
+ --> tests/ui/bad-bound.rs:4:26
+  |
+4 | #[rustversion::any(since(stable))]
+  |                          ^^^^^^

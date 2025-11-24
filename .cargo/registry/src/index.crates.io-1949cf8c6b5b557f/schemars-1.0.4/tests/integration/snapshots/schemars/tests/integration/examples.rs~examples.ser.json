@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Struct",
+  "type": "object",
+  "properties": {
+    "foo": {
+      "type": "integer",
+      "format": "int32",
+      "examples": [
+        8,
+        null
+      ]
+    },
+    "bar": {
+      "type": "boolean"
+    },
+    "baz": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "examples": [
+        null,
+        "foo"
+      ]
+    }
+  },
+  "required": [
+    "foo",
+    "bar",
+    "baz"
+  ],
+  "examples": [
+    {
+      "foo": 0,
+      "bar": false,
+      "baz": null
+    },
+    null
+  ]
+}

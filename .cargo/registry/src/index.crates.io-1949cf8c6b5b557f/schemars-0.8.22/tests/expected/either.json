@@ -1,0 +1,20 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Either_int32_or_Either_Boolean_or_Null",
+  "anyOf": [
+    {
+      "type": "integer",
+      "format": "int32"
+    },
+    {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  ]
+}

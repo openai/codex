@@ -1,0 +1,6 @@
+Package: bzip2
+Version: 1.0.6-2
+Architecture: x64-windows
+Multi-Arch: same
+Description: High-quality data compressor.
+Status: install ok half-installed

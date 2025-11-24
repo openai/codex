@@ -1,0 +1,7 @@
+Package: boost-winapi
+Version: 1.67.0
+Depends: boost-config, boost-integer, boost-predef, boost-vcpkg-helpers
+Architecture: x64-windows
+Multi-Arch: same
+Description: Boost winapi module
+Status: install ok half-installed

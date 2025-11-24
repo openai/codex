@@ -1,0 +1,47 @@
+[package]
+name = "tracing-log"
+version = "0.2.0"
+authors = ["Tokio Contributors <team@tokio.rs>"]
+edition = "2018"
+repository = "https://github.com/tokio-rs/tracing"
+homepage = "https://tokio.rs"
+description = """
+Provides compatibility between `tracing` and the `log` crate.
+"""
+categories = [
+    "development-tools::debugging",
+    "asynchronous",
+]
+keywords = ["logging", "tracing", "log"]
+license = "MIT"
+readme = "README.md"
+rust-version = "1.56.0"
+
+[features]
+default = ["log-tracer", "std"]
+std = ["log/std"]
+log-tracer = []
+interest-cache = ["lru", "ahash"]
+
+[dependencies]
+tracing-core = { path = "../tracing-core", version = "0.1.28"}
+log = { version = "0.4.17" }
+once_cell = "1.13.0"
+lru = { version = "0.7.7", optional = true }
+ahash = { version = "0.7.6", optional = true }
+
+[dev-dependencies]
+tracing = { path = "../tracing", version = "0.1.35"}
+tracing-subscriber = { path = "../tracing-subscriber" }
+criterion = { version = "0.3.6", default-features = false }
+
+[badges]
+maintenance = { status = "actively-maintained" }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[[bench]]
+name = "logging"
+harness = false

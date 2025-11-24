@@ -1,0 +1,37 @@
+[package]
+name = "async-broadcast"
+version = "0.7.2"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/smol-rs/async-broadcast"
+documentation = "https://docs.rs/async-broadcast"
+description = "Async broadcast channels"
+readme = "README.md"
+edition = "2021"
+rust-version = "1.60"
+keywords = []
+categories = []
+authors = [
+    "Stjepan Glavina <stjepang@gmail.com>",
+    "Yoshua Wuyts <yoshuawuyts@gmail.com>",
+    "Zeeshan Ali Khan <zeeshanak@gnome.org>",
+]
+
+
+[[bench]]
+harness = false
+name = "broadcast_bench"
+
+[features]
+
+[dependencies]
+event-listener = "5.0.0"
+event-listener-strategy = "0.5.0"
+futures-core = "0.3.21"
+pin-project-lite = "0.2.13"
+
+[dev-dependencies]
+criterion = "0.3.5"
+doc-comment = "0.3.3"
+easy-parallel = "3.2.0"
+futures-lite = "1.11.3"
+futures-util = "0.3.21"

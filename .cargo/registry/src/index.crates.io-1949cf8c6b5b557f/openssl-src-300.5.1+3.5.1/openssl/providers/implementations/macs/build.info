@@ -1,0 +1,30 @@
+# We make separate GOAL variables for each algorithm, to make it easy to
+# switch each to the Legacy provider when needed.
+
+$GMAC_GOAL=../../libdefault.a ../../libfips.a
+$HMAC_GOAL=../../libdefault.a ../../libfips.a
+$KMAC_GOAL=../../libdefault.a ../../libfips.a
+$CMAC_GOAL=../../libdefault.a ../../libfips.a
+$BLAKE2_GOAL=../../libdefault.a
+$SIPHASH_GOAL=../../libdefault.a
+$POLY1305_GOAL=../../libdefault.a
+
+SOURCE[$GMAC_GOAL]=gmac_prov.c
+SOURCE[$HMAC_GOAL]=hmac_prov.c
+SOURCE[$KMAC_GOAL]=kmac_prov.c
+
+IF[{- !$disabled{cmac} -}]
+  SOURCE[$CMAC_GOAL]=cmac_prov.c
+ENDIF
+
+IF[{- !$disabled{blake2} -}]
+  SOURCE[$BLAKE2_GOAL]=blake2b_mac.c blake2s_mac.c
+ENDIF
+
+IF[{- !$disabled{siphash} -}]
+  SOURCE[$SIPHASH_GOAL]=siphash_prov.c
+ENDIF
+
+IF[{- !$disabled{poly1305} -}]
+  SOURCE[$POLY1305_GOAL]=poly1305_prov.c
+ENDIF

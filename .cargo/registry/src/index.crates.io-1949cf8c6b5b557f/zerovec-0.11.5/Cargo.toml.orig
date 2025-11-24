@@ -1,0 +1,77 @@
+# This file is part of ICU4X. For terms of use, please see the file
+# called LICENSE at the top level of the ICU4X source tree
+# (online at: https://github.com/unicode-org/icu4x/blob/main/LICENSE ).
+
+[package]
+name = "zerovec"
+description = "Zero-copy vector backed by a byte array"
+version = "0.11.5"
+categories = ["rust-patterns", "memory-management", "caching", "no-std", "data-structures"]
+keywords = ["zerocopy", "serialization", "zero-copy", "serde"]
+
+authors.workspace = true
+edition.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version = "1.82"
+
+[package.metadata.workspaces]
+independent = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+zerofrom = { workspace = true }
+
+zerovec-derive = { workspace = true, optional = true}
+
+databake = { workspace = true, features = ["derive"], optional = true }
+serde = { workspace = true, features = ["derive"], optional = true }
+
+yoke = { workspace = true, optional = true }
+twox-hash = { workspace = true, optional = true }
+
+[features]
+derive = ["dep:zerovec-derive"]
+hashmap = ["dep:twox-hash", "alloc"]
+yoke = ["dep:yoke"]
+serde = ["dep:serde"]
+databake = ["dep:databake"]
+alloc = ["serde?/alloc"]
+# No longer does anything
+std = []
+
+[package.metadata.cargo-all-features]
+# We have tons of features here, limit the amount of tests we run
+max_combination_size = 3
+
+[lib]
+bench = false  # This option is required for Benchmark CI
+
+[[bench]]
+name = "zerovec"
+harness = false
+
+[[bench]]
+name = "zerovec_serde"
+harness = false
+required-features = ["serde"]
+
+[[bench]]
+name = "vzv"
+harness = false
+
+[[bench]]
+name = "zerovec_iai"
+harness = false
+
+[[bench]]
+name = "zeromap"
+harness = false
+required-features = ["serde", "hashmap", "derive"]
+
+[[example]]
+name = "zv_serde"
+required-features = ["serde"]

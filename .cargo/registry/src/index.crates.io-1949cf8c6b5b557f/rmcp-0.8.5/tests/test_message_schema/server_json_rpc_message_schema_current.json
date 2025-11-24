@@ -1,0 +1,2411 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "JsonRpcMessage",
+  "description": "Represents any JSON-RPC message that can be sent or received.\n\nThis enum covers all possible message types in the JSON-RPC protocol:\nindividual requests/responses, notifications, and errors.\nIt serves as the top-level message container for MCP communication.",
+  "anyOf": [
+    {
+      "description": "A single request expecting a response",
+      "allOf": [
+        {
+          "$ref": "#/definitions/JsonRpcRequest"
+        }
+      ]
+    },
+    {
+      "description": "A response to a previous request",
+      "allOf": [
+        {
+          "$ref": "#/definitions/JsonRpcResponse"
+        }
+      ]
+    },
+    {
+      "description": "A one-way notification (no response expected)",
+      "allOf": [
+        {
+          "$ref": "#/definitions/JsonRpcNotification"
+        }
+      ]
+    },
+    {
+      "description": "An error response",
+      "allOf": [
+        {
+          "$ref": "#/definitions/JsonRpcError"
+        }
+      ]
+    }
+  ],
+  "definitions": {
+    "Annotated": {
+      "type": "object",
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawTextContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "image"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawImageContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "resource"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawEmbeddedResource"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "audio"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawAudioContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "resource_link"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawResource"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    },
+    "Annotated2": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional protocol-level metadata for this content block",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resource": {
+          "$ref": "#/definitions/ResourceContents"
+        }
+      },
+      "required": [
+        "resource"
+      ]
+    },
+    "Annotated3": {
+      "description": "Represents a resource in the extension with metadata",
+      "type": "object",
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "description": "Optional description of the resource",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icons": {
+          "description": "Optional list of icons for the resource",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Icon"
+          }
+        },
+        "mimeType": {
+          "description": "MIME type of the resource content (\"text\" or \"blob\")",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Name of the resource",
+          "type": "string"
+        },
+        "size": {
+          "description": "The size of the raw resource content, in bytes (i.e., before base64 encoding or any tokenization), if known.\n\nThis can be used by Hosts to display file sizes and estimate context window us",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "title": {
+          "description": "Human-readable title of the resource",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uri": {
+          "description": "URI representing the resource location (e.g., \"file:///path/to/file\" or \"str:///content\")",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "name"
+      ]
+    },
+    "Annotated4": {
+      "type": "object",
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mimeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uriTemplate": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "uriTemplate",
+        "name"
+      ]
+    },
+    "Annotations": {
+      "type": "object",
+      "properties": {
+        "audience": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Role"
+          }
+        },
+        "lastModified": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "priority": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        }
+      }
+    },
+    "BooleanSchema": {
+      "description": "Schema definition for boolean properties.",
+      "type": "object",
+      "properties": {
+        "default": {
+          "description": "Default value",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "description": {
+          "description": "Human-readable description",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "Optional title for the schema",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "description": "Type discriminator",
+          "allOf": [
+            {
+              "$ref": "#/definitions/BooleanTypeConst"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "BooleanTypeConst": {
+      "type": "string",
+      "format": "const",
+      "const": "boolean"
+    },
+    "CallToolResult": {
+      "description": "The result of a tool call operation.\n\nContains the content returned by the tool execution and an optional\nflag indicating whether the operation resulted in an error.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional protocol-level metadata for this result",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "content": {
+          "description": "The content returned by the tool (text, images, etc.)",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Annotated"
+          }
+        },
+        "isError": {
+          "description": "Whether this result represents an error condition",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "structuredContent": {
+          "description": "An optional JSON object that represents the structured result of the tool call"
+        }
+      },
+      "required": [
+        "content"
+      ]
+    },
+    "CancelledNotificationMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "notifications/cancelled"
+    },
+    "CancelledNotificationParam": {
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requestId": {
+          "$ref": "#/definitions/NumberOrString"
+        }
+      },
+      "required": [
+        "requestId"
+      ]
+    },
+    "CompleteResult": {
+      "type": "object",
+      "properties": {
+        "completion": {
+          "$ref": "#/definitions/CompletionInfo"
+        }
+      },
+      "required": [
+        "completion"
+      ]
+    },
+    "CompletionInfo": {
+      "type": "object",
+      "properties": {
+        "hasMore": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "total": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "values"
+      ]
+    },
+    "ContextInclusion": {
+      "description": "Specifies how much context should be included in sampling requests.\n\nThis allows clients to control what additional context information\nshould be provided to the LLM when processing sampling requests.",
+      "oneOf": [
+        {
+          "description": "Include context from all connected MCP servers",
+          "type": "string",
+          "const": "allServers"
+        },
+        {
+          "description": "Include no additional context",
+          "type": "string",
+          "const": "none"
+        },
+        {
+          "description": "Include context only from the requesting server",
+          "type": "string",
+          "const": "thisServer"
+        }
+      ]
+    },
+    "CreateElicitationRequestParam": {
+      "description": "Parameters for creating an elicitation request to gather user input.\n\nThis structure contains everything needed to request interactive input from a user:\n- A human-readable message explaining what information is needed\n- A type-safe schema defining the expected structure of the response\n\n# Example\n\n```rust\nuse rmcp::model::*;\n\nlet params = CreateElicitationRequestParam {\n    message: \"Please provide your email\".to_string(),\n    requested_schema: ElicitationSchema::builder()\n        .required_email(\"email\")\n        .build()\n        .unwrap(),\n};\n```",
+      "type": "object",
+      "properties": {
+        "message": {
+          "description": "Human-readable message explaining what input is needed from the user.\nThis should be clear and provide sufficient context for the user to understand\nwhat information they need to provide.",
+          "type": "string"
+        },
+        "requestedSchema": {
+          "description": "Type-safe schema defining the expected structure and validation rules for the user's response.\nThis enforces the MCP 2025-06-18 specification that elicitation schemas must be objects\nwith primitive-typed properties.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ElicitationSchema"
+            }
+          ]
+        }
+      },
+      "required": [
+        "message",
+        "requestedSchema"
+      ]
+    },
+    "CreateElicitationResult": {
+      "description": "The result returned by a client in response to an elicitation request.\n\nContains the user's decision (accept/decline/cancel) and optionally their input data\nif they chose to accept the request.",
+      "type": "object",
+      "properties": {
+        "action": {
+          "description": "The user's decision on how to handle the elicitation request",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ElicitationAction"
+            }
+          ]
+        },
+        "content": {
+          "description": "The actual data provided by the user, if they accepted the request.\nMust conform to the JSON schema specified in the original request.\nOnly present when action is Accept."
+        }
+      },
+      "required": [
+        "action"
+      ]
+    },
+    "CreateMessageRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "sampling/createMessage"
+    },
+    "CreateMessageRequestParam": {
+      "description": "Parameters for creating a message through LLM sampling.\n\nThis structure contains all the necessary information for a client to\ngenerate an LLM response, including conversation history, model preferences,\nand generation parameters.",
+      "type": "object",
+      "properties": {
+        "includeContext": {
+          "description": "How much context to include from MCP servers",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ContextInclusion"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "maxTokens": {
+          "description": "Maximum number of tokens to generate",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "messages": {
+          "description": "The conversation history and current messages",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SamplingMessage"
+          }
+        },
+        "metadata": {
+          "description": "Additional metadata for the request"
+        },
+        "modelPreferences": {
+          "description": "Preferences for model selection and behavior",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ModelPreferences"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stopSequences": {
+          "description": "Sequences that should stop generation",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "systemPrompt": {
+          "description": "System prompt to guide the model's behavior",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "temperature": {
+          "description": "Temperature for controlling randomness (0.0 to 1.0)",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        }
+      },
+      "required": [
+        "messages",
+        "maxTokens"
+      ]
+    },
+    "ElicitationAction": {
+      "description": "Represents the possible actions a user can take in response to an elicitation request.\n\nWhen a server requests user input through elicitation, the user can:\n- Accept: Provide the requested information and continue\n- Decline: Refuse to provide the information but continue the operation\n- Cancel: Stop the entire operation",
+      "oneOf": [
+        {
+          "description": "User accepts the request and provides the requested information",
+          "type": "string",
+          "const": "accept"
+        },
+        {
+          "description": "User declines to provide the information but allows the operation to continue",
+          "type": "string",
+          "const": "decline"
+        },
+        {
+          "description": "User cancels the entire operation",
+          "type": "string",
+          "const": "cancel"
+        }
+      ]
+    },
+    "ElicitationCreateRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "elicitation/create"
+    },
+    "ElicitationSchema": {
+      "description": "Type-safe elicitation schema for requesting structured user input.\n\nThis enforces the MCP 2025-06-18 specification that elicitation schemas\nmust be objects with primitive-typed properties.\n\n# Example\n\n```rust\nuse rmcp::model::*;\n\nlet schema = ElicitationSchema::builder()\n    .required_email(\"email\")\n    .required_integer(\"age\", 0, 150)\n    .optional_bool(\"newsletter\", false)\n    .build();\n```",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "Optional description of what this schema represents",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "properties": {
+          "description": "Property definitions (must be primitive types)",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/PrimitiveSchema"
+          }
+        },
+        "required": {
+          "description": "List of required property names",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "title": {
+          "description": "Optional title for the schema",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "description": "Always \"object\" for elicitation schemas",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ObjectTypeConst"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "properties"
+      ]
+    },
+    "EmptyObject": {
+      "description": "This is commonly used for representing empty objects in MCP messages.\n\nwithout returning any specific data.",
+      "type": "object"
+    },
+    "EnumSchema": {
+      "description": "Schema definition for enum properties.\n\nCompliant with MCP 2025-06-18 specification for elicitation schemas.\nEnums must have string type and can optionally include human-readable names.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "Human-readable description",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enum": {
+          "description": "Allowed enum values (string values only per MCP spec)",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "enumNames": {
+          "description": "Optional human-readable names for each enum value",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "title": {
+          "description": "Optional title for the schema",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "description": "Type discriminator (always \"string\" for enums)",
+          "allOf": [
+            {
+              "$ref": "#/definitions/StringTypeConst"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "enum"
+      ]
+    },
+    "ErrorCode": {
+      "description": "Standard JSON-RPC error codes used throughout the MCP protocol.\n\nThese codes follow the JSON-RPC 2.0 specification and provide\nstandardized error reporting across all MCP implementations.",
+      "type": "integer",
+      "format": "int32"
+    },
+    "ErrorData": {
+      "description": "Error information for JSON-RPC error responses.\n\nThis structure follows the JSON-RPC 2.0 specification for error reporting,\nproviding a standardized way to communicate errors between clients and servers.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "description": "The error type that occurred (using standard JSON-RPC error codes)",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ErrorCode"
+            }
+          ]
+        },
+        "data": {
+          "description": "Additional information about the error. The value of this member is defined by the\nsender (e.g. detailed error information, nested errors etc.)."
+        },
+        "message": {
+          "description": "A short description of the error. The message SHOULD be limited to a concise single sentence.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    },
+    "GetPromptResult": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PromptMessage"
+          }
+        }
+      },
+      "required": [
+        "messages"
+      ]
+    },
+    "Icon": {
+      "description": "A URL pointing to an icon resource or a base64-encoded data URI.\n\nClients that support rendering icons MUST support at least the following MIME types:\n- image/png - PNG images (safe, universal compatibility)\n- image/jpeg (and image/jpg) - JPEG images (safe, universal compatibility)\n\nClients that support rendering icons SHOULD also support:\n- image/svg+xml - SVG images (scalable but requires security precautions)\n- image/webp - WebP images (modern, efficient format)",
+      "type": "object",
+      "properties": {
+        "mimeType": {
+          "description": "Optional override if the server's MIME type is missing or generic",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sizes": {
+          "description": "Size specification, each string should be in WxH format (e.g., `\\\"48x48\\\"`, `\\\"96x96\\\"`) or `\\\"any\\\"` for scalable formats like SVG",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "src": {
+          "description": "A standard URI pointing to an icon resource",
+          "type": "string"
+        }
+      },
+      "required": [
+        "src"
+      ]
+    },
+    "Implementation": {
+      "type": "object",
+      "properties": {
+        "icons": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Icon"
+          }
+        },
+        "name": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "type": "string"
+        },
+        "websiteUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ]
+    },
+    "InitializeResult": {
+      "description": "The server's response to an initialization request.\n\nContains the server's protocol version, capabilities, and implementation\ninformation, along with optional instructions for the client.",
+      "type": "object",
+      "properties": {
+        "capabilities": {
+          "description": "The capabilities this server provides (tools, resources, prompts, etc.)",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ServerCapabilities"
+            }
+          ]
+        },
+        "instructions": {
+          "description": "Optional human-readable instructions about using this server",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "protocolVersion": {
+          "description": "The MCP protocol version this server supports",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProtocolVersion"
+            }
+          ]
+        },
+        "serverInfo": {
+          "description": "Information about the server implementation",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Implementation"
+            }
+          ]
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "capabilities",
+        "serverInfo"
+      ]
+    },
+    "IntegerSchema": {
+      "description": "Schema definition for integer properties.\n\nCompliant with MCP 2025-06-18 specification for elicitation schemas.\nSupports only the fields allowed by the MCP spec.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "Human-readable description",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "maximum": {
+          "description": "Maximum value (inclusive)",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "minimum": {
+          "description": "Minimum value (inclusive)",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "title": {
+          "description": "Optional title for the schema",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "description": "Type discriminator",
+          "allOf": [
+            {
+              "$ref": "#/definitions/IntegerTypeConst"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "IntegerTypeConst": {
+      "type": "string",
+      "format": "const",
+      "const": "integer"
+    },
+    "JsonRpcError": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "$ref": "#/definitions/ErrorData"
+        },
+        "id": {
+          "$ref": "#/definitions/NumberOrString"
+        },
+        "jsonrpc": {
+          "$ref": "#/definitions/JsonRpcVersion2_0"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "error"
+      ]
+    },
+    "JsonRpcNotification": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "$ref": "#/definitions/JsonRpcVersion2_0"
+        }
+      },
+      "anyOf": [
+        {
+          "$ref": "#/definitions/Notification"
+        },
+        {
+          "$ref": "#/definitions/Notification2"
+        },
+        {
+          "$ref": "#/definitions/Notification3"
+        },
+        {
+          "$ref": "#/definitions/Notification4"
+        },
+        {
+          "$ref": "#/definitions/NotificationNoParam"
+        },
+        {
+          "$ref": "#/definitions/NotificationNoParam2"
+        },
+        {
+          "$ref": "#/definitions/NotificationNoParam3"
+        }
+      ],
+      "required": [
+        "jsonrpc"
+      ]
+    },
+    "JsonRpcRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/NumberOrString"
+        },
+        "jsonrpc": {
+          "$ref": "#/definitions/JsonRpcVersion2_0"
+        }
+      },
+      "anyOf": [
+        {
+          "$ref": "#/definitions/RequestNoParam"
+        },
+        {
+          "$ref": "#/definitions/Request"
+        },
+        {
+          "$ref": "#/definitions/RequestNoParam2"
+        },
+        {
+          "$ref": "#/definitions/Request2"
+        }
+      ],
+      "required": [
+        "jsonrpc",
+        "id"
+      ]
+    },
+    "JsonRpcResponse": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/NumberOrString"
+        },
+        "jsonrpc": {
+          "$ref": "#/definitions/JsonRpcVersion2_0"
+        },
+        "result": {
+          "$ref": "#/definitions/ServerResult"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ]
+    },
+    "JsonRpcVersion2_0": {
+      "type": "string",
+      "format": "const",
+      "const": "2.0"
+    },
+    "ListPromptsResult": {
+      "type": "object",
+      "properties": {
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prompts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Prompt"
+          }
+        }
+      },
+      "required": [
+        "prompts"
+      ]
+    },
+    "ListResourceTemplatesResult": {
+      "type": "object",
+      "properties": {
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resourceTemplates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Annotated4"
+          }
+        }
+      },
+      "required": [
+        "resourceTemplates"
+      ]
+    },
+    "ListResourcesResult": {
+      "type": "object",
+      "properties": {
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Annotated3"
+          }
+        }
+      },
+      "required": [
+        "resources"
+      ]
+    },
+    "ListRootsRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "roots/list"
+    },
+    "ListToolsResult": {
+      "type": "object",
+      "properties": {
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Tool"
+          }
+        }
+      },
+      "required": [
+        "tools"
+      ]
+    },
+    "LoggingLevel": {
+      "description": "Logging levels supported by the MCP protocol",
+      "type": "string",
+      "enum": [
+        "debug",
+        "info",
+        "notice",
+        "warning",
+        "error",
+        "critical",
+        "alert",
+        "emergency"
+      ]
+    },
+    "LoggingMessageNotificationMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "notifications/message"
+    },
+    "LoggingMessageNotificationParam": {
+      "description": "Parameters for a logging message notification",
+      "type": "object",
+      "properties": {
+        "data": {
+          "description": "The actual log data"
+        },
+        "level": {
+          "description": "The severity level of this log message",
+          "allOf": [
+            {
+              "$ref": "#/definitions/LoggingLevel"
+            }
+          ]
+        },
+        "logger": {
+          "description": "Optional logger name that generated this message",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "level",
+        "data"
+      ]
+    },
+    "ModelHint": {
+      "description": "A hint suggesting a preferred model name or family.\n\nModel hints are advisory suggestions that help clients choose appropriate\nmodels. They can be specific model names or general families like \"claude\" or \"gpt\".",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "The suggested model name or family identifier",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "ModelPreferences": {
+      "description": "Preferences for model selection and behavior in sampling requests.\n\nThis allows servers to express their preferences for which model to use\nand how to balance different priorities when the client has multiple\nmodel options available.",
+      "type": "object",
+      "properties": {
+        "costPriority": {
+          "description": "Priority for cost optimization (0.0 to 1.0, higher = prefer cheaper models)",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        },
+        "hints": {
+          "description": "Specific model names or families to prefer (e.g., \"claude\", \"gpt\")",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/ModelHint"
+          }
+        },
+        "intelligencePriority": {
+          "description": "Priority for intelligence/capability (0.0 to 1.0, higher = prefer more capable models)",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        },
+        "speedPriority": {
+          "description": "Priority for speed/latency (0.0 to 1.0, higher = prefer faster models)",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        }
+      }
+    },
+    "Notification": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/CancelledNotificationMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/CancelledNotificationParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Notification2": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ProgressNotificationMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/ProgressNotificationParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Notification3": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/LoggingMessageNotificationMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/LoggingMessageNotificationParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Notification4": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ResourceUpdatedNotificationMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/ResourceUpdatedNotificationParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "NotificationNoParam": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ResourceListChangedNotificationMethod"
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    "NotificationNoParam2": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ToolListChangedNotificationMethod"
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    "NotificationNoParam3": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/PromptListChangedNotificationMethod"
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    "NumberOrString": {
+      "oneOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "NumberSchema": {
+      "description": "Schema definition for number properties (floating-point).\n\nCompliant with MCP 2025-06-18 specification for elicitation schemas.\nSupports only the fields allowed by the MCP spec.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "Human-readable description",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "maximum": {
+          "description": "Maximum value (inclusive)",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "minimum": {
+          "description": "Minimum value (inclusive)",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "title": {
+          "description": "Optional title for the schema",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "description": "Type discriminator",
+          "allOf": [
+            {
+              "$ref": "#/definitions/NumberTypeConst"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "NumberTypeConst": {
+      "type": "string",
+      "format": "const",
+      "const": "number"
+    },
+    "ObjectTypeConst": {
+      "type": "string",
+      "format": "const",
+      "const": "object"
+    },
+    "PingRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "ping"
+    },
+    "PrimitiveSchema": {
+      "description": "Primitive schema definition for elicitation properties.\n\nAccording to MCP 2025-06-18 specification, elicitation schemas must have\nproperties of primitive types only (string, number, integer, boolean, enum).",
+      "anyOf": [
+        {
+          "description": "String property (with optional enum constraint)",
+          "allOf": [
+            {
+              "$ref": "#/definitions/StringSchema"
+            }
+          ]
+        },
+        {
+          "description": "Number property (with optional enum constraint)",
+          "allOf": [
+            {
+              "$ref": "#/definitions/NumberSchema"
+            }
+          ]
+        },
+        {
+          "description": "Integer property (with optional enum constraint)",
+          "allOf": [
+            {
+              "$ref": "#/definitions/IntegerSchema"
+            }
+          ]
+        },
+        {
+          "description": "Boolean property",
+          "allOf": [
+            {
+              "$ref": "#/definitions/BooleanSchema"
+            }
+          ]
+        },
+        {
+          "description": "Enum property (explicit enum schema)",
+          "allOf": [
+            {
+              "$ref": "#/definitions/EnumSchema"
+            }
+          ]
+        }
+      ]
+    },
+    "ProgressNotificationMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "notifications/progress"
+    },
+    "ProgressNotificationParam": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "description": "An optional message describing the current progress.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "progress": {
+          "description": "The progress thus far. This should increase every time progress is made, even if the total is unknown.",
+          "type": "number",
+          "format": "double"
+        },
+        "progressToken": {
+          "$ref": "#/definitions/ProgressToken"
+        },
+        "total": {
+          "description": "Total number of items to process (or total progress required), if known",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "required": [
+        "progressToken",
+        "progress"
+      ]
+    },
+    "ProgressToken": {
+      "description": "A token used to track the progress of long-running operations.\n\nProgress tokens allow clients and servers to associate progress notifications\nwith specific requests, enabling real-time updates on operation status.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/NumberOrString"
+        }
+      ]
+    },
+    "Prompt": {
+      "description": "A prompt that can be used to generate text from a model",
+      "type": "object",
+      "properties": {
+        "arguments": {
+          "description": "Optional arguments that can be passed to customize the prompt",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/PromptArgument"
+          }
+        },
+        "description": {
+          "description": "Optional description of what the prompt does",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icons": {
+          "description": "Optional list of icons for the prompt",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Icon"
+          }
+        },
+        "name": {
+          "description": "The name of the prompt",
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "PromptArgument": {
+      "description": "Represents a prompt argument that can be passed to customize the prompt",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "A description of what the argument is used for",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "The name of the argument",
+          "type": "string"
+        },
+        "required": {
+          "description": "Whether this argument is required",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "A human-readable title for the argument",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "PromptListChangedNotificationMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "notifications/prompts/list_changed"
+    },
+    "PromptMessage": {
+      "description": "A message in a prompt conversation",
+      "type": "object",
+      "properties": {
+        "content": {
+          "description": "The content of the message",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PromptMessageContent"
+            }
+          ]
+        },
+        "role": {
+          "description": "The role of the message sender",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PromptMessageRole"
+            }
+          ]
+        }
+      },
+      "required": [
+        "role",
+        "content"
+      ]
+    },
+    "PromptMessageContent": {
+      "description": "Content types that can be included in prompt messages",
+      "oneOf": [
+        {
+          "description": "Plain text content",
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "description": "Image content with base64-encoded data",
+          "type": "object",
+          "properties": {
+            "_meta": {
+              "description": "Optional protocol-level metadata for this content block",
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": true
+            },
+            "annotations": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Annotations"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "data": {
+              "description": "The base64-encoded image",
+              "type": "string"
+            },
+            "mimeType": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "image"
+            }
+          },
+          "required": [
+            "type",
+            "data",
+            "mimeType"
+          ]
+        },
+        {
+          "description": "Embedded server-side resource",
+          "type": "object",
+          "properties": {
+            "resource": {
+              "$ref": "#/definitions/Annotated2"
+            },
+            "type": {
+              "type": "string",
+              "const": "resource"
+            }
+          },
+          "required": [
+            "type",
+            "resource"
+          ]
+        },
+        {
+          "description": "A link to a resource that can be fetched separately",
+          "type": "object",
+          "properties": {
+            "annotations": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Annotations"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "description": {
+              "description": "Optional description of the resource",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "icons": {
+              "description": "Optional list of icons for the resource",
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/Icon"
+              }
+            },
+            "mimeType": {
+              "description": "MIME type of the resource content (\"text\" or \"blob\")",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "description": "Name of the resource",
+              "type": "string"
+            },
+            "size": {
+              "description": "The size of the raw resource content, in bytes (i.e., before base64 encoding or any tokenization), if known.\n\nThis can be used by Hosts to display file sizes and estimate context window us",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0
+            },
+            "title": {
+              "description": "Human-readable title of the resource",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "resource_link"
+            },
+            "uri": {
+              "description": "URI representing the resource location (e.g., \"file:///path/to/file\" or \"str:///content\")",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "uri",
+            "name"
+          ]
+        }
+      ]
+    },
+    "PromptMessageRole": {
+      "description": "Represents the role of a message sender in a prompt conversation",
+      "type": "string",
+      "enum": [
+        "user",
+        "assistant"
+      ]
+    },
+    "PromptsCapability": {
+      "type": "object",
+      "properties": {
+        "listChanged": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "ProtocolVersion": {
+      "description": "Represents the MCP protocol version used for communication.\n\nThis ensures compatibility between clients and servers by specifying\nwhich version of the Model Context Protocol is being used.",
+      "type": "string"
+    },
+    "RawAudioContent": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "mimeType"
+      ]
+    },
+    "RawEmbeddedResource": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional protocol-level metadata for this content block",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "resource": {
+          "$ref": "#/definitions/ResourceContents"
+        }
+      },
+      "required": [
+        "resource"
+      ]
+    },
+    "RawImageContent": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional protocol-level metadata for this content block",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "data": {
+          "description": "The base64-encoded image",
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "mimeType"
+      ]
+    },
+    "RawResource": {
+      "description": "Represents a resource in the extension with metadata",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "Optional description of the resource",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icons": {
+          "description": "Optional list of icons for the resource",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Icon"
+          }
+        },
+        "mimeType": {
+          "description": "MIME type of the resource content (\"text\" or \"blob\")",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Name of the resource",
+          "type": "string"
+        },
+        "size": {
+          "description": "The size of the raw resource content, in bytes (i.e., before base64 encoding or any tokenization), if known.\n\nThis can be used by Hosts to display file sizes and estimate context window us",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "title": {
+          "description": "Human-readable title of the resource",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uri": {
+          "description": "URI representing the resource location (e.g., \"file:///path/to/file\" or \"str:///content\")",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "name"
+      ]
+    },
+    "RawTextContent": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional protocol-level metadata for this content block",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ]
+    },
+    "ReadResourceResult": {
+      "description": "Result containing the contents of a read resource",
+      "type": "object",
+      "properties": {
+        "contents": {
+          "description": "The actual content of the resource",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ResourceContents"
+          }
+        }
+      },
+      "required": [
+        "contents"
+      ]
+    },
+    "Request": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/CreateMessageRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/CreateMessageRequestParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Request2": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ElicitationCreateRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/CreateElicitationRequestParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "RequestNoParam": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/PingRequestMethod"
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    "RequestNoParam2": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ListRootsRequestMethod"
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    "ResourceContents": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "_meta": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": true
+            },
+            "mimeType": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "text": {
+              "type": "string"
+            },
+            "uri": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "uri",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "_meta": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": true
+            },
+            "blob": {
+              "type": "string"
+            },
+            "mimeType": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "uri": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "uri",
+            "blob"
+          ]
+        }
+      ]
+    },
+    "ResourceListChangedNotificationMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "notifications/resources/list_changed"
+    },
+    "ResourceUpdatedNotificationMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "notifications/resources/updated"
+    },
+    "ResourceUpdatedNotificationParam": {
+      "description": "Parameters for a resource update notification",
+      "type": "object",
+      "properties": {
+        "uri": {
+          "description": "The URI of the resource that was updated",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri"
+      ]
+    },
+    "ResourcesCapability": {
+      "type": "object",
+      "properties": {
+        "listChanged": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "subscribe": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "Role": {
+      "description": "Represents the role of a participant in a conversation or message exchange.\n\nUsed in sampling and chat contexts to distinguish between different\ntypes of message senders in the conversation flow.",
+      "oneOf": [
+        {
+          "description": "A human user or client making a request",
+          "type": "string",
+          "const": "user"
+        },
+        {
+          "description": "An AI assistant or server providing a response",
+          "type": "string",
+          "const": "assistant"
+        }
+      ]
+    },
+    "SamplingMessage": {
+      "description": "A message in a sampling conversation, containing a role and content.\n\nThis represents a single message in a conversation flow, used primarily\nin LLM sampling requests where the conversation history is important\nfor generating appropriate responses.",
+      "type": "object",
+      "properties": {
+        "content": {
+          "description": "The actual content of the message (text, image, etc.)",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Annotated"
+            }
+          ]
+        },
+        "role": {
+          "description": "The role of the message sender (User or Assistant)",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Role"
+            }
+          ]
+        }
+      },
+      "required": [
+        "role",
+        "content"
+      ]
+    },
+    "ServerCapabilities": {
+      "title": "Builder",
+      "description": "```rust\n# use rmcp::model::ServerCapabilities;\nlet cap = ServerCapabilities::builder()\n    .enable_logging()\n    .enable_experimental()\n    .enable_prompts()\n    .enable_resources()\n    .enable_tools()\n    .enable_tool_list_changed()\n    .build();\n```",
+      "type": "object",
+      "properties": {
+        "completions": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "experimental": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "logging": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "prompts": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PromptsCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resources": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourcesCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tools": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolsCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "ServerResult": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/InitializeResult"
+        },
+        {
+          "$ref": "#/definitions/CompleteResult"
+        },
+        {
+          "$ref": "#/definitions/GetPromptResult"
+        },
+        {
+          "$ref": "#/definitions/ListPromptsResult"
+        },
+        {
+          "$ref": "#/definitions/ListResourcesResult"
+        },
+        {
+          "$ref": "#/definitions/ListResourceTemplatesResult"
+        },
+        {
+          "$ref": "#/definitions/ReadResourceResult"
+        },
+        {
+          "$ref": "#/definitions/CallToolResult"
+        },
+        {
+          "$ref": "#/definitions/ListToolsResult"
+        },
+        {
+          "$ref": "#/definitions/CreateElicitationResult"
+        },
+        {
+          "$ref": "#/definitions/EmptyObject"
+        }
+      ]
+    },
+    "StringFormat": {
+      "description": "String format types allowed by the MCP specification.",
+      "oneOf": [
+        {
+          "description": "Email address format",
+          "type": "string",
+          "const": "email"
+        },
+        {
+          "description": "URI format",
+          "type": "string",
+          "const": "uri"
+        },
+        {
+          "description": "Date format (YYYY-MM-DD)",
+          "type": "string",
+          "const": "date"
+        },
+        {
+          "description": "Date-time format (ISO 8601)",
+          "type": "string",
+          "const": "date-time"
+        }
+      ]
+    },
+    "StringSchema": {
+      "description": "Schema definition for string properties.\n\nCompliant with MCP 2025-06-18 specification for elicitation schemas.\nSupports only the fields allowed by the MCP spec:\n- format limited to: \"email\", \"uri\", \"date\", \"date-time\"",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "Human-readable description",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "format": {
+          "description": "String format - limited to: \"email\", \"uri\", \"date\", \"date-time\"",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/StringFormat"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "maxLength": {
+          "description": "Maximum string length",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "minLength": {
+          "description": "Minimum string length",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "title": {
+          "description": "Optional title for the schema",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "description": "Type discriminator",
+          "allOf": [
+            {
+              "$ref": "#/definitions/StringTypeConst"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "StringTypeConst": {
+      "type": "string",
+      "format": "const",
+      "const": "string"
+    },
+    "Tool": {
+      "description": "A tool that can be used by a model.",
+      "type": "object",
+      "properties": {
+        "annotations": {
+          "description": "Optional additional tool information.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolAnnotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "description": "A description of what the tool does",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icons": {
+          "description": "Optional list of icons for the tool",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Icon"
+          }
+        },
+        "inputSchema": {
+          "description": "A JSON Schema object defining the expected parameters for the tool",
+          "type": "object",
+          "additionalProperties": true
+        },
+        "name": {
+          "description": "The name of the tool",
+          "type": "string"
+        },
+        "outputSchema": {
+          "description": "An optional JSON Schema object defining the structure of the tool's output",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "title": {
+          "description": "A human-readable title for the tool",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "inputSchema"
+      ]
+    },
+    "ToolAnnotations": {
+      "description": "Additional properties describing a Tool to clients.\n\nNOTE: all properties in ToolAnnotations are **hints**.\nThey are not guaranteed to provide a faithful description of\ntool behavior (including descriptive properties like `title`).\n\nClients should never make tool use decisions based on ToolAnnotations\nreceived from untrusted servers.",
+      "type": "object",
+      "properties": {
+        "destructiveHint": {
+          "description": "If true, the tool may perform destructive updates to its environment.\nIf false, the tool performs only additive updates.\n\n(This property is meaningful only when `readOnlyHint == false`)\n\nDefault: true\nA human-readable description of the tool's purpose.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "idempotentHint": {
+          "description": "If true, calling the tool repeatedly with the same arguments\nwill have no additional effect on the its environment.\n\n(This property is meaningful only when `readOnlyHint == false`)\n\nDefault: false.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "openWorldHint": {
+          "description": "If true, this tool may interact with an \"open world\" of external\nentities. If false, the tool's domain of interaction is closed.\nFor example, the world of a web search tool is open, whereas that\nof a memory tool is not.\n\nDefault: true",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "readOnlyHint": {
+          "description": "If true, the tool does not modify its environment.\n\nDefault: false",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "A human-readable title for the tool.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "ToolListChangedNotificationMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "notifications/tools/list_changed"
+    },
+    "ToolsCapability": {
+      "type": "object",
+      "properties": {
+        "listChanged": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

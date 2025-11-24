@@ -1,0 +1,50 @@
+error[E0119]: conflicting implementations of trait `Unpin` for type `Foo<_, _>`
+  --> tests/ui/not_unpin/conflict-unpin.rs:5:1
+   |
+5  | / pin_project! {
+6  | |     #[project(!Unpin)]
+7  | |     struct Foo<T, U> {
+8  | |         #[pin]
+...  |
+12 | | }
+   | |_^ conflicting implementation for `Foo<_, _>`
+13 |
+14 |   impl<T, U> Unpin for Foo<T, U> where T: Unpin {}
+   |   --------------------------------------------- first implementation here
+   |
+   = note: upstream crates may add a new impl of trait `std::marker::Unpin` for type `(std::marker::PhantomData<&()>, std::marker::PhantomPinned)` in future versions
+   = note: this error originates in the macro `$crate::__pin_project_make_unpin_impl` which comes from the expansion of the macro `pin_project` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0119]: conflicting implementations of trait `Unpin` for type `Bar<_, _>`
+  --> tests/ui/not_unpin/conflict-unpin.rs:16:1
+   |
+16 | / pin_project! {
+17 | |     #[project(!Unpin)]
+18 | |     struct Bar<T, U> {
+19 | |         #[pin]
+...  |
+23 | | }
+   | |_^ conflicting implementation for `Bar<_, _>`
+24 |
+25 |   impl<T, U> Unpin for Bar<T, U> {}
+   |   ------------------------------ first implementation here
+   |
+   = note: upstream crates may add a new impl of trait `std::marker::Unpin` for type `(std::marker::PhantomData<&()>, std::marker::PhantomPinned)` in future versions
+   = note: this error originates in the macro `$crate::__pin_project_make_unpin_impl` which comes from the expansion of the macro `pin_project` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0119]: conflicting implementations of trait `Unpin` for type `Baz<_, _>`
+  --> tests/ui/not_unpin/conflict-unpin.rs:27:1
+   |
+27 | / pin_project! {
+28 | |     #[project(!Unpin)]
+29 | |     struct Baz<T, U> {
+30 | |         #[pin]
+...  |
+34 | | }
+   | |_^ conflicting implementation for `Baz<_, _>`
+35 |
+36 |   impl<T: Unpin, U: Unpin> Unpin for Baz<T, U> {}
+   |   -------------------------------------------- first implementation here
+   |
+   = note: upstream crates may add a new impl of trait `std::marker::Unpin` for type `(std::marker::PhantomData<&()>, std::marker::PhantomPinned)` in future versions
+   = note: this error originates in the macro `$crate::__pin_project_make_unpin_impl` which comes from the expansion of the macro `pin_project` (in Nightly builds, run with -Z macro-backtrace for more info)

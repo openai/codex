@@ -1,0 +1,62 @@
+# We make separate GOAL variables for each algorithm, to make it easy to
+# switch each to the Legacy provider when needed.
+
+$COMMON_GOAL=../../libcommon.a
+
+$SHA1_GOAL=../../libdefault.a ../../libfips.a
+$SHA2_GOAL=../../libdefault.a ../../libfips.a
+$SHA3_GOAL=../../libdefault.a ../../libfips.a
+$BLAKE2_GOAL=../../libdefault.a
+$SM3_GOAL=../../libdefault.a
+$MD5_GOAL=../../libdefault.a
+$NULL_GOAL=../../libdefault.a
+
+$MD2_GOAL=../../liblegacy.a
+$MD4_GOAL=../../liblegacy.a
+$MDC2_GOAL=../../liblegacy.a
+$WHIRLPOOL_GOAL=../../liblegacy.a
+IF[{- !$disabled{module} -}]
+  $RIPEMD_GOAL=../../libdefault.a ../../liblegacy.a
+ELSE
+  $RIPEMD_GOAL=../../libdefault.a
+ENDIF
+
+# This source is common for all digests in all our providers.
+SOURCE[$COMMON_GOAL]=digestcommon.c
+
+SOURCE[$SHA2_GOAL]=sha2_prov.c
+SOURCE[$SHA3_GOAL]=sha3_prov.c
+
+SOURCE[$NULL_GOAL]=null_prov.c
+
+IF[{- !$disabled{blake2} -}]
+  SOURCE[$BLAKE2_GOAL]=blake2_prov.c blake2b_prov.c blake2s_prov.c
+ENDIF
+
+IF[{- !$disabled{sm3} -}]
+  SOURCE[$SM3_GOAL]=sm3_prov.c
+ENDIF
+
+IF[{- !$disabled{md5} -}]
+  SOURCE[$MD5_GOAL]=md5_prov.c md5_sha1_prov.c
+ENDIF
+
+IF[{- !$disabled{md2} -}]
+  SOURCE[$MD2_GOAL]=md2_prov.c
+ENDIF
+
+IF[{- !$disabled{md4} -}]
+  SOURCE[$MD4_GOAL]=md4_prov.c
+ENDIF
+
+IF[{- !$disabled{mdc2} -}]
+  SOURCE[$MDC2_GOAL]=mdc2_prov.c
+ENDIF
+
+IF[{- !$disabled{whirlpool} -}]
+  SOURCE[$WHIRLPOOL_GOAL]=wp_prov.c
+ENDIF
+
+IF[{- !$disabled{rmd160} -}]
+  SOURCE[$RIPEMD_GOAL]=ripemd_prov.c
+ENDIF

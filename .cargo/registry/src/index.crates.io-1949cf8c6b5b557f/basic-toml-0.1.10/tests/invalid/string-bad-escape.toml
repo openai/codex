@@ -1,0 +1,1 @@
+invalid-escape = "This string has a bad \a escape character."

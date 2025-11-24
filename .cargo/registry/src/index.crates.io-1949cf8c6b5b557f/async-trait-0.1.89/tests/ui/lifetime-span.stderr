@@ -1,0 +1,33 @@
+error[E0726]: implicit elided lifetime not allowed here
+  --> tests/ui/lifetime-span.rs:12:6
+   |
+12 | impl Trait for A {
+   |      ^^^^^ expected lifetime parameter
+   |
+help: indicate the anonymous lifetime
+   |
+12 | impl Trait<'_> for A {
+   |           ++++
+
+error[E0107]: trait takes 0 lifetime arguments but 1 lifetime argument was supplied
+  --> tests/ui/lifetime-span.rs:32:10
+   |
+32 | impl<'r> Trait2<'r> for B {
+   |          ^^^^^^---- help: remove the unnecessary generics
+   |          |
+   |          expected 0 lifetime arguments
+   |
+note: trait defined here, with 0 lifetime parameters
+  --> tests/ui/lifetime-span.rs:22:11
+   |
+22 | pub trait Trait2 {
+   |           ^^^^^^
+
+error[E0195]: lifetime parameters or bounds on method `method` do not match the trait declaration
+  --> tests/ui/lifetime-span.rs:33:14
+   |
+23 |     async fn method<'r>(&'r self);
+   |                    ---- lifetimes in impl do not match this method in trait
+...
+33 |     async fn method(&'r self) {}
+   |              ^^^^^^^^^^^^^^^^ lifetimes do not match method in trait

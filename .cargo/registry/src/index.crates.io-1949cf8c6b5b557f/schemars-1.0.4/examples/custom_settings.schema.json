@@ -1,0 +1,64 @@
+{
+  "title": "MyStruct",
+  "type": "object",
+  "properties": {
+    "my_bool": {
+      "type": "boolean"
+    },
+    "my_int": {
+      "type": "integer",
+      "format": "int32"
+    },
+    "my_nullable_enum": {
+      "anyOf": [
+        {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "StringNewType": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "StringNewType"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "StructVariant": {
+                  "type": "object",
+                  "properties": {
+                    "floats": {
+                      "type": "array",
+                      "items": {
+                        "type": "number",
+                        "format": "float"
+                      }
+                    }
+                  },
+                  "required": [
+                    "floats"
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "StructVariant"
+              ]
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "my_int",
+    "my_bool"
+  ]
+}

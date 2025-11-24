@@ -1,0 +1,24 @@
+-- Copyright 2025 The OpenSSL Project Authors. All Rights Reserved.
+--
+-- Licensed under the Apache License 2.0 (the "License").  You may not use
+-- this file except in compliance with the License.  You can obtain a copy
+-- in the file LICENSE in the source distribution or at
+-- https://www.openssl.org/source/license.html
+
+-- -------------------------------------------------------------------
+-- Taken from https://csrc.nist.gov/projects/computer-security-objects-register/algorithm-registration
+
+sigAlgs OBJECT IDENTIFIER ::= { 2 16 840 1 101 3 4 3 }
+
+id-slh-dsa-sha2-128s OBJECT IDENTIFIER ::= { sigAlgs 20 }
+id-slh-dsa-sha2-128f OBJECT IDENTIFIER ::= { sigAlgs 21 }
+id-slh-dsa-sha2-192s OBJECT IDENTIFIER ::= { sigAlgs 22 }
+id-slh-dsa-sha2-192f OBJECT IDENTIFIER ::= { sigAlgs 23 }
+id-slh-dsa-sha2-256s OBJECT IDENTIFIER ::= { sigAlgs 24 }
+id-slh-dsa-sha2-256f OBJECT IDENTIFIER ::= { sigAlgs 25 }
+id-slh-dsa-shake-128s OBJECT IDENTIFIER ::= { sigAlgs 26 }
+id-slh-dsa-shake-128f OBJECT IDENTIFIER ::= { sigAlgs 27 }
+id-slh-dsa-shake-192s OBJECT IDENTIFIER ::= { sigAlgs 28 }
+id-slh-dsa-shake-192f OBJECT IDENTIFIER ::= { sigAlgs 29 }
+id-slh-dsa-shake-256s OBJECT IDENTIFIER ::= { sigAlgs 30 }
+id-slh-dsa-shake-256f OBJECT IDENTIFIER ::= { sigAlgs 31 }

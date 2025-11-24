@@ -1,0 +1,67 @@
+[package]
+name = "event-listener"
+# When publishing a new version:
+# - Update CHANGELOG.md
+# - Create "v5.x.y" git tag
+version = "5.4.0"
+authors = ["Stjepan Glavina <stjepang@gmail.com>", "John Nunley <dev@notgull.net>"]
+edition = "2021"
+rust-version = "1.60"
+description = "Notify async tasks or threads"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/smol-rs/event-listener"
+keywords = ["condvar", "eventcount", "wake", "blocking", "park"]
+categories = ["asynchronous", "concurrency"]
+exclude = ["/.*"]
+
+[features]
+default = ["std"]
+std = ["concurrent-queue/std", "parking"]
+portable-atomic = [
+  "portable-atomic-util",
+  "portable_atomic_crate",
+  "concurrent-queue/portable-atomic",
+]
+loom = ["concurrent-queue/loom", "parking?/loom", "dep:loom"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
+
+[dependencies]
+concurrent-queue = { version = "2.4.0", default-features = false }
+critical-section = { version = "1.2.0", default-features = false, optional = true }
+pin-project-lite = "0.2.12"
+portable-atomic-util = { version = "0.2.0", default-features = false, optional = true, features = ["alloc"] }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+parking = { version = "2.0.0", optional = true }
+
+[target.'cfg(loom)'.dependencies]
+loom = { version = "0.7", optional = true }
+
+[dependencies.portable_atomic_crate]
+package = "portable-atomic"
+version = "1.2.0"
+default-features = false
+optional = true
+
+[dev-dependencies]
+critical-section = { version = "1.2.0", features = ["std"] }
+futures-lite = "2.0.0"
+try-lock = "0.2.5"
+waker-fn = "1"
+
+[dev-dependencies.criterion]
+version = "0.5"
+default-features = false
+features = ["cargo_bench_support"]
+
+[target.'cfg(target_family = "wasm")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[[bench]]
+name = "bench"
+harness = false
+
+[lib]
+bench = false

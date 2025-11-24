@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="alpha_modifier_v1">
+  <copyright>
+    Copyright © 2024 Xaver Hugl
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice (including the next
+    paragraph) shall be included in all copies or substantial portions of the
+    Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+  </copyright>
+
+  <interface name="wp_alpha_modifier_v1" version="1">
+    <description summary="surface alpha modifier manager">
+      This interface allows a client to set a factor for the alpha values on a
+      surface, which can be used to offload such operations to the compositor,
+      which can in turn for example offload them to KMS.
+
+      Warning! The protocol described in this file is currently in the testing
+      phase. Backward compatible changes may be added together with the
+      corresponding interface version bump. Backward incompatible changes can
+      only be done by creating a new major version of the extension.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the alpha modifier manager object">
+        Destroy the alpha modifier manager. This doesn't destroy objects
+        created with the manager.
+      </description>
+    </request>
+
+    <enum name="error">
+      <entry name="already_constructed" value="0"
+             summary="wl_surface already has a alpha modifier object"/>
+    </enum>
+
+    <request name="get_surface">
+      <description summary="create a new alpha modifier surface object">
+        Create a new alpha modifier surface object associated with the
+        given wl_surface. If there is already such an object associated with
+        the wl_surface, the already_constructed error will be raised.
+      </description>
+      <arg name="id" type="new_id" interface="wp_alpha_modifier_surface_v1"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+  </interface>
+
+  <interface name="wp_alpha_modifier_surface_v1" version="1">
+    <description summary="alpha modifier object for a surface">
+      This interface allows the client to set a factor for the alpha values on
+      a surface, which can be used to offload such operations to the compositor.
+      The default factor is UINT32_MAX.
+
+      This object has to be destroyed before the associated wl_surface. Once the
+      wl_surface is destroyed, all request on this object will raise the
+      no_surface error.
+    </description>
+
+    <enum name="error">
+      <entry name="no_surface" value="0" summary="wl_surface was destroyed"/>
+    </enum>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the alpha modifier object">
+        This destroys the object, and is equivalent to set_multiplier with
+        a value of UINT32_MAX, with the same double-buffered semantics as
+        set_multiplier.
+      </description>
+    </request>
+
+    <request name="set_multiplier">
+      <description summary="specify the alpha multiplier">
+        Sets the alpha multiplier for the surface. The alpha multiplier is
+        double-buffered state, see wl_surface.commit for details.
+
+        This factor is applied in the compositor's blending space, as an
+        additional step after the processing of per-pixel alpha values for the
+        wl_surface. The exact meaning of the factor is thus undefined, unless
+        the blending space is specified in a different extension.
+
+        This multiplier is applied even if the buffer attached to the
+        wl_surface doesn't have an alpha channel; in that case an alpha value
+        of one is used instead.
+
+        Zero means completely transparent, UINT32_MAX means completely opaque.
+      </description>
+      <arg name="factor" type="uint"/>
+    </request>
+  </interface>
+</protocol>

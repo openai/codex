@@ -1,0 +1,17 @@
+error[E0623]: lifetime mismatch
+  --> tests/ui-msrv/ptr-is-invariant-over-v.rs:10:14
+   |
+7  |     big: Ptr<'small, &'big u32, (Exclusive, Aligned, Valid)>,
+   |          --------------------------------------------------- these two types are declared with different lifetimes...
+...
+10 |     _small = big;
+   |              ^^^ ...but data from `big` flows into `big` here
+
+error[E0623]: lifetime mismatch
+  --> tests/ui-msrv/ptr-is-invariant-over-v.rs:17:14
+   |
+14 |     big: Ptr<'small, &'big u32, (Shared, Aligned, Valid)>,
+   |          ------------------------------------------------ these two types are declared with different lifetimes...
+...
+17 |     _small = big;
+   |              ^^^ ...but data from `big` flows into `big` here

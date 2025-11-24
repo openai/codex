@@ -1,0 +1,7 @@
+error: associated function in `impl` without body
+  --> tests/ui/missing-body.rs:12:5
+   |
+12 |     async fn f(&self);
+   |     ^^^^^^^^^^^^^^^^^-
+   |                      |
+   |                      help: provide a definition for the function: `{ <body> }`

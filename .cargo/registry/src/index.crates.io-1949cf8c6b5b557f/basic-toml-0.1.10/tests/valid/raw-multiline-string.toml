@@ -1,0 +1,9 @@
+oneline = '''This string has a ' quote character.'''
+firstnl = '''
+This string has a ' quote character.'''
+multiline = '''
+This string
+has ' a quote character
+and more than
+one newline
+in it.'''

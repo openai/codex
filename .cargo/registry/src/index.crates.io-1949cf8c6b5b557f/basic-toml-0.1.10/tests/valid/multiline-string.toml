@@ -1,0 +1,34 @@
+multiline_empty_one = """"""
+multiline_empty_two = """
+"""
+multiline_empty_three = """\
+    """
+multiline_empty_four = """\
+   \
+   \
+   """
+multiline_empty_five = """\
+   \ 
+   \	
+   \ 	
+   """
+
+equivalent_one = "The quick brown fox jumps over the lazy dog."
+equivalent_two = """
+The quick brown \
+
+
+  fox jumps over \
+    the lazy dog."""
+
+equivalent_three = """\
+       The quick brown \
+       fox jumps over \
+       the lazy dog.\
+       """
+
+equivalent_four = """\
+       The quick brown \ 
+       fox jumps over \				
+       the lazy dog.\	
+       """

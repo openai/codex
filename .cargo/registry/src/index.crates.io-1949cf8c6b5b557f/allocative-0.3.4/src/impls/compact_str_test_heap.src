@@ -1,0 +1,8 @@
+# @generated
+# To regenerate, run:
+# ```
+# ALLOCATIVE_REGENERATE_TESTS=1 cargo test -p allocative
+# ```
+compact_str::CompactString 16
+compact_str::CompactString;ptr 8
+compact_str::CompactString;ptr;str 300

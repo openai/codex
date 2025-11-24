@@ -1,0 +1,24 @@
+<AutoVisualizer xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
+  <Type Name="tinyvec::arrayvec::ArrayVec&lt;array$&lt;*,*&gt;&gt;">
+    <DisplayString>{{ len={len} }}</DisplayString>
+    <Expand>
+      <Item Name="[len]">len</Item>
+      <Item Name="[capacity]">$T2</Item>
+      <ArrayItems>
+        <Size>len</Size>
+        <ValuePointer>($T1*)data</ValuePointer>
+      </ArrayItems>
+    </Expand>
+  </Type>
+
+  <Type Name="tinyvec::slicevec::SliceVec&lt;*&gt;">
+    <DisplayString>{{ len={len} }}</DisplayString>
+    <Expand>
+      <Item Name="[len]">len</Item>
+      <ArrayItems>
+        <Size>len</Size>
+        <ValuePointer>data.data_ptr</ValuePointer>
+      </ArrayItems>
+    </Expand>
+  </Type>
+</AutoVisualizer>

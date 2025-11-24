@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Either_int32_or_Either_boolean_or_null",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "Left": {
+          "type": "integer",
+          "format": "int32"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "Left"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "Right": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "Left": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Left"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "Right": {
+                  "type": "null"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Right"
+              ]
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "Right"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,109 @@
+# This tests that we can switch the line terminator to the NUL byte.
+[[test]]
+name = "nul"
+regex = '(?m)^[a-z]+$'
+haystack = '\x00abc\x00'
+matches = [[1, 4]]
+unescape = true
+line-terminator = '\x00'
+
+# This tests that '.' will not match the configured line terminator, but will
+# match \n.
+[[test]]
+name = "dot-changes-with-line-terminator"
+regex = '.'
+haystack = '\x00\n'
+matches = [[1, 2]]
+unescape = true
+line-terminator = '\x00'
+
+# This tests that when we switch the line terminator, \n is no longer
+# recognized as the terminator.
+[[test]]
+name = "not-line-feed"
+regex = '(?m)^[a-z]+$'
+haystack = '\nabc\n'
+matches = []
+unescape = true
+line-terminator = '\x00'
+
+# This tests that we can set the line terminator to a non-ASCII byte and have
+# it behave as expected.
+[[test]]
+name = "non-ascii"
+regex = '(?m)^[a-z]+$'
+haystack = '\xFFabc\xFF'
+matches = [[1, 4]]
+unescape = true
+line-terminator = '\xFF'
+utf8 = false
+
+# This tests a tricky case where the line terminator is set to \r. This ensures
+# that the StartLF look-behind assertion is tracked when computing the start
+# state.
+[[test]]
+name = "carriage"
+regex = '(?m)^[a-z]+'
+haystack = 'ABC\rabc'
+matches = [[4, 7]]
+bounds = [4, 7]
+unescape = true
+line-terminator = '\r'
+
+# This tests that we can set the line terminator to a byte corresponding to a
+# word character, and things work as expected.
+[[test]]
+name = "word-byte"
+regex = '(?m)^[a-z]+$'
+haystack = 'ZabcZ'
+matches = [[1, 4]]
+unescape = true
+line-terminator = 'Z'
+
+# This tests that we can set the line terminator to a byte corresponding to a
+# non-word character, and things work as expected.
+[[test]]
+name = "non-word-byte"
+regex = '(?m)^[a-z]+$'
+haystack = '%abc%'
+matches = [[1, 4]]
+unescape = true
+line-terminator = '%'
+
+# This combines "set line terminator to a word byte" with a word boundary
+# assertion, which should result in no match even though ^/$ matches.
+[[test]]
+name = "word-boundary"
+regex = '(?m)^\b[a-z]+\b$'
+haystack = 'ZabcZ'
+matches = []
+unescape = true
+line-terminator = 'Z'
+
+# Like 'word-boundary', but does an anchored search at the point where ^
+# matches, but where \b should not.
+[[test]]
+name = "word-boundary-at"
+regex = '(?m)^\b[a-z]+\b$'
+haystack = 'ZabcZ'
+matches = []
+bounds = [1, 4]
+anchored = true
+unescape = true
+line-terminator = 'Z'
+
+# Like 'word-boundary-at', but flips the word boundary to a negation. This
+# in particular tests a tricky case in DFA engines, where they must consider
+# explicitly that a starting configuration from a custom line terminator may
+# also required setting the "is from word byte" flag on a state. Otherwise,
+# it's treated as "not from a word byte," which would result in \B not matching
+# here when it should.
+[[test]]
+name = "not-word-boundary-at"
+regex = '(?m)^\B[a-z]+\B$'
+haystack = 'ZabcZ'
+matches = [[1, 4]]
+bounds = [1, 4]
+anchored = true
+unescape = true
+line-terminator = 'Z'

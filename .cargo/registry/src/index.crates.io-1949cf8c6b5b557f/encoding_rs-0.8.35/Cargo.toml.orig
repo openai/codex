@@ -1,0 +1,45 @@
+[package]
+name = "encoding_rs"
+description = "A Gecko-oriented implementation of the Encoding Standard"
+version = "0.8.35"
+edition = '2018'
+authors = ["Henri Sivonen <hsivonen@hsivonen.fi>"]
+license = "(Apache-2.0 OR MIT) AND BSD-3-Clause"
+readme = "README.md"
+documentation = "https://docs.rs/encoding_rs/"
+homepage = "https://docs.rs/encoding_rs/"
+repository = "https://github.com/hsivonen/encoding_rs"
+keywords = ["encoding", "web", "unicode", "charset"]
+categories = ["text-processing", "encoding", "web-programming", "internationalization"]
+rust-version = "1.36"
+
+[features]
+default = ["alloc"]
+alloc = []
+simd-accel = ["any_all_workaround"]
+less-slow-kanji-encode = []
+less-slow-big5-hanzi-encode = []
+less-slow-gb-hanzi-encode = []
+fast-hangul-encode = []
+fast-hanja-encode = []
+fast-kanji-encode = []
+fast-gb-hanzi-encode = []
+fast-big5-hanzi-encode = []
+fast-legacy-encode = ["fast-hangul-encode",
+                      "fast-hanja-encode",
+                      "fast-kanji-encode",
+                      "fast-gb-hanzi-encode",
+                      "fast-big5-hanzi-encode"]
+
+[dependencies]
+cfg-if = "1.0"
+serde = { version = "1.0", optional = true }
+any_all_workaround = { version = "0.1.0" , optional = true }
+
+[dev-dependencies]
+serde_derive = "1.0"
+bincode = "1.0"
+serde_json = "1.0"
+
+[profile.release]
+lto = true

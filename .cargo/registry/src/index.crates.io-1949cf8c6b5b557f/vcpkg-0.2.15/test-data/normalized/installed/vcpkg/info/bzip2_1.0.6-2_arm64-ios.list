@@ -1,0 +1,15 @@
+arm64-ios/
+arm64-ios/debug/
+arm64-ios/debug/lib/
+arm64-ios/debug/lib/libbz2d.a
+arm64-ios/include/
+arm64-ios/include/bzlib.h
+arm64-ios/lib/
+arm64-ios/lib/libbz2.a
+arm64-ios/share/
+arm64-ios/share/bzip2/
+arm64-ios/share/bzip2/copyright
+arm64-ios/share/bzip2/usage
+arm64-ios/tools/
+arm64-ios/tools/bzip2
+arm64-ios/tools/bzip2recover

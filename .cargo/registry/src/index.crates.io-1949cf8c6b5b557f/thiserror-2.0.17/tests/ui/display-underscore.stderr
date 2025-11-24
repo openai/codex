@@ -1,0 +1,7 @@
+error: invalid format string: invalid argument name `_`
+ --> tests/ui/display-underscore.rs:4:11
+  |
+4 | #[error("{_}")]
+  |           ^ invalid argument name in format string
+  |
+  = note: argument name cannot be a single underscore

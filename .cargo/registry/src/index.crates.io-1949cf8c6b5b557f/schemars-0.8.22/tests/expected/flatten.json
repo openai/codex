@@ -1,0 +1,34 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Flat",
+  "type": "object",
+  "required": [
+    "b",
+    "f",
+    "s",
+    "v"
+  ],
+  "properties": {
+    "f": {
+      "type": "number",
+      "format": "float"
+    },
+    "b": {
+      "type": "boolean"
+    },
+    "s": {
+      "type": "string"
+    },
+    "os": {
+      "default": "",
+      "type": "string"
+    },
+    "v": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "int32"
+      }
+    }
+  }
+}

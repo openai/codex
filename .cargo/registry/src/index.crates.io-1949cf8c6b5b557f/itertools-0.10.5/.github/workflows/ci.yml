@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - staging
+      - trying
+
+jobs:
+  msrv:
+    name: Rust MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: dtolnay/rust-toolchain@1.36.0
+      - run: cargo check --no-default-features
+      - run: cargo check --no-default-features --features "use_alloc"
+      - run: cargo check
+
+  stable:
+    name: Rust Stable
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo check --no-default-features
+      - run: cargo check --no-default-features --features "use_alloc"
+      - run: cargo test
+
+  # https://github.com/rust-lang/crater/blob/9ab6f9697c901c4a44025cf0a39b73ad5b37d198/.github/workflows/bors.yml#L125-L149
+  end-success:
+    name: bors build finished
+    if: success()
+    runs-on: ubuntu-latest
+    needs: [msrv,stable]
+
+    steps:
+      - name: Mark the job as successful
+        run: exit 0

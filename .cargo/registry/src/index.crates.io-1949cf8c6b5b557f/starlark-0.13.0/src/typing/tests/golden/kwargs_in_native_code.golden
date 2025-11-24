@@ -1,0 +1,28 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Code:
+def test():
+    # Good.
+    accepts_typed_kwargs(x=1)
+    # Bad.
+    accepts_typed_kwargs(x=None)
+
+Error:
+error: Expected type `int` but got `None`
+ --> filename:6:26
+  |
+6 |     accepts_typed_kwargs(x=None)
+  |                          ^^^^^^
+  |
+
+Compiler typechecker (eval):
+error: Expected type `int` but got `None`
+ --> filename:6:26
+  |
+6 |     accepts_typed_kwargs(x=None)
+  |                          ^^^^^^
+  |

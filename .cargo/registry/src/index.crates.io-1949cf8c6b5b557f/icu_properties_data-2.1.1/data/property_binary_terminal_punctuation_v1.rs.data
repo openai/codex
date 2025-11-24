@@ -1,0 +1,83 @@
+// @generated
+/// Implement `DataProvider<PropertyBinaryTerminalPunctuationV1>` on the given struct using the data
+/// hardcoded in this file. This allows the struct to be used with
+/// `icu`'s `_unstable` constructors.
+///
+/// Using this implementation will embed the following data in the binary's data segment:
+/// * 728B[^1] for the singleton data struct
+///
+/// [^1]: these numbers can be smaller in practice due to linker deduplication
+///
+/// This macro requires the following crates:
+/// * `icu`
+/// * `icu_provider`
+/// * `zerovec`
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __impl_property_binary_terminal_punctuation_v1 {
+    ($ provider : ty) => {
+        #[clippy::msrv = "1.83"]
+        const _: () = <$provider>::MUST_USE_MAKE_PROVIDER_MACRO;
+        #[clippy::msrv = "1.83"]
+        impl $provider {
+            #[doc(hidden)]
+            pub const SINGLETON_PROPERTY_BINARY_TERMINAL_PUNCTUATION_V1: &'static <icu::properties::provider::PropertyBinaryTerminalPunctuationV1 as icu_provider::DynamicDataMarker>::DataStruct = &icu::properties::provider::PropertyCodePointSet::InversionList(unsafe {
+                #[allow(unused_unsafe)]
+                icu::collections::codepointinvlist::CodePointInversionList::from_parts_unchecked(unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"!\0\0\"\0\0,\0\0-\0\0.\0\0/\0\0:\0\0<\0\0?\0\0@\0\0~\x03\0\x7F\x03\0\x87\x03\0\x88\x03\0\x89\x05\0\x8A\x05\0\xC3\x05\0\xC4\x05\0\x0C\x06\0\r\x06\0\x1B\x06\0\x1C\x06\0\x1D\x06\0 \x06\0\xD4\x06\0\xD5\x06\0\0\x07\0\x0B\x07\0\x0C\x07\0\r\x07\0\xF8\x07\0\xFA\x07\x000\x08\x006\x08\x007\x08\0?\x08\0^\x08\0_\x08\0d\t\0f\t\0Z\x0E\0\\\x0E\0\x08\x0F\0\t\x0F\0\r\x0F\0\x13\x0F\0J\x10\0L\x10\0a\x13\0i\x13\0n\x16\0o\x16\0\xEB\x16\0\xEE\x16\x005\x17\x007\x17\0\xD4\x17\0\xD7\x17\0\xDA\x17\0\xDB\x17\0\x02\x18\0\x06\x18\0\x08\x18\0\n\x18\0D\x19\0F\x19\0\xA8\x1A\0\xAC\x1A\0N\x1B\0P\x1B\0Z\x1B\0\\\x1B\0]\x1B\0`\x1B\0}\x1B\0\x80\x1B\0;\x1C\0@\x1C\0~\x1C\0\x80\x1C\0$ \0% \0< \0> \0G \0J \0\xF9,\0\xFC,\0..\0/.\0<.\0=.\0A.\0B.\0L.\0M.\0N.\0P.\0S.\0U.\0\x010\0\x030\0\xFE\xA4\0\0\xA5\0\r\xA6\0\x10\xA6\0\xF3\xA6\0\xF8\xA6\0v\xA8\0x\xA8\0\xCE\xA8\0\xD0\xA8\0/\xA9\x000\xA9\0\xC7\xA9\0\xCA\xA9\0]\xAA\0`\xAA\0\xDF\xAA\0\xE0\xAA\0\xF0\xAA\0\xF2\xAA\0\xEB\xAB\0\xEC\xAB\0\x12\xFE\0\x13\xFE\0\x15\xFE\0\x17\xFE\0P\xFE\0S\xFE\0T\xFE\0X\xFE\0\x01\xFF\0\x02\xFF\0\x0C\xFF\0\r\xFF\0\x0E\xFF\0\x0F\xFF\0\x1A\xFF\0\x1C\xFF\0\x1F\xFF\0 \xFF\0a\xFF\0b\xFF\0d\xFF\0e\xFF\0\x9F\x03\x01\xA0\x03\x01\xD0\x03\x01\xD1\x03\x01W\x08\x01X\x08\x01\x1F\t\x01 \t\x01V\n\x01X\n\x01\xF0\n\x01\xF6\n\x01:\x0B\x01@\x0B\x01\x99\x0B\x01\x9D\x0B\x01U\x0F\x01Z\x0F\x01\x86\x0F\x01\x8A\x0F\x01G\x10\x01N\x10\x01\xBE\x10\x01\xC2\x10\x01A\x11\x01D\x11\x01\xC5\x11\x01\xC7\x11\x01\xCD\x11\x01\xCE\x11\x01\xDE\x11\x01\xE0\x11\x018\x12\x01=\x12\x01\xA9\x12\x01\xAA\x12\x01\xD4\x13\x01\xD6\x13\x01K\x14\x01N\x14\x01Z\x14\x01\\\x14\x01\xC2\x15\x01\xC6\x15\x01\xC9\x15\x01\xD8\x15\x01A\x16\x01C\x16\x01<\x17\x01?\x17\x01D\x19\x01E\x19\x01F\x19\x01G\x19\x01B\x1A\x01D\x1A\x01\x9B\x1A\x01\x9D\x1A\x01\xA1\x1A\x01\xA3\x1A\x01A\x1C\x01D\x1C\x01q\x1C\x01r\x1C\x01\xF7\x1E\x01\xF9\x1E\x01C\x1F\x01E\x1F\x01p$\x01u$\x01nj\x01pj\x01\xF5j\x01\xF6j\x017k\x01:k\x01Dk\x01Ek\x01nm\x01pm\x01\x97n\x01\x99n\x01\x9F\xBC\x01\xA0\xBC\x01\x87\xDA\x01\x8B\xDA\x01") }, 291u32)
+            });
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DataProvider<icu::properties::provider::PropertyBinaryTerminalPunctuationV1> for $provider {
+            fn load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponse<icu::properties::provider::PropertyBinaryTerminalPunctuationV1>, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponse { payload: icu_provider::DataPayload::from_static_ref(Self::SINGLETON_PROPERTY_BINARY_TERMINAL_PUNCTUATION_V1), metadata: icu_provider::DataResponseMetadata::default() })
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyBinaryTerminalPunctuationV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , ITER) => {
+        __impl_property_binary_terminal_punctuation_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::properties::provider::PropertyBinaryTerminalPunctuationV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+    ($ provider : ty , DRY) => {
+        __impl_property_binary_terminal_punctuation_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::properties::provider::PropertyBinaryTerminalPunctuationV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyBinaryTerminalPunctuationV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , DRY , ITER) => {
+        __impl_property_binary_terminal_punctuation_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::properties::provider::PropertyBinaryTerminalPunctuationV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyBinaryTerminalPunctuationV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::properties::provider::PropertyBinaryTerminalPunctuationV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+}
+#[doc(inline)]
+pub use __impl_property_binary_terminal_punctuation_v1 as impl_property_binary_terminal_punctuation_v1;

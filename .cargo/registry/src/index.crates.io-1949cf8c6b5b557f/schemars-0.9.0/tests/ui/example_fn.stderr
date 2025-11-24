@@ -1,0 +1,7 @@
+error: `example` value must be an expression, and string literals that may be interpreted as function paths are currently disallowed to avoid migration errors (this restriction may be relaxed in a future version of schemars).
+       If you want to use the result of a function, use `#[schemars(example = my_fn())]`.
+       Or to use the string literal value, use `#[schemars(example = &"my_fn")]`.
+ --> tests/ui/example_fn.rs:4:22
+  |
+4 | #[schemars(example = "my_fn")]
+  |                      ^^^^^^^

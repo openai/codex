@@ -1,0 +1,44 @@
+name: Rust
+
+on: [push, pull_request]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v1
+    - name: Install rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: 1.70.0
+        override: true
+        components: clippy
+    - name: Check rust and cargo version
+      run: rustc -V && cargo -V
+    - name: Build
+      run: cargo build --verbose
+    - name: Run tests
+      run: cargo test --verbose
+    - name: Run Clippy lints
+      run: cargo clippy --verbose -- -D warnings
+    - name: Build (no default features)
+      run: cargo build --verbose --no-default-features
+    - name: Run tests (no default features)
+      run: cargo test --verbose --no-default-features
+    - name: Run Clippy lints (no default features)
+      run: cargo clippy --verbose --no-default-features -- -D warnings
+
+  miri:
+    name: "Miri"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install Miri
+        run: |
+          rustup toolchain install nightly --component miri
+          rustup override set nightly
+          cargo miri setup
+      - name: Test with Miri tests with "from_buffer" in name
+        run: cargo miri test from_buffer

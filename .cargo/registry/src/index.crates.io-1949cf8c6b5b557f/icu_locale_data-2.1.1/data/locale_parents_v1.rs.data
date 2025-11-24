@@ -1,0 +1,85 @@
+// @generated
+/// Implement `DataProvider<LocaleParentsV1>` on the given struct using the data
+/// hardcoded in this file. This allows the struct to be used with
+/// `icu`'s `_unstable` constructors.
+///
+/// Using this implementation will embed the following data in the binary's data segment:
+/// * 2941B[^1] for the singleton data struct
+///
+/// [^1]: these numbers can be smaller in practice due to linker deduplication
+///
+/// This macro requires the following crates:
+/// * `icu`
+/// * `icu_provider`
+/// * `zerovec`
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __impl_locale_parents_v1 {
+    ($ provider : ty) => {
+        #[clippy::msrv = "1.83"]
+        const _: () = <$provider>::MUST_USE_MAKE_PROVIDER_MACRO;
+        #[clippy::msrv = "1.83"]
+        impl $provider {
+            #[doc(hidden)]
+            pub const SINGLETON_LOCALE_PARENTS_V1: &'static <icu::locale::provider::LocaleParentsV1 as icu_provider::DynamicDataMarker>::DataStruct = &icu::locale::provider::Parents {
+                parents: unsafe {
+                    #[allow(unused_unsafe)]
+                    zerovec::ZeroMap::from_parts_unchecked(unsafe { zerovec::vecs::VarZeroVec16::from_bytes_unchecked(b"\x98\0\x06\0\x0B\0\x10\0\x15\0\x1A\0\x1F\0$\0)\0.\x003\08\0=\0B\0G\0L\0Q\0V\0[\0`\0e\0j\0o\0t\0y\0~\0\x83\0\x88\0\x8D\0\x92\0\x97\0\x9C\0\xA1\0\xA6\0\xAB\0\xB0\0\xB5\0\xBA\0\xBF\0\xC4\0\xC9\0\xCE\0\xD3\0\xD8\0\xDD\0\xE2\0\xE7\0\xEC\0\xF1\0\xF6\0\xFB\0\0\x01\x05\x01\n\x01\x0F\x01\x14\x01\x19\x01\x1E\x01#\x01(\x01-\x012\x017\x01<\x01A\x01F\x01K\x01P\x01U\x01Z\x01_\x01d\x01i\x01n\x01s\x01x\x01}\x01\x82\x01\x87\x01\x8C\x01\x91\x01\x96\x01\x9B\x01\xA0\x01\xA5\x01\xAA\x01\xAF\x01\xB4\x01\xB9\x01\xBE\x01\xC3\x01\xC8\x01\xCD\x01\xD2\x01\xD7\x01\xDC\x01\xE1\x01\xE6\x01\xEB\x01\xF0\x01\xF5\x01\xFA\x01\xFF\x01\x04\x02\t\x02\x0E\x02\x13\x02\x18\x02\x1D\x02\"\x02'\x02,\x021\x026\x02;\x02@\x02E\x02J\x02O\x02T\x02Y\x02^\x02c\x02h\x02m\x02r\x02w\x02|\x02\x81\x02\x86\x02\x8B\x02\x90\x02\x95\x02\x9A\x02\xA1\x02\xA3\x02\xA5\x02\xA7\x02\xAC\x02\xB1\x02\xB6\x02\xBB\x02\xC0\x02\xC5\x02\xCA\x02\xCF\x02\xD4\x02\xD9\x02\xDE\x02\xE3\x02\xEB\x02\xF3\x02en-150en-AGen-AIen-ATen-AUen-BBen-BEen-BMen-BSen-BWen-BZen-CCen-CHen-CKen-CMen-CXen-CYen-CZen-DEen-DGen-DKen-DMen-EEen-ERen-ESen-FIen-FJen-FKen-FMen-FRen-GBen-GDen-GEen-GGen-GHen-GIen-GMen-GSen-GYen-HKen-HUen-IDen-IEen-ILen-IMen-INen-IOen-ITen-JEen-JMen-KEen-KIen-KNen-KYen-LCen-LRen-LSen-LTen-LVen-MGen-MOen-MSen-MTen-MUen-MVen-MWen-MYen-NAen-NFen-NGen-NLen-NOen-NRen-NUen-NZen-PGen-PKen-PLen-PNen-PTen-PWen-ROen-RWen-SBen-SCen-SDen-SEen-SGen-SHen-SIen-SKen-SLen-SSen-SXen-SZen-TCen-TKen-TOen-TTen-TVen-TZen-UAen-UGen-VCen-VGen-VUen-WSen-ZAen-ZMen-ZWes-ARes-BOes-BRes-BZes-CLes-COes-CRes-CUes-DOes-ECes-GTes-HNes-JPes-MXes-NIes-PAes-PEes-PRes-PYes-SVes-USes-UYes-VEhi-Latnhtnbnnno-NOpt-AOpt-CHpt-CVpt-FRpt-GQpt-GWpt-LUpt-MOpt-MZpt-STpt-TLund-Hansund-Hantzh-Hant-MO") }, unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01150en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01150en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01150en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01150en\0\0\0\0\0\0\x01150en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01150en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01150en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01150en\0\0\0\0\0\0\x01150en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01150en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01150en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01150en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01150en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01150en\0\0\0\0\0\0\x01150en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01150en\0\0\0\0\0\0\x01150en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01150en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01150en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01150en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01150en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01150en\0\0\0\0\0\0\x01150en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01150en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001en\0\0\0\0\0\0\x01001es\0\0\0\0\0\0\x01419es\0\0\0\0\0\0\x01419es\0\0\0\0\0\0\x01419es\0\0\0\0\0\0\x01419es\0\0\0\0\0\0\x01419es\0\0\0\0\0\0\x01419es\0\0\0\0\0\0\x01419es\0\0\0\0\0\0\x01419es\0\0\0\0\0\0\x01419es\0\0\0\0\0\0\x01419es\0\0\0\0\0\0\x01419es\0\0\0\0\0\0\x01419es\0\0\0\0\0\0\x01419es\0\0\0\0\0\0\x01419es\0\0\0\0\0\0\x01419es\0\0\0\0\0\0\x01419es\0\0\0\0\0\0\x01419es\0\0\0\0\0\0\x01419es\0\0\0\0\0\0\x01419es\0\0\0\0\0\0\x01419es\0\0\0\0\0\0\x01419es\0\0\0\0\0\0\x01419es\0\0\0\0\0\0\x01419en\0\0\0\0\0\0\x01IN\0fr\0\0\0\0\0\0\x01HT\0no\0\0\0\0\0\0\0\0\0\0no\0\0\0\0\0\0\0\0\0\0no\0\0\0\0\0\0\0\0\0\0pt\0\0\0\0\0\0\x01PT\0pt\0\0\0\0\0\0\x01PT\0pt\0\0\0\0\0\0\x01PT\0pt\0\0\0\0\0\0\x01PT\0pt\0\0\0\0\0\0\x01PT\0pt\0\0\0\0\0\0\x01PT\0pt\0\0\0\0\0\0\x01PT\0pt\0\0\0\0\0\0\x01PT\0pt\0\0\0\0\0\0\x01PT\0pt\0\0\0\0\0\0\x01PT\0pt\0\0\0\0\0\0\x01PT\0und\x01Hani\0\0\0\0und\x01Hani\0\0\0\0zh\0\x01Hant\x01HK\0") })
+                },
+            };
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DataProvider<icu::locale::provider::LocaleParentsV1> for $provider {
+            fn load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponse<icu::locale::provider::LocaleParentsV1>, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponse { payload: icu_provider::DataPayload::from_static_ref(Self::SINGLETON_LOCALE_PARENTS_V1), metadata: icu_provider::DataResponseMetadata::default() })
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::locale::provider::LocaleParentsV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , ITER) => {
+        __impl_locale_parents_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::locale::provider::LocaleParentsV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+    ($ provider : ty , DRY) => {
+        __impl_locale_parents_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::locale::provider::LocaleParentsV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::locale::provider::LocaleParentsV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , DRY , ITER) => {
+        __impl_locale_parents_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::locale::provider::LocaleParentsV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::locale::provider::LocaleParentsV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::locale::provider::LocaleParentsV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+}
+#[doc(inline)]
+pub use __impl_locale_parents_v1 as impl_locale_parents_v1;

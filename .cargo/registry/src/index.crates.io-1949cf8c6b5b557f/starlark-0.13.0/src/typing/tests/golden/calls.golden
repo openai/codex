@@ -1,0 +1,39 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Code:
+def f(y): pass
+
+def g():
+    # Extra parameter.
+    f(1, 2)
+
+    # Not enough parameters.
+    f()
+
+Error:
+error: Too many positional arguments
+ --> filename:6:10
+  |
+6 |     f(1, 2)
+  |          ^
+  |
+
+Error:
+error: Missing required parameter `y`
+ --> filename:9:5
+  |
+9 |     f()
+  |     ^^^
+  |
+
+Compiler typechecker (eval):
+error: Too many positional arguments
+ --> filename:6:10
+  |
+6 |     f(1, 2)
+  |          ^
+  |

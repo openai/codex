@@ -1,0 +1,50 @@
+[package]
+name = "thiserror"
+version = "2.0.17"
+authors = ["David Tolnay <dtolnay@gmail.com>"]
+categories = ["rust-patterns", "no-std"]
+description = "derive(Error)"
+documentation = "https://docs.rs/thiserror"
+edition = "2021"
+keywords = ["error", "error-handling", "derive"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/dtolnay/thiserror"
+rust-version = "1.61"
+
+[features]
+default = ["std"]
+
+# Std feature enables support for formatting std::path::{Path, PathBuf}
+# conveniently in an error message.
+#
+#     #[derive(Error, Debug)]
+#     #[error("failed to create configuration file {path}")]
+#     pub struct MyError {
+#         pub path: PathBuf,
+#         pub source: std::io::Error,
+#     }
+#
+# Without std, this would need to be written #[error("... {}", path.display())].
+std = []
+
+[dependencies]
+thiserror-impl = { version = "=2.0.17", path = "impl" }
+
+[dev-dependencies]
+anyhow = "1.0.73"
+ref-cast = "1.0.18"
+rustversion = "1.0.13"
+trybuild = { version = "1.0.108", features = ["diff"] }
+
+[workspace]
+members = ["impl", "tests/no-std"]
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = [
+    "--generate-link-to-definition",
+    "--generate-macro-expansion",
+    "--extern-html-root-url=core=https://doc.rust-lang.org",
+    "--extern-html-root-url=alloc=https://doc.rust-lang.org",
+    "--extern-html-root-url=std=https://doc.rust-lang.org",
+]

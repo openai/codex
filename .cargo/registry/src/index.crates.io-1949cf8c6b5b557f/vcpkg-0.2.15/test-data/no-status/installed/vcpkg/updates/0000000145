@@ -1,0 +1,7 @@
+Package: boost-geometry
+Version: 1.67.0
+Depends: boost-algorithm, boost-array, boost-assert, boost-concept-check, boost-config, boost-container, boost-core, boost-detail, boost-function-types, boost-fusion, boost-integer, boost-iterator, boost-lexical-cast, boost-math, boost-move, boost-mpl, boost-multiprecision, boost-numeric-conversion, boost-polygon, boost-qvm, boost-range, boost-rational, boost-serialization, boost-smart-ptr, boost-static-assert, boost-throw-exception, boost-tokenizer, boost-tuple, boost-type-traits, boost-utility, boost-variant, boost-vcpkg-helpers
+Architecture: x64-windows
+Multi-Arch: same
+Description: Boost geometry module
+Status: install ok installed

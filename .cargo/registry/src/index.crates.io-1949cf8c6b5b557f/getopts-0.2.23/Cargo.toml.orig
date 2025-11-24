@@ -1,0 +1,21 @@
+[package]
+name = "getopts"
+version = "0.2.23"
+authors = ["The Rust Project Developers"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rust-lang/getopts"
+description = "getopts-like option parsing"
+categories = ["command-line-interface"]
+edition = "2021"
+rust-version = "1.66"
+
+[dependencies]
+unicode-width = "0.2.0"
+std = { version = "1.0", package = "rustc-std-workspace-std", optional = true }
+core = { version = "1.0", package = "rustc-std-workspace-core", optional = true }
+
+[dev-dependencies]
+log = "0.4"
+
+[features]
+rustc-dep-of-std = ["unicode-width/rustc-dep-of-std", "std", "core"]

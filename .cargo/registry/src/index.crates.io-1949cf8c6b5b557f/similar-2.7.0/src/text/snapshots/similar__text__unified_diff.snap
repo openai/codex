@@ -1,0 +1,12 @@
+---
+source: src/text/mod.rs
+expression: "&diff.unified_diff().context_radius(3).header(\"old\", \"new\").to_string()"
+---
+--- old
++++ new
+@@ -1,3 +1,3 @@
+ Hello World
+-some stuff here
++some amazing stuff here
+ some more stuff here
+

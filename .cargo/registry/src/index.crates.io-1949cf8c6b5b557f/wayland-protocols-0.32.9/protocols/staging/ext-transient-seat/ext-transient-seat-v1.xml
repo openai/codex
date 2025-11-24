@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="ext_transient_seat_v1">
+  <copyright>
+    Copyright © 2020 - 2023 Andri Yngvason
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice (including the next
+    paragraph) shall be included in all copies or substantial portions of the
+    Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+  </copyright>
+
+  <description summary="protocol for creating temporary seats">
+    The transient seat protocol can be used by privileged clients to create
+    independent seats that will be removed from the compositor when the client
+    destroys its transient seat.
+
+    This protocol is intended for use with virtual input protocols such as
+    "virtual_keyboard_unstable_v1" or "wlr_virtual_pointer_unstable_v1", both
+    of which allow the user to select a seat.
+
+    The "wl_seat" global created by this protocol does not generate input events
+    on its own, or have any capabilities except those assigned to it by other
+    protocol extensions, such as the ones mentioned above.
+
+    For example, a remote desktop server can create a seat with virtual inputs
+    for each remote user by following these steps for each new connection:
+     * Create a transient seat
+     * Wait for the transient seat to be created
+     * Locate a "wl_seat" global with a matching name
+     * Create virtual inputs using the resulting "wl_seat" global
+  </description>
+
+  <interface name="ext_transient_seat_manager_v1" version="1">
+    <description summary="transient seat manager">
+      The transient seat manager creates short-lived seats.
+    </description>
+
+    <request name="create">
+      <description summary="create a transient seat">
+        Create a new seat that is removed when the client side transient seat
+        object is destroyed.
+
+        The actual seat may be removed sooner, in which case the transient seat
+        object shall become inert.
+      </description>
+      <arg name="seat" type="new_id" interface="ext_transient_seat_v1"/>
+    </request>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the manager">
+        Destroy the manager.
+
+        All objects created by the manager will remain valid until they are
+        destroyed themselves.
+      </description>
+    </request>
+  </interface>
+
+  <interface name="ext_transient_seat_v1" version="1">
+    <description summary="transient seat handle">
+      When the transient seat handle is destroyed, the seat itself will also be
+      destroyed.
+    </description>
+
+    <event name="ready">
+      <description summary="transient seat is ready">
+        This event advertises the global name for the wl_seat to be used with
+        wl_registry_bind.
+
+        It is sent exactly once, immediately after the transient seat is created
+        and the new "wl_seat" global is advertised, if and only if the creation
+        of the transient seat was allowed.
+      </description>
+      <arg name="global_name" type="uint"/>
+    </event>
+
+    <event name="denied">
+      <description summary="transient seat creation denied">
+        The event informs the client that the compositor denied its request to
+        create a transient seat.
+
+        It is sent exactly once, immediately after the transient seat object is
+        created, if and only if the creation of the transient seat was denied.
+
+        After receiving this event, the client should destroy the object.
+      </description>
+    </event>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy transient seat">
+        When the transient seat object is destroyed by the client, the
+        associated seat created by the compositor is also destroyed.
+      </description>
+    </request>
+  </interface>
+</protocol>

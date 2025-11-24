@@ -1,0 +1,14 @@
+{
+    "answer": {"type": "integer", "value": "42"},
+    "neganswer": {"type": "integer", "value": "-42"},
+
+    "neg_zero": {"type": "integer", "value": "0"},
+    "pos_zero": {"type": "integer", "value": "0"},
+
+    "hex1": {"type": "integer", "value": "3735928559"},
+    "hex2": {"type": "integer", "value": "3735928559"},
+    "hex3": {"type": "integer", "value": "3735928559"},
+    "oct1": {"type": "integer", "value": "342391"},
+    "oct2": {"type": "integer", "value": "493"},
+    "bin1": {"type": "integer", "value": "214"}
+}

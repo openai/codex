@@ -1,0 +1,76 @@
+#
+# OpenSSL example configuration file for automated certificate creation.
+#
+
+# Comment out the next line to ignore configuration errors
+config_diagnostics = 1
+
+# This definition stops the following lines choking if HOME or CN
+# is undefined.
+HOME			= .
+CN			= "Not Defined"
+default_ca		= ca
+
+####################################################################
+
+[ req ]
+default_bits		= 2048
+default_keyfile 	= privkey.pem
+# Don't prompt for fields: use those in section directly
+prompt			= no
+distinguished_name	= req_distinguished_name
+x509_extensions         = v3_ca # The extensions to add to the self signed cert
+string_mask             = utf8only
+
+# req_extensions = v3_req # The extensions to add to a certificate request
+
+[ req_distinguished_name ]
+countryName			= UK
+
+organizationName		= OpenSSL Group
+# Take CN from environment so it can come from a script.
+commonName			= $ENV::CN
+
+[ usr_rsa_cert ]
+
+# These extensions are added when 'ca' signs a request for a normal end-entity
+# certificate with key usage restrictions compatible with RSA keys
+
+basicConstraints = CA:FALSE
+keyUsage = critical, nonRepudiation, digitalSignature, keyEncipherment
+
+# Following SKID and AKID settings are meanwhile by default in all certificates.
+# See doc/man5/x509v3_config.pod for details.
+
+# subjectKeyIdentifier   = hash
+# authorityKeyIdentifier = keyid, issuer
+
+[ signer_cert ]
+
+basicConstraints = CA:FALSE
+keyUsage = critical, digitalSignature
+
+[ dh_cert ]
+
+# These extensions are added when 'ca' signs a request for an end-entity
+# DH certificate, for which only key agreement makes sense
+
+basicConstraints = CA:FALSE
+keyUsage = critical, keyAgreement
+
+[ codesign_cert ]
+
+# These extensions are added when 'ca' signs a request for a code-signing
+# end-entity certificate compatible with RSA and ECC keys
+
+basicConstraints = CA:FALSE
+keyUsage = critical, digitalSignature
+extendedKeyUsage = codeSigning
+
+[ v3_ca ]
+
+# Extensions for a typical CA as required by RFC 5280 etc.
+# SKID and AKID are by default set according to PKIX recommendation.
+
+basicConstraints = critical, CA:true
+keyUsage = critical, cRLSign, keyCertSign

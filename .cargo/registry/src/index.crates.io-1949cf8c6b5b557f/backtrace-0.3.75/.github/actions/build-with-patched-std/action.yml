@@ -1,0 +1,50 @@
+# Github composite action to build a single-source-file test binary with an
+# already-checked-out version of Rust's stdlib, that will be patched with a
+# given revision of the backtrace crate.
+
+name: Build with patched std
+description: >
+  Build a binary with a version of std that's had a specific revision of
+  backtrace patched in.
+inputs:
+  backtrace-commit:
+    description: The git commit of backtrace to patch in to std
+    required: true
+  main-rs:
+    description: The (single) source code file to compile
+    required: true
+  rustc-dir:
+    description: The root directory of the rustc repo
+    required: true
+outputs:
+  test-binary-size:
+    description: The size in bytes of the built test binary
+    value: ${{ steps.measure.outputs.test-binary-size }}
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      id: measure
+      env:
+        RUSTC_FLAGS: -Copt-level=3 -Cstrip=symbols
+        # This symlink is made by Build::new() in the bootstrap crate, using a
+        # symlink on Linux and a junction on Windows, so it will exist on both
+        # platforms.
+        RUSTC_BUILD_DIR: build/host
+        RUST_BACKTRACE: 1
+      working-directory: ${{ inputs.rustc-dir }}
+      run: |
+        set -x
+        rm -rf "$RUSTC_BUILD_DIR/stage0-std"
+
+        (cd library/backtrace && git checkout ${{ inputs.backtrace-commit }})
+        git add library/backtrace
+
+        python3 x.py build library --stage 0
+
+        TEMP_BUILD_OUTPUT=$(mktemp test-binary-XXXXXXXX)
+        "$RUSTC_BUILD_DIR/stage0-sysroot/bin/rustc" $RUSTC_FLAGS "${{ inputs.main-rs }}" -o "$TEMP_BUILD_OUTPUT"
+        BINARY_SIZE=$(stat -c '%s' "$TEMP_BUILD_OUTPUT")
+        rm "$TEMP_BUILD_OUTPUT"
+
+        echo "test-binary-size=$BINARY_SIZE" >> "$GITHUB_OUTPUT"

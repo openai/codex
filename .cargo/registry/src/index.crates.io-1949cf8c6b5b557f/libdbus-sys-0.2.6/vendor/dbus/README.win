@@ -1,0 +1,114 @@
+-----------------------------------------
+Windows port of the freedesktop.org D-Bus
+-----------------------------------------
+
+Features and completeness
+-------------------------
+The windows port of dbus provides the dbus-1 library and mostly
+applications which are already available on unix. These applications
+are: dbus-daemon, dbus-launch, dbus-monitor and dbus-send.
+DBus comes with a test suite which is used on unix to guarantate
+production quality and this test suite runs mostly. There are some
+test not running yet and there is help needed to get them running.
+
+Supported compilers
+-------------------
+On windows Microsoft Visual Studio 2010 (Express and professional variants)
+and mingw-w64|32 are known to work.
+
+Building
+--------
+DBus can be built on windows using automake or cmake. See the
+file INSTALL for more information.
+
+windbus and dbus4win Ports
+--------------------------
+The Windows ports from the windbus and dbus4win projects has been merged
+into the freedesktop git master branch, as applicable. The spec has been
+updated with windows specific stuff.
+
+
+Tests
+-----
+ - run complete test suite
+     make check
+   or
+     ctest [-V]
+
+ - dbus library check
+    ctest [-V] -R test-dbus
+
+ - bus daemon check
+    ctest [-V] -R test-bus
+
+ - check available names
+    ctest [-V] -R test-names
+
+ - check if dbus-daemon is accessable
+    bin\dbus-send.exe --session --type=method_call --print-reply --dest=org.freedesktop.DBus / org.freedesktop.DBus.ListNames method return sender=org.freedesktop.DBus -> dest=:1.4 array [ string "org.freedesktop.DBus"string ":1.4"]
+
+ - start session dbus-daemon
+    either by running
+        bin\dbus-launch
+    or
+        start bin\dbus-daemon --session
+
+    Before running these commands you may execute
+        set DBUS_VERBOSE=1
+    for getting debug infos
+
+
+ - call function registerd in dbus
+    bin\dbus-send.exe  --dest=org.freedesktop.DBus --print-reply --type=method_call / org.freedesktop.DBus.StartServiceByName string:org.freedesktop.DBus.TestSuiteEchoService  uint32:455 method return sender=org.freedesktop.DBus -> dest=:1.8 uint32 2
+
+    note: When building with the Visual C++ IDE the *.exe files are in
+          the bin/Debug and bin/Release folder, not in the bin folder.
+
+
+FAQ
+---
+
+- How far is WinDBus from being usable for production ?
+
+  dbus comes with a test suite which is used on unix to guarantate
+  production quality and this test suite runs mostly. There are some
+  test not running and we need help to get them running.
+  In the pratice I and some other people are using dbus for at least more
+  than four years in conjunction with kde on windows without any problems.
+
+- On UNIX D-Bus uses UNIX sockets to communicate (correct me if I'm wrong).
+  What is used on Windows ?
+
+  tcp sockets, there are some efforts to get named pipe running, but some
+  design problems of the win32 api, we are not able to solve without
+  bigger changes to the dbus code base let us stop this effort.
+
+- Do you have any clue if dbus-win32 can run in a Windows CE environment?
+
+  dbus has been ported to wince, see README.wince for more information
+
+- Do you know if the C++ binding made by OpenWengo will be easily portable to Windows?
+
+  The OpenWengo dbus-c++ binding has been ported to windows see in WinDBus svn
+  (http://sf.net/projects/windbus)
+  The related test applications are running well.
+
+
+TODO
+----
+
+October 2010:
+
+- the code wrapped with DBUS_WIN_FIXME should be inspected if it required for windows
+
+- create a dbus setup installer
+
+- implement system bus and system bus service starter
+  see http://windbus.svn.sourceforge.net/viewvc/windbus/trunk/bus/bus-service-win.c
+  for a starting point
+
+- implement a real login session bus
+  The scope parameter of the autolaunch meta protocol could be extended to support user
+  specific session busses (like already done with the amarok bundled dbus which use a
+  shared memory area named "DBusDaemonAddressInfo:<username>".
+  Also the dbus installer should start a session bus on user login.

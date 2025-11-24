@@ -1,0 +1,26 @@
+[package]
+name = "scopeguard"
+version = "1.2.0"
+
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/bluss/scopeguard"
+documentation = "https://docs.rs/scopeguard/"
+authors = ["bluss"]
+
+description = """
+A RAII scope guard that will run a given closure when it goes out of scope,
+even if the code between panics (assuming unwinding panic).
+
+Defines the macros `defer!`, `defer_on_unwind!`, `defer_on_success!` as
+shorthands for guards with one of the implemented strategies.
+"""
+
+keywords = ["scope-guard", "defer", "panic", "unwind"]
+categories = ["rust-patterns", "no-std"]
+
+[features]
+default = ["use_std"]
+use_std = []
+
+[package.metadata.release]
+no-dev-version = true

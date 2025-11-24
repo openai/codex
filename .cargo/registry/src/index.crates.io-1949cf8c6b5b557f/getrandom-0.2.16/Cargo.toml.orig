@@ -1,0 +1,67 @@
+[package]
+name = "getrandom"
+version = "0.2.16" # Also update html_root_url in lib.rs when bumping this
+edition = "2018"
+authors = ["The Rand Project Developers"]
+license = "MIT OR Apache-2.0"
+description = "A small cross-platform library for retrieving random data from system source"
+documentation = "https://docs.rs/getrandom"
+repository = "https://github.com/rust-random/getrandom"
+categories = ["os", "no-std"]
+exclude = [".*"]
+
+[dependencies]
+cfg-if = "1"
+
+# When built as part of libstd
+compiler_builtins = { version = "0.1", optional = true }
+core = { version = "1.0", optional = true, package = "rustc-std-workspace-core" }
+
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2.154", default-features = false }
+
+[target.'cfg(target_os = "wasi")'.dependencies]
+wasi = { version = "0.11", default-features = false }
+
+[target.'cfg(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown"))'.dependencies]
+wasm-bindgen = { version = "0.2.62", default-features = false, optional = true }
+js-sys = { version = "0.3", optional = true }
+[target.'cfg(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown"))'.dev-dependencies]
+wasm-bindgen-test = "0.3.18"
+
+[features]
+# Implement std-only traits for getrandom::Error
+std = []
+# Disable `/dev/urandom` fallback for Linux and Android targets.
+# Bumps minimum supported Linux kernel version to 3.17 and Android API level to 23 (Marshmallow).
+linux_disable_fallback = []
+# Feature to enable fallback RDRAND-based implementation on x86/x86_64
+rdrand = []
+# Feature to enable JavaScript bindings on wasm*-unknown-unknown
+js = ["wasm-bindgen", "js-sys"]
+# Feature to enable custom RNG implementations
+custom = []
+# Unstable feature to support being a libstd dependency
+rustc-dep-of-std = [
+  "compiler_builtins",
+  "core",
+  "libc/rustc-dep-of-std",
+  "wasi/rustc-dep-of-std",
+]
+# Unstable/test-only feature to run wasm-bindgen tests in a browser
+test-in-browser = []
+
+[package.metadata.docs.rs]
+features = ["std", "custom"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+# workaround for https://github.com/cross-rs/cross/issues/1345
+[package.metadata.cross.target.x86_64-unknown-netbsd]
+pre-build = [
+    "mkdir -p /tmp/netbsd",
+    "curl https://cdn.netbsd.org/pub/NetBSD/NetBSD-9.2/amd64/binary/sets/base.tar.xz -O",
+    "tar -C /tmp/netbsd -xJf base.tar.xz",
+    "cp /tmp/netbsd/usr/lib/libexecinfo.so /usr/local/x86_64-unknown-netbsd/lib",
+    "rm base.tar.xz",
+    "rm -rf /tmp/netbsd",
+]

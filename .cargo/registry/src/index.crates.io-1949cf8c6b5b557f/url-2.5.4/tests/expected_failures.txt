@@ -1,0 +1,49 @@
+</> against <file://h/C:/a/b>
+<file:\\\\//>
+<file:\\\\\\\\>
+<file:\\\\\\\\?fox>
+<file:\\\\\\\\#guppy>
+<file://spider///>
+<file:\\\\localhost//>
+<file://\\/localhost//cat>
+<file://localhost//a//../..//>
+</////mouse> against <file:///elephant>
+<\\/localhost//pig> against <file://lion/>
+<//localhost//pig> against <file://lion/>
+</..//localhost//pig> against <file://lion/>
+<C|> against <file://host/dir/file>
+<C|> against <file://host/D:/dir1/dir2/file>
+<C|#> against <file://host/dir/file>
+<C|?> against <file://host/dir/file>
+<C|/> against <file://host/dir/file>
+<C|\n/> against <file://host/dir/file>
+<C|\\> against <file://host/dir/file>
+</c:/foo/bar> against <file://host/path>
+<file://example.net/C:/>
+<file://1.2.3.4/C:/>
+<file://[1::8]/C:/>
+<C|/> against <file://host/>
+</C:/> against <file://host/>
+<file:C:/> against <file://host/>
+<file:/C:/> against <file://host/>
+<file://localhost//a//../..//foo>
+<file://localhost////foo>
+<file:////foo>
+<file:////one/two> against <file:///>
+<////one/two> against <file:///>
+<file:///.//> against <file:////>
+<file:.//p>
+<file:/.//p>
+<http://example.net/path> set hostname to <example.com:8080>
+<http://example.net:8080/path> set hostname to <example.com:>
+<non-spec:/.//p> set hostname to <h>
+<non-spec:/.//p> set hostname to <>
+<foo:///some/path> set pathname to <>
+<file:///var/log/system.log> set href to <http://0300.168.0xF0>
+<file://monkey/> set pathname to <\\\\>
+<file:///unicorn> set pathname to <//\\/>
+<file:///unicorn> set pathname to <//monkey/..//>
+<non-spec:/> set pathname to </.//p>
+<non-spec:/> set pathname to </..//p>
+<non-spec:/> set pathname to <//p>
+<non-spec:/.//> set pathname to <p>

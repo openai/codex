@@ -1,0 +1,81 @@
+// @generated
+/// Implement `DataProvider<PropertyNameParseIndicSyllabicCategoryV1>` on the given struct using the data
+/// hardcoded in this file. This allows the struct to be used with
+/// `icu`'s `_unstable` constructors.
+///
+/// Using this implementation will embed the following data in the binary's data segment:
+/// * 510B[^1] for the singleton data struct
+///
+/// [^1]: these numbers can be smaller in practice due to linker deduplication
+///
+/// This macro requires the following crates:
+/// * `icu`
+/// * `icu_provider`
+/// * `zerotrie`
+/// * `zerovec`
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __impl_property_name_parse_indic_syllabic_category_v1 {
+    ($ provider : ty) => {
+        #[clippy::msrv = "1.83"]
+        const _: () = <$provider>::MUST_USE_MAKE_PROVIDER_MACRO;
+        #[clippy::msrv = "1.83"]
+        impl $provider {
+            #[doc(hidden)]
+            pub const SINGLETON_PROPERTY_NAME_PARSE_INDIC_SYLLABIC_CATEGORY_V1: &'static <icu::properties::provider::PropertyNameParseIndicSyllabicCategoryV1 as icu_provider::DynamicDataMarker>::DataStruct = &icu::properties::provider::names::PropertyValueNameToEnumMap { map: zerotrie::ZeroTrieSimpleAscii { store: unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"\xE1nABCGIJMNOPRSTV\0\0\0\0\0\0\x01\x01\x01\x01\x01\x01\x01\x08$\xD0\xE0\xF2\xF9\n.3?cu\x89vagraha\x81\xC2ir\x04ndu\x82ahmi_Joining_Number\x83\xC2ao\x10ntillation_Mark\x84nsonant\x85_\xC9DFHIKMPSW\x04\t\x14%+1Upead\x86inal\x87ead_Letter\x88nitial_Postfixed\x89iller\x8Aedial\x8B\xC2lr\naceholder\x8Ce\xC2cf\x0Ceding_Repha\x8Dixed\x8Eu\xC2bc\x07joined\x8Fceeding_Repha\x90\0ith_Stacker\x90\x01emination_Mark\x90\x02nvisible_Stacker\x90\x03oiner\x90\x04odifying_Letter\x90\x05\xC2ou\nn_Joiner\x90\x06\xC2km\x04ta\x90\x07ber\x90\x08_Joiner\x90\tther\x80ure_Killer\x90\ne\xC2go\x0Fister_Shifter\x90\x0Brdering_Killer\x90\x14yllable_Modifier\x90\x0Cone_\xC2LM\x07etter\x90\rark\x90\x0E\xC2io\x0F\xC2rs\x05ama\x90\x0Farga\x90\x10wel\x90\x11_\xC2DI\nependent\x90\x12ndependent\x90\x13") } } };
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DataProvider<icu::properties::provider::PropertyNameParseIndicSyllabicCategoryV1> for $provider {
+            fn load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponse<icu::properties::provider::PropertyNameParseIndicSyllabicCategoryV1>, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponse { payload: icu_provider::DataPayload::from_static_ref(Self::SINGLETON_PROPERTY_NAME_PARSE_INDIC_SYLLABIC_CATEGORY_V1), metadata: icu_provider::DataResponseMetadata::default() })
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyNameParseIndicSyllabicCategoryV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , ITER) => {
+        __impl_property_name_parse_indic_syllabic_category_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::properties::provider::PropertyNameParseIndicSyllabicCategoryV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+    ($ provider : ty , DRY) => {
+        __impl_property_name_parse_indic_syllabic_category_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::properties::provider::PropertyNameParseIndicSyllabicCategoryV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyNameParseIndicSyllabicCategoryV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , DRY , ITER) => {
+        __impl_property_name_parse_indic_syllabic_category_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::properties::provider::PropertyNameParseIndicSyllabicCategoryV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyNameParseIndicSyllabicCategoryV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::properties::provider::PropertyNameParseIndicSyllabicCategoryV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+}
+#[doc(inline)]
+pub use __impl_property_name_parse_indic_syllabic_category_v1 as impl_property_name_parse_indic_syllabic_category_v1;

@@ -1,0 +1,22 @@
+error: proc-macro derive panicked
+  --> $DIR/multi_line.rs:23:10
+   |
+23 | #[derive(Display)]
+   |          ^^^^^^^
+   |
+   = help: message: Multi-line comments are disabled by default by displaydoc. Please consider using block doc comments (/** */) or adding the #[ignore_extra_doc_attributes] attribute to your type next to the derive.
+
+error[E0277]: `TestType` doesn't implement `std::fmt::Display`
+  --> $DIR/multi_line.rs:34:37
+   |
+34 | static_assertions::assert_impl_all!(TestType: core::fmt::Display);
+   |                                     ^^^^^^^^ `TestType` cannot be formatted with the default formatter
+   |
+   = help: the trait `std::fmt::Display` is not implemented for `TestType`
+   = note: in format strings you may be able to use `{:?}` (or {:#?} for pretty-print) instead
+note: required by a bound in `assert_impl_all`
+  --> $DIR/multi_line.rs:34:1
+   |
+34 | static_assertions::assert_impl_all!(TestType: core::fmt::Display);
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `assert_impl_all`
+   = note: this error originates in the macro `static_assertions::assert_impl_all` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ClampingI8",
+  "type": "integer",
+  "format": "int128"
+}

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "UntaggedEnum",
+  "anyOf": [
+    {
+      "type": "null",
+      "foo": "bar"
+    },
+    {
+      "foo": "bar"
+    },
+    {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "integer",
+          "format": "int32"
+        },
+        {
+          "type": "boolean"
+        }
+      ],
+      "minItems": 2,
+      "maxItems": 2,
+      "foo": "bar"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "i": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "b": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "i",
+        "b"
+      ],
+      "foo": "bar"
+    }
+  ],
+  "foo": "bar"
+}

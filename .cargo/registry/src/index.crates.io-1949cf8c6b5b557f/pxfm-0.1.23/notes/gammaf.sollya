@@ -1,0 +1,22 @@
+pretty = proc(u) {
+  return ~(floor(u*1000)/1000);
+};
+
+//prec = 1500;
+
+pxfm_gamma = library("./notes/bessel_sollya/cmake-build-release/libbessel_sollya.dylib");
+
+f = pxfm_gamma(x + 1);
+d = [0, 1];
+w = 1;
+pf = remez(f, 16, d);
+
+w = 1;
+or_f = pxfm_gamma(x + 1);
+pf1 = pf;
+err_p = -log2(dirtyinfnorm(pf1*w-or_f, d));
+print ("relative error:", pretty(err_p));
+
+for i from 0 to degree(pf) by 1 do {
+    print("'", coeff(pf, i), "',");
+};

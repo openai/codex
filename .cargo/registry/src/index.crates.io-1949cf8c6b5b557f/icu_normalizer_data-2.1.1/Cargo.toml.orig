@@ -1,0 +1,27 @@
+# This file is part of ICU4X. For terms of use, please see the file
+# called LICENSE at the top level of the ICU4X source tree
+# (online at: https://github.com/unicode-org/icu4x/blob/main/LICENSE ).
+
+[package]
+name = "icu_normalizer_data"
+description = "Data for the icu_normalizer crate"
+license = "Unicode-3.0"
+version.workspace = true
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+homepage.workspace = true
+include.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.sources]
+cldr = { tagged = "48.0.0" }
+icuexport = { tagged = "release-78.1rc" }
+segmenter_lstm = { tagged = "v0.1.0" }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(icu4x_custom_data)'] }
+
+[dependencies]

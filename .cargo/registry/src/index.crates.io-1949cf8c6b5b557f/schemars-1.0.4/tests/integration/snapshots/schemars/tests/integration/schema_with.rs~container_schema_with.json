@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "IntAsString",
+  "type": "string",
+  "pattern": "^-?\\d+$"
+}

@@ -1,0 +1,305 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="input_method_unstable_v1">
+
+  <copyright>
+    Copyright © 2012, 2013 Intel Corporation
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice (including the next
+    paragraph) shall be included in all copies or substantial portions of the
+    Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+  </copyright>
+
+  <interface name="zwp_input_method_context_v1" version="1">
+    <description summary="input method context">
+      Corresponds to a text input on the input method side. An input method context
+      is created on text input activation on the input method side. It allows
+      receiving information about the text input from the application via events.
+      Input method contexts do not keep state after deactivation and should be
+      destroyed after deactivation is handled.
+
+      Text is generally UTF-8 encoded, indices and lengths are in bytes.
+
+      Serials are used to synchronize the state between the text input and
+      an input method. New serials are sent by the text input in the
+      commit_state request and are used by the input method to indicate
+      the known text input state in events like preedit_string, commit_string,
+      and keysym. The text input can then ignore events from the input method
+      which are based on an outdated state (for example after a reset).
+
+      Warning! The protocol described in this file is experimental and
+      backward incompatible changes may be made. Backward compatible changes
+      may be added together with the corresponding interface version bump.
+      Backward incompatible changes are done by bumping the version number in
+      the protocol and interface names and resetting the interface version.
+      Once the protocol is to be declared stable, the 'z' prefix and the
+      version number in the protocol and interface names are removed and the
+      interface version number is reset.
+    </description>
+
+    <request name="destroy" type="destructor"/>
+
+    <request name="commit_string">
+      <description summary="commit string">
+	Send the commit string text for insertion to the application.
+
+	The text to commit could be either just a single character after a key
+	press or the result of some composing (pre-edit). It could be also an
+	empty text when some text should be removed (see
+	delete_surrounding_text) or when the input cursor should be moved (see
+	cursor_position).
+
+	Any previously set composing text will be removed.
+      </description>
+      <arg name="serial" type="uint" summary="serial of the latest known text input state"/>
+      <arg name="text" type="string"/>
+    </request>
+
+    <request name="preedit_string">
+      <description summary="pre-edit string">
+	Send the pre-edit string text to the application text input.
+
+	The commit text can be used to replace the pre-edit text on reset (for
+	example on unfocus).
+
+	Previously sent preedit_style and preedit_cursor requests are also
+	processed by the text_input.
+      </description>
+      <arg name="serial" type="uint" summary="serial of the latest known text input state"/>
+      <arg name="text" type="string"/>
+      <arg name="commit" type="string"/>
+    </request>
+
+    <request name="preedit_styling">
+      <description summary="pre-edit styling">
+	Set the styling information on composing text. The style is applied for
+	length in bytes from index relative to the beginning of
+	the composing text (as byte offset). Multiple styles can
+	be applied to a composing text.
+
+	This request should be sent before sending a preedit_string request.
+      </description>
+      <arg name="index" type="uint"/>
+      <arg name="length" type="uint"/>
+      <arg name="style" type="uint"/>
+    </request>
+
+    <request name="preedit_cursor">
+      <description summary="pre-edit cursor">
+	Set the cursor position inside the composing text (as byte offset)
+	relative to the start of the composing text.
+
+	When index is negative no cursor should be displayed.
+
+	This request should be sent before sending a preedit_string request.
+      </description>
+      <arg name="index" type="int"/>
+    </request>
+
+    <request name="delete_surrounding_text">
+      <description summary="delete text">
+	Remove the surrounding text.
+
+	This request will be handled on the text_input side directly following
+	a commit_string request.
+      </description>
+      <arg name="index" type="int"/>
+      <arg name="length" type="uint"/>
+    </request>
+
+    <request name="cursor_position">
+      <description summary="set cursor to a new position">
+	Set the cursor and anchor to a new position. Index is the new cursor
+	position in bytes (when >= 0 this is relative to the end of the inserted text,
+	otherwise it is relative to the beginning of the inserted text). Anchor is
+	the new anchor position in bytes (when >= 0 this is relative to the end of the
+	inserted text, otherwise it is relative to the beginning of the inserted
+	text). When there should be no selected text, anchor should be the same
+	as index.
+
+	This request will be handled on the text_input side directly following
+	a commit_string request.
+      </description>
+      <arg name="index" type="int"/>
+      <arg name="anchor" type="int"/>
+    </request>
+
+    <request name="modifiers_map">
+      <arg name="map" type="array"/>
+    </request>
+
+    <request name="keysym">
+      <description summary="keysym">
+	Notify when a key event was sent. Key events should not be used for
+	normal text input operations, which should be done with commit_string,
+	delete_surrounding_text, etc. The key event follows the wl_keyboard key
+	event convention. Sym is an XKB keysym, state is a wl_keyboard key_state.
+      </description>
+      <arg name="serial" type="uint" summary="serial of the latest known text input state"/>
+      <arg name="time" type="uint"/>
+      <arg name="sym" type="uint"/>
+      <arg name="state" type="uint"/>
+      <arg name="modifiers" type="uint"/>
+    </request>
+
+    <request name="grab_keyboard">
+      <description summary="grab hardware keyboard">
+	Allow an input method to receive hardware keyboard input and process
+	key events to generate text events (with pre-edit) over the wire. This
+	allows input methods which compose multiple key events for inputting
+	text like it is done for CJK languages.
+      </description>
+      <arg name="keyboard" type="new_id" interface="wl_keyboard"/>
+    </request>
+
+    <request name="key">
+      <description summary="forward key event">
+	Forward a wl_keyboard::key event to the client that was not processed
+	by the input method itself. Should be used when filtering key events
+	with grab_keyboard.  The arguments should be the ones from the
+	wl_keyboard::key event.
+
+	For generating custom key events use the keysym request instead.
+      </description>
+      <arg name="serial" type="uint" summary="serial from wl_keyboard::key"/>
+      <arg name="time" type="uint" summary="time from wl_keyboard::key"/>
+      <arg name="key" type="uint" summary="key from wl_keyboard::key"/>
+      <arg name="state" type="uint" summary="state from wl_keyboard::key"/>
+    </request>
+
+    <request name="modifiers">
+      <description summary="forward modifiers event">
+	Forward a wl_keyboard::modifiers event to the client that was not
+	processed by the input method itself.  Should be used when filtering
+	key events with grab_keyboard. The arguments should be the ones
+	from the wl_keyboard::modifiers event.
+      </description>
+      <arg name="serial" type="uint" summary="serial from wl_keyboard::modifiers"/>
+      <arg name="mods_depressed" type="uint" summary="mods_depressed from wl_keyboard::modifiers"/>
+      <arg name="mods_latched" type="uint" summary="mods_latched from wl_keyboard::modifiers"/>
+      <arg name="mods_locked" type="uint" summary="mods_locked from wl_keyboard::modifiers"/>
+      <arg name="group" type="uint" summary="group from wl_keyboard::modifiers"/>
+    </request>
+
+    <request name="language">
+      <arg name="serial" type="uint" summary="serial of the latest known text input state"/>
+      <arg name="language" type="string"/>
+    </request>
+
+    <request name="text_direction">
+      <arg name="serial" type="uint" summary="serial of the latest known text input state"/>
+      <arg name="direction" type="uint"/>
+    </request>
+
+    <event name="surrounding_text">
+      <description summary="surrounding text event">
+	The plain surrounding text around the input position. Cursor is the
+	position in bytes within the surrounding text relative to the beginning
+	of the text. Anchor is the position in bytes of the selection anchor
+	within the surrounding text relative to the beginning of the text. If
+	there is no selected text then anchor is the same as cursor.
+      </description>
+      <arg name="text" type="string"/>
+      <arg name="cursor" type="uint"/>
+      <arg name="anchor" type="uint"/>
+    </event>
+
+    <event name="reset">
+    </event>
+
+    <event name="content_type">
+      <arg name="hint" type="uint"/>
+      <arg name="purpose" type="uint"/>
+    </event>
+
+    <event name="invoke_action">
+      <arg name="button" type="uint"/>
+      <arg name="index" type="uint"/>
+    </event>
+
+    <event name="commit_state">
+      <arg name="serial" type="uint" summary="serial of text input state"/>
+    </event>
+
+    <event name="preferred_language">
+      <arg name="language" type="string"/>
+    </event>
+  </interface>
+
+  <interface name="zwp_input_method_v1" version="1">
+    <description summary="input method">
+      An input method object is responsible for composing text in response to
+      input from hardware or virtual keyboards. There is one input method
+      object per seat. On activate there is a new input method context object
+      created which allows the input method to communicate with the text input.
+    </description>
+
+    <event name="activate">
+      <description summary="activate event">
+	A text input was activated. Creates an input method context object
+	which allows communication with the text input.
+      </description>
+      <arg name="id" type="new_id" interface="zwp_input_method_context_v1"/>
+    </event>
+
+    <event name="deactivate">
+      <description summary="deactivate event">
+	The text input corresponding to the context argument was deactivated.
+	The input method context should be destroyed after deactivation is
+	handled.
+      </description>
+      <arg name="context" type="object" interface="zwp_input_method_context_v1"/>
+    </event>
+  </interface>
+
+  <interface name="zwp_input_panel_v1" version="1">
+    <description summary="interface for implementing keyboards">
+      Only one client can bind this interface at a time.
+    </description>
+
+    <request name="get_input_panel_surface">
+      <arg name="id" type="new_id" interface="zwp_input_panel_surface_v1"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+  </interface>
+
+  <interface name="zwp_input_panel_surface_v1" version="1">
+    <enum name="position">
+      <entry name="center_bottom" value="0"/>
+    </enum>
+
+    <request name="set_toplevel">
+      <description summary="set the surface type as a keyboard">
+	Set the input_panel_surface type to keyboard.
+
+	A keyboard surface is only shown when a text input is active.
+      </description>
+      <arg name="output" type="object" interface="wl_output"/>
+      <arg name="position" type="uint"/>
+    </request>
+
+    <request name="set_overlay_panel">
+      <description summary="set the surface type as an overlay panel">
+	Set the input_panel_surface to be an overlay panel.
+
+	This is shown near the input cursor above the application window when
+	a text input is active.
+      </description>
+    </request>
+  </interface>
+
+</protocol>

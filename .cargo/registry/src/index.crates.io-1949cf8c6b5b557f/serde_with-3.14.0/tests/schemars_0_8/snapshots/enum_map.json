@@ -1,0 +1,48 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Test",
+  "type": "object",
+  "required": [
+    "data"
+  ],
+  "properties": {
+    "data": {
+      "$ref": "#/definitions/EnumMap(Mappable)"
+    }
+  },
+  "definitions": {
+    "EnumMap(Mappable)": {
+      "type": "object",
+      "properties": {
+        "A": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "B": {
+          "type": "string"
+        },
+        "C": {
+          "type": "object",
+          "required": [
+            "c"
+          ],
+          "properties": {
+            "b": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "c": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

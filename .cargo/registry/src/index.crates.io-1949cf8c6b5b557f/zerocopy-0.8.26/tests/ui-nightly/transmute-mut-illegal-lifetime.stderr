@@ -1,0 +1,12 @@
+error[E0597]: `x` does not live long enough
+  --> tests/ui-nightly/transmute-mut-illegal-lifetime.rs:14:56
+   |
+12 |     let mut x = 0u64;
+   |         ----- binding `x` declared here
+13 |     // It is illegal to increase the lifetime scope.
+14 |     let _: &'static mut u64 = zerocopy::transmute_mut!(&mut x);
+   |            ----------------                            ^^^^^^ borrowed value does not live long enough
+   |            |
+   |            type annotation requires that `x` is borrowed for `'static`
+15 | }
+   | - `x` dropped here while still borrowed

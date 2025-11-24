@@ -1,0 +1,20 @@
+error[E0277]: the trait bound `Ipv4Addr: ToTokens` is not satisfied
+ --> tests/ui/not-quotable.rs:6:13
+  |
+6 |     let _ = quote! { #ip };
+  |             ^^^^^^^^^^^^^^
+  |             |
+  |             the trait `ToTokens` is not implemented for `Ipv4Addr`
+  |             required by a bound introduced by this call
+  |
+  = help: the following other types implement trait `ToTokens`:
+            &T
+            &mut T
+            Box<T>
+            CStr
+            CString
+            Cow<'a, T>
+            Option<T>
+            Rc<T>
+          and $N others
+  = note: this error originates in the macro `quote` (in Nightly builds, run with -Z macro-backtrace for more info)

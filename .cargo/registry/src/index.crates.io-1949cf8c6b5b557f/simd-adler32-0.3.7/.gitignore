@@ -1,0 +1,10 @@
+# editor
+.idea/
+.vscode/
+
+# fuzz
+fuzz/artifacts
+fuzz/corpus
+
+# cargo
+target/

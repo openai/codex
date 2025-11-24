@@ -1,0 +1,10 @@
+error[E0616]: field `bits` of struct `Flags1` is private
+  --> $DIR/private_field.rs:12:41
+   |
+12 |     let flag1 = example::Flags1::FLAG_A.bits;
+   |                                         ^^^^ private field
+   |
+help: a method `bits` also exists, call it with parentheses
+   |
+12 |     let flag1 = example::Flags1::FLAG_A.bits();
+   |                                             ^^

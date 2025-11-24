@@ -1,0 +1,5 @@
+---
+source: notify/src/event.rs
+expression: json
+---
+{"type":"access","kind":"close","mode":"other","paths":[],"attrs":{}}

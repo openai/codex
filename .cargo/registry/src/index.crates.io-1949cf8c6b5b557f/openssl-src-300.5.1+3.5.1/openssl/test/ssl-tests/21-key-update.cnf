@@ -1,0 +1,112 @@
+# Generated with generate_ssl_tests.pl
+
+num_tests = 4
+
+test-0 = 0-update-key-client-update-not-requested
+test-1 = 1-update-key-server-update-not-requested
+test-2 = 2-update-key-client-update-requested
+test-3 = 3-update-key-server-update-requested
+# ===========================================================
+
+[0-update-key-client-update-not-requested]
+ssl_conf = 0-update-key-client-update-not-requested-ssl
+
+[0-update-key-client-update-not-requested-ssl]
+server = 0-update-key-client-update-not-requested-server
+client = 0-update-key-client-update-not-requested-client
+
+[0-update-key-client-update-not-requested-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[0-update-key-client-update-not-requested-client]
+CipherString = DEFAULT
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-0]
+ExpectedResult = Success
+HandshakeMode = KeyUpdateClient
+KeyUpdateType = KeyUpdateNotRequested
+ResumptionExpected = No
+
+
+# ===========================================================
+
+[1-update-key-server-update-not-requested]
+ssl_conf = 1-update-key-server-update-not-requested-ssl
+
+[1-update-key-server-update-not-requested-ssl]
+server = 1-update-key-server-update-not-requested-server
+client = 1-update-key-server-update-not-requested-client
+
+[1-update-key-server-update-not-requested-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[1-update-key-server-update-not-requested-client]
+CipherString = DEFAULT
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-1]
+ExpectedResult = Success
+HandshakeMode = KeyUpdateServer
+KeyUpdateType = KeyUpdateNotRequested
+ResumptionExpected = No
+
+
+# ===========================================================
+
+[2-update-key-client-update-requested]
+ssl_conf = 2-update-key-client-update-requested-ssl
+
+[2-update-key-client-update-requested-ssl]
+server = 2-update-key-client-update-requested-server
+client = 2-update-key-client-update-requested-client
+
+[2-update-key-client-update-requested-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[2-update-key-client-update-requested-client]
+CipherString = DEFAULT
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-2]
+ExpectedResult = Success
+HandshakeMode = KeyUpdateClient
+KeyUpdateType = KeyUpdateRequested
+ResumptionExpected = No
+
+
+# ===========================================================
+
+[3-update-key-server-update-requested]
+ssl_conf = 3-update-key-server-update-requested-ssl
+
+[3-update-key-server-update-requested-ssl]
+server = 3-update-key-server-update-requested-server
+client = 3-update-key-server-update-requested-client
+
+[3-update-key-server-update-requested-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[3-update-key-server-update-requested-client]
+CipherString = DEFAULT
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-3]
+ExpectedResult = Success
+HandshakeMode = KeyUpdateServer
+KeyUpdateType = KeyUpdateRequested
+ResumptionExpected = No
+
+

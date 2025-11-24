@@ -1,0 +1,46 @@
+[package]
+name = "toml_parser"
+version = "1.0.2"
+description = "Yet another format-preserving TOML parser."
+categories = ["encoding", "parser-implementations", "parsing", "config"]
+keywords = ["encoding", "toml", "no_std"]
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+include.workspace = true
+
+[package.metadata.docs.rs]
+features = []
+rustdoc-args = ["--cfg", "docsrs"]
+
+[package.metadata.release]
+pre-release-replacements = [
+  {file="CHANGELOG.md", search="Unreleased", replace="{{version}}", min=1},
+  {file="CHANGELOG.md", search="\\.\\.\\.HEAD", replace="...{{tag_name}}", exactly=1},
+  {file="CHANGELOG.md", search="ReleaseDate", replace="{{date}}", min=1},
+  {file="CHANGELOG.md", search="<!-- next-header -->", replace="<!-- next-header -->\n## [Unreleased] - ReleaseDate\n", exactly=1},
+  {file="CHANGELOG.md", search="<!-- next-url -->", replace="<!-- next-url -->\n[Unreleased]: https://github.com/toml-rs/toml/compare/{{tag_name}}...HEAD", exactly=1},
+]
+
+[features]
+default = ["std"]
+alloc = []
+std = ["alloc"]
+simd = ["winnow/simd"]
+unsafe = []
+
+debug = ["std", "dep:anstream", "dep:anstyle"]
+
+[dependencies]
+anstream = { version = "0.6.15", optional = true }
+anstyle = { version = "1.0.8", optional = true }
+winnow = { version = "0.7.10", default-features = false }
+
+[dev-dependencies]
+anstream = { version = "0.6.15", features = ["test"] }
+snapbox = "0.6.0"
+toml_datetime = { path = "../toml_datetime" }
+
+[lints]
+workspace = true

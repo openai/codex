@@ -1,0 +1,9 @@
+x64-windows/
+x64-windows/include/
+x64-windows/include/boost/
+x64-windows/include/boost/implicit_cast.hpp
+x64-windows/include/boost/polymorphic_cast.hpp
+x64-windows/include/boost/polymorphic_pointer_cast.hpp
+x64-windows/share/
+x64-windows/share/boost-conversion/
+x64-windows/share/boost-conversion/copyright

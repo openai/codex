@@ -1,0 +1,66 @@
+# -*- mode: perl; -*-
+# Copyright 2016-2025 The OpenSSL Project Authors. All Rights Reserved.
+#
+# Licensed under the Apache License 2.0 (the "License").  You may not use
+# this file except in compliance with the License.  You can obtain a copy
+# in the file LICENSE in the source distribution or at
+# https://www.openssl.org/source/license.html
+
+
+## SSL test configurations
+
+package ssltests;
+
+srand(1);
+sub randcase {
+    my ($names) = @_;
+    my @ret;
+    foreach my $name (split(/:/, $names)) {
+        my ($alg, $rest) = split(/(?=[+])/, $name, 2);
+        $alg =~ s{([a-zA-Z])}{chr(ord($1)^(int(rand(2.0)) * 32))}eg;
+        push @ret, $alg . ($rest // "");
+    }
+    return join(":", @ret);
+}
+
+our @tests = (
+    {
+        name => "default",
+        server => { },
+        client => { },
+        test   => { "ExpectedResult" => "Success" },
+    },
+
+    {
+        name => "Server signature algorithms bug",
+        # Should have no effect as we aren't doing client auth
+        server => { "ClientSignatureAlgorithms" => randcase("PSS+SHA512:RSA+SHA512") },
+        client => { "SignatureAlgorithms" => randcase("PSS+SHA256:RSA+SHA256") },
+        test   => { "ExpectedResult" => "Success" },
+    },
+
+    {
+        name => "verify-cert",
+        server => { },
+        client => {
+            # Don't set up the client root file.
+            "VerifyCAFile" => undef,
+        },
+        test   => {
+          "ExpectedResult" => "ClientFail",
+          "ExpectedClientAlert" => "UnknownCA",
+        },
+    },
+
+    {
+        name => "name-constraints-no-san-in-ee",
+        server => {
+            "Certificate" => test_pem("goodcn2-chain.pem"),
+            "PrivateKey"  => test_pem("goodcn2-key.pem"),
+        },
+        client => {
+            "VerifyCAFile" => test_pem("root-cert.pem"),
+        },
+        test   => { "ExpectedResult" => "Success" },
+    },
+);

@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Internal",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/UnitOne"
+    },
+    {
+      "$ref": "#/$defs/StringMap"
+    },
+    {
+      "$ref": "#/$defs/UnitStructNewType"
+    },
+    {
+      "$ref": "#/$defs/StructNewType"
+    },
+    {
+      "$ref": "#/$defs/Struct2"
+    },
+    {
+      "$ref": "#/$defs/UnitTwo"
+    }
+  ],
+  "$defs": {
+    "UnitOne": {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "const": "UnitOne"
+        }
+      },
+      "required": [
+        "tag"
+      ]
+    },
+    "StringMap": {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "const": "StringMap"
+        }
+      },
+      "additionalProperties": {
+        "type": "string"
+      },
+      "required": [
+        "tag"
+      ]
+    },
+    "UnitStructNewType": {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "const": "UnitStructNewType"
+        }
+      },
+      "required": [
+        "tag"
+      ]
+    },
+    "StructNewType": {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "const": "StructNewType"
+        }
+      },
+      "$ref": "#/$defs/Struct",
+      "required": [
+        "tag"
+      ]
+    },
+    "Struct": {
+      "type": "object",
+      "properties": {
+        "foo": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "bar": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "foo",
+        "bar"
+      ]
+    },
+    "Struct2": {
+      "type": "object",
+      "properties": {
+        "foo": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "bar": {
+          "type": "boolean"
+        },
+        "tag": {
+          "type": "string",
+          "const": "Struct"
+        }
+      },
+      "required": [
+        "tag",
+        "foo",
+        "bar"
+      ]
+    },
+    "UnitTwo": {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "const": "UnitTwo"
+        }
+      },
+      "required": [
+        "tag"
+      ]
+    }
+  }
+}

@@ -1,0 +1,26 @@
+[
+  {
+    "input": "zh-Hant",
+    "output": "zh-TW"
+  },
+  {
+    "input": "en-Latn-US",
+    "output": "en"
+  },
+  {
+    "input": "en",
+    "output": "en"
+  },
+  {
+    "input": "und",
+    "output": "en"
+  },
+  {
+    "input": "es-ES-preeuro",
+    "output": "es-preeuro"
+  },
+  {
+    "input": "zh-Hant-TW-u-hc-h23-nu-chinese",
+    "output": "zh-TW-u-hc-h23-nu-chinese"
+  }
+]

@@ -1,0 +1,12 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Enum",
+  "type": "integer",
+  "enum": [
+    0,
+    1,
+    5,
+    6,
+    3
+  ]
+}

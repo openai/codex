@@ -1,0 +1,66 @@
+[package]
+name = "proc-macro2"
+version = "1.0.95"
+authors = ["David Tolnay <dtolnay@gmail.com>", "Alex Crichton <alex@alexcrichton.com>"]
+autobenches = false
+categories = ["development-tools::procedural-macro-helpers"]
+description = "A substitute implementation of the compiler's `proc_macro` API to decouple token-based libraries from the procedural macro use case."
+documentation = "https://docs.rs/proc-macro2"
+edition = "2021"
+keywords = ["macros", "syn"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/dtolnay/proc-macro2"
+rust-version = "1.56"
+
+[package.metadata.docs.rs]
+rustc-args = ["--cfg=procmacro2_semver_exempt"]
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = [
+    "--cfg=procmacro2_semver_exempt",
+    "--generate-link-to-definition",
+    "--extern-html-root-url=core=https://doc.rust-lang.org",
+    "--extern-html-root-url=alloc=https://doc.rust-lang.org",
+    "--extern-html-root-url=std=https://doc.rust-lang.org",
+    "--extern-html-root-url=proc_macro=https://doc.rust-lang.org",
+]
+
+[package.metadata.playground]
+features = ["span-locations"]
+
+[dependencies]
+unicode-ident = "1.0"
+
+[dev-dependencies]
+flate2 = "1.0"
+quote = { version = "1.0", default-features = false }
+rayon = "1.0"
+rustversion = "1"
+tar = "0.4"
+
+[features]
+proc-macro = []
+default = ["proc-macro"]
+
+# Expose methods Span::start and Span::end which give the line/column location
+# of a token.
+span-locations = []
+
+# This feature no longer means anything.
+nightly = []
+
+[workspace]
+members = ["benches/bench-libproc-macro", "tests/ui"]
+
+[patch.crates-io]
+# Our doc tests depend on quote which depends on proc-macro2. Without this line,
+# the proc-macro2 dependency of quote would be the released version of
+# proc-macro2. Quote would implement its traits for types from that proc-macro2,
+# meaning impls would be missing when tested against types from the local
+# proc-macro2.
+#
+# GitHub Actions builds that are in progress at the time that you publish may
+# spuriously fail. This is because they'll be building a local proc-macro2 which
+# carries the second-most-recent version number, pulling in quote which resolves
+# to a dependency on the just-published most recent version number. Thus the
+# patch will fail to apply because the version numbers are different.
+proc-macro2 = { path = "." }

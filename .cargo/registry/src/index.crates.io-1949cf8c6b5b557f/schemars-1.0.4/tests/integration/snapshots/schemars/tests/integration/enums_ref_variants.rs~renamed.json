@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Renamed",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/struct_variant"
+    },
+    {
+      "$ref": "#/$defs/custom%20name%20variant"
+    }
+  ],
+  "$defs": {
+    "struct_variant": {
+      "type": "object",
+      "properties": {
+        "struct_variant": {
+          "type": "object",
+          "properties": {
+            "FIELD": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "FIELD"
+          ]
+        }
+      },
+      "required": [
+        "struct_variant"
+      ],
+      "additionalProperties": false
+    },
+    "custom name variant": {
+      "type": "object",
+      "properties": {
+        "custom name variant": {
+          "type": "object",
+          "properties": {
+            "custom name field": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "custom name field"
+          ]
+        }
+      },
+      "required": [
+        "custom name variant"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

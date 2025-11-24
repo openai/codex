@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Internal",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "const": "Unit"
+        }
+      },
+      "required": [
+        "tag"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "const": "StringMap"
+        }
+      },
+      "additionalProperties": {
+        "type": "string"
+      },
+      "required": [
+        "tag"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "const": "StructNewType"
+        }
+      },
+      "$ref": "#/$defs/Struct",
+      "required": [
+        "tag"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "baz": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "foobar": {
+          "type": "boolean"
+        },
+        "tag": {
+          "type": "string",
+          "const": "StructDenyUnknownFieldsNewType"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "tag",
+        "baz",
+        "foobar"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "foo": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "bar": {
+          "type": "boolean"
+        },
+        "tag": {
+          "type": "string",
+          "const": "Struct"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "tag",
+        "foo",
+        "bar"
+      ]
+    }
+  ],
+  "$defs": {
+    "Struct": {
+      "type": "object",
+      "properties": {
+        "foo": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "bar": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "foo",
+        "bar"
+      ]
+    }
+  }
+}

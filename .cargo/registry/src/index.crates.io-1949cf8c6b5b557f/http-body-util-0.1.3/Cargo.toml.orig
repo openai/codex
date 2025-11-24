@@ -1,0 +1,46 @@
+[package]
+name = "http-body-util"
+# When releasing to crates.io:
+# - Remove path dependencies
+# - Update html_root_url.
+# - Update doc url
+#   - Cargo.toml
+#   - README.md
+# - Update CHANGELOG.md.
+# - Create "http-body-util-x.y.z" git tag.
+version = "0.1.3"
+authors = [
+  "Carl Lerche <me@carllerche.com>",
+  "Lucio Franco <luciofranco14@gmail.com>",
+  "Sean McArthur <sean@seanmonstar.com>",
+]
+edition = "2018"
+readme = "../README.md"
+documentation = "https://docs.rs/http-body-util"
+repository = "https://github.com/hyperium/http-body"
+license = "MIT"
+description = """
+Combinators and adapters for HTTP request or response bodies.
+"""
+keywords = ["http"]
+categories = ["web-programming"]
+rust-version = "1.61"
+
+[features]
+default = []
+channel = ["dep:tokio"]
+full = ["channel"]
+
+[dependencies]
+bytes = "1"
+futures-core = { version = "0.3", default-features = false }
+http = "1"
+http-body = { version = "1", path = "../http-body" }
+pin-project-lite = "0.2"
+
+# optional dependencies
+tokio = { version = "1", features = ["sync"], optional = true }
+
+[dev-dependencies]
+futures-util = { version = "0.3", default-features = false }
+tokio = { version = "1", features = ["macros", "rt", "sync", "rt-multi-thread"] }

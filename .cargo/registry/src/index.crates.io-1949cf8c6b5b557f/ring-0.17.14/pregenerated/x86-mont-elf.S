@@ -1,0 +1,220 @@
+// This file is generated from a similarly-named Perl script in the BoringSSL
+// source tree. Do not edit by hand.
+
+#include <ring-core/asm_base.h>
+
+#if !defined(OPENSSL_NO_ASM) && defined(OPENSSL_X86) && defined(__ELF__)
+.text
+.globl	bn_mul_mont
+.hidden	bn_mul_mont
+.type	bn_mul_mont,@function
+.align	16
+bn_mul_mont:
+.L_bn_mul_mont_begin:
+	pushl	%ebp
+	pushl	%ebx
+	pushl	%esi
+	pushl	%edi
+	xorl	%eax,%eax
+	movl	40(%esp),%edi
+	leal	20(%esp),%esi
+	leal	24(%esp),%edx
+	addl	$2,%edi
+	negl	%edi
+	leal	-32(%esp,%edi,4),%ebp
+	negl	%edi
+	movl	%ebp,%eax
+	subl	%edx,%eax
+	andl	$2047,%eax
+	subl	%eax,%ebp
+	xorl	%ebp,%edx
+	andl	$2048,%edx
+	xorl	$2048,%edx
+	subl	%edx,%ebp
+	andl	$-64,%ebp
+	movl	%esp,%eax
+	subl	%ebp,%eax
+	andl	$-4096,%eax
+	movl	%esp,%edx
+	leal	(%ebp,%eax,1),%esp
+	movl	(%esp),%eax
+	cmpl	%ebp,%esp
+	ja	.L000page_walk
+	jmp	.L001page_walk_done
+.align	16
+.L000page_walk:
+	leal	-4096(%esp),%esp
+	movl	(%esp),%eax
+	cmpl	%ebp,%esp
+	ja	.L000page_walk
+.L001page_walk_done:
+	movl	(%esi),%eax
+	movl	4(%esi),%ebx
+	movl	8(%esi),%ecx
+	movl	12(%esi),%ebp
+	movl	16(%esi),%esi
+	movl	(%esi),%esi
+	movl	%eax,4(%esp)
+	movl	%ebx,8(%esp)
+	movl	%ecx,12(%esp)
+	movl	%ebp,16(%esp)
+	movl	%esi,20(%esp)
+	leal	-3(%edi),%ebx
+	movl	%edx,24(%esp)
+	movl	$-1,%eax
+	movd	%eax,%mm7
+	movl	8(%esp),%esi
+	movl	12(%esp),%edi
+	movl	16(%esp),%ebp
+	xorl	%edx,%edx
+	xorl	%ecx,%ecx
+	movd	(%edi),%mm4
+	movd	(%esi),%mm5
+	movd	(%ebp),%mm3
+	pmuludq	%mm4,%mm5
+	movq	%mm5,%mm2
+	movq	%mm5,%mm0
+	pand	%mm7,%mm0
+	pmuludq	20(%esp),%mm5
+	pmuludq	%mm5,%mm3
+	paddq	%mm0,%mm3
+	movd	4(%ebp),%mm1
+	movd	4(%esi),%mm0
+	psrlq	$32,%mm2
+	psrlq	$32,%mm3
+	incl	%ecx
+.align	16
+.L0021st:
+	pmuludq	%mm4,%mm0
+	pmuludq	%mm5,%mm1
+	paddq	%mm0,%mm2
+	paddq	%mm1,%mm3
+	movq	%mm2,%mm0
+	pand	%mm7,%mm0
+	movd	4(%ebp,%ecx,4),%mm1
+	paddq	%mm0,%mm3
+	movd	4(%esi,%ecx,4),%mm0
+	psrlq	$32,%mm2
+	movd	%mm3,28(%esp,%ecx,4)
+	psrlq	$32,%mm3
+	leal	1(%ecx),%ecx
+	cmpl	%ebx,%ecx
+	jl	.L0021st
+	pmuludq	%mm4,%mm0
+	pmuludq	%mm5,%mm1
+	paddq	%mm0,%mm2
+	paddq	%mm1,%mm3
+	movq	%mm2,%mm0
+	pand	%mm7,%mm0
+	paddq	%mm0,%mm3
+	movd	%mm3,28(%esp,%ecx,4)
+	psrlq	$32,%mm2
+	psrlq	$32,%mm3
+	paddq	%mm2,%mm3
+	movq	%mm3,32(%esp,%ebx,4)
+	incl	%edx
+.L003outer:
+	xorl	%ecx,%ecx
+	movd	(%edi,%edx,4),%mm4
+	movd	(%esi),%mm5
+	movd	32(%esp),%mm6
+	movd	(%ebp),%mm3
+	pmuludq	%mm4,%mm5
+	paddq	%mm6,%mm5
+	movq	%mm5,%mm0
+	movq	%mm5,%mm2
+	pand	%mm7,%mm0
+	pmuludq	20(%esp),%mm5
+	pmuludq	%mm5,%mm3
+	paddq	%mm0,%mm3
+	movd	36(%esp),%mm6
+	movd	4(%ebp),%mm1
+	movd	4(%esi),%mm0
+	psrlq	$32,%mm2
+	psrlq	$32,%mm3
+	paddq	%mm6,%mm2
+	incl	%ecx
+	decl	%ebx
+.L004inner:
+	pmuludq	%mm4,%mm0
+	pmuludq	%mm5,%mm1
+	paddq	%mm0,%mm2
+	paddq	%mm1,%mm3
+	movq	%mm2,%mm0
+	movd	36(%esp,%ecx,4),%mm6
+	pand	%mm7,%mm0
+	movd	4(%ebp,%ecx,4),%mm1
+	paddq	%mm0,%mm3
+	movd	4(%esi,%ecx,4),%mm0
+	psrlq	$32,%mm2
+	movd	%mm3,28(%esp,%ecx,4)
+	psrlq	$32,%mm3
+	paddq	%mm6,%mm2
+	decl	%ebx
+	leal	1(%ecx),%ecx
+	jnz	.L004inner
+	movl	%ecx,%ebx
+	pmuludq	%mm4,%mm0
+	pmuludq	%mm5,%mm1
+	paddq	%mm0,%mm2
+	paddq	%mm1,%mm3
+	movq	%mm2,%mm0
+	pand	%mm7,%mm0
+	paddq	%mm0,%mm3
+	movd	%mm3,28(%esp,%ecx,4)
+	psrlq	$32,%mm2
+	psrlq	$32,%mm3
+	movd	36(%esp,%ebx,4),%mm6
+	paddq	%mm2,%mm3
+	paddq	%mm6,%mm3
+	movq	%mm3,32(%esp,%ebx,4)
+	leal	1(%edx),%edx
+	cmpl	%ebx,%edx
+	jle	.L003outer
+	emms
+	jmp	.L005common_tail
+.align	16
+.L005common_tail:
+	movl	16(%esp),%ebp
+	movl	4(%esp),%edi
+	leal	32(%esp),%esi
+	movl	(%esi),%eax
+	movl	%ebx,%ecx
+	xorl	%edx,%edx
+.align	16
+.L006sub:
+	sbbl	(%ebp,%edx,4),%eax
+	movl	%eax,(%edi,%edx,4)
+	decl	%ecx
+	movl	4(%esi,%edx,4),%eax
+	leal	1(%edx),%edx
+	jge	.L006sub
+	sbbl	$0,%eax
+	movl	$-1,%edx
+	xorl	%eax,%edx
+	jmp	.L007copy
+.align	16
+.L007copy:
+	movl	32(%esp,%ebx,4),%esi
+	movl	(%edi,%ebx,4),%ebp
+	movl	%ecx,32(%esp,%ebx,4)
+	andl	%eax,%esi
+	andl	%edx,%ebp
+	orl	%esi,%ebp
+	movl	%ebp,(%edi,%ebx,4)
+	decl	%ebx
+	jge	.L007copy
+	movl	24(%esp),%esp
+	movl	$1,%eax
+	popl	%edi
+	popl	%esi
+	popl	%ebx
+	popl	%ebp
+	ret
+.size	bn_mul_mont,.-.L_bn_mul_mont_begin
+.byte	77,111,110,116,103,111,109,101,114,121,32,77,117,108,116,105
+.byte	112,108,105,99,97,116,105,111,110,32,102,111,114,32,120,56
+.byte	54,44,32,67,82,89,80,84,79,71,65,77,83,32,98,121
+.byte	32,60,97,112,112,114,111,64,111,112,101,110,115,115,108,46
+.byte	111,114,103,62,0
+#endif  // !defined(OPENSSL_NO_ASM) && defined(OPENSSL_X86) && defined(__ELF__)

@@ -1,0 +1,26 @@
+version: 2.1
+
+jobs:
+  test:
+    parameters:
+      version:
+        type: string
+        default: "latest"
+    docker:
+      - image: cimg/rust:<< parameters.version >>
+    steps:
+      - checkout
+      - run: cargo test --verbose
+
+workflows:
+  version: 2
+  test:
+    jobs:
+      - test:
+          matrix:
+            parameters:
+              version:
+                - "1.36"
+                - "1.49"
+
+

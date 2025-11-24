@@ -1,0 +1,6 @@
+Package: boost-build
+Version: 1.67.0
+Architecture: x64-windows
+Multi-Arch: same
+Description: Boost.Build
+Status: install ok installed

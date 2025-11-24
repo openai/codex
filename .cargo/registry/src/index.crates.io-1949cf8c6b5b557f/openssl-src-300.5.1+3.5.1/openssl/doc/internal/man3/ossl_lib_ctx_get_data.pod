@@ -1,0 +1,97 @@
+=pod
+
+=head1 NAME
+
+ossl_lib_ctx_get_data, ossl_lib_ctx_run_once, ossl_lib_ctx_onfree,
+ossl_lib_ctx_is_child
+- internal OSSL_LIB_CTX routines
+
+=head1 SYNOPSIS
+
+ #include <openssl/types.h>
+ #include "internal/cryptlib.h"
+
+ void *ossl_lib_ctx_get_data(OSSL_LIB_CTX *ctx, int index);
+
+ int ossl_lib_ctx_run_once(OSSL_LIB_CTX *ctx, unsigned int idx,
+                           ossl_lib_ctx_run_once_fn run_once_fn);
+ int ossl_lib_ctx_onfree(OSSL_LIB_CTX *ctx, ossl_lib_ctx_onfree_fn onfreefn);
+
+ int ossl_lib_ctx_is_child(OSSL_LIB_CTX *ctx);
+
+=head1 DESCRIPTION
+
+ossl_lib_ctx_run_once() is used to run some initialisation routine I<run_once_fn>
+exactly once per library context I<ctx> object. Each initialisation routine
+should be allocate a unique run once index in cryptlib.h.
+
+Any resources allocated via a run once initialisation routine can be cleaned up
+using ossl_lib_ctx_onfree(). This associates an "on free" routine I<onfreefn> with
+the library context I<ctx>. When I<ctx> is freed all associated "on free"
+routines are called.
+
+ossl_lib_ctx_is_child() returns 1 if this library context is a child and 0
+otherwise.
+
+ossl_lib_ctx_get_data() allows different parts of the library to retrieve
+pointers to structures used in diverse parts of the library. The lifetime of
+these structures is managed by B<OSSL_LIB_CTX>. The different objects which can
+be retrieved are specified with the given argument I<index>. The valid values of
+I<index> are specified in cryptlib.h.
+
+=head1 RETURN VALUES
+
+ossl_lib_ctx_get_data() returns a pointer on success, or NULL on
+failure.
+
+=head1 EXAMPLES
+
+=head2 Usage
+
+To obtain a pointer for an object managed by the library context, simply do
+this:
+
+ /*
+  * ctx is received from a caller,
+  */
+ FOO *data = ossl_lib_ctx_get_data(ctx, OSSL_LIB_CTX_FOO_INDEX);
+
+=head2 Run Once
+
+ void foo_cleanup(OSSL_LIB_CTX *ctx)
+ {
+     /* Free foo resources associated with ctx */
+ }
+
+ static ossl_lib_ctx_run_once_fn do_foo_init;
+ static int do_foo_init(OSSL_LIB_CTX *ctx)
+ {
+     /* Allocate and initialise some foo resources and associated with ctx */
+     return ossl_lib_ctx_onfree(ctx, &foo_cleanup)
+ }
+
+ int foo_some_function(OSSL_LIB_CTX *ctx)
+ {
+    if (!ossl_lib_ctx_run_once(ctx,
+                               OSSL_LIB_CTX_FOO_RUN_ONCE_INDEX,
+                               do_foo_init))
+        return 0;
+
+    /* Do some work using foo resources in ctx */
+ }
+
+
+=head1 SEE ALSO
+
+L<OSSL_LIB_CTX(3)>
+
+=head1 COPYRIGHT
+
+Copyright 2019-2022 The OpenSSL Project Authors. All Rights Reserved.
+
+Licensed under the Apache License 2.0 (the "License").  You may not use
+this file except in compliance with the License.  You can obtain a copy
+in the file LICENSE in the source distribution or at
+L<https://www.openssl.org/source/license.html>.
+
+=cut

@@ -1,0 +1,16 @@
+openssl_conf = openssl_init
+
+.include fipsmodule.cnf
+
+[openssl_init]
+providers = provider_sect
+alg_section = evp_properties
+
+[evp_properties]
+# Ensure FIPS non-approved algorithms in the FIPS module are suppressed (e.g.
+# TEST-RAND). This also means that EVP_default_properties_is_fips_enabled()
+# returns the expected value
+fips_mode = true
+
+[provider_sect]
+fips = fips_sect

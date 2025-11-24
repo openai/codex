@@ -1,0 +1,11 @@
+for i from 0 to 63 do {
+    if i < 3 then { pi_inv = 0.25 + 2^(16*(i - 3)) / pi; }
+    else { pi_inv = 2^(16*(i-3)) / pi; };
+    pn = nearestint(pi_inv);
+    pi_frac = pi_inv - pn;
+    a = round(pi_frac, 51, RN);
+    b = round(pi_frac - a, 51, RN);
+    c = round(pi_frac - a - b, 51, RN);
+    d = round(pi_frac - a - b - c, D, RN);
+    print("{", 2^7 * a, ",", 2^7 * b, ",", 2^7 * c, ",", 2^7 * d, "},");
+};

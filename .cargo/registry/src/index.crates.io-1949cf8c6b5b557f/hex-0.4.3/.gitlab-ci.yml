@@ -1,0 +1,47 @@
+stages:
+  - compile
+  - test
+
+compile:
+  stage: compile
+  image: liuchong/rustup:$RUST_VERSION
+  script:
+    - cargo build
+  cache:
+    key: "$CI_COMMIT_REF_SLUG:$RUST_VERSION"
+    paths:
+      - target/
+  parallel:
+    matrix:
+      - RUST_VERSION:
+          - stable
+          - stable-musl
+          - beta
+          - beta-musl
+          - nightly
+          - nightly-musl
+
+test:
+  stage: test
+  image: liuchong/rustup:$RUST_VERSION
+  script:
+    - cargo test
+    - cargo test --no-default-features
+    - cargo test --no-default-features --features alloc
+    - cargo test --no-default-features --features std
+    - cargo test --no-default-features --features serde
+  cache:
+    key: "$CI_COMMIT_REF_SLUG:$RUST_VERSION"
+    paths:
+      - target/
+  needs:
+    - compile
+  parallel:
+    matrix:
+      - RUST_VERSION:
+          - stable
+          - stable-musl
+          - beta
+          - beta-musl
+          - nightly
+          - nightly-musl

@@ -1,0 +1,18 @@
+[package]
+name = "pkg-config"
+version = "0.3.32"
+authors = ["Alex Crichton <alex@alexcrichton.com>"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rust-lang/pkg-config-rs"
+documentation = "https://docs.rs/pkg-config"
+readme = "README.md"
+description = """
+A library to run the pkg-config system tool at build time in order to be used in
+Cargo build scripts.
+"""
+keywords = ["build-dependencies"]
+rust-version = "1.31"
+edition = "2018"
+
+[dev-dependencies]
+lazy_static = "1"

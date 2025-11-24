@@ -1,0 +1,4 @@
+hard_tabs=true
+use_field_init_shorthand=true
+use_small_heuristics="Max"
+use_try_shorthand=true

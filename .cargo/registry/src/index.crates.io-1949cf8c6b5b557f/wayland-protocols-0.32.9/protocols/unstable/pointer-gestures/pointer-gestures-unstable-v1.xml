@@ -1,0 +1,253 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="pointer_gestures_unstable_v1">
+
+  <interface name="zwp_pointer_gestures_v1" version="3">
+    <description summary="touchpad gestures">
+      A global interface to provide semantic touchpad gestures for a given
+      pointer.
+
+      Three gestures are currently supported: swipe, pinch, and hold.
+      Pinch and swipe gestures follow a three-stage cycle: begin, update,
+      end. Hold gestures follow a two-stage cycle: begin and end. All
+      gestures are identified by a unique id.
+
+      Warning! The protocol described in this file is experimental and
+      backward incompatible changes may be made. Backward compatible changes
+      may be added together with the corresponding interface version bump.
+      Backward incompatible changes are done by bumping the version number in
+      the protocol and interface names and resetting the interface version.
+      Once the protocol is to be declared stable, the 'z' prefix and the
+      version number in the protocol and interface names are removed and the
+      interface version number is reset.
+    </description>
+
+    <request name="get_swipe_gesture">
+      <description summary="get swipe gesture">
+	Create a swipe gesture object. See the
+	wl_pointer_gesture_swipe interface for details.
+      </description>
+      <arg name="id" type="new_id" interface="zwp_pointer_gesture_swipe_v1"/>
+      <arg name="pointer" type="object" interface="wl_pointer"/>
+    </request>
+
+    <request name="get_pinch_gesture">
+      <description summary="get pinch gesture">
+	Create a pinch gesture object. See the
+	wl_pointer_gesture_pinch interface for details.
+      </description>
+      <arg name="id" type="new_id" interface="zwp_pointer_gesture_pinch_v1"/>
+      <arg name="pointer" type="object" interface="wl_pointer"/>
+    </request>
+
+    <!-- Version 2 additions -->
+
+    <request name="release" type="destructor" since="2">
+      <description summary="destroy the pointer gesture object">
+	Destroy the pointer gesture object. Swipe, pinch and hold objects
+	created via this gesture object remain valid.
+      </description>
+    </request>
+
+    <!-- Version 3 additions -->
+
+    <request name="get_hold_gesture" since="3">
+      <description summary="get hold gesture">
+	Create a hold gesture object. See the
+	wl_pointer_gesture_hold interface for details.
+      </description>
+      <arg name="id" type="new_id" interface="zwp_pointer_gesture_hold_v1"/>
+      <arg name="pointer" type="object" interface="wl_pointer"/>
+    </request>
+
+  </interface>
+
+  <interface name="zwp_pointer_gesture_swipe_v1" version="2">
+    <description summary="a swipe gesture object">
+      A swipe gesture object notifies a client about a multi-finger swipe
+      gesture detected on an indirect input device such as a touchpad.
+      The gesture is usually initiated by multiple fingers moving in the
+      same direction but once initiated the direction may change.
+      The precise conditions of when such a gesture is detected are
+      implementation-dependent.
+
+      A gesture consists of three stages: begin, update (optional) and end.
+      There cannot be multiple simultaneous hold, pinch or swipe gestures on a
+      same pointer/seat, how compositors prevent these situations is
+      implementation-dependent.
+
+      A gesture may be cancelled by the compositor or the hardware.
+      Clients should not consider performing permanent or irreversible
+      actions until the end of a gesture has been received.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the pointer swipe gesture object"/>
+    </request>
+
+    <event name="begin">
+      <description summary="multi-finger swipe begin">
+	This event is sent when a multi-finger swipe gesture is detected
+	on the device.
+      </description>
+      <arg name="serial" type="uint"/>
+      <arg name="time" type="uint" summary="timestamp with millisecond granularity"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+      <arg name="fingers" type="uint" summary="number of fingers"/>
+    </event>
+
+    <event name="update">
+      <description summary="multi-finger swipe motion">
+	This event is sent when a multi-finger swipe gesture changes the
+	position of the logical center.
+
+	The dx and dy coordinates are relative coordinates of the logical
+	center of the gesture compared to the previous event.
+      </description>
+      <arg name="time" type="uint" summary="timestamp with millisecond granularity"/>
+      <arg name="dx" type="fixed" summary="delta x coordinate in surface coordinate space"/>
+      <arg name="dy" type="fixed" summary="delta y coordinate in surface coordinate space"/>
+    </event>
+
+    <event name="end">
+      <description summary="multi-finger swipe end">
+	This event is sent when a multi-finger swipe gesture ceases to
+	be valid. This may happen when one or more fingers are lifted or
+	the gesture is cancelled.
+
+	When a gesture is cancelled, the client should undo state changes
+	caused by this gesture. What causes a gesture to be cancelled is
+	implementation-dependent.
+      </description>
+      <arg name="serial" type="uint"/>
+      <arg name="time" type="uint" summary="timestamp with millisecond granularity"/>
+      <arg name="cancelled" type="int" summary="1 if the gesture was cancelled, 0 otherwise"/>
+    </event>
+  </interface>
+
+  <interface name="zwp_pointer_gesture_pinch_v1" version="2">
+    <description summary="a pinch gesture object">
+      A pinch gesture object notifies a client about a multi-finger pinch
+      gesture detected on an indirect input device such as a touchpad.
+      The gesture is usually initiated by multiple fingers moving towards
+      each other or away from each other, or by two or more fingers rotating
+      around a logical center of gravity. The precise conditions of when
+      such a gesture is detected are implementation-dependent.
+
+      A gesture consists of three stages: begin, update (optional) and end.
+      There cannot be multiple simultaneous hold, pinch or swipe gestures on a
+      same pointer/seat, how compositors prevent these situations is
+      implementation-dependent.
+
+      A gesture may be cancelled by the compositor or the hardware.
+      Clients should not consider performing permanent or irreversible
+      actions until the end of a gesture has been received.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the pinch gesture object"/>
+    </request>
+
+    <event name="begin">
+      <description summary="multi-finger pinch begin">
+	This event is sent when a multi-finger pinch gesture is detected
+	on the device.
+      </description>
+      <arg name="serial" type="uint"/>
+      <arg name="time" type="uint" summary="timestamp with millisecond granularity"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+      <arg name="fingers" type="uint" summary="number of fingers"/>
+    </event>
+
+    <event name="update">
+      <description summary="multi-finger pinch motion">
+	This event is sent when a multi-finger pinch gesture changes the
+	position of the logical center, the rotation or the relative scale.
+
+	The dx and dy coordinates are relative coordinates in the
+	surface coordinate space of the logical center of the gesture.
+
+	The scale factor is an absolute scale compared to the
+	pointer_gesture_pinch.begin event, e.g. a scale of 2 means the fingers
+	are now twice as far apart as on pointer_gesture_pinch.begin.
+
+	The rotation is the relative angle in degrees clockwise compared to the previous
+	pointer_gesture_pinch.begin or pointer_gesture_pinch.update event.
+      </description>
+      <arg name="time" type="uint" summary="timestamp with millisecond granularity"/>
+      <arg name="dx" type="fixed" summary="delta x coordinate in surface coordinate space"/>
+      <arg name="dy" type="fixed" summary="delta y coordinate in surface coordinate space"/>
+      <arg name="scale" type="fixed" summary="scale relative to the initial finger position"/>
+      <arg name="rotation" type="fixed" summary="angle in degrees cw relative to the previous event"/>
+    </event>
+
+    <event name="end">
+      <description summary="multi-finger pinch end">
+	This event is sent when a multi-finger pinch gesture ceases to
+	be valid. This may happen when one or more fingers are lifted or
+	the gesture is cancelled.
+
+	When a gesture is cancelled, the client should undo state changes
+	caused by this gesture. What causes a gesture to be cancelled is
+	implementation-dependent.
+      </description>
+      <arg name="serial" type="uint"/>
+      <arg name="time" type="uint" summary="timestamp with millisecond granularity"/>
+      <arg name="cancelled" type="int" summary="1 if the gesture was cancelled, 0 otherwise"/>
+    </event>
+
+  </interface>
+
+  <interface name="zwp_pointer_gesture_hold_v1" version="3">
+    <description summary="a hold gesture object">
+      A hold gesture object notifies a client about a single- or
+      multi-finger hold gesture detected on an indirect input device such as
+      a touchpad. The gesture is usually initiated by one or more fingers
+      being held down without significant movement. The precise conditions
+      of when such a gesture is detected are implementation-dependent.
+
+      In particular, this gesture may be used to cancel kinetic scrolling.
+
+      A hold gesture consists of two stages: begin and end. Unlike pinch and
+      swipe there is no update stage.
+      There cannot be multiple simultaneous hold, pinch or swipe gestures on a
+      same pointer/seat, how compositors prevent these situations is
+      implementation-dependent.
+
+      A gesture may be cancelled by the compositor or the hardware.
+      Clients should not consider performing permanent or irreversible
+      actions until the end of a gesture has been received.
+    </description>
+
+    <request name="destroy" type="destructor" since="3">
+      <description summary="destroy the hold gesture object"/>
+    </request>
+
+    <event name="begin" since="3">
+      <description summary="multi-finger hold begin">
+	This event is sent when a hold gesture is detected on the device.
+      </description>
+      <arg name="serial" type="uint"/>
+      <arg name="time" type="uint" summary="timestamp with millisecond granularity"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+      <arg name="fingers" type="uint" summary="number of fingers"/>
+    </event>
+
+    <event name="end" since="3">
+      <description summary="multi-finger hold end">
+	This event is sent when a hold gesture ceases to
+	be valid. This may happen when the holding fingers are lifted or
+	the gesture is cancelled, for example if the fingers move past an
+	implementation-defined threshold, the finger count changes or the hold
+	gesture changes into a different type of gesture.
+
+	When a gesture is cancelled, the client may need to undo state changes
+	caused by this gesture. What causes a gesture to be cancelled is
+	implementation-dependent.
+      </description>
+      <arg name="serial" type="uint"/>
+      <arg name="time" type="uint" summary="timestamp with millisecond granularity"/>
+      <arg name="cancelled" type="int" summary="1 if the gesture was cancelled, 0 otherwise"/>
+    </event>
+
+  </interface>
+</protocol>

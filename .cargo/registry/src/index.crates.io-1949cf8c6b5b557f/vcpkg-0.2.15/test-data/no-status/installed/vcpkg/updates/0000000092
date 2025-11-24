@@ -1,0 +1,7 @@
+Package: boost-math
+Version: 1.67.0
+Depends: boost-array, boost-assert, boost-atomic, boost-build, boost-compatibility, boost-concept-check, boost-config, boost-core, boost-detail, boost-fusion, boost-integer, boost-lambda, boost-lexical-cast, boost-modular-build-helper, boost-mpl, boost-predef, boost-range, boost-static-assert, boost-throw-exception, boost-tuple, boost-type-traits, boost-utility, boost-vcpkg-helpers
+Architecture: x64-windows
+Multi-Arch: same
+Description: Boost math module
+Status: install ok half-installed

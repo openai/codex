@@ -1,0 +1,26 @@
+[package]
+name = "blocking"
+# When publishing a new version:
+# - Update CHANGELOG.md
+# - Create "v1.x.y" git tag
+version = "1.6.2"
+authors = ["Stjepan Glavina <stjepang@gmail.com>"]
+edition = "2021"
+rust-version = "1.63"
+description = "A thread pool for isolating blocking I/O in async programs"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/smol-rs/blocking"
+keywords = ["async", "file", "stdio", "stdin", "process"]
+categories = ["asynchronous", "concurrency"]
+exclude = ["/.*"]
+
+[dependencies]
+async-channel = "2.0.0"
+async-task = "4.4.0"
+futures-io = { version = "0.3.28", default-features = false, features = ["std"] }
+futures-lite = { version = "2.0.0", default-features = false }
+piper = "0.2.0"
+tracing = { version = "0.1.37", default-features = false, optional = true }
+
+[dev-dependencies]
+futures-lite = "2.0.0"

@@ -1,0 +1,7 @@
+Package: boost-graph
+Version: 1.67.0
+Depends: boost-algorithm, boost-any, boost-array, boost-assert, boost-bimap, boost-bind, boost-build, boost-compatibility, boost-concept-check, boost-config, boost-conversion, boost-core, boost-detail, boost-foreach, boost-function, boost-functional, boost-integer, boost-iterator, boost-lexical-cast, boost-math, boost-modular-build-helper, boost-move, boost-mpl, boost-multi-index, boost-optional, boost-parameter, boost-preprocessor, boost-property-map, boost-property-tree, boost-random, boost-range, boost-regex, boost-serialization, boost-smart-ptr, boost-spirit, boost-static-assert, boost-test, boost-throw-exception, boost-tti, boost-tuple, boost-typeof, boost-type-traits, boost-unordered, boost-utility, boost-vcpkg-helpers, boost-xpressive
+Architecture: x64-windows
+Multi-Arch: same
+Description: Boost graph module
+Status: install ok half-installed

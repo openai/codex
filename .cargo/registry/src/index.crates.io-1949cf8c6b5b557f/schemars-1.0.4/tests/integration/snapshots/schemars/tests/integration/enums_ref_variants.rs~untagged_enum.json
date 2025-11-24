@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Untagged",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/UnitOne"
+    },
+    {
+      "$ref": "#/$defs/StringMap"
+    },
+    {
+      "$ref": "#/$defs/UnitStructNewType"
+    },
+    {
+      "$ref": "#/$defs/StructNewType"
+    },
+    {
+      "$ref": "#/$defs/Struct2"
+    },
+    {
+      "$ref": "#/$defs/Tuple"
+    },
+    {
+      "$ref": "#/$defs/UnitTwo"
+    },
+    {
+      "$ref": "#/$defs/UnitAsInt"
+    },
+    {
+      "$ref": "#/$defs/TupleAsStr"
+    }
+  ],
+  "$defs": {
+    "UnitOne": {
+      "type": "null"
+    },
+    "StringMap": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "UnitStructNewType": {
+      "$ref": "#/$defs/UnitStruct"
+    },
+    "UnitStruct": {
+      "type": "null"
+    },
+    "StructNewType": {
+      "$ref": "#/$defs/Struct"
+    },
+    "Struct": {
+      "type": "object",
+      "properties": {
+        "foo": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "bar": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "foo",
+        "bar"
+      ]
+    },
+    "Struct2": {
+      "type": "object",
+      "properties": {
+        "foo": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "bar": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "foo",
+        "bar"
+      ]
+    },
+    "Tuple": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "integer",
+          "format": "int32"
+        },
+        {
+          "type": "boolean"
+        }
+      ],
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "UnitTwo": {
+      "type": "null"
+    },
+    "UnitAsInt": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "TupleAsStr": {
+      "type": "string",
+      "pattern": "^\\d+ (true|false)$"
+    }
+  }
+}

@@ -1,0 +1,25 @@
+[package]
+name = "serde_derive_internals"
+version = "0.29.1"
+authors = ["Erick Tryzelaar <erick.tryzelaar@gmail.com>", "David Tolnay <dtolnay@gmail.com>"]
+description = "AST representation used by Serde derive macros. Unstable."
+documentation = "https://docs.rs/serde_derive_internals"
+edition = "2015"
+exclude = ["build.rs"]
+homepage = "https://serde.rs"
+keywords = ["serde", "serialization"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/serde-rs/serde"
+rust-version = "1.56"
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true, features = ["clone-impls", "derive", "parsing", "printing"] }
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--generate-link-to-definition"]

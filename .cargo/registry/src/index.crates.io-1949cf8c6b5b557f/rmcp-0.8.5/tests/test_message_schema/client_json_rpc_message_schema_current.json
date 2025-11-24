@@ -1,0 +1,1509 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "JsonRpcMessage",
+  "description": "Represents any JSON-RPC message that can be sent or received.\n\nThis enum covers all possible message types in the JSON-RPC protocol:\nindividual requests/responses, notifications, and errors.\nIt serves as the top-level message container for MCP communication.",
+  "anyOf": [
+    {
+      "description": "A single request expecting a response",
+      "allOf": [
+        {
+          "$ref": "#/definitions/JsonRpcRequest"
+        }
+      ]
+    },
+    {
+      "description": "A response to a previous request",
+      "allOf": [
+        {
+          "$ref": "#/definitions/JsonRpcResponse"
+        }
+      ]
+    },
+    {
+      "description": "A one-way notification (no response expected)",
+      "allOf": [
+        {
+          "$ref": "#/definitions/JsonRpcNotification"
+        }
+      ]
+    },
+    {
+      "description": "An error response",
+      "allOf": [
+        {
+          "$ref": "#/definitions/JsonRpcError"
+        }
+      ]
+    }
+  ],
+  "definitions": {
+    "Annotated": {
+      "type": "object",
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawTextContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "image"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawImageContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "resource"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawEmbeddedResource"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "audio"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawAudioContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "resource_link"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawResource"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    },
+    "Annotations": {
+      "type": "object",
+      "properties": {
+        "audience": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Role"
+          }
+        },
+        "lastModified": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "priority": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        }
+      }
+    },
+    "ArgumentInfo": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ]
+    },
+    "CallToolRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "tools/call"
+    },
+    "CallToolRequestParam": {
+      "description": "Parameters for calling a tool provided by an MCP server.\n\nContains the tool name and optional arguments needed to execute\nthe tool operation.",
+      "type": "object",
+      "properties": {
+        "arguments": {
+          "description": "Arguments to pass to the tool (must match the tool's input schema)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "name": {
+          "description": "The name of the tool to call",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "CancelledNotificationMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "notifications/cancelled"
+    },
+    "CancelledNotificationParam": {
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requestId": {
+          "$ref": "#/definitions/NumberOrString"
+        }
+      },
+      "required": [
+        "requestId"
+      ]
+    },
+    "ClientCapabilities": {
+      "title": "Builder",
+      "description": "```rust\n# use rmcp::model::ClientCapabilities;\nlet cap = ClientCapabilities::builder()\n    .enable_experimental()\n    .enable_roots()\n    .enable_roots_list_changed()\n    .build();\n```",
+      "type": "object",
+      "properties": {
+        "elicitation": {
+          "description": "Capability to handle elicitation requests from servers for interactive user input",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ElicitationCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "experimental": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "roots": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RootsCapabilities"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sampling": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      }
+    },
+    "ClientResult": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/CreateMessageResult"
+        },
+        {
+          "$ref": "#/definitions/ListRootsResult"
+        },
+        {
+          "$ref": "#/definitions/CreateElicitationResult"
+        },
+        {
+          "$ref": "#/definitions/EmptyObject"
+        }
+      ]
+    },
+    "CompleteRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "completion/complete"
+    },
+    "CompleteRequestParam": {
+      "type": "object",
+      "properties": {
+        "argument": {
+          "$ref": "#/definitions/ArgumentInfo"
+        },
+        "context": {
+          "description": "Optional context containing previously resolved argument values",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CompletionContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ref": {
+          "$ref": "#/definitions/Reference"
+        }
+      },
+      "required": [
+        "ref",
+        "argument"
+      ]
+    },
+    "CompletionContext": {
+      "description": "Context for completion requests providing previously resolved arguments.\n\nThis enables context-aware completion where subsequent argument completions\ncan take into account the values of previously resolved arguments.",
+      "type": "object",
+      "properties": {
+        "arguments": {
+          "description": "Previously resolved argument values that can inform completion suggestions",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "CreateElicitationResult": {
+      "description": "The result returned by a client in response to an elicitation request.\n\nContains the user's decision (accept/decline/cancel) and optionally their input data\nif they chose to accept the request.",
+      "type": "object",
+      "properties": {
+        "action": {
+          "description": "The user's decision on how to handle the elicitation request",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ElicitationAction"
+            }
+          ]
+        },
+        "content": {
+          "description": "The actual data provided by the user, if they accepted the request.\nMust conform to the JSON schema specified in the original request.\nOnly present when action is Accept."
+        }
+      },
+      "required": [
+        "action"
+      ]
+    },
+    "CreateMessageResult": {
+      "description": "The result of a sampling/createMessage request containing the generated response.\n\nThis structure contains the generated message along with metadata about\nhow the generation was performed and why it stopped.",
+      "type": "object",
+      "properties": {
+        "content": {
+          "description": "The actual content of the message (text, image, etc.)",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Annotated"
+            }
+          ]
+        },
+        "model": {
+          "description": "The identifier of the model that generated the response",
+          "type": "string"
+        },
+        "role": {
+          "description": "The role of the message sender (User or Assistant)",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Role"
+            }
+          ]
+        },
+        "stopReason": {
+          "description": "The reason why generation stopped (e.g., \"endTurn\", \"maxTokens\")",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "model",
+        "role",
+        "content"
+      ]
+    },
+    "ElicitationAction": {
+      "description": "Represents the possible actions a user can take in response to an elicitation request.\n\nWhen a server requests user input through elicitation, the user can:\n- Accept: Provide the requested information and continue\n- Decline: Refuse to provide the information but continue the operation\n- Cancel: Stop the entire operation",
+      "oneOf": [
+        {
+          "description": "User accepts the request and provides the requested information",
+          "type": "string",
+          "const": "accept"
+        },
+        {
+          "description": "User declines to provide the information but allows the operation to continue",
+          "type": "string",
+          "const": "decline"
+        },
+        {
+          "description": "User cancels the entire operation",
+          "type": "string",
+          "const": "cancel"
+        }
+      ]
+    },
+    "ElicitationCapability": {
+      "description": "Capability for handling elicitation requests from servers.\n\nElicitation allows servers to request interactive input from users during tool execution.\nThis capability indicates that a client can handle elicitation requests and present\nappropriate UI to users for collecting the requested information.",
+      "type": "object",
+      "properties": {
+        "schemaValidation": {
+          "description": "Whether the client supports JSON Schema validation for elicitation responses.\nWhen true, the client will validate user input against the requested_schema\nbefore sending the response back to the server.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "EmptyObject": {
+      "description": "This is commonly used for representing empty objects in MCP messages.\n\nwithout returning any specific data.",
+      "type": "object"
+    },
+    "ErrorCode": {
+      "description": "Standard JSON-RPC error codes used throughout the MCP protocol.\n\nThese codes follow the JSON-RPC 2.0 specification and provide\nstandardized error reporting across all MCP implementations.",
+      "type": "integer",
+      "format": "int32"
+    },
+    "ErrorData": {
+      "description": "Error information for JSON-RPC error responses.\n\nThis structure follows the JSON-RPC 2.0 specification for error reporting,\nproviding a standardized way to communicate errors between clients and servers.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "description": "The error type that occurred (using standard JSON-RPC error codes)",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ErrorCode"
+            }
+          ]
+        },
+        "data": {
+          "description": "Additional information about the error. The value of this member is defined by the\nsender (e.g. detailed error information, nested errors etc.)."
+        },
+        "message": {
+          "description": "A short description of the error. The message SHOULD be limited to a concise single sentence.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    },
+    "GetPromptRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "prompts/get"
+    },
+    "GetPromptRequestParam": {
+      "description": "Parameters for retrieving a specific prompt",
+      "type": "object",
+      "properties": {
+        "arguments": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "Icon": {
+      "description": "A URL pointing to an icon resource or a base64-encoded data URI.\n\nClients that support rendering icons MUST support at least the following MIME types:\n- image/png - PNG images (safe, universal compatibility)\n- image/jpeg (and image/jpg) - JPEG images (safe, universal compatibility)\n\nClients that support rendering icons SHOULD also support:\n- image/svg+xml - SVG images (scalable but requires security precautions)\n- image/webp - WebP images (modern, efficient format)",
+      "type": "object",
+      "properties": {
+        "mimeType": {
+          "description": "Optional override if the server's MIME type is missing or generic",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sizes": {
+          "description": "Size specification, each string should be in WxH format (e.g., `\\\"48x48\\\"`, `\\\"96x96\\\"`) or `\\\"any\\\"` for scalable formats like SVG",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "src": {
+          "description": "A standard URI pointing to an icon resource",
+          "type": "string"
+        }
+      },
+      "required": [
+        "src"
+      ]
+    },
+    "Implementation": {
+      "type": "object",
+      "properties": {
+        "icons": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Icon"
+          }
+        },
+        "name": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "type": "string"
+        },
+        "websiteUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ]
+    },
+    "InitializeRequestParam": {
+      "description": "Parameters sent by a client when initializing a connection to an MCP server.\n\nThis contains the client's protocol version, capabilities, and implementation\ninformation, allowing the server to understand what the client supports.",
+      "type": "object",
+      "properties": {
+        "capabilities": {
+          "description": "The capabilities this client supports (sampling, roots, etc.)",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ClientCapabilities"
+            }
+          ]
+        },
+        "clientInfo": {
+          "description": "Information about the client implementation",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Implementation"
+            }
+          ]
+        },
+        "protocolVersion": {
+          "description": "The MCP protocol version this client supports",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProtocolVersion"
+            }
+          ]
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "capabilities",
+        "clientInfo"
+      ]
+    },
+    "InitializeResultMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "initialize"
+    },
+    "InitializedNotificationMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "notifications/initialized"
+    },
+    "JsonRpcError": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "$ref": "#/definitions/ErrorData"
+        },
+        "id": {
+          "$ref": "#/definitions/NumberOrString"
+        },
+        "jsonrpc": {
+          "$ref": "#/definitions/JsonRpcVersion2_0"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "error"
+      ]
+    },
+    "JsonRpcNotification": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "$ref": "#/definitions/JsonRpcVersion2_0"
+        }
+      },
+      "anyOf": [
+        {
+          "$ref": "#/definitions/Notification"
+        },
+        {
+          "$ref": "#/definitions/Notification2"
+        },
+        {
+          "$ref": "#/definitions/NotificationNoParam"
+        },
+        {
+          "$ref": "#/definitions/NotificationNoParam2"
+        }
+      ],
+      "required": [
+        "jsonrpc"
+      ]
+    },
+    "JsonRpcRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/NumberOrString"
+        },
+        "jsonrpc": {
+          "$ref": "#/definitions/JsonRpcVersion2_0"
+        }
+      },
+      "anyOf": [
+        {
+          "$ref": "#/definitions/RequestNoParam"
+        },
+        {
+          "$ref": "#/definitions/Request"
+        },
+        {
+          "$ref": "#/definitions/Request2"
+        },
+        {
+          "$ref": "#/definitions/Request3"
+        },
+        {
+          "$ref": "#/definitions/Request4"
+        },
+        {
+          "$ref": "#/definitions/RequestOptionalParam"
+        },
+        {
+          "$ref": "#/definitions/RequestOptionalParam2"
+        },
+        {
+          "$ref": "#/definitions/RequestOptionalParam3"
+        },
+        {
+          "$ref": "#/definitions/Request5"
+        },
+        {
+          "$ref": "#/definitions/Request6"
+        },
+        {
+          "$ref": "#/definitions/Request7"
+        },
+        {
+          "$ref": "#/definitions/Request8"
+        },
+        {
+          "$ref": "#/definitions/RequestOptionalParam4"
+        }
+      ],
+      "required": [
+        "jsonrpc",
+        "id"
+      ]
+    },
+    "JsonRpcResponse": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/NumberOrString"
+        },
+        "jsonrpc": {
+          "$ref": "#/definitions/JsonRpcVersion2_0"
+        },
+        "result": {
+          "$ref": "#/definitions/ClientResult"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ]
+    },
+    "JsonRpcVersion2_0": {
+      "type": "string",
+      "format": "const",
+      "const": "2.0"
+    },
+    "ListPromptsRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "prompts/list"
+    },
+    "ListResourceTemplatesRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "resources/templates/list"
+    },
+    "ListResourcesRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "resources/list"
+    },
+    "ListRootsResult": {
+      "type": "object",
+      "properties": {
+        "roots": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Root"
+          }
+        }
+      },
+      "required": [
+        "roots"
+      ]
+    },
+    "ListToolsRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "tools/list"
+    },
+    "LoggingLevel": {
+      "description": "Logging levels supported by the MCP protocol",
+      "type": "string",
+      "enum": [
+        "debug",
+        "info",
+        "notice",
+        "warning",
+        "error",
+        "critical",
+        "alert",
+        "emergency"
+      ]
+    },
+    "Notification": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/CancelledNotificationMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/CancelledNotificationParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Notification2": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ProgressNotificationMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/ProgressNotificationParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "NotificationNoParam": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/InitializedNotificationMethod"
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    "NotificationNoParam2": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/RootsListChangedNotificationMethod"
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    "NumberOrString": {
+      "oneOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "PaginatedRequestParam": {
+      "type": "object",
+      "properties": {
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "PingRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "ping"
+    },
+    "ProgressNotificationMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "notifications/progress"
+    },
+    "ProgressNotificationParam": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "description": "An optional message describing the current progress.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "progress": {
+          "description": "The progress thus far. This should increase every time progress is made, even if the total is unknown.",
+          "type": "number",
+          "format": "double"
+        },
+        "progressToken": {
+          "$ref": "#/definitions/ProgressToken"
+        },
+        "total": {
+          "description": "Total number of items to process (or total progress required), if known",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "required": [
+        "progressToken",
+        "progress"
+      ]
+    },
+    "ProgressToken": {
+      "description": "A token used to track the progress of long-running operations.\n\nProgress tokens allow clients and servers to associate progress notifications\nwith specific requests, enabling real-time updates on operation status.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/NumberOrString"
+        }
+      ]
+    },
+    "PromptReference": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "ProtocolVersion": {
+      "description": "Represents the MCP protocol version used for communication.\n\nThis ensures compatibility between clients and servers by specifying\nwhich version of the Model Context Protocol is being used.",
+      "type": "string"
+    },
+    "RawAudioContent": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "mimeType"
+      ]
+    },
+    "RawEmbeddedResource": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional protocol-level metadata for this content block",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "resource": {
+          "$ref": "#/definitions/ResourceContents"
+        }
+      },
+      "required": [
+        "resource"
+      ]
+    },
+    "RawImageContent": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional protocol-level metadata for this content block",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "data": {
+          "description": "The base64-encoded image",
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "mimeType"
+      ]
+    },
+    "RawResource": {
+      "description": "Represents a resource in the extension with metadata",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "Optional description of the resource",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icons": {
+          "description": "Optional list of icons for the resource",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Icon"
+          }
+        },
+        "mimeType": {
+          "description": "MIME type of the resource content (\"text\" or \"blob\")",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Name of the resource",
+          "type": "string"
+        },
+        "size": {
+          "description": "The size of the raw resource content, in bytes (i.e., before base64 encoding or any tokenization), if known.\n\nThis can be used by Hosts to display file sizes and estimate context window us",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "title": {
+          "description": "Human-readable title of the resource",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uri": {
+          "description": "URI representing the resource location (e.g., \"file:///path/to/file\" or \"str:///content\")",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "name"
+      ]
+    },
+    "RawTextContent": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional protocol-level metadata for this content block",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ]
+    },
+    "ReadResourceRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "resources/read"
+    },
+    "ReadResourceRequestParam": {
+      "description": "Parameters for reading a specific resource",
+      "type": "object",
+      "properties": {
+        "uri": {
+          "description": "The URI of the resource to read",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri"
+      ]
+    },
+    "Reference": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "ref/resource"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceReference"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "ref/prompt"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/PromptReference"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    },
+    "Request": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/InitializeResultMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/InitializeRequestParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Request2": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/CompleteRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/CompleteRequestParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Request3": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/SetLevelRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/SetLevelRequestParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Request4": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/GetPromptRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/GetPromptRequestParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Request5": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ReadResourceRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/ReadResourceRequestParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Request6": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/SubscribeRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/SubscribeRequestParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Request7": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/UnsubscribeRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/UnsubscribeRequestParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Request8": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/CallToolRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/CallToolRequestParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "RequestNoParam": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/PingRequestMethod"
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    "RequestOptionalParam": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ListPromptsRequestMethod"
+        },
+        "params": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PaginatedRequestParam"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    "RequestOptionalParam2": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ListResourcesRequestMethod"
+        },
+        "params": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PaginatedRequestParam"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    "RequestOptionalParam3": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ListResourceTemplatesRequestMethod"
+        },
+        "params": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PaginatedRequestParam"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    "RequestOptionalParam4": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ListToolsRequestMethod"
+        },
+        "params": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PaginatedRequestParam"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    "ResourceContents": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "_meta": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": true
+            },
+            "mimeType": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "text": {
+              "type": "string"
+            },
+            "uri": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "uri",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "_meta": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": true
+            },
+            "blob": {
+              "type": "string"
+            },
+            "mimeType": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "uri": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "uri",
+            "blob"
+          ]
+        }
+      ]
+    },
+    "ResourceReference": {
+      "type": "object",
+      "properties": {
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri"
+      ]
+    },
+    "Role": {
+      "description": "Represents the role of a participant in a conversation or message exchange.\n\nUsed in sampling and chat contexts to distinguish between different\ntypes of message senders in the conversation flow.",
+      "oneOf": [
+        {
+          "description": "A human user or client making a request",
+          "type": "string",
+          "const": "user"
+        },
+        {
+          "description": "An AI assistant or server providing a response",
+          "type": "string",
+          "const": "assistant"
+        }
+      ]
+    },
+    "Root": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri"
+      ]
+    },
+    "RootsCapabilities": {
+      "type": "object",
+      "properties": {
+        "listChanged": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "RootsListChangedNotificationMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "notifications/roots/list_changed"
+    },
+    "SetLevelRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "logging/setLevel"
+    },
+    "SetLevelRequestParam": {
+      "description": "Parameters for setting the logging level",
+      "type": "object",
+      "properties": {
+        "level": {
+          "description": "The desired logging level",
+          "allOf": [
+            {
+              "$ref": "#/definitions/LoggingLevel"
+            }
+          ]
+        }
+      },
+      "required": [
+        "level"
+      ]
+    },
+    "SubscribeRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "resources/subscribe"
+    },
+    "SubscribeRequestParam": {
+      "description": "Parameters for subscribing to resource updates",
+      "type": "object",
+      "properties": {
+        "uri": {
+          "description": "The URI of the resource to subscribe to",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri"
+      ]
+    },
+    "UnsubscribeRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "resources/unsubscribe"
+    },
+    "UnsubscribeRequestParam": {
+      "description": "Parameters for unsubscribing from resource updates",
+      "type": "object",
+      "properties": {
+        "uri": {
+          "description": "The URI of the resource to unsubscribe from",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri"
+      ]
+    }
+  }
+}

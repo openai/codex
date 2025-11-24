@@ -1,0 +1,37 @@
+<!-- DTD for D-Bus Introspection data -->
+<!-- (C) 2005-02-02 David A. Wheeler; released under the D-Bus licenses,
+         GNU GPL version 2 (or greater) and AFL 1.1 (or greater) -->
+
+<!-- see D-Bus specification for documentation -->
+
+<!ELEMENT node (node|interface)*>
+<!ATTLIST node name CDATA #IMPLIED>
+
+<!ELEMENT interface (method|signal|property|annotation)*>
+<!ATTLIST interface name CDATA #REQUIRED>
+
+<!ELEMENT method (arg|annotation)*>
+<!ATTLIST method name CDATA #REQUIRED>
+
+<!ELEMENT signal (arg|annotation)*>
+<!ATTLIST signal name CDATA #REQUIRED>
+
+<!ELEMENT arg (annotation)*>
+<!ATTLIST arg name CDATA #IMPLIED>
+<!ATTLIST arg type CDATA #REQUIRED>
+<!-- Method arguments SHOULD include "direction",
+     while signal and error arguments SHOULD not (since there's no point).
+     The DTD format can't express that subtlety. -->
+<!ATTLIST arg direction (in|out) "in">
+
+<!-- AKA "attribute" -->
+<!ELEMENT property (annotation)*>
+<!ATTLIST property name CDATA #REQUIRED>
+<!ATTLIST property type CDATA #REQUIRED> 
+<!ATTLIST property access (read|write|readwrite) #REQUIRED>
+
+<!ELEMENT annotation EMPTY>  <!-- Generic metadata -->
+<!ATTLIST annotation name CDATA #REQUIRED>
+<!ATTLIST annotation value CDATA #REQUIRED>
+
+

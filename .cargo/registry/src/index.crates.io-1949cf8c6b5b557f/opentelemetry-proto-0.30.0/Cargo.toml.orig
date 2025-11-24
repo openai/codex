@@ -1,0 +1,72 @@
+[package]
+name = "opentelemetry-proto"
+version = "0.30.0"
+description = "Protobuf generated files and transformations."
+homepage = "https://github.com/open-telemetry/opentelemetry-rust/tree/main/opentelemetry-proto"
+repository = "https://github.com/open-telemetry/opentelemetry-rust/tree/main/opentelemetry-proto"
+readme = "README.md"
+categories = [
+    "development-tools::debugging",
+    "development-tools::profiling",
+    "asynchronous",
+]
+keywords = ["opentelemetry", "otlp", "logging", "tracing", "metrics"]
+license = "Apache-2.0"
+edition = "2021"
+rust-version = "1.75.0"
+autotests = false
+autobenches = false
+
+[lib]
+doctest = false
+bench = false
+
+[[test]]
+name = "grpc_build"
+path = "tests/grpc_build.rs"
+
+[[test]]
+name = "json_serde"
+path = "tests/json_serde.rs"
+
+
+[features]
+default = ["full"]
+full = ["gen-tonic", "trace", "logs", "metrics", "zpages", "with-serde", "internal-logs"]
+
+# crates used to generate rs files
+gen-tonic = ["gen-tonic-messages", "tonic/channel"]
+gen-tonic-messages = ["tonic", "prost"]
+
+# telemetry pillars and functions
+trace = ["opentelemetry/trace", "opentelemetry_sdk/trace"]
+metrics = ["opentelemetry/metrics", "opentelemetry_sdk/metrics"]
+logs = ["opentelemetry/logs", "opentelemetry_sdk/logs"]
+zpages = ["trace"]
+profiles = []
+testing = ["opentelemetry/testing"]
+
+# add ons
+internal-logs = ["opentelemetry/internal-logs"]
+with-schemars = ["schemars"]
+with-serde = ["serde", "hex", "base64"]
+
+[dependencies]
+tonic = { workspace = true, optional = true, features = ["codegen", "prost"] }
+prost = { workspace = true, optional = true }
+opentelemetry = { version = "0.30", default-features = false, path = "../opentelemetry" }
+opentelemetry_sdk = { version = "0.30", default-features = false, path = "../opentelemetry-sdk" }
+schemars = { workspace = true, optional = true }
+serde = { workspace = true, optional = true, features = ["serde_derive"] }
+hex = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
+
+[dev-dependencies]
+opentelemetry = { features = ["testing"], path = "../opentelemetry" }
+tonic-build = { workspace = true }
+prost-build = { workspace = true }
+tempfile = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

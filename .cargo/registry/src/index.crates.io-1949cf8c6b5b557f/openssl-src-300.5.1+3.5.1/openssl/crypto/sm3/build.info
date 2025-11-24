@@ -1,0 +1,27 @@
+LIBS=../../libcrypto
+
+IF[{- !$disabled{sm3} -}]
+  IF[{- !$disabled{asm} -}]
+    $SM3ASM_aarch64=sm3-armv8.S
+    $SM3DEF_aarch64=OPENSSL_SM3_ASM
+
+    $SM3ASM_riscv64=sm3_riscv.c sm3-riscv64-zvksh.S
+    $SM3DEF_riscv64=OPENSSL_SM3_ASM
+
+    # Now that we have defined all the arch specific variables, use the
+    # appropriate ones, and define the appropriate macros
+    IF[$SM3ASM_{- $target{asm_arch} -}]
+      $SM3ASM=$SM3ASM_{- $target{asm_arch} -}
+      $SM3DEF=$SM3DEF_{- $target{asm_arch} -}
+    ENDIF
+  ENDIF
+
+  SOURCE[../../libcrypto]=sm3.c legacy_sm3.c $SM3ASM
+  DEFINE[../../libcrypto]=$SM3DEF
+
+  GENERATE[sm3-armv8.S]=asm/sm3-armv8.pl
+  INCLUDE[sm3-armv8.o]=..
+
+  GENERATE[sm3-riscv64-zvksh.S]=asm/sm3-riscv64-zvksh.pl
+ENDIF
+

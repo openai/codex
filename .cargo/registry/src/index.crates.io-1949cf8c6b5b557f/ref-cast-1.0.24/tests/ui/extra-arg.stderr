@@ -1,0 +1,13 @@
+error: ref_cast_custom function is required to have a single argument
+ --> tests/ui/extra-arg.rs:9:33
+  |
+9 |     pub fn ref_cast(s: &String, wat: i32) -> &Self;
+  |                                 ^^^^^^^^
+
+error: associated function in `impl` without body
+ --> tests/ui/extra-arg.rs:9:5
+  |
+9 |     pub fn ref_cast(s: &String, wat: i32) -> &Self;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^-
+  |                                                   |
+  |                                                   help: provide a definition for the function: `{ <body> }`

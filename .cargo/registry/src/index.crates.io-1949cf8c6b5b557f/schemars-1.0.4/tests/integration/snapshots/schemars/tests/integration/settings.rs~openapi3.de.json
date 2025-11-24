@@ -1,0 +1,92 @@
+{
+  "$schema": "https://spec.openapis.org/oas/3.0/schema/2024-10-18#/definitions/Schema",
+  "title": "OuterStruct",
+  "type": "object",
+  "properties": {
+    "maybe_int": {
+      "type": "integer",
+      "format": "int32",
+      "nullable": true,
+      "example": 8
+    },
+    "values": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "value": {},
+    "inner": {
+      "$ref": "#/components/schemas/InnerEnum"
+    },
+    "maybe_inner": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/InnerEnum"
+        },
+        {
+          "nullable": true,
+          "enum": [
+            null
+          ]
+        }
+      ]
+    },
+    "tuples": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "maxItems": 2,
+        "minItems": 2,
+        "items": [
+          {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0,
+            "maximum": 255
+          },
+          {
+            "type": "integer",
+            "format": "int64"
+          }
+        ]
+      }
+    }
+  },
+  "required": [
+    "values",
+    "value",
+    "inner",
+    "tuples"
+  ],
+  "components": {
+    "schemas": {
+      "InnerEnum": {
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "UndocumentedUnit1",
+              "UndocumentedUnit2"
+            ]
+          },
+          {
+            "description": "This is a documented unit variant",
+            "type": "string",
+            "enum": [
+              "DocumentedUnit"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "ValueNewType": {}
+            },
+            "required": [
+              "ValueNewType"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Renamed",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "struct_variant": {
+          "type": "object",
+          "properties": {
+            "FIELD": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "FIELD"
+          ]
+        }
+      },
+      "required": [
+        "struct_variant"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "custom name variant": {
+          "type": "object",
+          "properties": {
+            "custom name field": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "custom name field"
+          ]
+        }
+      },
+      "required": [
+        "custom name variant"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

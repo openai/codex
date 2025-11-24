@@ -1,0 +1,10 @@
+error[E0133]: call to unsafe function `Pin::<&'a mut T>::get_unchecked_mut` is unsafe and requires unsafe function or block
+  --> tests/ui/pinned_drop/unsafe-call.rs:16:9
+   |
+13 | #[pinned_drop]
+   | -------------- items do not inherit unsafety from separate enclosing items
+...
+16 |         self.project().f.get_unchecked_mut(); //~ ERROR call to unsafe function is unsafe and requires unsafe function or block [E0133]
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+   |
+   = note: consult the function's documentation for information on how to avoid undefined behavior

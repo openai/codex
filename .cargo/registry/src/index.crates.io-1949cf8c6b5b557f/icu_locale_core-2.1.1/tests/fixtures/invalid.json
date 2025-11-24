@@ -1,0 +1,142 @@
+[
+  {
+    "input": "-",
+    "output": {
+      "error": "InvalidLanguage",
+      "text": "The given language subtag is invalid"
+    }
+  },
+
+  {
+    "input": "--",
+    "output": {
+      "error": "InvalidLanguage",
+      "text": "The given subtag is invalid"
+    }
+  },
+  {
+    "input": "en-",
+    "output": {
+      "error": "InvalidSubtag",
+      "text": "The given subtag is invalid"
+    }
+  },
+  {
+    "input": "-en",
+    "output": {
+      "error": "InvalidLanguage",
+      "text": "The given subtag is invalid"
+    }
+  },
+  {
+    "input": "en-us-",
+    "output": {
+      "error": "InvalidSubtag",
+      "text": "The given subtag is invalid"
+    }
+  },
+  {
+    "input": "en_us",
+    "output": {
+      "error": "InvalidLanguage",
+      "text": "The given language subtag is invalid"
+    }
+  },
+  {
+    "input": "en--US",
+    "output": {
+      "error": "InvalidSubtag",
+      "text": "The given subtag is invalid"
+    }
+  },
+  {
+    "input": "-e-",
+    "output": {
+      "error": "InvalidLanguage",
+      "text": "The given subtag is invalid"
+    }
+  },
+  {
+    "input": "a1a",
+    "output": {
+      "error": "InvalidLanguage",
+      "text": "The given language subtag is invalid"
+    }
+  },
+  {
+    "input": "Arab-US",
+    "output": {
+      "error": "InvalidLanguage",
+      "text": "The given language subtag is invalid"
+    }
+  },
+  {
+    "input": "",
+    "output": {
+      "error": "InvalidLanguage",
+      "text": "The given language subtag is invalid"
+    }
+  },
+  {
+    "input": "pl-DSDAFAFDF",
+    "output": {
+      "error": "InvalidSubtag",
+      "text": "Invalid subtag"
+    }
+  },
+  {
+    "input": "pl-Latn-$1231",
+    "output": {
+      "error": "InvalidSubtag",
+      "text": "Invalid subtag"
+    }
+  },
+  {
+    "input": "pl-Latn-US-$1231",
+    "output": {
+      "error": "InvalidSubtag",
+      "text": "Invalid subtag"
+    }
+  },
+  {
+    "input": "pl-Latn-12",
+    "output": {
+      "error": "InvalidSubtag",
+      "text": "Invalid subtag"
+    }
+  },
+  {
+    "input": "pl-Latn-a12",
+    "output": {
+      "error": "InvalidSubtag",
+      "text": "Invalid subtag"
+    }
+  },
+  {
+    "input": "pl-Latn-US-3-dd",
+    "output": {
+      "error": "InvalidSubtag",
+      "text": "Invalid subtag"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "pl-Latn-US-variant-h0-hybrid"
+    },
+    "output": {
+      "error": "InvalidSubtag",
+      "text": "Invalid subtag"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "en-variant-emodeng-emodeng"
+    },
+    "output": {
+      "error": "InvalidSubtag",
+      "text": "Invalid subtag"
+    }
+  }
+]

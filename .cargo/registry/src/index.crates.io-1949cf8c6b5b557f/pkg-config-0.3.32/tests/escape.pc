@@ -1,0 +1,5 @@
+Name: Escape
+Version: 4.2.0
+Description: Escape utility library
+Libs: -Llink\ path\ with\ spaces
+Cflags: -Iinclude\ path\ with\ spaces -DA=\"escaped\ string\'\ literal\" -DB=ESCAPED\ IDENTIFIER -DFOX=🦊

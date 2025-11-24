@@ -1,0 +1,7 @@
+error: no rules expected `,`
+ --> tests/ui/unexpected_comma.rs:4:17
+  |
+4 |     json!({ "a" , "b": true });
+  |                 ^ no rules expected this token in macro call
+  |
+  = note: while trying to match end of macro

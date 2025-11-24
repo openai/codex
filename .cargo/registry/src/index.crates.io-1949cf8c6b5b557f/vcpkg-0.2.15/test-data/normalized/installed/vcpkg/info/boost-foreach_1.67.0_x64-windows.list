@@ -1,0 +1,8 @@
+x64-windows/
+x64-windows/include/
+x64-windows/include/boost/
+x64-windows/include/boost/foreach.hpp
+x64-windows/include/boost/foreach_fwd.hpp
+x64-windows/share/
+x64-windows/share/boost-foreach/
+x64-windows/share/boost-foreach/copyright

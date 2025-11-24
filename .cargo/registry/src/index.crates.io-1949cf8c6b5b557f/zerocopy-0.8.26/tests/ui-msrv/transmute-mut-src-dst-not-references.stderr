@@ -1,0 +1,12 @@
+error[E0308]: mismatched types
+  --> tests/ui-msrv/transmute-mut-src-dst-not-references.rs:17:59
+   |
+17 | const SRC_DST_NOT_REFERENCES: &mut usize = transmute_mut!(0usize);
+   |                                            ---------------^^^^^^-
+   |                                            |              |
+   |                                            |              expected `&mut _`, found `usize`
+   |                                            |              help: consider mutably borrowing here: `&mut 0usize`
+   |                                            expected due to this
+   |
+   = note: expected mutable reference `&mut _`
+                           found type `usize`

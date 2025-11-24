@@ -1,0 +1,15 @@
+-- Copyright 2025 The OpenSSL Project Authors. All Rights Reserved.
+--
+-- Licensed under the Apache License 2.0 (the "License").  You may not use
+-- this file except in compliance with the License.  You can obtain a copy
+-- in the file LICENSE in the source distribution or at
+-- https://www.openssl.org/source/license.html
+
+-- -------------------------------------------------------------------
+-- Taken from https://csrc.nist.gov/projects/computer-security-objects-register/algorithm-registration
+
+sigAlgs OBJECT IDENTIFIER ::= { 2 16 840 1 101 3 4 3 }
+
+id-ml-dsa-44 OBJECT IDENTIFIER ::= { sigAlgs 17 }
+id-ml-dsa-65 OBJECT IDENTIFIER ::= { sigAlgs 18 }
+id-ml-dsa-87 OBJECT IDENTIFIER ::= { sigAlgs 19 }

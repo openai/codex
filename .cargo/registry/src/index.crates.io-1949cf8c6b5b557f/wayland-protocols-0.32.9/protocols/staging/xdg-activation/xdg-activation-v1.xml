@@ -1,0 +1,200 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="xdg_activation_v1">
+
+  <copyright>
+    Copyright © 2020 Aleix Pol Gonzalez &lt;aleixpol@kde.org&gt;
+    Copyright © 2020 Carlos Garnacho &lt;carlosg@gnome.org&gt;
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice (including the next
+    paragraph) shall be included in all copies or substantial portions of the
+    Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+  </copyright>
+
+  <description summary="Protocol for requesting activation of surfaces">
+    The way for a client to pass focus to another toplevel is as follows.
+
+    The client that intends to activate another toplevel uses the
+    xdg_activation_v1.get_activation_token request to get an activation token.
+    This token is then forwarded to the client, which is supposed to activate
+    one of its surfaces, through a separate band of communication.
+
+    One established way of doing this is through the XDG_ACTIVATION_TOKEN
+    environment variable of a newly launched child process. The child process
+    should unset the environment variable again right after reading it out in
+    order to avoid propagating it to other child processes.
+
+    Another established way exists for Applications implementing the D-Bus
+    interface org.freedesktop.Application, which should get their token under
+    activation-token on their platform_data.
+
+    In general activation tokens may be transferred across clients through
+    means not described in this protocol.
+
+    The client to be activated will then pass the token
+    it received to the xdg_activation_v1.activate request. The compositor can
+    then use this token to decide how to react to the activation request.
+
+    The token the activating client gets may be ineffective either already at
+    the time it receives it, for example if it was not focused, for focus
+    stealing prevention. The activating client will have no way to discover
+    the validity of the token, and may still forward it to the to be activated
+    client.
+
+    The created activation token may optionally get information attached to it
+    that can be used by the compositor to identify the application that we
+    intend to activate. This can for example be used to display a visual hint
+    about what application is being started.
+
+    Warning! The protocol described in this file is currently in the testing
+    phase. Backward compatible changes may be added together with the
+    corresponding interface version bump. Backward incompatible changes can
+    only be done by creating a new major version of the extension.
+  </description>
+
+  <interface name="xdg_activation_v1" version="1">
+    <description summary="interface for activating surfaces">
+      A global interface used for informing the compositor about applications
+      being activated or started, or for applications to request to be
+      activated.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the xdg_activation object">
+        Notify the compositor that the xdg_activation object will no longer be
+        used.
+
+        The child objects created via this interface are unaffected and should
+        be destroyed separately.
+      </description>
+    </request>
+
+    <request name="get_activation_token">
+      <description summary="requests a token">
+        Creates an xdg_activation_token_v1 object that will provide
+        the initiating client with a unique token for this activation. This
+        token should be offered to the clients to be activated.
+      </description>
+
+      <arg name="id" type="new_id" interface="xdg_activation_token_v1"/>
+    </request>
+
+    <request name="activate">
+      <description summary="notify new interaction being available">
+        Requests surface activation. It's up to the compositor to display
+        this information as desired, for example by placing the surface above
+        the rest.
+
+        The compositor may know who requested this by checking the activation
+        token and might decide not to follow through with the activation if it's
+        considered unwanted.
+
+        Compositors can ignore unknown activation tokens when an invalid
+        token is passed.
+      </description>
+      <arg name="token" type="string" summary="the activation token of the initiating client"/>
+      <arg name="surface" type="object" interface="wl_surface"
+	   summary="the wl_surface to activate"/>
+    </request>
+  </interface>
+
+  <interface name="xdg_activation_token_v1" version="1">
+    <description summary="an exported activation handle">
+      An object for setting up a token and receiving a token handle that can
+      be passed as an activation token to another client.
+
+      The object is created using the xdg_activation_v1.get_activation_token
+      request. This object should then be populated with the app_id, surface
+      and serial information and committed. The compositor shall then issue a
+      done event with the token. In case the request's parameters are invalid,
+      the compositor will provide an invalid token.
+    </description>
+
+    <enum name="error">
+      <entry name="already_used" value="0"
+             summary="The token has already been used previously"/>
+    </enum>
+
+    <request name="set_serial">
+      <description summary="specifies the seat and serial of the activating event">
+        Provides information about the seat and serial event that requested the
+        token.
+
+        The serial can come from an input or focus event. For instance, if a
+        click triggers the launch of a third-party client, the launcher client
+        should send a set_serial request with the serial and seat from the
+        wl_pointer.button event.
+
+        Some compositors might refuse to activate toplevels when the token
+        doesn't have a valid and recent enough event serial.
+
+        Must be sent before commit. This information is optional.
+      </description>
+      <arg name="serial" type="uint"
+           summary="the serial of the event that triggered the activation"/>
+      <arg name="seat" type="object" interface="wl_seat"
+           summary="the wl_seat of the event"/>
+    </request>
+
+    <request name="set_app_id">
+      <description summary="specifies the application being activated">
+        The requesting client can specify an app_id to associate the token
+        being created with it.
+
+        Must be sent before commit. This information is optional.
+      </description>
+      <arg name="app_id" type="string"
+           summary="the application id of the client being activated."/>
+    </request>
+
+    <request name="set_surface">
+      <description summary="specifies the surface requesting activation">
+        This request sets the surface requesting the activation. Note, this is
+        different from the surface that will be activated.
+
+        Some compositors might refuse to activate toplevels when the token
+        doesn't have a requesting surface.
+
+        Must be sent before commit. This information is optional.
+      </description>
+      <arg name="surface" type="object" interface="wl_surface"
+	   summary="the requesting surface"/>
+    </request>
+
+    <request name="commit">
+      <description summary="issues the token request">
+        Requests an activation token based on the different parameters that
+        have been offered through set_serial, set_surface and set_app_id.
+      </description>
+    </request>
+
+    <event name="done">
+      <description summary="the exported activation token">
+        The 'done' event contains the unique token of this activation request
+        and notifies that the provider is done.
+      </description>
+      <arg name="token" type="string" summary="the exported activation token"/>
+    </event>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the xdg_activation_token_v1 object">
+        Notify the compositor that the xdg_activation_token_v1 object will no
+        longer be used. The received token stays valid.
+      </description>
+    </request>
+  </interface>
+</protocol>

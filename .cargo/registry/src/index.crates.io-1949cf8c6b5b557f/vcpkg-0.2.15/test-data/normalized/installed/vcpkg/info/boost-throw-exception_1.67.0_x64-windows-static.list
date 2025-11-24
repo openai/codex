@@ -1,0 +1,9 @@
+x64-windows-static/
+x64-windows-static/include/
+x64-windows-static/include/boost/
+x64-windows-static/include/boost/exception/
+x64-windows-static/include/boost/exception/exception.hpp
+x64-windows-static/include/boost/throw_exception.hpp
+x64-windows-static/share/
+x64-windows-static/share/boost-throw-exception/
+x64-windows-static/share/boost-throw-exception/copyright

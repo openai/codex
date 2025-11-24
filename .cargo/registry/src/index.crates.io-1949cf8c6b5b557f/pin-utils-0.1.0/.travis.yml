@@ -1,0 +1,41 @@
+language: rust
+rust:
+  - nightly
+sudo: false
+cache: cargo
+
+matrix:
+  include:
+    # This is the minimum Rust version supported by pin-utils.
+    # When updating this, the reminder to update the minimum required version in README.md.
+    - name: cargo test (minimum required version)
+      rust: 1.33.0
+
+    - name: cargo +stable test
+      rust: stable
+
+    - name: cargo test
+      os: osx
+
+    - name: cargo test
+      os: linux
+
+    - name: cargo clippy
+      rust: stable
+      script:
+        - rustup component add clippy
+        - cargo clippy -- -Dwarnings
+
+    - name: cargo doc
+      rust: nightly
+      script:
+        - RUSTDOCFLAGS=-Dwarnings cargo doc
+
+script:
+  - cargo build
+  - cargo test
+  - cargo test --release
+
+notifications:
+  email:
+    on_success: never

@@ -1,0 +1,7 @@
+Package: boost-bimap
+Version: 1.67.0
+Depends: boost-concept-check, boost-config, boost-functional, boost-iterator, boost-lambda, boost-mpl, boost-multi-index, boost-preprocessor, boost-property-map, boost-serialization, boost-static-assert, boost-throw-exception, boost-type-traits, boost-utility, boost-vcpkg-helpers
+Architecture: x64-windows
+Multi-Arch: same
+Description: Boost bimap module
+Status: install ok installed

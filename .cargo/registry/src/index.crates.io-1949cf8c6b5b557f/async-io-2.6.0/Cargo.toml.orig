@@ -1,0 +1,62 @@
+[package]
+name = "async-io"
+# When publishing a new version:
+# - Update CHANGELOG.md
+# - Create "v2.x.y" git tag
+version = "2.6.0"
+authors = ["Stjepan Glavina <stjepang@gmail.com>"]
+edition = "2021"
+rust-version = "1.71"
+description = "Async I/O and timers"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/smol-rs/async-io"
+keywords = ["mio", "epoll", "kqueue", "iocp"]
+categories = ["asynchronous", "network-programming", "os"]
+exclude = ["/.*"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(polling_test_poll_backend)', 'cfg(async_io_no_pipe)' ] }
+
+[[bench]]
+name = "io"
+harness = false
+
+[[bench]]
+name = "timer"
+harness = false
+
+[dependencies]
+cfg-if = "1"
+concurrent-queue = "2.2.0"
+futures-io = { version = "0.3.28", default-features = false, features = ["std"] }
+futures-lite = { version = "2.0.0", default-features = false }
+parking = "2.0.0"
+polling = "3.4.0"
+rustix = { version = "1.0.7", default-features = false, features = ["fs", "net", "std"] }
+slab = "0.4.2"
+tracing = { version = "0.1.37", default-features = false, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation"] }
+
+[build-dependencies]
+autocfg = "1"
+
+[dev-dependencies]
+async-channel = "2.0.0"
+async-net = "2.0.0"
+blocking = "1"
+criterion = { version = "0.7", default-features = false, features = ["cargo_bench_support"] }
+getrandom = "0.3"
+signal-hook = "0.3"
+tempfile = "3"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+inotify = { version = "0.11.0", default-features = false }
+timerfd = "1"
+
+[target.'cfg(windows)'.dev-dependencies]
+uds_windows = "1"
+
+[patch.crates-io]
+async-io = { path = "." }

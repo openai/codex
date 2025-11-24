@@ -1,0 +1,36 @@
+[package]
+name = "prost"
+readme = "README.md"
+description = "A Protocol Buffers implementation for the Rust Language."
+keywords = ["protobuf", "serialization"]
+categories = ["encoding"]
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+# https://bheisler.github.io/criterion.rs/book/faq.html#cargo-bench-gives-unrecognized-option-errors-for-valid-command-line-options
+bench = false
+
+[features]
+default = ["derive", "std"]
+derive = ["dep:prost-derive"]
+prost-derive = ["derive"]     # deprecated, please use derive feature instead
+no-recursion-limit = []
+std = []
+
+[dependencies]
+bytes = { version = "1", default-features = false }
+prost-derive = { version = "0.13.5", path = "../prost-derive", optional = true }
+
+[dev-dependencies]
+criterion = { version = "0.5", default-features = false }
+proptest = "1"
+rand = "0.9"
+
+[[bench]]
+name = "varint"
+harness = false

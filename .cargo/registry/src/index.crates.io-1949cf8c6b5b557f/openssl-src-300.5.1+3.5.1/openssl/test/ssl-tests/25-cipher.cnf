@@ -1,0 +1,244 @@
+# Generated with generate_ssl_tests.pl
+
+num_tests = 9
+
+test-0 = 0-cipher-server-1
+test-1 = 1-cipher-server-2
+test-2 = 2-cipher-server-client-list
+test-3 = 3-cipher-server-pref-1
+test-4 = 4-cipher-server-pref-2
+test-5 = 5-cipher-server-pref-client-list
+test-6 = 6-cipher-server-pref-not-mobile
+test-7 = 7-cipher-server-pref-mobile
+test-8 = 8-cipher-server-pref-mobile2
+# ===========================================================
+
+[0-cipher-server-1]
+ssl_conf = 0-cipher-server-1-ssl
+
+[0-cipher-server-1-ssl]
+server = 0-cipher-server-1-server
+client = 0-cipher-server-1-client
+
+[0-cipher-server-1-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = ECDHE-RSA-AES256-SHA384:ECDHE-RSA-AES128-SHA256
+MaxProtocol = TLSv1.2
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[0-cipher-server-1-client]
+CipherString = ECDHE-RSA-AES256-SHA384
+MaxProtocol = TLSv1.2
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-0]
+ExpectedCipher = ECDHE-RSA-AES256-SHA384
+
+
+# ===========================================================
+
+[1-cipher-server-2]
+ssl_conf = 1-cipher-server-2-ssl
+
+[1-cipher-server-2-ssl]
+server = 1-cipher-server-2-server
+client = 1-cipher-server-2-client
+
+[1-cipher-server-2-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = ECDHE-RSA-AES256-SHA384:ECDHE-RSA-AES128-SHA256
+MaxProtocol = TLSv1.2
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[1-cipher-server-2-client]
+CipherString = ECDHE-RSA-AES128-SHA256
+MaxProtocol = TLSv1.2
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-1]
+ExpectedCipher = ECDHE-RSA-AES128-SHA256
+
+
+# ===========================================================
+
+[2-cipher-server-client-list]
+ssl_conf = 2-cipher-server-client-list-ssl
+
+[2-cipher-server-client-list-ssl]
+server = 2-cipher-server-client-list-server
+client = 2-cipher-server-client-list-client
+
+[2-cipher-server-client-list-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = ECDHE-RSA-AES256-SHA384:ECDHE-RSA-AES128-SHA256
+MaxProtocol = TLSv1.2
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[2-cipher-server-client-list-client]
+CipherString = ECDHE-RSA-AES128-SHA256:ECDHE-RSA-AES256-SHA384
+MaxProtocol = TLSv1.2
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-2]
+ExpectedCipher = ECDHE-RSA-AES128-SHA256
+
+
+# ===========================================================
+
+[3-cipher-server-pref-1]
+ssl_conf = 3-cipher-server-pref-1-ssl
+
+[3-cipher-server-pref-1-ssl]
+server = 3-cipher-server-pref-1-server
+client = 3-cipher-server-pref-1-client
+
+[3-cipher-server-pref-1-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = ECDHE-RSA-AES256-SHA384:ECDHE-RSA-AES128-SHA256
+MaxProtocol = TLSv1.2
+Options = ServerPreference
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[3-cipher-server-pref-1-client]
+CipherString = ECDHE-RSA-AES256-SHA384
+MaxProtocol = TLSv1.2
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-3]
+ExpectedCipher = ECDHE-RSA-AES256-SHA384
+
+
+# ===========================================================
+
+[4-cipher-server-pref-2]
+ssl_conf = 4-cipher-server-pref-2-ssl
+
+[4-cipher-server-pref-2-ssl]
+server = 4-cipher-server-pref-2-server
+client = 4-cipher-server-pref-2-client
+
+[4-cipher-server-pref-2-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = ECDHE-RSA-AES256-SHA384:ECDHE-RSA-AES128-SHA256
+MaxProtocol = TLSv1.2
+Options = ServerPreference
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[4-cipher-server-pref-2-client]
+CipherString = ECDHE-RSA-AES128-SHA256
+MaxProtocol = TLSv1.2
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-4]
+ExpectedCipher = ECDHE-RSA-AES128-SHA256
+
+
+# ===========================================================
+
+[5-cipher-server-pref-client-list]
+ssl_conf = 5-cipher-server-pref-client-list-ssl
+
+[5-cipher-server-pref-client-list-ssl]
+server = 5-cipher-server-pref-client-list-server
+client = 5-cipher-server-pref-client-list-client
+
+[5-cipher-server-pref-client-list-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = ECDHE-RSA-AES256-SHA384:ECDHE-RSA-AES128-SHA256
+MaxProtocol = TLSv1.2
+Options = ServerPreference
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[5-cipher-server-pref-client-list-client]
+CipherString = ECDHE-RSA-AES128-SHA256:ECDHE-RSA-AES256-SHA384
+MaxProtocol = TLSv1.2
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-5]
+ExpectedCipher = ECDHE-RSA-AES256-SHA384
+
+
+# ===========================================================
+
+[6-cipher-server-pref-not-mobile]
+ssl_conf = 6-cipher-server-pref-not-mobile-ssl
+
+[6-cipher-server-pref-not-mobile-ssl]
+server = 6-cipher-server-pref-not-mobile-server
+client = 6-cipher-server-pref-not-mobile-client
+
+[6-cipher-server-pref-not-mobile-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = ECDHE-RSA-AES256-SHA384:ECDHE-RSA-AES128-SHA256:ECDHE-RSA-CHACHA20-POLY1305
+MaxProtocol = TLSv1.2
+Options = ServerPreference
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[6-cipher-server-pref-not-mobile-client]
+CipherString = ECDHE-RSA-CHACHA20-POLY1305:ECDHE-RSA-AES128-SHA256:ECDHE-RSA-AES256-SHA384
+MaxProtocol = TLSv1.2
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-6]
+ExpectedCipher = ECDHE-RSA-AES256-SHA384
+
+
+# ===========================================================
+
+[7-cipher-server-pref-mobile]
+ssl_conf = 7-cipher-server-pref-mobile-ssl
+
+[7-cipher-server-pref-mobile-ssl]
+server = 7-cipher-server-pref-mobile-server
+client = 7-cipher-server-pref-mobile-client
+
+[7-cipher-server-pref-mobile-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = ECDHE-RSA-AES256-SHA384:ECDHE-RSA-AES128-SHA256:ECDHE-RSA-CHACHA20-POLY1305
+MaxProtocol = TLSv1.2
+Options = ServerPreference,PrioritizeChaCha
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[7-cipher-server-pref-mobile-client]
+CipherString = ECDHE-RSA-AES128-SHA256:ECDHE-RSA-AES256-SHA384:ECDHE-RSA-CHACHA20-POLY1305
+MaxProtocol = TLSv1.2
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-7]
+ExpectedCipher = ECDHE-RSA-AES256-SHA384
+
+
+# ===========================================================
+
+[8-cipher-server-pref-mobile2]
+ssl_conf = 8-cipher-server-pref-mobile2-ssl
+
+[8-cipher-server-pref-mobile2-ssl]
+server = 8-cipher-server-pref-mobile2-server
+client = 8-cipher-server-pref-mobile2-client
+
+[8-cipher-server-pref-mobile2-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = ECDHE-RSA-AES256-SHA384:ECDHE-RSA-AES128-SHA256:ECDHE-RSA-CHACHA20-POLY1305
+MaxProtocol = TLSv1.2
+Options = ServerPreference,PrioritizeChaCha
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[8-cipher-server-pref-mobile2-client]
+CipherString = ECDHE-RSA-CHACHA20-POLY1305:ECDHE-RSA-AES128-SHA256:ECDHE-RSA-AES256-SHA384
+MaxProtocol = TLSv1.2
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-8]
+ExpectedCipher = ECDHE-RSA-CHACHA20-POLY1305
+
+

@@ -1,0 +1,15 @@
+error: unused return value of `anyhow::__private::must_use` that must be used
+ --> tests/ui/must-use.rs:8:9
+  |
+8 |         anyhow!("it failed");
+  |         ^^^^^^^^^^^^^^^^^^^^
+  |
+note: the lint level is defined here
+ --> tests/ui/must-use.rs:1:9
+  |
+1 | #![deny(unused_must_use)]
+  |         ^^^^^^^^^^^^^^^
+help: use `let _ = ...` to ignore the resulting value
+  |
+8 |         let _ = anyhow!("it failed");
+  |         +++++++

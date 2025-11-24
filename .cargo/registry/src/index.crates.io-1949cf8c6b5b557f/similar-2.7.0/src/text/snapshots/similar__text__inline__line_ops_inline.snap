@@ -1,0 +1,126 @@
+---
+source: src/text/inline.rs
+expression: "&changes"
+---
+[
+    InlineChange {
+        tag: Insert,
+        old_index: None,
+        new_index: Some(
+            0,
+        ),
+        values: [
+            (
+                false,
+                "Stuff\n",
+            ),
+        ],
+    },
+    InlineChange {
+        tag: Equal,
+        old_index: Some(
+            0,
+        ),
+        new_index: Some(
+            1,
+        ),
+        values: [
+            (
+                false,
+                "Hello World\n",
+            ),
+        ],
+    },
+    InlineChange {
+        tag: Delete,
+        old_index: Some(
+            1,
+        ),
+        new_index: None,
+        values: [
+            (
+                false,
+                "some ",
+            ),
+            (
+                false,
+                "stuff here\n",
+            ),
+        ],
+    },
+    InlineChange {
+        tag: Insert,
+        old_index: None,
+        new_index: Some(
+            2,
+        ),
+        values: [
+            (
+                false,
+                "some ",
+            ),
+            (
+                true,
+                "amazing ",
+            ),
+            (
+                false,
+                "stuff here\n",
+            ),
+        ],
+    },
+    InlineChange {
+        tag: Equal,
+        old_index: Some(
+            2,
+        ),
+        new_index: Some(
+            3,
+        ),
+        values: [
+            (
+                false,
+                "some more stuff here\n",
+            ),
+        ],
+    },
+    InlineChange {
+        tag: Delete,
+        old_index: Some(
+            3,
+        ),
+        new_index: None,
+        values: [
+            (
+                false,
+                "\n",
+            ),
+        ],
+    },
+    InlineChange {
+        tag: Delete,
+        old_index: Some(
+            4,
+        ),
+        new_index: None,
+        values: [
+            (
+                false,
+                "Aha stuff here\n",
+            ),
+        ],
+    },
+    InlineChange {
+        tag: Delete,
+        old_index: Some(
+            5,
+        ),
+        new_index: None,
+        values: [
+            (
+                false,
+                "and more stuff",
+            ),
+        ],
+    },
+]

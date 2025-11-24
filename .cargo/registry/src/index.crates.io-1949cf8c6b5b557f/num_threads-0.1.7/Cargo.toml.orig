@@ -1,0 +1,23 @@
+[package]
+name = "num_threads"
+version = "0.1.7"
+authors = ["Jacob Pratt <open-source@jhpratt.dev>"]
+repository = "https://github.com/jhpratt/num_threads"
+categories = ["api-bindings", "hardware-support", "os"]
+license = "MIT OR Apache-2.0"
+description = "A minimal library that determines the number of running threads for the current process."
+include = ["src/**/*", "LICENSE-*"]
+
+[package.metadata.docs.rs]
+all-features = true
+targets = ["x86_64-unknown-linux-gnu"]
+
+[dependencies]
+
+[target.'cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))'.dependencies]
+libc = "0.2.107"
+
+[[test]]
+name = "tests"
+path = "tests.rs"
+harness = false

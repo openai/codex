@@ -1,0 +1,118 @@
+[package]
+name = "tracing"
+# When releasing to crates.io:
+# - Remove path dependencies
+# - Update html_root_url.
+# - Update doc url
+#   - Cargo.toml
+#   - README.md
+# - Update CHANGELOG.md.
+# - Create "v0.1.x" git tag
+version = "0.1.41"
+authors = ["Eliza Weisman <eliza@buoyant.io>", "Tokio Contributors <team@tokio.rs>"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/tokio-rs/tracing"
+homepage = "https://tokio.rs"
+description = """
+Application-level tracing for Rust.
+"""
+categories = [
+    "development-tools::debugging",
+    "development-tools::profiling",
+    "asynchronous",
+    "no-std",
+]
+keywords = ["logging", "tracing", "metrics", "async"]
+edition = "2018"
+rust-version = "1.63.0"
+
+[dependencies]
+tracing-core = { path = "../tracing-core", version = "0.1.33", default-features = false }
+log = { version = "0.4.17", optional = true }
+tracing-attributes = { path = "../tracing-attributes", version = "0.1.28", optional = true }
+pin-project-lite = "0.2.9"
+
+[dev-dependencies]
+criterion = { version = "0.3.6", default-features = false }
+futures = { version = "0.3.21", default-features = false }
+log = "0.4.17"
+tracing-mock = { path = "../tracing-mock" }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3.38"
+
+[features]
+default = ["std", "attributes"]
+
+max_level_off   = []
+max_level_error = []
+max_level_warn  = []
+max_level_info  = []
+max_level_debug = []
+max_level_trace = []
+
+release_max_level_off   = []
+release_max_level_error = []
+release_max_level_warn  = []
+release_max_level_info  = []
+release_max_level_debug = []
+release_max_level_trace = []
+
+# This feature flag is no longer necessary.
+async-await = []
+
+std = ["tracing-core/std"]
+log-always = ["log"]
+attributes = ["tracing-attributes"]
+valuable = ["tracing-core/valuable"]
+
+[[bench]]
+name = "baseline"
+harness = false
+
+[[bench]]
+name = "dispatch_get_clone"
+harness = false
+
+[[bench]]
+name = "dispatch_get_ref"
+harness = false
+
+[[bench]]
+name = "empty_span"
+harness = false
+
+[[bench]]
+name = "enter_span"
+harness = false
+
+[[bench]]
+name = "event"
+harness = false
+
+[[bench]]
+name = "span_fields"
+harness = false
+
+[[bench]]
+name = "span_no_fields"
+harness = false
+
+[[bench]]
+name = "span_repeated"
+harness = false
+
+[badges]
+maintenance = { status = "actively-developed" }
+
+[package.metadata.docs.rs]
+all-features = true
+# enable unstable features in the documentation
+rustdoc-args = ["--cfg", "docsrs", "--cfg", "tracing_unstable"]
+# it's necessary to _also_ pass `--cfg tracing_unstable` to rustc, or else
+# dependencies will not be enabled, and the docs build will fail.
+rustc-args = ["--cfg", "tracing_unstable"]
+
+[lints]
+workspace = true

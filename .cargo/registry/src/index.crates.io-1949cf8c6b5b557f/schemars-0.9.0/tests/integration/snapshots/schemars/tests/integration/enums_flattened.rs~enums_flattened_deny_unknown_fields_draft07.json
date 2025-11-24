@@ -1,0 +1,161 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ContainerDenyUnknownFields",
+  "type": "object",
+  "properties": {
+    "f": {
+      "type": "number",
+      "format": "float"
+    },
+    "B": true,
+    "B2": true,
+    "B3": true,
+    "F": true,
+    "F2": true,
+    "S": true,
+    "S2": true,
+    "S3": true,
+    "U": true,
+    "U2": true
+  },
+  "required": [
+    "f"
+  ],
+  "allOf": [
+    {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "B": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "B"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "S": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "U": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "U"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "F": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "required": [
+            "F"
+          ]
+        }
+      ]
+    },
+    {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "B2": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "B2"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "S2": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "S2"
+          ]
+        }
+      ]
+    },
+    {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "U2": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "U2"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "F2": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "required": [
+            "F2"
+          ]
+        }
+      ]
+    }
+  ],
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "B3": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "B3"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "S3": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "S3"
+      ]
+    }
+  ],
+  "additionalProperties": false
+}

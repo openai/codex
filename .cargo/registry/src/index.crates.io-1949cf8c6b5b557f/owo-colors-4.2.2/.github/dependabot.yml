@@ -1,0 +1,24 @@
+version: 2
+updates:
+  # Fetch and update latest `cargo` packages
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: daily
+      time: "00:00"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: build
+      prefix-development: build
+      include: scope
+  # Fetch and update latest `github-actions` pkgs
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: daily
+      time: "00:00"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: build
+      prefix-development: build
+      include: scope

@@ -1,0 +1,5 @@
+error: expected identifier after `:`
+ --> tests/ui/no-ident-after-colon.rs:4:15
+  |
+4 |     fn [<name:0>]() {}
+  |               ^

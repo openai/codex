@@ -1,0 +1,81 @@
+// @generated
+/// Implement `DataProvider<PropertyNameParseLineBreakV1>` on the given struct using the data
+/// hardcoded in this file. This allows the struct to be used with
+/// `icu`'s `_unstable` constructors.
+///
+/// Using this implementation will embed the following data in the binary's data segment:
+/// * 804B[^1] for the singleton data struct
+///
+/// [^1]: these numbers can be smaller in practice due to linker deduplication
+///
+/// This macro requires the following crates:
+/// * `icu`
+/// * `icu_provider`
+/// * `zerotrie`
+/// * `zerovec`
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __impl_property_name_parse_line_break_v1 {
+    ($ provider : ty) => {
+        #[clippy::msrv = "1.83"]
+        const _: () = <$provider>::MUST_USE_MAKE_PROVIDER_MACRO;
+        #[clippy::msrv = "1.83"]
+        impl $provider {
+            #[doc(hidden)]
+            pub const SINGLETON_PROPERTY_NAME_PARSE_LINE_BREAK_V1: &'static <icu::properties::provider::PropertyNameParseLineBreakV1 as icu_provider::DynamicDataMarker>::DataStruct = &icu::properties::provider::names::PropertyValueNameToEnumMap { map: zerotrie::ZeroTrieSimpleAscii { store: unsafe { zerovec::ZeroVec::from_bytes_unchecked(b"\xE1uABCEGHIJLMNOPQRSUVWXZ\0\0\x01\x01\x01\x01\x01\x01\x01\x01\x01\x02\x02\x02\x02\x02\x02\x02\x02\x02Bs\x04/7`\x9A\xA6\xB5\xC4\xF0\x06/>Vx\x93\xAB\xBC\xBE\xC8IKLPSklm\x01\x03\x04\x06\x08!*\x81\x90\x1B\x82\x90\x1C\x90\x1Dsara\x90\x1B_\xC2PS\x08rebase\x90\x1Ctart\x90\x1Dphabetic\x82biguous\x81\xC52ABKr\x01\x02\x03\x04\x83\x84\x85\x86eak_\xC3ABS\x05\x11fter\x84\xC2eo\x05fore\x85th\x83ymbols\x90\x0B\xC9BJLMPRalo\x01\x03\x04\x05\x07\x08\x164\x87\x90\x15\x88\x89\x90\x14\x8Arriage_Return\x8Aose_P\xC2au\x0Brenthesis\x90\x14nctuation\x88\xC2mn\x1C\xC2bp\x0Bining_Mark\x89lex_Context\x90\x08\xC2dt\x1Aitional_Japanese_Starter\x90\x15ingent_Break\x87\xC5BMX_x\x02\x04\x05\x17\x90\x18\x90\x19\x8B\xC2BM\x05ase\x90\x18odifier\x90\x19clamation\x8B\xC2Ll\x01\x8Cue\x8C\xC723HLYey\x02\x04\x06\x08\t\x16\x90\x0F\x90\x10\x90 \x90\x16\x8Dbrew_Letter\x90\x16phen\x8D\xC5DNSdn\x01\x02\x04\x0E\x8E\x8F\x90\0eographic\x8E\xC2fs\x0Cix_Numeric\x90\0ep\xC2ae\x06rable\x8Frable\x8F\xC3LTV\x02\x04\x90\x11\x90\x12\x90\x13\xC2Fi\x02\x90\x01ne_Feed\x90\x01andatory_Break\x86\xC6LSUeou\x02\x04\x06\x0F\x19\x90\r\x90\x02\x90\x03xt_Line\x90\rnstarter\x90\x02meric\x90\x03\xC2Pp\x02\x90\x04en_Punctuation\x90\x04\xC4ORor\x02\x04\x13\x90\x05\x90\x06stfix_Numeric\x90\x05efix_Numeric\x90\x06\xC2Uu\x02\x90\x07otation\x90\x07\xC2Ie\x02\x90\x17gional_Indicator\x90\x17\xC6AGPYpu\x02\x04\x06\x08\r\x90\x08\x90\t\x90\n\x90\x0Bace\x90\nrrogate\x90\tn\xC2ak\x11mbiguous_Hyphen\x90 nown\x80\xC3FIi\x02\x04\x90\x1E\x90\x1Frama\x90\x1F_Final\x90\x1E\xC2Jo\x02\x90\x0Erd_Joiner\x90\x0EX\x80W\x90\x0C\xC2JS\x02\x90\x1Apace\x90\x0C") } } };
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DataProvider<icu::properties::provider::PropertyNameParseLineBreakV1> for $provider {
+            fn load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponse<icu::properties::provider::PropertyNameParseLineBreakV1>, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponse { payload: icu_provider::DataPayload::from_static_ref(Self::SINGLETON_PROPERTY_NAME_PARSE_LINE_BREAK_V1), metadata: icu_provider::DataResponseMetadata::default() })
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyNameParseLineBreakV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , ITER) => {
+        __impl_property_name_parse_line_break_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::properties::provider::PropertyNameParseLineBreakV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+    ($ provider : ty , DRY) => {
+        __impl_property_name_parse_line_break_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::properties::provider::PropertyNameParseLineBreakV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyNameParseLineBreakV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , DRY , ITER) => {
+        __impl_property_name_parse_line_break_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::properties::provider::PropertyNameParseLineBreakV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyNameParseLineBreakV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::properties::provider::PropertyNameParseLineBreakV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+}
+#[doc(inline)]
+pub use __impl_property_name_parse_line_break_v1 as impl_property_name_parse_line_break_v1;

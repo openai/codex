@@ -1,0 +1,109 @@
+# Copyright 2018 The Fuchsia Authors
+#
+# Licensed under a BSD-style license <LICENSE-BSD>, Apache License, Version 2.0
+# <LICENSE-APACHE or https://www.apache.org/licenses/LICENSE-2.0>, or the MIT
+# license <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your option.
+# This file may not be copied, modified, or distributed except according to
+# those terms.
+
+# Put both crates in a single workspace so that `trybuild` compiler errors have
+# paths that are stable regardless of the path to the repository root. This
+# avoids issues like:
+# https://github.com/dtolnay/trybuild/issues/207#issuecomment-131227.594
+[workspace]
+
+[package]
+edition = "2021"
+name = "zerocopy"
+version = "0.8.26"
+authors = ["Joshua Liebow-Feeser <joshlf@google.com>", "Jack Wrenn <jswrenn@amazon.com>"]
+description = "Zerocopy makes zero-cost memory manipulation effortless. We write \"unsafe\" so you don't have to."
+categories = ["embedded", "encoding", "no-std::no-alloc", "parsing", "rust-patterns"]
+keywords = ["cast", "convert", "transmute", "transmutation", "type-punning"]
+license = "BSD-2-Clause OR Apache-2.0 OR MIT"
+repository = "https://github.com/google/zerocopy"
+rust-version = "1.56.0"
+
+exclude = [".*"]
+
+[package.metadata.build-rs]
+# These key/value pairs are parsed by `build.rs`. Each entry names a `--cfg`
+# which will be emitted if zerocopy is built with a toolchain version at least
+# as high as the specified version. In the emitted `--cfg`, dashes are replaced
+# by underscores.
+#
+# Each name is suffixed with the version it corresponds to. This is a convention
+# used in the codebase to make it less likely for us to make mistakes when
+# writing `doc_cfg` attributes.
+
+# From 1.81.0, Rust supports the `core::error::Error` trait.
+zerocopy-core-error-1-81-0 = "1.81.0"
+
+# From 1.78.0, Rust supports the `#[diagnostic::on_unimplemented]` attribute.
+zerocopy-diagnostic-on-unimplemented-1-78-0 = "1.78.0"
+
+# From 1.61.0, Rust supports generic types with trait bounds in `const fn`.
+zerocopy-generic-bounds-in-const-fn-1-61-0 = "1.61.0"
+
+# From 1.60.0, Rust supports `cfg(target_has_atomics)`, which allows us to
+# detect whether a target supports particular sets of atomics.
+zerocopy-target-has-atomics-1-60-0 = "1.60.0"
+
+# When the "simd" feature is enabled, include SIMD types from the
+# `core::arch::aarch64` module, which was stabilized in 1.59.0. On earlier Rust
+# versions, these types require the "simd-nightly" feature.
+zerocopy-aarch64-simd-1-59-0 = "1.59.0"
+
+# Permit panicking in `const fn`s and calling `Vec::try_reserve`.
+zerocopy-panic-in-const-and-vec-try-reserve-1-57-0 = "1.57.0"
+
+[package.metadata.ci]
+# The versions of the stable and nightly compiler toolchains to use in CI.
+pinned-stable = "1.87.0"
+pinned-nightly = "nightly-2025-06-16"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "doc_cfg", "--generate-link-to-definition"]
+
+[package.metadata.playground]
+features = ["__internal_use_only_features_that_work_on_stable"]
+
+[features]
+alloc = []
+derive = ["zerocopy-derive"]
+simd = []
+simd-nightly = ["simd"]
+float-nightly = []
+std = ["alloc"]
+# This feature depends on all other features that work on the stable compiler.
+# We make no stability guarantees about this feature; it may be modified or
+# removed at any time.
+__internal_use_only_features_that_work_on_stable = ["alloc", "derive", "simd", "std"]
+
+[dependencies]
+zerocopy-derive = { version = "=0.8.26", path = "zerocopy-derive", optional = true }
+
+# The "associated proc macro pattern" ensures that the versions of zerocopy and
+# zerocopy-derive remain equal, even if the 'derive' feature isn't used.
+# See: https://github.com/matklad/macro-dep-test
+[target.'cfg(any())'.dependencies]
+zerocopy-derive = { version = "=0.8.26", path = "zerocopy-derive" }
+
+[dev-dependencies]
+# More recent versions of `either` have an MSRV higher than ours.
+either = "=1.13.0"
+# FIXME(#381) Remove this dependency once we have our own layout gadgets.
+elain = "0.3.0"
+itertools = "0.11"
+rand = { version = "0.8.5", default-features = false, features = ["small_rng"] }
+rustversion = "1.0"
+static_assertions = "1.1"
+testutil = { path = "testutil" }
+# Pinned to a specific version so that the version used for local development
+# and the version used in CI are guaranteed to be the same. Future versions
+# sometimes change the output format slightly, so a version mismatch can cause
+# CI test failures.
+trybuild = { version = "=1.0.89", features = ["diff"] }
+# In tests, unlike in production, zerocopy-derive is not optional
+zerocopy-derive = { version = "=0.8.26", path = "zerocopy-derive" }

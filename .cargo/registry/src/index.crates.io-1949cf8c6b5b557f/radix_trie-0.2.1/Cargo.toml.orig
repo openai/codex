@@ -1,0 +1,37 @@
+[package]
+name = "radix_trie"
+version = "0.2.1"
+description = "Generic radix trie data-structure."
+edition = "2018"
+license = "MIT"
+authors = ["Michael Sproul <micsproul@gmail.com>"]
+
+repository = "https://github.com/michaelsproul/rust_radix_trie"
+documentation = "https://docs.rs/radix_trie/"
+readme = "README.md"
+
+keywords = ["trie", "patricia", "collection", "generic", "prefix"]
+categories = ["data-structures", "text-processing"]
+
+[dependencies]
+nibble_vec = "0.1"
+endian-type = "0.1.2"
+serde = { version = "1.0", optional = true }
+
+[dev-dependencies]
+criterion = "0.3"
+quickcheck = "0.4"
+rand = "0.3"
+serde_test = "1.0"
+
+[[bench]]
+name = "trie_benches"
+harness = false
+
+[lib]
+bench = false
+
+[badges]
+travis-ci = { repository = "michaelsproul/rust_radix_trie" }
+appveyor = { repository = "michaelsproul/rust_radix_trie" }
+maintenance = { status = "as-is" }

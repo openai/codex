@@ -1,0 +1,10 @@
+error[E0704]: incorrect visibility restriction
+ --> tests/compile_fail/incorrect_visibility_restriction.rs:5:9
+  |
+5 |     pub(nonsense) static ref WRONG: () = ();
+  |         ^^^^^^^^ help: make this visible only to module `nonsense` with `in`: `in nonsense`
+  |
+  = help: some possible visibility restrictions are:
+          `pub(crate)`: visible only on the current crate
+          `pub(super)`: visible only in the current module's parent
+          `pub(in path::to::module)`: visible only on the specified path

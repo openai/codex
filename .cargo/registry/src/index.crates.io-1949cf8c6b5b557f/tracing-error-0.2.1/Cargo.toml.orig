@@ -1,0 +1,50 @@
+[package]
+name = "tracing-error"
+# When releasing to crates.io:
+# - Remove path dependencies
+# - Update html_root_url.
+# - Update doc url
+#   - Cargo.toml
+#   - README.md
+# - Update CHANGELOG.md.
+# - Create "v0.2.x" git tag
+version = "0.2.1"
+authors = [
+    "Eliza Weisman <eliza@buoyant.io>",
+    "Jane Lusby <jlusby@yaah.dev>",
+    "Tokio Contributors <team@tokio.rs>"
+]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/tokio-rs/tracing"
+homepage = "https://tokio.rs"
+description = """
+Utilities for enriching errors with `tracing`.
+"""
+categories = [
+    "development-tools::debugging",
+    "rust-patterns"
+]
+keywords = [
+    "tracing",
+    "error-handling",
+    "exception-reporting",
+    "backtrace"
+]
+edition = "2018"
+rust-version = "1.63.0"
+
+[features]
+default = ["traced-error"]
+traced-error = []
+
+[dependencies]
+tracing-subscriber = { path = "../tracing-subscriber", version = "0.3.0", default-features = false, features = ["registry", "fmt"] }
+tracing = { path = "../tracing", version = "0.1.35", default-features = false, features = ["std"] }
+
+[badges]
+maintenance = { status = "experimental" }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

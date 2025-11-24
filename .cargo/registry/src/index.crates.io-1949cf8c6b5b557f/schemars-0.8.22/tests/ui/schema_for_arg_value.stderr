@@ -1,0 +1,7 @@
+error: This argument to `schema_for!` is not a type - did you mean to use `schema_for_value!` instead?
+ --> $DIR/schema_for_arg_value.rs:4:19
+  |
+4 |     let _schema = schema_for!(123);
+  |                   ^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `schema_for` (in Nightly builds, run with -Z macro-backtrace for more info)

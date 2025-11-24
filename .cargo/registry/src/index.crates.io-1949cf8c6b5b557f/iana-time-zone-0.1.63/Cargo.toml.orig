@@ -1,0 +1,55 @@
+[package]
+name = "iana-time-zone"
+description = "get the IANA time zone for the current system"
+version = "0.1.63"
+authors = [
+    "Andrew Straw <strawman@astraw.com>",
+    "René Kijewski <rene.kijewski@fu-berlin.de>",
+    "Ryan Lopopolo <rjl@hyperbo.la>",
+]
+repository = "https://github.com/strawlab/iana-time-zone"
+license = "MIT OR Apache-2.0"
+keywords = ["IANA", "time"]
+categories = ["date-and-time", "internationalization", "os"]
+readme = "README.md"
+edition = "2021"
+rust-version = "1.62.0"
+
+[features]
+# When enabled, the library will succeed to compile for unknown target platforms, and return an `Err(GetTimezoneError::OsError)` at runtime.
+fallback = []
+
+[target.'cfg(target_os = "android")'.dependencies]
+android_system_properties = "0.1.5"
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+core-foundation-sys = "0.8.6"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-core = ">=0.56, <=0.61"
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+js-sys = "0.3.66"
+# Set a minimum, but unused, dependency on `log` to ensure that cfg-if 1.0.0
+# gets pulled in in a minimal versions build for the indirect dependency from
+# `wasm-bindgen`.
+log = "0.4.14"
+wasm-bindgen = "0.2.89"
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
+wasm-bindgen-test = "0.3.46"
+getrandom = { version = "0.2.1", features = ["js"] }
+
+[target.'cfg(target_os = "haiku")'.dependencies]
+iana-time-zone-haiku = { version = "0.1.1", path = "haiku" }
+
+[dev-dependencies]
+chrono-tz = "0.10.1"
+# Set a minimum, but unused, dependency on `getrandom` to ensure that cfg-if
+# 1.0.0 gets pulled in in a minimal versions build for the indirect dependency
+# from `chrono`.
+getrandom = "0.2.1"
+
+[workspace]
+members = [".", "haiku"]
+default-members = ["."]

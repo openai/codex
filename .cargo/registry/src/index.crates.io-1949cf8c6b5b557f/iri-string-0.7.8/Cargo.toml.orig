@@ -1,0 +1,68 @@
+[workspace]
+members = [
+    ".",
+    "iri-string-tests",
+    "iri-string-benches",
+]
+
+[package]
+name = "iri-string"
+version = "0.7.8"
+authors = ["YOSHIOKA Takuma <nop_thread@nops.red>"]
+edition = "2021"
+rust-version = "1.60"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+description = "IRI as string types"
+repository = "https://github.com/lo48576/iri-string"
+keywords = ["IRI", "URI"]
+
+[package.metadata.docs.rs]
+all-features = true
+# Use unstable toolchain feature on document generation on docs.rs.
+# See <https://docs.rs/about/builds>.
+#
+# Didn't create `docsrs` feature, since Rustdoc feature `doc_auto_cfg` depends
+# on nightly toolchain and it prevents `cargo doc --all-features` from running
+# with stable Rust toolchain.
+# See <https://doc.rust-lang.org/rustdoc/unstable-features.html#doc_auto_cfg-automatically-generate-doccfg>
+# for unstable `doc_auto_cfg` feature.
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lib]
+bench = false
+
+[features]
+# Default features.
+default = ["std"]
+
+# Enable features that requires `alloc`.
+alloc = ["serde?/alloc"]
+# Enable features that requires `std`.
+std = ["alloc", "memchr?/std", "serde?/std"]
+
+[dependencies]
+memchr = { version = "2.4.1", default-features = false, optional = true }
+serde = { version = "1.0.103", default-features = false, features = ["derive"], optional = true }
+
+[dev-dependencies]
+serde_test = "1.0.104"
+
+[badges]
+maintenance = { status = "actively-developed" }
+
+[[example]]
+name = "flamegraph-resolve"
+required-features = ["alloc"]
+
+[[example]]
+name = "normalize"
+required-features = ["std"]
+
+[[example]]
+name = "parse"
+required-features = ["std"]
+
+[[example]]
+name = "resolve"
+required-features = ["std"]

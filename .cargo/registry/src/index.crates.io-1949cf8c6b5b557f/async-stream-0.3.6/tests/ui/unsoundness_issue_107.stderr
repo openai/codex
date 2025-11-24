@@ -1,0 +1,13 @@
+error[E0597]: `v` does not live long enough
+  --> tests/ui/unsoundness_issue_107.rs:11:21
+   |
+10 |         let v = vec![0; 10];
+   |             - binding `v` declared here
+11 |         let v_ref = &v;
+   |                     ^^ borrowed value does not live long enough
+...
+20 |     };
+   |     - `v` dropped here while still borrowed
+21 |     // use-after-free
+22 |     println!("{outer:?}"); // […garbage allocator internals…, 0, 0, 0]
+   |               --------- borrow later used here

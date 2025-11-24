@@ -1,0 +1,15 @@
+[package]
+edition = "2021"
+name = "new_debug_unreachable"
+version = "1.0.6"
+authors = ["Matt Brubeck <mbrubeck@limpet.net>", "Jonathan Reem <jonathan.reem@gmail.com>"]
+repository = "https://github.com/mbrubeck/rust-debug-unreachable"
+description = "panic in debug, intrinsics::unreachable() in release (fork of debug_unreachable)"
+documentation = "https://docs.rs/new_debug_unreachable"
+license = "MIT"
+keywords    = ["optimization", "macro"]
+categories  = ["rust-patterns", "no-std"]
+
+[lib]
+name = "debug_unreachable"
+path = "src/lib.rs"

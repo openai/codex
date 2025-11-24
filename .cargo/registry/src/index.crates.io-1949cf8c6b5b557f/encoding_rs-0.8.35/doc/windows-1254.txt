@@ -1,0 +1,7 @@
+/// This is the Turkish encoding for Windows. It is an extension of ISO-8859-9,
+/// which is known as Latin 5.
+///
+/// [Index visualization](https://encoding.spec.whatwg.org/windows-1254.html),
+/// [Visualization of BMP coverage](https://encoding.spec.whatwg.org/windows-1254-bmp.html)
+///
+/// This encoding matches the Windows code page 1254.

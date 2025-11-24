@@ -1,0 +1,142 @@
+[package]
+
+name = "nom"
+version = "7.1.3"
+authors = [ "contact@geoffroycouprie.com" ]
+description = "A byte-oriented, zero-copy, parser combinators library"
+license = "MIT"
+repository = "https://github.com/Geal/nom"
+readme = "README.md"
+documentation = "https://docs.rs/nom"
+keywords = ["parser", "parser-combinators", "parsing", "streaming", "bit"]
+categories = ["parsing"]
+edition = "2018"
+autoexamples = false
+
+# also update in README.md (badge and "Rust version requirements" section)
+rust-version = "1.48"
+
+include = [
+  "CHANGELOG.md",
+  "LICENSE",
+  "README.md",
+  ".gitignore",
+  "Cargo.toml",
+  "src/*.rs",
+  "src/*/*.rs",
+  "tests/*.rs",
+  "doc/nom_recipes.md",
+]
+
+[features]
+alloc = []
+std = ["alloc", "memchr/std", "minimal-lexical/std"]
+default = ["std"]
+docsrs = []
+
+[dependencies.minimal-lexical]
+version = "0.2.0"
+default-features = false
+
+[dependencies.memchr]
+version = "2.3"
+default-features = false
+
+[dev-dependencies]
+doc-comment = "0.3"
+proptest = "1.0.0"
+
+[package.metadata.docs.rs]
+features = ["alloc", "std", "docsrs"]
+all-features = true
+
+[profile.bench]
+debug = true
+lto = true
+codegen-units = 1
+
+[[test]]
+name = "arithmetic"
+
+[[test]]
+name = "arithmetic_ast"
+required-features = ["alloc"]
+
+[[test]]
+name = "css"
+
+[[test]]
+name = "custom_errors"
+
+[[test]]
+name = "float"
+
+[[test]]
+name = "ini"
+required-features = ["alloc"]
+
+[[test]]
+name = "ini_str"
+required-features = ["alloc"]
+
+[[test]]
+name = "issues"
+required-features = ["alloc"]
+
+[[test]]
+name = "json"
+
+[[test]]
+name = "mp4"
+required-features = ["alloc"]
+
+[[test]]
+name = "multiline"
+required-features = ["alloc"]
+
+[[test]]
+name = "overflow"
+
+[[test]]
+name = "reborrow_fold"
+
+[[test]]
+name = "fnmut"
+required-features = ["alloc"]
+
+[[example]]
+name = "custom_error"
+required-features = ["alloc"]
+path = "examples/custom_error.rs"
+
+[[example]]
+name = "json"
+required-features = ["alloc"]
+path = "examples/json.rs"
+
+[[example]]
+name = "json_iterator"
+required-features = ["alloc"]
+path = "examples/json_iterator.rs"
+
+[[example]]
+name = "iterator"
+path = "examples/iterator.rs"
+
+[[example]]
+name = "s_expression"
+path = "examples/s_expression.rs"
+required-features = ["alloc"]
+
+[[example]]
+name = "string"
+required-features = ["alloc"]
+path = "examples/string.rs"
+
+[badges]
+travis-ci = { repository = "Geal/nom" }
+coveralls = { repository = "Geal/nom", branch = "main", service = "github" }
+maintenance = { status = "actively-developed" }
+
+[workspace]
+members = [".", "benchmarks/"]

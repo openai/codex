@@ -1,0 +1,218 @@
+[package]
+authors = [
+    "Ashley Mannix<ashleymannix@live.com.au>",
+    "Dylan DPC<dylan.dpc@gmail.com>",
+    "Hunar Roop Kahlon<hunar.roop@gmail.com>"
+]
+categories = [
+    "data-structures",
+    "no-std",
+    "parser-implementations",
+    "wasm"
+]
+description = "A library to generate and parse UUIDs."
+documentation = "https://docs.rs/uuid"
+edition = "2018"
+include = [
+    "src",
+    "README.md",
+    "LICENSE-APACHE",
+    "LICENSE-MIT",
+]
+keywords = [
+    "guid",
+    "unique",
+    "uuid"
+]
+license = "Apache-2.0 OR MIT"
+homepage = "https://github.com/uuid-rs/uuid"
+name = "uuid"
+readme = "README.md"
+repository = "https://github.com/uuid-rs/uuid"
+version = "1.18.1" # remember to update html_root_url in lib.rs
+rust-version = "1.63.0"
+
+[package.metadata.docs.rs]
+rustc-args = ["--cfg", "uuid_unstable"]
+rustdoc-args = ["--cfg", "uuid_unstable"]
+targets = ["x86_64-unknown-linux-gnu"]
+features = ["serde", "arbitrary", "slog", "borsh", "v1", "v3", "v4", "v5", "v6", "v7", "v8"]
+
+[package.metadata.playground]
+features = ["serde", "v1", "v3", "v4", "v5", "v6", "v7", "v8"]
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(uuid_unstable)'] }
+
+[badges.is-it-maintained-issue-resolution]
+repository = "uuid-rs/uuid"
+
+[badges.is-it-maintained-open-issues]
+repository = "uuid-rs/uuid"
+
+[badges.maintenance]
+status = "actively-developed"
+
+[features]
+default = ["std"]
+std = ["wasm-bindgen?/std", "js-sys?/std"]
+macro-diagnostics = ["dep:uuid-macro-internal"]
+
+# NOTE: When adding new features, check the `ci.yml` workflow
+# and include them where necessary (you can follow along with existing features)
+v1 = ["atomic"]
+v3 = ["md5"]
+v4 = ["rng"]
+v5 = ["sha1"]
+v6 = ["atomic"]
+v7 = ["rng"]
+v8 = []
+
+js = ["dep:wasm-bindgen", "dep:js-sys"]
+
+rng = ["dep:getrandom"]
+rng-getrandom = ["rng", "dep:getrandom", "uuid-rng-internal-lib", "uuid-rng-internal-lib/getrandom"]
+rng-rand = ["rng", "dep:rand", "uuid-rng-internal-lib", "uuid-rng-internal-lib/rand"]
+
+fast-rng = ["rng", "dep:rand"]
+
+sha1 = ["dep:sha1_smol"]
+md5 = ["dep:md-5"]
+atomic = ["dep:atomic"]
+
+borsh = ["dep:borsh", "dep:borsh-derive"]
+
+# Public: Used in trait impls on `Uuid`
+[dependencies.bytemuck]
+version = "1.18.1"
+optional = true
+features = ["derive"]
+
+# Public: Used in trait impls on `Uuid`
+[dependencies.serde]
+default-features = false
+optional = true
+version = "1.0.56"
+
+# Public: Used in trait impls on `Uuid`
+[dependencies.slog]
+optional = true
+version = "2"
+
+# Public: Used in trait impls on `Uuid`
+[dependencies.arbitrary]
+optional = true
+version = "1.1.3"
+
+# Public (unstable): Used in `zerocopy` derive
+# Unstable: also need RUSTFLAGS="--cfg uuid_unstable" to work
+# This feature may break between releases, or be removed entirely before
+# stabilization.
+# See: https://github.com/uuid-rs/uuid/issues/588
+[dependencies.zerocopy]
+optional = true
+version = "0.8"
+features = ["derive"]
+
+# Public: Used in trait impls on `Uuid`
+[dependencies.borsh]
+optional = true
+version = "1"
+default-features = false
+
+# Private
+[dependencies.borsh-derive]
+optional = true
+version = "1"
+default-features = false
+
+# NOTE: `getrandom` will throw a compiler error for the following target configuration when `wasm_js` is not enabled:
+# all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))
+
+# Private
+# (Formally public)
+[target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dependencies.getrandom]
+version = "0.3"
+optional = true
+
+[target.'cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))'.dependencies.uuid-rng-internal-lib]
+# Work-around lack of support for both `dep:x` and `x/` in MSRV
+package = "uuid-rng-internal"
+version = "1.18.1"
+path = "rng"
+optional = true
+
+# Private
+[target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dependencies.rand]
+version = "0.9"
+optional = true
+
+# Private
+[dependencies.md-5]
+default-features = false
+optional = true
+version = "0.10"
+
+# Private
+[dependencies.sha1_smol]
+default-features = false
+optional = true
+version = "1"
+
+# Public: Re-exported
+[dependencies.uuid-macro-internal]
+version = "1.18.1"
+path = "macros"
+optional = true
+
+# Private
+[dependencies.atomic]
+default-features = false
+optional = true
+version = "0.6"
+
+# Private
+[target.'cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))'.dependencies.wasm-bindgen]
+default-features = false
+features = ["msrv"]
+version = "0.2"
+optional = true
+
+# Private
+[target.'cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"), target_feature = "atomics"))'.dependencies.js-sys]
+default-features = false
+version = "0.3"
+optional = true
+
+[dev-dependencies.bincode]
+version = "1.0"
+
+[dev-dependencies.serde_derive]
+version = "1.0.79"
+
+[dev-dependencies.serde_json]
+version = "1.0"
+
+[dev-dependencies.serde_test]
+version = "1.0.56"
+
+[target.'cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))'.dev-dependencies.wasm-bindgen]
+version = "0.2"
+
+[target.'cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))'.dev-dependencies.wasm-bindgen-test]
+version = "0.3"
+
+[dev-dependencies.trybuild]
+version = "1.0.52"
+
+[dev-dependencies.rustversion]
+version = "1"
+
+[workspace]
+members = [
+    "macros",
+    "rng",
+    "examples",
+    "tests/smoke-test",
+    "tests/wasm32-getrandom-test",
+]

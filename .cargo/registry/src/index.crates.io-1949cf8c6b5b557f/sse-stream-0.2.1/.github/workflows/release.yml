@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    branches: [ release ]
+    tags:
+      - 'release-*'
+  pull_request:
+    branches: [ release ]
+env:
+  CARGO_TERM_COLOR: always
+  ARTIFACT_DIR: release-artifacts
+
+jobs:
+  release:
+    name: Release crates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Cargo login
+        run: cargo login ${{ secrets.CRATES_TOKEN }}
+      - name: Publish macros dry run
+        run: cargo publish -p sse-stream --dry-run
+      - name: Publish sse-stream
+        if: ${{ startsWith(github.ref, 'refs/tags/release') }}
+        run: cargo publish -p sse-stream
+      

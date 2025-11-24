@@ -1,0 +1,18 @@
+{
+    "albums": [
+        {
+            "name": {"type": "string", "value": "Born to Run"},
+            "songs": [
+                {"name": {"type": "string", "value": "Jungleland"}},
+                {"name": {"type": "string", "value": "Meeting Across the River"}}
+            ]
+        },
+        {
+            "name": {"type": "string", "value": "Born in the USA"},
+            "songs": [
+                {"name": {"type": "string", "value": "Glory Days"}},
+                {"name": {"type": "string", "value": "Dancing in the Dark"}}
+            ]
+        }
+    ]
+}

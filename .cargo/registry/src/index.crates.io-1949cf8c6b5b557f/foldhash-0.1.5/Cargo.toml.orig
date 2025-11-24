@@ -1,0 +1,44 @@
+[package]
+name = "foldhash"
+version = "0.1.5"
+authors = ["Orson Peters <orsonpeters@gmail.com>"]
+license = "Zlib"
+repository = "https://github.com/orlp/foldhash"
+readme = "README.md"
+keywords = ["hash", "hasher", "no-std"]
+categories = ["algorithms", "no-std"]
+description = "A fast, non-cryptographic, minimally DoS-resistant hashing algorithm."
+edition = "2021"
+exclude = ["benches", "tools", "assets"]
+rust-version = "1.60"
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+
+[dev-dependencies]
+criterion = "0.5"
+hashbrown = "0.14"
+uuid = "1.8"
+rand = "0.8"
+ahash = "0.8"
+fxhash = "0.2"
+chrono = "0.4"
+
+[lib]
+bench = false
+
+[[bench]]
+name = "bench"
+path = "benches/bench.rs"
+harness = false
+
+[[bench]]
+name = "avalanche"
+path = "benches/avalanche.rs"
+harness = false
+
+[profile.release]
+lto = "thin"

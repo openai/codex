@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "External",
+  "anyOf": [
+    {
+      "type": "string",
+      "enum": [
+        "taggedUnitOne"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "taggedStruct": {
+          "type": "object",
+          "properties": {
+            "baz": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "foobar": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "baz",
+            "foobar"
+          ]
+        }
+      },
+      "required": [
+        "taggedStruct"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "null"
+    },
+    {
+      "$ref": "#/$defs/UnitStruct"
+    },
+    {
+      "$ref": "#/$defs/Struct"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "baz": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "foobar": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "baz",
+        "foobar"
+      ]
+    },
+    {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "integer",
+          "format": "int32"
+        },
+        {
+          "type": "boolean"
+        }
+      ],
+      "minItems": 2,
+      "maxItems": 2
+    },
+    {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  ],
+  "$defs": {
+    "UnitStruct": {
+      "type": "null"
+    },
+    "Struct": {
+      "type": "object",
+      "properties": {
+        "foo": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "bar": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "foo",
+        "bar"
+      ]
+    }
+  }
+}

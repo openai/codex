@@ -1,0 +1,5 @@
+disallowed-methods = [
+    { path = "std::env::var_os", reason = "Please use Build::getenv" },
+    { path = "std::env::var", reason = "Please use Build::getenv" },
+]
+doc-valid-idents = ["AppleClang", "OpenBSD", ".."]

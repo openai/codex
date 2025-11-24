@@ -1,0 +1,27 @@
+[package]
+name = "crypto-common"
+description = "Common cryptographic traits"
+version = "0.1.6"
+authors = ["RustCrypto Developers"]
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+edition = "2018"
+documentation = "https://docs.rs/crypto-common"
+repository = "https://github.com/RustCrypto/traits"
+keywords = ["crypto", "traits"]
+categories = ["cryptography", "no-std"]
+
+[dependencies]
+generic-array = { version = "0.14.4", features = ["more_lengths"] }
+typenum = "1.14" # earlier versions of typenum don't satisfy the 'static bound on U* types
+
+# optional dependencies
+rand_core = { version = "0.6", optional = true }
+
+[features]
+std = []
+getrandom = ["rand_core/getrandom"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

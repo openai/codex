@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Basic",
+  "type": "object",
+  "properties": {
+    "bare_field": {
+      "description": "Basic field, no attribute",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "display_from_str": {
+      "description": "Field that directly uses `DisplayFromStr`",
+      "type": "string"
+    },
+    "same": {
+      "description": "Same does not implement `JsonSchema` directly so this checks that the\ncorrect schemars attribute was injected.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "box_same": {
+      "description": "This checks that Same still works when wrapped in a box.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "vec_same": {
+      "description": "Same thing, but with a Vec this time.",
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0
+      }
+    }
+  },
+  "required": [
+    "bare_field",
+    "display_from_str",
+    "same",
+    "box_same",
+    "vec_same"
+  ]
+}

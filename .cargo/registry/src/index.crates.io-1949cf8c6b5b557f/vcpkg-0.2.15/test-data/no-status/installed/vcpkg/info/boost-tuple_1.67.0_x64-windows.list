@@ -1,0 +1,12 @@
+x64-windows/
+x64-windows/include/
+x64-windows/include/boost/
+x64-windows/include/boost/tuple/
+x64-windows/include/boost/tuple/detail/
+x64-windows/include/boost/tuple/detail/tuple_basic.hpp
+x64-windows/include/boost/tuple/tuple.hpp
+x64-windows/include/boost/tuple/tuple_comparison.hpp
+x64-windows/include/boost/tuple/tuple_io.hpp
+x64-windows/share/
+x64-windows/share/boost-tuple/
+x64-windows/share/boost-tuple/copyright

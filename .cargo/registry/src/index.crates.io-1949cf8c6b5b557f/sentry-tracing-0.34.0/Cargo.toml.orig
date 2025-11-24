@@ -1,0 +1,37 @@
+[package]
+name = "sentry-tracing"
+version = "0.34.0"
+authors = ["Sentry <hello@sentry.io>"]
+license = "Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/getsentry/sentry-rust"
+homepage = "https://sentry.io/welcome/"
+description = """
+Sentry integration for tracing and tracing-subscriber crates.
+"""
+edition = "2021"
+rust-version = "1.73"
+
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+default = []
+backtrace = ["dep:sentry-backtrace"]
+
+[dependencies]
+sentry-core = { version = "0.34.0", path = "../sentry-core", features = [
+    "client",
+] }
+tracing-core = "0.1"
+tracing-subscriber = { version = "0.3.1", default-features = false, features = [
+    "std",
+] }
+sentry-backtrace = { version = "0.34.0", path = "../sentry-backtrace", optional = true }
+
+[dev-dependencies]
+log = "0.4"
+sentry = { path = "../sentry", default-features = false, features = ["test"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3.1", features = ["fmt", "registry"] }
+tokio = { version = "1.8", features = ["rt-multi-thread", "macros", "time"] }

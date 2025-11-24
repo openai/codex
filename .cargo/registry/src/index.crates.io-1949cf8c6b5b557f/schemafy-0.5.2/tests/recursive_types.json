@@ -1,0 +1,22 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "title": "recursive_types",
+    "type": "object",
+    "properties": {},
+    "required": [
+        "test_a"
+    ],
+    "definitions": {
+        "test_a": {
+            "properties": {
+                "arr": {
+                    "type": "array",
+                    "$ref": "#/definitions/test_a"
+                },
+                "ref": {
+                    "$ref": "#/definitions/test_a"
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,4 @@
+--out src/windows_bindings.rs
+
+--filter
+    Windows.Globalization.Calendar

@@ -1,0 +1,41 @@
+error: expected serde default attribute to be a string: `default = "..."`
+ --> tests/ui/invalid_attrs.rs:5:15
+  |
+5 |     default = 0,
+  |               ^
+
+error: duplicate serde attribute `deny_unknown_fields`
+ --> tests/ui/invalid_attrs.rs:8:5
+  |
+8 |     deny_unknown_fields,
+  |     ^^^^^^^^^^^^^^^^^^^
+
+error: expected serde default attribute to be a string: `default = "..."`
+  --> tests/ui/invalid_attrs.rs:17:15
+   |
+17 |     default = 0,
+   |               ^
+
+error: duplicate serde attribute `deny_unknown_fields`
+  --> tests/ui/invalid_attrs.rs:20:5
+   |
+20 |     deny_unknown_fields,
+   |     ^^^^^^^^^^^^^^^^^^^
+
+error: unexpected value of schemars inline attribute item
+  --> tests/ui/invalid_attrs.rs:21:12
+   |
+21 |     inline = 1,
+   |            ^^^
+
+error: duplicate schemars attribute item `inline`
+  --> tests/ui/invalid_attrs.rs:23:5
+   |
+23 |     inline
+   |     ^^^^^^
+
+error: unknown schemars attribute `foo`
+  --> tests/ui/invalid_attrs.rs:18:5
+   |
+18 |     foo,
+   |     ^^^

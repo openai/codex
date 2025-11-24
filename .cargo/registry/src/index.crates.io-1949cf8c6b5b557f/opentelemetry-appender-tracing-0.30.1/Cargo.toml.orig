@@ -1,0 +1,56 @@
+[package]
+name = "opentelemetry-appender-tracing"
+version = "0.30.1"
+edition = "2021"
+description = "An OpenTelemetry log appender for the tracing crate"
+homepage = "https://github.com/open-telemetry/opentelemetry-rust/tree/main/opentelemetry-appender-tracing"
+repository = "https://github.com/open-telemetry/opentelemetry-rust/tree/main/opentelemetry-appender-tracing"
+readme = "README.md"
+keywords = ["opentelemetry", "log", "logs", "tracing"]
+license = "Apache-2.0"
+rust-version = "1.75.0"
+autobenches = false
+
+[dependencies]
+log = { workspace = true, optional = true }
+opentelemetry = { version = "0.30", path = "../opentelemetry", features = ["logs"] }
+tracing = { workspace = true, features = ["std"]}
+tracing-core = { workspace = true }
+tracing-log = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, features = ["registry", "std"] }
+tracing-opentelemetry = { workspace = true, optional = true }
+
+[dev-dependencies]
+log = { workspace = true }
+opentelemetry-stdout = { workspace = true, features = ["logs"] }
+opentelemetry_sdk = { path = "../opentelemetry-sdk", features = ["logs", "testing"]  }
+tracing = { workspace = true, features = ["std"]}
+tracing-subscriber = { workspace = true, features = ["env-filter","registry", "std", "fmt"] }
+tracing-log = { workspace = true }
+criterion = { workspace = true }
+tokio = { workspace = true, features = ["full"]}
+
+[target.'cfg(not(target_os = "windows"))'.dev-dependencies]
+pprof = { version = "0.14", features = ["flamegraph", "criterion"] }
+
+[features]
+default = []
+experimental_metadata_attributes = ["dep:tracing-log"]
+spec_unstable_logs_enabled = ["opentelemetry/spec_unstable_logs_enabled"]
+experimental_use_tracing_span_context = ["tracing-opentelemetry"]
+
+
+[[bench]]
+name = "logs"
+harness = false
+required-features = ["spec_unstable_logs_enabled"]
+
+[[bench]]
+name = "log-attributes"
+harness = false
+
+[lib]
+bench = false
+
+[lints]
+workspace = true

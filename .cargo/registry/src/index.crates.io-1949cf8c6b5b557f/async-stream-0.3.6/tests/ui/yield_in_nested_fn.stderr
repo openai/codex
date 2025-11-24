@@ -1,0 +1,24 @@
+error[E0658]: yield syntax is experimental
+ --> tests/ui/yield_in_nested_fn.rs:6:13
+  |
+6 |             yield "hello";
+  |             ^^^^^^^^^^^^^
+  |
+  = note: see issue #43122 <https://github.com/rust-lang/rust/issues/43122> for more information
+
+error: `yield` can only be used in `#[coroutine]` closures, or `gen` blocks
+ --> tests/ui/yield_in_nested_fn.rs:6:13
+  |
+6 |             yield "hello";
+  |             ^^^^^^^^^^^^^
+  |
+help: use `#[coroutine]` to make this closure a coroutine
+  |
+5 |         #[coroutine] fn foo() {
+  |         ++++++++++++
+
+error[E0627]: yield expression outside of coroutine literal
+ --> tests/ui/yield_in_nested_fn.rs:6:13
+  |
+6 |             yield "hello";
+  |             ^^^^^^^^^^^^^

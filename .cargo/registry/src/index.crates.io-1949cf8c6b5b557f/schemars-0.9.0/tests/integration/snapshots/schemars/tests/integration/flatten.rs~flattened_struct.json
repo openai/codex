@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Flat",
+  "type": "object",
+  "properties": {
+    "f": {
+      "type": "number",
+      "format": "float"
+    },
+    "b": {
+      "type": "boolean"
+    },
+    "s": {
+      "type": "string"
+    },
+    "v": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "int32"
+      }
+    }
+  },
+  "required": [
+    "f",
+    "b",
+    "v"
+  ]
+}

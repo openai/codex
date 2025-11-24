@@ -1,0 +1,66 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Test",
+  "type": "object",
+  "required": [
+    "data"
+  ],
+  "properties": {
+    "data": {
+      "$ref": "#/definitions/KeyValueMap(KvMapFlatten)"
+    }
+  },
+  "definitions": {
+    "KeyValueMap(KvMapFlatten)": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "a"
+            ],
+            "properties": {
+              "a": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0.0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "b"
+            ],
+            "properties": {
+              "b": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "c"
+            ],
+            "properties": {
+              "c": {
+                "type": "boolean"
+              }
+            }
+          }
+        ],
+        "required": [
+          "extra"
+        ],
+        "properties": {
+          "extra": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,5 @@
+ossl_cmp_allow_unprotected_cb_t         datatype
+#
+DEFINE_SPARSE_ARRAY_OF                  define
+#Functions exported by libcrypto that don't exist in our public headers
+asn1_d2i_read_bio                       internal

@@ -1,0 +1,26 @@
+pretty = proc(u) {
+  return ~(floor(u*1000)/1000);
+};
+
+prec = 500;
+
+bessel_j0 = library("./cmake-build-release/libbessel_sollya.dylib");
+
+f = bessel_j0(x);
+d = [0, 1.2];
+w = 1;
+pf = remez(f, 21, d);
+
+w = 1;
+or_f = bessel_j0(x);
+err_p = -log2(dirtyinfnorm(pf*w-or_f, d));
+print ("relative error:", pretty(err_p));
+
+for i from 0 to degree(pf) do {
+    print("'", coeff(pf, i), "',");
+};
+
+//for i from 0 to degree(pf) do {
+//    write(coeff(pf, i)) >> "coefficients.txt";
+//    write("\n") >> "coefficients.txt";
+//};

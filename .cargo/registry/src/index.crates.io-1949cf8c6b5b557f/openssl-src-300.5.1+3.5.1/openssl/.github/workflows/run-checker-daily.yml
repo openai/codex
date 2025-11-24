@@ -1,0 +1,367 @@
+# Copyright 2021-2025 The OpenSSL Project Authors. All Rights Reserved.
+#
+# Licensed under the Apache License 2.0 (the "License").  You may not use
+# this file except in compliance with the License.  You can obtain a copy
+# in the file LICENSE in the source distribution or at
+# https://www.openssl.org/source/license.html
+
+name: Run-checker daily
+# Jobs run daily
+
+on:
+  schedule:
+    - cron: '30 02 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  run-checker:
+    strategy:
+      fail-fast: false
+      matrix:
+        opt: [
+          386,
+          no-afalgeng,
+          no-apps,
+          no-aria,
+          no-asan,
+          no-asm,
+          no-async,
+          no-atexit,
+          no-autoalginit,
+          no-autoerrinit,
+          no-autoload-config,
+          no-bf,
+          no-blake2,
+          no-buildtest-c++,
+          no-bulk,
+          no-cached-fetch,
+          no-camellia,
+          no-capieng,
+          no-cast,
+          no-chacha,
+          no-cmac,
+          no-comp,
+          enable-crypto-mdebug,
+          enable-crypto-mdebug-backtrace,
+          no-ct,
+          enable-demos,
+          no-deprecated,
+          no-des,
+#          enable-devcryptoeng,  # Cannot work on Linux
+          no-docs,
+          no-dsa,
+          no-dtls1,
+          no-dtls1_2,
+          no-dtls1_2-method,
+          no-dtls1-method,
+          no-ecdh,
+          no-ecdsa,
+          enable-ec_nistp_64_gcc_128,
+          enable-egd,
+          no-engine,
+#          enable-external-tests,  # Requires extra setup
+          enable-fips,
+          enable-fips enable-acvp-tests,
+          enable-fips no-tls1_3,
+          enable-fips no-des no-dsa no-ec2m,
+#          enable-fuzz-afl,        # Requires extra setup
+#          enable-fuzz-libfuzzer,  # Requires extra setup
+          no-gost,
+          enable-h3demo,
+          enable-heartbeats,
+          enable-hqinterop,
+          no-hw,
+          no-hw-padlock,
+          no-idea,
+          no-makedepend,
+          enable-md2,
+          no-md4,
+          no-mdc2,
+          no-msan,
+          no-multiblock,
+          no-nextprotoneg,
+          no-ocb,
+          no-padlockeng,
+          no-pic,
+          no-poly1305,
+          no-posix-io,
+          no-psk,
+          no-rc2,
+          enable-rc5,
+          no-rdrand,
+          no-rfc3779,
+          no-ripemd,
+          no-rmd160,
+          no-scrypt,
+          no-secure-memory,
+          no-seed,
+          no-shared,
+          no-siphash,
+          no-siv,
+          no-sm2,
+          no-sm2-precomp,
+          no-sm3,
+          no-sm4,
+          no-sock,
+          no-sse2,
+          no-ssl,
+          enable-ssl3,
+          enable-ssl3-method,
+          enable-sslkeylog,
+          no-static-engine no-shared,
+          no-tests,
+          enable-tfo,
+          no-tls1,
+          no-tls1_1,
+          no-tls1_1-method,
+          no-tls1_2-method,
+          no-tls1-method,
+          enable-trace,
+          no-ubsan,
+          no-ui-console,
+          enable-unit-test,
+          no-uplink,
+          no-weak-ssl-ciphers,
+          no-whirlpool,
+          enable-zlib-dynamic,
+          -DOPENSSL_PEDANTIC_ZEROIZATION,
+          -DOPENSSL_PEDANTIC_ZEROIZATION enable-fips,
+          -DOPENSSL_NO_BUILTIN_OVERFLOW_CHECKING,
+          -DSSL3_ALIGN_PAYLOAD=4,
+          -DOPENSSL_TLS_SECURITY_LEVEL=0
+        ]
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: checkout fuzz/corpora submodule
+      run: git submodule update --init --depth 1 fuzz/corpora
+    - name: config
+      run: CC=clang ./config --banner=Configured --strict-warnings ${{ matrix.opt }}
+    - name: config dump
+      run: ./configdata.pm --dump
+    - name: make
+      run: make -s -j4
+    - name: get cpu info
+      run: |
+        cat /proc/cpuinfo
+        if [ -x apps/openssl ] ; then ./util/opensslwrap.sh version -c ; fi
+    - name: make test
+      run: make test HARNESS_JOBS=${HARNESS_JOBS:-4}
+
+  run-checker-sctp:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: checkout fuzz/corpora submodule
+      run: git submodule update --init --depth 1 fuzz/corpora
+    - name: Install Dependencies for sctp option
+      run:  |
+        sudo apt-get update
+        sudo apt-get -yq install lksctp-tools libsctp-dev
+
+    - name: Check SCTP and enable auth
+      id: sctp_auth
+      continue-on-error: true
+      run:  |
+        checksctp
+        sudo sysctl -w net.sctp.auth_enable=1
+
+    - name: config
+      if: steps.sctp_auth.outcome == 'success' && steps.sctp_auth.conclusion == 'success'
+      run: CC=clang ./config --banner=Configured --strict-warnings enable-sctp
+
+    - name: config dump
+      if: steps.sctp_auth.outcome == 'success' && steps.sctp_auth.conclusion == 'success'
+      run: ./configdata.pm --dump
+
+    - name: make
+      if: steps.sctp_auth.outcome == 'success' && steps.sctp_auth.conclusion == 'success'
+      run: make -s -j4
+
+    - name: get cpu info
+      run: |
+        cat /proc/cpuinfo
+        ./util/opensslwrap.sh version -c
+
+    - name: make test
+      if: steps.sctp_auth.outcome == 'success' && steps.sctp_auth.conclusion == 'success'
+      run: make test HARNESS_JOBS=${HARNESS_JOBS:-4}
+
+  enable_brotli_dynamic:
+    runs-on: ubuntu-latest
+    steps:
+    - name: install brotli
+      run: |
+        sudo apt-get update
+        sudo apt-get -yq --no-install-suggests --no-install-recommends --force-yes install brotli libbrotli1 libbrotli-dev
+    - name: checkout openssl
+      uses: actions/checkout@v4
+    - name: checkout fuzz/corpora submodule
+      run: git submodule update --init --depth 1 fuzz/corpora
+    - name: config
+      run: ./config enable-comp enable-brotli enable-brotli-dynamic && perl configdata.pm --dump
+    - name: make
+      run: make -s -j4
+    - name: get cpu info
+      run: |
+        cat /proc/cpuinfo
+        ./util/opensslwrap.sh version -c
+    - name: make test
+      run: make test HARNESS_JOBS=${HARNESS_JOBS:-4}
+
+  enable_zstd_dynamic:
+    runs-on: ubuntu-latest
+    steps:
+    - name: install zstd
+      run: |
+        sudo apt-get update
+        sudo apt-get -yq --no-install-suggests --no-install-recommends --force-yes install zstd libzstd1 libzstd-dev
+    - name: checkout openssl
+      uses: actions/checkout@v4
+    - name: checkout fuzz/corpora submodule
+      run: git submodule update --init --depth 1 fuzz/corpora
+    - name: config
+      run: ./config enable-comp enable-zstd enable-zstd-dynamic && perl configdata.pm --dump
+    - name: make
+      run: make -s -j4
+    - name: get cpu info
+      run: |
+        cat /proc/cpuinfo
+        ./util/opensslwrap.sh version -c
+    - name: make test
+      run: make test HARNESS_JOBS=${HARNESS_JOBS:-4}
+
+  enable_brotli_and_zstd_dynamic:
+    runs-on: ubuntu-latest
+    steps:
+    - name: install brotli and zstd
+      run: |
+        sudo apt-get update
+        sudo apt-get -yq --no-install-suggests --no-install-recommends --force-yes install brotli libbrotli1 libbrotli-dev
+        sudo apt-get -yq --no-install-suggests --no-install-recommends --force-yes install zstd libzstd1 libzstd-dev
+    - name: checkout openssl
+      uses: actions/checkout@v4
+    - name: checkout fuzz/corpora submodule
+      run: git submodule update --init --depth 1 fuzz/corpora
+    - name: config
+      run: ./config enable-comp enable-brotli enable-brotli-dynamic enable-zstd enable-zstd-dynamic && perl configdata.pm --dump
+    - name: make
+      run: make -s -j4
+    - name: get cpu info
+      run: |
+        cat /proc/cpuinfo
+        ./util/opensslwrap.sh version -c
+    - name: make test
+      run: make test HARNESS_JOBS=${HARNESS_JOBS:-4}
+
+  enable_brotli_and_asan_ubsan:
+    runs-on: ubuntu-latest
+    steps:
+    - name: install brotli
+      run: |
+        sudo apt-get update
+        sudo apt-get -yq --no-install-suggests --no-install-recommends --force-yes install brotli libbrotli1 libbrotli-dev
+    - name: checkout openssl
+      uses: actions/checkout@v4
+    - name: checkout fuzz/corpora submodule
+      run: git submodule update --init --depth 1 fuzz/corpora
+    - name: Adjust ASLR for sanitizer
+      run: |
+        sudo cat /proc/sys/vm/mmap_rnd_bits
+        sudo sysctl -w vm.mmap_rnd_bits=28
+    - name: config
+      run: ./config --banner=Configured --debug enable-asan enable-ubsan enable-comp enable-brotli -DPEDANTIC && perl configdata.pm --dump
+    - name: make
+      run: make -s -j4
+    - name: get cpu info
+      run: |
+        cat /proc/cpuinfo
+        ./util/opensslwrap.sh version -c
+    - name: make test
+      run: make test HARNESS_JOBS=${HARNESS_JOBS:-4} OPENSSL_TEST_RAND_ORDER=0
+
+  enable_zstd_and_asan_ubsan:
+    runs-on: ubuntu-latest
+    steps:
+    - name: install zstd
+      run: |
+        sudo apt-get update
+        sudo apt-get -yq --no-install-suggests --no-install-recommends --force-yes install zstd libzstd1 libzstd-dev
+    - name: checkout openssl
+      uses: actions/checkout@v4
+    - name: checkout fuzz/corpora submodule
+      run: git submodule update --init --depth 1 fuzz/corpora
+    - name: Adjust ASLR for sanitizer
+      run: |
+        sudo cat /proc/sys/vm/mmap_rnd_bits
+        sudo sysctl -w vm.mmap_rnd_bits=28
+    - name: config
+      run: ./config --banner=Configured --debug enable-asan enable-ubsan enable-comp enable-zstd -DPEDANTIC && perl configdata.pm --dump
+    - name: make
+      run: make -s -j4
+    - name: get cpu info
+      run: |
+        cat /proc/cpuinfo
+        ./util/opensslwrap.sh version -c
+    - name: make test
+      run: make test HARNESS_JOBS=${HARNESS_JOBS:-4} OPENSSL_TEST_RAND_ORDER=0
+
+  enable_tfo:
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, macos-13, macos-14 ]
+    runs-on: ${{matrix.os}}
+    steps:
+    - uses: actions/checkout@v4
+    - name: checkout fuzz/corpora submodule
+      run: git submodule update --init --depth 1 fuzz/corpora
+    - name: config
+      run: CC=gcc ./config --banner=Configured enable-tfo --strict-warnings && perl configdata.pm --dump
+    - name: make
+      run: make -s -j4
+    - name: get cpu info
+      run: ./util/opensslwrap.sh version -c
+    - name: make test
+      run: make test HARNESS_JOBS=${HARNESS_JOBS:-4}
+
+  enable_buildtest:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: checkout fuzz/corpora submodule
+      run: git submodule update --init --depth 1 fuzz/corpora
+    - name: config
+      run: ./config --banner=Configured no-asm no-makedepend enable-buildtest-c++ enable-fips --strict-warnings -D_DEFAULT_SOURCE && perl configdata.pm --dump
+    - name: make
+      run: make -s -j4
+    - name: get cpu info
+      run: |
+        cat /proc/cpuinfo
+        ./util/opensslwrap.sh version -c
+    - name: make test
+      run: make test HARNESS_JOBS=${HARNESS_JOBS:-4}
+
+  memory_sanitizer_slh_dsa:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: checkout fuzz/corpora submodule
+      run: git submodule update --init --depth 1 fuzz/corpora
+    - name: Adjust ASLR for sanitizer
+      run: |
+        sudo cat /proc/sys/vm/mmap_rnd_bits
+        sudo sysctl -w vm.mmap_rnd_bits=28
+    - name: config
+      # --debug -O1 is to produce a debug build that runs in a reasonable amount of time
+      run: CC=clang ./config --banner=Configured --debug no-shared -O1 -fsanitize=memory -DOSSL_SANITIZE_MEMORY -fno-optimize-sibling-calls enable-rc5 enable-md2 enable-ec_nistp_64_gcc_128 enable-fips && perl configdata.pm --dump
+    - name: make
+      run: make -s -j4
+    - name: get cpu info
+      run: |
+        cat /proc/cpuinfo
+        ./util/opensslwrap.sh version -c
+    - name: make test
+      run: make test HARNESS_JOBS=${HARNESS_JOBS:-4} OPENSSL_TEST_RAND_ORDER=0

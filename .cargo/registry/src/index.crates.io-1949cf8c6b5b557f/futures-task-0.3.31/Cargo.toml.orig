@@ -1,0 +1,32 @@
+[package]
+name = "futures-task"
+version = "0.3.31"
+edition = "2018"
+rust-version = "1.56"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rust-lang/futures-rs"
+homepage = "https://rust-lang.github.io/futures-rs"
+description = """
+Tools for working with tasks.
+"""
+
+[features]
+default = ["std"]
+std = ["alloc"]
+alloc = []
+
+# These features are no longer used.
+# TODO: remove in the next major version.
+unstable = []
+cfg-target-has-atomic = []
+
+[dependencies]
+
+[dev-dependencies]
+futures = { path = "../futures" }
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

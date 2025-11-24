@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MyContainer",
+  "type": "object",
+  "required": [
+    "associated",
+    "generic"
+  ],
+  "properties": {
+    "associated": {
+      "type": "string"
+    },
+    "generic": {
+      "type": "null"
+    }
+  }
+}

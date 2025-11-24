@@ -1,0 +1,32 @@
+# We make separate GOAL variables for each algorithm, to make it easy to
+# switch each to the Legacy provider when needed.
+
+$ENCODER_GOAL=../../libdefault.a
+$DECODER_GOAL=../../libdefault.a
+
+SOURCE[$ENCODER_GOAL]=endecoder_common.c
+
+SOURCE[$DECODER_GOAL]=decode_der2key.c decode_epki2pki.c decode_pem2der.c \
+                      decode_msblob2key.c decode_pvk2key.c \
+                      decode_spki2typespki.c
+
+SOURCE[$ENCODER_GOAL]=encode_key2any.c encode_key2text.c encode_key2ms.c
+# encode_key2blob.c is only being included when EC is enabled, because we
+# currently only define a "blob" output type for EC public keys.  This may
+# change in the future.
+IF[{- !$disabled{ec} -}]
+  SOURCE[$ENCODER_GOAL]=encode_key2blob.c
+ENDIF
+DEPEND[encode_key2any.o]=../../common/include/prov/der_rsa.h
+
+IF[{- !$disabled{'ml-dsa'} -}]
+  SOURCE[$DECODER_GOAL]=ml_dsa_codecs.c
+ENDIF
+
+IF[{- !$disabled{'ml-kem'} -}]
+  SOURCE[$DECODER_GOAL]=ml_kem_codecs.c
+ENDIF
+
+IF[{- !$disabled{'ml-dsa'} || !$disabled{'ml-kem'} -}]
+  SOURCE[$DECODER_GOAL]=ml_common_codecs.c
+ENDIF

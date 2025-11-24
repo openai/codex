@@ -1,0 +1,13 @@
+[package]
+name        = "dirs"
+version     = "6.0.0"
+authors     = ["Simon Ochsenreither <simon@ochsenreither.de>"]
+description = "A tiny low-level library that provides platform-specific standard locations of directories for config, cache and other data on Linux, Windows, macOS and Redox by leveraging the mechanisms defined by the XDG base/user directory specifications on Linux, the Known Folder API on Windows, and the Standard Directory guidelines on macOS."
+readme      = "README.md"
+license     = "MIT OR Apache-2.0"
+repository  = "https://github.com/soc/dirs-rs"
+maintenance = { status = "actively-developed" }
+keywords    = ["xdg", "basedir", "app_dirs", "path", "folder"]
+
+[dependencies]
+dirs-sys = "0.5.0"

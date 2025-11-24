@@ -1,0 +1,10 @@
+comment:
+  layout: "diff, flags, files"
+  require_changes: true
+
+coverage:
+  status:
+    project:
+      default:
+        # Don't fail on coverage, only show
+        informational: true

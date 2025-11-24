@@ -1,0 +1,248 @@
+# Copyright 2021-2025 The OpenSSL Project Authors. All Rights Reserved.
+#
+# Licensed under the Apache License 2.0 (the "License").  You may not use
+# this file except in compliance with the License.  You can obtain a copy
+# in the file LICENSE in the source distribution or at
+# https://www.openssl.org/source/license.html
+
+name: OS Zoo CI
+
+on:
+  schedule:
+    - cron: '50 02 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  alpine:
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: [edge, latest]
+        cc: [gcc, clang]
+    runs-on: ubuntu-latest
+    container:
+      image: docker.io/library/alpine:${{ matrix.tag }}
+    env:
+      # See https://www.openwall.com/lists/musl/2022/02/16/14
+      # for the reason why -Wno-sign-compare is needed with clang
+      # -Wno-stringop-overflow is needed to silence a bogus
+      # warning on new fortify-headers with gcc
+      EXTRA_CFLAGS: ${{ matrix.cc == 'clang' && '-Wno-sign-compare' || matrix.tag == 'edge' && '-Wno-stringop-overflow' || '' }}
+      CC: ${{ matrix.cc }}
+    steps:
+    - name: install packages
+      run: apk --no-cache add build-base perl linux-headers ${{ matrix.cc }}
+    - uses: actions/checkout@v4
+    - name: config
+      run: |
+        ./config --banner=Configured no-shared -Wall -Werror enable-fips --strict-warnings \
+                 ${EXTRA_CFLAGS}
+    - name: config dump
+      run: ./configdata.pm --dump
+    - name: make
+      run: make -s -j4
+    - name: get cpu info
+      run: |
+        cat /proc/cpuinfo
+        ./util/opensslwrap.sh version -c
+    - name: make test
+      run: make test HARNESS_JOBS=${HARNESS_JOBS:-4}
+
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        zoo:
+          - image: docker.io/library/debian:10
+            install: apt-get update && apt-get install -y gcc make perl
+          - image: docker.io/library/debian:11
+            install: apt-get update && apt-get install -y gcc make perl
+          - image: docker.io/library/debian:12
+            install: apt-get update && apt-get install -y gcc make perl
+          - image: docker.io/library/ubuntu:20.04
+            install: apt-get update && apt-get install -y gcc make perl
+          - image: docker.io/library/ubuntu:22.04
+            install: apt-get update && apt-get install -y gcc make perl
+          - image: docker.io/library/fedora:38
+            install: dnf install -y gcc make perl-core
+          - image: docker.io/library/fedora:39
+            install: dnf install -y gcc make perl-core
+          - image: docker.io/library/centos:8
+            install: |
+              sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-* && \
+              sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-* && \
+              dnf install -y gcc make perl-core
+          - image: docker.io/library/rockylinux:8
+            install: dnf install -y gcc make perl-core
+          - image: docker.io/library/rockylinux:9
+            install: dnf install -y gcc make perl-core
+    runs-on: ubuntu-latest
+    container: ${{ matrix.zoo.image }}
+    steps:
+    - uses: actions/checkout@v4
+    - name: install packages
+      run: ${{ matrix.zoo.install }}
+    - name: config
+      run: ./config
+    - name: config dump
+      run: ./configdata.pm --dump
+    - name: make
+      run: make -j4
+    - name: get cpu info
+      run: |
+        cat /proc/cpuinfo
+        ./util/opensslwrap.sh version -c
+    - name: make test
+      run: make test HARNESS_JOBS=${HARNESS_JOBS:-4}
+
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-13, macos-14, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+    - name: checkout fuzz/corpora submodule
+      run: git submodule update --init --depth 1 fuzz/corpora
+    - name: config
+      run: ./config --banner=Configured -Wall -Werror --strict-warnings enable-fips
+    - name: config dump
+      run: ./configdata.pm --dump
+    - name: make
+      run: make -s -j4
+    - name: get cpu info
+      run: |
+        sysctl machdep.cpu
+        ./util/opensslwrap.sh version -c
+    - name: make test
+      run: make test HARNESS_JOBS=${HARNESS_JOBS:-4}
+
+  windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+    - name: checkout fuzz/corpora submodule
+      run: git submodule update --init --depth 1 fuzz/corpora
+    - uses: ilammy/msvc-dev-cmd@v1
+    - name: install nasm
+      run: |
+        choco install nasm
+        "C:\Program Files\NASM" | Out-File -FilePath "$env:GITHUB_PATH" -Append
+    - name: prepare the build directory
+      run: mkdir _build
+    - name: config
+      working-directory: _build
+      run: perl ..\Configure --banner=Configured no-makedepend enable-fips
+    - name: config dump
+      working-directory: _build
+      run: ./configdata.pm --dump
+    - name: build
+      working-directory: _build
+      run: nmake /S
+    - name: download coreinfo
+      uses: suisei-cn/actions-download-file@v1.6.0
+      with:
+        url: "https://download.sysinternals.com/files/Coreinfo.zip"
+        target: _build/coreinfo/
+    - name: get cpu info
+      working-directory: _build
+      run: |
+        7z.exe x coreinfo/Coreinfo.zip
+        ./Coreinfo64.exe -accepteula -f
+        apps/openssl.exe version -c
+    - name: test
+      working-directory: _build
+      run: nmake test VERBOSE_FAILURE=yes HARNESS_JOBS=4
+
+  linux-arm64:
+    runs-on: linux-arm64
+    steps:
+    - uses: actions/checkout@v4
+    - name: config
+      run: ./config enable-fips enable-ec_nistp_64_gcc_128 enable-md2 enable-rc5 enable-ssl3 enable-ssl3-method enable-trace
+    - name: config dump
+      run: ./configdata.pm --dump
+    - name: make
+      run: make -j4
+    - name: get cpu info
+      run: ./util/opensslwrap.sh version -c
+    - name: make test
+      run: make test HARNESS_JOBS=${HARNESS_JOBS:-4}
+
+  linux-ppc64le:
+    runs-on: linux-ppc64le
+    steps:
+    - uses: actions/checkout@v4
+    - name: config
+      run: ./config enable-fips enable-ec_nistp_64_gcc_128 enable-md2 enable-rc5 enable-ssl3 enable-ssl3-method enable-trace
+    - name: config dump
+      run: ./configdata.pm --dump
+    - name: make
+      run: make -j4
+    - name: get cpu info
+      run: |
+        cat /proc/cpuinfo
+        ./util/opensslwrap.sh version -c
+    - name: make test
+      run: make test HARNESS_JOBS=${HARNESS_JOBS:-4}
+
+  linux-s390x:
+    runs-on: linux-s390x
+    steps:
+    - uses: actions/checkout@v4
+    - name: config
+      run: ./config enable-fips enable-md2 enable-rc5 enable-ssl3 enable-ssl3-method enable-trace
+    - name: config dump
+      run: ./configdata.pm --dump
+    - name: make
+      run: make -j4
+    - name: get cpu info
+      run: |
+        cat /proc/cpuinfo
+        ./util/opensslwrap.sh version -c
+    - name: make test
+      run: make test HARNESS_JOBS=${HARNESS_JOBS:-4}
+
+  freebsd-x86_64:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: config
+      uses: cross-platform-actions/action@v0.26.0
+      with:
+        operating_system: freebsd
+        version: "13.4"
+        shutdown_vm: false
+        run: |
+          sudo pkg install -y gcc perl5
+          ./config enable-fips enable-ec_nistp_64_gcc_128 enable-md2 enable-rc5 enable-ssl3 enable-ssl3-method enable-trace
+    - name: config dump
+      uses: cross-platform-actions/action@v0.26.0
+      with:
+        operating_system: freebsd
+        version: "13.4"
+        shutdown_vm: false
+        run: ./configdata.pm --dump
+    - name: make
+      uses: cross-platform-actions/action@v0.26.0
+      with:
+        operating_system: freebsd
+        version: "13.4"
+        shutdown_vm: false
+        run: make -j4
+    - name: make test
+      uses: cross-platform-actions/action@v0.26.0
+      with:
+        operating_system: freebsd
+        version: "13.4"
+        run: |
+          ./util/opensslwrap.sh version -c
+          .github/workflows/make-test

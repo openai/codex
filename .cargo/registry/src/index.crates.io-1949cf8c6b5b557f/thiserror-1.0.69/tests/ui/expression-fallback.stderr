@@ -1,0 +1,19 @@
+error: expected `,`, found `.`
+ --> tests/ui/expression-fallback.rs:4:11
+  |
+4 | #[error("".yellow)]
+  |           ^ expected `,`
+
+error: argument never used
+ --> tests/ui/expression-fallback.rs:4:12
+  |
+4 | #[error("".yellow)]
+  |         -- ^^^^^^ argument never used
+  |         |
+  |         formatting specifier missing
+
+error[E0425]: cannot find value `yellow` in this scope
+ --> tests/ui/expression-fallback.rs:4:12
+  |
+4 | #[error("".yellow)]
+  |            ^^^^^^ not found in this scope

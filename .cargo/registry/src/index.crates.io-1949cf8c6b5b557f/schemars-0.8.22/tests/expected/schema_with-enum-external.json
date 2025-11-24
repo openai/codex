@@ -1,0 +1,73 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "External",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "struct"
+      ],
+      "properties": {
+        "struct": {
+          "type": "object",
+          "required": [
+            "foo"
+          ],
+          "properties": {
+            "foo": {
+              "type": "boolean"
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "newType"
+      ],
+      "properties": {
+        "newType": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "tuple"
+      ],
+      "properties": {
+        "tuple": {
+          "type": "array",
+          "items": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer",
+              "format": "int32"
+            }
+          ],
+          "maxItems": 2,
+          "minItems": 2
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "unit"
+      ],
+      "properties": {
+        "unit": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  ]
+}

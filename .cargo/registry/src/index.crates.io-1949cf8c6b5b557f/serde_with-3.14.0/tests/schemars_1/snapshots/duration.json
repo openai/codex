@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Test",
+  "type": "object",
+  "properties": {
+    "seconds": {
+      "oneOf": [
+        {
+          "type": "number",
+          "minimum": 0.0
+        },
+        {
+          "type": "string",
+          "pattern": "^[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$",
+          "writeOnly": true
+        }
+      ]
+    },
+    "frac": {
+      "oneOf": [
+        {
+          "type": "number",
+          "minimum": 0.0
+        },
+        {
+          "type": "string",
+          "pattern": "^[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$",
+          "writeOnly": true
+        }
+      ]
+    },
+    "flexible_string": {
+      "oneOf": [
+        {
+          "type": "number",
+          "minimum": 0.0,
+          "writeOnly": true
+        },
+        {
+          "type": "string",
+          "pattern": "^[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$"
+        }
+      ]
+    },
+    "seconds_u64_strict": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "time_i64": {
+      "oneOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "string",
+          "pattern": "^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$",
+          "writeOnly": true
+        }
+      ]
+    }
+  },
+  "required": [
+    "seconds",
+    "frac",
+    "flexible_string",
+    "seconds_u64_strict",
+    "time_i64"
+  ]
+}

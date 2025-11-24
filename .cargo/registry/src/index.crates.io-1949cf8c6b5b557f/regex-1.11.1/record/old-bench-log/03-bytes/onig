@@ -1,0 +1,68 @@
+   Compiling regex-benchmark v0.1.0 (file:///home/andrew/data/projects/rust/regex/benches)
+     Running benches/target/release/onig-e3bc363aa56fb408
+
+running 61 tests
+test misc::anchored_literal_long_match       ... bench:          70 ns/iter (+/- 1) = 5571 MB/s
+test misc::anchored_literal_long_non_match   ... bench:         424 ns/iter (+/- 4) = 919 MB/s
+test misc::anchored_literal_short_match      ... bench:          70 ns/iter (+/- 1) = 371 MB/s
+test misc::anchored_literal_short_non_match  ... bench:          38 ns/iter (+/- 0) = 684 MB/s
+test misc::easy0_1K                          ... bench:         176 ns/iter (+/- 2) = 5818 MB/s
+test misc::easy0_1MB                         ... bench:     163,547 ns/iter (+/- 1,451) = 6411 MB/s
+test misc::easy0_32                          ... bench:          20 ns/iter (+/- 1) = 1600 MB/s
+test misc::easy0_32K                         ... bench:       5,056 ns/iter (+/- 64) = 6481 MB/s
+test misc::easy1_1K                          ... bench:       4,103 ns/iter (+/- 11) = 249 MB/s
+test misc::easy1_1MB                         ... bench:   4,198,406 ns/iter (+/- 62,171) = 249 MB/s
+test misc::easy1_32                          ... bench:         139 ns/iter (+/- 1) = 230 MB/s
+test misc::easy1_32K                         ... bench:     131,083 ns/iter (+/- 1,310) = 249 MB/s
+test misc::hard_1K                           ... bench:         163 ns/iter (+/- 3) = 6282 MB/s
+test misc::hard_1MB                          ... bench:     163,910 ns/iter (+/- 2,368) = 6397 MB/s
+test misc::hard_32                           ... bench:          20 ns/iter (+/- 1) = 1600 MB/s
+test misc::hard_32K                          ... bench:       5,002 ns/iter (+/- 306) = 6550 MB/s
+test misc::literal                           ... bench:         226 ns/iter (+/- 0) = 225 MB/s
+test misc::match_class                       ... bench:         337 ns/iter (+/- 2) = 240 MB/s
+test misc::match_class_in_range              ... bench:         337 ns/iter (+/- 1) = 240 MB/s
+test misc::match_class_unicode               ... bench:       2,004 ns/iter (+/- 26) = 80 MB/s
+test misc::medium_1K                         ... bench:         191 ns/iter (+/- 2) = 5361 MB/s
+test misc::medium_1MB                        ... bench:     164,027 ns/iter (+/- 2,494) = 6392 MB/s
+test misc::medium_32                         ... bench:          22 ns/iter (+/- 1) = 1454 MB/s
+test misc::medium_32K                        ... bench:       4,962 ns/iter (+/- 60) = 6603 MB/s
+test misc::not_literal                       ... bench:         359 ns/iter (+/- 5) = 142 MB/s
+test misc::one_pass_long_prefix              ... bench:          94 ns/iter (+/- 3) = 276 MB/s
+test misc::one_pass_long_prefix_not          ... bench:         101 ns/iter (+/- 1) = 257 MB/s
+test misc::one_pass_short                    ... bench:         332 ns/iter (+/- 6) = 51 MB/s
+test misc::one_pass_short_not                ... bench:         318 ns/iter (+/- 4) = 53 MB/s
+test sherlock::before_holmes                 ... bench:  70,859,542 ns/iter (+/- 594,306) = 8 MB/s
+test sherlock::everything_greedy             ... bench:   5,129,894 ns/iter (+/- 33,792) = 115 MB/s
+test sherlock::holmes_cochar_watson          ... bench:   2,388,047 ns/iter (+/- 19,666) = 249 MB/s
+test sherlock::ing_suffix                    ... bench:  28,413,935 ns/iter (+/- 800,513) = 20 MB/s
+test sherlock::ing_suffix_limited_space      ... bench:   2,636,327 ns/iter (+/- 66,410) = 225 MB/s
+test sherlock::letters                       ... bench:  26,471,724 ns/iter (+/- 872,994) = 22 MB/s
+test sherlock::letters_lower                 ... bench:  26,124,489 ns/iter (+/- 556,750) = 22 MB/s
+test sherlock::letters_upper                 ... bench:  11,268,144 ns/iter (+/- 338,510) = 52 MB/s
+test sherlock::line_boundary_sherlock_holmes ... bench:     195,797 ns/iter (+/- 1,621) = 3038 MB/s
+test sherlock::name_alt1                     ... bench:   2,100,763 ns/iter (+/- 16,823) = 283 MB/s
+test sherlock::name_alt2                     ... bench:   2,212,816 ns/iter (+/- 17,997) = 268 MB/s
+test sherlock::name_alt3                     ... bench:   3,031,567 ns/iter (+/- 35,631) = 196 MB/s
+test sherlock::name_alt3_nocase              ... bench:  39,737,911 ns/iter (+/- 166,863) = 14 MB/s
+test sherlock::name_alt4                     ... bench:   2,230,681 ns/iter (+/- 18,856) = 266 MB/s
+test sherlock::name_alt4_nocase              ... bench:   8,294,698 ns/iter (+/- 36,887) = 71 MB/s
+test sherlock::name_holmes                   ... bench:     402,600 ns/iter (+/- 6,232) = 1477 MB/s
+test sherlock::name_holmes_nocase            ... bench:   4,074,155 ns/iter (+/- 23,317) = 146 MB/s
+test sherlock::name_sherlock                 ... bench:     270,225 ns/iter (+/- 2,815) = 2201 MB/s
+test sherlock::name_sherlock_holmes          ... bench:     196,502 ns/iter (+/- 2,168) = 3027 MB/s
+test sherlock::name_sherlock_holmes_nocase   ... bench:   4,397,347 ns/iter (+/- 28,567) = 135 MB/s
+test sherlock::name_sherlock_nocase          ... bench:   4,400,574 ns/iter (+/- 25,127) = 135 MB/s
+test sherlock::name_whitespace               ... bench:     274,462 ns/iter (+/- 3,180) = 2167 MB/s
+test sherlock::no_match_common               ... bench:     596,601 ns/iter (+/- 9,285) = 997 MB/s
+test sherlock::no_match_uncommon             ... bench:     586,258 ns/iter (+/- 7,702) = 1014 MB/s
+test sherlock::quotes                        ... bench:   4,069,570 ns/iter (+/- 20,372) = 146 MB/s
+test sherlock::repeated_class_negation       ... bench:  44,936,445 ns/iter (+/- 103,467) = 13 MB/s
+test sherlock::the_lower                     ... bench:   1,300,513 ns/iter (+/- 12,884) = 457 MB/s
+test sherlock::the_nocase                    ... bench:   5,141,237 ns/iter (+/- 25,487) = 115 MB/s
+test sherlock::the_upper                     ... bench:     821,454 ns/iter (+/- 13,420) = 724 MB/s
+test sherlock::the_whitespace                ... bench:   2,009,530 ns/iter (+/- 14,082) = 296 MB/s
+test sherlock::word_ending_n                 ... bench:  27,847,316 ns/iter (+/- 47,618) = 21 MB/s
+test sherlock::words                         ... bench:  21,105,627 ns/iter (+/- 33,436) = 28 MB/s
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 61 measured
+

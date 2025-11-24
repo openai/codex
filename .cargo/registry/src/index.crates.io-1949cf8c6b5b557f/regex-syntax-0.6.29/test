@@ -1,0 +1,22 @@
+#!/bin/bash
+
+set -e
+
+# This is a convenience script for running a broad swath of the syntax tests.
+echo "===== DEFAULT FEATURES ==="
+cargo test
+
+features=(
+    unicode
+    unicode-age
+    unicode-bool
+    unicode-case
+    unicode-gencat
+    unicode-perl
+    unicode-script
+    unicode-segment
+)
+for f in "${features[@]}"; do
+    echo "===== FEATURE: $f ==="
+    cargo test --no-default-features --features "$f"
+done

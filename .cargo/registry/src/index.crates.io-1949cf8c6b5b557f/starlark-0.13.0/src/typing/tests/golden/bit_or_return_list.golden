@@ -1,0 +1,26 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Code:
+test = int | list[3]
+
+def foo() -> test:
+    pass
+
+No errors.
+
+Approximations:
+Approximation: Unknown type = "Span { begin: Pos(36), end: Pos(40) }"
+
+Compiler typechecker (eval):
+Compiler typechecker and eval results mismatch.
+
+error: Type `3` is not a valid type annotation
+ --> filename:2:14
+  |
+2 | test = int | list[3]
+  |              ^^^^^^^
+  |

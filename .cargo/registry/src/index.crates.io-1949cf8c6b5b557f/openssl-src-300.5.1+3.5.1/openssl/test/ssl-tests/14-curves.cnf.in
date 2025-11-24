@@ -1,0 +1,194 @@
+# -*- mode: perl; -*-
+
+## SSL test configurations
+
+package ssltests;
+
+use strict;
+use warnings;
+
+use OpenSSL::Test;
+use OpenSSL::Test::Utils;
+
+our $fips_mode;
+our $fips_3_4;
+
+my @curves = ("prime256v1", "secp384r1", "secp521r1");
+
+my @curves_no_fips = ("X25519", "X448");
+
+push @curves, @curves_no_fips if !$fips_mode;
+
+#Curves *only* suitable for use in TLSv1.3
+my @curves_tls_1_3 = ("ffdhe2048", "ffdhe3072", "ffdhe4096", "ffdhe6144",
+                      "ffdhe8192");
+my @curves_tls_1_3_no_fips = ("brainpoolP256r1tls13", "brainpoolP384r1tls13",
+                              "brainpoolP512r1tls13");
+
+push @curves_tls_1_3, @curves_tls_1_3_no_fips if !$fips_mode;
+push @curves, @curves_tls_1_3;
+
+my @curves_tls_1_2 = ();
+push @curves_tls_1_2,
+    "sect233k1", "sect233r1", "sect283k1", "sect283r1", "sect409k1",
+    "sect409r1", "sect571k1", "sect571r1", "secp224r1"
+    unless ($fips_3_4 || disabled("tls-deprecated-ec"));
+
+my @curves_non_fips = ();
+push @curves_non_fips,
+    "sect163k1", "sect163r2", "prime192v1", "sect163r1", "sect193r1",
+    "sect193r2", "sect239k1", "secp160k1", "secp160r1", "secp160r2",
+    "secp192k1", "secp224k1",  "secp256k1"
+    unless disabled("tls-deprecated-ec");
+push @curves_non_fips,
+    "brainpoolP256r1", "brainpoolP384r1", "brainpoolP512r1";
+
+push @curves_tls_1_2, @curves_non_fips if !$fips_mode;
+
+our @tests = ();
+
+sub get_key_type {
+    my $group = shift;
+    my $keyType;
+
+    if ($group =~ /ffdhe/) {
+        $keyType = "dhKeyAgreement";
+    } else {
+        $keyType = $group;
+    }
+
+    return $keyType;
+}
+
+sub generate_tests() {
+    foreach (0..$#curves) {
+        my $curve = $curves[$_];
+        push @tests, {
+            name => "curve-${curve}",
+            server => {
+                "Curves" => $curve,
+                "CipherString" => 'DEFAULT@SECLEVEL=1',
+                "MaxProtocol" => "TLSv1.3"
+            },
+            client => {
+                "CipherString" => 'ECDHE@SECLEVEL=1',
+                "MaxProtocol" => "TLSv1.3",
+                "Curves" => $curve
+            },
+            test   => {
+                "ExpectedTmpKeyType" => get_key_type($curve),
+                "ExpectedProtocol" => "TLSv1.3",
+                "ExpectedResult" => "Success"
+            },
+        };
+    }
+    foreach (0..$#curves_tls_1_2) {
+        my $curve = $curves_tls_1_2[$_];
+        push @tests, {
+            name => "curve-${curve}",
+            server => {
+                "Curves" => $curve,
+                "CipherString" => 'DEFAULT@SECLEVEL=1',
+                "MaxProtocol" => "TLSv1.3"
+            },
+            client => {
+                "CipherString" => 'ECDHE@SECLEVEL=1',
+                "MaxProtocol" => "TLSv1.2",
+                "Curves" => $curve
+            },
+            test   => {
+                "ExpectedTmpKeyType" => get_key_type($curve),
+                "ExpectedProtocol" => "TLSv1.2",
+                "ExpectedResult" => "Success"
+            },
+        };
+    }
+    foreach (0..$#curves_tls_1_2) {
+        my $curve = $curves_tls_1_2[$_];
+        push @tests, {
+            name => "curve-${curve}-tls12-in-tls13",
+            server => {
+                "Curves" => "$curve:P-256",
+                "CipherString" => 'DEFAULT@SECLEVEL=1',
+                "MaxProtocol" => "TLSv1.3"
+            },
+            client => {
+                "CipherString" => 'ECDHE@SECLEVEL=1',
+                "MaxProtocol" => "TLSv1.3",
+                "MinProtocol" => "TLSv1.3",
+                "Curves" => "$curve:P-256"
+            },
+            test   => {
+                #This curve is not allowed in a TLSv1.3 key_share. We should
+                #succeed but fallback to P-256
+                "ExpectedTmpKeyType" => "P-256",
+                "ExpectedProtocol" => "TLSv1.3",
+                "ExpectedResult" => "Success"
+            },
+        };
+    }
+    foreach (0..$#curves_tls_1_2) {
+        my $curve = $curves_tls_1_2[$_];
+        push @tests, {
+            name => "curve-${curve}-tls13",
+            server => {
+                "Curves" => $curve,
+                "CipherString" => 'DEFAULT@SECLEVEL=1',
+                "MaxProtocol" => "TLSv1.3"
+            },
+            client => {
+                "CipherString" => 'ECDHE@SECLEVEL=1',
+                "MinProtocol" => "TLSv1.3",
+                "Curves" => $curve
+            },
+            test   => {
+                "ExpectedResult" => "ClientFail"
+            },
+        };
+    }
+    if (!$fips_3_4) {
+      foreach (0..$#curves_tls_1_3) {
+        my $curve = $curves_tls_1_3[$_];
+        push @tests, {
+            name => "curve-${curve}-tls13-in-tls12",
+            server => {
+                "Curves" => $curve,
+                "CipherString" => 'DEFAULT@SECLEVEL=1',
+                "MaxProtocol" => "TLSv1.3"
+            },
+            client => {
+                "CipherString" => 'ECDHE@SECLEVEL=1',
+                "MaxProtocol" => "TLSv1.2",
+                "Curves" => $curve
+            },
+            test   => {
+                #These curves are only suitable for TLSv1.3 so we expect the
+                #server to fail because it has no shared groups for TLSv1.2
+                #ECDHE key exchange
+                "ExpectedResult" => "ServerFail"
+            },
+        };
+        push @tests, {
+                name => "curve-${curve}-tls13-in-tls12-2",
+                server => {
+                    "Curves" => $curve,
+                    "CipherString" => 'DEFAULT@SECLEVEL=1',
+                    "MaxProtocol" => "TLSv1.2"
+                },
+                client => {
+                    "CipherString" => 'DEFAULT@SECLEVEL=1',
+                    "MaxProtocol" => "TLSv1.3",
+                    "Curves" => $curve
+                },
+                test   => {
+                    #These curves are only suitable for TLSv1.3. We expect TLSv1.2
+                    #negotiation to succeed because we fall back to some other
+                    #ciphersuite
+                    "ExpectedResult" => "Success"
+                  },
+            };
+        }
+    }
+}
+
+generate_tests();

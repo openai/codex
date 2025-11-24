@@ -1,0 +1,385 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="text_input_unstable_v1">
+
+  <copyright>
+    Copyright © 2012, 2013 Intel Corporation
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice (including the next
+    paragraph) shall be included in all copies or substantial portions of the
+    Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+  </copyright>
+
+  <interface name="zwp_text_input_v1" version="1">
+    <description summary="text input">
+      An object used for text input. Adds support for text input and input
+      methods to applications. A text_input object is created from a
+      wl_text_input_manager and corresponds typically to a text entry in an
+      application.
+
+      Requests are used to activate/deactivate the text_input object and set
+      state information like surrounding and selected text or the content type.
+      The information about entered text is sent to the text_input object via
+      the pre-edit and commit events. Using this interface removes the need
+      for applications to directly process hardware key events and compose text
+      out of them.
+
+      Text is generally UTF-8 encoded, indices and lengths are in bytes.
+
+      Serials are used to synchronize the state between the text input and
+      an input method. New serials are sent by the text input in the
+      commit_state request and are used by the input method to indicate
+      the known text input state in events like preedit_string, commit_string,
+      and keysym. The text input can then ignore events from the input method
+      which are based on an outdated state (for example after a reset).
+
+      Warning! The protocol described in this file is experimental and
+      backward incompatible changes may be made. Backward compatible changes
+      may be added together with the corresponding interface version bump.
+      Backward incompatible changes are done by bumping the version number in
+      the protocol and interface names and resetting the interface version.
+      Once the protocol is to be declared stable, the 'z' prefix and the
+      version number in the protocol and interface names are removed and the
+      interface version number is reset.
+    </description>
+
+    <request name="activate">
+      <description summary="request activation">
+	Requests the text_input object to be activated (typically when the
+	text entry gets focus).
+
+	The seat argument is a wl_seat which maintains the focus for this
+	activation. The surface argument is a wl_surface assigned to the
+	text_input object and tracked for focus lost. The enter event
+	is emitted on successful activation.
+      </description>
+      <arg name="seat" type="object" interface="wl_seat"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+
+    <request name="deactivate">
+      <description summary="request deactivation">
+	Requests the text_input object to be deactivated (typically when the
+	text entry lost focus). The seat argument is a wl_seat which was used
+	for activation.
+      </description>
+      <arg name="seat" type="object" interface="wl_seat"/>
+    </request>
+
+    <request name="show_input_panel">
+      <description summary="show input panels">
+	Requests input panels (virtual keyboard) to show.
+      </description>
+    </request>
+
+    <request name="hide_input_panel">
+      <description summary="hide input panels">
+	Requests input panels (virtual keyboard) to hide.
+      </description>
+    </request>
+
+    <request name="reset">
+      <description summary="reset">
+	Should be called by an editor widget when the input state should be
+	reset, for example after the text was changed outside of the normal
+	input method flow.
+      </description>
+    </request>
+
+    <request name="set_surrounding_text">
+      <description summary="sets the surrounding text">
+	Sets the plain surrounding text around the input position. Text is
+	UTF-8 encoded. Cursor is the byte offset within the
+	surrounding text. Anchor is the byte offset of the
+	selection anchor within the surrounding text. If there is no selected
+	text anchor, then it is the same as cursor.
+      </description>
+      <arg name="text" type="string"/>
+      <arg name="cursor" type="uint"/>
+      <arg name="anchor" type="uint"/>
+    </request>
+
+    <enum name="content_hint" bitfield="true">
+      <description summary="content hint">
+	Content hint is a bitmask to allow to modify the behavior of the text
+	input.
+      </description>
+      <entry name="none" value="0x0" summary="no special behaviour"/>
+      <entry name="default" value="0x7" summary="auto completion, correction and capitalization"/>
+      <entry name="password" value="0xc0" summary="hidden and sensitive text"/>
+      <entry name="auto_completion" value="0x1" summary="suggest word completions"/>
+      <entry name="auto_correction" value="0x2" summary="suggest word corrections"/>
+      <entry name="auto_capitalization" value="0x4" summary="switch to uppercase letters at the start of a sentence"/>
+      <entry name="lowercase" value="0x8" summary="prefer lowercase letters"/>
+      <entry name="uppercase" value="0x10" summary="prefer uppercase letters"/>
+      <entry name="titlecase" value="0x20" summary="prefer casing for titles and headings (can be language dependent)"/>
+      <entry name="hidden_text" value="0x40" summary="characters should be hidden"/>
+      <entry name="sensitive_data" value="0x80" summary="typed text should not be stored"/>
+      <entry name="latin" value="0x100" summary="just latin characters should be entered"/>
+      <entry name="multiline" value="0x200" summary="the text input is multiline"/>
+    </enum>
+
+    <enum name="content_purpose">
+      <description summary="content purpose">
+	The content purpose allows to specify the primary purpose of a text
+	input.
+
+	This allows an input method to show special purpose input panels with
+	extra characters or to disallow some characters.
+      </description>
+      <entry name="normal" value="0" summary="default input, allowing all characters"/>
+      <entry name="alpha" value="1" summary="allow only alphabetic characters"/>
+      <entry name="digits" value="2" summary="allow only digits"/>
+      <entry name="number" value="3" summary="input a number (including decimal separator and sign)"/>
+      <entry name="phone" value="4" summary="input a phone number"/>
+      <entry name="url" value="5" summary="input an URL"/>
+      <entry name="email" value="6" summary="input an email address"/>
+      <entry name="name" value="7" summary="input a name of a person"/>
+      <entry name="password" value="8" summary="input a password (combine with password or sensitive_data hint)"/>
+      <entry name="date" value="9" summary="input a date"/>
+      <entry name="time" value="10" summary="input a time"/>
+      <entry name="datetime" value="11" summary="input a date and time"/>
+      <entry name="terminal" value="12" summary="input for a terminal"/>
+    </enum>
+
+    <request name="set_content_type">
+      <description summary="set content purpose and hint">
+	Sets the content purpose and content hint. While the purpose is the
+	basic purpose of an input field, the hint flags allow to modify some
+	of the behavior.
+
+	When no content type is explicitly set, a normal content purpose with
+	default hints (auto completion, auto correction, auto capitalization)
+	should be assumed.
+      </description>
+      <arg name="hint" type="uint" enum="content_hint" />
+      <arg name="purpose" type="uint" enum="content_purpose" />
+    </request>
+
+    <request name="set_cursor_rectangle">
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+    </request>
+
+    <request name="set_preferred_language">
+      <description summary="sets preferred language">
+	Sets a specific language. This allows for example a virtual keyboard to
+	show a language specific layout. The "language" argument is an RFC-3066
+	format language tag.
+
+	It could be used for example in a word processor to indicate the
+	language of the currently edited document or in an instant message
+	application which tracks languages of contacts.
+      </description>
+      <arg name="language" type="string"/>
+    </request>
+
+    <request name="commit_state">
+      <arg name="serial" type="uint" summary="used to identify the known state"/>
+    </request>
+
+    <request name="invoke_action">
+      <arg name="button" type="uint"/>
+      <arg name="index" type="uint"/>
+    </request>
+
+    <event name="enter">
+      <description summary="enter event">
+	Notify the text_input object when it received focus. Typically in
+	response to an activate request.
+      </description>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </event>
+
+    <event name="leave">
+      <description summary="leave event">
+	Notify the text_input object when it lost focus. Either in response
+	to a deactivate request or when the assigned surface lost focus or was
+	destroyed.
+      </description>
+    </event>
+
+    <event name="modifiers_map">
+      <description summary="modifiers map">
+	Transfer an array of 0-terminated modifier names. The position in
+	the array is the index of the modifier as used in the modifiers
+	bitmask in the keysym event.
+      </description>
+      <arg name="map" type="array"/>
+    </event>
+
+    <event name="input_panel_state">
+      <description summary="state of the input panel">
+	Notify when the visibility state of the input panel changed.
+      </description>
+      <arg name="state" type="uint"/>
+    </event>
+
+    <event name="preedit_string">
+      <description summary="pre-edit">
+	Notify when a new composing text (pre-edit) should be set around the
+	current cursor position. Any previously set composing text should
+	be removed.
+
+	The commit text can be used to replace the preedit text on reset
+	(for example on unfocus).
+
+	The text input should also handle all preedit_style and preedit_cursor
+	events occurring directly before preedit_string.
+      </description>
+      <arg name="serial" type="uint" summary="serial of the latest known text input state"/>
+      <arg name="text" type="string"/>
+      <arg name="commit" type="string"/>
+    </event>
+
+    <enum name="preedit_style">
+      <entry name="default" value="0" summary="default style for composing text"/>
+      <entry name="none" value="1" summary="style should be the same as in non-composing text"/>
+      <entry name="active" value="2"/>
+      <entry name="inactive" value="3"/>
+      <entry name="highlight" value="4"/>
+      <entry name="underline" value="5"/>
+      <entry name="selection" value="6"/>
+      <entry name="incorrect" value="7"/>
+    </enum>
+
+    <event name="preedit_styling">
+      <description summary="pre-edit styling">
+	Sets styling information on composing text. The style is applied for
+	length bytes from index relative to the beginning of the composing
+	text (as byte offset). Multiple styles can
+	be applied to a composing text by sending multiple preedit_styling
+	events.
+
+	This event is handled as part of a following preedit_string event.
+      </description>
+      <arg name="index" type="uint"/>
+      <arg name="length" type="uint"/>
+      <arg name="style" type="uint" enum="preedit_style" />
+    </event>
+
+    <event name="preedit_cursor">
+      <description summary="pre-edit cursor">
+	Sets the cursor position inside the composing text (as byte
+	offset) relative to the start of the composing text. When index is a
+	negative number no cursor is shown.
+
+	This event is handled as part of a following preedit_string event.
+      </description>
+      <arg name="index" type="int"/>
+    </event>
+
+    <event name="commit_string">
+      <description summary="commit">
+	Notify when text should be inserted into the editor widget. The text to
+	commit could be either just a single character after a key press or the
+	result of some composing (pre-edit). It could also be an empty text
+	when some text should be removed (see delete_surrounding_text) or when
+	the input cursor should be moved (see cursor_position).
+
+	Any previously set composing text should be removed.
+      </description>
+      <arg name="serial" type="uint" summary="serial of the latest known text input state"/>
+      <arg name="text" type="string"/>
+    </event>
+
+    <event name="cursor_position">
+      <description summary="set cursor to new position">
+	Notify when the cursor or anchor position should be modified.
+
+	This event should be handled as part of a following commit_string
+	event.
+      </description>
+      <arg name="index" type="int"/>
+      <arg name="anchor" type="int"/>
+    </event>
+
+    <event name="delete_surrounding_text">
+      <description summary="delete surrounding text">
+	Notify when the text around the current cursor position should be
+	deleted.
+
+	Index is relative to the current cursor (in bytes).
+	Length is the length of deleted text (in bytes).
+
+	This event should be handled as part of a following commit_string
+	event.
+      </description>
+      <arg name="index" type="int"/>
+      <arg name="length" type="uint"/>
+    </event>
+
+    <event name="keysym">
+      <description summary="keysym">
+	Notify when a key event was sent. Key events should not be used
+	for normal text input operations, which should be done with
+	commit_string, delete_surrounding_text, etc. The key event follows
+	the wl_keyboard key event convention. Sym is an XKB keysym, state a
+	wl_keyboard key_state. Modifiers are a mask for effective modifiers
+	(where the modifier indices are set by the modifiers_map event)
+      </description>
+      <arg name="serial" type="uint" summary="serial of the latest known text input state"/>
+      <arg name="time" type="uint"/>
+      <arg name="sym" type="uint"/>
+      <arg name="state" type="uint"/>
+      <arg name="modifiers" type="uint"/>
+    </event>
+
+    <event name="language">
+      <description summary="language">
+	Sets the language of the input text. The "language" argument is an
+	RFC-3066 format language tag.
+      </description>
+      <arg name="serial" type="uint" summary="serial of the latest known text input state"/>
+      <arg name="language" type="string"/>
+    </event>
+
+    <enum name="text_direction">
+      <entry name="auto" value="0" summary="automatic text direction based on text and language"/>
+      <entry name="ltr" value="1" summary="left-to-right"/>
+      <entry name="rtl" value="2" summary="right-to-left"/>
+    </enum>
+
+    <event name="text_direction">
+      <description summary="text direction">
+	Sets the text direction of input text.
+
+	It is mainly needed for showing an input cursor on the correct side of
+	the editor when there is no input done yet and making sure neutral
+	direction text is laid out properly.
+      </description>
+      <arg name="serial" type="uint" summary="serial of the latest known text input state"/>
+      <arg name="direction" type="uint" enum="text_direction" />
+    </event>
+  </interface>
+
+  <interface name="zwp_text_input_manager_v1" version="1">
+    <description summary="text input manager">
+      A factory for text_input objects. This object is a global singleton.
+    </description>
+
+    <request name="create_text_input">
+      <description summary="create text input">
+	Creates a new text_input object.
+      </description>
+      <arg name="id" type="new_id" interface="zwp_text_input_v1"/>
+    </request>
+  </interface>
+
+</protocol>

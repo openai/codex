@@ -1,0 +1,24 @@
+[package]
+name = "async-stream"
+# When releasing to crates.io:
+# - Update CHANGELOG.md
+# - Create git tag
+version = "0.3.6"
+edition = "2021"
+rust-version = "1.65"
+license = "MIT"
+authors = ["Carl Lerche <me@carllerche.com>"]
+description = "Asynchronous streams using async & await notation"
+repository = "https://github.com/tokio-rs/async-stream"
+
+[dependencies]
+async-stream-impl = { version = "=0.3.6", path = "../async-stream-impl" }
+futures-core = "0.3"
+pin-project-lite = "0.2"
+
+[dev-dependencies]
+futures-util = "0.3"
+rustversion = "1"
+tokio = { version = "1", features = ["full"] }
+# tokio-test = "0.4" # https://github.com/rust-lang/cargo/issues/4242
+trybuild = "1"

@@ -1,0 +1,16 @@
+pretty = proc(u) {
+  return ~(floor(u*1000)/1000);
+};
+
+f = 1 / sin(x) - 1/x;
+
+d = [0.000443633; pi/16];
+pf = fpminimax(f, [|1, 3, 5, 7, 9|], [|D...|], d, relative, floating);
+
+err_p = -log2(dirtyinfnorm(pf-f, d));
+print("Csc [2^-23, pi/16]");
+print(pf);
+display = decimal;
+print ("absolute error:", pretty(err_p));
+
+for i from 1 to degree(pf) by 2 do printdouble(coeff(pf, i));

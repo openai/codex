@@ -1,0 +1,23 @@
+[package]
+name = "async-stream-impl"
+version = "0.3.6"
+edition = "2021"
+rust-version = "1.65"
+license = "MIT"
+authors = ["Carl Lerche <me@carllerche.com>"]
+description = "proc macros for async-stream crate"
+repository = "https://github.com/tokio-rs/async-stream"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0.60"
+syn = { version = "2.0.2", features = ["full", "visit-mut"] }
+quote = "1"
+
+[dev-dependencies]
+async-stream = { path = "../async-stream" }
+futures-core = "0.3"
+futures-util = "0.3"
+tokio = { version = "1", features = ["full"] }

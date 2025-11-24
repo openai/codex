@@ -1,0 +1,21 @@
+
+
+pretty = proc(u) {
+  return ~(floor(u*1000)/1000);
+};
+
+d = [2^-26, pi/16];
+f_sinmx = (sin(x) - x)/x;
+Q = fpminimax(f_sinmx, [|0, 2, 4, 6, 8, 10, 12|], [|127, 127, D...|], d);
+
+err_p = -log2(dirtyinfnorm(Q-f_sinmx, d));
+display = decimal;
+print (Q);
+display = decimal;
+print ("absolute error:",pretty(err_p));
+
+for i from 0 to degree(Q) by 2 do printdouble(coeff(Q, i));
+
+print("---");
+
+for i from 0 to degree(Q) by 2 do print(coeff(Q, i));

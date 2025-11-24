@@ -1,0 +1,125 @@
+$	! OpenSSL startup script
+$	!
+$	! This script defines the logical names used by the installation
+$	! of OpenSSL.  It can provide those logical names at any level,
+$	! defined by P1.
+$	!
+$	! The logical names created are:
+$	!
+$	!	OSSL$INSTROOT		Installation root
+$	!	OSSL$DATAROOT		Data root (common directory
+$	!				for certs etc)
+$	!	OSSL$INCLUDE		Include directory root
+$	!	OSSL$LIB		Where the static library files
+$	!				are located
+$	!	OSSL$SHARE		Where the shareable image files
+$	!				are located
+$	!	OSSL$EXE		Where the executables are located
+$	!	OSSL$ENGINESnnn		Where the engines modules are located
+$	!	OSSL$MODULES		Where the non-engine modules are located
+$	!	OSSL$LIBCRYPTO		The static crypto library
+$	!	OSSL$LIBSSL		The static ssl library
+$	!	OSSL$LIBCRYPTOnnn_SHR	The shareable crypto image
+$	!	OSSL$LIBSSLnnn_SHR	The shareable ssl image
+$	!	OPENSSL			is OSSL$INCLUDE:[OPENSSL]
+$	!
+$	! In all these, nnn is the OpenSSL version number.  This allows
+$	! several OpenSSL versions to be installed simultaneously, which
+$	! matters for applications that are linked to the shareable images
+$	! or that depend on engines.
+$	!
+$	! In addition, unless P2 is "NOALIASES", these logical names are
+$	! created:
+$	!
+$	!	OSSL$ENGINES		Alias for OSSL$ENGINESnnn
+$	!	OSSL$LIBCRYPTO_SHR	Alias for OSSL$LIBCRYPTOnnn_SHR
+$	!	OSSL$LIBSSL_SHR		Alias for OSSL$LIBSSLnnn_SHR
+$	!
+$	! P1	Qualifier(s) for DEFINE.  "/SYSTEM" would be typical when
+$	!	calling this script from SYS$STARTUP:SYSTARTUP_VMS.COM,
+$	!	while "/PROCESS" would be typical for a personal install.
+$	!	Default: /PROCESS
+$	!
+$	! P2	If the value is "NOALIASES", no alias logical names are
+$	!	created.
+$
+$	status = %x10000001	! Generic success
+$
+$	! In case there's a problem
+$	ON CONTROL_Y THEN GOTO bailout
+$	ON ERROR THEN GOTO bailout
+$
+$	! Find the architecture
+$	IF F$GETSYI("CPU") .LT. 128
+$	THEN
+$	    arch := VAX
+$	ELSE
+$	    arch = F$EDIT(F$GETSYI("ARCH_NAME"),"UPCASE")
+$	    IF arch .EQS. "" THEN GOTO unknown_arch
+$	ENDIF
+$
+$	! Generated information
+$	INSTALLTOP := {- $config{INSTALLTOP} -}
+$	OPENSSLDIR := {- $config{OPENSSLDIR} -}
+$
+$	! Make sure that INSTALLTOP and OPENSSLDIR become something one
+$	! can build concealed logical names on
+$	INSTALLTOP_ = F$PARSE("A.;",INSTALLTOP,,,"NO_CONCEAL") -
+		     - ".][000000" - "[000000." - "][" - "]A.;" + "."
+$	OPENSSLDIR_ = F$PARSE("A.;",OPENSSLDIR,,,"NO_CONCEAL") -
+		     - ".][000000" - "[000000." - "][" - "]A.;" + "."
+$
+$	DEFINE /TRANSLATION=CONCEALED /NOLOG WRK_INSTALLTOP 'INSTALLTOP_']
+$	DEFINE /TRANSLATION=CONCEALED /NOLOG WRK_OPENSSLDIR 'OPENSSLDIR_']
+$
+$	! Check that things are in place, and specifically, the stuff
+$	! belonging to this architecture
+$	IF F$SEARCH("WRK_INSTALLTOP:[000000]INCLUDE.DIR;1") .EQS. "" -
+	   .OR. F$SEARCH("WRK_INSTALLTOP:[000000]LIB.DIR;1") .EQS. "" -
+	   .OR. F$SEARCH("WRK_INSTALLTOP:[000000]EXE.DIR;1") .EQS. "" -
+	   .OR. F$SEARCH("WRK_INSTALLTOP:[LIB]''arch'.DIR;1") .EQS. "" -
+	   .OR. F$SEARCH("WRK_INSTALLTOP:[EXE]''arch'.DIR;1") .EQS. "" -
+	   .OR. F$SEARCH("WRK_OPENSSLDIR:[000000]openssl.cnf") .EQS. ""
+$	THEN
+$	    WRITE SYS$ERROR "''INSTALLTOP' doesn't look like an OpenSSL installation for ''arch'"
+$	    status = %x00018292 ! RMS$_FNF, file not found
+$	    GOTO bailout
+$	ENDIF
+$
+$	! Abbrevs
+$	DEFT := DEFINE /TRANSLATION=CONCEALED /NOLOG 'P1'
+$	DEF  := DEFINE /NOLOG 'P1'
+$	sv   := {- platform->shlib_version_as_filename(); -}
+$	pz   := {- $target{pointer_size} -}
+$
+$	DEFT OSSL$DATAROOT		'OPENSSLDIR_']
+$	DEFT OSSL$INSTROOT		'INSTALLTOP_']
+$	DEFT OSSL$INCLUDE		'INSTALLTOP_'INCLUDE.]
+$	DEF  OSSL$LIB			OSSL$INSTROOT:[LIB.'arch']
+$	DEF  OSSL$SHARE			OSSL$INSTROOT:[LIB.'arch']
+$	DEF  OSSL$ENGINES'sv''pz'	OSSL$INSTROOT:[ENGINES'sv''pz'.'arch']
+$	DEF  OSSL$MODULES'pz'           OSSL$INSTROOT:[MODULES'pz'.'arch']
+$	DEF  OSSL$EXE			OSSL$INSTROOT:[EXE.'arch'],-
+					OSSL$INSTROOT:[EXE]
+$	DEF  OSSL$LIBCRYPTO'pz'		OSSL$LIB:OSSL$LIBCRYPTO'pz'.OLB
+$	DEF  OSSL$LIBSSL'pz'		OSSL$LIB:OSSL$LIBSSL'pz'.OLB
+${- output_off() if $disabled{shared}; "" -}
+$	DEF  OSSL$LIBCRYPTO'sv'_SHR'pz'	OSSL$SHARE:OSSL$LIBCRYPTO'sv'_SHR'pz'.EXE
+$	DEF  OSSL$LIBSSL'sv'_SHR'pz'	OSSL$SHARE:OSSL$LIBSSL'sv'_SHR'pz'.EXE
+${- output_on() if $disabled{shared}; "" -}
+$	DEF  OPENSSL			OSSL$INCLUDE:[OPENSSL]
+$
+$	IF P2 .NES. "NOALIASES"
+$	THEN
+$	    DEF OSSL$ENGINES'pz'	OSSL$ENGINES'sv''pz'
+${- output_off() if $disabled{shared}; "" -}
+$	    DEF OSSL$LIBCRYPTO_SHR'pz'	OSSL$LIBCRYPTO'sv'_SHR'pz'
+$	    DEF OSSL$LIBSSL_SHR'pz'	OSSL$LIBSSL'sv'_SHR'pz'
+${- output_on() if $disabled{shared}; "" -}
+$	ENDIF
+$
+$ bailout:
+$	DEASSIGN WRK_INSTALLTOP
+$	DEASSIGN WRK_OPENSSLDIR
+$
+$	EXIT 'status'

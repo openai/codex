@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2019-09/schema",
+  "title": "Outer",
+  "type": "object",
+  "required": [
+    "int",
+    "value",
+    "values"
+  ],
+  "properties": {
+    "int": {
+      "examples": [
+        8,
+        null
+      ],
+      "type": "integer",
+      "format": "int32"
+    },
+    "values": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "value": true,
+    "inner": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/Inner"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "definitions": {
+    "Inner": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "UndocumentedUnit1",
+            "UndocumentedUnit2"
+          ]
+        },
+        {
+          "description": "This is a documented unit variant",
+          "type": "string",
+          "enum": [
+            "DocumentedUnit"
+          ]
+        },
+        {
+          "type": "object",
+          "required": [
+            "ValueNewType"
+          ],
+          "properties": {
+            "ValueNewType": true
+          },
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

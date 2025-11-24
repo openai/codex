@@ -1,0 +1,110 @@
+[package]
+name        = "nix"
+description = "Rust friendly bindings to *nix APIs"
+edition     = "2021"
+version     = "0.30.1"
+rust-version = "1.69"
+authors     = ["The nix-rust Project Developers"]
+repository  = "https://github.com/nix-rust/nix"
+license     = "MIT"
+categories  = ["os::unix-apis"]
+include = ["build.rs", "src/**/*", "test/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "aarch64-linux-android",
+  "x86_64-apple-darwin",
+  "aarch64-apple-ios",
+  "x86_64-unknown-freebsd",
+  "x86_64-unknown-openbsd",
+  "x86_64-unknown-netbsd",
+  "x86_64-unknown-dragonfly",
+  "x86_64-unknown-fuchsia",
+  "x86_64-unknown-redox",
+  "x86_64-unknown-illumos"
+]
+
+[dependencies]
+libc = { version = "0.2.171", features = ["extra_traits"] }
+bitflags = "2.3.3"
+cfg-if = "1.0"
+pin-utils = { version = "0.1.0", optional = true }
+memoffset = { version = "0.9", optional = true }
+
+[features]
+default = []
+
+acct = []
+aio = ["pin-utils"]
+dir = ["fs"]
+env = []
+event = ["poll"]
+fanotify = []
+feature = []
+fs = []
+hostname = []
+inotify = []
+ioctl = []
+kmod = []
+mman = []
+mount = ["uio"]
+mqueue = ["fs"]
+net = ["socket"]
+personality = []
+poll = []
+pthread = []
+ptrace = ["process"]
+quota = []
+process = []
+reboot = []
+resource = []
+sched = ["process"]
+signal = ["process"]
+socket = ["memoffset"]
+syslog = []
+term = []
+time = []
+ucontext = ["signal"]
+uio = []
+user = ["feature"]
+zerocopy = ["fs", "uio"]
+
+[dev-dependencies]
+assert-impl = "0.1"
+parking_lot = "0.12"
+rand = "0.9"
+tempfile = "3.7.1"
+semver = "1.0.7"
+nix = { path = ".", features = ["acct", "aio", "dir", "env", "event", "fanotify",
+    "feature", "fs", "hostname", "inotify", "ioctl", "kmod", "mman", "mount", "mqueue",
+    "net", "personality", "poll", "pthread", "ptrace", "quota", "process", "reboot",
+    "resource", "sched", "signal", "socket", "syslog", "term", "time", "ucontext", "uio",
+    "user", "zerocopy"] }
+
+[target.'cfg(any(target_os = "android", target_os = "linux"))'.dev-dependencies]
+caps = "0.5.3"
+
+[target.'cfg(target_os = "freebsd")'.dev-dependencies]
+sysctl = "0.4"
+
+[build-dependencies]
+cfg_aliases = "0.2.1"
+
+[[test]]
+name = "test"
+path = "test/test.rs"
+
+[[test]]
+name = "test-aio-drop"
+path = "test/sys/test_aio_drop.rs"
+
+[[test]]
+name = "test-clearenv"
+path = "test/test_clearenv.rs"
+
+[[test]]
+name = "test-prctl"
+path = "test/sys/test_prctl.rs"

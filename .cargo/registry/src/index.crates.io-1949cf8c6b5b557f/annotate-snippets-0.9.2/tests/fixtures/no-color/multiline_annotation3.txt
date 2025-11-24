@@ -1,0 +1,9 @@
+error[E####]: spacing error found
+  --> foo.txt:26:12
+   |
+26 |   This is an exampl
+   |  ____________^
+27 | | e of an edge case of an annotation overflowing
+   | |_^ this should not be on separate lines
+28 |   to exactly one character on next line.
+   |

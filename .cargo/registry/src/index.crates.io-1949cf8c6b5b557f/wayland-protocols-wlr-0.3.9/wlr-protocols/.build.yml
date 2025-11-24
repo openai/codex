@@ -1,0 +1,9 @@
+image: archlinux
+packages:
+  - wayland
+sources:
+  - https://gitlab.freedesktop.org/wlroots/wlr-protocols.git
+tasks:
+  - protocols: |
+      cd wlr-protocols
+      make check

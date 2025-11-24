@@ -1,0 +1,325 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<!DOCTYPE refentry PUBLIC "-//OASIS//DTD DocBook XML V4.4//EN" "http://www.oasis-open.org/docbook/xml/4.4/docbookx.dtd">
+<refentry id="dbus-test-tool.1">
+  <refentryinfo>
+    <copyright>
+      <year>2015</year>
+      <holder>Collabora Ltd.</holder>
+    </copyright>
+    <legalnotice>
+      <para>This man page is distributed under the same terms as
+        dbus-test-tool (GPL-2+). There is NO WARRANTY, to the extent
+        permitted by law.</para>
+    </legalnotice>
+  </refentryinfo>
+
+  <refmeta>
+    <refentrytitle>dbus-test-tool</refentrytitle>
+    <manvolnum>1</manvolnum>
+    <refmiscinfo class="manual">User Commands</refmiscinfo>
+    <refmiscinfo class="source">D-Bus</refmiscinfo>
+    <refmiscinfo class="version">@DBUS_VERSION@</refmiscinfo>
+  </refmeta>
+  <refnamediv>
+    <refname>dbus-test-tool</refname>
+    <refpurpose>D-Bus traffic generator and test tool</refpurpose>
+  </refnamediv>
+
+  <refsynopsisdiv id="synopsis">
+    <cmdsynopsis>
+      <command>dbus-test-tool</command>
+      <arg choice="plain">black-hole</arg>
+      <group choice="opt">
+        <arg choice="plain">--session</arg>
+        <arg choice="plain">--system</arg>
+      </group>
+      <arg choice="opt">--name=<replaceable>NAME</replaceable></arg>
+      <arg choice="opt">--no-read</arg>
+    </cmdsynopsis>
+
+    <cmdsynopsis>
+      <command>dbus-test-tool</command>
+      <arg choice="plain">echo</arg>
+      <group choice="opt">
+        <arg choice="plain">--session</arg>
+        <arg choice="plain">--system</arg>
+      </group>
+      <arg choice="opt">--name=<replaceable>NAME</replaceable></arg>
+      <arg choice="opt">--sleep-ms=<replaceable>MS</replaceable></arg>
+    </cmdsynopsis>
+
+    <cmdsynopsis>
+      <command>dbus-test-tool</command>
+      <arg choice="plain">spam</arg>
+      <group choice="opt">
+        <arg choice="plain">--session</arg>
+        <arg choice="plain">--system</arg>
+      </group>
+      <arg choice="opt">--dest=<replaceable>NAME</replaceable></arg>
+      <arg choice="opt">--count=<replaceable>N</replaceable></arg>
+      <arg choice="opt">--flood</arg>
+      <arg choice="opt">--ignore-errors</arg>
+      <arg choice="opt">--messages-per-conn=<replaceable>N</replaceable></arg>
+      <arg choice="opt">--no-reply</arg>
+      <arg choice="opt">--queue=<replaceable>N</replaceable></arg>
+      <arg choice="opt">--seed=<replaceable>SEED</replaceable></arg>
+      <group choice="opt">
+        <arg choice="plain">--string</arg>
+        <arg choice="plain">--bytes</arg>
+        <arg choice="plain">--empty</arg>
+      </group>
+      <group choice="opt">
+        <arg choice="plain">--payload=<replaceable>S</replaceable></arg>
+        <arg choice="plain">--stdin</arg>
+        <arg choice="plain">--message-stdin</arg>
+        <arg choice="plain">--random-size</arg>
+      </group>
+    </cmdsynopsis>
+  </refsynopsisdiv>
+
+  <refsect1 id="description">
+    <title>DESCRIPTION</title>
+    <para><command>dbus-test-tool</command> is a multi-purpose tool
+      for debugging and profiling D-Bus.</para>
+
+    <para><command>dbus-test-tool black-hole</command>
+      connects to D-Bus, optionally requests a name, then does not
+      reply to messages. It normally reads and discards messages from
+      its D-Bus socket, but can be configured to sleep forever without
+      reading.</para>
+
+    <para><command>dbus-test-tool echo</command>
+      connects to D-Bus, optionally requests a name, then sends back an
+      empty reply to every method call, after an optional delay.</para>
+
+    <para><command>dbus-test-tool spam</command>
+      connects to D-Bus and makes repeated method calls,
+      normally named <literal>com.example.Spam</literal>.</para>
+  </refsect1>
+
+  <refsect1 id="options">
+    <title>OPTIONS</title>
+    <refsect2>
+      <title>Common options</title>
+      <variablelist remap="TP">
+
+        <varlistentry>
+          <term><option>--session</option></term>
+          <listitem>
+            <para>Connect to the session bus. This is the default.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>--system</option></term>
+          <listitem>
+            <para>Connect to the system bus.</para>
+          </listitem>
+        </varlistentry>
+
+      </variablelist>
+    </refsect2>
+
+    <refsect2>
+      <title>black-hole mode</title>
+      <variablelist remap="TP">
+
+        <varlistentry>
+          <term><option>--name=</option><replaceable>NAME</replaceable></term>
+          <listitem>
+            <para>Before proceeding, request ownership of the well-known
+              bus name <replaceable>NAME</replaceable>, for example
+              <literal>com.example.NoReply</literal>. By default,
+              no name is requested, and the tool can only be addressed by
+              a unique bus name such as <literal>:1.23</literal>.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>--no-read</option></term>
+          <listitem>
+            <para>Do not read from the D-Bus socket.</para>
+          </listitem>
+        </varlistentry>
+
+      </variablelist>
+    </refsect2>
+
+    <refsect2>
+      <title>echo mode</title>
+      <variablelist remap="TP">
+
+        <varlistentry>
+          <term><option>--name=</option><replaceable>NAME</replaceable></term>
+          <listitem>
+            <para>Before proceeding, request ownership of the well-known
+              bus name <replaceable>NAME</replaceable>, for example
+              <literal>com.example.Echo</literal>. By default,
+              no name is requested, and the tool can only be addressed by
+              a unique bus name such as <literal>:1.23</literal>.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>--sleep-ms=</option><replaceable>MS</replaceable></term>
+          <listitem>
+            <para>Block for <replaceable>MS</replaceable> milliseconds
+              before replying to a method call.</para>
+          </listitem>
+        </varlistentry>
+
+      </variablelist>
+    </refsect2>
+
+    <refsect2>
+      <title>spam mode</title>
+      <variablelist remap="TP">
+
+        <varlistentry>
+          <term><option>--dest=</option><replaceable>NAME</replaceable></term>
+          <listitem>
+            <para>Send method calls to the well-known or unique
+              bus name <replaceable>NAME</replaceable>.
+              The default is the dbus-daemon,
+              <literal>org.freedesktop.DBus</literal>.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>--count=</option><replaceable>N</replaceable></term>
+          <listitem>
+            <para>Send <replaceable>N</replaceable> method calls in total.
+              The default is 1.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>--queue=</option><replaceable>N</replaceable></term>
+          <listitem>
+            <para>Send <replaceable>N</replaceable> method calls before
+              waiting for any replies, then send one new call per reply
+              received, keeping <replaceable>N</replaceable> method calls
+              "in flight" at all times until the number of messages specified
+              with the <option>--count</option> option have been sent.
+              The default is 1, unless <option>--flood</option>
+              is used.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>--flood</option></term>
+          <listitem>
+            <para>Send all messages without waiting for a reply,
+              equivalent to <option>--queue</option> with an arbitrarily
+              large <replaceable>N</replaceable>.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>--no-reply</option></term>
+          <listitem>
+            <para>Set the "no reply desired" flag on the messages.
+              This implies <option>--flood</option>, since it disables
+              the replies that would be used for a finite
+              <option>--queue</option> length.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>--messages-per-conn=</option><replaceable>N</replaceable></term>
+          <listitem>
+            <para>If given, send <replaceable>N</replaceable> method calls
+              on the same connection, then disconnect and reconnect.
+              The default is to use the same connection for all method
+              calls.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>--string</option></term>
+          <listitem>
+            <para>The payload of each message is a UTF-8 string. This is the
+              default. The actual string used is given by the
+              <option>--payload</option> or <option>--stdin</option>
+              option, defaulting to "hello, world!".</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>--bytes</option></term>
+          <listitem>
+            <para>The payload of each message is a byte-array.
+              The actual bytes used are given by the
+              <option>--payload</option> or <option>--stdin</option>
+              option, defaulting to the ASCII encoding of
+              "hello, world!".</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>--empty</option></term>
+          <listitem>
+            <para>The messages have no payload.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>--payload=</option><replaceable>S</replaceable></term>
+          <listitem>
+            <para>Use <replaceable>S</replaceable> as the
+              <option>--string</option> or <option>--bytes</option>
+              in the messages. The default is "hello, world!".</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>--stdin</option></term>
+          <listitem>
+            <para>Read from standard input until end-of-file is reached,
+              and use that as the <option>--string</option> or
+              <option>--bytes</option> in the messages.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>--message-stdin</option></term>
+          <listitem>
+            <para>Read a complete binary D-Bus method call message from
+              standard input, and use that for each method call.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>--random-size</option></term>
+          <listitem>
+            <para>Read whitespace-separated ASCII decimal numbers from
+              standard input, choose one at random for each message,
+              and send a message whose payload is a string of that
+              length.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>--seed=</option><replaceable>SEED</replaceable></term>
+          <listitem>
+            <para>Use <replaceable>SEED</replaceable> as the seed
+              for the pseudorandom number generator, to have somewhat
+              repeatable sequences of random messages.</para>
+          </listitem>
+        </varlistentry>
+
+      </variablelist>
+    </refsect2>
+  </refsect1>
+
+  <refsect1 id="bugs">
+    <title>BUGS</title>
+      <para>Please send bug reports to the D-Bus bug tracker or mailing list.
+        See <ulink url="http://www.freedesktop.org/software/dbus/">http://www.freedesktop.org/software/dbus/</ulink>.</para>
+  </refsect1>
+
+  <refsect1 id="see_also">
+    <title>SEE ALSO</title>
+    <para><citerefentry><refentrytitle>dbus-send</refentrytitle><manvolnum>1</manvolnum></citerefentry></para>
+  </refsect1>
+</refentry>

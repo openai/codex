@@ -1,0 +1,16 @@
+strict digraph kdf {
+    bgcolor="transparent";
+
+    begin [label=start, color="#deeaee", style="filled"];
+    newed [label="newed", fontcolor="#c94c4c", style="solid"];
+    deriving [label="deriving", fontcolor="#c94c4c"];
+    end [label="freed", color="#deeaee", style="filled"];
+
+    begin -> newed [label="EVP_KDF_CTX_new"];
+    newed -> deriving [label="EVP_KDF_derive"];
+    deriving -> deriving [label="EVP_KDF_derive", style=dashed];
+    deriving -> end [label="EVP_KDF_CTX_free"];
+    deriving -> newed [label="EVP_KDF_CTX_reset", style=dashed,
+                      color="#034f84", fontcolor="#034f84"];
+}
+

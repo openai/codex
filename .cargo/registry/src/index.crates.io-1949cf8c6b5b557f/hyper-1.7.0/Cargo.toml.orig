@@ -1,0 +1,245 @@
+[package]
+name = "hyper"
+version = "1.7.0"
+description = "A protective and efficient HTTP library for all."
+readme = "README.md"
+homepage = "https://hyper.rs"
+documentation = "https://docs.rs/hyper"
+repository = "https://github.com/hyperium/hyper"
+license = "MIT"
+authors = ["Sean McArthur <sean@seanmonstar.com>"]
+keywords = ["http", "hyper", "hyperium"]
+categories = ["network-programming", "web-programming::http-client", "web-programming::http-server"]
+edition = "2021"
+rust-version = "1.63" # keep in sync with MSRV.md dev doc
+
+include = [
+  "Cargo.toml",
+  "LICENSE",
+  "src/**/*",
+]
+
+[dependencies]
+bytes = "1.2"
+http = "1"
+http-body = "1"
+tokio = { version = "1", features = ["sync"] }
+
+# Optional
+
+atomic-waker = { version = "1.1.2", optional = true }
+futures-channel = { version = "0.3", optional = true }
+futures-core = { version = "0.3.31", optional = true }
+futures-util = { version = "0.3", default-features = false, features = ["alloc"], optional = true }
+h2 = { version = "0.4.2", optional = true }
+http-body-util = { version = "0.1", optional = true }
+httparse = { version = "1.9", optional = true }
+httpdate = { version = "1.0", optional = true }
+itoa = { version = "1", optional = true }
+pin-project-lite = { version = "0.2.4", optional = true }
+pin-utils = { version = "0.1", optional = true } # TODO: replace with std::pin::pin! once MSRV >= 1.68
+smallvec = { version = "1.12", features = ["const_generics", "const_new"], optional = true }
+tracing = { version = "0.1", default-features = false, features = ["std"], optional = true }
+want = { version = "0.3", optional = true }
+
+[dev-dependencies]
+form_urlencoded = "1"
+futures-channel = { version = "0.3", features = ["sink"] }
+futures-util = { version = "0.3", default-features = false, features = ["alloc", "sink"] }
+http-body-util = "0.1"
+pretty_env_logger = "0.5"
+pin-project-lite = "0.2.4"
+spmc = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = [
+    "fs",
+    "macros",
+    "net",
+    "io-std",
+    "io-util",
+    "rt",
+    "rt-multi-thread", # so examples can use #[tokio::main]
+    "sync",
+    "time",
+    "test-util",
+] }
+tokio-test = "0.4"
+tokio-util = "0.7.10"
+
+[features]
+# Nothing by default
+default = []
+
+# Easily turn it all on
+full = [
+    "client",
+    "http1",
+    "http2",
+    "server",
+]
+
+# HTTP versions
+http1 = ["dep:atomic-waker", "dep:futures-channel", "dep:futures-core", "dep:httparse", "dep:itoa", "dep:pin-utils"]
+http2 = ["dep:futures-channel", "dep:futures-core", "dep:h2"]
+
+# Client/Server
+client = ["dep:want", "dep:pin-project-lite", "dep:smallvec"]
+server = ["dep:httpdate", "dep:pin-project-lite", "dep:smallvec"]
+
+# C-API support (currently unstable (no semver))
+ffi = ["dep:http-body-util", "dep:futures-util"]
+capi = []
+
+# Utilize tracing (currently unstable)
+tracing = ["dep:tracing"]
+
+# internal features used in CI
+nightly = []
+
+[lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = [
+    'cfg(hyper_unstable_tracing)',
+    'cfg(hyper_unstable_ffi)'
+]
+
+[package.metadata.docs.rs]
+features = ["ffi", "full", "tracing"]
+rustdoc-args = ["--cfg", "hyper_unstable_ffi", "--cfg", "hyper_unstable_tracing"]
+
+[package.metadata.playground]
+features = ["full"]
+
+[package.metadata.capi.header]
+generation = false
+subdirectory = false
+
+[package.metadata.capi.install.include]
+asset = [{ from="capi/include/hyper.h" }]
+
+[profile.release]
+codegen-units = 1
+incremental = false
+
+[profile.bench]
+codegen-units = 1
+incremental = false
+
+[[example]]
+name = "client"
+path = "examples/client.rs"
+required-features = ["full"]
+
+[[example]]
+name = "client_json"
+path = "examples/client_json.rs"
+required-features = ["full"]
+
+[[example]]
+name = "echo"
+path = "examples/echo.rs"
+required-features = ["full"]
+
+[[example]]
+name = "gateway"
+path = "examples/gateway.rs"
+required-features = ["full"]
+
+[[example]]
+name = "graceful_shutdown"
+path = "examples/graceful_shutdown.rs"
+required-features = ["full"]
+
+[[example]]
+name = "hello"
+path = "examples/hello.rs"
+required-features = ["full"]
+
+[[example]]
+name = "http_proxy"
+path = "examples/http_proxy.rs"
+required-features = ["full"]
+
+[[example]]
+name = "multi_server"
+path = "examples/multi_server.rs"
+required-features = ["full"]
+
+[[example]]
+name = "params"
+path = "examples/params.rs"
+required-features = ["full"]
+
+[[example]]
+name = "send_file"
+path = "examples/send_file.rs"
+required-features = ["full"]
+
+[[example]]
+name = "service_struct_impl"
+path = "examples/service_struct_impl.rs"
+required-features = ["full"]
+
+[[example]]
+name = "single_threaded"
+path = "examples/single_threaded.rs"
+required-features = ["full"]
+
+[[example]]
+name = "state"
+path = "examples/state.rs"
+required-features = ["full"]
+
+[[example]]
+name = "upgrades"
+path = "examples/upgrades.rs"
+required-features = ["full"]
+
+
+[[example]]
+name = "web_api"
+path = "examples/web_api.rs"
+required-features = ["full"]
+
+
+[[bench]]
+name = "body"
+path = "benches/body.rs"
+required-features = ["full"]
+
+[[bench]]
+name = "connect"
+path = "benches/connect.rs"
+required-features = ["full"]
+
+[[bench]]
+name = "end_to_end"
+path = "benches/end_to_end.rs"
+required-features = ["full"]
+
+[[bench]]
+name = "pipeline"
+path = "benches/pipeline.rs"
+required-features = ["full"]
+
+[[bench]]
+name = "server"
+path = "benches/server.rs"
+required-features = ["full"]
+
+
+[[test]]
+name = "client"
+path = "tests/client.rs"
+required-features = ["full"]
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
+required-features = ["full"]
+
+[[test]]
+name = "server"
+path = "tests/server.rs"
+required-features = ["full"]

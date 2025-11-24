@@ -1,0 +1,112 @@
+[package]
+name = "tracing-subscriber"
+version = "0.3.20"
+authors = [
+    "Eliza Weisman <eliza@buoyant.io>",
+    "David Barsky <me@davidbarsky.com>",
+    "Tokio Contributors <team@tokio.rs>",
+]
+edition = "2018"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/tokio-rs/tracing"
+homepage = "https://tokio.rs"
+description = """
+Utilities for implementing and composing `tracing` subscribers.
+"""
+categories = [
+    "development-tools::debugging",
+    "development-tools::profiling",
+    "asynchronous",
+]
+keywords = ["logging", "tracing", "metrics", "subscriber"]
+rust-version = "1.65.0"
+
+[features]
+
+default = ["smallvec", "fmt", "ansi", "tracing-log", "std"]
+alloc = []
+std = ["alloc", "tracing-core/std"]
+env-filter = ["matchers", "once_cell", "tracing", "std", "thread_local", "dep:regex-automata"]
+fmt = ["registry", "std"]
+ansi = ["fmt", "nu-ansi-term"]
+registry = ["sharded-slab", "thread_local", "std"]
+json = ["tracing-serde", "serde", "serde_json"]
+valuable = ["tracing-core/valuable", "valuable_crate", "valuable-serde", "tracing-serde/valuable"]
+# Enables support for local time when using the `time` crate timestamp
+# formatters.
+local-time = ["time/local-offset"]
+nu-ansi-term = ["dep:nu-ansi-term"]
+# For backwards compatibility only
+regex = []
+
+[dependencies]
+tracing-core = { path = "../tracing-core", version = "0.1.33", default-features = false }
+
+# only required by the filter feature
+tracing = { optional = true, path = "../tracing", version = "0.1.41", default-features = false }
+matchers = { optional = true, version = "0.2.0" }
+# required to have matchers::BuildError implement std::error::Error
+regex-automata = { optional = true, version = "0.4", default-features = false, features = ["std"] }
+smallvec = { optional = true, version = "1.9.0" }
+once_cell = { optional = true, version = "1.13.0" }
+
+# fmt
+tracing-log = { path = "../tracing-log", version = "0.2.0", optional = true, default-features = false, features = ["log-tracer", "std"] }
+nu-ansi-term = { version = "0.50.0", optional = true }
+time = { version = "0.3.2", features = ["formatting"], optional = true }
+
+# only required by the json feature
+serde_json = { version = "1.0.82", optional = true }
+serde = { version = "1.0.140", optional = true }
+tracing-serde = { path = "../tracing-serde", version = "0.2.0", optional = true }
+
+# opt-in deps
+parking_lot = { version = "0.12.1", optional = true }
+chrono = { version = "0.4.26", default-features = false, features = ["clock", "std"], optional = true }
+
+# registry
+sharded-slab = { version = "0.1.4", optional = true }
+thread_local = { version = "1.1.4", optional = true }
+
+[target.'cfg(tracing_unstable)'.dependencies]
+valuable_crate = { package = "valuable", version = "0.1.0", optional = true, default-features = false }
+valuable-serde = { version = "0.1.0", optional = true, default-features = false }
+
+[dev-dependencies]
+tracing = { path = "../tracing", version = "0.1.41" }
+tracing-mock = { path = "../tracing-mock", features = ["tracing-subscriber"] }
+log = "0.4.17"
+tracing-log = { path = "../tracing-log", version = "0.2.0" }
+criterion = { version = "0.3.6", default-features = false }
+regex = { version = "1", default-features = false, features = ["std"] }
+tracing-futures = { path = "../tracing-futures", version = "0.2.0", default-features = false, features = ["std-future", "std"] }
+tokio = { version = "1", features = ["rt", "macros"] }
+# Enable the `time` crate's `macros` feature, for examples.
+time = { version = "0.3.2", features = ["formatting", "macros"] }
+
+[badges]
+maintenance = { status = "experimental" }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[[bench]]
+name = "filter"
+harness = false
+
+[[bench]]
+name = "filter_log"
+harness = false
+
+[[bench]]
+name = "fmt"
+harness = false
+
+[[bench]]
+name = "enter"
+harness = false
+
+[lints]
+workspace = true

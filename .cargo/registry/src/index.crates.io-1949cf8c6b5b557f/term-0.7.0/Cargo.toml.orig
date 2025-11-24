@@ -1,0 +1,30 @@
+[package]
+
+name = "term"
+version = "0.7.0"
+authors = ["The Rust Project Developers", "Steven Allen"]
+license = "MIT/Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/Stebalien/term"
+homepage = "https://github.com/Stebalien/term"
+documentation = "https://docs.rs/term/"
+description = """
+A terminal formatting library
+"""
+categories = ["command-line-interface"]
+exclude = ["/scripts/*", "/.travis.yml", "/appveyor.yml"]
+edition = "2018"
+
+[badges]
+circle-ci = { repository = "Stebalien/term" }
+appveyor = { repository = "Stebalien/term" }
+
+[dependencies]
+dirs-next = "2"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["consoleapi", "wincon", "handleapi", "fileapi"] }
+rustversion = "1"
+
+[features]
+default=[]

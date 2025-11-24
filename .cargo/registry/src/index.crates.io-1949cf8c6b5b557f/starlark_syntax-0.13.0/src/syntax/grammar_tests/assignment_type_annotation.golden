@@ -1,0 +1,16 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Program:
+(x, y): int = foo
+
+Error:
+error: type annotations not allowed on multiple assignments
+ --> assignment_type_annotation:1:9
+  |
+1 | (x, y): int = foo
+  |         ^^^
+  |

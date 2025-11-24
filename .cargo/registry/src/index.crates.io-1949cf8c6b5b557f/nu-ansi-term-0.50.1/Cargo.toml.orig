@@ -1,0 +1,38 @@
+[package]
+authors = [
+    "ogham@bsago.me",
+    "Ryan Scheel (Havvy) <ryan.havvy@gmail.com>",
+    "Josh Triplett <josh@joshtriplett.org>",
+    "The Nushell Project Developers",
+]
+description = "Library for ANSI terminal colors and styles (bold, underline)"
+edition = "2021"
+rust-version = "1.62.1"
+license = "MIT"
+name = "nu-ansi-term"
+version = "0.50.1"
+repository = "https://github.com/nushell/nu-ansi-term"
+
+[lib]
+doctest = true
+
+[features]
+derive_serde_style = ["serde"]
+gnu_legacy = []
+
+[dependencies]
+serde = { version="1.0.152", features=["derive"], optional=true }
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.52.0"
+package = "windows-sys"
+features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+    "Win32_Storage_FileSystem",
+    "Win32_Security"
+]
+
+[dev-dependencies]
+doc-comment = "0.3.3"
+serde_json = "1.0.94"

@@ -1,0 +1,39 @@
+[package]
+name = "simd-adler32"
+authors = ["Marvin Countryman <me@maar.vin>"]
+license = "MIT"
+version = "0.3.7"
+edition = "2018"
+keywords = ["simd", "avx2", "ssse3", "adler", "adler32"]
+categories = ["algorithms", "no-std"]
+repository = "https://github.com/mcountryman/simd-adler32"
+description = "A SIMD-accelerated Adler-32 hash algorithm implementation."
+exclude = ["bench"]
+
+[profile.release]
+debug = true
+opt-level = 2
+
+[[bench]]
+name = "alts"
+path = "bench/alts.rs"
+harness = false
+
+[[bench]]
+name = "variants"
+path = "bench/variants.rs"
+harness = false
+
+[features]
+default = ["std", "const-generics"]
+std = []
+nightly = []
+const-generics = []
+
+[dev-dependencies]
+rand = "0.8"
+criterion = "0.3"
+
+# competition
+adler = "1.0.2"
+adler32 = "1.2.0"

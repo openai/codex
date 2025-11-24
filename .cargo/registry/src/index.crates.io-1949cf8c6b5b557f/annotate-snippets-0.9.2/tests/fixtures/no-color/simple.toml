@@ -1,0 +1,18 @@
+[[slices]]
+source = """
+        })
+
+        for line in &self.body {"""
+line_start = 169
+origin = "src/format_color.rs"
+[[slices.annotations]]
+label = "unexpected token"
+annotation_type = "Error"
+range = [20, 23]
+[[slices.annotations]]
+label = "expected one of `.`, `;`, `?`, or an operator here"
+annotation_type = "Warning"
+range = [10, 11]
+[title]
+label = "expected one of `.`, `;`, `?`, or an operator, found `for`"
+annotation_type = "Error"

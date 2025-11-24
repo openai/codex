@@ -1,0 +1,6 @@
+Package: liblzma
+Version: 5.2.3-2
+Architecture: x64-windows
+Multi-Arch: same
+Description: Compression library with an API similar to that of zlib.
+Status: install ok installed

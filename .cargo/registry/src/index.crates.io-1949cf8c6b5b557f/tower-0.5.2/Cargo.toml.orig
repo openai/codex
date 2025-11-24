@@ -1,0 +1,105 @@
+[package]
+name = "tower"
+# When releasing to crates.io:
+# - Update README.md
+# - Update CHANGELOG.md.
+# - Create "vX.X.X" git tag.
+version = "0.5.2"
+authors = ["Tower Maintainers <team@tower-rs.com>"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/tower-rs/tower"
+homepage = "https://github.com/tower-rs/tower"
+description = """
+Tower is a library of modular and reusable components for building robust
+clients and servers.
+"""
+categories = ["asynchronous", "network-programming"]
+keywords = ["io", "async", "non-blocking", "futures", "service"]
+edition = "2018"
+rust-version = "1.64.0"
+
+[features]
+
+# Internal
+__common = ["futures-core", "pin-project-lite"]
+
+full = [
+  "balance",
+  "buffer",
+  "discover",
+  "filter",
+  "hedge",
+  "limit",
+  "load",
+  "load-shed",
+  "make",
+  "ready-cache",
+  "reconnect",
+  "retry",
+  "spawn-ready",
+  "steer",
+  "timeout",
+  "util",
+]
+# FIXME: Use weak dependency once available (https://github.com/rust-lang/cargo/issues/8832)
+log = ["tracing/log"]
+balance = ["discover", "load", "ready-cache", "make", "slab", "util"]
+buffer = ["__common", "tokio/sync", "tokio/rt", "tokio-util", "tracing"]
+discover = ["__common"]
+filter = ["__common", "futures-util"]
+hedge = ["util", "filter", "futures-util", "hdrhistogram", "tokio/time", "tracing"]
+limit = ["__common", "tokio/time", "tokio/sync", "tokio-util", "tracing"]
+load = ["__common", "tokio/time", "tracing"]
+load-shed = ["__common"]
+make = ["futures-util", "pin-project-lite", "tokio/io-std"]
+ready-cache = ["futures-core", "futures-util", "indexmap", "tokio/sync", "tracing", "pin-project-lite"]
+reconnect = ["make", "tokio/io-std", "tracing"]
+retry = ["__common", "tokio/time", "util"]
+spawn-ready = ["__common", "futures-util", "tokio/sync", "tokio/rt", "util", "tracing"]
+steer = []
+timeout = ["pin-project-lite", "tokio/time"]
+util = ["__common", "futures-util", "pin-project-lite", "sync_wrapper"]
+
+[dependencies]
+tower-layer = { version = "0.3.3", path = "../tower-layer" }
+tower-service = { version = "0.3.3", path = "../tower-service" }
+
+futures-core = { workspace = true, optional = true }
+futures-util = { workspace = true, features = ["alloc"], optional = true }
+hdrhistogram = { workspace = true, optional = true }
+indexmap = { workspace = true, optional = true }
+slab = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["sync"], optional = true }
+tokio-stream = { workspace = true, optional = true }
+tokio-util = { workspace = true, optional = true }
+tracing = { workspace = true, features = ["std"], optional = true }
+pin-project-lite = { workspace = true, optional = true }
+sync_wrapper = { workspace = true, optional = true }
+
+[dev-dependencies]
+futures = { workspace = true }
+hdrhistogram = { workspace = true }
+pin-project-lite = { workspace = true }
+tokio = { workspace = true, features = ["macros", "sync", "test-util", "rt-multi-thread"] }
+tokio-stream = { workspace = true }
+tokio-test = { workspace = true }
+tower-test = { version = "0.4", path = "../tower-test" }
+tracing = { workspace = true, features = ["std"] }
+tracing-subscriber = { workspace = true, features = ["fmt", "ansi"] }
+http = { workspace = true }
+lazy_static = { workspace = true }
+rand = { workspace = true, features = ["small_rng"] }
+quickcheck = { workspace = true }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[package.metadata.playground]
+features = ["full"]
+
+[[example]]
+name = "tower-balance"
+path = "examples/tower-balance.rs"
+required-features = ["full"]

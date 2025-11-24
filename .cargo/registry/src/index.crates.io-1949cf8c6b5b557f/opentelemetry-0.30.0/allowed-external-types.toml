@@ -1,0 +1,9 @@
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+# This is used with cargo-check-external-types to reduce the surface area of downstream crates from
+# the public API. Ideally this can have a few exceptions as possible.
+allowed_external_types = [
+    "equivalent::Equivalent",
+    "futures_sink::Sink", # TODO: This is a pre-1.0 crate, we can't easily stabilize with this in the public API
+    "futures_core::stream::Stream",  # TODO: This is a pre-1.0 crate, we can't easily stabilize with this in the public API
+]

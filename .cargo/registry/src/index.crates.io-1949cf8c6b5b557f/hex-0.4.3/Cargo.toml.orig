@@ -1,0 +1,40 @@
+[package]
+name = "hex"
+version = "0.4.3"
+authors = ["KokaKiwi <kokakiwi@kokakiwi.net>"]
+description = "Encoding and decoding data into/from hexadecimal representation."
+license = "MIT OR Apache-2.0"
+documentation = "https://docs.rs/hex/"
+repository = "https://github.com/KokaKiwi/rust-hex"
+edition = "2018"
+readme = "README.md"
+keywords = ["no_std", "hex"]
+categories = ["encoding", "no-std"]
+
+[badges]
+maintenance = { status = "actively-developed" }
+
+[features]
+default = ["std"]
+alloc = []
+std = ["alloc"]
+
+[[bench]]
+name = "hex"
+harness = false
+
+[dependencies]
+serde = { version = "1.0", default-features = false, optional = true }
+
+[dev-dependencies]
+criterion = "0.3"
+rustc-hex = "2.1"
+faster-hex = "0.5"
+version-sync = "0.9"
+pretty_assertions = "0.6"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

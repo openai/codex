@@ -1,0 +1,14 @@
+# don't check in Cargo.lock because this is a library project
+# see https://doc.rust-lang.org/cargo/guide/cargo-toml-vs-cargo-lock.html
+Cargo.lock
+# don't check in .cargo directory because not every developer
+# uses it; the typical use is to enable cross-compiling.
+/.cargo/
+# don't check in the binary and testing artifacts
+target
+fuzz
+libtest.rmeta
+# profiling
+*.profdata
+*.profraw
+

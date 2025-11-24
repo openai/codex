@@ -1,0 +1,10 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+root 35
+root;"module" 70
+root;"module";test.star.test 168
+root;"module";test.star.test;test.star.inner 140

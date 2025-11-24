@@ -1,0 +1,21 @@
+original_prefix=@prefix@
+prefix=@pkgconfig_prefix@
+exec_prefix=@exec_prefix@
+bindir=@bindir@
+libdir=@libdir@
+includedir=@includedir@
+system_bus_default_address=@DBUS_SYSTEM_BUS_DEFAULT_ADDRESS@
+datarootdir=@datarootdir@
+datadir=@datadir@
+sysconfdir=@sysconfdir@
+session_bus_services_dir=${datadir}/dbus-1/services
+system_bus_services_dir=${datadir}/dbus-1/system-services
+interfaces_dir=${datadir}/dbus-1/interfaces
+daemondir=@dbus_daemondir@
+
+Name: dbus
+Description: Free desktop message bus
+Version: @VERSION@
+Libs: -L${libdir} -ldbus-1
+Libs.private: @LIBDBUS_LIBS@
+Cflags: -I${includedir}/dbus-1.0 -I${libdir}/dbus-1.0/include @DBUS_STATIC_BUILD_CPPFLAGS@

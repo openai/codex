@@ -1,0 +1,94 @@
+[package]
+name = "syn"
+version = "2.0.104"
+authors = ["David Tolnay <dtolnay@gmail.com>"]
+categories = ["development-tools::procedural-macro-helpers", "parser-implementations"]
+description = "Parser for Rust source code"
+documentation = "https://docs.rs/syn"
+edition = "2021"
+include = [
+    "/benches/**",
+    "/Cargo.toml",
+    "/LICENSE-APACHE",
+    "/LICENSE-MIT",
+    "/README.md",
+    "/src/**",
+    "/tests/**",
+]
+keywords = ["macros", "syn"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/dtolnay/syn"
+rust-version = "1.61"
+
+[features]
+default = ["derive", "parsing", "printing", "clone-impls", "proc-macro"]
+derive = []
+full = []
+parsing = []
+printing = ["dep:quote"]
+visit = []
+visit-mut = []
+fold = []
+clone-impls = []
+extra-traits = []
+proc-macro = ["proc-macro2/proc-macro", "quote?/proc-macro"]
+test = ["syn-test-suite/all-features"]
+
+[dependencies]
+proc-macro2 = { version = "1.0.91", default-features = false }
+quote = { version = "1.0.35", optional = true, default-features = false }
+unicode-ident = "1"
+
+[dev-dependencies]
+anyhow = "1"
+automod = "1"
+insta = "1"
+ref-cast = "1"
+rustversion = "1"
+syn-test-suite = { version = "0", path = "tests/features" }
+termcolor = "1"
+
+[target.'cfg(not(miri))'.dev-dependencies]
+flate2 = "1"
+rayon = "1"
+reqwest = { version = "0.12", features = ["blocking"] }
+tar = "0.4.16"
+walkdir = "2.3.2"
+
+[[bench]]
+name = "rust"
+harness = false
+required-features = ["full", "parsing"]
+
+[[bench]]
+name = "file"
+required-features = ["full", "parsing"]
+
+[package.metadata.docs.rs]
+all-features = true
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = [
+    "--generate-link-to-definition",
+    "--extend-css=src/gen/token.css",
+    "--extern-html-root-url=core=https://doc.rust-lang.org",
+    "--extern-html-root-url=alloc=https://doc.rust-lang.org",
+    "--extern-html-root-url=std=https://doc.rust-lang.org",
+    "--extern-html-root-url=proc_macro=https://doc.rust-lang.org",
+]
+
+[package.metadata.playground]
+features = ["full", "visit", "visit-mut", "fold", "extra-traits"]
+
+[workspace]
+members = [
+    "dev",
+    "examples/dump-syntax",
+    "examples/heapsize/example",
+    "examples/heapsize/heapsize",
+    "examples/heapsize/heapsize_derive",
+    "examples/lazy-static/example",
+    "examples/lazy-static/lazy-static",
+    "examples/trace-var/example",
+    "examples/trace-var/trace-var",
+    "tests/features",
+]

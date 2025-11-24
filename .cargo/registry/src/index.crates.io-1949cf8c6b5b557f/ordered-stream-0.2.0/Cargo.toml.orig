@@ -1,0 +1,18 @@
+[package]
+name = "ordered-stream"
+version = "0.2.0"
+authors = ["Daniel De Graaf <code@danieldg.net>", "Zeeshan Ali Khan <zeeshanak@gnome.org>"]
+license = "MIT OR Apache-2.0"
+edition = "2018"
+
+description = "Streams that are ordered relative to external events"
+repository = "https://github.com/danieldg/ordered-stream"
+keywords = ["async", "stream", "timestamp"]
+
+[dependencies]
+futures-core = "0.3"
+pin-project-lite = "0.2"
+
+[dev-dependencies]
+futures-executor = "0.3.25"
+futures-util = "0.3.25"

@@ -1,0 +1,78 @@
+[config]
+min_version = "0.35.0"
+
+[env]
+CI_CARGO_TEST_FLAGS = { value = "--locked -- --nocapture", condition = { env_true = [
+    "CARGO_MAKE_CI",
+] } }
+CARGO_MAKE_CARGO_ALL_FEATURES = { source = "${CARGO_MAKE_RUST_CHANNEL}", default_value = "--all-features", mapping = { "nightly" = "--all-features" } }
+CARGO_MAKE_CLIPPY_ARGS = { value = "${CARGO_MAKE_CLIPPY_ALL_FEATURES_WARN}", condition = { env_true = [
+    "CARGO_MAKE_CI",
+] } }
+
+# Override for CI flag additions
+[tasks.test]
+args = [
+    "test",
+    "@@remove-empty(CARGO_MAKE_CARGO_VERBOSE_FLAGS)",
+    "@@split(CARGO_MAKE_CARGO_BUILD_TEST_FLAGS, )",
+    "@@split(CI_CARGO_TEST_FLAGS, )",
+]
+
+# Let clippy run on non-nightly CI
+[tasks.clippy-ci-flow]
+condition = { env_set = ["CARGO_MAKE_RUN_CLIPPY"] }
+
+# Let format check run on non-nightly CI
+[tasks.check-format-ci-flow]
+condition = { env_set = ["CARGO_MAKE_RUN_CHECK_FORMAT"] }
+
+[tasks.check-docs]
+description = "Checks docs for errors."
+category = "Documentation"
+install_crate = false
+env = { RUSTDOCFLAGS = "-D warnings" }
+command = "cargo"
+args = [
+    "doc",
+    "--workspace",
+    "--no-deps",
+    "@@remove-empty(CARGO_MAKE_CARGO_VERBOSE_FLAGS)",
+    "${CARGO_MAKE_CARGO_ALL_FEATURES}",
+]
+
+# Build & Test with no features enabled
+[tasks.post-ci-flow]
+run_task = [
+    { name = [
+        "check-docs",
+        "build-no-std",
+        "test-no-std",
+        "build-no-std-alloc",
+        "test-no-std-alloc",
+    ] },
+]
+
+[tasks.build-no-std]
+description = "Build without any features"
+category = "Build"
+env = { CARGO_MAKE_CARGO_BUILD_TEST_FLAGS = "--no-default-features" }
+run_task = "build"
+
+[tasks.test-no-std]
+description = "Run tests without any features"
+category = "Test"
+env = { CARGO_MAKE_CARGO_BUILD_TEST_FLAGS = "--no-default-features" }
+run_task = "test"
+
+[tasks.build-no-std-alloc]
+description = "Build without any features except alloc"
+category = "Build"
+env = { CARGO_MAKE_CARGO_BUILD_TEST_FLAGS = "--no-default-features --features alloc" }
+run_task = "build"
+
+[tasks.test-no-std-alloc]
+description = "Run tests without any features except alloc"
+category = "Test"
+env = { CARGO_MAKE_CARGO_BUILD_TEST_FLAGS = "--no-default-features --features alloc" }
+run_task = "test"

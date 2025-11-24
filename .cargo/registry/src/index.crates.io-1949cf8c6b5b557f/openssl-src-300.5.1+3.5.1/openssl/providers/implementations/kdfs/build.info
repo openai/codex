@@ -1,0 +1,46 @@
+# We make separate GOAL variables for each algorithm, to make it easy to
+# switch each to the Legacy provider when needed.
+
+$TLS1_PRF_GOAL=../../libdefault.a ../../libfips.a
+$HKDF_GOAL=../../libdefault.a ../../libfips.a
+$KBKDF_GOAL=../../libdefault.a ../../libfips.a
+$KRB5KDF_GOAL=../../libdefault.a
+$PBKDF1_GOAL=../../liblegacy.a
+$PBKDF2_GOAL=../../libdefault.a ../../libfips.a
+$PVKKDF_GOAL=../../liblegacy.a
+$PKCS12KDF_GOAL=../../libdefault.a
+$SSKDF_GOAL=../../libdefault.a ../../libfips.a
+$SCRYPT_GOAL=../../libdefault.a
+$SSHKDF_GOAL=../../libdefault.a ../../libfips.a
+$X942KDF_GOAL=../../libdefault.a ../../libfips.a
+$HMAC_DRBG_KDF_GOAL=../../libdefault.a
+$ARGON2_GOAL=../../libdefault.a
+
+SOURCE[$TLS1_PRF_GOAL]=tls1_prf.c
+
+SOURCE[$HKDF_GOAL]=hkdf.c
+
+SOURCE[$KBKDF_GOAL]=kbkdf.c
+
+SOURCE[$KRB5KDF_GOAL]=krb5kdf.c
+
+SOURCE[$PBKDF1_GOAL]=pbkdf1.c
+
+SOURCE[$PBKDF2_GOAL]=pbkdf2.c
+# Extra code to satisfy the FIPS and non-FIPS separation.
+# When the PBKDF2 moves to legacy, this can be removed.
+SOURCE[$PBKDF2_GOAL]=pbkdf2_fips.c
+
+SOURCE[$PBKDF1_GOAL]=pvkkdf.c
+
+SOURCE[$PKCS12KDF_GOAL]=pkcs12kdf.c
+
+SOURCE[$SSKDF_GOAL]=sskdf.c
+
+SOURCE[$SCRYPT_GOAL]=scrypt.c
+SOURCE[$SSHKDF_GOAL]=sshkdf.c
+SOURCE[$X942KDF_GOAL]=x942kdf.c
+DEPEND[x942kdf.o]=../../common/include/prov/der_wrap.h
+
+SOURCE[$HMAC_DRBG_KDF_GOAL]=hmacdrbg_kdf.c
+SOURCE[$ARGON2_GOAL]=argon2.c

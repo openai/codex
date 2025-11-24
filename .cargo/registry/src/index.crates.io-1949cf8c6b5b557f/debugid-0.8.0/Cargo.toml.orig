@@ -1,0 +1,19 @@
+[package]
+name = "debugid"
+version = "0.8.0"
+license = "Apache-2.0"
+description = "Common reusable types for implementing the sentry.io protocol."
+homepage = "https://sentry.io/"
+repository = "https://github.com/getsentry/rust-debugid"
+documentation = "https://docs.rs/debugid"
+keywords = ["sentry", "debugid", "breakpad", "crashpad"]
+readme = "README.md"
+authors = ["Sentry <hello@sentry.io>"]
+edition = "2018"
+
+[dependencies]
+uuid = "1.0.0"
+serde = { version = "1.0.85", optional = true }
+
+[dev-dependencies]
+serde_json = "1.0.37"

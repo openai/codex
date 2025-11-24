@@ -1,0 +1,6 @@
+
+IF[{- !$disabled{hqinterop} -}]
+  SUBDIRS=hq-interop
+ENDIF
+
+

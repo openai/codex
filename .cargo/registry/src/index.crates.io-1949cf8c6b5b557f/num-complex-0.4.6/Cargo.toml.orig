@@ -1,0 +1,59 @@
+[package]
+authors = ["The Rust Project Developers"]
+description = "Complex numbers implementation for Rust"
+documentation = "https://docs.rs/num-complex"
+homepage = "https://github.com/rust-num/num-complex"
+keywords = ["mathematics", "numerics"]
+categories = ["algorithms", "data-structures", "science", "no-std"]
+license = "MIT OR Apache-2.0"
+name = "num-complex"
+repository = "https://github.com/rust-num/num-complex"
+version = "0.4.6"
+readme = "README.md"
+exclude = ["/ci/*", "/.github/*"]
+edition = "2021"
+rust-version = "1.60"
+
+[package.metadata.docs.rs]
+features = ["bytemuck", "std", "serde", "rkyv/size_64", "bytecheck", "rand"]
+
+[dependencies]
+
+[dependencies.bytemuck]
+optional = true
+version = "1"
+
+[dependencies.num-traits]
+version = "0.2.18"
+default-features = false
+features = ["i128"]
+
+[dependencies.serde]
+optional = true
+version = "1.0"
+default-features = false
+
+[dependencies.rkyv]
+optional = true
+version = "0.7"
+default-features = false
+
+[dependencies.bytecheck]
+optional = true
+version = "0.6"
+default-features = false
+
+[dependencies.rand]
+optional = true
+version = "0.8"
+default-features = false
+
+[features]
+default = ["std"]
+std = ["num-traits/std"]
+libm = ["num-traits/libm"]
+bytecheck = ["dep:bytecheck"]
+bytemuck = ["dep:bytemuck"]
+rand = ["dep:rand"]
+rkyv = ["dep:rkyv"]
+serde = ["dep:serde"]

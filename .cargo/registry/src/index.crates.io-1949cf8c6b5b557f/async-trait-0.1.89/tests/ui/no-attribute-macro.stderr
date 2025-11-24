@@ -1,0 +1,17 @@
+error[E0038]: the trait `Trait` is not dyn compatible
+  --> tests/ui/no-attribute-macro.rs:12:17
+   |
+12 |     let _: &dyn Trait;
+   |                 ^^^^^ `Trait` is not dyn compatible
+   |
+note: for a trait to be dyn compatible it needs to allow building a vtable
+      for more information, visit <https://doc.rust-lang.org/reference/items/traits.html#dyn-compatibility>
+  --> tests/ui/no-attribute-macro.rs:2:14
+   |
+ 1 | pub trait Trait {
+   |           ----- this trait is not dyn compatible...
+ 2 |     async fn method(&self);
+   |              ^^^^^^ ...because method `method` is `async`
+   = help: consider moving `method` to another trait
+   = help: only type `Struct` implements `Trait` within this crate; consider using it directly instead.
+   = note: `Trait` may be implemented in other crates; if you want to support your users passing their own types here, you can't refer to a specific type

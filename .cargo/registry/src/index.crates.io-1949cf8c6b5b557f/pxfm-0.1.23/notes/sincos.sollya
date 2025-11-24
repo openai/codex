@@ -1,0 +1,33 @@
+f = sin(x);
+
+I = [-pi/256; pi/256];
+P = fpminimax(f, [|1, 3, 5, 7, 9, 11, 13|], [|1, 128...|], I, relative, floating);
+print("Sin [-pi/256; pi/256]");
+print(P);
+for i from 1 to degree(P) by 2 do print(coeff(P, i));
+
+f = cos(x);
+
+I = [-pi/256; pi/256];
+P = fpminimax(f, [|0, 2, 4, 6, 8, 10, 12|], [|1, 128...|], I, relative, floating);
+print("Cos [-pi/256; pi/256]");
+print(P);
+for i from 0 to degree(P) by 2 do print(coeff(P, i));
+
+
+procedure ulp(x, n) { return 2^(floor(log2(abs(x))) - n); };
+
+display=hexadecimal!;
+
+for i from 0 to 127 do {
+    if i < 3 then { pi_inv = 0.25 + 2^(16*(i - 3)) / pi; }
+    else { pi_inv = 2^(16*(i-3)) / pi; };
+    pn = nearestint(pi_inv);
+    pi_frac = pi_inv - pn;
+    a = round(pi_frac, 51, RN);
+    b = round(pi_frac - a, 51, RN);
+    c = round(pi_frac - a - b, 51, RN);
+    d = round(pi_frac - a - b - c, D, RN);
+
+    print("(", 2^7 * a, ",", 2^7 * b, ",", 2^7 * c, ",", 2^7 * d, "),");
+};

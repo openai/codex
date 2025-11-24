@@ -1,0 +1,70 @@
+<!ELEMENT busconfig (user |
+                     type |
+                     fork |
+                     keep_umask |
+                     listen | 
+                     pidfile |
+                     includedir |
+                     servicedir |
+                     servicehelper |
+                     auth |
+                     include |
+                     policy |
+                     limit |
+                     selinux |
+                     apparmor)*>
+
+<!ELEMENT user (#PCDATA)>
+<!ELEMENT listen (#PCDATA)>
+<!ELEMENT includedir (#PCDATA)>
+<!ELEMENT servicedir (#PCDATA)>
+<!ELEMENT servicehelper (#PCDATA)>
+<!ELEMENT auth (#PCDATA)>
+<!ELEMENT type (#PCDATA)>
+<!ELEMENT pidfile (#PCDATA)>
+<!ELEMENT fork EMPTY>
+<!ELEMENT keep_umask EMPTY>
+
+<!ELEMENT include (#PCDATA)>
+<!ATTLIST include 
+          ignore_missing (yes|no) "no"
+          if_selinux_enabled (yes|no) "no"
+          selinux_root_relative (yes|no) "no">
+
+<!ELEMENT policy (allow|deny)*>
+<!ATTLIST policy 
+          context (default|mandatory) #IMPLIED
+          user CDATA #IMPLIED
+          group CDATA #IMPLIED
+          at_console (yes|no) #IMPLIED>
+
+<!ELEMENT allow EMPTY>
+<!ATTLIST allow 
+          user CDATA #IMPLIED
+          send CDATA #IMPLIED
+          receive CDATA #IMPLIED
+          own CDATA #IMPLIED
+          send_to CDATA #IMPLIED
+          receive_from CDATA #IMPLIED>
+
+<!ELEMENT deny EMPTY>
+<!ATTLIST deny
+          user CDATA #IMPLIED
+          send CDATA #IMPLIED
+          receive CDATA #IMPLIED
+          own CDATA #IMPLIED
+          send_to CDATA #IMPLIED
+          receive_from CDATA #IMPLIED>
+
+<!ELEMENT limit (#PCDATA)>
+<!ATTLIST limit name CDATA #REQUIRED>
+
+<!ELEMENT selinux (associate)*>
+<!ELEMENT associate EMPTY>
+<!ATTLIST associate
+          own CDATA #REQUIRED
+          context CDATA #REQUIRED>
+
+<!ELEMENT apparmor EMPTY>
+<!ATTLIST apparmor
+          mode (required|enabled|disabled) "enabled">

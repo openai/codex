@@ -1,0 +1,17 @@
+error[E0277]: the size for values of type `[u8]` cannot be known at compilation time
+ --> tests/ui/dst-before-trivial.rs:7:12
+  |
+7 |     bytes: [u8],
+  |            ^^^^ doesn't have a size known at compile-time
+  |
+  = help: the trait `Sized` is not implemented for `[u8]`
+  = note: only the last field of a struct may have a dynamically sized type
+  = help: change the field's type to have a statically known size
+help: borrowed types always have a statically known size
+  |
+7 |     bytes: &[u8],
+  |            +
+help: the `Box` type always has a statically known size and allocates its contents in the heap
+  |
+7 |     bytes: Box<[u8]>,
+  |            ++++    +

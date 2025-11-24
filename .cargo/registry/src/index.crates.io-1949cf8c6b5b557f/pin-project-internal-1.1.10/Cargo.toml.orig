@@ -1,0 +1,29 @@
+[package]
+name = "pin-project-internal"
+version = "1.1.10" #publish:version
+edition = "2021"
+rust-version = "1.56" # For syn
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/taiki-e/pin-project"
+keywords = ["pin", "macros", "attribute"]
+categories = ["no-std", "no-std::no-alloc", "rust-patterns"]
+description = """
+Implementation detail of the `pin-project` crate.
+"""
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0.60"
+quote = "1.0.25"
+syn = { version = "2.0.1", default-features = false, features = ["parsing", "printing", "clone-impls", "proc-macro", "full", "visit-mut"] }
+
+[dev-dependencies]
+pin-project = { path = ".." }
+
+[lints]
+workspace = true

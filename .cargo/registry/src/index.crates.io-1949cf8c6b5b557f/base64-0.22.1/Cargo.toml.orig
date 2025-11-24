@@ -1,0 +1,60 @@
+[package]
+name = "base64"
+version = "0.22.1"
+authors = ["Marshall Pierce <marshall@mpierce.org>"]
+description = "encodes and decodes base64 as bytes or utf8"
+repository = "https://github.com/marshallpierce/rust-base64"
+documentation = "https://docs.rs/base64"
+readme = "README.md"
+keywords = ["base64", "utf8", "encode", "decode", "no_std"]
+categories = ["encoding"]
+license = "MIT OR Apache-2.0"
+edition = "2018"
+# dev-dependencies require 1.65, but the main code doesn't
+# This option was added in 1.56, keep it for when we bump MSRV.
+rust-version = "1.48.0"
+
+[[bench]]
+name = "benchmarks"
+harness = false
+required-features = ["std"]
+
+[[example]]
+name = "base64"
+required-features = ["std"]
+
+[[test]]
+name = "tests"
+required-features = ["alloc"]
+
+[[test]]
+name = "encode"
+required-features = ["alloc"]
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--generate-link-to-definition"]
+
+[dev-dependencies]
+criterion = "0.4.0"
+rand = { version = "0.8.5", features = ["small_rng"] }
+# Latest is 4.4.13 but specifies MSRV in Cargo.toml which means we can't depend
+# on it (even though we won't compile it in MSRV CI).
+clap = { version = "3.2.25", features = ["derive"] }
+strum = { version = "0.25", features = ["derive"] }
+# test fixtures for engine tests
+rstest = "0.13.0"
+rstest_reuse = "0.6.0"
+once_cell = "1"
+
+[features]
+default = ["std"]
+alloc = []
+std = ["alloc"]
+
+[profile.bench]
+# Useful for better disassembly when using `perf record` and `perf annotate`
+debug = true
+
+[profile.test]
+# Faster tests save much more than the increase in compilation time
+opt-level = 3

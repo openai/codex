@@ -1,0 +1,22 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+def test(x):
+  for i in x:
+    if i: break
+    noop(i)
+
+# Bytecode:
+
+Max stack size: 2
+Instructions:
+   0: Iter &x 0 ->&2 ->&i 136
+  >  24: IfNotBr &i 56
+     40: Break &2 136
+  >  56: CallFrozenNativePos noop &1..&2 instrs.star.bzl:4:5-12 ->&3
+     112: Continue &2 0 ->&i 24 136
+  >136: ReturnConst None
+   152: End

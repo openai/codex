@@ -1,0 +1,13 @@
+arm64-ios/
+arm64-ios/debug/
+arm64-ios/debug/lib/
+arm64-ios/debug/lib/libz.a
+arm64-ios/include/
+arm64-ios/include/zconf.h
+arm64-ios/include/zlib.h
+arm64-ios/lib/
+arm64-ios/lib/libz.a
+arm64-ios/share/
+arm64-ios/share/zlib/
+arm64-ios/share/zlib/copyright
+arm64-ios/share/zlib/usage

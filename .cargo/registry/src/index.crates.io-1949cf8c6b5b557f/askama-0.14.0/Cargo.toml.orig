@@ -1,0 +1,68 @@
+[package]
+name = "askama"
+version = "0.14.0"
+description = "Type-safe, compiled Jinja-like templates for Rust"
+keywords = ["markup", "template", "jinja2", "html"]
+categories = ["template-engine"]
+homepage = "https://askama.readthedocs.io/"
+repository = "https://github.com/askama-rs/askama"
+license = "MIT OR Apache-2.0"
+edition = "2021"
+rust-version = "1.83"
+
+[package.metadata.docs.rs]
+features = ["full"]
+rustdoc-args = ["--generate-link-to-definition", "--cfg=docsrs"]
+
+[[bench]]
+name = "to-json"
+harness = false
+required-features = ["serde_json"]
+
+[[bench]]
+name = "escape"
+harness = false
+
+[dependencies]
+itoa = "1.0.11"
+
+# needed by feature "derive"
+askama_derive = { version = "=0.14.0", path = "../askama_derive", default-features = false, optional = true }
+
+# needed by feature "serde_json"
+serde = { version = "1.0", optional = true, default-features = false }
+serde_json = { version = "1.0", optional = true, default-features = false }
+
+# needed by feature "urlencode"
+percent-encoding = { version = "2.1.0", optional = true, default-features = false }
+
+[dev-dependencies]
+assert_matches = "1.5.0"
+criterion = "0.5"
+
+[badges]
+maintenance = { status = "actively-developed" }
+
+[features]
+default = ["config", "derive", "std", "urlencode", "askama_derive?/default"]
+full = ["default", "blocks", "code-in-doc", "serde_json", "askama_derive?/full"]
+
+alloc = [
+    "askama_derive?/alloc",
+    "serde?/alloc",
+    "serde_json?/alloc",
+    "percent-encoding?/alloc",
+]
+blocks = ["askama_derive?/blocks"]
+code-in-doc = ["askama_derive?/code-in-doc"]
+config = ["askama_derive?/config"]
+derive = ["dep:askama_derive"]
+serde_json = ["std", "askama_derive?/serde_json", "dep:serde", "dep:serde_json"]
+std = [
+    "alloc",
+    "askama_derive?/std",
+    "serde?/std",
+    "serde_json?/std",
+    "percent-encoding?/std",
+]
+urlencode = ["askama_derive?/urlencode", "dep:percent-encoding"]

@@ -1,0 +1,75 @@
+[package]
+name = "png"
+version = "0.18.0"
+license = "MIT OR Apache-2.0"
+
+description = "PNG decoding and encoding library in pure Rust"
+categories = ["multimedia::images"]
+authors = ["The image-rs Developers"]
+repository = "https://github.com/image-rs/image-png"
+
+edition = "2021"
+rust-version = "1.73"
+include = [
+    "/LICENSE-MIT",
+    "/LICENSE-APACHE",
+    "/README.md",
+    "/CHANGES.md",
+    "/src/",
+    "/examples/",
+    "/benches/",
+]
+
+[dependencies]
+bitflags = "2.0"
+crc32fast = "1.2.0"
+fdeflate = "0.3.3"
+flate2 = "1.0.35"
+miniz_oxide = { version = "0.8", features = ["simd"] }
+
+[dev-dependencies]
+approx = "0.5.1"
+byteorder = "1.5.0"
+clap = { version = "4.0", features = ["derive"] }
+criterion = { version = "0.7.0", default-features = false, features = ["cargo_bench_support"] }
+glob = "0.3"
+rand = "0.9.2"
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion = "0.7.0"
+
+[features]
+# Use nightly-only features for a minor performance boost in PNG decoding
+unstable = ["crc32fast/nightly"]
+# Use zlib-rs for faster PNG encoding at the cost of some `unsafe` code.
+# WARNING: this changes the flate2 backend for your entire dependency tree!
+# While the `png` crate always uses fully memory-safe decoding,
+# this enables zlib-rs and introduces some unsafe code to all other crates
+# that rely on flate2, including the decoding codepaths.
+zlib-rs = ["flate2/zlib-rs"]
+benchmarks = []
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
+
+[[bench]]
+path = "benches/decoder.rs"
+name = "decoder"
+harness = false
+
+[[bench]]
+path = "benches/unfilter.rs"
+name = "unfilter"
+harness = false
+required-features = ["benchmarks"]
+
+[[bench]]
+path = "benches/adam7.rs"
+name = "adam7"
+harness = false
+required-features = ["benchmarks"]
+
+[[bench]]
+path = "benches/expand_paletted.rs"
+name = "expand_paletted"
+harness = false
+required-features = ["benchmarks"]

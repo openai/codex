@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AdjacentEnum",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "const": "WriteOnlyUnit"
+        }
+      },
+      "required": [
+        "tag"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "const": "WriteOnlyStruct"
+        },
+        "content": {
+          "type": "object",
+          "properties": {
+            "i": {
+              "type": "integer",
+              "format": "int"
+            }
+          },
+          "required": [
+            "i"
+          ]
+        }
+      },
+      "required": [
+        "tag",
+        "content"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "const": "de_renamed_unit"
+        }
+      },
+      "required": [
+        "tag"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "const": "de_renamed_struct"
+        },
+        "content": {
+          "type": "object",
+          "properties": {
+            "b": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "b"
+          ]
+        }
+      },
+      "required": [
+        "tag",
+        "content"
+      ]
+    }
+  ]
+}

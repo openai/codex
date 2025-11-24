@@ -1,0 +1,8 @@
+x64-windows-static/
+x64-windows-static/share/
+x64-windows-static/share/boost-build/
+x64-windows-static/share/boost-build/CMakeLists.txt
+x64-windows-static/share/boost-build/Jamroot.jam
+x64-windows-static/share/boost-build/boost-modular-build.cmake
+x64-windows-static/share/boost-build/nothing.bat
+x64-windows-static/share/boost-build/user-config.jam

@@ -1,0 +1,9 @@
+{
+    "strings-and-ints": {
+        "type": "array",
+        "value": [
+            {"type": "string", "value": "hi"},
+            {"type": "integer", "value": "42"}
+        ]
+    }
+}

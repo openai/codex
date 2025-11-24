@@ -1,0 +1,159 @@
+$INCDIR=../include/prov
+
+#----- Digests
+$DER_DIGESTS_H=$INCDIR/der_digests.h
+$DER_DIGESTS_GEN=der_digests_gen.c
+
+GENERATE[$DER_DIGESTS_GEN]=der_digests_gen.c.in
+DEPEND[$DER_DIGESTS_GEN]=oids_to_c.pm NIST.asn1 DIGESTS.asn1
+
+DEPEND[${DER_DIGESTS_GEN/.c/.o}]=$DER_DIGESTS_H
+GENERATE[$DER_DIGESTS_H]=$INCDIR/der_digests.h.in
+DEPEND[$DER_DIGESTS_H]=oids_to_c.pm NIST.asn1 DIGESTS.asn1
+
+#----- RSA
+$DER_RSA_H=$INCDIR/der_rsa.h
+$DER_RSA_GEN=der_rsa_gen.c
+$DER_RSA_AUX=der_rsa_key.c der_rsa_sig.c
+$DER_RSA_COMMON=$DER_RSA_GEN der_rsa_key.c
+$DER_RSA_FIPSABLE=der_rsa_sig.c
+
+GENERATE[$DER_RSA_GEN]=der_rsa_gen.c.in
+DEPEND[$DER_RSA_GEN]=oids_to_c.pm NIST.asn1 RSA.asn1
+
+DEPEND[${DER_RSA_AUX/.c/.o}]=$DER_RSA_H $DER_DIGESTS_H
+DEPEND[${DER_RSA_GEN/.c/.o}]=$DER_RSA_H
+GENERATE[$DER_RSA_H]=$INCDIR/der_rsa.h.in
+DEPEND[$DER_RSA_H]=oids_to_c.pm NIST.asn1 RSA.asn1
+
+#----- DSA
+IF[{- !$disabled{dsa} -}]
+  $DER_DSA_H=$INCDIR/der_dsa.h
+  $DER_DSA_GEN=der_dsa_gen.c
+  $DER_DSA_AUX=der_dsa_key.c der_dsa_sig.c
+
+  GENERATE[$DER_DSA_GEN]=der_dsa_gen.c.in
+  DEPEND[$DER_DSA_GEN]=oids_to_c.pm DSA.asn1
+
+  DEPEND[${DER_DSA_AUX/.c/.o}]=$DER_DSA_H $DER_DIGESTS_H
+  DEPEND[${DER_DSA_GEN/.c/.o}]=$DER_DSA_H
+  GENERATE[$DER_DSA_H]=$INCDIR/der_dsa.h.in
+  DEPEND[$DER_DSA_H]=oids_to_c.pm DSA.asn1
+ENDIF
+
+#----- EC
+IF[{- !$disabled{ec} -}]
+  $DER_EC_H=$INCDIR/der_ec.h
+  $DER_EC_GEN=der_ec_gen.c
+  $DER_EC_AUX=der_ec_key.c der_ec_sig.c
+
+  GENERATE[$DER_EC_GEN]=der_ec_gen.c.in
+  DEPEND[$DER_EC_GEN]=oids_to_c.pm EC.asn1
+
+  DEPEND[${DER_EC_AUX/.c/.o}]=$DER_EC_H $DER_DIGESTS_H
+  DEPEND[${DER_EC_GEN/.c/.o}]=$DER_EC_H
+  GENERATE[$DER_EC_H]=$INCDIR/der_ec.h.in
+  DEPEND[$DER_EC_H]=oids_to_c.pm EC.asn1
+ENDIF
+
+#----- ECX
+IF[{- !$disabled{ecx} -}]
+  $DER_ECX_H=$INCDIR/der_ecx.h
+  $DER_ECX_GEN=der_ecx_gen.c
+  $DER_ECX_AUX=der_ecx_key.c
+
+  GENERATE[$DER_ECX_GEN]=der_ecx_gen.c.in
+  DEPEND[$DER_ECX_GEN]=oids_to_c.pm ECX.asn1
+
+  DEPEND[${DER_ECX_AUX/.c/.o}]=$DER_ECX_H
+  DEPEND[${DER_ECX_GEN/.c/.o}]=$DER_ECX_H
+  GENERATE[$DER_ECX_H]=$INCDIR/der_ecx.h.in
+  DEPEND[$DER_ECX_H]=oids_to_c.pm ECX.asn1
+ENDIF
+
+#----- ML-DSA
+IF[{- !$disabled{'ml-dsa'} -}]
+  $DER_ML_DSA_H=$INCDIR/der_ml_dsa.h
+  $DER_ML_DSA_GEN=der_ml_dsa_gen.c
+  $DER_ML_DSA_AUX=der_ml_dsa_key.c
+
+  GENERATE[$DER_ML_DSA_GEN]=der_ml_dsa_gen.c.in
+  DEPEND[$DER_ML_DSA_GEN]=oids_to_c.pm ML_DSA.asn1
+
+  DEPEND[${DER_ML_DSA_GEN/.c/.o}]=$DER_ML_DSA_H
+  DEPEND[${DER_ML_DSA_AUX/.c/.o}]=$DER_ML_DSA_H
+  GENERATE[$DER_ML_DSA_H]=$INCDIR/der_ml_dsa.h.in
+  DEPEND[$DER_ML_DSA_H]=oids_to_c.pm ML_DSA.asn1
+ENDIF
+
+#----- KEY WRAP
+$DER_WRAP_H=$INCDIR/der_wrap.h
+$DER_WRAP_GEN=der_wrap_gen.c
+
+GENERATE[$DER_WRAP_GEN]=der_wrap_gen.c.in
+DEPEND[$DER_WRAP_GEN]=oids_to_c.pm wrap.asn1
+
+DEPEND[${DER_WRAP_GEN/.c/.o}]=$DER_WRAP_H
+GENERATE[$DER_WRAP_H]=$INCDIR/der_wrap.h.in
+DEPEND[$DER_WRAP_H]=oids_to_c.pm wrap.asn1
+
+#----- SM2
+IF[{- !$disabled{sm2} -}]
+  $DER_SM2_H=$INCDIR/der_sm2.h
+  $DER_SM2_GEN=der_sm2_gen.c
+  $DER_SM2_AUX=der_sm2_key.c der_sm2_sig.c
+
+  GENERATE[$DER_SM2_GEN]=der_sm2_gen.c.in
+  DEPEND[$DER_SM2_GEN]=oids_to_c.pm SM2.asn1
+
+  DEPEND[${DER_SM2_AUX/.c/.o}]=$DER_SM2_H $DER_EC_H
+  DEPEND[${DER_SM2_GEN/.c/.o}]=$DER_SM2_H
+  GENERATE[$DER_SM2_H]=$INCDIR/der_sm2.h.in
+  DEPEND[$DER_SM2_H]=oids_to_c.pm SM2.asn1
+ENDIF
+
+#----- SLH-DSA
+IF[{- !$disabled{'slh-dsa'} -}]
+  $DER_SLH_DSA_H=$INCDIR/der_slh_dsa.h
+  $DER_SLH_DSA_GEN=der_slh_dsa_gen.c
+  $DER_SLH_DSA_AUX=der_slh_dsa_key.c
+
+  GENERATE[$DER_SLH_DSA_GEN]=der_slh_dsa_gen.c.in
+  DEPEND[$DER_SLH_DSA_GEN]=oids_to_c.pm SLH_DSA.asn1
+
+  DEPEND[${DER_SLH_DSA_GEN/.c/.o}]=$DER_SLH_DSA_H
+  DEPEND[${DER_SLH_DSA_AUX/.c/.o}]=$DER_SLH_DSA_H
+  GENERATE[$DER_SLH_DSA_H]=$INCDIR/der_slh_dsa.h.in
+  DEPEND[$DER_SLH_DSA_H]=oids_to_c.pm SLH_DSA.asn1
+ENDIF
+
+#----- Conclusion
+
+$COMMON= $DER_RSA_COMMON $DER_DIGESTS_GEN $DER_WRAP_GEN
+
+IF[{- !$disabled{dsa} -}]
+  $COMMON = $COMMON $DER_DSA_GEN $DER_DSA_AUX
+ENDIF
+
+IF[{- !$disabled{ec} -}]
+  $COMMON = $COMMON $DER_EC_GEN $DER_EC_AUX
+  IF[{- !$disabled{ecx} -}]
+    $COMMON = $COMMON $DER_ECX_GEN $DER_ECX_AUX
+  ENDIF
+ENDIF
+
+IF[{- !$disabled{'ml-dsa'} -}]
+  $COMMON = $COMMON $DER_ML_DSA_GEN $DER_ML_DSA_AUX
+ENDIF
+
+IF[{- !$disabled{sm2} -}]
+  $NONFIPS = $NONFIPS $DER_SM2_GEN $DER_SM2_AUX
+ENDIF
+
+IF[{- !$disabled{'slh-dsa'} -}]
+  $COMMON = $COMMON $DER_SLH_DSA_GEN $DER_SLH_DSA_AUX
+ENDIF
+
+SOURCE[../../libcommon.a]= $COMMON
+SOURCE[../../libfips.a]= $DER_RSA_FIPSABLE
+SOURCE[../../libdefault.a]= $DER_RSA_FIPSABLE $NONFIPS

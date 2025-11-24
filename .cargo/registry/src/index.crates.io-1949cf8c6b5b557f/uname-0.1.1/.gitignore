@@ -1,0 +1,5 @@
+target
+Cargo.lock
+
+# IDE - vscode
+.vscode

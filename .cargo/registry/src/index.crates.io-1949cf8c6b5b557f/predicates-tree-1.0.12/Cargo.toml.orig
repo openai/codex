@@ -1,0 +1,35 @@
+[package]
+name = "predicates-tree"
+version = "1.0.12"
+authors = ["Nick Stevens <nick@bitcurry.com>"]
+description = "Render boolean-valued predicate functions results as a tree."
+readme = "README.md"
+repository = "https://github.com/assert-rs/predicates-rs/tree/master/crates/tree"
+homepage = "https://github.com/assert-rs/predicates-rs/tree/master/crates/tree"
+documentation = "https://docs.rs/predicates-tree"
+categories = ["data-structures", "rust-patterns"]
+keywords = ["predicate", "boolean", "combinatorial", "match", "logic"]
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+include.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[package.metadata.release]
+pre-release-replacements = [
+  {file="CHANGELOG.md", search="Unreleased", replace="{{version}}", min=1},
+  {file="CHANGELOG.md", search="\\.\\.\\.HEAD", replace="...{{tag_name}}", exactly=1},
+  {file="CHANGELOG.md", search="ReleaseDate", replace="{{date}}", min=1},
+  {file="CHANGELOG.md", search="<!-- next-header -->", replace="<!-- next-header -->\n## [Unreleased] - ReleaseDate\n", exactly=1},
+  {file="CHANGELOG.md", search="<!-- next-url -->", replace="<!-- next-url -->\n[Unreleased]: https://github.com/assert-rs/predicates-rs/compare/{{tag_name}}...HEAD", exactly=1},
+]
+
+[dependencies]
+predicates-core = { version = "1.0", path = "../core" }
+termtree = "0.5.0"
+
+[dev-dependencies]
+predicates = { version = "3.1", path = "../..", features = ["color"] }

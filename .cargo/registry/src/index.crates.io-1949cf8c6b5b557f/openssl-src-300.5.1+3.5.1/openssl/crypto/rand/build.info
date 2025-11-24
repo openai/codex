@@ -1,0 +1,20 @@
+LIBS=../../libcrypto
+
+$COMMON=rand_lib.c
+$CRYPTO=randfile.c rand_err.c rand_deprecated.c prov_seed.c rand_uniform.c
+
+IF[{- !$disabled{'egd'} -}]
+  $CRYPTO=$CRYPTO rand_egd.c
+ENDIF
+IF[{- !$disabled{'deprecated-3.0'} -}]
+  $CRYPTO=$CRYPTO rand_meth.c
+ENDIF
+
+IF[{- !$disabled{'fips-jitter'} -}]
+  $COMMON=$COMMON rand_pool.c
+ELSE
+  $CRYPTO=$CRYPTO rand_pool.c
+ENDIF
+
+SOURCE[../../libcrypto]=$COMMON $CRYPTO
+SOURCE[../../providers/libfips.a]=$COMMON

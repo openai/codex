@@ -1,0 +1,62 @@
+# This file is part of ICU4X. For terms of use, please see the file
+# called LICENSE at the top level of the ICU4X source tree
+# (online at: https://github.com/unicode-org/icu4x/blob/main/LICENSE ).
+
+[package]
+name = "icu_locale"
+description = "API for Unicode Language and Locale Identifiers canonicalization"
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+homepage.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[package.metadata.cargo-all-features]
+skip_optional_dependencies = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+databake = { workspace = true, optional = true, features = ["derive"] }
+icu_locale_core = { workspace = true, features = ["alloc", "zerovec"] }
+icu_provider = { workspace = true, features = ["alloc"] }
+serde = { workspace = true, features = ["derive", "alloc"], optional = true }
+tinystr = { workspace = true, features = ["alloc", "zerovec"] }
+potential_utf = { workspace = true, features = ["alloc", "zerovec"] }
+zerovec = { workspace = true,  features = ["alloc", "yoke"] }
+
+icu_collections = { workspace = true }
+
+icu_locale_data = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+icu = { path = "../../components/icu", default-features = false }
+writeable = { path = "../../utils/writeable" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion = { workspace = true }
+
+[lib]
+bench = false  # This option is required for Benchmark CI
+
+[features]
+default = ["compiled_data"]
+serde = ["dep:serde", "icu_locale_core/serde", "tinystr/serde", "zerovec/serde", "icu_provider/serde", "potential_utf/serde", "icu_collections/serde"]
+datagen = ["serde", "dep:databake", "zerovec/databake", "icu_locale_core/databake", "tinystr/databake", "icu_collections/databake", "icu_provider/export"]
+compiled_data = ["dep:icu_locale_data", "icu_provider/baked"]
+
+[[bench]]
+name = "locale_canonicalizer"
+harness = false
+
+[[test]]
+name = "locale_canonicalizer"
+required-features = ["serde"]

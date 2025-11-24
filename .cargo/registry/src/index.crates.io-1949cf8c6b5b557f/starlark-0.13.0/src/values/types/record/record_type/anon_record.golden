@@ -1,0 +1,21 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Program:
+
+record(a = field(int))(a = 1)
+
+Error:
+
+Traceback (most recent call last):
+  * assert.bzl:1, in <module>
+      record(a = field(int))(a = 1)
+error: Record instance cannot be created if record type is not assigned to a global variable
+ --> assert.bzl:1:1
+  |
+1 | record(a = field(int))(a = 1)
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |

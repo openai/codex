@@ -1,0 +1,14 @@
+error: unreachable statement
+  --> tests/ui/unreachable.rs:16:9
+   |
+15 |         let _y = unimplemented!();
+   |                  ---------------- any code following this expression is unreachable
+16 |         let _z = _y;
+   |         ^^^^^^^^^^^^ unreachable statement
+   |
+note: the lint level is defined here
+  --> tests/ui/unreachable.rs:1:9
+   |
+ 1 | #![deny(warnings)]
+   |         ^^^^^^^^
+   = note: `#[deny(unreachable_code)]` implied by `#[deny(warnings)]`

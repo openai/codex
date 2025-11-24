@@ -1,0 +1,20 @@
+language: rust
+matrix:
+    fast_finish: true
+    allow_failures:
+        - rust: nightly
+    include:
+        - rust: stable
+        - rust: beta
+        - rust: nightly
+        - rust: 1.15.0
+
+sudo: false
+dist: trusty
+cache: cargo
+
+script:
+    - cargo build
+    - cargo clean
+    - cargo test
+    - rustdoc --test README.md -L target/debug/deps

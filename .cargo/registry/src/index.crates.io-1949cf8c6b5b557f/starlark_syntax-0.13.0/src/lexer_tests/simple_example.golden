@@ -1,0 +1,32 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Program:
+"""A docstring."""
+
+def _impl(ctx):
+  # Print Hello, World!
+  print('Hello, World!')
+
+Tokens:
+string literal "A docstring."   # """A docstring."""
+new line                        # \n
+new line                        # \n
+keyword 'def'                   # def
+identifier '_impl'              # _impl
+symbol '('                      # (
+identifier 'ctx'                # ctx
+symbol ')'                      # )
+symbol ':'                      # :
+new line                        # \n
+comment ' Print Hello, World!'  # # Print Hello, World!
+new indentation block           #   
+identifier 'print'              # print
+symbol '('                      # (
+string literal "Hello, World!"  # 'Hello, World!'
+symbol ')'                      # )
+new line                        # 
+end of indentation block        #

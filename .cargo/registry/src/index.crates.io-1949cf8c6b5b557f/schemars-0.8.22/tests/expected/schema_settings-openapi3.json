@@ -1,0 +1,60 @@
+{
+  "$schema": "https://spec.openapis.org/oas/3.0/schema/2019-04-02#/definitions/Schema",
+  "title": "Outer",
+  "type": "object",
+  "required": [
+    "int",
+    "value",
+    "values"
+  ],
+  "properties": {
+    "int": {
+      "type": "integer",
+      "format": "int32",
+      "example": 8
+    },
+    "values": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "value": {},
+    "inner": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/Inner"
+        }
+      ],
+      "nullable": true
+    }
+  },
+  "definitions": {
+    "Inner": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "UndocumentedUnit1",
+            "UndocumentedUnit2"
+          ]
+        },
+        {
+          "description": "This is a documented unit variant",
+          "type": "string",
+          "enum": [
+            "DocumentedUnit"
+          ]
+        },
+        {
+          "type": "object",
+          "required": [
+            "ValueNewType"
+          ],
+          "properties": {
+            "ValueNewType": {}
+          },
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

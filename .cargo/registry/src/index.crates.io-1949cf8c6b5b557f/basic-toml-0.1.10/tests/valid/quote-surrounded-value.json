@@ -1,0 +1,10 @@
+{
+  "double": {
+    "type": "string",
+    "value": "\"double quotes here\""
+  },
+  "single": {
+    "type": "string",
+    "value": "'single quotes here'"
+  }
+}

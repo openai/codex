@@ -1,0 +1,7 @@
+x64-windows/
+x64-windows/include/
+x64-windows/include/boost/
+x64-windows/include/boost/any.hpp
+x64-windows/share/
+x64-windows/share/boost-any/
+x64-windows/share/boost-any/copyright

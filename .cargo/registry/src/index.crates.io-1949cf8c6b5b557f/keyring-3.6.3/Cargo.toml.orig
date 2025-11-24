@@ -1,0 +1,83 @@
+[package]
+authors = ["Walther Chen <walther.chen@gmail.com>", "Daniel Brotsky <dev@brotsky.com>"]
+description = "Cross-platform library for managing passwords/credentials"
+homepage = "https://github.com/hwchen/keyring-rs"
+keywords = ["password", "credential", "keychain", "keyring", "cross-platform"]
+license = "MIT OR Apache-2.0"
+name = "keyring"
+repository = "https://github.com/hwchen/keyring-rs.git"
+version = "3.6.3"
+rust-version = "1.75"
+edition = "2021"
+exclude = [".github/"]
+readme = "README.md"
+
+[features]
+linux-native = ["dep:linux-keyutils"]
+apple-native = ["dep:security-framework"]
+windows-native = ["dep:windows-sys", "dep:byteorder"]
+
+linux-native-sync-persistent = ["linux-native", "sync-secret-service"]
+linux-native-async-persistent = ["linux-native", "async-secret-service"]
+sync-secret-service = ["dep:dbus-secret-service"]
+async-secret-service = ["dep:secret-service", "dep:zbus"]
+crypto-rust = ["dbus-secret-service?/crypto-rust", "secret-service?/crypto-rust"]
+crypto-openssl = ["dbus-secret-service?/crypto-openssl", "secret-service?/crypto-openssl"]
+tokio = ["zbus?/tokio"]
+async-io = ["zbus?/async-io"]
+vendored = ["dbus-secret-service?/vendored", "openssl?/vendored"]
+
+[dependencies]
+log = "0.4.22"
+openssl = { version = "0.10.66", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]  # see issue #190
+security-framework = { version = "3", optional = true }
+
+[target.'cfg(target_os = "ios")'.dependencies]  # see issue #190
+security-framework = { version = "2", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+secret-service = { version = "4", optional = true }
+zbus = { version = "4", optional = true }
+linux-keyutils = { version = "0.2", features = ["std"], optional = true }
+dbus-secret-service = { version = "4.0.0-rc.2", optional = true }
+
+[target.'cfg(target_os = "freebsd")'.dependencies]
+secret-service = { version = "4", optional = true }
+zbus = { version = "4", optional = true }
+dbus-secret-service = { version = "4.0.1", optional = true }
+
+[target.'cfg(target_os = "openbsd")'.dependencies]
+secret-service = { version = "4", optional = true }
+zbus = { version = "4", optional = true }
+dbus-secret-service = { version = "4.0.0-rc.1", optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+byteorder = { version = "1.2", optional = true }
+windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Security_Credentials"], optional = true }
+zeroize = "1.8.1"
+
+[[example]]
+name = "iostest"
+path = "examples/ios.rs"
+crate-type = ["staticlib"]
+
+[[example]]
+name = "keyring-cli"
+path = "examples/cli.rs"
+
+[dev-dependencies]
+base64 = "0.22"
+clap = { version = "4", features = ["derive", "wrap_help"] }
+doc-comment = "0.3"
+env_logger = "0.11.5"
+fastrand = "2"
+rpassword = "7"
+rprompt = "2"
+whoami = "1.5"
+
+[package.metadata.docs.rs]
+default-target = "x86_64-unknown-linux-gnu"
+targets = ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin", "aarch64-apple-ios", "x86_64-pc-windows-msvc"]
+features = ["apple-native", "windows-native", "linux-native-sync-persistent", "crypto-rust"]

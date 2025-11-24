@@ -1,0 +1,10 @@
+error[E0308]: mismatched types
+ --> tests/ui/does-not-have-iter.rs:4:5
+  |
+4 |     quote!(#(a b)*);
+  |     ^^^^^^^^^^^^^^^
+  |     |
+  |     expected `HasIterator`, found `ThereIsNoIteratorInRepetition`
+  |     expected due to this
+  |
+  = note: this error originates in the macro `$crate::quote_token_with_context` which comes from the expansion of the macro `quote` (in Nightly builds, run with -Z macro-backtrace for more info)

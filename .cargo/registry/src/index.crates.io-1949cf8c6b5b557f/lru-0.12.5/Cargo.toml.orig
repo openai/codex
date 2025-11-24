@@ -1,0 +1,23 @@
+[package]
+name = "lru"
+version = "0.12.5"
+authors = ["Jerome Froelich <jeromefroelic@hotmail.com>"]
+categories = ["caching", "no-std"]
+description = "A LRU cache implementation"
+homepage = "https://github.com/jeromefroe/lru-rs"
+repository = "https://github.com/jeromefroe/lru-rs.git"
+documentation = "https://docs.rs/lru/"
+readme = "README.md"
+license = "MIT"
+keywords = ["LRU", "cache"]
+
+[features]
+default = ["hashbrown"]
+nightly = ["hashbrown", "hashbrown/nightly"]
+
+[dependencies]
+hashbrown = { version = "0.15", optional = true }
+
+[dev-dependencies]
+scoped_threadpool = "0.1.*"
+stats_alloc = "0.1.*"

@@ -1,0 +1,116 @@
+# Generated with generate_ssl_tests.pl
+
+num_tests = 4
+
+test-0 = 0-SCTPLabelBug-good1
+test-1 = 1-SCTPLabelBug-good2
+test-2 = 2-SCTPLabelBug-bad1
+test-3 = 3-SCTPLabelBug-bad2
+# ===========================================================
+
+[0-SCTPLabelBug-good1]
+ssl_conf = 0-SCTPLabelBug-good1-ssl
+
+[0-SCTPLabelBug-good1-ssl]
+server = 0-SCTPLabelBug-good1-server
+client = 0-SCTPLabelBug-good1-client
+
+[0-SCTPLabelBug-good1-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[0-SCTPLabelBug-good1-client]
+CipherString = DEFAULT
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-0]
+EnableClientSCTPLabelBug = No
+EnableServerSCTPLabelBug = No
+ExpectedResult = Success
+Method = DTLS
+UseSCTP = Yes
+
+
+# ===========================================================
+
+[1-SCTPLabelBug-good2]
+ssl_conf = 1-SCTPLabelBug-good2-ssl
+
+[1-SCTPLabelBug-good2-ssl]
+server = 1-SCTPLabelBug-good2-server
+client = 1-SCTPLabelBug-good2-client
+
+[1-SCTPLabelBug-good2-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[1-SCTPLabelBug-good2-client]
+CipherString = DEFAULT
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-1]
+EnableClientSCTPLabelBug = Yes
+EnableServerSCTPLabelBug = Yes
+ExpectedResult = Success
+Method = DTLS
+UseSCTP = Yes
+
+
+# ===========================================================
+
+[2-SCTPLabelBug-bad1]
+ssl_conf = 2-SCTPLabelBug-bad1-ssl
+
+[2-SCTPLabelBug-bad1-ssl]
+server = 2-SCTPLabelBug-bad1-server
+client = 2-SCTPLabelBug-bad1-client
+
+[2-SCTPLabelBug-bad1-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[2-SCTPLabelBug-bad1-client]
+CipherString = DEFAULT
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-2]
+EnableClientSCTPLabelBug = Yes
+EnableServerSCTPLabelBug = No
+ExpectedResult = ClientFail
+Method = DTLS
+UseSCTP = Yes
+
+
+# ===========================================================
+
+[3-SCTPLabelBug-bad2]
+ssl_conf = 3-SCTPLabelBug-bad2-ssl
+
+[3-SCTPLabelBug-bad2-ssl]
+server = 3-SCTPLabelBug-bad2-server
+client = 3-SCTPLabelBug-bad2-client
+
+[3-SCTPLabelBug-bad2-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[3-SCTPLabelBug-bad2-client]
+CipherString = DEFAULT
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-3]
+EnableClientSCTPLabelBug = No
+EnableServerSCTPLabelBug = Yes
+ExpectedResult = ClientFail
+Method = DTLS
+UseSCTP = Yes
+
+

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DeprecatedEnum",
+  "oneOf": [
+    {
+      "type": "string",
+      "enum": [
+        "Unit"
+      ]
+    },
+    {
+      "type": "string",
+      "const": "DeprecatedUnitVariant",
+      "deprecated": true
+    },
+    {
+      "type": "object",
+      "properties": {
+        "DeprecatedStructVariant": {
+          "type": "object",
+          "properties": {
+            "foo": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "deprecated_field": {
+              "type": "boolean",
+              "deprecated": true
+            }
+          },
+          "required": [
+            "foo",
+            "deprecated_field"
+          ]
+        }
+      },
+      "required": [
+        "DeprecatedStructVariant"
+      ],
+      "additionalProperties": false,
+      "deprecated": true
+    }
+  ],
+  "deprecated": true
+}

@@ -1,0 +1,8 @@
+# @generated
+# To regenerate, run:
+# ```
+# ALLOCATIVE_REGENERATE_TESTS=1 cargo test -p allocative
+# ```
+allocative::impls::triomphe::ArcInnerRepr 15
+allocative::impls::triomphe::ArcInnerRepr;data;u8 1
+triomphe::arc::Arc<u8>;ptr 8

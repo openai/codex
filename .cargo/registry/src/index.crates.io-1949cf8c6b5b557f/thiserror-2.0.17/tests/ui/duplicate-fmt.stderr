@@ -1,0 +1,23 @@
+error: only one #[error(...)] attribute is allowed
+ --> tests/ui/duplicate-fmt.rs:5:1
+  |
+5 | #[error("...")]
+  | ^^^^^^^^^^^^^^^
+
+error: duplicate #[error(fmt = ...)] attribute
+  --> tests/ui/duplicate-fmt.rs:10:1
+   |
+10 | #[error(fmt = core::fmt::LowerHex::fmt)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: cannot have both #[error(transparent)] and #[error(fmt = ...)]
+  --> tests/ui/duplicate-fmt.rs:14:1
+   |
+14 | #[error(fmt = core::fmt::Octal::fmt)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: cannot have both #[error(fmt = ...)] and a format arguments attribute
+  --> tests/ui/duplicate-fmt.rs:20:1
+   |
+20 | #[error("...")]
+   | ^^^^^^^^^^^^^^^

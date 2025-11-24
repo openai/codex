@@ -1,0 +1,15 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+def test(x): return '((%s))' % x
+
+# Bytecode:
+
+Max stack size: 1
+Instructions:
+  0: PercentSOne "((" &x "))" ->&1
+  32: Return &1
+  40: End

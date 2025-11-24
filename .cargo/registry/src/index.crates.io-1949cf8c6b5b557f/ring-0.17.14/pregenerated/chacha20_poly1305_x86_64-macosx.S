@@ -1,0 +1,8898 @@
+// This file is generated from a similarly-named Perl script in the BoringSSL
+// source tree. Do not edit by hand.
+
+#include <ring-core/asm_base.h>
+
+#if !defined(OPENSSL_NO_ASM) && defined(OPENSSL_X86_64) && defined(__APPLE__)
+.section	__DATA,__const
+.p2align	6
+chacha20_poly1305_constants:
+L$chacha20_consts:
+.byte	'e','x','p','a','n','d',' ','3','2','-','b','y','t','e',' ','k'
+.byte	'e','x','p','a','n','d',' ','3','2','-','b','y','t','e',' ','k'
+L$rol8:
+.byte	3,0,1,2, 7,4,5,6, 11,8,9,10, 15,12,13,14
+.byte	3,0,1,2, 7,4,5,6, 11,8,9,10, 15,12,13,14
+L$rol16:
+.byte	2,3,0,1, 6,7,4,5, 10,11,8,9, 14,15,12,13
+.byte	2,3,0,1, 6,7,4,5, 10,11,8,9, 14,15,12,13
+L$avx2_init:
+.long	0,0,0,0
+L$sse_inc:
+.long	1,0,0,0
+L$avx2_inc:
+.long	2,0,0,0,2,0,0,0
+L$clamp:
+.quad	0x0FFFFFFC0FFFFFFF, 0x0FFFFFFC0FFFFFFC
+.quad	0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF
+.p2align	4
+L$and_masks:
+.byte	0xff,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+.byte	0xff,0xff,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+.byte	0xff,0xff,0xff,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+.byte	0xff,0xff,0xff,0xff,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+.byte	0xff,0xff,0xff,0xff,0xff,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+.byte	0xff,0xff,0xff,0xff,0xff,0xff,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+.byte	0xff,0xff,0xff,0xff,0xff,0xff,0xff,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+.byte	0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+.byte	0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+.byte	0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0x00,0x00,0x00,0x00,0x00,0x00
+.byte	0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0x00,0x00,0x00,0x00,0x00
+.byte	0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0x00,0x00,0x00,0x00
+.byte	0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0x00,0x00,0x00
+.byte	0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0x00,0x00
+.byte	0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0x00
+.byte	0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff
+.text	
+
+
+.p2align	6
+poly_hash_ad_internal:
+
+
+	xorq	%r10,%r10
+	xorq	%r11,%r11
+	xorq	%r12,%r12
+	cmpq	$13,%r8
+	jne	L$hash_ad_loop
+L$poly_fast_tls_ad:
+
+	movq	(%rcx),%r10
+	movq	5(%rcx),%r11
+	shrq	$24,%r11
+	movq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	ret
+L$hash_ad_loop:
+
+	cmpq	$16,%r8
+	jb	L$hash_ad_tail
+	addq	0+0(%rcx),%r10
+	adcq	8+0(%rcx),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	leaq	16(%rcx),%rcx
+	subq	$16,%r8
+	jmp	L$hash_ad_loop
+L$hash_ad_tail:
+	cmpq	$0,%r8
+	je	L$hash_ad_done
+
+	xorq	%r13,%r13
+	xorq	%r14,%r14
+	xorq	%r15,%r15
+	addq	%r8,%rcx
+L$hash_ad_tail_loop:
+	shldq	$8,%r13,%r14
+	shlq	$8,%r13
+	movzbq	-1(%rcx),%r15
+	xorq	%r15,%r13
+	decq	%rcx
+	decq	%r8
+	jne	L$hash_ad_tail_loop
+
+	addq	%r13,%r10
+	adcq	%r14,%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+
+L$hash_ad_done:
+	ret
+
+
+
+.globl	_chacha20_poly1305_open_sse41
+.private_extern _chacha20_poly1305_open_sse41
+
+.p2align	6
+_chacha20_poly1305_open_sse41:
+
+_CET_ENDBR
+	pushq	%rbp
+
+	pushq	%rbx
+
+	pushq	%r12
+
+	pushq	%r13
+
+	pushq	%r14
+
+	pushq	%r15
+
+
+
+	pushq	%r9
+
+	subq	$288 + 0 + 32,%rsp
+
+
+	leaq	32(%rsp),%rbp
+	andq	$-32,%rbp
+
+	movq	%rdx,%rbx
+	movq	%r8,0+0+32(%rbp)
+	movq	%rbx,8+0+32(%rbp)
+
+	cmpq	$128,%rbx
+	jbe	L$open_sse_128
+
+	movdqa	L$chacha20_consts(%rip),%xmm0
+	movdqu	0(%r9),%xmm4
+	movdqu	16(%r9),%xmm8
+	movdqu	32(%r9),%xmm12
+
+	movdqa	%xmm12,%xmm7
+
+	movdqa	%xmm4,0+48(%rbp)
+	movdqa	%xmm8,0+64(%rbp)
+	movdqa	%xmm12,0+96(%rbp)
+	movq	$10,%r10
+L$open_sse_init_rounds:
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol16(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm4
+	pxor	%xmm3,%xmm4
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol8(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm4
+	pxor	%xmm3,%xmm4
+.byte	102,15,58,15,228,4
+.byte	102,69,15,58,15,192,8
+.byte	102,69,15,58,15,228,12
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol16(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm4
+	pxor	%xmm3,%xmm4
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol8(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm4
+	pxor	%xmm3,%xmm4
+.byte	102,15,58,15,228,12
+.byte	102,69,15,58,15,192,8
+.byte	102,69,15,58,15,228,4
+
+	decq	%r10
+	jne	L$open_sse_init_rounds
+
+	paddd	L$chacha20_consts(%rip),%xmm0
+	paddd	0+48(%rbp),%xmm4
+
+	pand	L$clamp(%rip),%xmm0
+	movdqa	%xmm0,0+0(%rbp)
+	movdqa	%xmm4,0+16(%rbp)
+
+	movq	%r8,%r8
+	call	poly_hash_ad_internal
+L$open_sse_main_loop:
+	cmpq	$256,%rbx
+	jb	L$open_sse_tail
+
+	movdqa	L$chacha20_consts(%rip),%xmm0
+	movdqa	0+48(%rbp),%xmm4
+	movdqa	0+64(%rbp),%xmm8
+	movdqa	%xmm0,%xmm1
+	movdqa	%xmm4,%xmm5
+	movdqa	%xmm8,%xmm9
+	movdqa	%xmm0,%xmm2
+	movdqa	%xmm4,%xmm6
+	movdqa	%xmm8,%xmm10
+	movdqa	%xmm0,%xmm3
+	movdqa	%xmm4,%xmm7
+	movdqa	%xmm8,%xmm11
+	movdqa	0+96(%rbp),%xmm15
+	paddd	L$sse_inc(%rip),%xmm15
+	movdqa	%xmm15,%xmm14
+	paddd	L$sse_inc(%rip),%xmm14
+	movdqa	%xmm14,%xmm13
+	paddd	L$sse_inc(%rip),%xmm13
+	movdqa	%xmm13,%xmm12
+	paddd	L$sse_inc(%rip),%xmm12
+	movdqa	%xmm12,0+96(%rbp)
+	movdqa	%xmm13,0+112(%rbp)
+	movdqa	%xmm14,0+128(%rbp)
+	movdqa	%xmm15,0+144(%rbp)
+
+
+
+	movq	$4,%rcx
+	movq	%rsi,%r8
+L$open_sse_main_loop_rounds:
+	movdqa	%xmm8,0+80(%rbp)
+	movdqa	L$rol16(%rip),%xmm8
+	paddd	%xmm7,%xmm3
+	paddd	%xmm6,%xmm2
+	paddd	%xmm5,%xmm1
+	paddd	%xmm4,%xmm0
+	pxor	%xmm3,%xmm15
+	pxor	%xmm2,%xmm14
+	pxor	%xmm1,%xmm13
+	pxor	%xmm0,%xmm12
+.byte	102,69,15,56,0,248
+.byte	102,69,15,56,0,240
+.byte	102,69,15,56,0,232
+.byte	102,69,15,56,0,224
+	movdqa	0+80(%rbp),%xmm8
+	paddd	%xmm15,%xmm11
+	paddd	%xmm14,%xmm10
+	paddd	%xmm13,%xmm9
+	paddd	%xmm12,%xmm8
+	pxor	%xmm11,%xmm7
+	addq	0+0(%r8),%r10
+	adcq	8+0(%r8),%r11
+	adcq	$1,%r12
+
+	leaq	16(%r8),%r8
+	pxor	%xmm10,%xmm6
+	pxor	%xmm9,%xmm5
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm8,0+80(%rbp)
+	movdqa	%xmm7,%xmm8
+	psrld	$20,%xmm8
+	pslld	$32-20,%xmm7
+	pxor	%xmm8,%xmm7
+	movdqa	%xmm6,%xmm8
+	psrld	$20,%xmm8
+	pslld	$32-20,%xmm6
+	pxor	%xmm8,%xmm6
+	movdqa	%xmm5,%xmm8
+	psrld	$20,%xmm8
+	pslld	$32-20,%xmm5
+	pxor	%xmm8,%xmm5
+	movdqa	%xmm4,%xmm8
+	psrld	$20,%xmm8
+	pslld	$32-20,%xmm4
+	pxor	%xmm8,%xmm4
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movdqa	L$rol8(%rip),%xmm8
+	paddd	%xmm7,%xmm3
+	paddd	%xmm6,%xmm2
+	paddd	%xmm5,%xmm1
+	paddd	%xmm4,%xmm0
+	pxor	%xmm3,%xmm15
+	pxor	%xmm2,%xmm14
+	pxor	%xmm1,%xmm13
+	pxor	%xmm0,%xmm12
+.byte	102,69,15,56,0,248
+.byte	102,69,15,56,0,240
+.byte	102,69,15,56,0,232
+.byte	102,69,15,56,0,224
+	movdqa	0+80(%rbp),%xmm8
+	paddd	%xmm15,%xmm11
+	paddd	%xmm14,%xmm10
+	paddd	%xmm13,%xmm9
+	paddd	%xmm12,%xmm8
+	pxor	%xmm11,%xmm7
+	pxor	%xmm10,%xmm6
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	pxor	%xmm9,%xmm5
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm8,0+80(%rbp)
+	movdqa	%xmm7,%xmm8
+	psrld	$25,%xmm8
+	pslld	$32-25,%xmm7
+	pxor	%xmm8,%xmm7
+	movdqa	%xmm6,%xmm8
+	psrld	$25,%xmm8
+	pslld	$32-25,%xmm6
+	pxor	%xmm8,%xmm6
+	movdqa	%xmm5,%xmm8
+	psrld	$25,%xmm8
+	pslld	$32-25,%xmm5
+	pxor	%xmm8,%xmm5
+	movdqa	%xmm4,%xmm8
+	psrld	$25,%xmm8
+	pslld	$32-25,%xmm4
+	pxor	%xmm8,%xmm4
+	movdqa	0+80(%rbp),%xmm8
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+.byte	102,15,58,15,255,4
+.byte	102,69,15,58,15,219,8
+.byte	102,69,15,58,15,255,12
+.byte	102,15,58,15,246,4
+.byte	102,69,15,58,15,210,8
+.byte	102,69,15,58,15,246,12
+.byte	102,15,58,15,237,4
+.byte	102,69,15,58,15,201,8
+.byte	102,69,15,58,15,237,12
+.byte	102,15,58,15,228,4
+.byte	102,69,15,58,15,192,8
+.byte	102,69,15,58,15,228,12
+	movdqa	%xmm8,0+80(%rbp)
+	movdqa	L$rol16(%rip),%xmm8
+	paddd	%xmm7,%xmm3
+	paddd	%xmm6,%xmm2
+	paddd	%xmm5,%xmm1
+	paddd	%xmm4,%xmm0
+	pxor	%xmm3,%xmm15
+	pxor	%xmm2,%xmm14
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+	pxor	%xmm1,%xmm13
+	pxor	%xmm0,%xmm12
+.byte	102,69,15,56,0,248
+.byte	102,69,15,56,0,240
+.byte	102,69,15,56,0,232
+.byte	102,69,15,56,0,224
+	movdqa	0+80(%rbp),%xmm8
+	paddd	%xmm15,%xmm11
+	paddd	%xmm14,%xmm10
+	paddd	%xmm13,%xmm9
+	paddd	%xmm12,%xmm8
+	pxor	%xmm11,%xmm7
+	pxor	%xmm10,%xmm6
+	pxor	%xmm9,%xmm5
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm8,0+80(%rbp)
+	movdqa	%xmm7,%xmm8
+	psrld	$20,%xmm8
+	pslld	$32-20,%xmm7
+	pxor	%xmm8,%xmm7
+	movdqa	%xmm6,%xmm8
+	psrld	$20,%xmm8
+	pslld	$32-20,%xmm6
+	pxor	%xmm8,%xmm6
+	movdqa	%xmm5,%xmm8
+	psrld	$20,%xmm8
+	pslld	$32-20,%xmm5
+	pxor	%xmm8,%xmm5
+	movdqa	%xmm4,%xmm8
+	psrld	$20,%xmm8
+	pslld	$32-20,%xmm4
+	pxor	%xmm8,%xmm4
+	movdqa	L$rol8(%rip),%xmm8
+	paddd	%xmm7,%xmm3
+	paddd	%xmm6,%xmm2
+	paddd	%xmm5,%xmm1
+	paddd	%xmm4,%xmm0
+	pxor	%xmm3,%xmm15
+	pxor	%xmm2,%xmm14
+	pxor	%xmm1,%xmm13
+	pxor	%xmm0,%xmm12
+.byte	102,69,15,56,0,248
+.byte	102,69,15,56,0,240
+.byte	102,69,15,56,0,232
+.byte	102,69,15,56,0,224
+	movdqa	0+80(%rbp),%xmm8
+	paddd	%xmm15,%xmm11
+	paddd	%xmm14,%xmm10
+	paddd	%xmm13,%xmm9
+	paddd	%xmm12,%xmm8
+	pxor	%xmm11,%xmm7
+	pxor	%xmm10,%xmm6
+	pxor	%xmm9,%xmm5
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm8,0+80(%rbp)
+	movdqa	%xmm7,%xmm8
+	psrld	$25,%xmm8
+	pslld	$32-25,%xmm7
+	pxor	%xmm8,%xmm7
+	movdqa	%xmm6,%xmm8
+	psrld	$25,%xmm8
+	pslld	$32-25,%xmm6
+	pxor	%xmm8,%xmm6
+	movdqa	%xmm5,%xmm8
+	psrld	$25,%xmm8
+	pslld	$32-25,%xmm5
+	pxor	%xmm8,%xmm5
+	movdqa	%xmm4,%xmm8
+	psrld	$25,%xmm8
+	pslld	$32-25,%xmm4
+	pxor	%xmm8,%xmm4
+	movdqa	0+80(%rbp),%xmm8
+.byte	102,15,58,15,255,12
+.byte	102,69,15,58,15,219,8
+.byte	102,69,15,58,15,255,4
+.byte	102,15,58,15,246,12
+.byte	102,69,15,58,15,210,8
+.byte	102,69,15,58,15,246,4
+.byte	102,15,58,15,237,12
+.byte	102,69,15,58,15,201,8
+.byte	102,69,15,58,15,237,4
+.byte	102,15,58,15,228,12
+.byte	102,69,15,58,15,192,8
+.byte	102,69,15,58,15,228,4
+
+	decq	%rcx
+	jge	L$open_sse_main_loop_rounds
+	addq	0+0(%r8),%r10
+	adcq	8+0(%r8),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	leaq	16(%r8),%r8
+	cmpq	$-6,%rcx
+	jg	L$open_sse_main_loop_rounds
+	paddd	L$chacha20_consts(%rip),%xmm3
+	paddd	0+48(%rbp),%xmm7
+	paddd	0+64(%rbp),%xmm11
+	paddd	0+144(%rbp),%xmm15
+	paddd	L$chacha20_consts(%rip),%xmm2
+	paddd	0+48(%rbp),%xmm6
+	paddd	0+64(%rbp),%xmm10
+	paddd	0+128(%rbp),%xmm14
+	paddd	L$chacha20_consts(%rip),%xmm1
+	paddd	0+48(%rbp),%xmm5
+	paddd	0+64(%rbp),%xmm9
+	paddd	0+112(%rbp),%xmm13
+	paddd	L$chacha20_consts(%rip),%xmm0
+	paddd	0+48(%rbp),%xmm4
+	paddd	0+64(%rbp),%xmm8
+	paddd	0+96(%rbp),%xmm12
+	movdqa	%xmm12,0+80(%rbp)
+	movdqu	0 + 0(%rsi),%xmm12
+	pxor	%xmm3,%xmm12
+	movdqu	%xmm12,0 + 0(%rdi)
+	movdqu	16 + 0(%rsi),%xmm12
+	pxor	%xmm7,%xmm12
+	movdqu	%xmm12,16 + 0(%rdi)
+	movdqu	32 + 0(%rsi),%xmm12
+	pxor	%xmm11,%xmm12
+	movdqu	%xmm12,32 + 0(%rdi)
+	movdqu	48 + 0(%rsi),%xmm12
+	pxor	%xmm15,%xmm12
+	movdqu	%xmm12,48 + 0(%rdi)
+	movdqu	0 + 64(%rsi),%xmm3
+	movdqu	16 + 64(%rsi),%xmm7
+	movdqu	32 + 64(%rsi),%xmm11
+	movdqu	48 + 64(%rsi),%xmm15
+	pxor	%xmm3,%xmm2
+	pxor	%xmm7,%xmm6
+	pxor	%xmm11,%xmm10
+	pxor	%xmm14,%xmm15
+	movdqu	%xmm2,0 + 64(%rdi)
+	movdqu	%xmm6,16 + 64(%rdi)
+	movdqu	%xmm10,32 + 64(%rdi)
+	movdqu	%xmm15,48 + 64(%rdi)
+	movdqu	0 + 128(%rsi),%xmm3
+	movdqu	16 + 128(%rsi),%xmm7
+	movdqu	32 + 128(%rsi),%xmm11
+	movdqu	48 + 128(%rsi),%xmm15
+	pxor	%xmm3,%xmm1
+	pxor	%xmm7,%xmm5
+	pxor	%xmm11,%xmm9
+	pxor	%xmm13,%xmm15
+	movdqu	%xmm1,0 + 128(%rdi)
+	movdqu	%xmm5,16 + 128(%rdi)
+	movdqu	%xmm9,32 + 128(%rdi)
+	movdqu	%xmm15,48 + 128(%rdi)
+	movdqu	0 + 192(%rsi),%xmm3
+	movdqu	16 + 192(%rsi),%xmm7
+	movdqu	32 + 192(%rsi),%xmm11
+	movdqu	48 + 192(%rsi),%xmm15
+	pxor	%xmm3,%xmm0
+	pxor	%xmm7,%xmm4
+	pxor	%xmm11,%xmm8
+	pxor	0+80(%rbp),%xmm15
+	movdqu	%xmm0,0 + 192(%rdi)
+	movdqu	%xmm4,16 + 192(%rdi)
+	movdqu	%xmm8,32 + 192(%rdi)
+	movdqu	%xmm15,48 + 192(%rdi)
+
+	leaq	256(%rsi),%rsi
+	leaq	256(%rdi),%rdi
+	subq	$256,%rbx
+	jmp	L$open_sse_main_loop
+L$open_sse_tail:
+
+	testq	%rbx,%rbx
+	jz	L$open_sse_finalize
+	cmpq	$192,%rbx
+	ja	L$open_sse_tail_256
+	cmpq	$128,%rbx
+	ja	L$open_sse_tail_192
+	cmpq	$64,%rbx
+	ja	L$open_sse_tail_128
+	movdqa	L$chacha20_consts(%rip),%xmm0
+	movdqa	0+48(%rbp),%xmm4
+	movdqa	0+64(%rbp),%xmm8
+	movdqa	0+96(%rbp),%xmm12
+	paddd	L$sse_inc(%rip),%xmm12
+	movdqa	%xmm12,0+96(%rbp)
+
+	xorq	%r8,%r8
+	movq	%rbx,%rcx
+	cmpq	$16,%rcx
+	jb	L$open_sse_tail_64_rounds
+L$open_sse_tail_64_rounds_and_x1hash:
+	addq	0+0(%rsi,%r8,1),%r10
+	adcq	8+0(%rsi,%r8,1),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	subq	$16,%rcx
+L$open_sse_tail_64_rounds:
+	addq	$16,%r8
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol16(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm4
+	pxor	%xmm3,%xmm4
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol8(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm4
+	pxor	%xmm3,%xmm4
+.byte	102,15,58,15,228,4
+.byte	102,69,15,58,15,192,8
+.byte	102,69,15,58,15,228,12
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol16(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm4
+	pxor	%xmm3,%xmm4
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol8(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm4
+	pxor	%xmm3,%xmm4
+.byte	102,15,58,15,228,12
+.byte	102,69,15,58,15,192,8
+.byte	102,69,15,58,15,228,4
+
+	cmpq	$16,%rcx
+	jae	L$open_sse_tail_64_rounds_and_x1hash
+	cmpq	$160,%r8
+	jne	L$open_sse_tail_64_rounds
+	paddd	L$chacha20_consts(%rip),%xmm0
+	paddd	0+48(%rbp),%xmm4
+	paddd	0+64(%rbp),%xmm8
+	paddd	0+96(%rbp),%xmm12
+
+	jmp	L$open_sse_tail_64_dec_loop
+
+L$open_sse_tail_128:
+	movdqa	L$chacha20_consts(%rip),%xmm0
+	movdqa	0+48(%rbp),%xmm4
+	movdqa	0+64(%rbp),%xmm8
+	movdqa	%xmm0,%xmm1
+	movdqa	%xmm4,%xmm5
+	movdqa	%xmm8,%xmm9
+	movdqa	0+96(%rbp),%xmm13
+	paddd	L$sse_inc(%rip),%xmm13
+	movdqa	%xmm13,%xmm12
+	paddd	L$sse_inc(%rip),%xmm12
+	movdqa	%xmm12,0+96(%rbp)
+	movdqa	%xmm13,0+112(%rbp)
+
+	movq	%rbx,%rcx
+	andq	$-16,%rcx
+	xorq	%r8,%r8
+L$open_sse_tail_128_rounds_and_x1hash:
+	addq	0+0(%rsi,%r8,1),%r10
+	adcq	8+0(%rsi,%r8,1),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+L$open_sse_tail_128_rounds:
+	addq	$16,%r8
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol16(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm4
+	pxor	%xmm3,%xmm4
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol8(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm4
+	pxor	%xmm3,%xmm4
+.byte	102,15,58,15,228,4
+.byte	102,69,15,58,15,192,8
+.byte	102,69,15,58,15,228,12
+	paddd	%xmm5,%xmm1
+	pxor	%xmm1,%xmm13
+	pshufb	L$rol16(%rip),%xmm13
+	paddd	%xmm13,%xmm9
+	pxor	%xmm9,%xmm5
+	movdqa	%xmm5,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm5
+	pxor	%xmm3,%xmm5
+	paddd	%xmm5,%xmm1
+	pxor	%xmm1,%xmm13
+	pshufb	L$rol8(%rip),%xmm13
+	paddd	%xmm13,%xmm9
+	pxor	%xmm9,%xmm5
+	movdqa	%xmm5,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm5
+	pxor	%xmm3,%xmm5
+.byte	102,15,58,15,237,4
+.byte	102,69,15,58,15,201,8
+.byte	102,69,15,58,15,237,12
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol16(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm4
+	pxor	%xmm3,%xmm4
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol8(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm4
+	pxor	%xmm3,%xmm4
+.byte	102,15,58,15,228,12
+.byte	102,69,15,58,15,192,8
+.byte	102,69,15,58,15,228,4
+	paddd	%xmm5,%xmm1
+	pxor	%xmm1,%xmm13
+	pshufb	L$rol16(%rip),%xmm13
+	paddd	%xmm13,%xmm9
+	pxor	%xmm9,%xmm5
+	movdqa	%xmm5,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm5
+	pxor	%xmm3,%xmm5
+	paddd	%xmm5,%xmm1
+	pxor	%xmm1,%xmm13
+	pshufb	L$rol8(%rip),%xmm13
+	paddd	%xmm13,%xmm9
+	pxor	%xmm9,%xmm5
+	movdqa	%xmm5,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm5
+	pxor	%xmm3,%xmm5
+.byte	102,15,58,15,237,12
+.byte	102,69,15,58,15,201,8
+.byte	102,69,15,58,15,237,4
+
+	cmpq	%rcx,%r8
+	jb	L$open_sse_tail_128_rounds_and_x1hash
+	cmpq	$160,%r8
+	jne	L$open_sse_tail_128_rounds
+	paddd	L$chacha20_consts(%rip),%xmm1
+	paddd	0+48(%rbp),%xmm5
+	paddd	0+64(%rbp),%xmm9
+	paddd	0+112(%rbp),%xmm13
+	paddd	L$chacha20_consts(%rip),%xmm0
+	paddd	0+48(%rbp),%xmm4
+	paddd	0+64(%rbp),%xmm8
+	paddd	0+96(%rbp),%xmm12
+	movdqu	0 + 0(%rsi),%xmm3
+	movdqu	16 + 0(%rsi),%xmm7
+	movdqu	32 + 0(%rsi),%xmm11
+	movdqu	48 + 0(%rsi),%xmm15
+	pxor	%xmm3,%xmm1
+	pxor	%xmm7,%xmm5
+	pxor	%xmm11,%xmm9
+	pxor	%xmm13,%xmm15
+	movdqu	%xmm1,0 + 0(%rdi)
+	movdqu	%xmm5,16 + 0(%rdi)
+	movdqu	%xmm9,32 + 0(%rdi)
+	movdqu	%xmm15,48 + 0(%rdi)
+
+	subq	$64,%rbx
+	leaq	64(%rsi),%rsi
+	leaq	64(%rdi),%rdi
+	jmp	L$open_sse_tail_64_dec_loop
+
+L$open_sse_tail_192:
+	movdqa	L$chacha20_consts(%rip),%xmm0
+	movdqa	0+48(%rbp),%xmm4
+	movdqa	0+64(%rbp),%xmm8
+	movdqa	%xmm0,%xmm1
+	movdqa	%xmm4,%xmm5
+	movdqa	%xmm8,%xmm9
+	movdqa	%xmm0,%xmm2
+	movdqa	%xmm4,%xmm6
+	movdqa	%xmm8,%xmm10
+	movdqa	0+96(%rbp),%xmm14
+	paddd	L$sse_inc(%rip),%xmm14
+	movdqa	%xmm14,%xmm13
+	paddd	L$sse_inc(%rip),%xmm13
+	movdqa	%xmm13,%xmm12
+	paddd	L$sse_inc(%rip),%xmm12
+	movdqa	%xmm12,0+96(%rbp)
+	movdqa	%xmm13,0+112(%rbp)
+	movdqa	%xmm14,0+128(%rbp)
+
+	movq	%rbx,%rcx
+	movq	$160,%r8
+	cmpq	$160,%rcx
+	cmovgq	%r8,%rcx
+	andq	$-16,%rcx
+	xorq	%r8,%r8
+L$open_sse_tail_192_rounds_and_x1hash:
+	addq	0+0(%rsi,%r8,1),%r10
+	adcq	8+0(%rsi,%r8,1),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+L$open_sse_tail_192_rounds:
+	addq	$16,%r8
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol16(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm4
+	pxor	%xmm3,%xmm4
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol8(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm4
+	pxor	%xmm3,%xmm4
+.byte	102,15,58,15,228,4
+.byte	102,69,15,58,15,192,8
+.byte	102,69,15,58,15,228,12
+	paddd	%xmm5,%xmm1
+	pxor	%xmm1,%xmm13
+	pshufb	L$rol16(%rip),%xmm13
+	paddd	%xmm13,%xmm9
+	pxor	%xmm9,%xmm5
+	movdqa	%xmm5,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm5
+	pxor	%xmm3,%xmm5
+	paddd	%xmm5,%xmm1
+	pxor	%xmm1,%xmm13
+	pshufb	L$rol8(%rip),%xmm13
+	paddd	%xmm13,%xmm9
+	pxor	%xmm9,%xmm5
+	movdqa	%xmm5,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm5
+	pxor	%xmm3,%xmm5
+.byte	102,15,58,15,237,4
+.byte	102,69,15,58,15,201,8
+.byte	102,69,15,58,15,237,12
+	paddd	%xmm6,%xmm2
+	pxor	%xmm2,%xmm14
+	pshufb	L$rol16(%rip),%xmm14
+	paddd	%xmm14,%xmm10
+	pxor	%xmm10,%xmm6
+	movdqa	%xmm6,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm6
+	pxor	%xmm3,%xmm6
+	paddd	%xmm6,%xmm2
+	pxor	%xmm2,%xmm14
+	pshufb	L$rol8(%rip),%xmm14
+	paddd	%xmm14,%xmm10
+	pxor	%xmm10,%xmm6
+	movdqa	%xmm6,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm6
+	pxor	%xmm3,%xmm6
+.byte	102,15,58,15,246,4
+.byte	102,69,15,58,15,210,8
+.byte	102,69,15,58,15,246,12
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol16(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm4
+	pxor	%xmm3,%xmm4
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol8(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm4
+	pxor	%xmm3,%xmm4
+.byte	102,15,58,15,228,12
+.byte	102,69,15,58,15,192,8
+.byte	102,69,15,58,15,228,4
+	paddd	%xmm5,%xmm1
+	pxor	%xmm1,%xmm13
+	pshufb	L$rol16(%rip),%xmm13
+	paddd	%xmm13,%xmm9
+	pxor	%xmm9,%xmm5
+	movdqa	%xmm5,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm5
+	pxor	%xmm3,%xmm5
+	paddd	%xmm5,%xmm1
+	pxor	%xmm1,%xmm13
+	pshufb	L$rol8(%rip),%xmm13
+	paddd	%xmm13,%xmm9
+	pxor	%xmm9,%xmm5
+	movdqa	%xmm5,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm5
+	pxor	%xmm3,%xmm5
+.byte	102,15,58,15,237,12
+.byte	102,69,15,58,15,201,8
+.byte	102,69,15,58,15,237,4
+	paddd	%xmm6,%xmm2
+	pxor	%xmm2,%xmm14
+	pshufb	L$rol16(%rip),%xmm14
+	paddd	%xmm14,%xmm10
+	pxor	%xmm10,%xmm6
+	movdqa	%xmm6,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm6
+	pxor	%xmm3,%xmm6
+	paddd	%xmm6,%xmm2
+	pxor	%xmm2,%xmm14
+	pshufb	L$rol8(%rip),%xmm14
+	paddd	%xmm14,%xmm10
+	pxor	%xmm10,%xmm6
+	movdqa	%xmm6,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm6
+	pxor	%xmm3,%xmm6
+.byte	102,15,58,15,246,12
+.byte	102,69,15,58,15,210,8
+.byte	102,69,15,58,15,246,4
+
+	cmpq	%rcx,%r8
+	jb	L$open_sse_tail_192_rounds_and_x1hash
+	cmpq	$160,%r8
+	jne	L$open_sse_tail_192_rounds
+	cmpq	$176,%rbx
+	jb	L$open_sse_tail_192_finish
+	addq	0+160(%rsi),%r10
+	adcq	8+160(%rsi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	cmpq	$192,%rbx
+	jb	L$open_sse_tail_192_finish
+	addq	0+176(%rsi),%r10
+	adcq	8+176(%rsi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+L$open_sse_tail_192_finish:
+	paddd	L$chacha20_consts(%rip),%xmm2
+	paddd	0+48(%rbp),%xmm6
+	paddd	0+64(%rbp),%xmm10
+	paddd	0+128(%rbp),%xmm14
+	paddd	L$chacha20_consts(%rip),%xmm1
+	paddd	0+48(%rbp),%xmm5
+	paddd	0+64(%rbp),%xmm9
+	paddd	0+112(%rbp),%xmm13
+	paddd	L$chacha20_consts(%rip),%xmm0
+	paddd	0+48(%rbp),%xmm4
+	paddd	0+64(%rbp),%xmm8
+	paddd	0+96(%rbp),%xmm12
+	movdqu	0 + 0(%rsi),%xmm3
+	movdqu	16 + 0(%rsi),%xmm7
+	movdqu	32 + 0(%rsi),%xmm11
+	movdqu	48 + 0(%rsi),%xmm15
+	pxor	%xmm3,%xmm2
+	pxor	%xmm7,%xmm6
+	pxor	%xmm11,%xmm10
+	pxor	%xmm14,%xmm15
+	movdqu	%xmm2,0 + 0(%rdi)
+	movdqu	%xmm6,16 + 0(%rdi)
+	movdqu	%xmm10,32 + 0(%rdi)
+	movdqu	%xmm15,48 + 0(%rdi)
+	movdqu	0 + 64(%rsi),%xmm3
+	movdqu	16 + 64(%rsi),%xmm7
+	movdqu	32 + 64(%rsi),%xmm11
+	movdqu	48 + 64(%rsi),%xmm15
+	pxor	%xmm3,%xmm1
+	pxor	%xmm7,%xmm5
+	pxor	%xmm11,%xmm9
+	pxor	%xmm13,%xmm15
+	movdqu	%xmm1,0 + 64(%rdi)
+	movdqu	%xmm5,16 + 64(%rdi)
+	movdqu	%xmm9,32 + 64(%rdi)
+	movdqu	%xmm15,48 + 64(%rdi)
+
+	subq	$128,%rbx
+	leaq	128(%rsi),%rsi
+	leaq	128(%rdi),%rdi
+	jmp	L$open_sse_tail_64_dec_loop
+
+L$open_sse_tail_256:
+	movdqa	L$chacha20_consts(%rip),%xmm0
+	movdqa	0+48(%rbp),%xmm4
+	movdqa	0+64(%rbp),%xmm8
+	movdqa	%xmm0,%xmm1
+	movdqa	%xmm4,%xmm5
+	movdqa	%xmm8,%xmm9
+	movdqa	%xmm0,%xmm2
+	movdqa	%xmm4,%xmm6
+	movdqa	%xmm8,%xmm10
+	movdqa	%xmm0,%xmm3
+	movdqa	%xmm4,%xmm7
+	movdqa	%xmm8,%xmm11
+	movdqa	0+96(%rbp),%xmm15
+	paddd	L$sse_inc(%rip),%xmm15
+	movdqa	%xmm15,%xmm14
+	paddd	L$sse_inc(%rip),%xmm14
+	movdqa	%xmm14,%xmm13
+	paddd	L$sse_inc(%rip),%xmm13
+	movdqa	%xmm13,%xmm12
+	paddd	L$sse_inc(%rip),%xmm12
+	movdqa	%xmm12,0+96(%rbp)
+	movdqa	%xmm13,0+112(%rbp)
+	movdqa	%xmm14,0+128(%rbp)
+	movdqa	%xmm15,0+144(%rbp)
+
+	xorq	%r8,%r8
+L$open_sse_tail_256_rounds_and_x1hash:
+	addq	0+0(%rsi,%r8,1),%r10
+	adcq	8+0(%rsi,%r8,1),%r11
+	adcq	$1,%r12
+	movdqa	%xmm11,0+80(%rbp)
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol16(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm11
+	pslld	$12,%xmm11
+	psrld	$20,%xmm4
+	pxor	%xmm11,%xmm4
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol8(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm11
+	pslld	$7,%xmm11
+	psrld	$25,%xmm4
+	pxor	%xmm11,%xmm4
+.byte	102,15,58,15,228,4
+.byte	102,69,15,58,15,192,8
+.byte	102,69,15,58,15,228,12
+	paddd	%xmm5,%xmm1
+	pxor	%xmm1,%xmm13
+	pshufb	L$rol16(%rip),%xmm13
+	paddd	%xmm13,%xmm9
+	pxor	%xmm9,%xmm5
+	movdqa	%xmm5,%xmm11
+	pslld	$12,%xmm11
+	psrld	$20,%xmm5
+	pxor	%xmm11,%xmm5
+	paddd	%xmm5,%xmm1
+	pxor	%xmm1,%xmm13
+	pshufb	L$rol8(%rip),%xmm13
+	paddd	%xmm13,%xmm9
+	pxor	%xmm9,%xmm5
+	movdqa	%xmm5,%xmm11
+	pslld	$7,%xmm11
+	psrld	$25,%xmm5
+	pxor	%xmm11,%xmm5
+.byte	102,15,58,15,237,4
+.byte	102,69,15,58,15,201,8
+.byte	102,69,15,58,15,237,12
+	paddd	%xmm6,%xmm2
+	pxor	%xmm2,%xmm14
+	pshufb	L$rol16(%rip),%xmm14
+	paddd	%xmm14,%xmm10
+	pxor	%xmm10,%xmm6
+	movdqa	%xmm6,%xmm11
+	pslld	$12,%xmm11
+	psrld	$20,%xmm6
+	pxor	%xmm11,%xmm6
+	paddd	%xmm6,%xmm2
+	pxor	%xmm2,%xmm14
+	pshufb	L$rol8(%rip),%xmm14
+	paddd	%xmm14,%xmm10
+	pxor	%xmm10,%xmm6
+	movdqa	%xmm6,%xmm11
+	pslld	$7,%xmm11
+	psrld	$25,%xmm6
+	pxor	%xmm11,%xmm6
+.byte	102,15,58,15,246,4
+.byte	102,69,15,58,15,210,8
+.byte	102,69,15,58,15,246,12
+	movdqa	0+80(%rbp),%xmm11
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movdqa	%xmm9,0+80(%rbp)
+	paddd	%xmm7,%xmm3
+	pxor	%xmm3,%xmm15
+	pshufb	L$rol16(%rip),%xmm15
+	paddd	%xmm15,%xmm11
+	pxor	%xmm11,%xmm7
+	movdqa	%xmm7,%xmm9
+	pslld	$12,%xmm9
+	psrld	$20,%xmm7
+	pxor	%xmm9,%xmm7
+	paddd	%xmm7,%xmm3
+	pxor	%xmm3,%xmm15
+	pshufb	L$rol8(%rip),%xmm15
+	paddd	%xmm15,%xmm11
+	pxor	%xmm11,%xmm7
+	movdqa	%xmm7,%xmm9
+	pslld	$7,%xmm9
+	psrld	$25,%xmm7
+	pxor	%xmm9,%xmm7
+.byte	102,15,58,15,255,4
+.byte	102,69,15,58,15,219,8
+.byte	102,69,15,58,15,255,12
+	movdqa	0+80(%rbp),%xmm9
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	movdqa	%xmm11,0+80(%rbp)
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol16(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm11
+	pslld	$12,%xmm11
+	psrld	$20,%xmm4
+	pxor	%xmm11,%xmm4
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol8(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm11
+	pslld	$7,%xmm11
+	psrld	$25,%xmm4
+	pxor	%xmm11,%xmm4
+.byte	102,15,58,15,228,12
+.byte	102,69,15,58,15,192,8
+.byte	102,69,15,58,15,228,4
+	paddd	%xmm5,%xmm1
+	pxor	%xmm1,%xmm13
+	pshufb	L$rol16(%rip),%xmm13
+	paddd	%xmm13,%xmm9
+	pxor	%xmm9,%xmm5
+	movdqa	%xmm5,%xmm11
+	pslld	$12,%xmm11
+	psrld	$20,%xmm5
+	pxor	%xmm11,%xmm5
+	paddd	%xmm5,%xmm1
+	pxor	%xmm1,%xmm13
+	pshufb	L$rol8(%rip),%xmm13
+	paddd	%xmm13,%xmm9
+	pxor	%xmm9,%xmm5
+	movdqa	%xmm5,%xmm11
+	pslld	$7,%xmm11
+	psrld	$25,%xmm5
+	pxor	%xmm11,%xmm5
+.byte	102,15,58,15,237,12
+.byte	102,69,15,58,15,201,8
+.byte	102,69,15,58,15,237,4
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	paddd	%xmm6,%xmm2
+	pxor	%xmm2,%xmm14
+	pshufb	L$rol16(%rip),%xmm14
+	paddd	%xmm14,%xmm10
+	pxor	%xmm10,%xmm6
+	movdqa	%xmm6,%xmm11
+	pslld	$12,%xmm11
+	psrld	$20,%xmm6
+	pxor	%xmm11,%xmm6
+	paddd	%xmm6,%xmm2
+	pxor	%xmm2,%xmm14
+	pshufb	L$rol8(%rip),%xmm14
+	paddd	%xmm14,%xmm10
+	pxor	%xmm10,%xmm6
+	movdqa	%xmm6,%xmm11
+	pslld	$7,%xmm11
+	psrld	$25,%xmm6
+	pxor	%xmm11,%xmm6
+.byte	102,15,58,15,246,12
+.byte	102,69,15,58,15,210,8
+.byte	102,69,15,58,15,246,4
+	movdqa	0+80(%rbp),%xmm11
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+	movdqa	%xmm9,0+80(%rbp)
+	paddd	%xmm7,%xmm3
+	pxor	%xmm3,%xmm15
+	pshufb	L$rol16(%rip),%xmm15
+	paddd	%xmm15,%xmm11
+	pxor	%xmm11,%xmm7
+	movdqa	%xmm7,%xmm9
+	pslld	$12,%xmm9
+	psrld	$20,%xmm7
+	pxor	%xmm9,%xmm7
+	paddd	%xmm7,%xmm3
+	pxor	%xmm3,%xmm15
+	pshufb	L$rol8(%rip),%xmm15
+	paddd	%xmm15,%xmm11
+	pxor	%xmm11,%xmm7
+	movdqa	%xmm7,%xmm9
+	pslld	$7,%xmm9
+	psrld	$25,%xmm7
+	pxor	%xmm9,%xmm7
+.byte	102,15,58,15,255,12
+.byte	102,69,15,58,15,219,8
+.byte	102,69,15,58,15,255,4
+	movdqa	0+80(%rbp),%xmm9
+
+	addq	$16,%r8
+	cmpq	$160,%r8
+	jb	L$open_sse_tail_256_rounds_and_x1hash
+
+	movq	%rbx,%rcx
+	andq	$-16,%rcx
+L$open_sse_tail_256_hash:
+	addq	0+0(%rsi,%r8,1),%r10
+	adcq	8+0(%rsi,%r8,1),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	addq	$16,%r8
+	cmpq	%rcx,%r8
+	jb	L$open_sse_tail_256_hash
+	paddd	L$chacha20_consts(%rip),%xmm3
+	paddd	0+48(%rbp),%xmm7
+	paddd	0+64(%rbp),%xmm11
+	paddd	0+144(%rbp),%xmm15
+	paddd	L$chacha20_consts(%rip),%xmm2
+	paddd	0+48(%rbp),%xmm6
+	paddd	0+64(%rbp),%xmm10
+	paddd	0+128(%rbp),%xmm14
+	paddd	L$chacha20_consts(%rip),%xmm1
+	paddd	0+48(%rbp),%xmm5
+	paddd	0+64(%rbp),%xmm9
+	paddd	0+112(%rbp),%xmm13
+	paddd	L$chacha20_consts(%rip),%xmm0
+	paddd	0+48(%rbp),%xmm4
+	paddd	0+64(%rbp),%xmm8
+	paddd	0+96(%rbp),%xmm12
+	movdqa	%xmm12,0+80(%rbp)
+	movdqu	0 + 0(%rsi),%xmm12
+	pxor	%xmm3,%xmm12
+	movdqu	%xmm12,0 + 0(%rdi)
+	movdqu	16 + 0(%rsi),%xmm12
+	pxor	%xmm7,%xmm12
+	movdqu	%xmm12,16 + 0(%rdi)
+	movdqu	32 + 0(%rsi),%xmm12
+	pxor	%xmm11,%xmm12
+	movdqu	%xmm12,32 + 0(%rdi)
+	movdqu	48 + 0(%rsi),%xmm12
+	pxor	%xmm15,%xmm12
+	movdqu	%xmm12,48 + 0(%rdi)
+	movdqu	0 + 64(%rsi),%xmm3
+	movdqu	16 + 64(%rsi),%xmm7
+	movdqu	32 + 64(%rsi),%xmm11
+	movdqu	48 + 64(%rsi),%xmm15
+	pxor	%xmm3,%xmm2
+	pxor	%xmm7,%xmm6
+	pxor	%xmm11,%xmm10
+	pxor	%xmm14,%xmm15
+	movdqu	%xmm2,0 + 64(%rdi)
+	movdqu	%xmm6,16 + 64(%rdi)
+	movdqu	%xmm10,32 + 64(%rdi)
+	movdqu	%xmm15,48 + 64(%rdi)
+	movdqu	0 + 128(%rsi),%xmm3
+	movdqu	16 + 128(%rsi),%xmm7
+	movdqu	32 + 128(%rsi),%xmm11
+	movdqu	48 + 128(%rsi),%xmm15
+	pxor	%xmm3,%xmm1
+	pxor	%xmm7,%xmm5
+	pxor	%xmm11,%xmm9
+	pxor	%xmm13,%xmm15
+	movdqu	%xmm1,0 + 128(%rdi)
+	movdqu	%xmm5,16 + 128(%rdi)
+	movdqu	%xmm9,32 + 128(%rdi)
+	movdqu	%xmm15,48 + 128(%rdi)
+
+	movdqa	0+80(%rbp),%xmm12
+	subq	$192,%rbx
+	leaq	192(%rsi),%rsi
+	leaq	192(%rdi),%rdi
+
+
+L$open_sse_tail_64_dec_loop:
+	cmpq	$16,%rbx
+	jb	L$open_sse_tail_16_init
+	subq	$16,%rbx
+	movdqu	(%rsi),%xmm3
+	pxor	%xmm3,%xmm0
+	movdqu	%xmm0,(%rdi)
+	leaq	16(%rsi),%rsi
+	leaq	16(%rdi),%rdi
+	movdqa	%xmm4,%xmm0
+	movdqa	%xmm8,%xmm4
+	movdqa	%xmm12,%xmm8
+	jmp	L$open_sse_tail_64_dec_loop
+L$open_sse_tail_16_init:
+	movdqa	%xmm0,%xmm1
+
+
+L$open_sse_tail_16:
+	testq	%rbx,%rbx
+	jz	L$open_sse_finalize
+
+
+
+	pxor	%xmm3,%xmm3
+	leaq	-1(%rsi,%rbx,1),%rsi
+	movq	%rbx,%r8
+L$open_sse_tail_16_compose:
+	pslldq	$1,%xmm3
+	pinsrb	$0,(%rsi),%xmm3
+	subq	$1,%rsi
+	subq	$1,%r8
+	jnz	L$open_sse_tail_16_compose
+
+.byte	102,73,15,126,221
+	pextrq	$1,%xmm3,%r14
+
+	pxor	%xmm1,%xmm3
+
+
+L$open_sse_tail_16_extract:
+	pextrb	$0,%xmm3,(%rdi)
+	psrldq	$1,%xmm3
+	addq	$1,%rdi
+	subq	$1,%rbx
+	jne	L$open_sse_tail_16_extract
+
+	addq	%r13,%r10
+	adcq	%r14,%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+
+L$open_sse_finalize:
+	addq	0+0+32(%rbp),%r10
+	adcq	8+0+32(%rbp),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+
+	movq	%r10,%r13
+	movq	%r11,%r14
+	movq	%r12,%r15
+	subq	$-5,%r10
+	sbbq	$-1,%r11
+	sbbq	$3,%r12
+	cmovcq	%r13,%r10
+	cmovcq	%r14,%r11
+	cmovcq	%r15,%r12
+
+	addq	0+0+16(%rbp),%r10
+	adcq	8+0+16(%rbp),%r11
+
+
+	addq	$288 + 0 + 32,%rsp
+
+
+	popq	%r9
+
+	movq	%r10,(%r9)
+	movq	%r11,8(%r9)
+	popq	%r15
+
+	popq	%r14
+
+	popq	%r13
+
+	popq	%r12
+
+	popq	%rbx
+
+	popq	%rbp
+
+	ret
+
+L$open_sse_128:
+
+	movdqu	L$chacha20_consts(%rip),%xmm0
+	movdqa	%xmm0,%xmm1
+	movdqa	%xmm0,%xmm2
+	movdqu	0(%r9),%xmm4
+	movdqa	%xmm4,%xmm5
+	movdqa	%xmm4,%xmm6
+	movdqu	16(%r9),%xmm8
+	movdqa	%xmm8,%xmm9
+	movdqa	%xmm8,%xmm10
+	movdqu	32(%r9),%xmm12
+	movdqa	%xmm12,%xmm13
+	paddd	L$sse_inc(%rip),%xmm13
+	movdqa	%xmm13,%xmm14
+	paddd	L$sse_inc(%rip),%xmm14
+	movdqa	%xmm4,%xmm7
+	movdqa	%xmm8,%xmm11
+	movdqa	%xmm13,%xmm15
+	movq	$10,%r10
+
+L$open_sse_128_rounds:
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol16(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm4
+	pxor	%xmm3,%xmm4
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol8(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm4
+	pxor	%xmm3,%xmm4
+.byte	102,15,58,15,228,4
+.byte	102,69,15,58,15,192,8
+.byte	102,69,15,58,15,228,12
+	paddd	%xmm5,%xmm1
+	pxor	%xmm1,%xmm13
+	pshufb	L$rol16(%rip),%xmm13
+	paddd	%xmm13,%xmm9
+	pxor	%xmm9,%xmm5
+	movdqa	%xmm5,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm5
+	pxor	%xmm3,%xmm5
+	paddd	%xmm5,%xmm1
+	pxor	%xmm1,%xmm13
+	pshufb	L$rol8(%rip),%xmm13
+	paddd	%xmm13,%xmm9
+	pxor	%xmm9,%xmm5
+	movdqa	%xmm5,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm5
+	pxor	%xmm3,%xmm5
+.byte	102,15,58,15,237,4
+.byte	102,69,15,58,15,201,8
+.byte	102,69,15,58,15,237,12
+	paddd	%xmm6,%xmm2
+	pxor	%xmm2,%xmm14
+	pshufb	L$rol16(%rip),%xmm14
+	paddd	%xmm14,%xmm10
+	pxor	%xmm10,%xmm6
+	movdqa	%xmm6,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm6
+	pxor	%xmm3,%xmm6
+	paddd	%xmm6,%xmm2
+	pxor	%xmm2,%xmm14
+	pshufb	L$rol8(%rip),%xmm14
+	paddd	%xmm14,%xmm10
+	pxor	%xmm10,%xmm6
+	movdqa	%xmm6,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm6
+	pxor	%xmm3,%xmm6
+.byte	102,15,58,15,246,4
+.byte	102,69,15,58,15,210,8
+.byte	102,69,15,58,15,246,12
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol16(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm4
+	pxor	%xmm3,%xmm4
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol8(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm4
+	pxor	%xmm3,%xmm4
+.byte	102,15,58,15,228,12
+.byte	102,69,15,58,15,192,8
+.byte	102,69,15,58,15,228,4
+	paddd	%xmm5,%xmm1
+	pxor	%xmm1,%xmm13
+	pshufb	L$rol16(%rip),%xmm13
+	paddd	%xmm13,%xmm9
+	pxor	%xmm9,%xmm5
+	movdqa	%xmm5,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm5
+	pxor	%xmm3,%xmm5
+	paddd	%xmm5,%xmm1
+	pxor	%xmm1,%xmm13
+	pshufb	L$rol8(%rip),%xmm13
+	paddd	%xmm13,%xmm9
+	pxor	%xmm9,%xmm5
+	movdqa	%xmm5,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm5
+	pxor	%xmm3,%xmm5
+.byte	102,15,58,15,237,12
+.byte	102,69,15,58,15,201,8
+.byte	102,69,15,58,15,237,4
+	paddd	%xmm6,%xmm2
+	pxor	%xmm2,%xmm14
+	pshufb	L$rol16(%rip),%xmm14
+	paddd	%xmm14,%xmm10
+	pxor	%xmm10,%xmm6
+	movdqa	%xmm6,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm6
+	pxor	%xmm3,%xmm6
+	paddd	%xmm6,%xmm2
+	pxor	%xmm2,%xmm14
+	pshufb	L$rol8(%rip),%xmm14
+	paddd	%xmm14,%xmm10
+	pxor	%xmm10,%xmm6
+	movdqa	%xmm6,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm6
+	pxor	%xmm3,%xmm6
+.byte	102,15,58,15,246,12
+.byte	102,69,15,58,15,210,8
+.byte	102,69,15,58,15,246,4
+
+	decq	%r10
+	jnz	L$open_sse_128_rounds
+	paddd	L$chacha20_consts(%rip),%xmm0
+	paddd	L$chacha20_consts(%rip),%xmm1
+	paddd	L$chacha20_consts(%rip),%xmm2
+	paddd	%xmm7,%xmm4
+	paddd	%xmm7,%xmm5
+	paddd	%xmm7,%xmm6
+	paddd	%xmm11,%xmm9
+	paddd	%xmm11,%xmm10
+	paddd	%xmm15,%xmm13
+	paddd	L$sse_inc(%rip),%xmm15
+	paddd	%xmm15,%xmm14
+
+	pand	L$clamp(%rip),%xmm0
+	movdqa	%xmm0,0+0(%rbp)
+	movdqa	%xmm4,0+16(%rbp)
+
+	movq	%r8,%r8
+	call	poly_hash_ad_internal
+L$open_sse_128_xor_hash:
+	cmpq	$16,%rbx
+	jb	L$open_sse_tail_16
+	subq	$16,%rbx
+	addq	0+0(%rsi),%r10
+	adcq	8+0(%rsi),%r11
+	adcq	$1,%r12
+
+
+	movdqu	0(%rsi),%xmm3
+	pxor	%xmm3,%xmm1
+	movdqu	%xmm1,0(%rdi)
+	leaq	16(%rsi),%rsi
+	leaq	16(%rdi),%rdi
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+
+	movdqa	%xmm5,%xmm1
+	movdqa	%xmm9,%xmm5
+	movdqa	%xmm13,%xmm9
+	movdqa	%xmm2,%xmm13
+	movdqa	%xmm6,%xmm2
+	movdqa	%xmm10,%xmm6
+	movdqa	%xmm14,%xmm10
+	jmp	L$open_sse_128_xor_hash
+
+
+
+
+
+
+
+
+
+.globl	_chacha20_poly1305_seal_sse41
+.private_extern _chacha20_poly1305_seal_sse41
+
+.p2align	6
+_chacha20_poly1305_seal_sse41:
+
+_CET_ENDBR
+	pushq	%rbp
+
+	pushq	%rbx
+
+	pushq	%r12
+
+	pushq	%r13
+
+	pushq	%r14
+
+	pushq	%r15
+
+
+
+	pushq	%r9
+
+	subq	$288 + 0 + 32,%rsp
+
+	leaq	32(%rsp),%rbp
+	andq	$-32,%rbp
+
+	movq	56(%r9),%rbx
+	addq	%rdx,%rbx
+	movq	%r8,0+0+32(%rbp)
+	movq	%rbx,8+0+32(%rbp)
+	movq	%rdx,%rbx
+
+	cmpq	$128,%rbx
+	jbe	L$seal_sse_128
+
+	movdqa	L$chacha20_consts(%rip),%xmm0
+	movdqu	0(%r9),%xmm4
+	movdqu	16(%r9),%xmm8
+	movdqu	32(%r9),%xmm12
+
+	movdqa	%xmm0,%xmm1
+	movdqa	%xmm0,%xmm2
+	movdqa	%xmm0,%xmm3
+	movdqa	%xmm4,%xmm5
+	movdqa	%xmm4,%xmm6
+	movdqa	%xmm4,%xmm7
+	movdqa	%xmm8,%xmm9
+	movdqa	%xmm8,%xmm10
+	movdqa	%xmm8,%xmm11
+	movdqa	%xmm12,%xmm15
+	paddd	L$sse_inc(%rip),%xmm12
+	movdqa	%xmm12,%xmm14
+	paddd	L$sse_inc(%rip),%xmm12
+	movdqa	%xmm12,%xmm13
+	paddd	L$sse_inc(%rip),%xmm12
+
+	movdqa	%xmm4,0+48(%rbp)
+	movdqa	%xmm8,0+64(%rbp)
+	movdqa	%xmm12,0+96(%rbp)
+	movdqa	%xmm13,0+112(%rbp)
+	movdqa	%xmm14,0+128(%rbp)
+	movdqa	%xmm15,0+144(%rbp)
+	movq	$10,%r10
+L$seal_sse_init_rounds:
+	movdqa	%xmm8,0+80(%rbp)
+	movdqa	L$rol16(%rip),%xmm8
+	paddd	%xmm7,%xmm3
+	paddd	%xmm6,%xmm2
+	paddd	%xmm5,%xmm1
+	paddd	%xmm4,%xmm0
+	pxor	%xmm3,%xmm15
+	pxor	%xmm2,%xmm14
+	pxor	%xmm1,%xmm13
+	pxor	%xmm0,%xmm12
+.byte	102,69,15,56,0,248
+.byte	102,69,15,56,0,240
+.byte	102,69,15,56,0,232
+.byte	102,69,15,56,0,224
+	movdqa	0+80(%rbp),%xmm8
+	paddd	%xmm15,%xmm11
+	paddd	%xmm14,%xmm10
+	paddd	%xmm13,%xmm9
+	paddd	%xmm12,%xmm8
+	pxor	%xmm11,%xmm7
+	pxor	%xmm10,%xmm6
+	pxor	%xmm9,%xmm5
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm8,0+80(%rbp)
+	movdqa	%xmm7,%xmm8
+	psrld	$20,%xmm8
+	pslld	$32-20,%xmm7
+	pxor	%xmm8,%xmm7
+	movdqa	%xmm6,%xmm8
+	psrld	$20,%xmm8
+	pslld	$32-20,%xmm6
+	pxor	%xmm8,%xmm6
+	movdqa	%xmm5,%xmm8
+	psrld	$20,%xmm8
+	pslld	$32-20,%xmm5
+	pxor	%xmm8,%xmm5
+	movdqa	%xmm4,%xmm8
+	psrld	$20,%xmm8
+	pslld	$32-20,%xmm4
+	pxor	%xmm8,%xmm4
+	movdqa	L$rol8(%rip),%xmm8
+	paddd	%xmm7,%xmm3
+	paddd	%xmm6,%xmm2
+	paddd	%xmm5,%xmm1
+	paddd	%xmm4,%xmm0
+	pxor	%xmm3,%xmm15
+	pxor	%xmm2,%xmm14
+	pxor	%xmm1,%xmm13
+	pxor	%xmm0,%xmm12
+.byte	102,69,15,56,0,248
+.byte	102,69,15,56,0,240
+.byte	102,69,15,56,0,232
+.byte	102,69,15,56,0,224
+	movdqa	0+80(%rbp),%xmm8
+	paddd	%xmm15,%xmm11
+	paddd	%xmm14,%xmm10
+	paddd	%xmm13,%xmm9
+	paddd	%xmm12,%xmm8
+	pxor	%xmm11,%xmm7
+	pxor	%xmm10,%xmm6
+	pxor	%xmm9,%xmm5
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm8,0+80(%rbp)
+	movdqa	%xmm7,%xmm8
+	psrld	$25,%xmm8
+	pslld	$32-25,%xmm7
+	pxor	%xmm8,%xmm7
+	movdqa	%xmm6,%xmm8
+	psrld	$25,%xmm8
+	pslld	$32-25,%xmm6
+	pxor	%xmm8,%xmm6
+	movdqa	%xmm5,%xmm8
+	psrld	$25,%xmm8
+	pslld	$32-25,%xmm5
+	pxor	%xmm8,%xmm5
+	movdqa	%xmm4,%xmm8
+	psrld	$25,%xmm8
+	pslld	$32-25,%xmm4
+	pxor	%xmm8,%xmm4
+	movdqa	0+80(%rbp),%xmm8
+.byte	102,15,58,15,255,4
+.byte	102,69,15,58,15,219,8
+.byte	102,69,15,58,15,255,12
+.byte	102,15,58,15,246,4
+.byte	102,69,15,58,15,210,8
+.byte	102,69,15,58,15,246,12
+.byte	102,15,58,15,237,4
+.byte	102,69,15,58,15,201,8
+.byte	102,69,15,58,15,237,12
+.byte	102,15,58,15,228,4
+.byte	102,69,15,58,15,192,8
+.byte	102,69,15,58,15,228,12
+	movdqa	%xmm8,0+80(%rbp)
+	movdqa	L$rol16(%rip),%xmm8
+	paddd	%xmm7,%xmm3
+	paddd	%xmm6,%xmm2
+	paddd	%xmm5,%xmm1
+	paddd	%xmm4,%xmm0
+	pxor	%xmm3,%xmm15
+	pxor	%xmm2,%xmm14
+	pxor	%xmm1,%xmm13
+	pxor	%xmm0,%xmm12
+.byte	102,69,15,56,0,248
+.byte	102,69,15,56,0,240
+.byte	102,69,15,56,0,232
+.byte	102,69,15,56,0,224
+	movdqa	0+80(%rbp),%xmm8
+	paddd	%xmm15,%xmm11
+	paddd	%xmm14,%xmm10
+	paddd	%xmm13,%xmm9
+	paddd	%xmm12,%xmm8
+	pxor	%xmm11,%xmm7
+	pxor	%xmm10,%xmm6
+	pxor	%xmm9,%xmm5
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm8,0+80(%rbp)
+	movdqa	%xmm7,%xmm8
+	psrld	$20,%xmm8
+	pslld	$32-20,%xmm7
+	pxor	%xmm8,%xmm7
+	movdqa	%xmm6,%xmm8
+	psrld	$20,%xmm8
+	pslld	$32-20,%xmm6
+	pxor	%xmm8,%xmm6
+	movdqa	%xmm5,%xmm8
+	psrld	$20,%xmm8
+	pslld	$32-20,%xmm5
+	pxor	%xmm8,%xmm5
+	movdqa	%xmm4,%xmm8
+	psrld	$20,%xmm8
+	pslld	$32-20,%xmm4
+	pxor	%xmm8,%xmm4
+	movdqa	L$rol8(%rip),%xmm8
+	paddd	%xmm7,%xmm3
+	paddd	%xmm6,%xmm2
+	paddd	%xmm5,%xmm1
+	paddd	%xmm4,%xmm0
+	pxor	%xmm3,%xmm15
+	pxor	%xmm2,%xmm14
+	pxor	%xmm1,%xmm13
+	pxor	%xmm0,%xmm12
+.byte	102,69,15,56,0,248
+.byte	102,69,15,56,0,240
+.byte	102,69,15,56,0,232
+.byte	102,69,15,56,0,224
+	movdqa	0+80(%rbp),%xmm8
+	paddd	%xmm15,%xmm11
+	paddd	%xmm14,%xmm10
+	paddd	%xmm13,%xmm9
+	paddd	%xmm12,%xmm8
+	pxor	%xmm11,%xmm7
+	pxor	%xmm10,%xmm6
+	pxor	%xmm9,%xmm5
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm8,0+80(%rbp)
+	movdqa	%xmm7,%xmm8
+	psrld	$25,%xmm8
+	pslld	$32-25,%xmm7
+	pxor	%xmm8,%xmm7
+	movdqa	%xmm6,%xmm8
+	psrld	$25,%xmm8
+	pslld	$32-25,%xmm6
+	pxor	%xmm8,%xmm6
+	movdqa	%xmm5,%xmm8
+	psrld	$25,%xmm8
+	pslld	$32-25,%xmm5
+	pxor	%xmm8,%xmm5
+	movdqa	%xmm4,%xmm8
+	psrld	$25,%xmm8
+	pslld	$32-25,%xmm4
+	pxor	%xmm8,%xmm4
+	movdqa	0+80(%rbp),%xmm8
+.byte	102,15,58,15,255,12
+.byte	102,69,15,58,15,219,8
+.byte	102,69,15,58,15,255,4
+.byte	102,15,58,15,246,12
+.byte	102,69,15,58,15,210,8
+.byte	102,69,15,58,15,246,4
+.byte	102,15,58,15,237,12
+.byte	102,69,15,58,15,201,8
+.byte	102,69,15,58,15,237,4
+.byte	102,15,58,15,228,12
+.byte	102,69,15,58,15,192,8
+.byte	102,69,15,58,15,228,4
+
+	decq	%r10
+	jnz	L$seal_sse_init_rounds
+	paddd	L$chacha20_consts(%rip),%xmm3
+	paddd	0+48(%rbp),%xmm7
+	paddd	0+64(%rbp),%xmm11
+	paddd	0+144(%rbp),%xmm15
+	paddd	L$chacha20_consts(%rip),%xmm2
+	paddd	0+48(%rbp),%xmm6
+	paddd	0+64(%rbp),%xmm10
+	paddd	0+128(%rbp),%xmm14
+	paddd	L$chacha20_consts(%rip),%xmm1
+	paddd	0+48(%rbp),%xmm5
+	paddd	0+64(%rbp),%xmm9
+	paddd	0+112(%rbp),%xmm13
+	paddd	L$chacha20_consts(%rip),%xmm0
+	paddd	0+48(%rbp),%xmm4
+	paddd	0+64(%rbp),%xmm8
+	paddd	0+96(%rbp),%xmm12
+
+
+	pand	L$clamp(%rip),%xmm3
+	movdqa	%xmm3,0+0(%rbp)
+	movdqa	%xmm7,0+16(%rbp)
+
+	movq	%r8,%r8
+	call	poly_hash_ad_internal
+	movdqu	0 + 0(%rsi),%xmm3
+	movdqu	16 + 0(%rsi),%xmm7
+	movdqu	32 + 0(%rsi),%xmm11
+	movdqu	48 + 0(%rsi),%xmm15
+	pxor	%xmm3,%xmm2
+	pxor	%xmm7,%xmm6
+	pxor	%xmm11,%xmm10
+	pxor	%xmm14,%xmm15
+	movdqu	%xmm2,0 + 0(%rdi)
+	movdqu	%xmm6,16 + 0(%rdi)
+	movdqu	%xmm10,32 + 0(%rdi)
+	movdqu	%xmm15,48 + 0(%rdi)
+	movdqu	0 + 64(%rsi),%xmm3
+	movdqu	16 + 64(%rsi),%xmm7
+	movdqu	32 + 64(%rsi),%xmm11
+	movdqu	48 + 64(%rsi),%xmm15
+	pxor	%xmm3,%xmm1
+	pxor	%xmm7,%xmm5
+	pxor	%xmm11,%xmm9
+	pxor	%xmm13,%xmm15
+	movdqu	%xmm1,0 + 64(%rdi)
+	movdqu	%xmm5,16 + 64(%rdi)
+	movdqu	%xmm9,32 + 64(%rdi)
+	movdqu	%xmm15,48 + 64(%rdi)
+
+	cmpq	$192,%rbx
+	ja	L$seal_sse_main_init
+	movq	$128,%rcx
+	subq	$128,%rbx
+	leaq	128(%rsi),%rsi
+	jmp	L$seal_sse_128_tail_hash
+L$seal_sse_main_init:
+	movdqu	0 + 128(%rsi),%xmm3
+	movdqu	16 + 128(%rsi),%xmm7
+	movdqu	32 + 128(%rsi),%xmm11
+	movdqu	48 + 128(%rsi),%xmm15
+	pxor	%xmm3,%xmm0
+	pxor	%xmm7,%xmm4
+	pxor	%xmm11,%xmm8
+	pxor	%xmm12,%xmm15
+	movdqu	%xmm0,0 + 128(%rdi)
+	movdqu	%xmm4,16 + 128(%rdi)
+	movdqu	%xmm8,32 + 128(%rdi)
+	movdqu	%xmm15,48 + 128(%rdi)
+
+	movq	$192,%rcx
+	subq	$192,%rbx
+	leaq	192(%rsi),%rsi
+	movq	$2,%rcx
+	movq	$8,%r8
+	cmpq	$64,%rbx
+	jbe	L$seal_sse_tail_64
+	cmpq	$128,%rbx
+	jbe	L$seal_sse_tail_128
+	cmpq	$192,%rbx
+	jbe	L$seal_sse_tail_192
+
+L$seal_sse_main_loop:
+	movdqa	L$chacha20_consts(%rip),%xmm0
+	movdqa	0+48(%rbp),%xmm4
+	movdqa	0+64(%rbp),%xmm8
+	movdqa	%xmm0,%xmm1
+	movdqa	%xmm4,%xmm5
+	movdqa	%xmm8,%xmm9
+	movdqa	%xmm0,%xmm2
+	movdqa	%xmm4,%xmm6
+	movdqa	%xmm8,%xmm10
+	movdqa	%xmm0,%xmm3
+	movdqa	%xmm4,%xmm7
+	movdqa	%xmm8,%xmm11
+	movdqa	0+96(%rbp),%xmm15
+	paddd	L$sse_inc(%rip),%xmm15
+	movdqa	%xmm15,%xmm14
+	paddd	L$sse_inc(%rip),%xmm14
+	movdqa	%xmm14,%xmm13
+	paddd	L$sse_inc(%rip),%xmm13
+	movdqa	%xmm13,%xmm12
+	paddd	L$sse_inc(%rip),%xmm12
+	movdqa	%xmm12,0+96(%rbp)
+	movdqa	%xmm13,0+112(%rbp)
+	movdqa	%xmm14,0+128(%rbp)
+	movdqa	%xmm15,0+144(%rbp)
+
+.p2align	5
+L$seal_sse_main_rounds:
+	movdqa	%xmm8,0+80(%rbp)
+	movdqa	L$rol16(%rip),%xmm8
+	paddd	%xmm7,%xmm3
+	paddd	%xmm6,%xmm2
+	paddd	%xmm5,%xmm1
+	paddd	%xmm4,%xmm0
+	pxor	%xmm3,%xmm15
+	pxor	%xmm2,%xmm14
+	pxor	%xmm1,%xmm13
+	pxor	%xmm0,%xmm12
+.byte	102,69,15,56,0,248
+.byte	102,69,15,56,0,240
+.byte	102,69,15,56,0,232
+.byte	102,69,15,56,0,224
+	movdqa	0+80(%rbp),%xmm8
+	paddd	%xmm15,%xmm11
+	paddd	%xmm14,%xmm10
+	paddd	%xmm13,%xmm9
+	paddd	%xmm12,%xmm8
+	pxor	%xmm11,%xmm7
+	addq	0+0(%rdi),%r10
+	adcq	8+0(%rdi),%r11
+	adcq	$1,%r12
+	pxor	%xmm10,%xmm6
+	pxor	%xmm9,%xmm5
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm8,0+80(%rbp)
+	movdqa	%xmm7,%xmm8
+	psrld	$20,%xmm8
+	pslld	$32-20,%xmm7
+	pxor	%xmm8,%xmm7
+	movdqa	%xmm6,%xmm8
+	psrld	$20,%xmm8
+	pslld	$32-20,%xmm6
+	pxor	%xmm8,%xmm6
+	movdqa	%xmm5,%xmm8
+	psrld	$20,%xmm8
+	pslld	$32-20,%xmm5
+	pxor	%xmm8,%xmm5
+	movdqa	%xmm4,%xmm8
+	psrld	$20,%xmm8
+	pslld	$32-20,%xmm4
+	pxor	%xmm8,%xmm4
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movdqa	L$rol8(%rip),%xmm8
+	paddd	%xmm7,%xmm3
+	paddd	%xmm6,%xmm2
+	paddd	%xmm5,%xmm1
+	paddd	%xmm4,%xmm0
+	pxor	%xmm3,%xmm15
+	pxor	%xmm2,%xmm14
+	pxor	%xmm1,%xmm13
+	pxor	%xmm0,%xmm12
+.byte	102,69,15,56,0,248
+.byte	102,69,15,56,0,240
+.byte	102,69,15,56,0,232
+.byte	102,69,15,56,0,224
+	movdqa	0+80(%rbp),%xmm8
+	paddd	%xmm15,%xmm11
+	paddd	%xmm14,%xmm10
+	paddd	%xmm13,%xmm9
+	paddd	%xmm12,%xmm8
+	pxor	%xmm11,%xmm7
+	pxor	%xmm10,%xmm6
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	pxor	%xmm9,%xmm5
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm8,0+80(%rbp)
+	movdqa	%xmm7,%xmm8
+	psrld	$25,%xmm8
+	pslld	$32-25,%xmm7
+	pxor	%xmm8,%xmm7
+	movdqa	%xmm6,%xmm8
+	psrld	$25,%xmm8
+	pslld	$32-25,%xmm6
+	pxor	%xmm8,%xmm6
+	movdqa	%xmm5,%xmm8
+	psrld	$25,%xmm8
+	pslld	$32-25,%xmm5
+	pxor	%xmm8,%xmm5
+	movdqa	%xmm4,%xmm8
+	psrld	$25,%xmm8
+	pslld	$32-25,%xmm4
+	pxor	%xmm8,%xmm4
+	movdqa	0+80(%rbp),%xmm8
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+.byte	102,15,58,15,255,4
+.byte	102,69,15,58,15,219,8
+.byte	102,69,15,58,15,255,12
+.byte	102,15,58,15,246,4
+.byte	102,69,15,58,15,210,8
+.byte	102,69,15,58,15,246,12
+.byte	102,15,58,15,237,4
+.byte	102,69,15,58,15,201,8
+.byte	102,69,15,58,15,237,12
+.byte	102,15,58,15,228,4
+.byte	102,69,15,58,15,192,8
+.byte	102,69,15,58,15,228,12
+	movdqa	%xmm8,0+80(%rbp)
+	movdqa	L$rol16(%rip),%xmm8
+	paddd	%xmm7,%xmm3
+	paddd	%xmm6,%xmm2
+	paddd	%xmm5,%xmm1
+	paddd	%xmm4,%xmm0
+	pxor	%xmm3,%xmm15
+	pxor	%xmm2,%xmm14
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+	pxor	%xmm1,%xmm13
+	pxor	%xmm0,%xmm12
+.byte	102,69,15,56,0,248
+.byte	102,69,15,56,0,240
+.byte	102,69,15,56,0,232
+.byte	102,69,15,56,0,224
+	movdqa	0+80(%rbp),%xmm8
+	paddd	%xmm15,%xmm11
+	paddd	%xmm14,%xmm10
+	paddd	%xmm13,%xmm9
+	paddd	%xmm12,%xmm8
+	pxor	%xmm11,%xmm7
+	pxor	%xmm10,%xmm6
+	pxor	%xmm9,%xmm5
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm8,0+80(%rbp)
+	movdqa	%xmm7,%xmm8
+	psrld	$20,%xmm8
+	pslld	$32-20,%xmm7
+	pxor	%xmm8,%xmm7
+	movdqa	%xmm6,%xmm8
+	psrld	$20,%xmm8
+	pslld	$32-20,%xmm6
+	pxor	%xmm8,%xmm6
+	movdqa	%xmm5,%xmm8
+	psrld	$20,%xmm8
+	pslld	$32-20,%xmm5
+	pxor	%xmm8,%xmm5
+	movdqa	%xmm4,%xmm8
+	psrld	$20,%xmm8
+	pslld	$32-20,%xmm4
+	pxor	%xmm8,%xmm4
+	movdqa	L$rol8(%rip),%xmm8
+	paddd	%xmm7,%xmm3
+	paddd	%xmm6,%xmm2
+	paddd	%xmm5,%xmm1
+	paddd	%xmm4,%xmm0
+	pxor	%xmm3,%xmm15
+	pxor	%xmm2,%xmm14
+	pxor	%xmm1,%xmm13
+	pxor	%xmm0,%xmm12
+.byte	102,69,15,56,0,248
+.byte	102,69,15,56,0,240
+.byte	102,69,15,56,0,232
+.byte	102,69,15,56,0,224
+	movdqa	0+80(%rbp),%xmm8
+	paddd	%xmm15,%xmm11
+	paddd	%xmm14,%xmm10
+	paddd	%xmm13,%xmm9
+	paddd	%xmm12,%xmm8
+	pxor	%xmm11,%xmm7
+	pxor	%xmm10,%xmm6
+	pxor	%xmm9,%xmm5
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm8,0+80(%rbp)
+	movdqa	%xmm7,%xmm8
+	psrld	$25,%xmm8
+	pslld	$32-25,%xmm7
+	pxor	%xmm8,%xmm7
+	movdqa	%xmm6,%xmm8
+	psrld	$25,%xmm8
+	pslld	$32-25,%xmm6
+	pxor	%xmm8,%xmm6
+	movdqa	%xmm5,%xmm8
+	psrld	$25,%xmm8
+	pslld	$32-25,%xmm5
+	pxor	%xmm8,%xmm5
+	movdqa	%xmm4,%xmm8
+	psrld	$25,%xmm8
+	pslld	$32-25,%xmm4
+	pxor	%xmm8,%xmm4
+	movdqa	0+80(%rbp),%xmm8
+.byte	102,15,58,15,255,12
+.byte	102,69,15,58,15,219,8
+.byte	102,69,15,58,15,255,4
+.byte	102,15,58,15,246,12
+.byte	102,69,15,58,15,210,8
+.byte	102,69,15,58,15,246,4
+.byte	102,15,58,15,237,12
+.byte	102,69,15,58,15,201,8
+.byte	102,69,15,58,15,237,4
+.byte	102,15,58,15,228,12
+.byte	102,69,15,58,15,192,8
+.byte	102,69,15,58,15,228,4
+
+	leaq	16(%rdi),%rdi
+	decq	%r8
+	jge	L$seal_sse_main_rounds
+	addq	0+0(%rdi),%r10
+	adcq	8+0(%rdi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	leaq	16(%rdi),%rdi
+	decq	%rcx
+	jg	L$seal_sse_main_rounds
+	paddd	L$chacha20_consts(%rip),%xmm3
+	paddd	0+48(%rbp),%xmm7
+	paddd	0+64(%rbp),%xmm11
+	paddd	0+144(%rbp),%xmm15
+	paddd	L$chacha20_consts(%rip),%xmm2
+	paddd	0+48(%rbp),%xmm6
+	paddd	0+64(%rbp),%xmm10
+	paddd	0+128(%rbp),%xmm14
+	paddd	L$chacha20_consts(%rip),%xmm1
+	paddd	0+48(%rbp),%xmm5
+	paddd	0+64(%rbp),%xmm9
+	paddd	0+112(%rbp),%xmm13
+	paddd	L$chacha20_consts(%rip),%xmm0
+	paddd	0+48(%rbp),%xmm4
+	paddd	0+64(%rbp),%xmm8
+	paddd	0+96(%rbp),%xmm12
+
+	movdqa	%xmm14,0+80(%rbp)
+	movdqa	%xmm14,0+80(%rbp)
+	movdqu	0 + 0(%rsi),%xmm14
+	pxor	%xmm3,%xmm14
+	movdqu	%xmm14,0 + 0(%rdi)
+	movdqu	16 + 0(%rsi),%xmm14
+	pxor	%xmm7,%xmm14
+	movdqu	%xmm14,16 + 0(%rdi)
+	movdqu	32 + 0(%rsi),%xmm14
+	pxor	%xmm11,%xmm14
+	movdqu	%xmm14,32 + 0(%rdi)
+	movdqu	48 + 0(%rsi),%xmm14
+	pxor	%xmm15,%xmm14
+	movdqu	%xmm14,48 + 0(%rdi)
+
+	movdqa	0+80(%rbp),%xmm14
+	movdqu	0 + 64(%rsi),%xmm3
+	movdqu	16 + 64(%rsi),%xmm7
+	movdqu	32 + 64(%rsi),%xmm11
+	movdqu	48 + 64(%rsi),%xmm15
+	pxor	%xmm3,%xmm2
+	pxor	%xmm7,%xmm6
+	pxor	%xmm11,%xmm10
+	pxor	%xmm14,%xmm15
+	movdqu	%xmm2,0 + 64(%rdi)
+	movdqu	%xmm6,16 + 64(%rdi)
+	movdqu	%xmm10,32 + 64(%rdi)
+	movdqu	%xmm15,48 + 64(%rdi)
+	movdqu	0 + 128(%rsi),%xmm3
+	movdqu	16 + 128(%rsi),%xmm7
+	movdqu	32 + 128(%rsi),%xmm11
+	movdqu	48 + 128(%rsi),%xmm15
+	pxor	%xmm3,%xmm1
+	pxor	%xmm7,%xmm5
+	pxor	%xmm11,%xmm9
+	pxor	%xmm13,%xmm15
+	movdqu	%xmm1,0 + 128(%rdi)
+	movdqu	%xmm5,16 + 128(%rdi)
+	movdqu	%xmm9,32 + 128(%rdi)
+	movdqu	%xmm15,48 + 128(%rdi)
+
+	cmpq	$256,%rbx
+	ja	L$seal_sse_main_loop_xor
+
+	movq	$192,%rcx
+	subq	$192,%rbx
+	leaq	192(%rsi),%rsi
+	jmp	L$seal_sse_128_tail_hash
+L$seal_sse_main_loop_xor:
+	movdqu	0 + 192(%rsi),%xmm3
+	movdqu	16 + 192(%rsi),%xmm7
+	movdqu	32 + 192(%rsi),%xmm11
+	movdqu	48 + 192(%rsi),%xmm15
+	pxor	%xmm3,%xmm0
+	pxor	%xmm7,%xmm4
+	pxor	%xmm11,%xmm8
+	pxor	%xmm12,%xmm15
+	movdqu	%xmm0,0 + 192(%rdi)
+	movdqu	%xmm4,16 + 192(%rdi)
+	movdqu	%xmm8,32 + 192(%rdi)
+	movdqu	%xmm15,48 + 192(%rdi)
+
+	leaq	256(%rsi),%rsi
+	subq	$256,%rbx
+	movq	$6,%rcx
+	movq	$4,%r8
+	cmpq	$192,%rbx
+	jg	L$seal_sse_main_loop
+	movq	%rbx,%rcx
+	testq	%rbx,%rbx
+	je	L$seal_sse_128_tail_hash
+	movq	$6,%rcx
+	cmpq	$128,%rbx
+	ja	L$seal_sse_tail_192
+	cmpq	$64,%rbx
+	ja	L$seal_sse_tail_128
+
+L$seal_sse_tail_64:
+	movdqa	L$chacha20_consts(%rip),%xmm0
+	movdqa	0+48(%rbp),%xmm4
+	movdqa	0+64(%rbp),%xmm8
+	movdqa	0+96(%rbp),%xmm12
+	paddd	L$sse_inc(%rip),%xmm12
+	movdqa	%xmm12,0+96(%rbp)
+
+L$seal_sse_tail_64_rounds_and_x2hash:
+	addq	0+0(%rdi),%r10
+	adcq	8+0(%rdi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	leaq	16(%rdi),%rdi
+L$seal_sse_tail_64_rounds_and_x1hash:
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol16(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm4
+	pxor	%xmm3,%xmm4
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol8(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm4
+	pxor	%xmm3,%xmm4
+.byte	102,15,58,15,228,4
+.byte	102,69,15,58,15,192,8
+.byte	102,69,15,58,15,228,12
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol16(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm4
+	pxor	%xmm3,%xmm4
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol8(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm4
+	pxor	%xmm3,%xmm4
+.byte	102,15,58,15,228,12
+.byte	102,69,15,58,15,192,8
+.byte	102,69,15,58,15,228,4
+	addq	0+0(%rdi),%r10
+	adcq	8+0(%rdi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	leaq	16(%rdi),%rdi
+	decq	%rcx
+	jg	L$seal_sse_tail_64_rounds_and_x2hash
+	decq	%r8
+	jge	L$seal_sse_tail_64_rounds_and_x1hash
+	paddd	L$chacha20_consts(%rip),%xmm0
+	paddd	0+48(%rbp),%xmm4
+	paddd	0+64(%rbp),%xmm8
+	paddd	0+96(%rbp),%xmm12
+
+	jmp	L$seal_sse_128_tail_xor
+
+L$seal_sse_tail_128:
+	movdqa	L$chacha20_consts(%rip),%xmm0
+	movdqa	0+48(%rbp),%xmm4
+	movdqa	0+64(%rbp),%xmm8
+	movdqa	%xmm0,%xmm1
+	movdqa	%xmm4,%xmm5
+	movdqa	%xmm8,%xmm9
+	movdqa	0+96(%rbp),%xmm13
+	paddd	L$sse_inc(%rip),%xmm13
+	movdqa	%xmm13,%xmm12
+	paddd	L$sse_inc(%rip),%xmm12
+	movdqa	%xmm12,0+96(%rbp)
+	movdqa	%xmm13,0+112(%rbp)
+
+L$seal_sse_tail_128_rounds_and_x2hash:
+	addq	0+0(%rdi),%r10
+	adcq	8+0(%rdi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	leaq	16(%rdi),%rdi
+L$seal_sse_tail_128_rounds_and_x1hash:
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol16(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm4
+	pxor	%xmm3,%xmm4
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol8(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm4
+	pxor	%xmm3,%xmm4
+.byte	102,15,58,15,228,4
+.byte	102,69,15,58,15,192,8
+.byte	102,69,15,58,15,228,12
+	paddd	%xmm5,%xmm1
+	pxor	%xmm1,%xmm13
+	pshufb	L$rol16(%rip),%xmm13
+	paddd	%xmm13,%xmm9
+	pxor	%xmm9,%xmm5
+	movdqa	%xmm5,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm5
+	pxor	%xmm3,%xmm5
+	paddd	%xmm5,%xmm1
+	pxor	%xmm1,%xmm13
+	pshufb	L$rol8(%rip),%xmm13
+	paddd	%xmm13,%xmm9
+	pxor	%xmm9,%xmm5
+	movdqa	%xmm5,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm5
+	pxor	%xmm3,%xmm5
+.byte	102,15,58,15,237,4
+.byte	102,69,15,58,15,201,8
+.byte	102,69,15,58,15,237,12
+	addq	0+0(%rdi),%r10
+	adcq	8+0(%rdi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol16(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm4
+	pxor	%xmm3,%xmm4
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol8(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm4
+	pxor	%xmm3,%xmm4
+.byte	102,15,58,15,228,12
+.byte	102,69,15,58,15,192,8
+.byte	102,69,15,58,15,228,4
+	paddd	%xmm5,%xmm1
+	pxor	%xmm1,%xmm13
+	pshufb	L$rol16(%rip),%xmm13
+	paddd	%xmm13,%xmm9
+	pxor	%xmm9,%xmm5
+	movdqa	%xmm5,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm5
+	pxor	%xmm3,%xmm5
+	paddd	%xmm5,%xmm1
+	pxor	%xmm1,%xmm13
+	pshufb	L$rol8(%rip),%xmm13
+	paddd	%xmm13,%xmm9
+	pxor	%xmm9,%xmm5
+	movdqa	%xmm5,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm5
+	pxor	%xmm3,%xmm5
+.byte	102,15,58,15,237,12
+.byte	102,69,15,58,15,201,8
+.byte	102,69,15,58,15,237,4
+
+	leaq	16(%rdi),%rdi
+	decq	%rcx
+	jg	L$seal_sse_tail_128_rounds_and_x2hash
+	decq	%r8
+	jge	L$seal_sse_tail_128_rounds_and_x1hash
+	paddd	L$chacha20_consts(%rip),%xmm1
+	paddd	0+48(%rbp),%xmm5
+	paddd	0+64(%rbp),%xmm9
+	paddd	0+112(%rbp),%xmm13
+	paddd	L$chacha20_consts(%rip),%xmm0
+	paddd	0+48(%rbp),%xmm4
+	paddd	0+64(%rbp),%xmm8
+	paddd	0+96(%rbp),%xmm12
+	movdqu	0 + 0(%rsi),%xmm3
+	movdqu	16 + 0(%rsi),%xmm7
+	movdqu	32 + 0(%rsi),%xmm11
+	movdqu	48 + 0(%rsi),%xmm15
+	pxor	%xmm3,%xmm1
+	pxor	%xmm7,%xmm5
+	pxor	%xmm11,%xmm9
+	pxor	%xmm13,%xmm15
+	movdqu	%xmm1,0 + 0(%rdi)
+	movdqu	%xmm5,16 + 0(%rdi)
+	movdqu	%xmm9,32 + 0(%rdi)
+	movdqu	%xmm15,48 + 0(%rdi)
+
+	movq	$64,%rcx
+	subq	$64,%rbx
+	leaq	64(%rsi),%rsi
+	jmp	L$seal_sse_128_tail_hash
+
+L$seal_sse_tail_192:
+	movdqa	L$chacha20_consts(%rip),%xmm0
+	movdqa	0+48(%rbp),%xmm4
+	movdqa	0+64(%rbp),%xmm8
+	movdqa	%xmm0,%xmm1
+	movdqa	%xmm4,%xmm5
+	movdqa	%xmm8,%xmm9
+	movdqa	%xmm0,%xmm2
+	movdqa	%xmm4,%xmm6
+	movdqa	%xmm8,%xmm10
+	movdqa	0+96(%rbp),%xmm14
+	paddd	L$sse_inc(%rip),%xmm14
+	movdqa	%xmm14,%xmm13
+	paddd	L$sse_inc(%rip),%xmm13
+	movdqa	%xmm13,%xmm12
+	paddd	L$sse_inc(%rip),%xmm12
+	movdqa	%xmm12,0+96(%rbp)
+	movdqa	%xmm13,0+112(%rbp)
+	movdqa	%xmm14,0+128(%rbp)
+
+L$seal_sse_tail_192_rounds_and_x2hash:
+	addq	0+0(%rdi),%r10
+	adcq	8+0(%rdi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	leaq	16(%rdi),%rdi
+L$seal_sse_tail_192_rounds_and_x1hash:
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol16(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm4
+	pxor	%xmm3,%xmm4
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol8(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm4
+	pxor	%xmm3,%xmm4
+.byte	102,15,58,15,228,4
+.byte	102,69,15,58,15,192,8
+.byte	102,69,15,58,15,228,12
+	paddd	%xmm5,%xmm1
+	pxor	%xmm1,%xmm13
+	pshufb	L$rol16(%rip),%xmm13
+	paddd	%xmm13,%xmm9
+	pxor	%xmm9,%xmm5
+	movdqa	%xmm5,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm5
+	pxor	%xmm3,%xmm5
+	paddd	%xmm5,%xmm1
+	pxor	%xmm1,%xmm13
+	pshufb	L$rol8(%rip),%xmm13
+	paddd	%xmm13,%xmm9
+	pxor	%xmm9,%xmm5
+	movdqa	%xmm5,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm5
+	pxor	%xmm3,%xmm5
+.byte	102,15,58,15,237,4
+.byte	102,69,15,58,15,201,8
+.byte	102,69,15,58,15,237,12
+	paddd	%xmm6,%xmm2
+	pxor	%xmm2,%xmm14
+	pshufb	L$rol16(%rip),%xmm14
+	paddd	%xmm14,%xmm10
+	pxor	%xmm10,%xmm6
+	movdqa	%xmm6,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm6
+	pxor	%xmm3,%xmm6
+	paddd	%xmm6,%xmm2
+	pxor	%xmm2,%xmm14
+	pshufb	L$rol8(%rip),%xmm14
+	paddd	%xmm14,%xmm10
+	pxor	%xmm10,%xmm6
+	movdqa	%xmm6,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm6
+	pxor	%xmm3,%xmm6
+.byte	102,15,58,15,246,4
+.byte	102,69,15,58,15,210,8
+.byte	102,69,15,58,15,246,12
+	addq	0+0(%rdi),%r10
+	adcq	8+0(%rdi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol16(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm4
+	pxor	%xmm3,%xmm4
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol8(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm4
+	pxor	%xmm3,%xmm4
+.byte	102,15,58,15,228,12
+.byte	102,69,15,58,15,192,8
+.byte	102,69,15,58,15,228,4
+	paddd	%xmm5,%xmm1
+	pxor	%xmm1,%xmm13
+	pshufb	L$rol16(%rip),%xmm13
+	paddd	%xmm13,%xmm9
+	pxor	%xmm9,%xmm5
+	movdqa	%xmm5,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm5
+	pxor	%xmm3,%xmm5
+	paddd	%xmm5,%xmm1
+	pxor	%xmm1,%xmm13
+	pshufb	L$rol8(%rip),%xmm13
+	paddd	%xmm13,%xmm9
+	pxor	%xmm9,%xmm5
+	movdqa	%xmm5,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm5
+	pxor	%xmm3,%xmm5
+.byte	102,15,58,15,237,12
+.byte	102,69,15,58,15,201,8
+.byte	102,69,15,58,15,237,4
+	paddd	%xmm6,%xmm2
+	pxor	%xmm2,%xmm14
+	pshufb	L$rol16(%rip),%xmm14
+	paddd	%xmm14,%xmm10
+	pxor	%xmm10,%xmm6
+	movdqa	%xmm6,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm6
+	pxor	%xmm3,%xmm6
+	paddd	%xmm6,%xmm2
+	pxor	%xmm2,%xmm14
+	pshufb	L$rol8(%rip),%xmm14
+	paddd	%xmm14,%xmm10
+	pxor	%xmm10,%xmm6
+	movdqa	%xmm6,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm6
+	pxor	%xmm3,%xmm6
+.byte	102,15,58,15,246,12
+.byte	102,69,15,58,15,210,8
+.byte	102,69,15,58,15,246,4
+
+	leaq	16(%rdi),%rdi
+	decq	%rcx
+	jg	L$seal_sse_tail_192_rounds_and_x2hash
+	decq	%r8
+	jge	L$seal_sse_tail_192_rounds_and_x1hash
+	paddd	L$chacha20_consts(%rip),%xmm2
+	paddd	0+48(%rbp),%xmm6
+	paddd	0+64(%rbp),%xmm10
+	paddd	0+128(%rbp),%xmm14
+	paddd	L$chacha20_consts(%rip),%xmm1
+	paddd	0+48(%rbp),%xmm5
+	paddd	0+64(%rbp),%xmm9
+	paddd	0+112(%rbp),%xmm13
+	paddd	L$chacha20_consts(%rip),%xmm0
+	paddd	0+48(%rbp),%xmm4
+	paddd	0+64(%rbp),%xmm8
+	paddd	0+96(%rbp),%xmm12
+	movdqu	0 + 0(%rsi),%xmm3
+	movdqu	16 + 0(%rsi),%xmm7
+	movdqu	32 + 0(%rsi),%xmm11
+	movdqu	48 + 0(%rsi),%xmm15
+	pxor	%xmm3,%xmm2
+	pxor	%xmm7,%xmm6
+	pxor	%xmm11,%xmm10
+	pxor	%xmm14,%xmm15
+	movdqu	%xmm2,0 + 0(%rdi)
+	movdqu	%xmm6,16 + 0(%rdi)
+	movdqu	%xmm10,32 + 0(%rdi)
+	movdqu	%xmm15,48 + 0(%rdi)
+	movdqu	0 + 64(%rsi),%xmm3
+	movdqu	16 + 64(%rsi),%xmm7
+	movdqu	32 + 64(%rsi),%xmm11
+	movdqu	48 + 64(%rsi),%xmm15
+	pxor	%xmm3,%xmm1
+	pxor	%xmm7,%xmm5
+	pxor	%xmm11,%xmm9
+	pxor	%xmm13,%xmm15
+	movdqu	%xmm1,0 + 64(%rdi)
+	movdqu	%xmm5,16 + 64(%rdi)
+	movdqu	%xmm9,32 + 64(%rdi)
+	movdqu	%xmm15,48 + 64(%rdi)
+
+	movq	$128,%rcx
+	subq	$128,%rbx
+	leaq	128(%rsi),%rsi
+
+L$seal_sse_128_tail_hash:
+	cmpq	$16,%rcx
+	jb	L$seal_sse_128_tail_xor
+	addq	0+0(%rdi),%r10
+	adcq	8+0(%rdi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	subq	$16,%rcx
+	leaq	16(%rdi),%rdi
+	jmp	L$seal_sse_128_tail_hash
+
+L$seal_sse_128_tail_xor:
+	cmpq	$16,%rbx
+	jb	L$seal_sse_tail_16
+	subq	$16,%rbx
+
+	movdqu	0(%rsi),%xmm3
+	pxor	%xmm3,%xmm0
+	movdqu	%xmm0,0(%rdi)
+
+	addq	0(%rdi),%r10
+	adcq	8(%rdi),%r11
+	adcq	$1,%r12
+	leaq	16(%rsi),%rsi
+	leaq	16(%rdi),%rdi
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+
+	movdqa	%xmm4,%xmm0
+	movdqa	%xmm8,%xmm4
+	movdqa	%xmm12,%xmm8
+	movdqa	%xmm1,%xmm12
+	movdqa	%xmm5,%xmm1
+	movdqa	%xmm9,%xmm5
+	movdqa	%xmm13,%xmm9
+	jmp	L$seal_sse_128_tail_xor
+
+L$seal_sse_tail_16:
+	testq	%rbx,%rbx
+	jz	L$process_blocks_of_extra_in
+
+	movq	%rbx,%r8
+	movq	%rbx,%rcx
+	leaq	-1(%rsi,%rbx,1),%rsi
+	pxor	%xmm15,%xmm15
+L$seal_sse_tail_16_compose:
+	pslldq	$1,%xmm15
+	pinsrb	$0,(%rsi),%xmm15
+	leaq	-1(%rsi),%rsi
+	decq	%rcx
+	jne	L$seal_sse_tail_16_compose
+
+
+	pxor	%xmm0,%xmm15
+
+
+	movq	%rbx,%rcx
+	movdqu	%xmm15,%xmm0
+L$seal_sse_tail_16_extract:
+	pextrb	$0,%xmm0,(%rdi)
+	psrldq	$1,%xmm0
+	addq	$1,%rdi
+	subq	$1,%rcx
+	jnz	L$seal_sse_tail_16_extract
+
+
+
+
+
+
+
+
+	movq	288 + 0 + 32(%rsp),%r9
+	movq	56(%r9),%r14
+	movq	48(%r9),%r13
+	testq	%r14,%r14
+	jz	L$process_partial_block
+
+	movq	$16,%r15
+	subq	%rbx,%r15
+	cmpq	%r15,%r14
+
+	jge	L$load_extra_in
+	movq	%r14,%r15
+
+L$load_extra_in:
+
+
+	leaq	-1(%r13,%r15,1),%rsi
+
+
+	addq	%r15,%r13
+	subq	%r15,%r14
+	movq	%r13,48(%r9)
+	movq	%r14,56(%r9)
+
+
+
+	addq	%r15,%r8
+
+
+	pxor	%xmm11,%xmm11
+L$load_extra_load_loop:
+	pslldq	$1,%xmm11
+	pinsrb	$0,(%rsi),%xmm11
+	leaq	-1(%rsi),%rsi
+	subq	$1,%r15
+	jnz	L$load_extra_load_loop
+
+
+
+
+	movq	%rbx,%r15
+
+L$load_extra_shift_loop:
+	pslldq	$1,%xmm11
+	subq	$1,%r15
+	jnz	L$load_extra_shift_loop
+
+
+
+
+	leaq	L$and_masks(%rip),%r15
+	shlq	$4,%rbx
+	pand	-16(%r15,%rbx,1),%xmm15
+
+
+	por	%xmm11,%xmm15
+
+
+
+.byte	102,77,15,126,253
+	pextrq	$1,%xmm15,%r14
+	addq	%r13,%r10
+	adcq	%r14,%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+
+L$process_blocks_of_extra_in:
+
+	movq	288+32+0 (%rsp),%r9
+	movq	48(%r9),%rsi
+	movq	56(%r9),%r8
+	movq	%r8,%rcx
+	shrq	$4,%r8
+
+L$process_extra_hash_loop:
+	jz	process_extra_in_trailer
+	addq	0+0(%rsi),%r10
+	adcq	8+0(%rsi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	leaq	16(%rsi),%rsi
+	subq	$1,%r8
+	jmp	L$process_extra_hash_loop
+process_extra_in_trailer:
+	andq	$15,%rcx
+	movq	%rcx,%rbx
+	jz	L$do_length_block
+	leaq	-1(%rsi,%rcx,1),%rsi
+
+L$process_extra_in_trailer_load:
+	pslldq	$1,%xmm15
+	pinsrb	$0,(%rsi),%xmm15
+	leaq	-1(%rsi),%rsi
+	subq	$1,%rcx
+	jnz	L$process_extra_in_trailer_load
+
+L$process_partial_block:
+
+	leaq	L$and_masks(%rip),%r15
+	shlq	$4,%rbx
+	pand	-16(%r15,%rbx,1),%xmm15
+.byte	102,77,15,126,253
+	pextrq	$1,%xmm15,%r14
+	addq	%r13,%r10
+	adcq	%r14,%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+
+L$do_length_block:
+	addq	0+0+32(%rbp),%r10
+	adcq	8+0+32(%rbp),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+
+	movq	%r10,%r13
+	movq	%r11,%r14
+	movq	%r12,%r15
+	subq	$-5,%r10
+	sbbq	$-1,%r11
+	sbbq	$3,%r12
+	cmovcq	%r13,%r10
+	cmovcq	%r14,%r11
+	cmovcq	%r15,%r12
+
+	addq	0+0+16(%rbp),%r10
+	adcq	8+0+16(%rbp),%r11
+
+
+	addq	$288 + 0 + 32,%rsp
+
+
+	popq	%r9
+
+	movq	%r10,(%r9)
+	movq	%r11,8(%r9)
+	popq	%r15
+
+	popq	%r14
+
+	popq	%r13
+
+	popq	%r12
+
+	popq	%rbx
+
+	popq	%rbp
+
+	ret
+
+L$seal_sse_128:
+
+	movdqu	L$chacha20_consts(%rip),%xmm0
+	movdqa	%xmm0,%xmm1
+	movdqa	%xmm0,%xmm2
+	movdqu	0(%r9),%xmm4
+	movdqa	%xmm4,%xmm5
+	movdqa	%xmm4,%xmm6
+	movdqu	16(%r9),%xmm8
+	movdqa	%xmm8,%xmm9
+	movdqa	%xmm8,%xmm10
+	movdqu	32(%r9),%xmm14
+	movdqa	%xmm14,%xmm12
+	paddd	L$sse_inc(%rip),%xmm12
+	movdqa	%xmm12,%xmm13
+	paddd	L$sse_inc(%rip),%xmm13
+	movdqa	%xmm4,%xmm7
+	movdqa	%xmm8,%xmm11
+	movdqa	%xmm12,%xmm15
+	movq	$10,%r10
+
+L$seal_sse_128_rounds:
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol16(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm4
+	pxor	%xmm3,%xmm4
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol8(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm4
+	pxor	%xmm3,%xmm4
+.byte	102,15,58,15,228,4
+.byte	102,69,15,58,15,192,8
+.byte	102,69,15,58,15,228,12
+	paddd	%xmm5,%xmm1
+	pxor	%xmm1,%xmm13
+	pshufb	L$rol16(%rip),%xmm13
+	paddd	%xmm13,%xmm9
+	pxor	%xmm9,%xmm5
+	movdqa	%xmm5,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm5
+	pxor	%xmm3,%xmm5
+	paddd	%xmm5,%xmm1
+	pxor	%xmm1,%xmm13
+	pshufb	L$rol8(%rip),%xmm13
+	paddd	%xmm13,%xmm9
+	pxor	%xmm9,%xmm5
+	movdqa	%xmm5,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm5
+	pxor	%xmm3,%xmm5
+.byte	102,15,58,15,237,4
+.byte	102,69,15,58,15,201,8
+.byte	102,69,15,58,15,237,12
+	paddd	%xmm6,%xmm2
+	pxor	%xmm2,%xmm14
+	pshufb	L$rol16(%rip),%xmm14
+	paddd	%xmm14,%xmm10
+	pxor	%xmm10,%xmm6
+	movdqa	%xmm6,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm6
+	pxor	%xmm3,%xmm6
+	paddd	%xmm6,%xmm2
+	pxor	%xmm2,%xmm14
+	pshufb	L$rol8(%rip),%xmm14
+	paddd	%xmm14,%xmm10
+	pxor	%xmm10,%xmm6
+	movdqa	%xmm6,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm6
+	pxor	%xmm3,%xmm6
+.byte	102,15,58,15,246,4
+.byte	102,69,15,58,15,210,8
+.byte	102,69,15,58,15,246,12
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol16(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm4
+	pxor	%xmm3,%xmm4
+	paddd	%xmm4,%xmm0
+	pxor	%xmm0,%xmm12
+	pshufb	L$rol8(%rip),%xmm12
+	paddd	%xmm12,%xmm8
+	pxor	%xmm8,%xmm4
+	movdqa	%xmm4,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm4
+	pxor	%xmm3,%xmm4
+.byte	102,15,58,15,228,12
+.byte	102,69,15,58,15,192,8
+.byte	102,69,15,58,15,228,4
+	paddd	%xmm5,%xmm1
+	pxor	%xmm1,%xmm13
+	pshufb	L$rol16(%rip),%xmm13
+	paddd	%xmm13,%xmm9
+	pxor	%xmm9,%xmm5
+	movdqa	%xmm5,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm5
+	pxor	%xmm3,%xmm5
+	paddd	%xmm5,%xmm1
+	pxor	%xmm1,%xmm13
+	pshufb	L$rol8(%rip),%xmm13
+	paddd	%xmm13,%xmm9
+	pxor	%xmm9,%xmm5
+	movdqa	%xmm5,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm5
+	pxor	%xmm3,%xmm5
+.byte	102,15,58,15,237,12
+.byte	102,69,15,58,15,201,8
+.byte	102,69,15,58,15,237,4
+	paddd	%xmm6,%xmm2
+	pxor	%xmm2,%xmm14
+	pshufb	L$rol16(%rip),%xmm14
+	paddd	%xmm14,%xmm10
+	pxor	%xmm10,%xmm6
+	movdqa	%xmm6,%xmm3
+	pslld	$12,%xmm3
+	psrld	$20,%xmm6
+	pxor	%xmm3,%xmm6
+	paddd	%xmm6,%xmm2
+	pxor	%xmm2,%xmm14
+	pshufb	L$rol8(%rip),%xmm14
+	paddd	%xmm14,%xmm10
+	pxor	%xmm10,%xmm6
+	movdqa	%xmm6,%xmm3
+	pslld	$7,%xmm3
+	psrld	$25,%xmm6
+	pxor	%xmm3,%xmm6
+.byte	102,15,58,15,246,12
+.byte	102,69,15,58,15,210,8
+.byte	102,69,15,58,15,246,4
+
+	decq	%r10
+	jnz	L$seal_sse_128_rounds
+	paddd	L$chacha20_consts(%rip),%xmm0
+	paddd	L$chacha20_consts(%rip),%xmm1
+	paddd	L$chacha20_consts(%rip),%xmm2
+	paddd	%xmm7,%xmm4
+	paddd	%xmm7,%xmm5
+	paddd	%xmm7,%xmm6
+	paddd	%xmm11,%xmm8
+	paddd	%xmm11,%xmm9
+	paddd	%xmm15,%xmm12
+	paddd	L$sse_inc(%rip),%xmm15
+	paddd	%xmm15,%xmm13
+
+	pand	L$clamp(%rip),%xmm2
+	movdqa	%xmm2,0+0(%rbp)
+	movdqa	%xmm6,0+16(%rbp)
+
+	movq	%r8,%r8
+	call	poly_hash_ad_internal
+	jmp	L$seal_sse_128_tail_xor
+
+
+
+
+.globl	_chacha20_poly1305_open_avx2
+.private_extern _chacha20_poly1305_open_avx2
+
+.p2align	6
+_chacha20_poly1305_open_avx2:
+
+_CET_ENDBR
+	pushq	%rbp
+
+	pushq	%rbx
+
+	pushq	%r12
+
+	pushq	%r13
+
+	pushq	%r14
+
+	pushq	%r15
+
+
+
+	pushq	%r9
+
+	subq	$288 + 0 + 32,%rsp
+
+
+	leaq	32(%rsp),%rbp
+	andq	$-32,%rbp
+
+	movq	%rdx,%rbx
+	movq	%r8,0+0+32(%rbp)
+	movq	%rbx,8+0+32(%rbp)
+
+	vzeroupper
+	vmovdqa	L$chacha20_consts(%rip),%ymm0
+	vbroadcasti128	0(%r9),%ymm4
+	vbroadcasti128	16(%r9),%ymm8
+	vbroadcasti128	32(%r9),%ymm12
+	vpaddd	L$avx2_init(%rip),%ymm12,%ymm12
+	cmpq	$192,%rbx
+	jbe	L$open_avx2_192
+	cmpq	$320,%rbx
+	jbe	L$open_avx2_320
+
+	vmovdqa	%ymm4,0+64(%rbp)
+	vmovdqa	%ymm8,0+96(%rbp)
+	vmovdqa	%ymm12,0+160(%rbp)
+	movq	$10,%r10
+L$open_avx2_init_rounds:
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol16(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpsrld	$20,%ymm4,%ymm3
+	vpslld	$12,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol8(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpslld	$7,%ymm4,%ymm3
+	vpsrld	$25,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpalignr	$12,%ymm12,%ymm12,%ymm12
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$4,%ymm4,%ymm4,%ymm4
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol16(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpsrld	$20,%ymm4,%ymm3
+	vpslld	$12,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol8(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpslld	$7,%ymm4,%ymm3
+	vpsrld	$25,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpalignr	$4,%ymm12,%ymm12,%ymm12
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$12,%ymm4,%ymm4,%ymm4
+
+	decq	%r10
+	jne	L$open_avx2_init_rounds
+	vpaddd	L$chacha20_consts(%rip),%ymm0,%ymm0
+	vpaddd	0+64(%rbp),%ymm4,%ymm4
+	vpaddd	0+96(%rbp),%ymm8,%ymm8
+	vpaddd	0+160(%rbp),%ymm12,%ymm12
+
+	vperm2i128	$0x02,%ymm0,%ymm4,%ymm3
+
+	vpand	L$clamp(%rip),%ymm3,%ymm3
+	vmovdqa	%ymm3,0+0(%rbp)
+
+	vperm2i128	$0x13,%ymm0,%ymm4,%ymm0
+	vperm2i128	$0x13,%ymm8,%ymm12,%ymm4
+
+	movq	%r8,%r8
+	call	poly_hash_ad_internal
+
+	xorq	%rcx,%rcx
+L$open_avx2_init_hash:
+	addq	0+0(%rsi,%rcx,1),%r10
+	adcq	8+0(%rsi,%rcx,1),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	addq	$16,%rcx
+	cmpq	$64,%rcx
+	jne	L$open_avx2_init_hash
+
+	vpxor	0(%rsi),%ymm0,%ymm0
+	vpxor	32(%rsi),%ymm4,%ymm4
+
+	vmovdqu	%ymm0,0(%rdi)
+	vmovdqu	%ymm4,32(%rdi)
+	leaq	64(%rsi),%rsi
+	leaq	64(%rdi),%rdi
+	subq	$64,%rbx
+L$open_avx2_main_loop:
+
+	cmpq	$512,%rbx
+	jb	L$open_avx2_main_loop_done
+	vmovdqa	L$chacha20_consts(%rip),%ymm0
+	vmovdqa	0+64(%rbp),%ymm4
+	vmovdqa	0+96(%rbp),%ymm8
+	vmovdqa	%ymm0,%ymm1
+	vmovdqa	%ymm4,%ymm5
+	vmovdqa	%ymm8,%ymm9
+	vmovdqa	%ymm0,%ymm2
+	vmovdqa	%ymm4,%ymm6
+	vmovdqa	%ymm8,%ymm10
+	vmovdqa	%ymm0,%ymm3
+	vmovdqa	%ymm4,%ymm7
+	vmovdqa	%ymm8,%ymm11
+	vmovdqa	L$avx2_inc(%rip),%ymm12
+	vpaddd	0+160(%rbp),%ymm12,%ymm15
+	vpaddd	%ymm15,%ymm12,%ymm14
+	vpaddd	%ymm14,%ymm12,%ymm13
+	vpaddd	%ymm13,%ymm12,%ymm12
+	vmovdqa	%ymm15,0+256(%rbp)
+	vmovdqa	%ymm14,0+224(%rbp)
+	vmovdqa	%ymm13,0+192(%rbp)
+	vmovdqa	%ymm12,0+160(%rbp)
+
+	xorq	%rcx,%rcx
+L$open_avx2_main_loop_rounds:
+	addq	0+0(%rsi,%rcx,1),%r10
+	adcq	8+0(%rsi,%rcx,1),%r11
+	adcq	$1,%r12
+	vmovdqa	%ymm8,0+128(%rbp)
+	vmovdqa	L$rol16(%rip),%ymm8
+	vpaddd	%ymm7,%ymm3,%ymm3
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm3,%ymm15,%ymm15
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpxor	%ymm0,%ymm12,%ymm12
+	movq	0+0+0(%rbp),%rdx
+	movq	%rdx,%r15
+	mulxq	%r10,%r13,%r14
+	mulxq	%r11,%rax,%rdx
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	vpshufb	%ymm8,%ymm15,%ymm15
+	vpshufb	%ymm8,%ymm14,%ymm14
+	vpshufb	%ymm8,%ymm13,%ymm13
+	vpshufb	%ymm8,%ymm12,%ymm12
+	vpaddd	%ymm15,%ymm11,%ymm11
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpaddd	0+128(%rbp),%ymm12,%ymm8
+	vpxor	%ymm11,%ymm7,%ymm7
+	movq	8+0+0(%rbp),%rdx
+	mulxq	%r10,%r10,%rax
+	addq	%r10,%r14
+	mulxq	%r11,%r11,%r9
+	adcq	%r11,%r15
+	adcq	$0,%r9
+	imulq	%r12,%rdx
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	%ymm8,0+128(%rbp)
+	vpsrld	$20,%ymm7,%ymm8
+	vpslld	$32-20,%ymm7,%ymm7
+	vpxor	%ymm8,%ymm7,%ymm7
+	vpsrld	$20,%ymm6,%ymm8
+	vpslld	$32-20,%ymm6,%ymm6
+	vpxor	%ymm8,%ymm6,%ymm6
+	vpsrld	$20,%ymm5,%ymm8
+	vpslld	$32-20,%ymm5,%ymm5
+	addq	%rax,%r15
+	adcq	%rdx,%r9
+	vpxor	%ymm8,%ymm5,%ymm5
+	vpsrld	$20,%ymm4,%ymm8
+	vpslld	$32-20,%ymm4,%ymm4
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	L$rol8(%rip),%ymm8
+	vpaddd	%ymm7,%ymm3,%ymm3
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm3,%ymm15,%ymm15
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	%ymm8,%ymm15,%ymm15
+	vpshufb	%ymm8,%ymm14,%ymm14
+	vpshufb	%ymm8,%ymm13,%ymm13
+	vpshufb	%ymm8,%ymm12,%ymm12
+	vpaddd	%ymm15,%ymm11,%ymm11
+	vpaddd	%ymm14,%ymm10,%ymm10
+	addq	0+16(%rsi,%rcx,1),%r10
+	adcq	8+16(%rsi,%rcx,1),%r11
+	adcq	$1,%r12
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpaddd	0+128(%rbp),%ymm12,%ymm8
+	vpxor	%ymm11,%ymm7,%ymm7
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	%ymm8,0+128(%rbp)
+	vpsrld	$25,%ymm7,%ymm8
+	movq	0+0+0(%rbp),%rdx
+	movq	%rdx,%r15
+	mulxq	%r10,%r13,%r14
+	mulxq	%r11,%rax,%rdx
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	vpslld	$32-25,%ymm7,%ymm7
+	vpxor	%ymm8,%ymm7,%ymm7
+	vpsrld	$25,%ymm6,%ymm8
+	vpslld	$32-25,%ymm6,%ymm6
+	vpxor	%ymm8,%ymm6,%ymm6
+	vpsrld	$25,%ymm5,%ymm8
+	vpslld	$32-25,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm5,%ymm5
+	vpsrld	$25,%ymm4,%ymm8
+	vpslld	$32-25,%ymm4,%ymm4
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	0+128(%rbp),%ymm8
+	vpalignr	$4,%ymm7,%ymm7,%ymm7
+	vpalignr	$8,%ymm11,%ymm11,%ymm11
+	vpalignr	$12,%ymm15,%ymm15,%ymm15
+	vpalignr	$4,%ymm6,%ymm6,%ymm6
+	vpalignr	$8,%ymm10,%ymm10,%ymm10
+	vpalignr	$12,%ymm14,%ymm14,%ymm14
+	movq	8+0+0(%rbp),%rdx
+	mulxq	%r10,%r10,%rax
+	addq	%r10,%r14
+	mulxq	%r11,%r11,%r9
+	adcq	%r11,%r15
+	adcq	$0,%r9
+	imulq	%r12,%rdx
+	vpalignr	$4,%ymm5,%ymm5,%ymm5
+	vpalignr	$8,%ymm9,%ymm9,%ymm9
+	vpalignr	$12,%ymm13,%ymm13,%ymm13
+	vpalignr	$4,%ymm4,%ymm4,%ymm4
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$12,%ymm12,%ymm12,%ymm12
+	vmovdqa	%ymm8,0+128(%rbp)
+	vmovdqa	L$rol16(%rip),%ymm8
+	vpaddd	%ymm7,%ymm3,%ymm3
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm3,%ymm15,%ymm15
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	%ymm8,%ymm15,%ymm15
+	vpshufb	%ymm8,%ymm14,%ymm14
+	addq	%rax,%r15
+	adcq	%rdx,%r9
+	vpshufb	%ymm8,%ymm13,%ymm13
+	vpshufb	%ymm8,%ymm12,%ymm12
+	vpaddd	%ymm15,%ymm11,%ymm11
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpaddd	0+128(%rbp),%ymm12,%ymm8
+	vpxor	%ymm11,%ymm7,%ymm7
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpxor	%ymm9,%ymm5,%ymm5
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	%ymm8,0+128(%rbp)
+	vpsrld	$20,%ymm7,%ymm8
+	vpslld	$32-20,%ymm7,%ymm7
+	vpxor	%ymm8,%ymm7,%ymm7
+	vpsrld	$20,%ymm6,%ymm8
+	vpslld	$32-20,%ymm6,%ymm6
+	vpxor	%ymm8,%ymm6,%ymm6
+	addq	0+32(%rsi,%rcx,1),%r10
+	adcq	8+32(%rsi,%rcx,1),%r11
+	adcq	$1,%r12
+
+	leaq	48(%rcx),%rcx
+	vpsrld	$20,%ymm5,%ymm8
+	vpslld	$32-20,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm5,%ymm5
+	vpsrld	$20,%ymm4,%ymm8
+	vpslld	$32-20,%ymm4,%ymm4
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	L$rol8(%rip),%ymm8
+	vpaddd	%ymm7,%ymm3,%ymm3
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm3,%ymm15,%ymm15
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	%ymm8,%ymm15,%ymm15
+	vpshufb	%ymm8,%ymm14,%ymm14
+	vpshufb	%ymm8,%ymm13,%ymm13
+	movq	0+0+0(%rbp),%rdx
+	movq	%rdx,%r15
+	mulxq	%r10,%r13,%r14
+	mulxq	%r11,%rax,%rdx
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	vpshufb	%ymm8,%ymm12,%ymm12
+	vpaddd	%ymm15,%ymm11,%ymm11
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpaddd	0+128(%rbp),%ymm12,%ymm8
+	vpxor	%ymm11,%ymm7,%ymm7
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpxor	%ymm9,%ymm5,%ymm5
+	movq	8+0+0(%rbp),%rdx
+	mulxq	%r10,%r10,%rax
+	addq	%r10,%r14
+	mulxq	%r11,%r11,%r9
+	adcq	%r11,%r15
+	adcq	$0,%r9
+	imulq	%r12,%rdx
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	%ymm8,0+128(%rbp)
+	vpsrld	$25,%ymm7,%ymm8
+	vpslld	$32-25,%ymm7,%ymm7
+	vpxor	%ymm8,%ymm7,%ymm7
+	vpsrld	$25,%ymm6,%ymm8
+	vpslld	$32-25,%ymm6,%ymm6
+	vpxor	%ymm8,%ymm6,%ymm6
+	addq	%rax,%r15
+	adcq	%rdx,%r9
+	vpsrld	$25,%ymm5,%ymm8
+	vpslld	$32-25,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm5,%ymm5
+	vpsrld	$25,%ymm4,%ymm8
+	vpslld	$32-25,%ymm4,%ymm4
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	0+128(%rbp),%ymm8
+	vpalignr	$12,%ymm7,%ymm7,%ymm7
+	vpalignr	$8,%ymm11,%ymm11,%ymm11
+	vpalignr	$4,%ymm15,%ymm15,%ymm15
+	vpalignr	$12,%ymm6,%ymm6,%ymm6
+	vpalignr	$8,%ymm10,%ymm10,%ymm10
+	vpalignr	$4,%ymm14,%ymm14,%ymm14
+	vpalignr	$12,%ymm5,%ymm5,%ymm5
+	vpalignr	$8,%ymm9,%ymm9,%ymm9
+	vpalignr	$4,%ymm13,%ymm13,%ymm13
+	vpalignr	$12,%ymm4,%ymm4,%ymm4
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+	vpalignr	$4,%ymm12,%ymm12,%ymm12
+
+	cmpq	$60*8,%rcx
+	jne	L$open_avx2_main_loop_rounds
+	vpaddd	L$chacha20_consts(%rip),%ymm3,%ymm3
+	vpaddd	0+64(%rbp),%ymm7,%ymm7
+	vpaddd	0+96(%rbp),%ymm11,%ymm11
+	vpaddd	0+256(%rbp),%ymm15,%ymm15
+	vpaddd	L$chacha20_consts(%rip),%ymm2,%ymm2
+	vpaddd	0+64(%rbp),%ymm6,%ymm6
+	vpaddd	0+96(%rbp),%ymm10,%ymm10
+	vpaddd	0+224(%rbp),%ymm14,%ymm14
+	vpaddd	L$chacha20_consts(%rip),%ymm1,%ymm1
+	vpaddd	0+64(%rbp),%ymm5,%ymm5
+	vpaddd	0+96(%rbp),%ymm9,%ymm9
+	vpaddd	0+192(%rbp),%ymm13,%ymm13
+	vpaddd	L$chacha20_consts(%rip),%ymm0,%ymm0
+	vpaddd	0+64(%rbp),%ymm4,%ymm4
+	vpaddd	0+96(%rbp),%ymm8,%ymm8
+	vpaddd	0+160(%rbp),%ymm12,%ymm12
+
+	vmovdqa	%ymm0,0+128(%rbp)
+	addq	0+60*8(%rsi),%r10
+	adcq	8+60*8(%rsi),%r11
+	adcq	$1,%r12
+	vperm2i128	$0x02,%ymm3,%ymm7,%ymm0
+	vperm2i128	$0x13,%ymm3,%ymm7,%ymm7
+	vperm2i128	$0x02,%ymm11,%ymm15,%ymm3
+	vperm2i128	$0x13,%ymm11,%ymm15,%ymm11
+	vpxor	0+0(%rsi),%ymm0,%ymm0
+	vpxor	32+0(%rsi),%ymm3,%ymm3
+	vpxor	64+0(%rsi),%ymm7,%ymm7
+	vpxor	96+0(%rsi),%ymm11,%ymm11
+	vmovdqu	%ymm0,0+0(%rdi)
+	vmovdqu	%ymm3,32+0(%rdi)
+	vmovdqu	%ymm7,64+0(%rdi)
+	vmovdqu	%ymm11,96+0(%rdi)
+
+	vmovdqa	0+128(%rbp),%ymm0
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+	vperm2i128	$0x02,%ymm2,%ymm6,%ymm3
+	vperm2i128	$0x13,%ymm2,%ymm6,%ymm6
+	vperm2i128	$0x02,%ymm10,%ymm14,%ymm2
+	vperm2i128	$0x13,%ymm10,%ymm14,%ymm10
+	vpxor	0+128(%rsi),%ymm3,%ymm3
+	vpxor	32+128(%rsi),%ymm2,%ymm2
+	vpxor	64+128(%rsi),%ymm6,%ymm6
+	vpxor	96+128(%rsi),%ymm10,%ymm10
+	vmovdqu	%ymm3,0+128(%rdi)
+	vmovdqu	%ymm2,32+128(%rdi)
+	vmovdqu	%ymm6,64+128(%rdi)
+	vmovdqu	%ymm10,96+128(%rdi)
+	addq	0+60*8+16(%rsi),%r10
+	adcq	8+60*8+16(%rsi),%r11
+	adcq	$1,%r12
+	vperm2i128	$0x02,%ymm1,%ymm5,%ymm3
+	vperm2i128	$0x13,%ymm1,%ymm5,%ymm5
+	vperm2i128	$0x02,%ymm9,%ymm13,%ymm1
+	vperm2i128	$0x13,%ymm9,%ymm13,%ymm9
+	vpxor	0+256(%rsi),%ymm3,%ymm3
+	vpxor	32+256(%rsi),%ymm1,%ymm1
+	vpxor	64+256(%rsi),%ymm5,%ymm5
+	vpxor	96+256(%rsi),%ymm9,%ymm9
+	vmovdqu	%ymm3,0+256(%rdi)
+	vmovdqu	%ymm1,32+256(%rdi)
+	vmovdqu	%ymm5,64+256(%rdi)
+	vmovdqu	%ymm9,96+256(%rdi)
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+	vperm2i128	$0x02,%ymm0,%ymm4,%ymm3
+	vperm2i128	$0x13,%ymm0,%ymm4,%ymm4
+	vperm2i128	$0x02,%ymm8,%ymm12,%ymm0
+	vperm2i128	$0x13,%ymm8,%ymm12,%ymm8
+	vpxor	0+384(%rsi),%ymm3,%ymm3
+	vpxor	32+384(%rsi),%ymm0,%ymm0
+	vpxor	64+384(%rsi),%ymm4,%ymm4
+	vpxor	96+384(%rsi),%ymm8,%ymm8
+	vmovdqu	%ymm3,0+384(%rdi)
+	vmovdqu	%ymm0,32+384(%rdi)
+	vmovdqu	%ymm4,64+384(%rdi)
+	vmovdqu	%ymm8,96+384(%rdi)
+
+	leaq	512(%rsi),%rsi
+	leaq	512(%rdi),%rdi
+	subq	$512,%rbx
+	jmp	L$open_avx2_main_loop
+L$open_avx2_main_loop_done:
+	testq	%rbx,%rbx
+	vzeroupper
+	je	L$open_sse_finalize
+
+	cmpq	$384,%rbx
+	ja	L$open_avx2_tail_512
+	cmpq	$256,%rbx
+	ja	L$open_avx2_tail_384
+	cmpq	$128,%rbx
+	ja	L$open_avx2_tail_256
+	vmovdqa	L$chacha20_consts(%rip),%ymm0
+	vmovdqa	0+64(%rbp),%ymm4
+	vmovdqa	0+96(%rbp),%ymm8
+	vmovdqa	L$avx2_inc(%rip),%ymm12
+	vpaddd	0+160(%rbp),%ymm12,%ymm12
+	vmovdqa	%ymm12,0+160(%rbp)
+
+	xorq	%r8,%r8
+	movq	%rbx,%rcx
+	andq	$-16,%rcx
+	testq	%rcx,%rcx
+	je	L$open_avx2_tail_128_rounds
+L$open_avx2_tail_128_rounds_and_x1hash:
+	addq	0+0(%rsi,%r8,1),%r10
+	adcq	8+0(%rsi,%r8,1),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+L$open_avx2_tail_128_rounds:
+	addq	$16,%r8
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol16(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpsrld	$20,%ymm4,%ymm3
+	vpslld	$12,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol8(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpslld	$7,%ymm4,%ymm3
+	vpsrld	$25,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpalignr	$12,%ymm12,%ymm12,%ymm12
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$4,%ymm4,%ymm4,%ymm4
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol16(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpsrld	$20,%ymm4,%ymm3
+	vpslld	$12,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol8(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpslld	$7,%ymm4,%ymm3
+	vpsrld	$25,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpalignr	$4,%ymm12,%ymm12,%ymm12
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$12,%ymm4,%ymm4,%ymm4
+
+	cmpq	%rcx,%r8
+	jb	L$open_avx2_tail_128_rounds_and_x1hash
+	cmpq	$160,%r8
+	jne	L$open_avx2_tail_128_rounds
+	vpaddd	L$chacha20_consts(%rip),%ymm0,%ymm0
+	vpaddd	0+64(%rbp),%ymm4,%ymm4
+	vpaddd	0+96(%rbp),%ymm8,%ymm8
+	vpaddd	0+160(%rbp),%ymm12,%ymm12
+	vperm2i128	$0x13,%ymm0,%ymm4,%ymm3
+	vperm2i128	$0x02,%ymm0,%ymm4,%ymm0
+	vperm2i128	$0x02,%ymm8,%ymm12,%ymm4
+	vperm2i128	$0x13,%ymm8,%ymm12,%ymm12
+	vmovdqa	%ymm3,%ymm8
+
+	jmp	L$open_avx2_tail_128_xor
+
+L$open_avx2_tail_256:
+	vmovdqa	L$chacha20_consts(%rip),%ymm0
+	vmovdqa	0+64(%rbp),%ymm4
+	vmovdqa	0+96(%rbp),%ymm8
+	vmovdqa	%ymm0,%ymm1
+	vmovdqa	%ymm4,%ymm5
+	vmovdqa	%ymm8,%ymm9
+	vmovdqa	L$avx2_inc(%rip),%ymm12
+	vpaddd	0+160(%rbp),%ymm12,%ymm13
+	vpaddd	%ymm13,%ymm12,%ymm12
+	vmovdqa	%ymm12,0+160(%rbp)
+	vmovdqa	%ymm13,0+192(%rbp)
+
+	movq	%rbx,0+128(%rbp)
+	movq	%rbx,%rcx
+	subq	$128,%rcx
+	shrq	$4,%rcx
+	movq	$10,%r8
+	cmpq	$10,%rcx
+	cmovgq	%r8,%rcx
+	movq	%rsi,%rbx
+	xorq	%r8,%r8
+L$open_avx2_tail_256_rounds_and_x1hash:
+	addq	0+0(%rbx),%r10
+	adcq	8+0(%rbx),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rdx
+	movq	%rdx,%r15
+	mulxq	%r10,%r13,%r14
+	mulxq	%r11,%rax,%rdx
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rdx
+	mulxq	%r10,%r10,%rax
+	addq	%r10,%r14
+	mulxq	%r11,%r11,%r9
+	adcq	%r11,%r15
+	adcq	$0,%r9
+	imulq	%r12,%rdx
+	addq	%rax,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	leaq	16(%rbx),%rbx
+L$open_avx2_tail_256_rounds:
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol16(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpsrld	$20,%ymm4,%ymm3
+	vpslld	$12,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol8(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpslld	$7,%ymm4,%ymm3
+	vpsrld	$25,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpalignr	$12,%ymm12,%ymm12,%ymm12
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$4,%ymm4,%ymm4,%ymm4
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol16(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpsrld	$20,%ymm5,%ymm3
+	vpslld	$12,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol8(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpslld	$7,%ymm5,%ymm3
+	vpsrld	$25,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpalignr	$12,%ymm13,%ymm13,%ymm13
+	vpalignr	$8,%ymm9,%ymm9,%ymm9
+	vpalignr	$4,%ymm5,%ymm5,%ymm5
+
+	incq	%r8
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol16(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpsrld	$20,%ymm4,%ymm3
+	vpslld	$12,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol8(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpslld	$7,%ymm4,%ymm3
+	vpsrld	$25,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpalignr	$4,%ymm12,%ymm12,%ymm12
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$12,%ymm4,%ymm4,%ymm4
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol16(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpsrld	$20,%ymm5,%ymm3
+	vpslld	$12,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol8(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpslld	$7,%ymm5,%ymm3
+	vpsrld	$25,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpalignr	$4,%ymm13,%ymm13,%ymm13
+	vpalignr	$8,%ymm9,%ymm9,%ymm9
+	vpalignr	$12,%ymm5,%ymm5,%ymm5
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpshufb	L$rol16(%rip),%ymm14,%ymm14
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpsrld	$20,%ymm6,%ymm3
+	vpslld	$12,%ymm6,%ymm6
+	vpxor	%ymm3,%ymm6,%ymm6
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpshufb	L$rol8(%rip),%ymm14,%ymm14
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpslld	$7,%ymm6,%ymm3
+	vpsrld	$25,%ymm6,%ymm6
+	vpxor	%ymm3,%ymm6,%ymm6
+	vpalignr	$4,%ymm14,%ymm14,%ymm14
+	vpalignr	$8,%ymm10,%ymm10,%ymm10
+	vpalignr	$12,%ymm6,%ymm6,%ymm6
+
+	cmpq	%rcx,%r8
+	jb	L$open_avx2_tail_256_rounds_and_x1hash
+	cmpq	$10,%r8
+	jne	L$open_avx2_tail_256_rounds
+	movq	%rbx,%r8
+	subq	%rsi,%rbx
+	movq	%rbx,%rcx
+	movq	0+128(%rbp),%rbx
+L$open_avx2_tail_256_hash:
+	addq	$16,%rcx
+	cmpq	%rbx,%rcx
+	jg	L$open_avx2_tail_256_done
+	addq	0+0(%r8),%r10
+	adcq	8+0(%r8),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rdx
+	movq	%rdx,%r15
+	mulxq	%r10,%r13,%r14
+	mulxq	%r11,%rax,%rdx
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rdx
+	mulxq	%r10,%r10,%rax
+	addq	%r10,%r14
+	mulxq	%r11,%r11,%r9
+	adcq	%r11,%r15
+	adcq	$0,%r9
+	imulq	%r12,%rdx
+	addq	%rax,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	leaq	16(%r8),%r8
+	jmp	L$open_avx2_tail_256_hash
+L$open_avx2_tail_256_done:
+	vpaddd	L$chacha20_consts(%rip),%ymm1,%ymm1
+	vpaddd	0+64(%rbp),%ymm5,%ymm5
+	vpaddd	0+96(%rbp),%ymm9,%ymm9
+	vpaddd	0+192(%rbp),%ymm13,%ymm13
+	vpaddd	L$chacha20_consts(%rip),%ymm0,%ymm0
+	vpaddd	0+64(%rbp),%ymm4,%ymm4
+	vpaddd	0+96(%rbp),%ymm8,%ymm8
+	vpaddd	0+160(%rbp),%ymm12,%ymm12
+	vperm2i128	$0x02,%ymm1,%ymm5,%ymm3
+	vperm2i128	$0x13,%ymm1,%ymm5,%ymm5
+	vperm2i128	$0x02,%ymm9,%ymm13,%ymm1
+	vperm2i128	$0x13,%ymm9,%ymm13,%ymm9
+	vpxor	0+0(%rsi),%ymm3,%ymm3
+	vpxor	32+0(%rsi),%ymm1,%ymm1
+	vpxor	64+0(%rsi),%ymm5,%ymm5
+	vpxor	96+0(%rsi),%ymm9,%ymm9
+	vmovdqu	%ymm3,0+0(%rdi)
+	vmovdqu	%ymm1,32+0(%rdi)
+	vmovdqu	%ymm5,64+0(%rdi)
+	vmovdqu	%ymm9,96+0(%rdi)
+	vperm2i128	$0x13,%ymm0,%ymm4,%ymm3
+	vperm2i128	$0x02,%ymm0,%ymm4,%ymm0
+	vperm2i128	$0x02,%ymm8,%ymm12,%ymm4
+	vperm2i128	$0x13,%ymm8,%ymm12,%ymm12
+	vmovdqa	%ymm3,%ymm8
+
+	leaq	128(%rsi),%rsi
+	leaq	128(%rdi),%rdi
+	subq	$128,%rbx
+	jmp	L$open_avx2_tail_128_xor
+
+L$open_avx2_tail_384:
+	vmovdqa	L$chacha20_consts(%rip),%ymm0
+	vmovdqa	0+64(%rbp),%ymm4
+	vmovdqa	0+96(%rbp),%ymm8
+	vmovdqa	%ymm0,%ymm1
+	vmovdqa	%ymm4,%ymm5
+	vmovdqa	%ymm8,%ymm9
+	vmovdqa	%ymm0,%ymm2
+	vmovdqa	%ymm4,%ymm6
+	vmovdqa	%ymm8,%ymm10
+	vmovdqa	L$avx2_inc(%rip),%ymm12
+	vpaddd	0+160(%rbp),%ymm12,%ymm14
+	vpaddd	%ymm14,%ymm12,%ymm13
+	vpaddd	%ymm13,%ymm12,%ymm12
+	vmovdqa	%ymm12,0+160(%rbp)
+	vmovdqa	%ymm13,0+192(%rbp)
+	vmovdqa	%ymm14,0+224(%rbp)
+
+	movq	%rbx,0+128(%rbp)
+	movq	%rbx,%rcx
+	subq	$256,%rcx
+	shrq	$4,%rcx
+	addq	$6,%rcx
+	movq	$10,%r8
+	cmpq	$10,%rcx
+	cmovgq	%r8,%rcx
+	movq	%rsi,%rbx
+	xorq	%r8,%r8
+L$open_avx2_tail_384_rounds_and_x2hash:
+	addq	0+0(%rbx),%r10
+	adcq	8+0(%rbx),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rdx
+	movq	%rdx,%r15
+	mulxq	%r10,%r13,%r14
+	mulxq	%r11,%rax,%rdx
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rdx
+	mulxq	%r10,%r10,%rax
+	addq	%r10,%r14
+	mulxq	%r11,%r11,%r9
+	adcq	%r11,%r15
+	adcq	$0,%r9
+	imulq	%r12,%rdx
+	addq	%rax,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	leaq	16(%rbx),%rbx
+L$open_avx2_tail_384_rounds_and_x1hash:
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpshufb	L$rol16(%rip),%ymm14,%ymm14
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpsrld	$20,%ymm6,%ymm3
+	vpslld	$12,%ymm6,%ymm6
+	vpxor	%ymm3,%ymm6,%ymm6
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpshufb	L$rol8(%rip),%ymm14,%ymm14
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpslld	$7,%ymm6,%ymm3
+	vpsrld	$25,%ymm6,%ymm6
+	vpxor	%ymm3,%ymm6,%ymm6
+	vpalignr	$12,%ymm14,%ymm14,%ymm14
+	vpalignr	$8,%ymm10,%ymm10,%ymm10
+	vpalignr	$4,%ymm6,%ymm6,%ymm6
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol16(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpsrld	$20,%ymm5,%ymm3
+	vpslld	$12,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol8(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpslld	$7,%ymm5,%ymm3
+	vpsrld	$25,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpalignr	$12,%ymm13,%ymm13,%ymm13
+	vpalignr	$8,%ymm9,%ymm9,%ymm9
+	vpalignr	$4,%ymm5,%ymm5,%ymm5
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol16(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpsrld	$20,%ymm4,%ymm3
+	vpslld	$12,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol8(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpslld	$7,%ymm4,%ymm3
+	vpsrld	$25,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpalignr	$12,%ymm12,%ymm12,%ymm12
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$4,%ymm4,%ymm4,%ymm4
+	addq	0+0(%rbx),%r10
+	adcq	8+0(%rbx),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	leaq	16(%rbx),%rbx
+	incq	%r8
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpshufb	L$rol16(%rip),%ymm14,%ymm14
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpsrld	$20,%ymm6,%ymm3
+	vpslld	$12,%ymm6,%ymm6
+	vpxor	%ymm3,%ymm6,%ymm6
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpshufb	L$rol8(%rip),%ymm14,%ymm14
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpslld	$7,%ymm6,%ymm3
+	vpsrld	$25,%ymm6,%ymm6
+	vpxor	%ymm3,%ymm6,%ymm6
+	vpalignr	$4,%ymm14,%ymm14,%ymm14
+	vpalignr	$8,%ymm10,%ymm10,%ymm10
+	vpalignr	$12,%ymm6,%ymm6,%ymm6
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol16(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpsrld	$20,%ymm5,%ymm3
+	vpslld	$12,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol8(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpslld	$7,%ymm5,%ymm3
+	vpsrld	$25,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpalignr	$4,%ymm13,%ymm13,%ymm13
+	vpalignr	$8,%ymm9,%ymm9,%ymm9
+	vpalignr	$12,%ymm5,%ymm5,%ymm5
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol16(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpsrld	$20,%ymm4,%ymm3
+	vpslld	$12,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol8(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpslld	$7,%ymm4,%ymm3
+	vpsrld	$25,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpalignr	$4,%ymm12,%ymm12,%ymm12
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$12,%ymm4,%ymm4,%ymm4
+
+	cmpq	%rcx,%r8
+	jb	L$open_avx2_tail_384_rounds_and_x2hash
+	cmpq	$10,%r8
+	jne	L$open_avx2_tail_384_rounds_and_x1hash
+	movq	%rbx,%r8
+	subq	%rsi,%rbx
+	movq	%rbx,%rcx
+	movq	0+128(%rbp),%rbx
+L$open_avx2_384_tail_hash:
+	addq	$16,%rcx
+	cmpq	%rbx,%rcx
+	jg	L$open_avx2_384_tail_done
+	addq	0+0(%r8),%r10
+	adcq	8+0(%r8),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rdx
+	movq	%rdx,%r15
+	mulxq	%r10,%r13,%r14
+	mulxq	%r11,%rax,%rdx
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rdx
+	mulxq	%r10,%r10,%rax
+	addq	%r10,%r14
+	mulxq	%r11,%r11,%r9
+	adcq	%r11,%r15
+	adcq	$0,%r9
+	imulq	%r12,%rdx
+	addq	%rax,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	leaq	16(%r8),%r8
+	jmp	L$open_avx2_384_tail_hash
+L$open_avx2_384_tail_done:
+	vpaddd	L$chacha20_consts(%rip),%ymm2,%ymm2
+	vpaddd	0+64(%rbp),%ymm6,%ymm6
+	vpaddd	0+96(%rbp),%ymm10,%ymm10
+	vpaddd	0+224(%rbp),%ymm14,%ymm14
+	vpaddd	L$chacha20_consts(%rip),%ymm1,%ymm1
+	vpaddd	0+64(%rbp),%ymm5,%ymm5
+	vpaddd	0+96(%rbp),%ymm9,%ymm9
+	vpaddd	0+192(%rbp),%ymm13,%ymm13
+	vpaddd	L$chacha20_consts(%rip),%ymm0,%ymm0
+	vpaddd	0+64(%rbp),%ymm4,%ymm4
+	vpaddd	0+96(%rbp),%ymm8,%ymm8
+	vpaddd	0+160(%rbp),%ymm12,%ymm12
+	vperm2i128	$0x02,%ymm2,%ymm6,%ymm3
+	vperm2i128	$0x13,%ymm2,%ymm6,%ymm6
+	vperm2i128	$0x02,%ymm10,%ymm14,%ymm2
+	vperm2i128	$0x13,%ymm10,%ymm14,%ymm10
+	vpxor	0+0(%rsi),%ymm3,%ymm3
+	vpxor	32+0(%rsi),%ymm2,%ymm2
+	vpxor	64+0(%rsi),%ymm6,%ymm6
+	vpxor	96+0(%rsi),%ymm10,%ymm10
+	vmovdqu	%ymm3,0+0(%rdi)
+	vmovdqu	%ymm2,32+0(%rdi)
+	vmovdqu	%ymm6,64+0(%rdi)
+	vmovdqu	%ymm10,96+0(%rdi)
+	vperm2i128	$0x02,%ymm1,%ymm5,%ymm3
+	vperm2i128	$0x13,%ymm1,%ymm5,%ymm5
+	vperm2i128	$0x02,%ymm9,%ymm13,%ymm1
+	vperm2i128	$0x13,%ymm9,%ymm13,%ymm9
+	vpxor	0+128(%rsi),%ymm3,%ymm3
+	vpxor	32+128(%rsi),%ymm1,%ymm1
+	vpxor	64+128(%rsi),%ymm5,%ymm5
+	vpxor	96+128(%rsi),%ymm9,%ymm9
+	vmovdqu	%ymm3,0+128(%rdi)
+	vmovdqu	%ymm1,32+128(%rdi)
+	vmovdqu	%ymm5,64+128(%rdi)
+	vmovdqu	%ymm9,96+128(%rdi)
+	vperm2i128	$0x13,%ymm0,%ymm4,%ymm3
+	vperm2i128	$0x02,%ymm0,%ymm4,%ymm0
+	vperm2i128	$0x02,%ymm8,%ymm12,%ymm4
+	vperm2i128	$0x13,%ymm8,%ymm12,%ymm12
+	vmovdqa	%ymm3,%ymm8
+
+	leaq	256(%rsi),%rsi
+	leaq	256(%rdi),%rdi
+	subq	$256,%rbx
+	jmp	L$open_avx2_tail_128_xor
+
+L$open_avx2_tail_512:
+	vmovdqa	L$chacha20_consts(%rip),%ymm0
+	vmovdqa	0+64(%rbp),%ymm4
+	vmovdqa	0+96(%rbp),%ymm8
+	vmovdqa	%ymm0,%ymm1
+	vmovdqa	%ymm4,%ymm5
+	vmovdqa	%ymm8,%ymm9
+	vmovdqa	%ymm0,%ymm2
+	vmovdqa	%ymm4,%ymm6
+	vmovdqa	%ymm8,%ymm10
+	vmovdqa	%ymm0,%ymm3
+	vmovdqa	%ymm4,%ymm7
+	vmovdqa	%ymm8,%ymm11
+	vmovdqa	L$avx2_inc(%rip),%ymm12
+	vpaddd	0+160(%rbp),%ymm12,%ymm15
+	vpaddd	%ymm15,%ymm12,%ymm14
+	vpaddd	%ymm14,%ymm12,%ymm13
+	vpaddd	%ymm13,%ymm12,%ymm12
+	vmovdqa	%ymm15,0+256(%rbp)
+	vmovdqa	%ymm14,0+224(%rbp)
+	vmovdqa	%ymm13,0+192(%rbp)
+	vmovdqa	%ymm12,0+160(%rbp)
+
+	xorq	%rcx,%rcx
+	movq	%rsi,%r8
+L$open_avx2_tail_512_rounds_and_x2hash:
+	addq	0+0(%r8),%r10
+	adcq	8+0(%r8),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	leaq	16(%r8),%r8
+L$open_avx2_tail_512_rounds_and_x1hash:
+	vmovdqa	%ymm8,0+128(%rbp)
+	vmovdqa	L$rol16(%rip),%ymm8
+	vpaddd	%ymm7,%ymm3,%ymm3
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm3,%ymm15,%ymm15
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	%ymm8,%ymm15,%ymm15
+	vpshufb	%ymm8,%ymm14,%ymm14
+	vpshufb	%ymm8,%ymm13,%ymm13
+	vpshufb	%ymm8,%ymm12,%ymm12
+	vpaddd	%ymm15,%ymm11,%ymm11
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpaddd	0+128(%rbp),%ymm12,%ymm8
+	vpxor	%ymm11,%ymm7,%ymm7
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	%ymm8,0+128(%rbp)
+	vpsrld	$20,%ymm7,%ymm8
+	vpslld	$32-20,%ymm7,%ymm7
+	vpxor	%ymm8,%ymm7,%ymm7
+	vpsrld	$20,%ymm6,%ymm8
+	vpslld	$32-20,%ymm6,%ymm6
+	vpxor	%ymm8,%ymm6,%ymm6
+	vpsrld	$20,%ymm5,%ymm8
+	vpslld	$32-20,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm5,%ymm5
+	vpsrld	$20,%ymm4,%ymm8
+	vpslld	$32-20,%ymm4,%ymm4
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	L$rol8(%rip),%ymm8
+	vpaddd	%ymm7,%ymm3,%ymm3
+	addq	0+0(%r8),%r10
+	adcq	8+0(%r8),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rdx
+	movq	%rdx,%r15
+	mulxq	%r10,%r13,%r14
+	mulxq	%r11,%rax,%rdx
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rdx
+	mulxq	%r10,%r10,%rax
+	addq	%r10,%r14
+	mulxq	%r11,%r11,%r9
+	adcq	%r11,%r15
+	adcq	$0,%r9
+	imulq	%r12,%rdx
+	addq	%rax,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm3,%ymm15,%ymm15
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	%ymm8,%ymm15,%ymm15
+	vpshufb	%ymm8,%ymm14,%ymm14
+	vpshufb	%ymm8,%ymm13,%ymm13
+	vpshufb	%ymm8,%ymm12,%ymm12
+	vpaddd	%ymm15,%ymm11,%ymm11
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpaddd	0+128(%rbp),%ymm12,%ymm8
+	vpxor	%ymm11,%ymm7,%ymm7
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	%ymm8,0+128(%rbp)
+	vpsrld	$25,%ymm7,%ymm8
+	vpslld	$32-25,%ymm7,%ymm7
+	vpxor	%ymm8,%ymm7,%ymm7
+	vpsrld	$25,%ymm6,%ymm8
+	vpslld	$32-25,%ymm6,%ymm6
+	vpxor	%ymm8,%ymm6,%ymm6
+	vpsrld	$25,%ymm5,%ymm8
+	vpslld	$32-25,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm5,%ymm5
+	vpsrld	$25,%ymm4,%ymm8
+	vpslld	$32-25,%ymm4,%ymm4
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	0+128(%rbp),%ymm8
+	vpalignr	$4,%ymm7,%ymm7,%ymm7
+	vpalignr	$8,%ymm11,%ymm11,%ymm11
+	vpalignr	$12,%ymm15,%ymm15,%ymm15
+	vpalignr	$4,%ymm6,%ymm6,%ymm6
+	vpalignr	$8,%ymm10,%ymm10,%ymm10
+	vpalignr	$12,%ymm14,%ymm14,%ymm14
+	vpalignr	$4,%ymm5,%ymm5,%ymm5
+	vpalignr	$8,%ymm9,%ymm9,%ymm9
+	vpalignr	$12,%ymm13,%ymm13,%ymm13
+	vpalignr	$4,%ymm4,%ymm4,%ymm4
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$12,%ymm12,%ymm12,%ymm12
+	vmovdqa	%ymm8,0+128(%rbp)
+	vmovdqa	L$rol16(%rip),%ymm8
+	vpaddd	%ymm7,%ymm3,%ymm3
+	addq	0+16(%r8),%r10
+	adcq	8+16(%r8),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rdx
+	movq	%rdx,%r15
+	mulxq	%r10,%r13,%r14
+	mulxq	%r11,%rax,%rdx
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rdx
+	mulxq	%r10,%r10,%rax
+	addq	%r10,%r14
+	mulxq	%r11,%r11,%r9
+	adcq	%r11,%r15
+	adcq	$0,%r9
+	imulq	%r12,%rdx
+	addq	%rax,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	leaq	32(%r8),%r8
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm3,%ymm15,%ymm15
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	%ymm8,%ymm15,%ymm15
+	vpshufb	%ymm8,%ymm14,%ymm14
+	vpshufb	%ymm8,%ymm13,%ymm13
+	vpshufb	%ymm8,%ymm12,%ymm12
+	vpaddd	%ymm15,%ymm11,%ymm11
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpaddd	0+128(%rbp),%ymm12,%ymm8
+	vpxor	%ymm11,%ymm7,%ymm7
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	%ymm8,0+128(%rbp)
+	vpsrld	$20,%ymm7,%ymm8
+	vpslld	$32-20,%ymm7,%ymm7
+	vpxor	%ymm8,%ymm7,%ymm7
+	vpsrld	$20,%ymm6,%ymm8
+	vpslld	$32-20,%ymm6,%ymm6
+	vpxor	%ymm8,%ymm6,%ymm6
+	vpsrld	$20,%ymm5,%ymm8
+	vpslld	$32-20,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm5,%ymm5
+	vpsrld	$20,%ymm4,%ymm8
+	vpslld	$32-20,%ymm4,%ymm4
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	L$rol8(%rip),%ymm8
+	vpaddd	%ymm7,%ymm3,%ymm3
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm3,%ymm15,%ymm15
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	%ymm8,%ymm15,%ymm15
+	vpshufb	%ymm8,%ymm14,%ymm14
+	vpshufb	%ymm8,%ymm13,%ymm13
+	vpshufb	%ymm8,%ymm12,%ymm12
+	vpaddd	%ymm15,%ymm11,%ymm11
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpaddd	0+128(%rbp),%ymm12,%ymm8
+	vpxor	%ymm11,%ymm7,%ymm7
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	%ymm8,0+128(%rbp)
+	vpsrld	$25,%ymm7,%ymm8
+	vpslld	$32-25,%ymm7,%ymm7
+	vpxor	%ymm8,%ymm7,%ymm7
+	vpsrld	$25,%ymm6,%ymm8
+	vpslld	$32-25,%ymm6,%ymm6
+	vpxor	%ymm8,%ymm6,%ymm6
+	vpsrld	$25,%ymm5,%ymm8
+	vpslld	$32-25,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm5,%ymm5
+	vpsrld	$25,%ymm4,%ymm8
+	vpslld	$32-25,%ymm4,%ymm4
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	0+128(%rbp),%ymm8
+	vpalignr	$12,%ymm7,%ymm7,%ymm7
+	vpalignr	$8,%ymm11,%ymm11,%ymm11
+	vpalignr	$4,%ymm15,%ymm15,%ymm15
+	vpalignr	$12,%ymm6,%ymm6,%ymm6
+	vpalignr	$8,%ymm10,%ymm10,%ymm10
+	vpalignr	$4,%ymm14,%ymm14,%ymm14
+	vpalignr	$12,%ymm5,%ymm5,%ymm5
+	vpalignr	$8,%ymm9,%ymm9,%ymm9
+	vpalignr	$4,%ymm13,%ymm13,%ymm13
+	vpalignr	$12,%ymm4,%ymm4,%ymm4
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$4,%ymm12,%ymm12,%ymm12
+
+	incq	%rcx
+	cmpq	$4,%rcx
+	jl	L$open_avx2_tail_512_rounds_and_x2hash
+	cmpq	$10,%rcx
+	jne	L$open_avx2_tail_512_rounds_and_x1hash
+	movq	%rbx,%rcx
+	subq	$384,%rcx
+	andq	$-16,%rcx
+L$open_avx2_tail_512_hash:
+	testq	%rcx,%rcx
+	je	L$open_avx2_tail_512_done
+	addq	0+0(%r8),%r10
+	adcq	8+0(%r8),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rdx
+	movq	%rdx,%r15
+	mulxq	%r10,%r13,%r14
+	mulxq	%r11,%rax,%rdx
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rdx
+	mulxq	%r10,%r10,%rax
+	addq	%r10,%r14
+	mulxq	%r11,%r11,%r9
+	adcq	%r11,%r15
+	adcq	$0,%r9
+	imulq	%r12,%rdx
+	addq	%rax,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	leaq	16(%r8),%r8
+	subq	$16,%rcx
+	jmp	L$open_avx2_tail_512_hash
+L$open_avx2_tail_512_done:
+	vpaddd	L$chacha20_consts(%rip),%ymm3,%ymm3
+	vpaddd	0+64(%rbp),%ymm7,%ymm7
+	vpaddd	0+96(%rbp),%ymm11,%ymm11
+	vpaddd	0+256(%rbp),%ymm15,%ymm15
+	vpaddd	L$chacha20_consts(%rip),%ymm2,%ymm2
+	vpaddd	0+64(%rbp),%ymm6,%ymm6
+	vpaddd	0+96(%rbp),%ymm10,%ymm10
+	vpaddd	0+224(%rbp),%ymm14,%ymm14
+	vpaddd	L$chacha20_consts(%rip),%ymm1,%ymm1
+	vpaddd	0+64(%rbp),%ymm5,%ymm5
+	vpaddd	0+96(%rbp),%ymm9,%ymm9
+	vpaddd	0+192(%rbp),%ymm13,%ymm13
+	vpaddd	L$chacha20_consts(%rip),%ymm0,%ymm0
+	vpaddd	0+64(%rbp),%ymm4,%ymm4
+	vpaddd	0+96(%rbp),%ymm8,%ymm8
+	vpaddd	0+160(%rbp),%ymm12,%ymm12
+
+	vmovdqa	%ymm0,0+128(%rbp)
+	vperm2i128	$0x02,%ymm3,%ymm7,%ymm0
+	vperm2i128	$0x13,%ymm3,%ymm7,%ymm7
+	vperm2i128	$0x02,%ymm11,%ymm15,%ymm3
+	vperm2i128	$0x13,%ymm11,%ymm15,%ymm11
+	vpxor	0+0(%rsi),%ymm0,%ymm0
+	vpxor	32+0(%rsi),%ymm3,%ymm3
+	vpxor	64+0(%rsi),%ymm7,%ymm7
+	vpxor	96+0(%rsi),%ymm11,%ymm11
+	vmovdqu	%ymm0,0+0(%rdi)
+	vmovdqu	%ymm3,32+0(%rdi)
+	vmovdqu	%ymm7,64+0(%rdi)
+	vmovdqu	%ymm11,96+0(%rdi)
+
+	vmovdqa	0+128(%rbp),%ymm0
+	vperm2i128	$0x02,%ymm2,%ymm6,%ymm3
+	vperm2i128	$0x13,%ymm2,%ymm6,%ymm6
+	vperm2i128	$0x02,%ymm10,%ymm14,%ymm2
+	vperm2i128	$0x13,%ymm10,%ymm14,%ymm10
+	vpxor	0+128(%rsi),%ymm3,%ymm3
+	vpxor	32+128(%rsi),%ymm2,%ymm2
+	vpxor	64+128(%rsi),%ymm6,%ymm6
+	vpxor	96+128(%rsi),%ymm10,%ymm10
+	vmovdqu	%ymm3,0+128(%rdi)
+	vmovdqu	%ymm2,32+128(%rdi)
+	vmovdqu	%ymm6,64+128(%rdi)
+	vmovdqu	%ymm10,96+128(%rdi)
+	vperm2i128	$0x02,%ymm1,%ymm5,%ymm3
+	vperm2i128	$0x13,%ymm1,%ymm5,%ymm5
+	vperm2i128	$0x02,%ymm9,%ymm13,%ymm1
+	vperm2i128	$0x13,%ymm9,%ymm13,%ymm9
+	vpxor	0+256(%rsi),%ymm3,%ymm3
+	vpxor	32+256(%rsi),%ymm1,%ymm1
+	vpxor	64+256(%rsi),%ymm5,%ymm5
+	vpxor	96+256(%rsi),%ymm9,%ymm9
+	vmovdqu	%ymm3,0+256(%rdi)
+	vmovdqu	%ymm1,32+256(%rdi)
+	vmovdqu	%ymm5,64+256(%rdi)
+	vmovdqu	%ymm9,96+256(%rdi)
+	vperm2i128	$0x13,%ymm0,%ymm4,%ymm3
+	vperm2i128	$0x02,%ymm0,%ymm4,%ymm0
+	vperm2i128	$0x02,%ymm8,%ymm12,%ymm4
+	vperm2i128	$0x13,%ymm8,%ymm12,%ymm12
+	vmovdqa	%ymm3,%ymm8
+
+	leaq	384(%rsi),%rsi
+	leaq	384(%rdi),%rdi
+	subq	$384,%rbx
+L$open_avx2_tail_128_xor:
+	cmpq	$32,%rbx
+	jb	L$open_avx2_tail_32_xor
+	subq	$32,%rbx
+	vpxor	(%rsi),%ymm0,%ymm0
+	vmovdqu	%ymm0,(%rdi)
+	leaq	32(%rsi),%rsi
+	leaq	32(%rdi),%rdi
+	vmovdqa	%ymm4,%ymm0
+	vmovdqa	%ymm8,%ymm4
+	vmovdqa	%ymm12,%ymm8
+	jmp	L$open_avx2_tail_128_xor
+L$open_avx2_tail_32_xor:
+	cmpq	$16,%rbx
+	vmovdqa	%xmm0,%xmm1
+	jb	L$open_avx2_exit
+	subq	$16,%rbx
+
+	vpxor	(%rsi),%xmm0,%xmm1
+	vmovdqu	%xmm1,(%rdi)
+	leaq	16(%rsi),%rsi
+	leaq	16(%rdi),%rdi
+	vperm2i128	$0x11,%ymm0,%ymm0,%ymm0
+	vmovdqa	%xmm0,%xmm1
+L$open_avx2_exit:
+	vzeroupper
+	jmp	L$open_sse_tail_16
+
+L$open_avx2_192:
+	vmovdqa	%ymm0,%ymm1
+	vmovdqa	%ymm0,%ymm2
+	vmovdqa	%ymm4,%ymm5
+	vmovdqa	%ymm4,%ymm6
+	vmovdqa	%ymm8,%ymm9
+	vmovdqa	%ymm8,%ymm10
+	vpaddd	L$avx2_inc(%rip),%ymm12,%ymm13
+	vmovdqa	%ymm12,%ymm11
+	vmovdqa	%ymm13,%ymm15
+	movq	$10,%r10
+L$open_avx2_192_rounds:
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol16(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpsrld	$20,%ymm4,%ymm3
+	vpslld	$12,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol8(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpslld	$7,%ymm4,%ymm3
+	vpsrld	$25,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpalignr	$12,%ymm12,%ymm12,%ymm12
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$4,%ymm4,%ymm4,%ymm4
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol16(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpsrld	$20,%ymm5,%ymm3
+	vpslld	$12,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol8(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpslld	$7,%ymm5,%ymm3
+	vpsrld	$25,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpalignr	$12,%ymm13,%ymm13,%ymm13
+	vpalignr	$8,%ymm9,%ymm9,%ymm9
+	vpalignr	$4,%ymm5,%ymm5,%ymm5
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol16(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpsrld	$20,%ymm4,%ymm3
+	vpslld	$12,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol8(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpslld	$7,%ymm4,%ymm3
+	vpsrld	$25,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpalignr	$4,%ymm12,%ymm12,%ymm12
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$12,%ymm4,%ymm4,%ymm4
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol16(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpsrld	$20,%ymm5,%ymm3
+	vpslld	$12,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol8(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpslld	$7,%ymm5,%ymm3
+	vpsrld	$25,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpalignr	$4,%ymm13,%ymm13,%ymm13
+	vpalignr	$8,%ymm9,%ymm9,%ymm9
+	vpalignr	$12,%ymm5,%ymm5,%ymm5
+
+	decq	%r10
+	jne	L$open_avx2_192_rounds
+	vpaddd	%ymm2,%ymm0,%ymm0
+	vpaddd	%ymm2,%ymm1,%ymm1
+	vpaddd	%ymm6,%ymm4,%ymm4
+	vpaddd	%ymm6,%ymm5,%ymm5
+	vpaddd	%ymm10,%ymm8,%ymm8
+	vpaddd	%ymm10,%ymm9,%ymm9
+	vpaddd	%ymm11,%ymm12,%ymm12
+	vpaddd	%ymm15,%ymm13,%ymm13
+	vperm2i128	$0x02,%ymm0,%ymm4,%ymm3
+
+	vpand	L$clamp(%rip),%ymm3,%ymm3
+	vmovdqa	%ymm3,0+0(%rbp)
+
+	vperm2i128	$0x13,%ymm0,%ymm4,%ymm0
+	vperm2i128	$0x13,%ymm8,%ymm12,%ymm4
+	vperm2i128	$0x02,%ymm1,%ymm5,%ymm8
+	vperm2i128	$0x02,%ymm9,%ymm13,%ymm12
+	vperm2i128	$0x13,%ymm1,%ymm5,%ymm1
+	vperm2i128	$0x13,%ymm9,%ymm13,%ymm5
+L$open_avx2_short:
+	movq	%r8,%r8
+	call	poly_hash_ad_internal
+L$open_avx2_short_hash_and_xor_loop:
+	cmpq	$32,%rbx
+	jb	L$open_avx2_short_tail_32
+	subq	$32,%rbx
+	addq	0+0(%rsi),%r10
+	adcq	8+0(%rsi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+	addq	0+16(%rsi),%r10
+	adcq	8+16(%rsi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+
+	vpxor	(%rsi),%ymm0,%ymm0
+	vmovdqu	%ymm0,(%rdi)
+	leaq	32(%rsi),%rsi
+	leaq	32(%rdi),%rdi
+
+	vmovdqa	%ymm4,%ymm0
+	vmovdqa	%ymm8,%ymm4
+	vmovdqa	%ymm12,%ymm8
+	vmovdqa	%ymm1,%ymm12
+	vmovdqa	%ymm5,%ymm1
+	vmovdqa	%ymm9,%ymm5
+	vmovdqa	%ymm13,%ymm9
+	vmovdqa	%ymm2,%ymm13
+	vmovdqa	%ymm6,%ymm2
+	jmp	L$open_avx2_short_hash_and_xor_loop
+L$open_avx2_short_tail_32:
+	cmpq	$16,%rbx
+	vmovdqa	%xmm0,%xmm1
+	jb	L$open_avx2_short_tail_32_exit
+	subq	$16,%rbx
+	addq	0+0(%rsi),%r10
+	adcq	8+0(%rsi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	vpxor	(%rsi),%xmm0,%xmm3
+	vmovdqu	%xmm3,(%rdi)
+	leaq	16(%rsi),%rsi
+	leaq	16(%rdi),%rdi
+	vextracti128	$1,%ymm0,%xmm1
+L$open_avx2_short_tail_32_exit:
+	vzeroupper
+	jmp	L$open_sse_tail_16
+
+L$open_avx2_320:
+	vmovdqa	%ymm0,%ymm1
+	vmovdqa	%ymm0,%ymm2
+	vmovdqa	%ymm4,%ymm5
+	vmovdqa	%ymm4,%ymm6
+	vmovdqa	%ymm8,%ymm9
+	vmovdqa	%ymm8,%ymm10
+	vpaddd	L$avx2_inc(%rip),%ymm12,%ymm13
+	vpaddd	L$avx2_inc(%rip),%ymm13,%ymm14
+	vmovdqa	%ymm4,%ymm7
+	vmovdqa	%ymm8,%ymm11
+	vmovdqa	%ymm12,0+160(%rbp)
+	vmovdqa	%ymm13,0+192(%rbp)
+	vmovdqa	%ymm14,0+224(%rbp)
+	movq	$10,%r10
+L$open_avx2_320_rounds:
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol16(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpsrld	$20,%ymm4,%ymm3
+	vpslld	$12,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol8(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpslld	$7,%ymm4,%ymm3
+	vpsrld	$25,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpalignr	$12,%ymm12,%ymm12,%ymm12
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$4,%ymm4,%ymm4,%ymm4
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol16(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpsrld	$20,%ymm5,%ymm3
+	vpslld	$12,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol8(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpslld	$7,%ymm5,%ymm3
+	vpsrld	$25,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpalignr	$12,%ymm13,%ymm13,%ymm13
+	vpalignr	$8,%ymm9,%ymm9,%ymm9
+	vpalignr	$4,%ymm5,%ymm5,%ymm5
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpshufb	L$rol16(%rip),%ymm14,%ymm14
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpsrld	$20,%ymm6,%ymm3
+	vpslld	$12,%ymm6,%ymm6
+	vpxor	%ymm3,%ymm6,%ymm6
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpshufb	L$rol8(%rip),%ymm14,%ymm14
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpslld	$7,%ymm6,%ymm3
+	vpsrld	$25,%ymm6,%ymm6
+	vpxor	%ymm3,%ymm6,%ymm6
+	vpalignr	$12,%ymm14,%ymm14,%ymm14
+	vpalignr	$8,%ymm10,%ymm10,%ymm10
+	vpalignr	$4,%ymm6,%ymm6,%ymm6
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol16(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpsrld	$20,%ymm4,%ymm3
+	vpslld	$12,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol8(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpslld	$7,%ymm4,%ymm3
+	vpsrld	$25,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpalignr	$4,%ymm12,%ymm12,%ymm12
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$12,%ymm4,%ymm4,%ymm4
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol16(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpsrld	$20,%ymm5,%ymm3
+	vpslld	$12,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol8(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpslld	$7,%ymm5,%ymm3
+	vpsrld	$25,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpalignr	$4,%ymm13,%ymm13,%ymm13
+	vpalignr	$8,%ymm9,%ymm9,%ymm9
+	vpalignr	$12,%ymm5,%ymm5,%ymm5
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpshufb	L$rol16(%rip),%ymm14,%ymm14
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpsrld	$20,%ymm6,%ymm3
+	vpslld	$12,%ymm6,%ymm6
+	vpxor	%ymm3,%ymm6,%ymm6
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpshufb	L$rol8(%rip),%ymm14,%ymm14
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpslld	$7,%ymm6,%ymm3
+	vpsrld	$25,%ymm6,%ymm6
+	vpxor	%ymm3,%ymm6,%ymm6
+	vpalignr	$4,%ymm14,%ymm14,%ymm14
+	vpalignr	$8,%ymm10,%ymm10,%ymm10
+	vpalignr	$12,%ymm6,%ymm6,%ymm6
+
+	decq	%r10
+	jne	L$open_avx2_320_rounds
+	vpaddd	L$chacha20_consts(%rip),%ymm0,%ymm0
+	vpaddd	L$chacha20_consts(%rip),%ymm1,%ymm1
+	vpaddd	L$chacha20_consts(%rip),%ymm2,%ymm2
+	vpaddd	%ymm7,%ymm4,%ymm4
+	vpaddd	%ymm7,%ymm5,%ymm5
+	vpaddd	%ymm7,%ymm6,%ymm6
+	vpaddd	%ymm11,%ymm8,%ymm8
+	vpaddd	%ymm11,%ymm9,%ymm9
+	vpaddd	%ymm11,%ymm10,%ymm10
+	vpaddd	0+160(%rbp),%ymm12,%ymm12
+	vpaddd	0+192(%rbp),%ymm13,%ymm13
+	vpaddd	0+224(%rbp),%ymm14,%ymm14
+	vperm2i128	$0x02,%ymm0,%ymm4,%ymm3
+
+	vpand	L$clamp(%rip),%ymm3,%ymm3
+	vmovdqa	%ymm3,0+0(%rbp)
+
+	vperm2i128	$0x13,%ymm0,%ymm4,%ymm0
+	vperm2i128	$0x13,%ymm8,%ymm12,%ymm4
+	vperm2i128	$0x02,%ymm1,%ymm5,%ymm8
+	vperm2i128	$0x02,%ymm9,%ymm13,%ymm12
+	vperm2i128	$0x13,%ymm1,%ymm5,%ymm1
+	vperm2i128	$0x13,%ymm9,%ymm13,%ymm5
+	vperm2i128	$0x02,%ymm2,%ymm6,%ymm9
+	vperm2i128	$0x02,%ymm10,%ymm14,%ymm13
+	vperm2i128	$0x13,%ymm2,%ymm6,%ymm2
+	vperm2i128	$0x13,%ymm10,%ymm14,%ymm6
+	jmp	L$open_avx2_short
+
+
+
+
+.globl	_chacha20_poly1305_seal_avx2
+.private_extern _chacha20_poly1305_seal_avx2
+
+.p2align	6
+_chacha20_poly1305_seal_avx2:
+
+_CET_ENDBR
+	pushq	%rbp
+
+	pushq	%rbx
+
+	pushq	%r12
+
+	pushq	%r13
+
+	pushq	%r14
+
+	pushq	%r15
+
+
+
+	pushq	%r9
+
+	subq	$288 + 0 + 32,%rsp
+
+	leaq	32(%rsp),%rbp
+	andq	$-32,%rbp
+
+	movq	56(%r9),%rbx
+	addq	%rdx,%rbx
+	movq	%r8,0+0+32(%rbp)
+	movq	%rbx,8+0+32(%rbp)
+	movq	%rdx,%rbx
+
+	vzeroupper
+	vmovdqa	L$chacha20_consts(%rip),%ymm0
+	vbroadcasti128	0(%r9),%ymm4
+	vbroadcasti128	16(%r9),%ymm8
+	vbroadcasti128	32(%r9),%ymm12
+	vpaddd	L$avx2_init(%rip),%ymm12,%ymm12
+	cmpq	$192,%rbx
+	jbe	L$seal_avx2_192
+	cmpq	$320,%rbx
+	jbe	L$seal_avx2_320
+	vmovdqa	%ymm0,%ymm1
+	vmovdqa	%ymm0,%ymm2
+	vmovdqa	%ymm0,%ymm3
+	vmovdqa	%ymm4,%ymm5
+	vmovdqa	%ymm4,%ymm6
+	vmovdqa	%ymm4,%ymm7
+	vmovdqa	%ymm4,0+64(%rbp)
+	vmovdqa	%ymm8,%ymm9
+	vmovdqa	%ymm8,%ymm10
+	vmovdqa	%ymm8,%ymm11
+	vmovdqa	%ymm8,0+96(%rbp)
+	vmovdqa	%ymm12,%ymm15
+	vpaddd	L$avx2_inc(%rip),%ymm15,%ymm14
+	vpaddd	L$avx2_inc(%rip),%ymm14,%ymm13
+	vpaddd	L$avx2_inc(%rip),%ymm13,%ymm12
+	vmovdqa	%ymm12,0+160(%rbp)
+	vmovdqa	%ymm13,0+192(%rbp)
+	vmovdqa	%ymm14,0+224(%rbp)
+	vmovdqa	%ymm15,0+256(%rbp)
+	movq	$10,%r10
+L$seal_avx2_init_rounds:
+	vmovdqa	%ymm8,0+128(%rbp)
+	vmovdqa	L$rol16(%rip),%ymm8
+	vpaddd	%ymm7,%ymm3,%ymm3
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm3,%ymm15,%ymm15
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	%ymm8,%ymm15,%ymm15
+	vpshufb	%ymm8,%ymm14,%ymm14
+	vpshufb	%ymm8,%ymm13,%ymm13
+	vpshufb	%ymm8,%ymm12,%ymm12
+	vpaddd	%ymm15,%ymm11,%ymm11
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpaddd	0+128(%rbp),%ymm12,%ymm8
+	vpxor	%ymm11,%ymm7,%ymm7
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	%ymm8,0+128(%rbp)
+	vpsrld	$20,%ymm7,%ymm8
+	vpslld	$32-20,%ymm7,%ymm7
+	vpxor	%ymm8,%ymm7,%ymm7
+	vpsrld	$20,%ymm6,%ymm8
+	vpslld	$32-20,%ymm6,%ymm6
+	vpxor	%ymm8,%ymm6,%ymm6
+	vpsrld	$20,%ymm5,%ymm8
+	vpslld	$32-20,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm5,%ymm5
+	vpsrld	$20,%ymm4,%ymm8
+	vpslld	$32-20,%ymm4,%ymm4
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	L$rol8(%rip),%ymm8
+	vpaddd	%ymm7,%ymm3,%ymm3
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm3,%ymm15,%ymm15
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	%ymm8,%ymm15,%ymm15
+	vpshufb	%ymm8,%ymm14,%ymm14
+	vpshufb	%ymm8,%ymm13,%ymm13
+	vpshufb	%ymm8,%ymm12,%ymm12
+	vpaddd	%ymm15,%ymm11,%ymm11
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpaddd	0+128(%rbp),%ymm12,%ymm8
+	vpxor	%ymm11,%ymm7,%ymm7
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	%ymm8,0+128(%rbp)
+	vpsrld	$25,%ymm7,%ymm8
+	vpslld	$32-25,%ymm7,%ymm7
+	vpxor	%ymm8,%ymm7,%ymm7
+	vpsrld	$25,%ymm6,%ymm8
+	vpslld	$32-25,%ymm6,%ymm6
+	vpxor	%ymm8,%ymm6,%ymm6
+	vpsrld	$25,%ymm5,%ymm8
+	vpslld	$32-25,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm5,%ymm5
+	vpsrld	$25,%ymm4,%ymm8
+	vpslld	$32-25,%ymm4,%ymm4
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	0+128(%rbp),%ymm8
+	vpalignr	$4,%ymm7,%ymm7,%ymm7
+	vpalignr	$8,%ymm11,%ymm11,%ymm11
+	vpalignr	$12,%ymm15,%ymm15,%ymm15
+	vpalignr	$4,%ymm6,%ymm6,%ymm6
+	vpalignr	$8,%ymm10,%ymm10,%ymm10
+	vpalignr	$12,%ymm14,%ymm14,%ymm14
+	vpalignr	$4,%ymm5,%ymm5,%ymm5
+	vpalignr	$8,%ymm9,%ymm9,%ymm9
+	vpalignr	$12,%ymm13,%ymm13,%ymm13
+	vpalignr	$4,%ymm4,%ymm4,%ymm4
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$12,%ymm12,%ymm12,%ymm12
+	vmovdqa	%ymm8,0+128(%rbp)
+	vmovdqa	L$rol16(%rip),%ymm8
+	vpaddd	%ymm7,%ymm3,%ymm3
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm3,%ymm15,%ymm15
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	%ymm8,%ymm15,%ymm15
+	vpshufb	%ymm8,%ymm14,%ymm14
+	vpshufb	%ymm8,%ymm13,%ymm13
+	vpshufb	%ymm8,%ymm12,%ymm12
+	vpaddd	%ymm15,%ymm11,%ymm11
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpaddd	0+128(%rbp),%ymm12,%ymm8
+	vpxor	%ymm11,%ymm7,%ymm7
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	%ymm8,0+128(%rbp)
+	vpsrld	$20,%ymm7,%ymm8
+	vpslld	$32-20,%ymm7,%ymm7
+	vpxor	%ymm8,%ymm7,%ymm7
+	vpsrld	$20,%ymm6,%ymm8
+	vpslld	$32-20,%ymm6,%ymm6
+	vpxor	%ymm8,%ymm6,%ymm6
+	vpsrld	$20,%ymm5,%ymm8
+	vpslld	$32-20,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm5,%ymm5
+	vpsrld	$20,%ymm4,%ymm8
+	vpslld	$32-20,%ymm4,%ymm4
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	L$rol8(%rip),%ymm8
+	vpaddd	%ymm7,%ymm3,%ymm3
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm3,%ymm15,%ymm15
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	%ymm8,%ymm15,%ymm15
+	vpshufb	%ymm8,%ymm14,%ymm14
+	vpshufb	%ymm8,%ymm13,%ymm13
+	vpshufb	%ymm8,%ymm12,%ymm12
+	vpaddd	%ymm15,%ymm11,%ymm11
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpaddd	0+128(%rbp),%ymm12,%ymm8
+	vpxor	%ymm11,%ymm7,%ymm7
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	%ymm8,0+128(%rbp)
+	vpsrld	$25,%ymm7,%ymm8
+	vpslld	$32-25,%ymm7,%ymm7
+	vpxor	%ymm8,%ymm7,%ymm7
+	vpsrld	$25,%ymm6,%ymm8
+	vpslld	$32-25,%ymm6,%ymm6
+	vpxor	%ymm8,%ymm6,%ymm6
+	vpsrld	$25,%ymm5,%ymm8
+	vpslld	$32-25,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm5,%ymm5
+	vpsrld	$25,%ymm4,%ymm8
+	vpslld	$32-25,%ymm4,%ymm4
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	0+128(%rbp),%ymm8
+	vpalignr	$12,%ymm7,%ymm7,%ymm7
+	vpalignr	$8,%ymm11,%ymm11,%ymm11
+	vpalignr	$4,%ymm15,%ymm15,%ymm15
+	vpalignr	$12,%ymm6,%ymm6,%ymm6
+	vpalignr	$8,%ymm10,%ymm10,%ymm10
+	vpalignr	$4,%ymm14,%ymm14,%ymm14
+	vpalignr	$12,%ymm5,%ymm5,%ymm5
+	vpalignr	$8,%ymm9,%ymm9,%ymm9
+	vpalignr	$4,%ymm13,%ymm13,%ymm13
+	vpalignr	$12,%ymm4,%ymm4,%ymm4
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$4,%ymm12,%ymm12,%ymm12
+
+	decq	%r10
+	jnz	L$seal_avx2_init_rounds
+	vpaddd	L$chacha20_consts(%rip),%ymm3,%ymm3
+	vpaddd	0+64(%rbp),%ymm7,%ymm7
+	vpaddd	0+96(%rbp),%ymm11,%ymm11
+	vpaddd	0+256(%rbp),%ymm15,%ymm15
+	vpaddd	L$chacha20_consts(%rip),%ymm2,%ymm2
+	vpaddd	0+64(%rbp),%ymm6,%ymm6
+	vpaddd	0+96(%rbp),%ymm10,%ymm10
+	vpaddd	0+224(%rbp),%ymm14,%ymm14
+	vpaddd	L$chacha20_consts(%rip),%ymm1,%ymm1
+	vpaddd	0+64(%rbp),%ymm5,%ymm5
+	vpaddd	0+96(%rbp),%ymm9,%ymm9
+	vpaddd	0+192(%rbp),%ymm13,%ymm13
+	vpaddd	L$chacha20_consts(%rip),%ymm0,%ymm0
+	vpaddd	0+64(%rbp),%ymm4,%ymm4
+	vpaddd	0+96(%rbp),%ymm8,%ymm8
+	vpaddd	0+160(%rbp),%ymm12,%ymm12
+
+	vperm2i128	$0x13,%ymm11,%ymm15,%ymm11
+	vperm2i128	$0x02,%ymm3,%ymm7,%ymm15
+	vperm2i128	$0x13,%ymm3,%ymm7,%ymm3
+	vpand	L$clamp(%rip),%ymm15,%ymm15
+	vmovdqa	%ymm15,0+0(%rbp)
+	movq	%r8,%r8
+	call	poly_hash_ad_internal
+
+	vpxor	0(%rsi),%ymm3,%ymm3
+	vpxor	32(%rsi),%ymm11,%ymm11
+	vmovdqu	%ymm3,0(%rdi)
+	vmovdqu	%ymm11,32(%rdi)
+	vperm2i128	$0x02,%ymm2,%ymm6,%ymm15
+	vperm2i128	$0x13,%ymm2,%ymm6,%ymm6
+	vperm2i128	$0x02,%ymm10,%ymm14,%ymm2
+	vperm2i128	$0x13,%ymm10,%ymm14,%ymm10
+	vpxor	0+64(%rsi),%ymm15,%ymm15
+	vpxor	32+64(%rsi),%ymm2,%ymm2
+	vpxor	64+64(%rsi),%ymm6,%ymm6
+	vpxor	96+64(%rsi),%ymm10,%ymm10
+	vmovdqu	%ymm15,0+64(%rdi)
+	vmovdqu	%ymm2,32+64(%rdi)
+	vmovdqu	%ymm6,64+64(%rdi)
+	vmovdqu	%ymm10,96+64(%rdi)
+	vperm2i128	$0x02,%ymm1,%ymm5,%ymm15
+	vperm2i128	$0x13,%ymm1,%ymm5,%ymm5
+	vperm2i128	$0x02,%ymm9,%ymm13,%ymm1
+	vperm2i128	$0x13,%ymm9,%ymm13,%ymm9
+	vpxor	0+192(%rsi),%ymm15,%ymm15
+	vpxor	32+192(%rsi),%ymm1,%ymm1
+	vpxor	64+192(%rsi),%ymm5,%ymm5
+	vpxor	96+192(%rsi),%ymm9,%ymm9
+	vmovdqu	%ymm15,0+192(%rdi)
+	vmovdqu	%ymm1,32+192(%rdi)
+	vmovdqu	%ymm5,64+192(%rdi)
+	vmovdqu	%ymm9,96+192(%rdi)
+	vperm2i128	$0x13,%ymm0,%ymm4,%ymm15
+	vperm2i128	$0x02,%ymm0,%ymm4,%ymm0
+	vperm2i128	$0x02,%ymm8,%ymm12,%ymm4
+	vperm2i128	$0x13,%ymm8,%ymm12,%ymm12
+	vmovdqa	%ymm15,%ymm8
+
+	leaq	320(%rsi),%rsi
+	subq	$320,%rbx
+	movq	$320,%rcx
+	cmpq	$128,%rbx
+	jbe	L$seal_avx2_short_hash_remainder
+	vpxor	0(%rsi),%ymm0,%ymm0
+	vpxor	32(%rsi),%ymm4,%ymm4
+	vpxor	64(%rsi),%ymm8,%ymm8
+	vpxor	96(%rsi),%ymm12,%ymm12
+	vmovdqu	%ymm0,320(%rdi)
+	vmovdqu	%ymm4,352(%rdi)
+	vmovdqu	%ymm8,384(%rdi)
+	vmovdqu	%ymm12,416(%rdi)
+	leaq	128(%rsi),%rsi
+	subq	$128,%rbx
+	movq	$8,%rcx
+	movq	$2,%r8
+	cmpq	$128,%rbx
+	jbe	L$seal_avx2_tail_128
+	cmpq	$256,%rbx
+	jbe	L$seal_avx2_tail_256
+	cmpq	$384,%rbx
+	jbe	L$seal_avx2_tail_384
+	cmpq	$512,%rbx
+	jbe	L$seal_avx2_tail_512
+	vmovdqa	L$chacha20_consts(%rip),%ymm0
+	vmovdqa	0+64(%rbp),%ymm4
+	vmovdqa	0+96(%rbp),%ymm8
+	vmovdqa	%ymm0,%ymm1
+	vmovdqa	%ymm4,%ymm5
+	vmovdqa	%ymm8,%ymm9
+	vmovdqa	%ymm0,%ymm2
+	vmovdqa	%ymm4,%ymm6
+	vmovdqa	%ymm8,%ymm10
+	vmovdqa	%ymm0,%ymm3
+	vmovdqa	%ymm4,%ymm7
+	vmovdqa	%ymm8,%ymm11
+	vmovdqa	L$avx2_inc(%rip),%ymm12
+	vpaddd	0+160(%rbp),%ymm12,%ymm15
+	vpaddd	%ymm15,%ymm12,%ymm14
+	vpaddd	%ymm14,%ymm12,%ymm13
+	vpaddd	%ymm13,%ymm12,%ymm12
+	vmovdqa	%ymm15,0+256(%rbp)
+	vmovdqa	%ymm14,0+224(%rbp)
+	vmovdqa	%ymm13,0+192(%rbp)
+	vmovdqa	%ymm12,0+160(%rbp)
+	vmovdqa	%ymm8,0+128(%rbp)
+	vmovdqa	L$rol16(%rip),%ymm8
+	vpaddd	%ymm7,%ymm3,%ymm3
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm3,%ymm15,%ymm15
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	%ymm8,%ymm15,%ymm15
+	vpshufb	%ymm8,%ymm14,%ymm14
+	vpshufb	%ymm8,%ymm13,%ymm13
+	vpshufb	%ymm8,%ymm12,%ymm12
+	vpaddd	%ymm15,%ymm11,%ymm11
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpaddd	0+128(%rbp),%ymm12,%ymm8
+	vpxor	%ymm11,%ymm7,%ymm7
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	%ymm8,0+128(%rbp)
+	vpsrld	$20,%ymm7,%ymm8
+	vpslld	$32-20,%ymm7,%ymm7
+	vpxor	%ymm8,%ymm7,%ymm7
+	vpsrld	$20,%ymm6,%ymm8
+	vpslld	$32-20,%ymm6,%ymm6
+	vpxor	%ymm8,%ymm6,%ymm6
+	vpsrld	$20,%ymm5,%ymm8
+	vpslld	$32-20,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm5,%ymm5
+	vpsrld	$20,%ymm4,%ymm8
+	vpslld	$32-20,%ymm4,%ymm4
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	L$rol8(%rip),%ymm8
+	vpaddd	%ymm7,%ymm3,%ymm3
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm3,%ymm15,%ymm15
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	%ymm8,%ymm15,%ymm15
+	vpshufb	%ymm8,%ymm14,%ymm14
+	vpshufb	%ymm8,%ymm13,%ymm13
+	vpshufb	%ymm8,%ymm12,%ymm12
+	vpaddd	%ymm15,%ymm11,%ymm11
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpaddd	0+128(%rbp),%ymm12,%ymm8
+	vpxor	%ymm11,%ymm7,%ymm7
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	%ymm8,0+128(%rbp)
+	vpsrld	$25,%ymm7,%ymm8
+	vpslld	$32-25,%ymm7,%ymm7
+	vpxor	%ymm8,%ymm7,%ymm7
+	vpsrld	$25,%ymm6,%ymm8
+	vpslld	$32-25,%ymm6,%ymm6
+	vpxor	%ymm8,%ymm6,%ymm6
+	vpsrld	$25,%ymm5,%ymm8
+	vpslld	$32-25,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm5,%ymm5
+	vpsrld	$25,%ymm4,%ymm8
+	vpslld	$32-25,%ymm4,%ymm4
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	0+128(%rbp),%ymm8
+	vpalignr	$4,%ymm7,%ymm7,%ymm7
+	vpalignr	$8,%ymm11,%ymm11,%ymm11
+	vpalignr	$12,%ymm15,%ymm15,%ymm15
+	vpalignr	$4,%ymm6,%ymm6,%ymm6
+	vpalignr	$8,%ymm10,%ymm10,%ymm10
+	vpalignr	$12,%ymm14,%ymm14,%ymm14
+	vpalignr	$4,%ymm5,%ymm5,%ymm5
+	vpalignr	$8,%ymm9,%ymm9,%ymm9
+	vpalignr	$12,%ymm13,%ymm13,%ymm13
+	vpalignr	$4,%ymm4,%ymm4,%ymm4
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$12,%ymm12,%ymm12,%ymm12
+	vmovdqa	%ymm8,0+128(%rbp)
+	vmovdqa	L$rol16(%rip),%ymm8
+	vpaddd	%ymm7,%ymm3,%ymm3
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm3,%ymm15,%ymm15
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	%ymm8,%ymm15,%ymm15
+	vpshufb	%ymm8,%ymm14,%ymm14
+	vpshufb	%ymm8,%ymm13,%ymm13
+	vpshufb	%ymm8,%ymm12,%ymm12
+	vpaddd	%ymm15,%ymm11,%ymm11
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpaddd	0+128(%rbp),%ymm12,%ymm8
+	vpxor	%ymm11,%ymm7,%ymm7
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	%ymm8,0+128(%rbp)
+	vpsrld	$20,%ymm7,%ymm8
+	vpslld	$32-20,%ymm7,%ymm7
+	vpxor	%ymm8,%ymm7,%ymm7
+	vpsrld	$20,%ymm6,%ymm8
+	vpslld	$32-20,%ymm6,%ymm6
+	vpxor	%ymm8,%ymm6,%ymm6
+	vpsrld	$20,%ymm5,%ymm8
+	vpslld	$32-20,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm5,%ymm5
+	vpsrld	$20,%ymm4,%ymm8
+	vpslld	$32-20,%ymm4,%ymm4
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	L$rol8(%rip),%ymm8
+	vpaddd	%ymm7,%ymm3,%ymm3
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm3,%ymm15,%ymm15
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	%ymm8,%ymm15,%ymm15
+	vpshufb	%ymm8,%ymm14,%ymm14
+	vpshufb	%ymm8,%ymm13,%ymm13
+	vpshufb	%ymm8,%ymm12,%ymm12
+	vpaddd	%ymm15,%ymm11,%ymm11
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpaddd	0+128(%rbp),%ymm12,%ymm8
+	vpxor	%ymm11,%ymm7,%ymm7
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	%ymm8,0+128(%rbp)
+	vpsrld	$25,%ymm7,%ymm8
+	vpslld	$32-25,%ymm7,%ymm7
+	vpxor	%ymm8,%ymm7,%ymm7
+	vpsrld	$25,%ymm6,%ymm8
+	vpslld	$32-25,%ymm6,%ymm6
+	vpxor	%ymm8,%ymm6,%ymm6
+	vpsrld	$25,%ymm5,%ymm8
+	vpslld	$32-25,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm5,%ymm5
+	vpsrld	$25,%ymm4,%ymm8
+	vpslld	$32-25,%ymm4,%ymm4
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	0+128(%rbp),%ymm8
+	vpalignr	$12,%ymm7,%ymm7,%ymm7
+	vpalignr	$8,%ymm11,%ymm11,%ymm11
+	vpalignr	$4,%ymm15,%ymm15,%ymm15
+	vpalignr	$12,%ymm6,%ymm6,%ymm6
+	vpalignr	$8,%ymm10,%ymm10,%ymm10
+	vpalignr	$4,%ymm14,%ymm14,%ymm14
+	vpalignr	$12,%ymm5,%ymm5,%ymm5
+	vpalignr	$8,%ymm9,%ymm9,%ymm9
+	vpalignr	$4,%ymm13,%ymm13,%ymm13
+	vpalignr	$12,%ymm4,%ymm4,%ymm4
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$4,%ymm12,%ymm12,%ymm12
+	vmovdqa	%ymm8,0+128(%rbp)
+	vmovdqa	L$rol16(%rip),%ymm8
+	vpaddd	%ymm7,%ymm3,%ymm3
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm3,%ymm15,%ymm15
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	%ymm8,%ymm15,%ymm15
+	vpshufb	%ymm8,%ymm14,%ymm14
+	vpshufb	%ymm8,%ymm13,%ymm13
+	vpshufb	%ymm8,%ymm12,%ymm12
+	vpaddd	%ymm15,%ymm11,%ymm11
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpaddd	0+128(%rbp),%ymm12,%ymm8
+	vpxor	%ymm11,%ymm7,%ymm7
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	%ymm8,0+128(%rbp)
+	vpsrld	$20,%ymm7,%ymm8
+	vpslld	$32-20,%ymm7,%ymm7
+	vpxor	%ymm8,%ymm7,%ymm7
+	vpsrld	$20,%ymm6,%ymm8
+	vpslld	$32-20,%ymm6,%ymm6
+	vpxor	%ymm8,%ymm6,%ymm6
+	vpsrld	$20,%ymm5,%ymm8
+	vpslld	$32-20,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm5,%ymm5
+	vpsrld	$20,%ymm4,%ymm8
+	vpslld	$32-20,%ymm4,%ymm4
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	L$rol8(%rip),%ymm8
+	vpaddd	%ymm7,%ymm3,%ymm3
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm3,%ymm15,%ymm15
+
+	subq	$16,%rdi
+	movq	$9,%rcx
+	jmp	L$seal_avx2_main_loop_rounds_entry
+.p2align	5
+L$seal_avx2_main_loop:
+	vmovdqa	L$chacha20_consts(%rip),%ymm0
+	vmovdqa	0+64(%rbp),%ymm4
+	vmovdqa	0+96(%rbp),%ymm8
+	vmovdqa	%ymm0,%ymm1
+	vmovdqa	%ymm4,%ymm5
+	vmovdqa	%ymm8,%ymm9
+	vmovdqa	%ymm0,%ymm2
+	vmovdqa	%ymm4,%ymm6
+	vmovdqa	%ymm8,%ymm10
+	vmovdqa	%ymm0,%ymm3
+	vmovdqa	%ymm4,%ymm7
+	vmovdqa	%ymm8,%ymm11
+	vmovdqa	L$avx2_inc(%rip),%ymm12
+	vpaddd	0+160(%rbp),%ymm12,%ymm15
+	vpaddd	%ymm15,%ymm12,%ymm14
+	vpaddd	%ymm14,%ymm12,%ymm13
+	vpaddd	%ymm13,%ymm12,%ymm12
+	vmovdqa	%ymm15,0+256(%rbp)
+	vmovdqa	%ymm14,0+224(%rbp)
+	vmovdqa	%ymm13,0+192(%rbp)
+	vmovdqa	%ymm12,0+160(%rbp)
+
+	movq	$10,%rcx
+.p2align	5
+L$seal_avx2_main_loop_rounds:
+	addq	0+0(%rdi),%r10
+	adcq	8+0(%rdi),%r11
+	adcq	$1,%r12
+	vmovdqa	%ymm8,0+128(%rbp)
+	vmovdqa	L$rol16(%rip),%ymm8
+	vpaddd	%ymm7,%ymm3,%ymm3
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm3,%ymm15,%ymm15
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpxor	%ymm0,%ymm12,%ymm12
+	movq	0+0+0(%rbp),%rdx
+	movq	%rdx,%r15
+	mulxq	%r10,%r13,%r14
+	mulxq	%r11,%rax,%rdx
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	vpshufb	%ymm8,%ymm15,%ymm15
+	vpshufb	%ymm8,%ymm14,%ymm14
+	vpshufb	%ymm8,%ymm13,%ymm13
+	vpshufb	%ymm8,%ymm12,%ymm12
+	vpaddd	%ymm15,%ymm11,%ymm11
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpaddd	0+128(%rbp),%ymm12,%ymm8
+	vpxor	%ymm11,%ymm7,%ymm7
+	movq	8+0+0(%rbp),%rdx
+	mulxq	%r10,%r10,%rax
+	addq	%r10,%r14
+	mulxq	%r11,%r11,%r9
+	adcq	%r11,%r15
+	adcq	$0,%r9
+	imulq	%r12,%rdx
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	%ymm8,0+128(%rbp)
+	vpsrld	$20,%ymm7,%ymm8
+	vpslld	$32-20,%ymm7,%ymm7
+	vpxor	%ymm8,%ymm7,%ymm7
+	vpsrld	$20,%ymm6,%ymm8
+	vpslld	$32-20,%ymm6,%ymm6
+	vpxor	%ymm8,%ymm6,%ymm6
+	vpsrld	$20,%ymm5,%ymm8
+	vpslld	$32-20,%ymm5,%ymm5
+	addq	%rax,%r15
+	adcq	%rdx,%r9
+	vpxor	%ymm8,%ymm5,%ymm5
+	vpsrld	$20,%ymm4,%ymm8
+	vpslld	$32-20,%ymm4,%ymm4
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	L$rol8(%rip),%ymm8
+	vpaddd	%ymm7,%ymm3,%ymm3
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm3,%ymm15,%ymm15
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+L$seal_avx2_main_loop_rounds_entry:
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	%ymm8,%ymm15,%ymm15
+	vpshufb	%ymm8,%ymm14,%ymm14
+	vpshufb	%ymm8,%ymm13,%ymm13
+	vpshufb	%ymm8,%ymm12,%ymm12
+	vpaddd	%ymm15,%ymm11,%ymm11
+	vpaddd	%ymm14,%ymm10,%ymm10
+	addq	0+16(%rdi),%r10
+	adcq	8+16(%rdi),%r11
+	adcq	$1,%r12
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpaddd	0+128(%rbp),%ymm12,%ymm8
+	vpxor	%ymm11,%ymm7,%ymm7
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	%ymm8,0+128(%rbp)
+	vpsrld	$25,%ymm7,%ymm8
+	movq	0+0+0(%rbp),%rdx
+	movq	%rdx,%r15
+	mulxq	%r10,%r13,%r14
+	mulxq	%r11,%rax,%rdx
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	vpslld	$32-25,%ymm7,%ymm7
+	vpxor	%ymm8,%ymm7,%ymm7
+	vpsrld	$25,%ymm6,%ymm8
+	vpslld	$32-25,%ymm6,%ymm6
+	vpxor	%ymm8,%ymm6,%ymm6
+	vpsrld	$25,%ymm5,%ymm8
+	vpslld	$32-25,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm5,%ymm5
+	vpsrld	$25,%ymm4,%ymm8
+	vpslld	$32-25,%ymm4,%ymm4
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	0+128(%rbp),%ymm8
+	vpalignr	$4,%ymm7,%ymm7,%ymm7
+	vpalignr	$8,%ymm11,%ymm11,%ymm11
+	vpalignr	$12,%ymm15,%ymm15,%ymm15
+	vpalignr	$4,%ymm6,%ymm6,%ymm6
+	vpalignr	$8,%ymm10,%ymm10,%ymm10
+	vpalignr	$12,%ymm14,%ymm14,%ymm14
+	movq	8+0+0(%rbp),%rdx
+	mulxq	%r10,%r10,%rax
+	addq	%r10,%r14
+	mulxq	%r11,%r11,%r9
+	adcq	%r11,%r15
+	adcq	$0,%r9
+	imulq	%r12,%rdx
+	vpalignr	$4,%ymm5,%ymm5,%ymm5
+	vpalignr	$8,%ymm9,%ymm9,%ymm9
+	vpalignr	$12,%ymm13,%ymm13,%ymm13
+	vpalignr	$4,%ymm4,%ymm4,%ymm4
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$12,%ymm12,%ymm12,%ymm12
+	vmovdqa	%ymm8,0+128(%rbp)
+	vmovdqa	L$rol16(%rip),%ymm8
+	vpaddd	%ymm7,%ymm3,%ymm3
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm3,%ymm15,%ymm15
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	%ymm8,%ymm15,%ymm15
+	vpshufb	%ymm8,%ymm14,%ymm14
+	addq	%rax,%r15
+	adcq	%rdx,%r9
+	vpshufb	%ymm8,%ymm13,%ymm13
+	vpshufb	%ymm8,%ymm12,%ymm12
+	vpaddd	%ymm15,%ymm11,%ymm11
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpaddd	0+128(%rbp),%ymm12,%ymm8
+	vpxor	%ymm11,%ymm7,%ymm7
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpxor	%ymm9,%ymm5,%ymm5
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	%ymm8,0+128(%rbp)
+	vpsrld	$20,%ymm7,%ymm8
+	vpslld	$32-20,%ymm7,%ymm7
+	vpxor	%ymm8,%ymm7,%ymm7
+	vpsrld	$20,%ymm6,%ymm8
+	vpslld	$32-20,%ymm6,%ymm6
+	vpxor	%ymm8,%ymm6,%ymm6
+	addq	0+32(%rdi),%r10
+	adcq	8+32(%rdi),%r11
+	adcq	$1,%r12
+
+	leaq	48(%rdi),%rdi
+	vpsrld	$20,%ymm5,%ymm8
+	vpslld	$32-20,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm5,%ymm5
+	vpsrld	$20,%ymm4,%ymm8
+	vpslld	$32-20,%ymm4,%ymm4
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	L$rol8(%rip),%ymm8
+	vpaddd	%ymm7,%ymm3,%ymm3
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm3,%ymm15,%ymm15
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	%ymm8,%ymm15,%ymm15
+	vpshufb	%ymm8,%ymm14,%ymm14
+	vpshufb	%ymm8,%ymm13,%ymm13
+	movq	0+0+0(%rbp),%rdx
+	movq	%rdx,%r15
+	mulxq	%r10,%r13,%r14
+	mulxq	%r11,%rax,%rdx
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	vpshufb	%ymm8,%ymm12,%ymm12
+	vpaddd	%ymm15,%ymm11,%ymm11
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpaddd	0+128(%rbp),%ymm12,%ymm8
+	vpxor	%ymm11,%ymm7,%ymm7
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpxor	%ymm9,%ymm5,%ymm5
+	movq	8+0+0(%rbp),%rdx
+	mulxq	%r10,%r10,%rax
+	addq	%r10,%r14
+	mulxq	%r11,%r11,%r9
+	adcq	%r11,%r15
+	adcq	$0,%r9
+	imulq	%r12,%rdx
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	%ymm8,0+128(%rbp)
+	vpsrld	$25,%ymm7,%ymm8
+	vpslld	$32-25,%ymm7,%ymm7
+	vpxor	%ymm8,%ymm7,%ymm7
+	vpsrld	$25,%ymm6,%ymm8
+	vpslld	$32-25,%ymm6,%ymm6
+	vpxor	%ymm8,%ymm6,%ymm6
+	addq	%rax,%r15
+	adcq	%rdx,%r9
+	vpsrld	$25,%ymm5,%ymm8
+	vpslld	$32-25,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm5,%ymm5
+	vpsrld	$25,%ymm4,%ymm8
+	vpslld	$32-25,%ymm4,%ymm4
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	0+128(%rbp),%ymm8
+	vpalignr	$12,%ymm7,%ymm7,%ymm7
+	vpalignr	$8,%ymm11,%ymm11,%ymm11
+	vpalignr	$4,%ymm15,%ymm15,%ymm15
+	vpalignr	$12,%ymm6,%ymm6,%ymm6
+	vpalignr	$8,%ymm10,%ymm10,%ymm10
+	vpalignr	$4,%ymm14,%ymm14,%ymm14
+	vpalignr	$12,%ymm5,%ymm5,%ymm5
+	vpalignr	$8,%ymm9,%ymm9,%ymm9
+	vpalignr	$4,%ymm13,%ymm13,%ymm13
+	vpalignr	$12,%ymm4,%ymm4,%ymm4
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+	vpalignr	$4,%ymm12,%ymm12,%ymm12
+
+	decq	%rcx
+	jne	L$seal_avx2_main_loop_rounds
+	vpaddd	L$chacha20_consts(%rip),%ymm3,%ymm3
+	vpaddd	0+64(%rbp),%ymm7,%ymm7
+	vpaddd	0+96(%rbp),%ymm11,%ymm11
+	vpaddd	0+256(%rbp),%ymm15,%ymm15
+	vpaddd	L$chacha20_consts(%rip),%ymm2,%ymm2
+	vpaddd	0+64(%rbp),%ymm6,%ymm6
+	vpaddd	0+96(%rbp),%ymm10,%ymm10
+	vpaddd	0+224(%rbp),%ymm14,%ymm14
+	vpaddd	L$chacha20_consts(%rip),%ymm1,%ymm1
+	vpaddd	0+64(%rbp),%ymm5,%ymm5
+	vpaddd	0+96(%rbp),%ymm9,%ymm9
+	vpaddd	0+192(%rbp),%ymm13,%ymm13
+	vpaddd	L$chacha20_consts(%rip),%ymm0,%ymm0
+	vpaddd	0+64(%rbp),%ymm4,%ymm4
+	vpaddd	0+96(%rbp),%ymm8,%ymm8
+	vpaddd	0+160(%rbp),%ymm12,%ymm12
+
+	vmovdqa	%ymm0,0+128(%rbp)
+	addq	0+0(%rdi),%r10
+	adcq	8+0(%rdi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rdx
+	movq	%rdx,%r15
+	mulxq	%r10,%r13,%r14
+	mulxq	%r11,%rax,%rdx
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rdx
+	mulxq	%r10,%r10,%rax
+	addq	%r10,%r14
+	mulxq	%r11,%r11,%r9
+	adcq	%r11,%r15
+	adcq	$0,%r9
+	imulq	%r12,%rdx
+	addq	%rax,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+	addq	0+16(%rdi),%r10
+	adcq	8+16(%rdi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rdx
+	movq	%rdx,%r15
+	mulxq	%r10,%r13,%r14
+	mulxq	%r11,%rax,%rdx
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rdx
+	mulxq	%r10,%r10,%rax
+	addq	%r10,%r14
+	mulxq	%r11,%r11,%r9
+	adcq	%r11,%r15
+	adcq	$0,%r9
+	imulq	%r12,%rdx
+	addq	%rax,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	leaq	32(%rdi),%rdi
+	vperm2i128	$0x02,%ymm3,%ymm7,%ymm0
+	vperm2i128	$0x13,%ymm3,%ymm7,%ymm7
+	vperm2i128	$0x02,%ymm11,%ymm15,%ymm3
+	vperm2i128	$0x13,%ymm11,%ymm15,%ymm11
+	vpxor	0+0(%rsi),%ymm0,%ymm0
+	vpxor	32+0(%rsi),%ymm3,%ymm3
+	vpxor	64+0(%rsi),%ymm7,%ymm7
+	vpxor	96+0(%rsi),%ymm11,%ymm11
+	vmovdqu	%ymm0,0+0(%rdi)
+	vmovdqu	%ymm3,32+0(%rdi)
+	vmovdqu	%ymm7,64+0(%rdi)
+	vmovdqu	%ymm11,96+0(%rdi)
+
+	vmovdqa	0+128(%rbp),%ymm0
+	vperm2i128	$0x02,%ymm2,%ymm6,%ymm3
+	vperm2i128	$0x13,%ymm2,%ymm6,%ymm6
+	vperm2i128	$0x02,%ymm10,%ymm14,%ymm2
+	vperm2i128	$0x13,%ymm10,%ymm14,%ymm10
+	vpxor	0+128(%rsi),%ymm3,%ymm3
+	vpxor	32+128(%rsi),%ymm2,%ymm2
+	vpxor	64+128(%rsi),%ymm6,%ymm6
+	vpxor	96+128(%rsi),%ymm10,%ymm10
+	vmovdqu	%ymm3,0+128(%rdi)
+	vmovdqu	%ymm2,32+128(%rdi)
+	vmovdqu	%ymm6,64+128(%rdi)
+	vmovdqu	%ymm10,96+128(%rdi)
+	vperm2i128	$0x02,%ymm1,%ymm5,%ymm3
+	vperm2i128	$0x13,%ymm1,%ymm5,%ymm5
+	vperm2i128	$0x02,%ymm9,%ymm13,%ymm1
+	vperm2i128	$0x13,%ymm9,%ymm13,%ymm9
+	vpxor	0+256(%rsi),%ymm3,%ymm3
+	vpxor	32+256(%rsi),%ymm1,%ymm1
+	vpxor	64+256(%rsi),%ymm5,%ymm5
+	vpxor	96+256(%rsi),%ymm9,%ymm9
+	vmovdqu	%ymm3,0+256(%rdi)
+	vmovdqu	%ymm1,32+256(%rdi)
+	vmovdqu	%ymm5,64+256(%rdi)
+	vmovdqu	%ymm9,96+256(%rdi)
+	vperm2i128	$0x02,%ymm0,%ymm4,%ymm3
+	vperm2i128	$0x13,%ymm0,%ymm4,%ymm4
+	vperm2i128	$0x02,%ymm8,%ymm12,%ymm0
+	vperm2i128	$0x13,%ymm8,%ymm12,%ymm8
+	vpxor	0+384(%rsi),%ymm3,%ymm3
+	vpxor	32+384(%rsi),%ymm0,%ymm0
+	vpxor	64+384(%rsi),%ymm4,%ymm4
+	vpxor	96+384(%rsi),%ymm8,%ymm8
+	vmovdqu	%ymm3,0+384(%rdi)
+	vmovdqu	%ymm0,32+384(%rdi)
+	vmovdqu	%ymm4,64+384(%rdi)
+	vmovdqu	%ymm8,96+384(%rdi)
+
+	leaq	512(%rsi),%rsi
+	subq	$512,%rbx
+	cmpq	$512,%rbx
+	jg	L$seal_avx2_main_loop
+
+	addq	0+0(%rdi),%r10
+	adcq	8+0(%rdi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rdx
+	movq	%rdx,%r15
+	mulxq	%r10,%r13,%r14
+	mulxq	%r11,%rax,%rdx
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rdx
+	mulxq	%r10,%r10,%rax
+	addq	%r10,%r14
+	mulxq	%r11,%r11,%r9
+	adcq	%r11,%r15
+	adcq	$0,%r9
+	imulq	%r12,%rdx
+	addq	%rax,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+	addq	0+16(%rdi),%r10
+	adcq	8+16(%rdi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rdx
+	movq	%rdx,%r15
+	mulxq	%r10,%r13,%r14
+	mulxq	%r11,%rax,%rdx
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rdx
+	mulxq	%r10,%r10,%rax
+	addq	%r10,%r14
+	mulxq	%r11,%r11,%r9
+	adcq	%r11,%r15
+	adcq	$0,%r9
+	imulq	%r12,%rdx
+	addq	%rax,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	leaq	32(%rdi),%rdi
+	movq	$10,%rcx
+	xorq	%r8,%r8
+
+	cmpq	$384,%rbx
+	ja	L$seal_avx2_tail_512
+	cmpq	$256,%rbx
+	ja	L$seal_avx2_tail_384
+	cmpq	$128,%rbx
+	ja	L$seal_avx2_tail_256
+
+L$seal_avx2_tail_128:
+	vmovdqa	L$chacha20_consts(%rip),%ymm0
+	vmovdqa	0+64(%rbp),%ymm4
+	vmovdqa	0+96(%rbp),%ymm8
+	vmovdqa	L$avx2_inc(%rip),%ymm12
+	vpaddd	0+160(%rbp),%ymm12,%ymm12
+	vmovdqa	%ymm12,0+160(%rbp)
+
+L$seal_avx2_tail_128_rounds_and_3xhash:
+	addq	0+0(%rdi),%r10
+	adcq	8+0(%rdi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rdx
+	movq	%rdx,%r15
+	mulxq	%r10,%r13,%r14
+	mulxq	%r11,%rax,%rdx
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rdx
+	mulxq	%r10,%r10,%rax
+	addq	%r10,%r14
+	mulxq	%r11,%r11,%r9
+	adcq	%r11,%r15
+	adcq	$0,%r9
+	imulq	%r12,%rdx
+	addq	%rax,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	leaq	16(%rdi),%rdi
+L$seal_avx2_tail_128_rounds_and_2xhash:
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol16(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpsrld	$20,%ymm4,%ymm3
+	vpslld	$12,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol8(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpslld	$7,%ymm4,%ymm3
+	vpsrld	$25,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpalignr	$12,%ymm12,%ymm12,%ymm12
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$4,%ymm4,%ymm4,%ymm4
+	addq	0+0(%rdi),%r10
+	adcq	8+0(%rdi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rdx
+	movq	%rdx,%r15
+	mulxq	%r10,%r13,%r14
+	mulxq	%r11,%rax,%rdx
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rdx
+	mulxq	%r10,%r10,%rax
+	addq	%r10,%r14
+	mulxq	%r11,%r11,%r9
+	adcq	%r11,%r15
+	adcq	$0,%r9
+	imulq	%r12,%rdx
+	addq	%rax,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol16(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpsrld	$20,%ymm4,%ymm3
+	vpslld	$12,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol8(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpslld	$7,%ymm4,%ymm3
+	vpsrld	$25,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpalignr	$4,%ymm12,%ymm12,%ymm12
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$12,%ymm4,%ymm4,%ymm4
+	addq	0+16(%rdi),%r10
+	adcq	8+16(%rdi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rdx
+	movq	%rdx,%r15
+	mulxq	%r10,%r13,%r14
+	mulxq	%r11,%rax,%rdx
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rdx
+	mulxq	%r10,%r10,%rax
+	addq	%r10,%r14
+	mulxq	%r11,%r11,%r9
+	adcq	%r11,%r15
+	adcq	$0,%r9
+	imulq	%r12,%rdx
+	addq	%rax,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	leaq	32(%rdi),%rdi
+	decq	%rcx
+	jg	L$seal_avx2_tail_128_rounds_and_3xhash
+	decq	%r8
+	jge	L$seal_avx2_tail_128_rounds_and_2xhash
+	vpaddd	L$chacha20_consts(%rip),%ymm0,%ymm0
+	vpaddd	0+64(%rbp),%ymm4,%ymm4
+	vpaddd	0+96(%rbp),%ymm8,%ymm8
+	vpaddd	0+160(%rbp),%ymm12,%ymm12
+	vperm2i128	$0x13,%ymm0,%ymm4,%ymm3
+	vperm2i128	$0x02,%ymm0,%ymm4,%ymm0
+	vperm2i128	$0x02,%ymm8,%ymm12,%ymm4
+	vperm2i128	$0x13,%ymm8,%ymm12,%ymm12
+	vmovdqa	%ymm3,%ymm8
+
+	jmp	L$seal_avx2_short_loop
+
+L$seal_avx2_tail_256:
+	vmovdqa	L$chacha20_consts(%rip),%ymm0
+	vmovdqa	0+64(%rbp),%ymm4
+	vmovdqa	0+96(%rbp),%ymm8
+	vmovdqa	%ymm0,%ymm1
+	vmovdqa	%ymm4,%ymm5
+	vmovdqa	%ymm8,%ymm9
+	vmovdqa	L$avx2_inc(%rip),%ymm12
+	vpaddd	0+160(%rbp),%ymm12,%ymm13
+	vpaddd	%ymm13,%ymm12,%ymm12
+	vmovdqa	%ymm12,0+160(%rbp)
+	vmovdqa	%ymm13,0+192(%rbp)
+
+L$seal_avx2_tail_256_rounds_and_3xhash:
+	addq	0+0(%rdi),%r10
+	adcq	8+0(%rdi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	leaq	16(%rdi),%rdi
+L$seal_avx2_tail_256_rounds_and_2xhash:
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol16(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpsrld	$20,%ymm4,%ymm3
+	vpslld	$12,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol8(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpslld	$7,%ymm4,%ymm3
+	vpsrld	$25,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpalignr	$12,%ymm12,%ymm12,%ymm12
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$4,%ymm4,%ymm4,%ymm4
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol16(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpsrld	$20,%ymm5,%ymm3
+	vpslld	$12,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol8(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpslld	$7,%ymm5,%ymm3
+	vpsrld	$25,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpalignr	$12,%ymm13,%ymm13,%ymm13
+	vpalignr	$8,%ymm9,%ymm9,%ymm9
+	vpalignr	$4,%ymm5,%ymm5,%ymm5
+	addq	0+0(%rdi),%r10
+	adcq	8+0(%rdi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol16(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpsrld	$20,%ymm4,%ymm3
+	vpslld	$12,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol8(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpslld	$7,%ymm4,%ymm3
+	vpsrld	$25,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpalignr	$4,%ymm12,%ymm12,%ymm12
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$12,%ymm4,%ymm4,%ymm4
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol16(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpsrld	$20,%ymm5,%ymm3
+	vpslld	$12,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol8(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpslld	$7,%ymm5,%ymm3
+	vpsrld	$25,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpalignr	$4,%ymm13,%ymm13,%ymm13
+	vpalignr	$8,%ymm9,%ymm9,%ymm9
+	vpalignr	$12,%ymm5,%ymm5,%ymm5
+	addq	0+16(%rdi),%r10
+	adcq	8+16(%rdi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	leaq	32(%rdi),%rdi
+	decq	%rcx
+	jg	L$seal_avx2_tail_256_rounds_and_3xhash
+	decq	%r8
+	jge	L$seal_avx2_tail_256_rounds_and_2xhash
+	vpaddd	L$chacha20_consts(%rip),%ymm1,%ymm1
+	vpaddd	0+64(%rbp),%ymm5,%ymm5
+	vpaddd	0+96(%rbp),%ymm9,%ymm9
+	vpaddd	0+192(%rbp),%ymm13,%ymm13
+	vpaddd	L$chacha20_consts(%rip),%ymm0,%ymm0
+	vpaddd	0+64(%rbp),%ymm4,%ymm4
+	vpaddd	0+96(%rbp),%ymm8,%ymm8
+	vpaddd	0+160(%rbp),%ymm12,%ymm12
+	vperm2i128	$0x02,%ymm1,%ymm5,%ymm3
+	vperm2i128	$0x13,%ymm1,%ymm5,%ymm5
+	vperm2i128	$0x02,%ymm9,%ymm13,%ymm1
+	vperm2i128	$0x13,%ymm9,%ymm13,%ymm9
+	vpxor	0+0(%rsi),%ymm3,%ymm3
+	vpxor	32+0(%rsi),%ymm1,%ymm1
+	vpxor	64+0(%rsi),%ymm5,%ymm5
+	vpxor	96+0(%rsi),%ymm9,%ymm9
+	vmovdqu	%ymm3,0+0(%rdi)
+	vmovdqu	%ymm1,32+0(%rdi)
+	vmovdqu	%ymm5,64+0(%rdi)
+	vmovdqu	%ymm9,96+0(%rdi)
+	vperm2i128	$0x13,%ymm0,%ymm4,%ymm3
+	vperm2i128	$0x02,%ymm0,%ymm4,%ymm0
+	vperm2i128	$0x02,%ymm8,%ymm12,%ymm4
+	vperm2i128	$0x13,%ymm8,%ymm12,%ymm12
+	vmovdqa	%ymm3,%ymm8
+
+	movq	$128,%rcx
+	leaq	128(%rsi),%rsi
+	subq	$128,%rbx
+	jmp	L$seal_avx2_short_hash_remainder
+
+L$seal_avx2_tail_384:
+	vmovdqa	L$chacha20_consts(%rip),%ymm0
+	vmovdqa	0+64(%rbp),%ymm4
+	vmovdqa	0+96(%rbp),%ymm8
+	vmovdqa	%ymm0,%ymm1
+	vmovdqa	%ymm4,%ymm5
+	vmovdqa	%ymm8,%ymm9
+	vmovdqa	%ymm0,%ymm2
+	vmovdqa	%ymm4,%ymm6
+	vmovdqa	%ymm8,%ymm10
+	vmovdqa	L$avx2_inc(%rip),%ymm12
+	vpaddd	0+160(%rbp),%ymm12,%ymm14
+	vpaddd	%ymm14,%ymm12,%ymm13
+	vpaddd	%ymm13,%ymm12,%ymm12
+	vmovdqa	%ymm12,0+160(%rbp)
+	vmovdqa	%ymm13,0+192(%rbp)
+	vmovdqa	%ymm14,0+224(%rbp)
+
+L$seal_avx2_tail_384_rounds_and_3xhash:
+	addq	0+0(%rdi),%r10
+	adcq	8+0(%rdi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	leaq	16(%rdi),%rdi
+L$seal_avx2_tail_384_rounds_and_2xhash:
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol16(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpsrld	$20,%ymm4,%ymm3
+	vpslld	$12,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol8(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpslld	$7,%ymm4,%ymm3
+	vpsrld	$25,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpalignr	$12,%ymm12,%ymm12,%ymm12
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$4,%ymm4,%ymm4,%ymm4
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol16(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpsrld	$20,%ymm5,%ymm3
+	vpslld	$12,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol8(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpslld	$7,%ymm5,%ymm3
+	vpsrld	$25,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpalignr	$12,%ymm13,%ymm13,%ymm13
+	vpalignr	$8,%ymm9,%ymm9,%ymm9
+	vpalignr	$4,%ymm5,%ymm5,%ymm5
+	addq	0+0(%rdi),%r10
+	adcq	8+0(%rdi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpshufb	L$rol16(%rip),%ymm14,%ymm14
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpsrld	$20,%ymm6,%ymm3
+	vpslld	$12,%ymm6,%ymm6
+	vpxor	%ymm3,%ymm6,%ymm6
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpshufb	L$rol8(%rip),%ymm14,%ymm14
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpslld	$7,%ymm6,%ymm3
+	vpsrld	$25,%ymm6,%ymm6
+	vpxor	%ymm3,%ymm6,%ymm6
+	vpalignr	$12,%ymm14,%ymm14,%ymm14
+	vpalignr	$8,%ymm10,%ymm10,%ymm10
+	vpalignr	$4,%ymm6,%ymm6,%ymm6
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol16(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpsrld	$20,%ymm4,%ymm3
+	vpslld	$12,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol8(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpslld	$7,%ymm4,%ymm3
+	vpsrld	$25,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpalignr	$4,%ymm12,%ymm12,%ymm12
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$12,%ymm4,%ymm4,%ymm4
+	addq	0+16(%rdi),%r10
+	adcq	8+16(%rdi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol16(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpsrld	$20,%ymm5,%ymm3
+	vpslld	$12,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol8(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpslld	$7,%ymm5,%ymm3
+	vpsrld	$25,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpalignr	$4,%ymm13,%ymm13,%ymm13
+	vpalignr	$8,%ymm9,%ymm9,%ymm9
+	vpalignr	$12,%ymm5,%ymm5,%ymm5
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpshufb	L$rol16(%rip),%ymm14,%ymm14
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpsrld	$20,%ymm6,%ymm3
+	vpslld	$12,%ymm6,%ymm6
+	vpxor	%ymm3,%ymm6,%ymm6
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpshufb	L$rol8(%rip),%ymm14,%ymm14
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpslld	$7,%ymm6,%ymm3
+	vpsrld	$25,%ymm6,%ymm6
+	vpxor	%ymm3,%ymm6,%ymm6
+	vpalignr	$4,%ymm14,%ymm14,%ymm14
+	vpalignr	$8,%ymm10,%ymm10,%ymm10
+	vpalignr	$12,%ymm6,%ymm6,%ymm6
+
+	leaq	32(%rdi),%rdi
+	decq	%rcx
+	jg	L$seal_avx2_tail_384_rounds_and_3xhash
+	decq	%r8
+	jge	L$seal_avx2_tail_384_rounds_and_2xhash
+	vpaddd	L$chacha20_consts(%rip),%ymm2,%ymm2
+	vpaddd	0+64(%rbp),%ymm6,%ymm6
+	vpaddd	0+96(%rbp),%ymm10,%ymm10
+	vpaddd	0+224(%rbp),%ymm14,%ymm14
+	vpaddd	L$chacha20_consts(%rip),%ymm1,%ymm1
+	vpaddd	0+64(%rbp),%ymm5,%ymm5
+	vpaddd	0+96(%rbp),%ymm9,%ymm9
+	vpaddd	0+192(%rbp),%ymm13,%ymm13
+	vpaddd	L$chacha20_consts(%rip),%ymm0,%ymm0
+	vpaddd	0+64(%rbp),%ymm4,%ymm4
+	vpaddd	0+96(%rbp),%ymm8,%ymm8
+	vpaddd	0+160(%rbp),%ymm12,%ymm12
+	vperm2i128	$0x02,%ymm2,%ymm6,%ymm3
+	vperm2i128	$0x13,%ymm2,%ymm6,%ymm6
+	vperm2i128	$0x02,%ymm10,%ymm14,%ymm2
+	vperm2i128	$0x13,%ymm10,%ymm14,%ymm10
+	vpxor	0+0(%rsi),%ymm3,%ymm3
+	vpxor	32+0(%rsi),%ymm2,%ymm2
+	vpxor	64+0(%rsi),%ymm6,%ymm6
+	vpxor	96+0(%rsi),%ymm10,%ymm10
+	vmovdqu	%ymm3,0+0(%rdi)
+	vmovdqu	%ymm2,32+0(%rdi)
+	vmovdqu	%ymm6,64+0(%rdi)
+	vmovdqu	%ymm10,96+0(%rdi)
+	vperm2i128	$0x02,%ymm1,%ymm5,%ymm3
+	vperm2i128	$0x13,%ymm1,%ymm5,%ymm5
+	vperm2i128	$0x02,%ymm9,%ymm13,%ymm1
+	vperm2i128	$0x13,%ymm9,%ymm13,%ymm9
+	vpxor	0+128(%rsi),%ymm3,%ymm3
+	vpxor	32+128(%rsi),%ymm1,%ymm1
+	vpxor	64+128(%rsi),%ymm5,%ymm5
+	vpxor	96+128(%rsi),%ymm9,%ymm9
+	vmovdqu	%ymm3,0+128(%rdi)
+	vmovdqu	%ymm1,32+128(%rdi)
+	vmovdqu	%ymm5,64+128(%rdi)
+	vmovdqu	%ymm9,96+128(%rdi)
+	vperm2i128	$0x13,%ymm0,%ymm4,%ymm3
+	vperm2i128	$0x02,%ymm0,%ymm4,%ymm0
+	vperm2i128	$0x02,%ymm8,%ymm12,%ymm4
+	vperm2i128	$0x13,%ymm8,%ymm12,%ymm12
+	vmovdqa	%ymm3,%ymm8
+
+	movq	$256,%rcx
+	leaq	256(%rsi),%rsi
+	subq	$256,%rbx
+	jmp	L$seal_avx2_short_hash_remainder
+
+L$seal_avx2_tail_512:
+	vmovdqa	L$chacha20_consts(%rip),%ymm0
+	vmovdqa	0+64(%rbp),%ymm4
+	vmovdqa	0+96(%rbp),%ymm8
+	vmovdqa	%ymm0,%ymm1
+	vmovdqa	%ymm4,%ymm5
+	vmovdqa	%ymm8,%ymm9
+	vmovdqa	%ymm0,%ymm2
+	vmovdqa	%ymm4,%ymm6
+	vmovdqa	%ymm8,%ymm10
+	vmovdqa	%ymm0,%ymm3
+	vmovdqa	%ymm4,%ymm7
+	vmovdqa	%ymm8,%ymm11
+	vmovdqa	L$avx2_inc(%rip),%ymm12
+	vpaddd	0+160(%rbp),%ymm12,%ymm15
+	vpaddd	%ymm15,%ymm12,%ymm14
+	vpaddd	%ymm14,%ymm12,%ymm13
+	vpaddd	%ymm13,%ymm12,%ymm12
+	vmovdqa	%ymm15,0+256(%rbp)
+	vmovdqa	%ymm14,0+224(%rbp)
+	vmovdqa	%ymm13,0+192(%rbp)
+	vmovdqa	%ymm12,0+160(%rbp)
+
+L$seal_avx2_tail_512_rounds_and_3xhash:
+	addq	0+0(%rdi),%r10
+	adcq	8+0(%rdi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rdx
+	movq	%rdx,%r15
+	mulxq	%r10,%r13,%r14
+	mulxq	%r11,%rax,%rdx
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rdx
+	mulxq	%r10,%r10,%rax
+	addq	%r10,%r14
+	mulxq	%r11,%r11,%r9
+	adcq	%r11,%r15
+	adcq	$0,%r9
+	imulq	%r12,%rdx
+	addq	%rax,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	leaq	16(%rdi),%rdi
+L$seal_avx2_tail_512_rounds_and_2xhash:
+	vmovdqa	%ymm8,0+128(%rbp)
+	vmovdqa	L$rol16(%rip),%ymm8
+	vpaddd	%ymm7,%ymm3,%ymm3
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm3,%ymm15,%ymm15
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	%ymm8,%ymm15,%ymm15
+	vpshufb	%ymm8,%ymm14,%ymm14
+	vpshufb	%ymm8,%ymm13,%ymm13
+	vpshufb	%ymm8,%ymm12,%ymm12
+	vpaddd	%ymm15,%ymm11,%ymm11
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpaddd	0+128(%rbp),%ymm12,%ymm8
+	vpxor	%ymm11,%ymm7,%ymm7
+	vpxor	%ymm10,%ymm6,%ymm6
+	addq	0+0(%rdi),%r10
+	adcq	8+0(%rdi),%r11
+	adcq	$1,%r12
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	%ymm8,0+128(%rbp)
+	vpsrld	$20,%ymm7,%ymm8
+	vpslld	$32-20,%ymm7,%ymm7
+	vpxor	%ymm8,%ymm7,%ymm7
+	vpsrld	$20,%ymm6,%ymm8
+	vpslld	$32-20,%ymm6,%ymm6
+	vpxor	%ymm8,%ymm6,%ymm6
+	vpsrld	$20,%ymm5,%ymm8
+	vpslld	$32-20,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm5,%ymm5
+	vpsrld	$20,%ymm4,%ymm8
+	vpslld	$32-20,%ymm4,%ymm4
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	L$rol8(%rip),%ymm8
+	vpaddd	%ymm7,%ymm3,%ymm3
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpaddd	%ymm4,%ymm0,%ymm0
+	movq	0+0+0(%rbp),%rdx
+	movq	%rdx,%r15
+	mulxq	%r10,%r13,%r14
+	mulxq	%r11,%rax,%rdx
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	vpxor	%ymm3,%ymm15,%ymm15
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	%ymm8,%ymm15,%ymm15
+	vpshufb	%ymm8,%ymm14,%ymm14
+	vpshufb	%ymm8,%ymm13,%ymm13
+	vpshufb	%ymm8,%ymm12,%ymm12
+	vpaddd	%ymm15,%ymm11,%ymm11
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpaddd	0+128(%rbp),%ymm12,%ymm8
+	vpxor	%ymm11,%ymm7,%ymm7
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	%ymm8,0+128(%rbp)
+	vpsrld	$25,%ymm7,%ymm8
+	vpslld	$32-25,%ymm7,%ymm7
+	vpxor	%ymm8,%ymm7,%ymm7
+	movq	8+0+0(%rbp),%rdx
+	mulxq	%r10,%r10,%rax
+	addq	%r10,%r14
+	mulxq	%r11,%r11,%r9
+	adcq	%r11,%r15
+	adcq	$0,%r9
+	imulq	%r12,%rdx
+	vpsrld	$25,%ymm6,%ymm8
+	vpslld	$32-25,%ymm6,%ymm6
+	vpxor	%ymm8,%ymm6,%ymm6
+	vpsrld	$25,%ymm5,%ymm8
+	vpslld	$32-25,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm5,%ymm5
+	vpsrld	$25,%ymm4,%ymm8
+	vpslld	$32-25,%ymm4,%ymm4
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	0+128(%rbp),%ymm8
+	vpalignr	$4,%ymm7,%ymm7,%ymm7
+	vpalignr	$8,%ymm11,%ymm11,%ymm11
+	vpalignr	$12,%ymm15,%ymm15,%ymm15
+	vpalignr	$4,%ymm6,%ymm6,%ymm6
+	vpalignr	$8,%ymm10,%ymm10,%ymm10
+	vpalignr	$12,%ymm14,%ymm14,%ymm14
+	vpalignr	$4,%ymm5,%ymm5,%ymm5
+	vpalignr	$8,%ymm9,%ymm9,%ymm9
+	vpalignr	$12,%ymm13,%ymm13,%ymm13
+	vpalignr	$4,%ymm4,%ymm4,%ymm4
+	addq	%rax,%r15
+	adcq	%rdx,%r9
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$12,%ymm12,%ymm12,%ymm12
+	vmovdqa	%ymm8,0+128(%rbp)
+	vmovdqa	L$rol16(%rip),%ymm8
+	vpaddd	%ymm7,%ymm3,%ymm3
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm3,%ymm15,%ymm15
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	%ymm8,%ymm15,%ymm15
+	vpshufb	%ymm8,%ymm14,%ymm14
+	vpshufb	%ymm8,%ymm13,%ymm13
+	vpshufb	%ymm8,%ymm12,%ymm12
+	vpaddd	%ymm15,%ymm11,%ymm11
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpaddd	0+128(%rbp),%ymm12,%ymm8
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+	vpxor	%ymm11,%ymm7,%ymm7
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	%ymm8,0+128(%rbp)
+	vpsrld	$20,%ymm7,%ymm8
+	vpslld	$32-20,%ymm7,%ymm7
+	vpxor	%ymm8,%ymm7,%ymm7
+	vpsrld	$20,%ymm6,%ymm8
+	vpslld	$32-20,%ymm6,%ymm6
+	vpxor	%ymm8,%ymm6,%ymm6
+	vpsrld	$20,%ymm5,%ymm8
+	vpslld	$32-20,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm5,%ymm5
+	vpsrld	$20,%ymm4,%ymm8
+	vpslld	$32-20,%ymm4,%ymm4
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	L$rol8(%rip),%ymm8
+	vpaddd	%ymm7,%ymm3,%ymm3
+	vpaddd	%ymm6,%ymm2,%ymm2
+	addq	0+16(%rdi),%r10
+	adcq	8+16(%rdi),%r11
+	adcq	$1,%r12
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm3,%ymm15,%ymm15
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	%ymm8,%ymm15,%ymm15
+	vpshufb	%ymm8,%ymm14,%ymm14
+	vpshufb	%ymm8,%ymm13,%ymm13
+	vpshufb	%ymm8,%ymm12,%ymm12
+	vpaddd	%ymm15,%ymm11,%ymm11
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpaddd	0+128(%rbp),%ymm12,%ymm8
+	vpxor	%ymm11,%ymm7,%ymm7
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	%ymm8,0+128(%rbp)
+	vpsrld	$25,%ymm7,%ymm8
+	movq	0+0+0(%rbp),%rdx
+	movq	%rdx,%r15
+	mulxq	%r10,%r13,%r14
+	mulxq	%r11,%rax,%rdx
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	vpslld	$32-25,%ymm7,%ymm7
+	vpxor	%ymm8,%ymm7,%ymm7
+	vpsrld	$25,%ymm6,%ymm8
+	vpslld	$32-25,%ymm6,%ymm6
+	vpxor	%ymm8,%ymm6,%ymm6
+	vpsrld	$25,%ymm5,%ymm8
+	vpslld	$32-25,%ymm5,%ymm5
+	vpxor	%ymm8,%ymm5,%ymm5
+	vpsrld	$25,%ymm4,%ymm8
+	vpslld	$32-25,%ymm4,%ymm4
+	vpxor	%ymm8,%ymm4,%ymm4
+	vmovdqa	0+128(%rbp),%ymm8
+	vpalignr	$12,%ymm7,%ymm7,%ymm7
+	vpalignr	$8,%ymm11,%ymm11,%ymm11
+	vpalignr	$4,%ymm15,%ymm15,%ymm15
+	vpalignr	$12,%ymm6,%ymm6,%ymm6
+	vpalignr	$8,%ymm10,%ymm10,%ymm10
+	vpalignr	$4,%ymm14,%ymm14,%ymm14
+	vpalignr	$12,%ymm5,%ymm5,%ymm5
+	vpalignr	$8,%ymm9,%ymm9,%ymm9
+	movq	8+0+0(%rbp),%rdx
+	mulxq	%r10,%r10,%rax
+	addq	%r10,%r14
+	mulxq	%r11,%r11,%r9
+	adcq	%r11,%r15
+	adcq	$0,%r9
+	imulq	%r12,%rdx
+	vpalignr	$4,%ymm13,%ymm13,%ymm13
+	vpalignr	$12,%ymm4,%ymm4,%ymm4
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$4,%ymm12,%ymm12,%ymm12
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+	addq	%rax,%r15
+	adcq	%rdx,%r9
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	leaq	32(%rdi),%rdi
+	decq	%rcx
+	jg	L$seal_avx2_tail_512_rounds_and_3xhash
+	decq	%r8
+	jge	L$seal_avx2_tail_512_rounds_and_2xhash
+	vpaddd	L$chacha20_consts(%rip),%ymm3,%ymm3
+	vpaddd	0+64(%rbp),%ymm7,%ymm7
+	vpaddd	0+96(%rbp),%ymm11,%ymm11
+	vpaddd	0+256(%rbp),%ymm15,%ymm15
+	vpaddd	L$chacha20_consts(%rip),%ymm2,%ymm2
+	vpaddd	0+64(%rbp),%ymm6,%ymm6
+	vpaddd	0+96(%rbp),%ymm10,%ymm10
+	vpaddd	0+224(%rbp),%ymm14,%ymm14
+	vpaddd	L$chacha20_consts(%rip),%ymm1,%ymm1
+	vpaddd	0+64(%rbp),%ymm5,%ymm5
+	vpaddd	0+96(%rbp),%ymm9,%ymm9
+	vpaddd	0+192(%rbp),%ymm13,%ymm13
+	vpaddd	L$chacha20_consts(%rip),%ymm0,%ymm0
+	vpaddd	0+64(%rbp),%ymm4,%ymm4
+	vpaddd	0+96(%rbp),%ymm8,%ymm8
+	vpaddd	0+160(%rbp),%ymm12,%ymm12
+
+	vmovdqa	%ymm0,0+128(%rbp)
+	vperm2i128	$0x02,%ymm3,%ymm7,%ymm0
+	vperm2i128	$0x13,%ymm3,%ymm7,%ymm7
+	vperm2i128	$0x02,%ymm11,%ymm15,%ymm3
+	vperm2i128	$0x13,%ymm11,%ymm15,%ymm11
+	vpxor	0+0(%rsi),%ymm0,%ymm0
+	vpxor	32+0(%rsi),%ymm3,%ymm3
+	vpxor	64+0(%rsi),%ymm7,%ymm7
+	vpxor	96+0(%rsi),%ymm11,%ymm11
+	vmovdqu	%ymm0,0+0(%rdi)
+	vmovdqu	%ymm3,32+0(%rdi)
+	vmovdqu	%ymm7,64+0(%rdi)
+	vmovdqu	%ymm11,96+0(%rdi)
+
+	vmovdqa	0+128(%rbp),%ymm0
+	vperm2i128	$0x02,%ymm2,%ymm6,%ymm3
+	vperm2i128	$0x13,%ymm2,%ymm6,%ymm6
+	vperm2i128	$0x02,%ymm10,%ymm14,%ymm2
+	vperm2i128	$0x13,%ymm10,%ymm14,%ymm10
+	vpxor	0+128(%rsi),%ymm3,%ymm3
+	vpxor	32+128(%rsi),%ymm2,%ymm2
+	vpxor	64+128(%rsi),%ymm6,%ymm6
+	vpxor	96+128(%rsi),%ymm10,%ymm10
+	vmovdqu	%ymm3,0+128(%rdi)
+	vmovdqu	%ymm2,32+128(%rdi)
+	vmovdqu	%ymm6,64+128(%rdi)
+	vmovdqu	%ymm10,96+128(%rdi)
+	vperm2i128	$0x02,%ymm1,%ymm5,%ymm3
+	vperm2i128	$0x13,%ymm1,%ymm5,%ymm5
+	vperm2i128	$0x02,%ymm9,%ymm13,%ymm1
+	vperm2i128	$0x13,%ymm9,%ymm13,%ymm9
+	vpxor	0+256(%rsi),%ymm3,%ymm3
+	vpxor	32+256(%rsi),%ymm1,%ymm1
+	vpxor	64+256(%rsi),%ymm5,%ymm5
+	vpxor	96+256(%rsi),%ymm9,%ymm9
+	vmovdqu	%ymm3,0+256(%rdi)
+	vmovdqu	%ymm1,32+256(%rdi)
+	vmovdqu	%ymm5,64+256(%rdi)
+	vmovdqu	%ymm9,96+256(%rdi)
+	vperm2i128	$0x13,%ymm0,%ymm4,%ymm3
+	vperm2i128	$0x02,%ymm0,%ymm4,%ymm0
+	vperm2i128	$0x02,%ymm8,%ymm12,%ymm4
+	vperm2i128	$0x13,%ymm8,%ymm12,%ymm12
+	vmovdqa	%ymm3,%ymm8
+
+	movq	$384,%rcx
+	leaq	384(%rsi),%rsi
+	subq	$384,%rbx
+	jmp	L$seal_avx2_short_hash_remainder
+
+L$seal_avx2_320:
+	vmovdqa	%ymm0,%ymm1
+	vmovdqa	%ymm0,%ymm2
+	vmovdqa	%ymm4,%ymm5
+	vmovdqa	%ymm4,%ymm6
+	vmovdqa	%ymm8,%ymm9
+	vmovdqa	%ymm8,%ymm10
+	vpaddd	L$avx2_inc(%rip),%ymm12,%ymm13
+	vpaddd	L$avx2_inc(%rip),%ymm13,%ymm14
+	vmovdqa	%ymm4,%ymm7
+	vmovdqa	%ymm8,%ymm11
+	vmovdqa	%ymm12,0+160(%rbp)
+	vmovdqa	%ymm13,0+192(%rbp)
+	vmovdqa	%ymm14,0+224(%rbp)
+	movq	$10,%r10
+L$seal_avx2_320_rounds:
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol16(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpsrld	$20,%ymm4,%ymm3
+	vpslld	$12,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol8(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpslld	$7,%ymm4,%ymm3
+	vpsrld	$25,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpalignr	$12,%ymm12,%ymm12,%ymm12
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$4,%ymm4,%ymm4,%ymm4
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol16(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpsrld	$20,%ymm5,%ymm3
+	vpslld	$12,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol8(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpslld	$7,%ymm5,%ymm3
+	vpsrld	$25,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpalignr	$12,%ymm13,%ymm13,%ymm13
+	vpalignr	$8,%ymm9,%ymm9,%ymm9
+	vpalignr	$4,%ymm5,%ymm5,%ymm5
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpshufb	L$rol16(%rip),%ymm14,%ymm14
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpsrld	$20,%ymm6,%ymm3
+	vpslld	$12,%ymm6,%ymm6
+	vpxor	%ymm3,%ymm6,%ymm6
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpshufb	L$rol8(%rip),%ymm14,%ymm14
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpslld	$7,%ymm6,%ymm3
+	vpsrld	$25,%ymm6,%ymm6
+	vpxor	%ymm3,%ymm6,%ymm6
+	vpalignr	$12,%ymm14,%ymm14,%ymm14
+	vpalignr	$8,%ymm10,%ymm10,%ymm10
+	vpalignr	$4,%ymm6,%ymm6,%ymm6
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol16(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpsrld	$20,%ymm4,%ymm3
+	vpslld	$12,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol8(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpslld	$7,%ymm4,%ymm3
+	vpsrld	$25,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpalignr	$4,%ymm12,%ymm12,%ymm12
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$12,%ymm4,%ymm4,%ymm4
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol16(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpsrld	$20,%ymm5,%ymm3
+	vpslld	$12,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol8(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpslld	$7,%ymm5,%ymm3
+	vpsrld	$25,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpalignr	$4,%ymm13,%ymm13,%ymm13
+	vpalignr	$8,%ymm9,%ymm9,%ymm9
+	vpalignr	$12,%ymm5,%ymm5,%ymm5
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpshufb	L$rol16(%rip),%ymm14,%ymm14
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpsrld	$20,%ymm6,%ymm3
+	vpslld	$12,%ymm6,%ymm6
+	vpxor	%ymm3,%ymm6,%ymm6
+	vpaddd	%ymm6,%ymm2,%ymm2
+	vpxor	%ymm2,%ymm14,%ymm14
+	vpshufb	L$rol8(%rip),%ymm14,%ymm14
+	vpaddd	%ymm14,%ymm10,%ymm10
+	vpxor	%ymm10,%ymm6,%ymm6
+	vpslld	$7,%ymm6,%ymm3
+	vpsrld	$25,%ymm6,%ymm6
+	vpxor	%ymm3,%ymm6,%ymm6
+	vpalignr	$4,%ymm14,%ymm14,%ymm14
+	vpalignr	$8,%ymm10,%ymm10,%ymm10
+	vpalignr	$12,%ymm6,%ymm6,%ymm6
+
+	decq	%r10
+	jne	L$seal_avx2_320_rounds
+	vpaddd	L$chacha20_consts(%rip),%ymm0,%ymm0
+	vpaddd	L$chacha20_consts(%rip),%ymm1,%ymm1
+	vpaddd	L$chacha20_consts(%rip),%ymm2,%ymm2
+	vpaddd	%ymm7,%ymm4,%ymm4
+	vpaddd	%ymm7,%ymm5,%ymm5
+	vpaddd	%ymm7,%ymm6,%ymm6
+	vpaddd	%ymm11,%ymm8,%ymm8
+	vpaddd	%ymm11,%ymm9,%ymm9
+	vpaddd	%ymm11,%ymm10,%ymm10
+	vpaddd	0+160(%rbp),%ymm12,%ymm12
+	vpaddd	0+192(%rbp),%ymm13,%ymm13
+	vpaddd	0+224(%rbp),%ymm14,%ymm14
+	vperm2i128	$0x02,%ymm0,%ymm4,%ymm3
+
+	vpand	L$clamp(%rip),%ymm3,%ymm3
+	vmovdqa	%ymm3,0+0(%rbp)
+
+	vperm2i128	$0x13,%ymm0,%ymm4,%ymm0
+	vperm2i128	$0x13,%ymm8,%ymm12,%ymm4
+	vperm2i128	$0x02,%ymm1,%ymm5,%ymm8
+	vperm2i128	$0x02,%ymm9,%ymm13,%ymm12
+	vperm2i128	$0x13,%ymm1,%ymm5,%ymm1
+	vperm2i128	$0x13,%ymm9,%ymm13,%ymm5
+	vperm2i128	$0x02,%ymm2,%ymm6,%ymm9
+	vperm2i128	$0x02,%ymm10,%ymm14,%ymm13
+	vperm2i128	$0x13,%ymm2,%ymm6,%ymm2
+	vperm2i128	$0x13,%ymm10,%ymm14,%ymm6
+	jmp	L$seal_avx2_short
+
+L$seal_avx2_192:
+	vmovdqa	%ymm0,%ymm1
+	vmovdqa	%ymm0,%ymm2
+	vmovdqa	%ymm4,%ymm5
+	vmovdqa	%ymm4,%ymm6
+	vmovdqa	%ymm8,%ymm9
+	vmovdqa	%ymm8,%ymm10
+	vpaddd	L$avx2_inc(%rip),%ymm12,%ymm13
+	vmovdqa	%ymm12,%ymm11
+	vmovdqa	%ymm13,%ymm15
+	movq	$10,%r10
+L$seal_avx2_192_rounds:
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol16(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpsrld	$20,%ymm4,%ymm3
+	vpslld	$12,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol8(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpslld	$7,%ymm4,%ymm3
+	vpsrld	$25,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpalignr	$12,%ymm12,%ymm12,%ymm12
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$4,%ymm4,%ymm4,%ymm4
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol16(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpsrld	$20,%ymm5,%ymm3
+	vpslld	$12,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol8(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpslld	$7,%ymm5,%ymm3
+	vpsrld	$25,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpalignr	$12,%ymm13,%ymm13,%ymm13
+	vpalignr	$8,%ymm9,%ymm9,%ymm9
+	vpalignr	$4,%ymm5,%ymm5,%ymm5
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol16(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpsrld	$20,%ymm4,%ymm3
+	vpslld	$12,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpaddd	%ymm4,%ymm0,%ymm0
+	vpxor	%ymm0,%ymm12,%ymm12
+	vpshufb	L$rol8(%rip),%ymm12,%ymm12
+	vpaddd	%ymm12,%ymm8,%ymm8
+	vpxor	%ymm8,%ymm4,%ymm4
+	vpslld	$7,%ymm4,%ymm3
+	vpsrld	$25,%ymm4,%ymm4
+	vpxor	%ymm3,%ymm4,%ymm4
+	vpalignr	$4,%ymm12,%ymm12,%ymm12
+	vpalignr	$8,%ymm8,%ymm8,%ymm8
+	vpalignr	$12,%ymm4,%ymm4,%ymm4
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol16(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpsrld	$20,%ymm5,%ymm3
+	vpslld	$12,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpaddd	%ymm5,%ymm1,%ymm1
+	vpxor	%ymm1,%ymm13,%ymm13
+	vpshufb	L$rol8(%rip),%ymm13,%ymm13
+	vpaddd	%ymm13,%ymm9,%ymm9
+	vpxor	%ymm9,%ymm5,%ymm5
+	vpslld	$7,%ymm5,%ymm3
+	vpsrld	$25,%ymm5,%ymm5
+	vpxor	%ymm3,%ymm5,%ymm5
+	vpalignr	$4,%ymm13,%ymm13,%ymm13
+	vpalignr	$8,%ymm9,%ymm9,%ymm9
+	vpalignr	$12,%ymm5,%ymm5,%ymm5
+
+	decq	%r10
+	jne	L$seal_avx2_192_rounds
+	vpaddd	%ymm2,%ymm0,%ymm0
+	vpaddd	%ymm2,%ymm1,%ymm1
+	vpaddd	%ymm6,%ymm4,%ymm4
+	vpaddd	%ymm6,%ymm5,%ymm5
+	vpaddd	%ymm10,%ymm8,%ymm8
+	vpaddd	%ymm10,%ymm9,%ymm9
+	vpaddd	%ymm11,%ymm12,%ymm12
+	vpaddd	%ymm15,%ymm13,%ymm13
+	vperm2i128	$0x02,%ymm0,%ymm4,%ymm3
+
+	vpand	L$clamp(%rip),%ymm3,%ymm3
+	vmovdqa	%ymm3,0+0(%rbp)
+
+	vperm2i128	$0x13,%ymm0,%ymm4,%ymm0
+	vperm2i128	$0x13,%ymm8,%ymm12,%ymm4
+	vperm2i128	$0x02,%ymm1,%ymm5,%ymm8
+	vperm2i128	$0x02,%ymm9,%ymm13,%ymm12
+	vperm2i128	$0x13,%ymm1,%ymm5,%ymm1
+	vperm2i128	$0x13,%ymm9,%ymm13,%ymm5
+L$seal_avx2_short:
+	movq	%r8,%r8
+	call	poly_hash_ad_internal
+	xorq	%rcx,%rcx
+L$seal_avx2_short_hash_remainder:
+	cmpq	$16,%rcx
+	jb	L$seal_avx2_short_loop
+	addq	0+0(%rdi),%r10
+	adcq	8+0(%rdi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	subq	$16,%rcx
+	addq	$16,%rdi
+	jmp	L$seal_avx2_short_hash_remainder
+L$seal_avx2_short_loop:
+	cmpq	$32,%rbx
+	jb	L$seal_avx2_short_tail
+	subq	$32,%rbx
+
+	vpxor	(%rsi),%ymm0,%ymm0
+	vmovdqu	%ymm0,(%rdi)
+	leaq	32(%rsi),%rsi
+
+	addq	0+0(%rdi),%r10
+	adcq	8+0(%rdi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+	addq	0+16(%rdi),%r10
+	adcq	8+16(%rdi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	leaq	32(%rdi),%rdi
+
+	vmovdqa	%ymm4,%ymm0
+	vmovdqa	%ymm8,%ymm4
+	vmovdqa	%ymm12,%ymm8
+	vmovdqa	%ymm1,%ymm12
+	vmovdqa	%ymm5,%ymm1
+	vmovdqa	%ymm9,%ymm5
+	vmovdqa	%ymm13,%ymm9
+	vmovdqa	%ymm2,%ymm13
+	vmovdqa	%ymm6,%ymm2
+	jmp	L$seal_avx2_short_loop
+L$seal_avx2_short_tail:
+	cmpq	$16,%rbx
+	jb	L$seal_avx2_exit
+	subq	$16,%rbx
+	vpxor	(%rsi),%xmm0,%xmm3
+	vmovdqu	%xmm3,(%rdi)
+	leaq	16(%rsi),%rsi
+	addq	0+0(%rdi),%r10
+	adcq	8+0(%rdi),%r11
+	adcq	$1,%r12
+	movq	0+0+0(%rbp),%rax
+	movq	%rax,%r15
+	mulq	%r10
+	movq	%rax,%r13
+	movq	%rdx,%r14
+	movq	0+0+0(%rbp),%rax
+	mulq	%r11
+	imulq	%r12,%r15
+	addq	%rax,%r14
+	adcq	%rdx,%r15
+	movq	8+0+0(%rbp),%rax
+	movq	%rax,%r9
+	mulq	%r10
+	addq	%rax,%r14
+	adcq	$0,%rdx
+	movq	%rdx,%r10
+	movq	8+0+0(%rbp),%rax
+	mulq	%r11
+	addq	%rax,%r15
+	adcq	$0,%rdx
+	imulq	%r12,%r9
+	addq	%r10,%r15
+	adcq	%rdx,%r9
+	movq	%r13,%r10
+	movq	%r14,%r11
+	movq	%r15,%r12
+	andq	$3,%r12
+	movq	%r15,%r13
+	andq	$-4,%r13
+	movq	%r9,%r14
+	shrdq	$2,%r9,%r15
+	shrq	$2,%r9
+	addq	%r13,%r15
+	adcq	%r14,%r9
+	addq	%r15,%r10
+	adcq	%r9,%r11
+	adcq	$0,%r12
+
+	leaq	16(%rdi),%rdi
+	vextracti128	$1,%ymm0,%xmm0
+L$seal_avx2_exit:
+	vzeroupper
+	jmp	L$seal_sse_tail_16
+
+
+#endif

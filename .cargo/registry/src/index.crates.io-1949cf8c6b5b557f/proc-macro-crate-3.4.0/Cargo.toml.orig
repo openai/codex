@@ -1,0 +1,25 @@
+[package]
+name = "proc-macro-crate"
+version = "3.4.0"
+authors = ["Bastian Köcher <git@kchr.de>"]
+edition = "2021"
+categories = ["development-tools::procedural-macro-helpers"]
+documentation = "https://docs.rs/proc-macro-crate"
+repository = "https://github.com/bkchr/proc-macro-crate"
+keywords = ["macro-rules", "crate", "macro", "proc-macro"]
+license = "MIT OR Apache-2.0"
+description = """
+Replacement for crate (macro_rules keyword) in proc-macros
+"""
+readme = "./README.md"
+rust-version = "1.67.0"
+
+[dependencies]
+toml_edit = { version = "0.23.2", default-features = false, features = [
+    "parse",
+] }
+
+[dev-dependencies]
+quote = "1.0.39"
+syn = "2.0.99"
+proc-macro2 = "1.0.94"

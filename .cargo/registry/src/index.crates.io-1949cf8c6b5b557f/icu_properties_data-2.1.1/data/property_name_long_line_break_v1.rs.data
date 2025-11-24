@@ -1,0 +1,80 @@
+// @generated
+/// Implement `DataProvider<PropertyNameLongLineBreakV1>` on the given struct using the data
+/// hardcoded in this file. This allows the struct to be used with
+/// `icu`'s `_unstable` constructors.
+///
+/// Using this implementation will embed the following data in the binary's data segment:
+/// * 636B[^1] for the singleton data struct
+///
+/// [^1]: these numbers can be smaller in practice due to linker deduplication
+///
+/// This macro requires the following crates:
+/// * `icu`
+/// * `icu_provider`
+/// * `zerovec`
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __impl_property_name_long_line_break_v1 {
+    ($ provider : ty) => {
+        #[clippy::msrv = "1.83"]
+        const _: () = <$provider>::MUST_USE_MAKE_PROVIDER_MACRO;
+        #[clippy::msrv = "1.83"]
+        impl $provider {
+            #[doc(hidden)]
+            pub const SINGLETON_PROPERTY_NAME_LONG_LINE_BREAK_V1: &'static <icu::properties::provider::PropertyNameLongLineBreakV1 as icu_provider::DynamicDataMarker>::DataStruct = &icu::properties::provider::names::PropertyEnumToValueNameLinearMap { map: unsafe { zerovec::vecs::VarZeroVec16::from_bytes_unchecked(b"1\0\x07\0\x10\0\x1A\0$\0/\0;\0J\0Z\0k\0y\0\x88\0\x93\0\x97\0\x9D\0\xA8\0\xB3\0\xC0\0\xC9\0\xD3\0\xDA\0\xEA\0\xF9\0\x07\x01\x10\x01\x1F\x01(\x01-\x01:\x01A\x01J\x01U\x01W\x01Y\x01[\x01]\x01_\x01p\x01\x8C\x01\x99\x01\xAB\x01\xB1\x01\xBB\x01\xBE\x01\xC4\x01\xD2\x01\xDE\x01\xEA\x01\xF0\x01UnknownAmbiguousAlphabeticBreak_BothBreak_AfterBreak_BeforeMandatory_BreakContingent_BreakClose_PunctuationCombining_MarkCarriage_ReturnExclamationGlueHyphenIdeographicInseparableInfix_NumericLine_FeedNonstarterNumericOpen_PunctuationPostfix_NumericPrefix_NumericQuotationComplex_ContextSurrogateSpaceBreak_SymbolsZWSpaceNext_LineWord_JoinerH2H3JLJTJVClose_ParenthesisConditional_Japanese_StarterHebrew_LetterRegional_IndicatorE_BaseE_ModifierZWJAksaraAksara_PrebaseAksara_StartVirama_FinalViramaUnambiguous_Hyphen") } };
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DataProvider<icu::properties::provider::PropertyNameLongLineBreakV1> for $provider {
+            fn load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponse<icu::properties::provider::PropertyNameLongLineBreakV1>, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponse { payload: icu_provider::DataPayload::from_static_ref(Self::SINGLETON_PROPERTY_NAME_LONG_LINE_BREAK_V1), metadata: icu_provider::DataResponseMetadata::default() })
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyNameLongLineBreakV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , ITER) => {
+        __impl_property_name_long_line_break_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::properties::provider::PropertyNameLongLineBreakV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+    ($ provider : ty , DRY) => {
+        __impl_property_name_long_line_break_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::properties::provider::PropertyNameLongLineBreakV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyNameLongLineBreakV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+    };
+    ($ provider : ty , DRY , ITER) => {
+        __impl_property_name_long_line_break_v1!($provider);
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::DryDataProvider<icu::properties::provider::PropertyNameLongLineBreakV1> for $provider {
+            fn dry_load(&self, req: icu_provider::DataRequest) -> Result<icu_provider::DataResponseMetadata, icu_provider::DataError> {
+                if req.id.locale.is_unknown() {
+                    Ok(icu_provider::DataResponseMetadata::default())
+                } else {
+                    Err(icu_provider::DataErrorKind::InvalidRequest.with_req(<icu::properties::provider::PropertyNameLongLineBreakV1 as icu_provider::DataMarker>::INFO, req))
+                }
+            }
+        }
+        #[clippy::msrv = "1.83"]
+        impl icu_provider::IterableDataProvider<icu::properties::provider::PropertyNameLongLineBreakV1> for $provider {
+            fn iter_ids(&self) -> Result<std::collections::BtreeSet<icu_provider::DataIdentifierCow<'static>>, icu_provider::DataError> {
+                Ok([Default::default()].into_iter().collect())
+            }
+        }
+    };
+}
+#[doc(inline)]
+pub use __impl_property_name_long_line_break_v1 as impl_property_name_long_line_break_v1;

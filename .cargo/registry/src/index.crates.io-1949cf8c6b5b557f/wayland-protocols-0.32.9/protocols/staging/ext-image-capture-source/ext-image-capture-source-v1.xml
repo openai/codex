@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="ext_image_capture_source_v1">
+  <copyright>
+    Copyright © 2022 Andri Yngvason
+    Copyright © 2024 Simon Ser
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice (including the next
+    paragraph) shall be included in all copies or substantial portions of the
+    Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+  </copyright>
+
+  <description summary="opaque image capture source objects">
+    This protocol serves as an intermediary between capturing protocols and
+    potential image capture sources such as outputs and toplevels.
+
+    This protocol may be extended to support more image capture sources in the
+    future, thereby adding those image capture sources to other protocols that
+    use the image capture source object without having to modify those
+    protocols.
+
+    Warning! The protocol described in this file is currently in the testing
+    phase. Backward compatible changes may be added together with the
+    corresponding interface version bump. Backward incompatible changes can
+    only be done by creating a new major version of the extension.
+  </description>
+
+  <interface name="ext_image_capture_source_v1" version="1">
+    <description summary="opaque image capture source object">
+      The image capture source object is an opaque descriptor for a capturable
+      resource.  This resource may be any sort of entity from which an image
+      may be derived.
+
+      Note, because ext_image_capture_source_v1 objects are created from multiple
+      independent factory interfaces, the ext_image_capture_source_v1 interface is
+      frozen at version 1.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="delete this object">
+        Destroys the image capture source. This request may be sent at any time
+        by the client.
+      </description>
+    </request>
+  </interface>
+
+  <interface name="ext_output_image_capture_source_manager_v1" version="1">
+    <description summary="image capture source manager for outputs">
+      A manager for creating image capture source objects for wl_output objects.
+    </description>
+
+    <request name="create_source">
+      <description summary="create source object for output">
+        Creates a source object for an output. Images captured from this source
+        will show the same content as the output. Some elements may be omitted,
+        such as cursors and overlays that have been marked as transparent to
+        capturing.
+      </description>
+      <arg name="source" type="new_id" interface="ext_image_capture_source_v1"/>
+      <arg name="output" type="object" interface="wl_output"/>
+    </request>
+
+    <request name="destroy" type="destructor">
+      <description summary="delete this object">
+        Destroys the manager. This request may be sent at any time by the client
+        and objects created by the manager will remain valid after its
+        destruction.
+      </description>
+    </request>
+  </interface>
+
+  <interface name="ext_foreign_toplevel_image_capture_source_manager_v1" version="1">
+    <description summary="image capture source manager for foreign toplevels">
+      A manager for creating image capture source objects for
+      ext_foreign_toplevel_handle_v1 objects.
+    </description>
+
+    <request name="create_source">
+      <description summary="create source object for foreign toplevel">
+        Creates a source object for a foreign toplevel handle. Images captured
+        from this source will show the same content as the toplevel.
+      </description>
+      <arg name="source" type="new_id" interface="ext_image_capture_source_v1"/>
+      <arg name="toplevel_handle" type="object" interface="ext_foreign_toplevel_handle_v1"/>
+    </request>
+
+    <request name="destroy" type="destructor">
+      <description summary="delete this object">
+        Destroys the manager. This request may be sent at any time by the client
+        and objects created by the manager will remain valid after its
+        destruction.
+      </description>
+    </request>
+  </interface>
+</protocol>

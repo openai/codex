@@ -1,0 +1,28 @@
+---
+source: src/algorithms/myers.rs
+expression: d.into_inner().ops()
+---
+[
+    Equal {
+        old_index: 0,
+        new_index: 0,
+        len: 3,
+    },
+    Replace {
+        old_index: 3,
+        old_len: 1,
+        new_index: 3,
+        new_len: 2,
+    },
+    Equal {
+        old_index: 4,
+        new_index: 5,
+        len: 2,
+    },
+    Replace {
+        old_index: 6,
+        old_len: 2,
+        new_index: 7,
+        new_len: 1,
+    },
+]

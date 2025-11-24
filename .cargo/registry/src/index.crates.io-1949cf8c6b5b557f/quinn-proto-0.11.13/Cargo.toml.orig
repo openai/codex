@@ -1,0 +1,79 @@
+[package]
+name = "quinn-proto"
+version = "0.11.13"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "State machine for the QUIC transport protocol"
+keywords.workspace = true
+categories.workspace = true
+workspace = ".."
+
+[features]
+# NOTE: Please keep this in sync with the feature list in `.github/workflows/codecov.yml`, see
+# comment in that file for more information.
+default = ["rustls-ring", "log", "bloom"]
+aws-lc-rs = ["dep:aws-lc-rs", "aws-lc-rs?/aws-lc-sys", "aws-lc-rs?/prebuilt-nasm"]
+aws-lc-rs-fips = ["aws-lc-rs", "aws-lc-rs?/fips"]
+# Enables BloomTokenLog, and uses it by default
+bloom = ["dep:fastbloom"]
+# For backwards compatibility, `rustls` forwards to `rustls-ring`
+rustls = ["rustls-ring"]
+# Enable rustls with the `aws-lc-rs` crypto provider
+rustls-aws-lc-rs = ["dep:rustls", "rustls?/aws-lc-rs", "aws-lc-rs"]
+rustls-aws-lc-rs-fips = ["rustls-aws-lc-rs", "aws-lc-rs-fips"]
+# Enable rustls with the `ring` crypto provider
+rustls-ring = ["dep:rustls", "rustls?/ring", "ring"]
+ring = ["dep:ring"]
+# Enable rustls ring provider and direct ring usage
+# Provides `ClientConfig::with_platform_verifier()` convenience method
+platform-verifier = ["dep:rustls-platform-verifier"]
+# Configure `tracing` to log events via `log` if no `tracing` subscriber exists.
+log = ["tracing/log"]
+# Enable rustls logging
+rustls-log = ["rustls?/logging"]
+# Enable qlog support
+qlog = ["dep:qlog"]
+
+[dependencies]
+arbitrary = { workspace = true, optional = true }
+aws-lc-rs = { workspace = true, optional = true }
+bytes = { workspace = true }
+fastbloom = { workspace = true, optional = true }
+lru-slab = { workspace = true }
+qlog = { workspace = true, optional = true }
+rustc-hash = { workspace = true }
+rand = { workspace = true }
+ring = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
+rustls-platform-verifier = { workspace = true, optional = true }
+slab = { workspace = true }
+thiserror = { workspace = true }
+tinyvec = { workspace = true, features = ["alloc"] }
+tracing = { workspace = true }
+
+# Feature flags & dependencies for wasm
+# wasm-bindgen is assumed for a wasm*-*-unknown target
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+ring = { workspace = true, features = ["wasm32_unknown_unknown_js"] }
+getrandom = { workspace = true, features = ["wasm_js"] }
+rustls-pki-types = { workspace = true, features = ["web"] } # only added as dependency to enforce the `web` feature for this target
+web-time = { workspace = true }
+
+[dev-dependencies]
+assert_matches = { workspace = true }
+hex-literal = { workspace = true  }
+rand_pcg = "0.9"
+rcgen = { workspace = true }
+tracing-subscriber = { workspace = true }
+lazy_static = "1"
+wasm-bindgen-test = { workspace = true }
+
+[lints.rust]
+# https://rust-fuzz.github.io/book/cargo-fuzz/guide.html#cfgfuzzing
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
+
+[package.metadata.docs.rs]
+# all non-default features except fips (cannot build on docs.rs environment)
+features = ["rustls-aws-lc-rs", "rustls-ring", "platform-verifier", "log", "rustls-log"]

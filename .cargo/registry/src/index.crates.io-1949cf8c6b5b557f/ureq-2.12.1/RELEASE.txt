@@ -1,0 +1,63 @@
+Releasing ureq
+==============
+
+1. UPDATE CHANGELOG
+
+Ensure the changelog is updated. Use git history to highlight the main
+changes, especially API changes. Smaller things can be omitted.
+
+Make a PR for changelog if there is time.
+
+
+
+2. CHECK OUTDATED DEPS
+
+Quickly scan whether we can bump some dep. Use `cargo install
+cargo-outdated` as a helper to find them.
+
+  cargo update
+  cargo outdated --depth=1
+
+The initial update is just to ensure your checkout is using the latest
+deps allowed by Cargo.toml already.
+
+Outdated deps doesn't _have_ to make the release, use your judgement.
+
+Make a PR for outdated deps if there is time.
+
+
+
+3. UPDATE Cargo.toml VERSION
+
+We follow semver. Bug fixes bump patch version, API changes bump minor
+version. Cargo bump is a helper to update the version in
+Cargo.toml. `cargo install cargo-bump`
+
+  cargo bump patch
+
+Git commit Cargo.toml and push straight into master.
+
+
+
+3. GIT TAG
+
+Each release has a corresponding git tag. For version `1.2.3` there would
+be a `git tag 1.2.3`. The tag should point to the bump commit pushed in 3.
+
+Do the tag and git push --tags.
+
+
+
+4. WAIT FOR CI
+
+Both the push to master and following git tag will cause Github CI to
+run. Wait for both runs to complete to ensure we have a "good
+version".
+
+
+
+5. PUBLISH
+
+Publish the release to crates.io.
+
+  cargo publish

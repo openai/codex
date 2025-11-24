@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Test",
+  "type": "object",
+  "required": [
+    "vec"
+  ],
+  "properties": {
+    "vec": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

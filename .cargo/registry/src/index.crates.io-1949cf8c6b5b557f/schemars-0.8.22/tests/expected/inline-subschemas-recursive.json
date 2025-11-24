@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RecursiveOuter",
+  "type": "object",
+  "properties": {
+    "direct": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/RecursiveOuter"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "indirect": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "recursive"
+      ],
+      "properties": {
+        "recursive": {
+          "$ref": "#/definitions/RecursiveOuter"
+        }
+      }
+    }
+  },
+  "definitions": {
+    "RecursiveOuter": {
+      "type": "object",
+      "properties": {
+        "direct": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RecursiveOuter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "indirect": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "required": [
+            "recursive"
+          ],
+          "properties": {
+            "recursive": {
+              "$ref": "#/definitions/RecursiveOuter"
+            }
+          }
+        }
+      }
+    }
+  }
+}

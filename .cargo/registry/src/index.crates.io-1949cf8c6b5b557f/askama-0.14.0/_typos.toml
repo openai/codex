@@ -1,0 +1,34 @@
+[default]
+locale = "en-us"
+
+[files]
+extend-exclude = [
+    # generated files
+    "book/ethicalads-theme.css",
+    "fuzzing/fuzz/artifacts/",
+    "fuzzing/fuzz/corpus/",
+    "target/",
+    "askama_parser/tests/*.txt",
+    "testing/templates/fuzzed-*",
+    # we copied the files verbatim including any typos :)
+    "askama_parser/benches",
+    "askama_derive_standalone/benches",
+    # filler texts
+    "*/benches/strings.inc",
+    # too many false positives
+    "testing/tests/gen_ws_tests.py",
+]
+
+[default.extend-words]
+# It's actually called that in the ASCII standard
+Enquiry = "Enquiry"
+
+# French words
+exemple = "exemple"
+existant = "existant"
+
+# used in tests
+Ba = "Ba"
+fo = "fo"
+Fo = "Fo"
+sur = "sur"

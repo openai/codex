@@ -1,0 +1,59 @@
+// Copyright 2019, OpenTelemetry Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package opentelemetry.proto.tracez.v1;
+
+import "opentelemetry/proto/common/v1/common.proto";
+import "opentelemetry/proto/trace/v1/trace.proto";
+
+message TracezCounts {
+  string spanname = 1;
+  repeated uint32 latency = 2; // [A]
+  uint32 running = 3;
+  uint32 error = 4;
+}
+
+message LatencyData {
+  bytes traceid = 1;
+  bytes spanid = 2;
+  bytes parentid = 3;
+  fixed64 starttime = 4;
+  fixed64 endtime = 5;
+  repeated opentelemetry.proto.common.v1.KeyValue attributes = 6; // [1]
+  repeated opentelemetry.proto.trace.v1.Span.Event events = 7; // [2]
+  repeated opentelemetry.proto.trace.v1.Span.Link links = 8; // [3]
+}
+
+message RunningData {
+  bytes traceid = 1;
+  bytes spanid = 2;
+  bytes parentid = 3;
+  fixed64 starttime = 4;
+  repeated opentelemetry.proto.common.v1.KeyValue attributes = 5; // [1]
+  repeated opentelemetry.proto.trace.v1.Span.Event events = 6; // [2]
+  repeated opentelemetry.proto.trace.v1.Span.Link links = 7; // [3]
+}
+
+message ErrorData {
+  bytes traceid = 1;
+  bytes spanid = 2;
+  bytes parentid = 3;
+  fixed64 starttime = 4;
+  repeated opentelemetry.proto.common.v1.KeyValue attributes = 5; // [1]
+  repeated opentelemetry.proto.trace.v1.Span.Event events = 6; // [2]
+  repeated opentelemetry.proto.trace.v1.Span.Link links = 7; // [3]
+  opentelemetry.proto.trace.v1.Status status = 8; // [4]
+}

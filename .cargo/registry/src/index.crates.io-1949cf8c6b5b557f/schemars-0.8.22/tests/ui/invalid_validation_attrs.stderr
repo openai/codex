@@ -1,0 +1,59 @@
+error: expected validate regex attribute to be a string: `regex = "..."`
+ --> $DIR/invalid_validation_attrs.rs:4:39
+  |
+4 | pub struct Struct1(#[validate(regex = 0, foo, length(min = 1, equal = 2, bar))] String);
+  |                                       ^
+
+error: unknown schemars attribute `foo`
+ --> $DIR/invalid_validation_attrs.rs:7:42
+  |
+7 | pub struct Struct2(#[schemars(regex = 0, foo, length(min = 1, equal = 2, bar))] String);
+  |                                          ^^^
+
+error: expected schemars regex attribute to be a string: `regex = "..."`
+ --> $DIR/invalid_validation_attrs.rs:7:39
+  |
+7 | pub struct Struct2(#[schemars(regex = 0, foo, length(min = 1, equal = 2, bar))] String);
+  |                                       ^
+
+error: schemars attribute cannot contain both `equal` and `min`
+ --> $DIR/invalid_validation_attrs.rs:7:63
+  |
+7 | pub struct Struct2(#[schemars(regex = 0, foo, length(min = 1, equal = 2, bar))] String);
+  |                                                               ^^^^^
+
+error: unknown item in schemars length attribute
+ --> $DIR/invalid_validation_attrs.rs:7:74
+  |
+7 | pub struct Struct2(#[schemars(regex = 0, foo, length(min = 1, equal = 2, bar))] String);
+  |                                                                          ^^^
+
+error: schemars attribute cannot contain both `contains` and `regex`
+  --> $DIR/invalid_validation_attrs.rs:26:9
+   |
+26 |         contains = "bar",
+   |         ^^^^^^^^
+
+error: duplicate schemars attribute `regex`
+  --> $DIR/invalid_validation_attrs.rs:27:9
+   |
+27 |         regex(path = "baz"),
+   |         ^^^^^
+
+error: schemars attribute cannot contain both `phone` and `email`
+  --> $DIR/invalid_validation_attrs.rs:29:9
+   |
+29 |         email,
+   |         ^^^^^
+
+error: schemars attribute cannot contain both `phone` and `url`
+  --> $DIR/invalid_validation_attrs.rs:30:9
+   |
+30 |         url
+   |         ^^^
+
+error[E0425]: cannot find value `foo` in this scope
+  --> $DIR/invalid_validation_attrs.rs:12:17
+   |
+12 |         regex = "foo",
+   |                 ^^^^^ not found in this scope

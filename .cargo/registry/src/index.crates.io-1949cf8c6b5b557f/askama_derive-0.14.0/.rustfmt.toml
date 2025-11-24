@@ -1,0 +1,12 @@
+edition = "2021"
+group_imports = "StdExternalCrate"
+imports_granularity = "Module"
+newline_style = "Unix"
+normalize_comments = true
+style_edition = "2024"
+unstable_features = true
+use_field_init_shorthand = true
+
+ignore = [
+    "testing/tests/hello.rs",
+]

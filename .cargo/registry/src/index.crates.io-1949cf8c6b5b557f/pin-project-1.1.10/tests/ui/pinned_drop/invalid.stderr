@@ -1,0 +1,143 @@
+error: unexpected argument: `foo`
+  --> tests/ui/pinned_drop/invalid.rs:11:19
+   |
+11 |     #[pinned_drop(foo)] //~ ERROR unexpected argument
+   |                   ^^^
+
+error: duplicate #[pinned_drop] attribute
+  --> tests/ui/pinned_drop/invalid.rs:32:5
+   |
+32 |     #[pinned_drop] //~ ERROR duplicate #[pinned_drop] attribute
+   |     ^^^^^^^^^^^^^^
+
+error: #[pinned_drop] may only be used on implementation for the `PinnedDrop` trait
+  --> tests/ui/pinned_drop/invalid.rs:45:10
+   |
+45 |     impl Drop for TraitImpl {} //~ ERROR may only be used on implementation for the `PinnedDrop` trait
+   |          ^^^^
+
+error: #[pinned_drop] may only be used on implementation for the `PinnedDrop` trait
+  --> tests/ui/pinned_drop/invalid.rs:51:10
+   |
+51 |     impl InherentImpl {} //~ ERROR may only be used on implementation for the `PinnedDrop` trait
+   |          ^^^^^^^^^^^^
+
+error: expected `impl`
+  --> tests/ui/pinned_drop/invalid.rs:54:5
+   |
+54 |     fn func(_: Pin<&mut ()>) {} //~ ERROR expected `impl`
+   |     ^^
+
+error: implementing the trait `PinnedDrop` is not unsafe
+  --> tests/ui/pinned_drop/invalid.rs:64:5
+   |
+64 |     unsafe impl PinnedDrop for Impl {
+   |     ^^^^^^
+
+error: implementing the method `drop` is not unsafe
+  --> tests/ui/pinned_drop/invalid.rs:74:9
+   |
+74 |         unsafe fn drop(self: Pin<&mut Self>) {} //~ ERROR implementing the method `drop` is not unsafe
+   |         ^^^^^^
+
+error: not all trait items implemented, missing: `drop`
+  --> tests/ui/pinned_drop/invalid.rs:85:5
+   |
+85 |     impl PinnedDrop for Empty {} //~ ERROR not all trait items implemented, missing: `drop`
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: const `A` is not a member of trait `PinnedDrop`
+  --> tests/ui/pinned_drop/invalid.rs:92:9
+   |
+92 |         const A: u8 = 0; //~ ERROR const `A` is not a member of trait `PinnedDrop`
+   |         ^^^^^^^^^^^^^^^^
+
+error: const `A` is not a member of trait `PinnedDrop`
+   --> tests/ui/pinned_drop/invalid.rs:102:9
+    |
+102 |         const A: u8 = 0; //~ ERROR const `A` is not a member of trait `PinnedDrop`
+    |         ^^^^^^^^^^^^^^^^
+
+error: type `A` is not a member of trait `PinnedDrop`
+   --> tests/ui/pinned_drop/invalid.rs:110:9
+    |
+110 |         type A = u8; //~ ERROR type `A` is not a member of trait `PinnedDrop`
+    |         ^^^^^^^^^^^^
+
+error: type `A` is not a member of trait `PinnedDrop`
+   --> tests/ui/pinned_drop/invalid.rs:120:9
+    |
+120 |         type A = u8; //~ ERROR type `A` is not a member of trait `PinnedDrop`
+    |         ^^^^^^^^^^^^
+
+error: duplicate definitions with name `drop`
+   --> tests/ui/pinned_drop/invalid.rs:129:9
+    |
+129 |         fn drop(self: Pin<&mut Self>) {} //~ ERROR duplicate definitions with name `drop`
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: method `drop` must return the unit type
+   --> tests/ui/pinned_drop/invalid.rs:151:42
+    |
+151 |         fn drop(self: Pin<&mut Self>) -> Self {} //~ ERROR method `drop` must return the unit type
+    |                                          ^^^^
+
+error: method `drop` must take an argument `self: Pin<&mut Self>`
+   --> tests/ui/pinned_drop/invalid.rs:159:16
+    |
+159 |         fn drop() {} //~ ERROR method `drop` must take an argument `self: Pin<&mut Self>`
+    |                ^^
+
+error: method `drop` must take an argument `self: Pin<&mut Self>`
+   --> tests/ui/pinned_drop/invalid.rs:167:17
+    |
+167 |         fn drop(self: Pin<&mut Self>, _: ()) {} //~ ERROR method `drop` must take an argument `self: Pin<&mut Self>`
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: method `drop` must take an argument `self: Pin<&mut Self>`
+   --> tests/ui/pinned_drop/invalid.rs:175:17
+    |
+175 |         fn drop(&mut self) {} //~ ERROR method `drop` must take an argument `self: Pin<&mut Self>`
+    |                 ^^^^^^^^^
+
+error: method `drop` must take an argument `self: Pin<&mut Self>`
+   --> tests/ui/pinned_drop/invalid.rs:183:17
+    |
+183 |         fn drop(_: Pin<&mut Self>) {} //~ ERROR method `drop` must take an argument `self: Pin<&mut Self>`
+    |                 ^^^^^^^^^^^^^^^^^
+
+error: method `drop` must take an argument `self: Pin<&mut Self>`
+   --> tests/ui/pinned_drop/invalid.rs:191:17
+    |
+191 |         fn drop(self: Pin<&Self>) {} //~ ERROR method `drop` must take an argument `self: Pin<&mut Self>`
+    |                 ^^^^^^^^^^^^^^^^
+
+error: method `drop` must take an argument `self: Pin<&mut Self>`
+   --> tests/ui/pinned_drop/invalid.rs:199:17
+    |
+199 |         fn drop(self: Pin<&mut ()>) {} //~ ERROR method `drop` must take an argument `self: Pin<&mut Self>`
+    |                 ^^^^^^^^^^^^^^^^^^
+
+error: method `pinned_drop` is not a member of trait `PinnedDrop`
+   --> tests/ui/pinned_drop/invalid.rs:207:12
+    |
+207 |         fn pinned_drop(self: Pin<&mut Self>) {} //~ ERROR method `pinned_drop` is not a member of trait `PinnedDrop`
+    |            ^^^^^^^^^^^
+
+error: implementing the trait `PinnedDrop` on this type is unsupported
+   --> tests/ui/pinned_drop/invalid.rs:215:25
+    |
+215 |     impl PinnedDrop for () {
+    |                         ^^
+
+error: implementing the trait `PinnedDrop` on this type is unsupported
+   --> tests/ui/pinned_drop/invalid.rs:221:25
+    |
+221 |     impl PinnedDrop for &mut A {
+    |                         ^^^^^^
+
+error: implementing the trait `PinnedDrop` on this type is unsupported
+   --> tests/ui/pinned_drop/invalid.rs:227:25
+    |
+227 |     impl PinnedDrop for [A] {
+    |                         ^^^

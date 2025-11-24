@@ -1,0 +1,77 @@
+# This file is part of ICU4X. For terms of use, please see the file
+# called LICENSE at the top level of the ICU4X source tree
+# (online at: https://github.com/unicode-org/icu4x/blob/main/LICENSE ).
+
+[package]
+name = "litemap"
+version = "0.8.0"
+keywords = ["sorted", "vec", "map", "hashmap", "btreemap"]
+description = "A key-value Map implementation based on a flat, sorted Vec."
+documentation = "https://docs.rs/litemap"
+
+authors.workspace = true
+edition.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.workspaces]
+independent = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+databake = { workspace = true, optional = true }
+serde = { workspace = true, optional = true, features = ["alloc"]}
+yoke = { workspace = true, features = ["derive"], optional = true }
+
+[dev-dependencies]
+rand = { workspace = true }
+bincode = { workspace = true }
+icu_benchmark_macros = { path = "../../tools/benchmark/macros" }
+icu_locale_core = { path = "../../components/locale_core" }
+postcard = { workspace = true, features = ["use-std"] }
+rkyv = { workspace = true, features = ["validation"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion = { workspace = true }
+
+[features]
+default = ["alloc"]
+alloc = []
+databake = ["dep:databake"]
+serde = ["dep:serde", "alloc"]
+yoke = ["dep:yoke"]
+
+# Enables the `testing` module with tools for testing custom stores.
+testing = ["alloc"]
+
+[lib]
+bench = false  # This option is required for Benchmark CI
+
+[[test]]
+name = "serde"
+required-features = ["serde"]
+
+[[test]]
+name = "store"
+required-features = ["testing"]
+
+[[example]]
+name = "litemap_bincode"
+path = "examples/litemap_bincode.rs"
+required-features = ["serde"]
+
+[[example]]
+name = "litemap_postcard"
+path = "examples/litemap_postcard.rs"
+required-features = ["serde"]
+
+[[bench]]
+name = "litemap"
+harness = false
+required-features = ["serde"]

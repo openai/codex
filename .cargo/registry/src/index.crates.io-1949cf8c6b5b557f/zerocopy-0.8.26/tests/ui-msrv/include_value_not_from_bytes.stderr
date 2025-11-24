@@ -1,0 +1,15 @@
+error[E0277]: the trait bound `NotZerocopy<u32>: zerocopy::FromBytes` is not satisfied
+  --> tests/ui-msrv/include_value_not_from_bytes.rs:19:42
+   |
+19 | const NOT_FROM_BYTES: NotZerocopy<u32> = include_value!("../../testdata/include_value/data");
+   |                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `zerocopy::FromBytes` is not implemented for `NotZerocopy<u32>`
+   |
+note: required by a bound in `NOT_FROM_BYTES::transmute`
+  --> tests/ui-msrv/include_value_not_from_bytes.rs:19:42
+   |
+19 | const NOT_FROM_BYTES: NotZerocopy<u32> = include_value!("../../testdata/include_value/data");
+   |                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |                                          |
+   |                                          required by a bound in this
+   |                                          required by this bound in `NOT_FROM_BYTES::transmute`
+   = note: this error originates in the macro `$crate::transmute` (in Nightly builds, run with -Z macro-backtrace for more info)

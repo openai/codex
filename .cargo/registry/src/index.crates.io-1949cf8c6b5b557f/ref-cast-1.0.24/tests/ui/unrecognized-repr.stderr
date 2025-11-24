@@ -1,0 +1,39 @@
+error: unrecognized repr on struct that implements RefCast
+ --> tests/ui/unrecognized-repr.rs:4:19
+  |
+4 | #[repr(packed, C, usize, usize(0), usize = "0")]
+  |                   ^^^^^
+
+error: unrecognized repr on struct that implements RefCast
+ --> tests/ui/unrecognized-repr.rs:4:26
+  |
+4 | #[repr(packed, C, usize, usize(0), usize = "0")]
+  |                          ^^^^^^^^
+
+error: unrecognized repr on struct that implements RefCast
+ --> tests/ui/unrecognized-repr.rs:4:36
+  |
+4 | #[repr(packed, C, usize, usize(0), usize = "0")]
+  |                                    ^^^^^^^^^^^
+
+error[E0552]: invalid representation hint: `usize` does not take a parenthesized argument list
+ --> tests/ui/unrecognized-repr.rs:4:26
+  |
+4 | #[repr(packed, C, usize, usize(0), usize = "0")]
+  |                          ^^^^^^^^
+
+error[E0552]: invalid representation hint: `usize` does not take a value
+ --> tests/ui/unrecognized-repr.rs:4:36
+  |
+4 | #[repr(packed, C, usize, usize(0), usize = "0")]
+  |                                    ^^^^^^^^^^^
+
+error[E0517]: attribute should be applied to an enum
+ --> tests/ui/unrecognized-repr.rs:4:19
+  |
+4 |   #[repr(packed, C, usize, usize(0), usize = "0")]
+  |                     ^^^^^
+5 | / struct Test {
+6 | |     s: String,
+7 | | }
+  | |_- not an enum

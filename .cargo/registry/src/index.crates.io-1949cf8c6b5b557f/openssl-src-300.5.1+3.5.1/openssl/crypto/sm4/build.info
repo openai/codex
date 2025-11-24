@@ -1,0 +1,40 @@
+LIBS=../../libcrypto
+
+IF[{- !$disabled{asm} -}]
+  $SM4DEF_aarch64=SM4_ASM VPSM4_ASM
+  $SM4ASM_aarch64=sm4-armv8.S vpsm4-armv8.S vpsm4_ex-armv8.S
+
+  $SM4DEF_riscv64=SM4_ASM
+  $SM4ASM_riscv64=sm4-riscv64-zvksed.s
+
+  # Now that we have defined all the arch specific variables, use the
+  # appropriate one, and define the appropriate macros
+  IF[$SM4ASM_{- $target{asm_arch} -}]
+    $SM4ASM=$SM4ASM_{- $target{asm_arch} -}
+    $SM4DEF=$SM4DEF_{- $target{asm_arch} -}
+  ENDIF
+ENDIF
+
+SOURCE[../../libcrypto]= $SM4ASM sm4.c
+
+
+# Implementations are now spread across several libraries, so the defines
+# need to be applied to all affected libraries and modules.
+DEFINE[../../libcrypto]=$SM4DEF
+DEFINE[../../providers/libfips.a]=$SM4DEF
+DEFINE[../../providers/libdefault.a]=$SM4DEF
+# We only need to include the SM4DEF stuff in the legacy provider when it's a
+# separate module and it's dynamically linked with libcrypto.  Otherwise, it
+# already gets everything that the static libcrypto.a has, and doesn't need it
+# added again.
+IF[{- !$disabled{module} && !$disabled{shared} -}]
+  DEFINE[../../providers/liblegacy.a]=$SM4DEF
+ENDIF
+
+GENERATE[sm4-armv8.S]=asm/sm4-armv8.pl
+GENERATE[vpsm4-armv8.S]=asm/vpsm4-armv8.pl
+GENERATE[vpsm4_ex-armv8.S]=asm/vpsm4_ex-armv8.pl
+INCLUDE[sm4-armv8.o]=..
+INCLUDE[vpsm4-armv8.o]=..
+INCLUDE[vpsm4_ex-armv8.o]=..
+GENERATE[sm4-riscv64-zvksed.s]=asm/sm4-riscv64-zvksed.pl

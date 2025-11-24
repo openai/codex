@@ -1,0 +1,67 @@
+# -*- mode: perl; -*-
+# Copyright 2019-2020 The OpenSSL Project Authors. All Rights Reserved.
+#
+# Licensed under the Apache License 2.0 (the "License").  You may not use
+# this file except in compliance with the License.  You can obtain a copy
+# in the file LICENSE in the source distribution or at
+# https://www.openssl.org/source/license.html
+
+
+## Test SSL_MODE_DTLS_SCTP_LABEL_LENGTH_BUG handling
+
+use strict;
+use warnings;
+
+package ssltests;
+use OpenSSL::Test::Utils;
+
+our @tests = (
+    {
+        name => "SCTPLabelBug-good1",
+        server => {},
+        client => {},
+        test => {
+            "Method" => "DTLS",
+            "UseSCTP" => "Yes",
+            "EnableClientSCTPLabelBug" => "No",
+            "EnableServerSCTPLabelBug" => "No",
+            "ExpectedResult" => "Success"
+        }
+    },
+    {
+        name => "SCTPLabelBug-good2",
+        server => {},
+        client => {},
+        test => {
+            "Method" => "DTLS",
+            "UseSCTP" => "Yes",
+            "EnableClientSCTPLabelBug" => "Yes",
+            "EnableServerSCTPLabelBug" => "Yes",
+            "ExpectedResult" => "Success"
+        }
+    },
+    {
+        name => "SCTPLabelBug-bad1",
+        server => {},
+        client => {},
+        test => {
+            "Method" => "DTLS",
+            "UseSCTP" => "Yes",
+            "EnableClientSCTPLabelBug" => "Yes",
+            "EnableServerSCTPLabelBug" => "No",
+            "ExpectedResult" => "ClientFail"
+        }
+    },
+    {
+        name => "SCTPLabelBug-bad2",
+        server => {},
+        client => {},
+        test => {
+            "Method" => "DTLS",
+            "UseSCTP" => "Yes",
+            "EnableClientSCTPLabelBug" => "No",
+            "EnableServerSCTPLabelBug" => "Yes",
+            "ExpectedResult" => "ClientFail"
+        }
+    },
+);

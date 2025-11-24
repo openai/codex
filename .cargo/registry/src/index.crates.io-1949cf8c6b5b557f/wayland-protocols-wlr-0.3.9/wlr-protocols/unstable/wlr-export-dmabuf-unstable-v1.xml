@@ -1,0 +1,203 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="wlr_export_dmabuf_unstable_v1">
+  <copyright>
+    Copyright © 2018 Rostislav Pehlivanov
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice (including the next
+    paragraph) shall be included in all copies or substantial portions of the
+    Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+  </copyright>
+
+  <description summary="a protocol for low overhead screen content capturing">
+    An interface to capture surfaces in an efficient way by exporting DMA-BUFs.
+
+    Warning! The protocol described in this file is experimental and
+    backward incompatible changes may be made. Backward compatible changes
+    may be added together with the corresponding interface version bump.
+    Backward incompatible changes are done by bumping the version number in
+    the protocol and interface names and resetting the interface version.
+    Once the protocol is to be declared stable, the 'z' prefix and the
+    version number in the protocol and interface names are removed and the
+    interface version number is reset.
+  </description>
+
+  <interface name="zwlr_export_dmabuf_manager_v1" version="1">
+    <description summary="manager to inform clients and begin capturing">
+      This object is a manager with which to start capturing from sources.
+    </description>
+
+    <request name="capture_output">
+      <description summary="capture a frame from an output">
+        Capture the next frame of an entire output.
+      </description>
+      <arg name="frame" type="new_id" interface="zwlr_export_dmabuf_frame_v1"/>
+      <arg name="overlay_cursor" type="int"
+           summary="include custom client hardware cursor on top of the frame"/>
+      <arg name="output" type="object" interface="wl_output"/>
+    </request>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the manager">
+        All objects created by the manager will still remain valid, until their
+        appropriate destroy request has been called.
+      </description>
+    </request>
+  </interface>
+
+  <interface name="zwlr_export_dmabuf_frame_v1" version="1">
+    <description summary="a DMA-BUF frame">
+      This object represents a single DMA-BUF frame.
+
+      If the capture is successful, the compositor will first send a "frame"
+      event, followed by one or several "object". When the frame is available
+      for readout, the "ready" event is sent.
+
+      If the capture failed, the "cancel" event is sent. This can happen anytime
+      before the "ready" event.
+
+      Once either a "ready" or a "cancel" event is received, the client should
+      destroy the frame. Once an "object" event is received, the client is
+      responsible for closing the associated file descriptor.
+
+      All frames are read-only and may not be written into or altered.
+    </description>
+
+    <enum name="flags">
+      <description summary="frame flags">
+        Special flags that should be respected by the client.
+      </description>
+      <entry name="transient" value="0x1"
+             summary="clients should copy frame before processing"/>
+    </enum>
+
+    <event name="frame">
+      <description summary="a frame description">
+        Main event supplying the client with information about the frame. If the
+        capture didn't fail, this event is always emitted first before any other
+        events.
+
+        This event is followed by a number of "object" as specified by the
+        "num_objects" argument.
+      </description>
+      <arg name="width" type="uint"
+           summary="frame width in pixels"/>
+      <arg name="height" type="uint"
+           summary="frame height in pixels"/>
+      <arg name="offset_x" type="uint"
+           summary="crop offset for the x axis"/>
+      <arg name="offset_y" type="uint"
+           summary="crop offset for the y axis"/>
+      <arg name="buffer_flags" type="uint"
+           summary="flags which indicate properties (invert, interlacing),
+                    has the same values as zwp_linux_buffer_params_v1:flags"/>
+      <arg name="flags" type="uint" enum="flags"
+           summary="indicates special frame features"/>
+      <arg name="format" type="uint"
+           summary="format of the frame (DRM_FORMAT_*)"/>
+      <arg name="mod_high" type="uint"
+           summary="drm format modifier, high"/>
+      <arg name="mod_low" type="uint"
+           summary="drm format modifier, low"/>
+      <arg name="num_objects" type="uint"
+           summary="indicates how many objects (FDs) the frame has (max 4)"/>
+    </event>
+
+    <event name="object">
+      <description summary="an object description">
+        Event which serves to supply the client with the file descriptors
+        containing the data for each object.
+
+        After receiving this event, the client must always close the file
+        descriptor as soon as they're done with it and even if the frame fails.
+      </description>
+      <arg name="index" type="uint"
+           summary="index of the current object"/>
+      <arg name="fd" type="fd"
+           summary="fd of the current object"/>
+      <arg name="size" type="uint"
+           summary="size in bytes for the current object"/>
+      <arg name="offset" type="uint"
+           summary="starting point for the data in the object's fd"/>
+      <arg name="stride" type="uint"
+           summary="line size in bytes"/>
+      <arg name="plane_index" type="uint"
+           summary="index of the plane the data in the object applies to"/>
+    </event>
+
+    <event name="ready">
+      <description summary="indicates frame is available for reading">
+        This event is sent as soon as the frame is presented, indicating it is
+        available for reading. This event includes the time at which
+        presentation happened at.
+
+        The timestamp is expressed as tv_sec_hi, tv_sec_lo, tv_nsec triples,
+        each component being an unsigned 32-bit value. Whole seconds are in
+        tv_sec which is a 64-bit value combined from tv_sec_hi and tv_sec_lo,
+        and the additional fractional part in tv_nsec as nanoseconds. Hence,
+        for valid timestamps tv_nsec must be in [0, 999999999]. The seconds part
+        may have an arbitrary offset at start.
+
+        After receiving this event, the client should destroy this object.
+      </description>
+      <arg name="tv_sec_hi" type="uint"
+           summary="high 32 bits of the seconds part of the timestamp"/>
+      <arg name="tv_sec_lo" type="uint"
+           summary="low 32 bits of the seconds part of the timestamp"/>
+      <arg name="tv_nsec" type="uint"
+           summary="nanoseconds part of the timestamp"/>
+    </event>
+
+    <enum name="cancel_reason">
+      <description summary="cancel reason">
+        Indicates reason for cancelling the frame.
+      </description>
+      <entry name="temporary" value="0"
+             summary="temporary error, source will produce more frames"/>
+      <entry name="permanent" value="1"
+             summary="fatal error, source will not produce frames"/>
+      <entry name="resizing" value="2"
+             summary="temporary error, source will produce more frames"/>
+    </enum>
+
+    <event name="cancel">
+      <description summary="indicates the frame is no longer valid">
+        If the capture failed or if the frame is no longer valid after the
+        "frame" event has been emitted, this event will be used to inform the
+        client to scrap the frame.
+
+        If the failure is temporary, the client may capture again the same
+        source. If the failure is permanent, any further attempts to capture the
+        same source will fail again.
+
+        After receiving this event, the client should destroy this object.
+      </description>
+      <arg name="reason" type="uint" enum="cancel_reason"
+           summary="indicates a reason for cancelling this frame capture"/>
+    </event>
+
+    <request name="destroy" type="destructor">
+      <description summary="delete this object, used or not">
+        Unreferences the frame. This request must be called as soon as its no
+        longer used.
+
+        It can be called at any time by the client. The client will still have
+        to close any FDs it has been given.
+      </description>
+    </request>
+  </interface>
+</protocol>

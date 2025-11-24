@@ -1,0 +1,5 @@
+error: expected string literal as argument to env! macro
+ --> tests/ui/env-empty.rs:4:10
+  |
+4 |     fn [<env!()>]() {}
+  |          ^^^^^^

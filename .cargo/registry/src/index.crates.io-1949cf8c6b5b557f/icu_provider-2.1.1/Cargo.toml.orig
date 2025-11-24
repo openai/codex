@@ -1,0 +1,90 @@
+# This file is part of ICU4X. For terms of use, please see the file
+# called LICENSE at the top level of the ICU4X source tree
+# (online at: https://github.com/unicode-org/icu4x/blob/main/LICENSE ).
+
+[package]
+name = "icu_provider"
+description = "Trait and struct definitions for the ICU data provider"
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+homepage.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+displaydoc = { workspace = true }
+icu_locale_core = { workspace = true }
+stable_deref_trait = { workspace = true, optional = true }
+writeable = { workspace = true, optional = true }
+yoke = { workspace = true, features = ["derive"] }
+zerofrom = { workspace = true, features = ["derive"] }
+zerovec = { workspace = true, features = ["derive"]}
+
+# baked
+zerotrie = { workspace = true, optional = true }
+
+# log
+log = { workspace = true, optional = true }
+
+# serde
+bincode = { workspace = true, optional = true }
+postcard = { workspace = true, optional = true }
+serde = { workspace = true, features = ["derive"], optional = true }
+serde_json = { workspace = true, optional = true }
+
+# export
+erased-serde = { workspace = true, optional = true }
+databake = { workspace = true, optional = true, features = ["derive"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+icu = { path = "../../components/icu", default-features = false }
+icu_locale = { path = "../../components/locale" }
+icu_provider_adapters = { path = "../adapters", default-features = false }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion = { workspace = true }
+
+[features]
+std = ["alloc"]
+alloc = ["icu_locale_core/alloc", "serde?/alloc", "yoke/alloc", "zerofrom/alloc", "zerovec/alloc", "zerotrie?/alloc", "dep:stable_deref_trait", "dep:writeable"]
+sync = []
+# Enable logging of additional context of data errors
+logging = ["dep:log"]
+
+# Enable BufferProvider and other deserialization infrastructure
+serde = ["dep:serde", "yoke/serde"]
+
+# Features for specific serde formats
+deserialize_json = ["serde", "dep:serde_json"]
+deserialize_bincode_1 = ["serde", "dep:bincode", "std"]
+deserialize_postcard_1 = ["serde", "dep:postcard"]
+
+# Dependencies for baked provider scaffolding
+baked = ["dep:zerotrie", "dep:writeable"]
+
+# Dependencies for running data generation
+export = ["serde", "dep:erased-serde", "dep:databake", "std", "sync", "dep:postcard", "zerovec/databake"]
+
+# added by accident
+zerotrie = []
+
+[package.metadata.cargo-all-features]
+denylist = ["macros"]
+# We have tons of features here, limit the amount of tests we run
+max_combination_size = 3
+
+[lib]
+bench = false  # This option is required for Benchmark CI
+
+[[bench]]
+name = "data_locale_bench"
+harness = false

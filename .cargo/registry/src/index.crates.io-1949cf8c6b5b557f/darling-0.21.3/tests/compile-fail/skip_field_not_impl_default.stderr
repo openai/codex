@@ -1,0 +1,23 @@
+error[E0277]: the trait bound `NoDefault: std::default::Default` is not satisfied
+ --> tests/compile-fail/skip_field_not_impl_default.rs:8:15
+  |
+8 |     #[darling(skip)]
+  |               ^^^^ the trait `std::default::Default` is not implemented for `NoDefault`
+  |
+help: consider annotating `NoDefault` with `#[derive(Default)]`
+  |
+4 + #[derive(Default)]
+5 | struct NoDefault(String);
+  |
+
+error[E0277]: the trait bound `NoDefault: std::default::Default` is not satisfied
+  --> tests/compile-fail/skip_field_not_impl_default.rs:11:22
+   |
+11 |     #[darling(skip = true)]
+   |                      ^^^^ the trait `std::default::Default` is not implemented for `NoDefault`
+   |
+help: consider annotating `NoDefault` with `#[derive(Default)]`
+   |
+4  + #[derive(Default)]
+5  | struct NoDefault(String);
+   |

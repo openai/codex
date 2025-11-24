@@ -1,0 +1,12 @@
+error[E0308]: mismatched types
+  --> tests/ui-msrv/transmute-ref-src-not-a-reference.rs:17:49
+   |
+17 | const SRC_NOT_A_REFERENCE: &u8 = transmute_ref!(0usize);
+   |                                  ---------------^^^^^^-
+   |                                  |              |
+   |                                  |              expected reference, found `usize`
+   |                                  |              help: consider borrowing here: `&0usize`
+   |                                  expected due to this
+   |
+   = note: expected reference `&_`
+                   found type `usize`

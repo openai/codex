@@ -1,0 +1,11 @@
+error: `#[darling(word)]` can only be applied to one variant
+ --> tests/compile-fail/duplicate_word_across_variants.rs:5:15
+  |
+5 |     #[darling(word)]
+  |               ^^^^
+
+error: `#[darling(word)]` can only be applied to one variant
+ --> tests/compile-fail/duplicate_word_across_variants.rs:7:15
+  |
+7 |     #[darling(word)]
+  |               ^^^^

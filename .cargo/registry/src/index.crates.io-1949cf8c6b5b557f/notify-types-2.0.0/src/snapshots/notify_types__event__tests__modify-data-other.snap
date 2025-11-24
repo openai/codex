@@ -1,0 +1,5 @@
+---
+source: notify/src/event.rs
+expression: json
+---
+{"type":"modify","kind":"data","mode":"other","paths":[],"attrs":{}}

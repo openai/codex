@@ -1,0 +1,32 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Code:
+def f(t: tuple[int, ...]) -> int:
+    return t[0]
+
+def g():
+    # Good.
+    f((1, 2, 3))
+
+    # Bad.
+    f((1, "x"))
+
+Error:
+error: Expected type `tuple[int, ...]` but got `(int, str)`
+  --> filename:10:7
+   |
+10 |     f((1, "x"))
+   |       ^^^^^^^^
+   |
+
+Compiler typechecker (eval):
+error: Expected type `tuple[int, ...]` but got `(int, str)`
+  --> filename:10:7
+   |
+10 |     f((1, "x"))
+   |       ^^^^^^^^
+   |

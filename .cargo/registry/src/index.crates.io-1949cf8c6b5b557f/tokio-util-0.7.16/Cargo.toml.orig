@@ -1,0 +1,72 @@
+[package]
+name = "tokio-util"
+# When releasing to crates.io:
+# - Remove path dependencies
+# - Update CHANGELOG.md.
+# - Create "tokio-util-0.7.x" git tag.
+version = "0.7.16"
+edition = "2021"
+rust-version = "1.70"
+authors = ["Tokio Contributors <team@tokio.rs>"]
+license = "MIT"
+repository = "https://github.com/tokio-rs/tokio"
+homepage = "https://tokio.rs"
+description = """
+Additional utilities for working with Tokio.
+"""
+categories = ["asynchronous"]
+
+[features]
+# No features on by default
+default = []
+
+# Shorthand for enabling everything
+full = ["codec", "compat", "io-util", "time", "net", "rt", "join-map"]
+
+net = ["tokio/net"]
+compat = ["futures-io"]
+codec = []
+time = ["tokio/time", "slab"]
+io = []
+io-util = ["io", "tokio/rt", "tokio/io-util"]
+rt = ["tokio/rt", "tokio/sync", "futures-util"]
+join-map = ["rt", "hashbrown"]
+
+__docs_rs = ["futures-util"]
+
+[dependencies]
+tokio = { version = "1.28.0", path = "../tokio", features = ["sync"] }
+bytes = "1.5.0"
+futures-core = "0.3.0"
+futures-sink = "0.3.0"
+futures-io = { version = "0.3.0", optional = true }
+futures-util = { version = "0.3.0", optional = true }
+pin-project-lite = "0.2.11"
+slab = { version = "0.4.4", optional = true } # Backs `DelayQueue`
+tracing = { version = "0.1.29", default-features = false, features = ["std"], optional = true }
+hashbrown = { version = "0.15.0", default-features = false, optional = true }
+
+[dev-dependencies]
+tokio = { version = "1.0.0", path = "../tokio", features = ["full"] }
+tokio-test = { version = "0.4.0", path = "../tokio-test" }
+tokio-stream = { version = "0.1", path = "../tokio-stream" }
+
+async-stream = "0.3.0"
+futures = "0.3.0"
+futures-test = "0.3.5"
+parking_lot = "0.12.0"
+tempfile = "3.1.0"
+
+[package.metadata.docs.rs]
+all-features = true
+# enable unstable features in the documentation
+rustdoc-args = ["--cfg", "docsrs", "--cfg", "tokio_unstable"]
+# it's necessary to _also_ pass `--cfg tokio_unstable` to rustc, or else
+# dependencies will not be enabled, and the docs build will fail.
+rustc-args = ["--cfg", "docsrs", "--cfg", "tokio_unstable"]
+
+[package.metadata.playground]
+features = ["full"]
+
+[lints]
+workspace = true

@@ -1,0 +1,7 @@
+error: input must be an enum
+ --> tests/ui/not_enum.rs:3:10
+  |
+3 | #[derive(Serialize_repr)]
+  |          ^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `Serialize_repr` (in Nightly builds, run with -Z macro-backtrace for more info)

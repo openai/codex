@@ -1,0 +1,11 @@
+[tasks.changelog]
+workspace=false
+install_crate="git-cliff"
+command = "git-cliff"
+args = ["--prepend", "CHANGELOG.md", "-u", "--tag", "${@}"]
+
+[tasks.release]
+workspace=false
+install_crate="cargo-release"
+command = "cargo"
+args = ["release", "--workspace", "${@}"]

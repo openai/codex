@@ -1,0 +1,111 @@
+[package]
+edition = "2021"
+rust-version = "1.70"
+name = "mio"
+# When releasing to crates.io:
+# - Update CHANGELOG.md.
+# - Create git tag
+version       = "1.0.4"
+license       = "MIT"
+authors       = [
+  "Carl Lerche <me@carllerche.com>",
+  "Thomas de Zeeuw <thomasdezeeuw@gmail.com>",
+  "Tokio Contributors <team@tokio.rs>",
+]
+description   = "Lightweight non-blocking I/O."
+homepage      = "https://github.com/tokio-rs/mio"
+repository    = "https://github.com/tokio-rs/mio"
+readme        = "README.md"
+keywords      = ["io", "async", "non-blocking"]
+categories    = ["asynchronous"]
+include       = [
+  "Cargo.toml",
+  "LICENSE",
+  "README.md",
+  "CHANGELOG.md",
+  "src/**/*.rs",
+  "examples/**/*.rs",
+]
+
+# For documentation of features see the `mio::features` module.
+[features]
+# By default Mio only provides a shell implementation.
+default = ["log"]
+
+# Enables the `Poll` and `Registry` types.
+os-poll = []
+# Enables additional OS specific extensions, e.g. Unix `pipe(2)`.
+os-ext = [
+  "os-poll",
+  "windows-sys/Win32_System_Pipes",
+  "windows-sys/Win32_Security",
+]
+# Enables `mio::net` module containing networking primitives.
+net = []
+
+[dependencies]
+log = { version = "0.4.8", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.159"
+
+[target.'cfg(target_os = "hermit")'.dependencies]
+libc = "0.2.159"
+
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.59"
+features = [
+  "Wdk_Foundation",                   # Required for AFD.
+  "Wdk_Storage_FileSystem",           # Required for AFD.
+  "Wdk_System_IO",                    # Required for AFD.
+  "Win32_Foundation",                 # Basic types eg HANDLE
+  "Win32_Networking_WinSock",         # winsock2 types/functions
+  "Win32_Storage_FileSystem",         # Enables NtCreateFile
+  "Win32_System_IO",                  # IO types like OVERLAPPED etc
+  "Win32_System_WindowsProgramming",  # General future used for various types/funcs
+]
+
+[target.'cfg(target_os = "wasi")'.dependencies]
+wasi = "0.11.0"
+libc = "0.2.159"
+
+[dev-dependencies]
+env_logger = { version = "0.9.3", default-features = false }
+rand = "0.8"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs", "--generate-link-to-definition"]
+targets = [
+  "aarch64-apple-ios",
+  "aarch64-linux-android",
+  "wasm32-wasip1",
+  "x86_64-apple-darwin",
+  "x86_64-pc-windows-gnu",
+  "x86_64-pc-windows-msvc",
+  "x86_64-unknown-dragonfly",
+  "x86_64-unknown-freebsd",
+  "x86_64-unknown-illumos",
+  "x86_64-unknown-linux-gnu",
+  "x86_64-unknown-netbsd",
+  "x86_64-unknown-openbsd",
+  "x86_64-unknown-hermit",
+]
+
+[package.metadata.playground]
+features = ["os-poll", "os-ext", "net"]
+
+[[example]]
+name = "tcp_server"
+required-features = ["os-poll", "net"]
+
+[[example]]
+name = "tcp_listenfd_server"
+required-features = ["os-poll", "net"]
+
+[[example]]
+name = "udp_server"
+required-features = ["os-poll", "net"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(mio_unsupported_force_poll_poll)', 'cfg(mio_unsupported_force_waker_pipe)'] }

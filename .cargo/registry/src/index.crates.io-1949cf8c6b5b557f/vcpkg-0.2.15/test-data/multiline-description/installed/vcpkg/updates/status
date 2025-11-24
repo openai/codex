@@ -1,0 +1,8 @@
+Package: graphite2
+Version: 1.3.10
+Architecture: x86-windows
+Multi-Arch: same
+Description: Graphite is a "smart font" system developed specifically to handle the complexities of lesser-known languages of the world.
+  Graphite2 is a rework of the original Graphite engine that is faster, smaller, and uses an API that is better suited to the layout architecture of most text-processing applications.
+Status: install ok installed
+

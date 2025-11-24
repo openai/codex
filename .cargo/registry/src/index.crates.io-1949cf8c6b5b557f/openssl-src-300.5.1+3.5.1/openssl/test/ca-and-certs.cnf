@@ -1,0 +1,91 @@
+
+# Comment out the next line to ignore configuration errors
+config_diagnostics = 1
+
+CN2 = Brother 2
+
+####################################################################
+[ req ]
+distinguished_name	= req_distinguished_name
+encrypt_rsa_key		= no
+default_md		= sha1
+
+[ req_distinguished_name ]
+countryName			= Country Name (2 letter code)
+countryName_value		= AU
+organizationName		= Organization Name (eg, company)
+organizationName_value		= Dodgy Brothers
+commonName			= Common Name (eg, YOUR name)
+commonName_value		= Dodgy CA
+
+####################################################################
+[ userreq ]
+distinguished_name	= user_dn
+encrypt_rsa_key		= no
+default_md		= sha256
+prompt			= no
+
+[ user_dn ]
+countryName		= AU
+organizationName	= Dodgy Brothers
+0.commonName		= Brother 1
+1.commonName		= $ENV::CN2
+
+[ empty ]
+
+[ v3_ee ]
+subjectKeyIdentifier	= hash
+authorityKeyIdentifier	= keyid,issuer:always
+basicConstraints 	= CA:false
+keyUsage		= nonRepudiation, digitalSignature, keyEncipherment
+
+[ v3_ee_dsa ]
+subjectKeyIdentifier	= hash
+authorityKeyIdentifier	= keyid:always
+basicConstraints	= CA:false
+keyUsage		= nonRepudiation, digitalSignature
+
+[ v3_ee_ec ]
+subjectKeyIdentifier	= hash
+authorityKeyIdentifier	= keyid:always
+basicConstraints	= CA:false
+keyUsage		= nonRepudiation, digitalSignature, keyAgreement
+
+####################################################################
+[ ca ]
+default_ca	= CA_default
+
+[ CA_default ]
+dir		= ./demoCA
+certs		= $dir/certs
+crl_dir		= $dir/crl
+database	= $dir/index.txt
+new_certs_dir	= $dir/newcerts
+certificate	= $dir/cacert.pem
+serial		= $dir/serial
+crl		= $dir/crl.pem
+private_key	= $dir/private/cakey.pem
+x509_extensions	= v3_ca
+name_opt 	= ca_default
+cert_opt 	= ca_default
+default_days	= 365
+default_crl_days= 30
+default_md	= sha1
+preserve	= no
+policy		= policy_anything
+
+[ policy_anything ]
+countryName		= optional
+stateOrProvinceName	= optional
+localityName		= optional
+organizationName	= optional
+organizationalUnitName	= optional
+commonName		= supplied
+emailAddress		= optional
+
+[ v3_ca ]
+subjectKeyIdentifier	= hash
+authorityKeyIdentifier	= keyid:always,issuer:always
+basicConstraints 	= critical,CA:true,pathlen:1
+keyUsage		= cRLSign, keyCertSign
+issuerAltName		= issuer:copy

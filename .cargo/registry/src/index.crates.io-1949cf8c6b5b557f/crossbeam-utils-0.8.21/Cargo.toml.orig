@@ -1,0 +1,46 @@
+[package]
+name = "crossbeam-utils"
+# When publishing a new version:
+# - Update CHANGELOG.md
+# - Update README.md (when increasing major or minor version)
+# - Run './tools/publish.sh crossbeam-utils <version>'
+version = "0.8.21"
+edition = "2021"
+rust-version = "1.60"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/crossbeam-rs/crossbeam"
+homepage = "https://github.com/crossbeam-rs/crossbeam/tree/master/crossbeam-utils"
+description = "Utilities for concurrent programming"
+keywords = ["scoped", "thread", "atomic", "cache"]
+categories = ["algorithms", "concurrency", "data-structures", "no-std"]
+
+[features]
+default = ["std"]
+
+# Enable to use APIs that require `std`.
+# This is enabled by default.
+std = []
+
+# These features are no longer used.
+# TODO: remove in the next major version.
+# Enable to use of unstable functionality.
+# This is disabled by default and requires recent nightly compiler.
+#
+# NOTE: This feature is outside of the normal semver guarantees and minor or
+# patch versions of crossbeam may make breaking changes to them at any time.
+nightly = []
+
+[dependencies]
+
+# Enable the use of loom for concurrency testing.
+#
+# NOTE: This feature is outside of the normal semver guarantees and minor or
+# patch versions of crossbeam may make breaking changes to them at any time.
+[target.'cfg(crossbeam_loom)'.dependencies]
+loom = { version = "0.7.1", optional = true }
+
+[dev-dependencies]
+rand = "0.8"
+
+[lints]
+workspace = true

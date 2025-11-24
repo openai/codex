@@ -1,0 +1,8 @@
+error: union as errors are not supported
+ --> tests/ui/union.rs:4:1
+  |
+4 | / pub union U {
+5 | |     msg: &'static str,
+6 | |     num: usize,
+7 | | }
+  | |_^

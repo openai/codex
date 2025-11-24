@@ -1,0 +1,68 @@
+[
+  {
+    "input": "Pl",
+    "output": "pl"
+  },
+  {
+    "input": "eN-uS",
+    "output": "en-US"
+  },
+  {
+    "input": "ZH-hans-hK",
+    "output": "zh-Hans-HK"
+  },
+  {
+    "input": "en-scouse-fonipa",
+    "output": "en-fonipa-scouse"
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "en-US-t-es-AR-x-foo"
+    },
+    "output": {
+      "type": "Locale",
+      "identifier": "en-US-t-es-ar-x-foo"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "en-t-en-Latn-CA-emodeng"
+    },
+    "output": {
+      "type": "Locale",
+      "identifier": "en-t-en-latn-ca-emodeng"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "EN-US-T-ES-AR-X-FOO"
+    },
+    "output": {
+      "type": "Locale",
+      "identifier": "en-US-t-es-ar-x-foo"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "EN-T-EN-LATN-CA-EMODENG"
+    },
+    "output": {
+      "type": "Locale",
+      "identifier": "en-t-en-latn-ca-emodeng"
+    }
+  },
+  {
+    "input": {
+      "type": "Locale",
+      "identifier": "UND-CYRL-T-ES-LATN-M0-UNGEGN"
+    },
+    "output": {
+      "type": "Locale",
+      "identifier": "und-Cyrl-t-es-latn-m0-ungegn"
+    }
+  }
+]

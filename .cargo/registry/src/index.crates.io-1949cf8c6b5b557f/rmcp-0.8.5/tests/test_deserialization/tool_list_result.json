@@ -1,0 +1,28 @@
+{
+    "result": {
+        "tools": [
+            {
+                "name": "add",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "a": {
+                            "type": "number"
+                        },
+                        "b": {
+                            "type": "number"
+                        }
+                    },
+                    "required": [
+                        "a",
+                        "b"
+                    ],
+                    "additionalProperties": false,
+                    "$schema": "http://json-schema.org/draft-07/schema#"
+                }
+            }
+        ]
+    },
+    "jsonrpc": "2.0",
+    "id": 2
+}

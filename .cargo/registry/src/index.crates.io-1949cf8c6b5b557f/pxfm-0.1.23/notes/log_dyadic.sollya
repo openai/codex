@@ -1,0 +1,7 @@
+pretty = proc(u) {
+  return ~(floor(u*1000)/1000);
+};
+
+P = fpminimax((log(1 + x) - x)/x^2, 2, [|1, 128...|], [-0x1.0002143p-29 , 0x1p-29]);
+err = -log2(dirtyinfnorm(log(1 + x)/x - x*P, [-0x1.0002143p-29 , 0x1p-29]));
+print ("relative error:", pretty(err));

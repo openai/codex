@@ -1,0 +1,5 @@
+---
+source: notify/src/event.rs
+expression: json
+---
+{"type":"create","kind":"file","paths":[],"attrs":{}}

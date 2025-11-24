@@ -1,0 +1,213 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<!DOCTYPE refentry PUBLIC "-//OASIS//DTD DocBook XML V4.4//EN" "http://www.oasis-open.org/docbook/xml/4.4/docbookx.dtd">
+<refentry id="dbus-update-activation-environment.1">
+  <refentryinfo>
+    <copyright>
+      <year>2015</year>
+      <holder>Collabora Ltd.</holder>
+    </copyright>
+    <legalnotice>
+      <para>This man page is distributed under the same terms as
+        dbus-update-activation-environment (MIT/X11). There is NO WARRANTY,
+        to the extent permitted by law.</para>
+    </legalnotice>
+  </refentryinfo>
+
+  <refmeta>
+    <refentrytitle>dbus-update-activation-environment</refentrytitle>
+    <manvolnum>1</manvolnum>
+    <refmiscinfo class="manual">User Commands</refmiscinfo>
+    <refmiscinfo class="source">D-Bus</refmiscinfo>
+    <refmiscinfo class="version">@DBUS_VERSION@</refmiscinfo>
+  </refmeta>
+  <refnamediv>
+    <refname>dbus-update-activation-environment</refname>
+    <refpurpose>update environment used for D-Bus session services</refpurpose>
+  </refnamediv>
+
+  <refsynopsisdiv id="synopsis">
+    <cmdsynopsis>
+      <command>dbus-update-activation-environment</command>
+      <arg choice="opt">--systemd</arg>
+      <arg choice="opt">--verbose</arg>
+      <group choice="plain">
+        <arg choice="plain">--all</arg>
+        <arg choice="plain" rep="repeat"><replaceable>VAR</replaceable></arg>
+        <arg choice="plain" rep="repeat"><replaceable>VAR</replaceable>=<replaceable>VAL</replaceable></arg>
+      </group>
+    </cmdsynopsis>
+  </refsynopsisdiv>
+
+  <refsect1 id="description">
+    <title>DESCRIPTION</title>
+    <para><command>dbus-update-activation-environment</command>
+      updates the list of environment variables used by
+      <command>dbus-daemon --session</command>
+      when it activates session services without using
+      <command>systemd</command>.</para>
+
+    <para>With the <option>--systemd</option> option,
+      if an instance of <command>systemd --user</command> is
+      available on D-Bus, it also updates the list of environment variables
+      used by <command>systemd --user</command>
+      when it activates user services, including D-Bus session services
+      for which <command>dbus-daemon</command> has been configured to
+      delegate activation to <command>systemd</command>.
+      This is very similar to the <option>import-environment</option>
+      command provided by
+      <citerefentry><refentrytitle>systemctl</refentrytitle><manvolnum>1</manvolnum></citerefentry>).</para>
+
+    <para>Variables that are special to <command>dbus-daemon</command>
+      or <command>systemd</command> may be set, but their values will
+      be overridden when a service is started. For instance, it is
+      not useful to add <envar>DBUS_SESSION_BUS_ADDRESS</envar> to
+      <command>dbus-daemon</command>'s activation environment,
+      although it might still be useful to add it to
+      <command>systemd</command>'s activation environment.</para>
+  </refsect1>
+
+  <refsect1 id="options">
+    <title>OPTIONS</title>
+    <variablelist remap="TP">
+
+      <varlistentry>
+        <term><option>--all</option></term>
+        <listitem>
+          <para>Set all environment variables present in
+            the environment used by
+            <command>dbus-update-activation-environment</command>.
+          </para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>--systemd</option></term>
+        <listitem>
+          <para>Set environment variables for systemd user services as well as
+            for traditional D-Bus session services.</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>--verbose</option></term>
+        <listitem>
+          <para>Output messages to standard error explaining what
+            dbus-update-activation-environment is doing.</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><replaceable>VAR</replaceable></term>
+        <listitem>
+          <para>If <replaceable>VAR</replaceable> is present in the
+            environment of <command>dbus-update-activation-environment</command>,
+            set it to the same value for D-Bus services. Its value must be
+            UTF-8 (if not, it is skipped with a warning). If
+            <replaceable>VAR</replaceable> is not present
+            in the environment, this argument is silently ignored.
+          </para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><replaceable>VAR</replaceable>=<replaceable>VAL</replaceable></term>
+        <listitem>
+          <para>Set <replaceable>VAR</replaceable> to <replaceable>VAL</replaceable>,
+            which must be UTF-8.</para>
+        </listitem>
+      </varlistentry>
+
+    </variablelist>
+  </refsect1>
+
+  <refsect1 id="examples">
+    <title>EXAMPLES</title>
+    <para>
+      <command>dbus-update-activation-environment</command> is
+      primarily designed to be used in Linux distributions' X11 session
+      startup scripts, in conjunction with the "user bus" design.
+    </para>
+
+    <para>To propagate <envar>DISPLAY</envar> and <envar>XAUTHORITY</envar>
+      to <command>dbus-daemon</command>
+      and, if present, <command>systemd</command>,
+      and propagate <envar>DBUS_SESSION_BUS_ADDRESS</envar> to
+      <command>systemd</command>:
+      <programlisting language="sh">
+        dbus-update-activation-environment --systemd \
+            DBUS_SESSION_BUS_ADDRESS DISPLAY XAUTHORITY
+      </programlisting>
+    </para>
+
+    <para>To propagate all environment variables except
+      <envar>XDG_SEAT</envar>, <envar>XDG_SESSION_ID</envar>
+      and <envar>XDG_VTNR</envar> to <command>dbus-daemon</command>
+      (and, if present, <command>systemd</command>) for compatibility
+      with legacy X11 session startup scripts:
+      <programlisting language="sh">
+        # in a subshell so the variables remain set in the
+        # parent script
+        (
+          unset XDG_SEAT
+          unset XDG_SESSION_ID
+          unset XDG_VTNR
+
+          dbus-update-activation-environment --systemd --all
+        )
+      </programlisting>
+    </para>
+  </refsect1>
+
+  <refsect1 id="exit_status">
+    <title>EXIT STATUS</title>
+    <para>
+      <command>dbus-update-activation-environment</command>
+      exits with status 0 on success, EX_USAGE (64) on invalid
+      command-line options, EX_OSERR (71) if unable to connect
+      to the session bus, or EX_UNAVAILABLE (69) if unable to
+      set the environment variables. Other nonzero exit codes might be
+      added in future versions.</para>
+  </refsect1>
+
+  <refsect1 id="environment">
+    <title>ENVIRONMENT</title>
+      <para><envar>DBUS_SESSION_BUS_ADDRESS</envar>,
+        <envar>XDG_RUNTIME_DIR</envar> and/or <envar>DISPLAY</envar>
+        are used to find the address of the session bus.</para>
+  </refsect1>
+
+  <refsect1 id="limitations">
+    <title>LIMITATIONS</title>
+    <para>
+      <command>dbus-daemon</command> does not provide a way to unset
+      environment variables after they have been set (although
+      <command>systemd</command> does), so
+      <command>dbus-update-activation-environment</command> does not
+      offer this functionality either.
+    </para>
+
+    <para>
+      POSIX does not specify the encoding of non-ASCII environment variable
+      names or values and allows them to contain any non-zero byte, but
+      neither <command>dbus-daemon</command> nor <command>systemd</command>
+      supports environment variables with non-UTF-8 names or values.
+      Accordingly, <command>dbus-update-activation-environment</command>
+      assumes that any name or value that appears to be valid UTF-8 is
+      intended to be UTF-8, and ignores other names or values with a warning.
+    </para>
+  </refsect1>
+
+  <refsect1 id="bugs">
+    <title>BUGS</title>
+      <para>Please send bug reports to the D-Bus bug tracker or mailing list.
+        See <ulink url="http://www.freedesktop.org/software/dbus/">http://www.freedesktop.org/software/dbus/</ulink>.</para>
+  </refsect1>
+
+  <refsect1 id="see_also">
+    <title>SEE ALSO</title>
+    <para><citerefentry><refentrytitle>dbus-daemon</refentrytitle><manvolnum>1</manvolnum></citerefentry>,
+      <citerefentry><refentrytitle>systemd</refentrytitle><manvolnum>1</manvolnum></citerefentry>,
+      the <option>import-environment</option> command of
+      <citerefentry><refentrytitle>systemctl</refentrytitle><manvolnum>1</manvolnum></citerefentry></para>
+  </refsect1>
+</refentry>

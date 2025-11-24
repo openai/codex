@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Decimal",
+  "type": [
+    "string",
+    "number"
+  ],
+  "pattern": "^-?[0-9]+(\\.[0-9]+)?([eE][0-9]+)?$"
+}

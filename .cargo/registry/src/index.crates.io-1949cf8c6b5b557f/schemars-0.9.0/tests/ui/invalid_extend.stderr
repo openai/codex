@@ -1,0 +1,35 @@
+error: expected string literal
+ --> tests/ui/invalid_extend.rs:4:19
+  |
+4 | #[schemars(extend(x))]
+  |                   ^
+
+error: expected `=`
+ --> tests/ui/invalid_extend.rs:5:22
+  |
+5 | #[schemars(extend("x"))]
+  |                      ^
+
+error: Expected extension value
+ --> tests/ui/invalid_extend.rs:6:25
+  |
+6 | #[schemars(extend("x" = ))]
+  |                         ^
+
+error: Duplicate extension key 'y'
+ --> tests/ui/invalid_extend.rs:7:32
+  |
+7 | #[schemars(extend("y" = "ok!", "y" = "duplicated!"), extend("y" = "duplicated!"))]
+  |                                ^^^
+
+error: Duplicate extension key 'y'
+ --> tests/ui/invalid_extend.rs:7:61
+  |
+7 | #[schemars(extend("y" = "ok!", "y" = "duplicated!"), extend("y" = "duplicated!"))]
+  |                                                             ^^^
+
+error: Duplicate extension key 'y'
+ --> tests/ui/invalid_extend.rs:8:19
+  |
+8 | #[schemars(extend("y" = "duplicated!"))]
+  |                   ^^^

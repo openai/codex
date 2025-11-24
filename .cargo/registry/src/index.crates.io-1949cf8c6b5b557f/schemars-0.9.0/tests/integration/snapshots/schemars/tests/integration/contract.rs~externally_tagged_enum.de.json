@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ExternalEnum",
+  "oneOf": [
+    {
+      "type": "string",
+      "enum": [
+        "WriteOnlyUnit",
+        "de_renamed_unit"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "WriteOnlyStruct": {
+          "type": "object",
+          "properties": {
+            "i": {
+              "type": "integer",
+              "format": "int"
+            }
+          },
+          "required": [
+            "i"
+          ]
+        }
+      },
+      "required": [
+        "WriteOnlyStruct"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "de_renamed_struct": {
+          "type": "object",
+          "properties": {
+            "b": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "b"
+          ]
+        }
+      },
+      "required": [
+        "de_renamed_struct"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

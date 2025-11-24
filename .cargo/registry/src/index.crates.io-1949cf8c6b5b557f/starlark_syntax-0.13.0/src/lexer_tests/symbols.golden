@@ -1,0 +1,55 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Program:
+, ; : += -= *= /= //= %= == != <= >= ** = < > - + * % / // . { } [ ] ( ) |
+,;:{}[]()|...
+
+Tokens:
+symbol ','    # ,
+symbol ';'    # ;
+symbol ':'    # :
+symbol '+='   # +=
+symbol '-='   # -=
+symbol '*='   # *=
+symbol '/='   # /=
+symbol '//='  # //=
+symbol '%='   # %=
+symbol '=='   # ==
+symbol '!='   # !=
+symbol '<='   # <=
+symbol '>='   # >=
+symbol '**'   # **
+symbol '='    # =
+symbol '<'    # <
+symbol '>'    # >
+symbol '-'    # -
+symbol '+'    # +
+symbol '*'    # *
+symbol '%'    # %
+symbol '/'    # /
+symbol '//'   # //
+symbol '.'    # .
+symbol '{'    # {
+symbol '}'    # }
+symbol '['    # [
+symbol ']'    # ]
+symbol '('    # (
+symbol ')'    # )
+symbol '|'    # |
+new line      # \n
+symbol ','    # ,
+symbol ';'    # ;
+symbol ':'    # :
+symbol '{'    # {
+symbol '}'    # }
+symbol '['    # [
+symbol ']'    # ]
+symbol '('    # (
+symbol ')'    # )
+symbol '|'    # |
+symbol '...'  # ...
+new line      #

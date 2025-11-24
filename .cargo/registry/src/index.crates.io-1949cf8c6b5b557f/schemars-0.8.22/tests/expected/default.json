@@ -1,0 +1,56 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MyStruct",
+  "type": "object",
+  "properties": {
+    "my_int": {
+      "default": 0,
+      "type": "integer",
+      "format": "int32"
+    },
+    "my_bool": {
+      "default": false,
+      "type": "boolean"
+    },
+    "my_optional_string": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "my_struct2": {
+      "default": "i:0 b:false",
+      "allOf": [
+        {
+          "$ref": "#/definitions/MyStruct2"
+        }
+      ]
+    },
+    "my_struct2_default_skipped": {
+      "$ref": "#/definitions/MyStruct2"
+    },
+    "not_serialize": {
+      "$ref": "#/definitions/NotSerialize"
+    }
+  },
+  "definitions": {
+    "MyStruct2": {
+      "type": "object",
+      "properties": {
+        "my_int": {
+          "default": 6,
+          "type": "integer",
+          "format": "int32"
+        },
+        "my_bool": {
+          "default": true,
+          "type": "boolean"
+        }
+      }
+    },
+    "NotSerialize": {
+      "type": "null"
+    }
+  }
+}

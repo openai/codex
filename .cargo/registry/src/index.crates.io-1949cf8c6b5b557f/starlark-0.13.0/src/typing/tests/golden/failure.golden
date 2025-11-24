@@ -1,0 +1,25 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Code:
+def test():
+    hash(1)
+
+Error:
+error: Expected type `str` but got `int`
+ --> filename:3:10
+  |
+3 |     hash(1)
+  |          ^
+  |
+
+Compiler typechecker (eval):
+error: Expected type `str` but got `int`
+ --> filename:3:10
+  |
+3 |     hash(1)
+  |          ^
+  |

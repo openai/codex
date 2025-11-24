@@ -1,0 +1,81 @@
+D-BUS System Activation
+
+Introduction:
+
+The dbus-daemon runs as the dbus user, and is therefore unprivileged.
+Earlier attempts [1] by David Zeuthen at launching system scripts using a
+custom DBUS protocol were reviewed, but deemed too difficult to audit, and
+also due to a multi-threaded design, too difficult to test.
+In the next few paragraphs I will outline a simpler setuid approach for
+launching daemons as a configured user.
+
+Scope:
+
+Launching programs using dbus has been a topic of interest for many months.
+This would allow simple systems to only start services that are needed,
+and that are automatically started only when first requested.
+This removes the need for an init system, and means that we can trivially
+startup services in parallel.
+This has immediate pressing need for OLPC, with a longer term evaluation for
+perhaps Fedora and RHEL.
+
+Details:
+
+Setuid applications have to used only when absolutely necessary.
+In this implementation I have an single executable,
+dbus-daemon-launch-helper, with the ownership root:dbus.
+This has the permissions 4750, i.e. u+rwx g+rx +setuid.
+It is located in /usr/libexec/ and thus is not designed to be invoked by a
+user directly.
+
+The helper must not be passed input that can be changed maliciously, and
+therefore passing a random path with user id is totally out of the question.
+In this implementation a similar idea as discussed with Davids' patch was
+taken, that to pass a single name argument to the helper.
+The service filename of "org.me.test.service" is then searched for in
+/usr/share/dbus-1/system-services or other specified directories.
+
+If applications want to be activated on the system _and_ session busses, then
+service files should be installed in both directories.
+
+A typical service file would look like:
+
+[D-BUS Service]
+Name=org.me.test
+Exec=/usr/sbin/dbus-test-server.py
+User=ftp
+
+This gives the user to switch to, and also the path of the executable.
+The service name must match that specified in the /etc/dbus-1/system.d or
+/usr/share/dbus-1/system.d conf file.
+
+Precautions taken:
+
+* Only the bus name is passed to the helper, and this is validated
+* We are super paranoid about the user that called us, and what permissions we have.
+* We clear all environment variables except for DBUS_VERBOSE which is used for debugging
+* Anything out of the ordinary causes the helper to abort.
+
+Launching services:
+
+Trivial methods on services can be called directly and the launch helper will
+start the service and execute the method on the service. The lauching of the
+service is completely transparent to the caller, e.g.:
+
+dbus-send --system --print-reply			\
+	--dest=org.freedesktop.Hal			\
+	/org/freedesktop/Hal/Manager			\
+	org.freedesktop.Hal.Manager.DeviceExists	\
+	string:/org/freedesktop/Hal/devices/computer
+
+If you wish to activate the service without calling a well known method,
+the standard dbus method StartServiceByName can be used:
+
+dbus-send --system --print-reply			\
+	--dest=org.freedesktop.DBus			\
+	/org/freedesktop/DBus				\
+	org.freedesktop.DBus.StartServiceByName		\
+	string:org.freedesktop.Hal uint32:0
+
+[1] http://lists.freedesktop.org/archives/dbus/2006-October/006096.html
+

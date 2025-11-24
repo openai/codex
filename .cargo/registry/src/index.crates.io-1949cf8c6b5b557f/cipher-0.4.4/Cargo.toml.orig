@@ -1,0 +1,32 @@
+[package]
+name = "cipher"
+description = "Traits for describing block ciphers and stream ciphers"
+version = "0.4.4"
+authors = ["RustCrypto Developers"]
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+edition = "2021"
+rust-version = "1.56"
+documentation = "https://docs.rs/cipher"
+repository = "https://github.com/RustCrypto/traits"
+keywords = ["crypto", "block-cipher", "stream-cipher", "trait"]
+categories = ["cryptography", "no-std"]
+
+[dependencies]
+crypto-common = "0.1.6"
+inout = "0.1"
+
+# optional dependencies
+blobby = { version = "0.3", optional = true }
+zeroize = { version = "1.5", optional = true, default-features = false }
+
+[features]
+alloc = []
+std = ["alloc", "crypto-common/std", "inout/std"]
+block-padding = ["inout/block-padding"]
+rand_core = ["crypto-common/rand_core"] # Enable random key and IV generation methods
+dev = ["blobby"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

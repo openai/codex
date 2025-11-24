@@ -1,0 +1,35 @@
+[package]
+name = "strum"
+version = "0.27.2"
+edition = "2021"
+authors = ["Peter Glotfelty <peter.glotfelty@microsoft.com>"]
+license = "MIT"
+
+description = "Helpful macros for working with enums and strings"
+keywords = ["enum", "string", "macros", "proc-macros"]
+categories = ["development-tools::procedural-macro-helpers", "parsing"]
+
+documentation = "https://docs.rs/strum"
+homepage = "https://github.com/Peternator7/strum"
+repository = "https://github.com/Peternator7/strum"
+readme = "../README.md"
+rust-version = "1.66.1"
+
+[dependencies]
+strum_macros = { path = "../strum_macros", optional = true, version = "0.27" }
+phf = { version = "0.12", features = ["macros"], optional = true }
+
+[dev-dependencies]
+strum_macros = { path = "../strum_macros" }
+
+[badges]
+travis-ci = { repository = "Peternator7/strum" }
+
+[features]
+default = ["std"]
+derive = ["strum_macros"]
+std = []
+
+[package.metadata.docs.rs]
+features = ["derive"]
+rustdoc-args = ["--cfg", "docsrs"]

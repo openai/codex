@@ -1,0 +1,11 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Function,Time(s),TimeRec(s),Calls,Callers,TopCaller,TopCallerCount,Allocs,AllocBytes,function,list
+"TOTALS",0.378,0.378,24,0,"",0,3,24,2,1
+"test.star.test",0.168,0.308,20,1,"module",1,1,8,0,1
+"test.star.inner",0.140,0.140,0,1,"test.star.test",1,0,0,0,0
+"module",0.070,0.378,4,1,"(root)",1,2,16,2,0

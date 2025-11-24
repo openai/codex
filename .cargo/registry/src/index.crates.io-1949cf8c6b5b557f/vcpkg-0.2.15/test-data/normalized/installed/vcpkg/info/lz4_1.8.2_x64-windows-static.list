@@ -1,0 +1,13 @@
+x64-windows-static/
+x64-windows-static/debug/
+x64-windows-static/debug/lib/
+x64-windows-static/debug/lib/lz4d.lib
+x64-windows-static/include/
+x64-windows-static/include/lz4.h
+x64-windows-static/include/lz4frame.h
+x64-windows-static/include/lz4hc.h
+x64-windows-static/lib/
+x64-windows-static/lib/lz4.lib
+x64-windows-static/share/
+x64-windows-static/share/lz4/
+x64-windows-static/share/lz4/copyright

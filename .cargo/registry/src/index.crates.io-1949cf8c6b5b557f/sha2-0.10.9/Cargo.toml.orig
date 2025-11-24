@@ -1,0 +1,44 @@
+[package]
+name = "sha2"
+version = "0.10.9"
+description = """
+Pure Rust implementation of the SHA-2 hash function family
+including SHA-224, SHA-256, SHA-384, and SHA-512.
+"""
+authors = ["RustCrypto Developers"]
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+edition = "2018"
+documentation = "https://docs.rs/sha2"
+repository = "https://github.com/RustCrypto/hashes"
+keywords = ["crypto", "sha2", "hash", "digest"]
+categories = ["cryptography", "no-std"]
+
+[dependencies]
+digest = "0.10.7"
+cfg-if = "1.0"
+
+[target.'cfg(any(target_arch = "aarch64", target_arch = "x86_64", target_arch = "x86"))'.dependencies]
+cpufeatures = "0.2"
+sha2-asm = { version = "0.6.1", optional = true }
+
+[dev-dependencies]
+digest = { version = "0.10.7", features = ["dev"] }
+hex-literal = "0.2.2"
+
+[features]
+default = ["std"]
+std = ["digest/std"]
+oid = ["digest/oid"] # Enable OID support. WARNING: Bumps MSRV to 1.57
+asm = ["sha2-asm"] # WARNING: this feature SHOULD NOT be enabled by library crates
+# Use assembly backend for LoongArch64 targets
+# WARNING: Bumps MSRV to 1.72. This feature SHOULD NOT be enabled by library crates
+loongarch64_asm = []
+compress = [] # Expose compress functions
+force-soft = [] # Force software implementation
+force-soft-compact = [] # Force compact software implementation
+asm-aarch64 = ["asm"] # DEPRECATED: use `asm` instead
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

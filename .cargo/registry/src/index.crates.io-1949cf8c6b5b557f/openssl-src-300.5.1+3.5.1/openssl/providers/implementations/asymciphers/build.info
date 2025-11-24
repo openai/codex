@@ -1,0 +1,11 @@
+# We make separate GOAL variables for each algorithm, to make it easy to
+# switch each to the Legacy provider when needed.
+
+$RSA_GOAL=../../libdefault.a ../../libfips.a
+$SM2_GOAL=../../libdefault.a
+
+SOURCE[$RSA_GOAL]=rsa_enc.c
+
+IF[{- !$disabled{"sm2"} -}]
+  SOURCE[$SM2_GOAL]=sm2_enc.c
+ENDIF

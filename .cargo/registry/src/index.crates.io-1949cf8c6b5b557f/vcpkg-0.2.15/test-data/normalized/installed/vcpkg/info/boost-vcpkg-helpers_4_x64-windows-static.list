@@ -1,0 +1,4 @@
+x64-windows-static/
+x64-windows-static/share/
+x64-windows-static/share/boost-vcpkg-helpers/
+x64-windows-static/share/boost-vcpkg-helpers/boost-modular-headers.cmake

@@ -1,0 +1,28 @@
+# @generated
+# To regenerate, run:
+# ```
+# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
+# ```
+
+Code:
+def foo(x: list.foo.bar):
+    pass
+
+Error:
+error: Operation `.foo` not supported on type `function`
+ --> filename:2:12
+  |
+2 | def foo(x: list.foo.bar):
+  |            ^^^^^^^^
+  |
+
+Approximations:
+Approximation: Unknown type = "Span { begin: Pos(12), end: Pos(24) }"
+
+Compiler typechecker (eval):
+error: Operation `.foo` not supported on type `function`
+ --> filename:2:17
+  |
+2 | def foo(x: list.foo.bar):
+  |                 ^^^
+  |

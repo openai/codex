@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TupleStruct",
+  "type": "array",
+  "prefixItems": [
+    {
+      "type": "string"
+    },
+    {
+      "type": "boolean",
+      "writeOnly": true
+    },
+    {
+      "type": "string"
+    },
+    {
+      "type": "string"
+    }
+  ],
+  "minItems": 4,
+  "maxItems": 4
+}

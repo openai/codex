@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MyStruct",
+  "type": "object",
+  "properties": {
+    "my_bool": {
+      "type": "boolean"
+    },
+    "my_int": {
+      "type": "integer",
+      "format": "int32",
+      "maximum": 10,
+      "minimum": 1
+    },
+    "my_nullable_enum": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "StringNewType": {
+              "type": "string",
+              "format": "email"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "StringNewType"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "StructVariant": {
+              "type": "object",
+              "properties": {
+                "floats": {
+                  "type": "array",
+                  "items": {
+                    "type": "number",
+                    "format": "float"
+                  },
+                  "maxItems": 100,
+                  "minItems": 1
+                }
+              },
+              "required": [
+                "floats"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "StructVariant"
+          ]
+        }
+      ]
+    }
+  },
+  "required": [
+    "my_int",
+    "my_bool",
+    "my_nullable_enum"
+  ]
+}

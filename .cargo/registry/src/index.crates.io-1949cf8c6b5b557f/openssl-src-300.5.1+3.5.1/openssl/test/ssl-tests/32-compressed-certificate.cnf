@@ -1,0 +1,244 @@
+# Generated with generate_ssl_tests.pl
+
+num_tests = 8
+
+test-0 = 0-no-compressed-certificates
+test-1 = 1-server-compressed-certificates
+test-2 = 2-client-compressed-certificates
+test-3 = 3-both-compressed-certificates
+test-4 = 4-no-compressed-certificates-mtls
+test-5 = 5-server-compressed-certificates-mtls
+test-6 = 6-client-compressed-certificates-mtls
+test-7 = 7-both-compressed-certificates-mtls
+# ===========================================================
+
+[0-no-compressed-certificates]
+ssl_conf = 0-no-compressed-certificates-ssl
+
+[0-no-compressed-certificates-ssl]
+server = 0-no-compressed-certificates-server
+client = 0-no-compressed-certificates-client
+
+[0-no-compressed-certificates-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+Options = -TxCertificateCompression,-RxCertificateCompression
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[0-no-compressed-certificates-client]
+CipherString = DEFAULT
+MinProtocol = TLSv1.3
+Options = -TxCertificateCompression,-RxCertificateCompression
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-0]
+CompressCertificates = Yes
+ExpectedResult = Success
+
+
+# ===========================================================
+
+[1-server-compressed-certificates]
+ssl_conf = 1-server-compressed-certificates-ssl
+
+[1-server-compressed-certificates-ssl]
+server = 1-server-compressed-certificates-server
+client = 1-server-compressed-certificates-client
+
+[1-server-compressed-certificates-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+Options = TxCertificateCompression,RxCertificateCompression
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[1-server-compressed-certificates-client]
+CipherString = DEFAULT
+MinProtocol = TLSv1.3
+Options = -TxCertificateCompression,-RxCertificateCompression
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-1]
+CompressCertificates = Yes
+ExpectedResult = Success
+
+
+# ===========================================================
+
+[2-client-compressed-certificates]
+ssl_conf = 2-client-compressed-certificates-ssl
+
+[2-client-compressed-certificates-ssl]
+server = 2-client-compressed-certificates-server
+client = 2-client-compressed-certificates-client
+
+[2-client-compressed-certificates-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+Options = -TxCertificateCompression,-RxCertificateCompression
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[2-client-compressed-certificates-client]
+CipherString = DEFAULT
+MinProtocol = TLSv1.3
+Options = TxCertificateCompression,RxCertificateCompression
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-2]
+CompressCertificates = Yes
+ExpectedResult = Success
+
+
+# ===========================================================
+
+[3-both-compressed-certificates]
+ssl_conf = 3-both-compressed-certificates-ssl
+
+[3-both-compressed-certificates-ssl]
+server = 3-both-compressed-certificates-server
+client = 3-both-compressed-certificates-client
+
+[3-both-compressed-certificates-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+Options = TxCertificateCompression,RxCertificateCompression
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+
+[3-both-compressed-certificates-client]
+CipherString = DEFAULT
+MinProtocol = TLSv1.3
+Options = TxCertificateCompression,RxCertificateCompression
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-3]
+CompressCertificates = Yes
+ExpectedResult = Success
+
+
+# ===========================================================
+
+[4-no-compressed-certificates-mtls]
+ssl_conf = 4-no-compressed-certificates-mtls-ssl
+
+[4-no-compressed-certificates-mtls-ssl]
+server = 4-no-compressed-certificates-mtls-server
+client = 4-no-compressed-certificates-mtls-client
+
+[4-no-compressed-certificates-mtls-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+Options = -TxCertificateCompression,-RxCertificateCompression
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/root-cert.pem
+VerifyMode = Request
+
+[4-no-compressed-certificates-mtls-client]
+Certificate = ${ENV::TEST_CERTS_DIR}/ee-client-chain.pem
+CipherString = DEFAULT
+MinProtocol = TLSv1.3
+Options = -TxCertificateCompression,-RxCertificateCompression
+PrivateKey = ${ENV::TEST_CERTS_DIR}/ee-key.pem
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-4]
+CompressCertificates = Yes
+ExpectedResult = Success
+
+
+# ===========================================================
+
+[5-server-compressed-certificates-mtls]
+ssl_conf = 5-server-compressed-certificates-mtls-ssl
+
+[5-server-compressed-certificates-mtls-ssl]
+server = 5-server-compressed-certificates-mtls-server
+client = 5-server-compressed-certificates-mtls-client
+
+[5-server-compressed-certificates-mtls-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+Options = TxCertificateCompression,RxCertificateCompression
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/root-cert.pem
+VerifyMode = Request
+
+[5-server-compressed-certificates-mtls-client]
+Certificate = ${ENV::TEST_CERTS_DIR}/ee-client-chain.pem
+CipherString = DEFAULT
+MinProtocol = TLSv1.3
+Options = -TxCertificateCompression,-RxCertificateCompression
+PrivateKey = ${ENV::TEST_CERTS_DIR}/ee-key.pem
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-5]
+CompressCertificates = Yes
+ExpectedResult = Success
+
+
+# ===========================================================
+
+[6-client-compressed-certificates-mtls]
+ssl_conf = 6-client-compressed-certificates-mtls-ssl
+
+[6-client-compressed-certificates-mtls-ssl]
+server = 6-client-compressed-certificates-mtls-server
+client = 6-client-compressed-certificates-mtls-client
+
+[6-client-compressed-certificates-mtls-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+Options = -TxCertificateCompression,-RxCertificateCompression
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/root-cert.pem
+VerifyMode = Request
+
+[6-client-compressed-certificates-mtls-client]
+Certificate = ${ENV::TEST_CERTS_DIR}/ee-client-chain.pem
+CipherString = DEFAULT
+MinProtocol = TLSv1.3
+Options = TxCertificateCompression,RxCertificateCompression
+PrivateKey = ${ENV::TEST_CERTS_DIR}/ee-key.pem
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-6]
+CompressCertificates = Yes
+ExpectedResult = Success
+
+
+# ===========================================================
+
+[7-both-compressed-certificates-mtls]
+ssl_conf = 7-both-compressed-certificates-mtls-ssl
+
+[7-both-compressed-certificates-mtls-ssl]
+server = 7-both-compressed-certificates-mtls-server
+client = 7-both-compressed-certificates-mtls-client
+
+[7-both-compressed-certificates-mtls-server]
+Certificate = ${ENV::TEST_CERTS_DIR}/servercert.pem
+CipherString = DEFAULT
+Options = TxCertificateCompression,RxCertificateCompression
+PrivateKey = ${ENV::TEST_CERTS_DIR}/serverkey.pem
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/root-cert.pem
+VerifyMode = Request
+
+[7-both-compressed-certificates-mtls-client]
+Certificate = ${ENV::TEST_CERTS_DIR}/ee-client-chain.pem
+CipherString = DEFAULT
+MinProtocol = TLSv1.3
+Options = TxCertificateCompression,RxCertificateCompression
+PrivateKey = ${ENV::TEST_CERTS_DIR}/ee-key.pem
+VerifyCAFile = ${ENV::TEST_CERTS_DIR}/rootcert.pem
+VerifyMode = Peer
+
+[test-7]
+CompressCertificates = Yes
+ExpectedResult = Success
+
+

@@ -1,0 +1,29 @@
+error[E0432]: unresolved import `crate::pub_::__DefaultProjection`
+  --> tests/ui/pin_project/import_unnamed.rs:18:9
+   |
+18 |     use crate::pub_::__DefaultProjection; //~ ERROR E0432
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `__DefaultProjection` in `pub_`
+
+error[E0432]: unresolved import `crate::pub_::__DefaultProjectionRef`
+  --> tests/ui/pin_project/import_unnamed.rs:20:9
+   |
+20 |     use crate::pub_::__DefaultProjectionRef; //~ ERROR E0432
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `__DefaultProjectionRef` in `pub_`
+
+error[E0432]: unresolved import `crate::pub_::__ReplaceProjection`
+  --> tests/ui/pin_project/import_unnamed.rs:22:9
+   |
+22 |     use crate::pub_::__ReplaceProjection; //~ ERROR E0432
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `__ReplaceProjection` in `pub_`
+
+error[E0432]: unresolved import `crate::pub_::__ReplaceProjectionOwned`
+  --> tests/ui/pin_project/import_unnamed.rs:24:9
+   |
+24 |     use crate::pub_::__ReplaceProjectionOwned; //~ ERROR E0432
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `__ReplaceProjectionOwned` in `pub_`
+
+error[E0432]: unresolved import `crate::pub_::__ReplaceProjectionRef`
+  --> tests/ui/pin_project/import_unnamed.rs:26:9
+   |
+26 |     use crate::pub_::__ReplaceProjectionRef; //~ ERROR E0432
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `__ReplaceProjectionRef` in `pub_`

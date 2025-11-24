@@ -1,0 +1,9 @@
+# @generated
+# To regenerate, run:
+# ```
+# ALLOCATIVE_REGENERATE_TESTS=1 cargo test -p allocative
+# ```
+ArcInner 64
+ArcInner;allocative::impls::std::sync::tests::CacheLine 63
+ArcInner;allocative::impls::std::sync::tests::CacheLine;0;u8 1
+alloc::sync::Arc<allocative::impls::std::sync::tests::CacheLine>;ptr 8

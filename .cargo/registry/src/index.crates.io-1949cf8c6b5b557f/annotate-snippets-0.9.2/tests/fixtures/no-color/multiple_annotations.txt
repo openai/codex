@@ -1,0 +1,14 @@
+    |
+ 96 | fn add_title_line(result: &mut Vec<String>, main_annotation: Option<&Annotation>) {
+ 97 |     if let Some(annotation) = main_annotation {
+    |                 ^^^^^^^^^^ Variable defined here
+ 98 |         result.push(format_title_line(
+ 99 |             &annotation.annotation_type,
+    |              ^^^^^^^^^^ Referenced here
+100 |             None,
+101 |             &annotation.label,
+    |              ^^^^^^^^^^ Referenced again here
+102 |         ));
+103 |     }
+104 | }
+    |

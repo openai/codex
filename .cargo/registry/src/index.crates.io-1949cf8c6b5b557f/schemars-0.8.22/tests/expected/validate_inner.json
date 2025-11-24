@@ -1,0 +1,74 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Struct",
+  "type": "object",
+  "required": [
+    "array_str_length",
+    "slice_str_contains",
+    "vec_i32_range",
+    "vec_str_length",
+    "vec_str_length2",
+    "vec_str_regex",
+    "vec_str_url"
+  ],
+  "properties": {
+    "array_str_length": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 100,
+        "minLength": 5
+      },
+      "maxItems": 2,
+      "minItems": 2
+    },
+    "slice_str_contains": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "substring\\.\\.\\."
+      }
+    },
+    "vec_i32_range": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "int32",
+        "maximum": 10.0,
+        "minimum": -10.0
+      }
+    },
+    "vec_str_length": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 100,
+        "minLength": 1
+      }
+    },
+    "vec_str_length2": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 100,
+        "minLength": 1
+      },
+      "maxItems": 3,
+      "minItems": 1
+    },
+    "vec_str_regex": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[Hh]ello\\b"
+      }
+    },
+    "vec_str_url": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uri"
+      }
+    }
+  }
+}

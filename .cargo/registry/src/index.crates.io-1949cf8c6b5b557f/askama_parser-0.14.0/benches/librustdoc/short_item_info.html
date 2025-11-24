@@ -1,0 +1,23 @@
+{% match self %}
+    {% when Self::Deprecation with { message } %}
+        <div class="stab deprecated"> {# #}
+            <span class="emoji">👎</span> {# #}
+            <span>{{message|safe}}</span> {# #}
+        </div> {# #}
+    {% when Self::Unstable with { feature, tracking } %}
+        <div class="stab unstable"> {# #}
+            <span class="emoji">🔬</span> {# #}
+            <span> {# #}
+                This is a nightly-only experimental API. ({# #}
+                <code>{{feature}}</code> {# #}
+                {% match tracking %}
+                    {% when Some with ((url, num)) %}
+                        &nbsp;<a href="{{url}}{{num}}">#{{num}}</a> {# #}
+                    {% when None %}
+                {% endmatch %}
+                ) {# #}
+            </span> {# #}
+        </div> {# #}
+    {% when Self::Portability with { message } %}
+        <div class="stab portability">{{message|safe}}</div> {# #}
+{% endmatch %}

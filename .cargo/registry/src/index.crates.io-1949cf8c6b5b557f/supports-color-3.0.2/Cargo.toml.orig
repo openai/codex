@@ -1,0 +1,17 @@
+[package]
+name = "supports-color"
+version = "3.0.2"
+authors = ["Kat Marchán <kzm@zkat.tech>"]
+description = "Detects whether a terminal supports color, and gives details about that support."
+categories = ["command-line-interface"]
+repository = "https://github.com/zkat/supports-color"
+documentation = "https://docs.rs/supports-color"
+license = "Apache-2.0"
+readme = "README.md"
+edition = "2018"
+rust-version = "1.70.0"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+is_ci = "1.2.0"

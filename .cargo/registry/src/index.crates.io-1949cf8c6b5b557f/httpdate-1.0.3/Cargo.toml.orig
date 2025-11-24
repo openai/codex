@@ -1,0 +1,18 @@
+[package]
+name = "httpdate"
+version = "1.0.3"
+authors = ["Pyfisch <pyfisch@posteo.org>"]
+license = "MIT OR Apache-2.0"
+description = "HTTP date parsing and formatting"
+keywords = ["http", "date", "time", "simple", "timestamp"]
+readme = "README.md"
+repository = "https://github.com/pyfisch/httpdate"
+edition = "2021"
+rust-version = "1.56"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "benchmarks"
+harness = false

@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OuterEnum",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "InnerStruct"
+      ],
+      "properties": {
+        "InnerStruct": {
+          "$ref": "#/definitions/InnerStruct"
+        }
+      },
+      "additionalProperties": false
+    }
+  ],
+  "definitions": {
+    "InnerStruct": {
+      "type": "object",
+      "required": [
+        "x"
+      ],
+      "properties": {
+        "x": {
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    }
+  }
+}

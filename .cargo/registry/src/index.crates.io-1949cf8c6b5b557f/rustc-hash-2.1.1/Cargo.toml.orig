@@ -1,0 +1,19 @@
+[package]
+name = "rustc-hash"
+version = "2.1.1"
+authors = ["The Rust Project Developers"]
+description = "A speedy, non-cryptographic hashing algorithm used by rustc"
+license = "Apache-2.0 OR MIT"
+readme = "README.md"
+keywords = ["hash", "hasher", "fxhash", "rustc"]
+repository = "https://github.com/rust-lang/rustc-hash"
+edition = "2021"
+
+[features]
+default = ["std"]
+std = []
+nightly = []
+rand = ["dep:rand", "std"]
+
+[dependencies]
+rand = { version = "0.8", optional = true }

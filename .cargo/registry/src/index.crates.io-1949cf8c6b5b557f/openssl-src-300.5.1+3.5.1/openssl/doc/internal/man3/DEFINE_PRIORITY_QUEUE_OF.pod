@@ -1,0 +1,125 @@
+=pod
+
+=head1 NAME
+
+DEFINE_PRIORITY_QUEUE_OF, PRIORITY_QUEUE_OF,
+ossl_pqueue_TYPE_num,
+ossl_pqueue_TYPE_new, ossl_pqueue_TYPE_free, ossl_pqueue_TYPE_pop_free,
+ossl_pqueue_TYPE_reserve,
+ossl_pqueue_TYPE_push, ossl_pqueue_TYPE_peek,
+ossl_pqueue_TYPE_pop, ossl_pqueue_TYPE_remove
+- priority queue container
+
+=head1 SYNOPSIS
+
+=for openssl generic
+
+ #include "internal/priority_queue.h"
+
+ PRIORITY_QUEUE_OF(type);
+
+ DEFINE_PRIORITY_QUEUE_OF(NAME, TYPE)
+
+ size_t ossl_pqueue_TYPE_num(const PRIORITY_QUEUE_OF(type) *pq);
+ PRIORITY_QUEUE_OF(type) *ossl_pqueue_TYPE_new(int (*compare)(const type *,
+                                                              const type *));
+ void ossl_pqueue_TYPE_free(PRIORITY_QUEUE_OF(type) *pq);
+ void ossl_pqueue_TYPE_pop_free(PRIORITY_QUEUE_OF(type) *pq,
+                                void (*free_func)(type *));
+ int ossl_pqueue_TYPE_reserve(PRIORITY_QUEUE_OF(type) *pq, size_t n);
+ int ossl_pqueue_TYPE_push(PRIORITY_QUEUE_OF(type) *pq, type *data,
+                           size_t *elem);
+ type *ossl_pqueue_TYPE_peek(const PRIORITY_QUEUE_OF(type) *pq);
+ type *ossl_pqueue_TYPE_pop(const PRIORITY_QUEUE_OF(type) *pq);
+ type *ossl_pqueue_TYPE_remove(const PRIORITY_QUEUE_OF(type) *pq, size_t elem);
+
+=head1 DESCRIPTION
+
+Create a type safe priority queue container.  These macros define typesafe
+inline functions that wrap internal routines. In the description here,
+B<I<TYPE>> is used as a placeholder for any datatype.
+
+The PRIORITY_QUEUE_OF() macro returns the name for a priority queue
+of the specified B<I<TYPE>>.  This is an opaque pointer to a structure
+declaration.
+
+DEFINE_PRIORITY_QUEUE_OF() creates a set of functions for a
+priority queue of B<I<TYPE>> elements.  The type is represented by
+B<PRIORITY_QUEUE_OF>(B<I<TYPE>>) and each function name begins with
+B<ossl_pqueue_I<TYPE>_>.
+
+B<ossl_pqueue_I<TYPE>_num>() returns the number of elements in I<pq>
+or B<0> if I<pq> is NULL.
+
+B<ossl_pqueue_I<TYPE>_new>() allocates a new priority queue using
+comparison function I<compare>. It is an error for I<compare> to be NULL.
+The I<compare> function is called to order two elements, it should return
+B<-1> if the first element is less than the second, B<0> if they are
+equal and B<1> otherwise.
+
+B<ossl_pqueue_I<TYPE>_free>() frees up the I<pq> structure. It does I<not>
+free up any elements of I<pq>. After this call I<pq> is no longer valid.
+
+B<ossl_pqueue_I<TYPE>_pop_free>() frees up all elements of I<pq> and I<pq>
+itself. The free function freefunc() is called on each element to free it.
+After this call I<pq> is no longer valid.
+
+B<ossl_pqueue_I<TYPE>_reserve>() allocates additional memory in the I<pq>
+structure such that the next I<n> calls to B<ossl_pqueue_I<TYPE>_push>()
+will not fail or cause memory to be allocated or reallocated. If I<n>
+is zero, no additional space is reserved. On error I<pq> is unchanged.
+
+B<ossl_pqueue_I<TYPE>_push>() inserts a new element with value I<data>
+into the priority queue I<pq>. If not NULL, the function returns an index
+in B<*elem> which can be used to identify the element when calling
+B<ossl_pqueue_I<TYPE>_remove>().
+
+B<ossl_pqueue_I<TYPE>_peek>() returns the data from the smallest element
+in I<pq>.
+
+B<ossl_pqueue_I<TYPE>_pop>() returns the data from the smallest element
+in I<pq> and removes that element from the priority queue.
+
+B<ossl_pqueue_I<TYPE>_remove>() returns and removes the specified element
+I<elem> from I<pq>. The index I<elem> must have been obtained from
+an earlier call made to B<ossl_pqueue_I<TYPE>_push>() with the same I<pq>
+argument.  The index I<elem> is invalidated by this function.  It is undefined
+what happens if an attempt to remove an element that isn't in the queue is
+made.
+
+=head1 RETURN VALUES
+
+B<ossl_pqueue_I<TYPE>_num>() returns the number of elements in the
+priority queue or B<0> if the passed priority queue is NULL.
+
+B<ossl_pqueue_I<TYPE>_new>() returns an empty priority queue or NULL if
+an error occurs.
+
+B<ossl_pqueue_I<TYPE>_free>() and B<ossl_pqueue_I<TYPE>_pop_free>()
+do not return values.
+
+B<ossl_pqueue_I<TYPE>_reserve>() returns B<1> on successful allocation
+of the required memory or B<0> on error.
+
+B<ossl_pqueue_I<TYPE>_push>() returns B<1> on success or B<0> on error.
+
+B<ossl_pqueue_I<TYPE>_peek>() and B<ossl_pqueue_I<TYPE>_pop>() return
+the data from the smallest element in the priority queue.
+
+B<ossl_pqueue_I<TYPE>_remove>() returns the data from the specified
+element.
+
+=head1 HISTORY
+
+The functions described here were all added in OpenSSL 3.2.
+
+=head1 COPYRIGHT
+
+Copyright 2022 The OpenSSL Project Authors. All Rights Reserved.
+
+Licensed under the Apache License 2.0 (the "License").  You may not use
+this file except in compliance with the License.  You can obtain a copy
+in the file LICENSE in the source distribution or at
+L<https://www.openssl.org/source/license.html>.
+
+=cut

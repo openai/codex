@@ -1,0 +1,93 @@
+name: Main workflow
+on:
+  push:
+  pull_request:
+
+jobs:
+  # Run the `rustfmt` code formatter
+  rustfmt:
+    name: Rustfmt [Formatter]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup | Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup | Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt
+
+      - name: Build | Format
+        run: cargo fmt --all -- --check
+
+  # Run the `clippy` linting tool
+  clippy:
+    name: Clippy [Linter]
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Setup | Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup | Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: clippy
+
+      - name: Build | Lint
+        run: cargo clippy --workspace --all-targets --all-features -- -Dwarnings
+      - name: Build | Lint (no features)
+        run: cargo clippy --workspace --all-targets -- -Dwarnings
+
+  # Ensure that the project could be successfully compiled
+  cargo_check:
+    name: Compile
+    strategy:
+      matrix:
+        target: [x86_64-unknown-linux-musl, wasm32-wasi]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup | Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup | Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+
+      - name: Build | Check
+        run: cargo check --workspace --target ${{ matrix.target }}
+
+  # Run tests on Linux, macOS, and Windows
+  # On both Rust stable and Rust nightly
+  test:
+    name: Test Suite
+    runs-on: ${{ matrix.os }}
+    needs: cargo_check # First check then run expansive tests
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        rust: ['1.70', stable, nightly]
+    steps:
+      - name: Setup | Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup | Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust }}
+
+      # Run the ignored tests that expect the above setup
+      - name: Build | Test
+        run: cargo test --workspace --all-features -- --include-ignored
+  cargo-deny:
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v4
+    - uses: EmbarkStudios/cargo-deny-action@v1

@@ -1,0 +1,7 @@
+prefix=@prefix@
+datarootdir=@datarootdir@
+pkgdatadir=${pc_sysrootdir}@datadir@/wlr-protocols
+
+Name: wlroots Wayland protocols
+Description: Wayland protocol files
+Version: 1.0

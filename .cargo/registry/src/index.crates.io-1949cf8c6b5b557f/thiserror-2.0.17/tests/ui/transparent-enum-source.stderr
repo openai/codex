@@ -1,0 +1,5 @@
+error: transparent variant can't contain #[source]
+ --> tests/ui/transparent-enum-source.rs:6:11
+  |
+6 |     Other(#[source] anyhow::Error),
+  |           ^^^^^^^^^

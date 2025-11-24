@@ -1,0 +1,59 @@
+[package]
+name = "notify"
+version = "8.2.0"
+description = "Cross-platform filesystem notification library"
+documentation = "https://docs.rs/notify"
+readme = "../README.md"
+license = "CC0-1.0"
+keywords = ["events", "filesystem", "notify", "watch"]
+categories = ["filesystem"]
+authors = [
+  "Félix Saparelli <me@passcod.name>",
+  "Daniel Faust <hessijames@gmail.com>",
+  "Aron Heinecke <Ox0p54r36@t-online.de>"
+]
+rust-version.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[features]
+default = ["macos_fsevent"]
+serde = ["notify-types/serde"]
+macos_kqueue = ["kqueue", "mio"]
+macos_fsevent = ["fsevent-sys"]
+serialization-compat-6 = ["notify-types/serialization-compat-6"]
+
+[dependencies]
+notify-types.workspace = true
+crossbeam-channel = { workspace = true, optional = true }
+flume = { workspace = true, optional = true }
+libc.workspace = true
+log.workspace = true
+walkdir.workspace = true
+
+[target.'cfg(any(target_os="linux", target_os="android"))'.dependencies]
+inotify = { workspace = true, default-features = false }
+mio.workspace = true
+
+[target.'cfg(target_os="macos")'.dependencies]
+bitflags.workspace = true
+fsevent-sys = { workspace = true, optional = true }
+kqueue = { workspace = true, optional = true }
+mio = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_System_Threading", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_Security", "Win32_System_WindowsProgramming", "Win32_System_IO"] }
+
+[target.'cfg(any(target_os="freebsd", target_os="openbsd", target_os = "netbsd", target_os = "dragonflybsd", target_os = "ios"))'.dependencies]
+kqueue.workspace = true
+mio.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
+nix.workspace = true
+insta.workspace = true
+
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+trash.workspace = true

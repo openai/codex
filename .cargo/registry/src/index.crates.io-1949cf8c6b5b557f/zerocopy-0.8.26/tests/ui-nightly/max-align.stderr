@@ -1,0 +1,5 @@
+error[E0589]: invalid `repr(align)` attribute: larger than 2^29
+  --> tests/ui-nightly/max-align.rs:96:17
+   |
+96 | #[repr(C, align(1073741824))]
+   |                 ^^^^^^^^^^

@@ -1,0 +1,31 @@
+error: future cannot be sent between threads safely
+  --> tests/ui/send-not-implemented.rs:8:5
+   |
+ 8 |     async fn test(&self) {
+   |     ^^^^^ future created by async block is not `Send`
+   |
+   = help: within `{async block@$DIR/tests/ui/send-not-implemented.rs:8:5: 8:10}`, the trait `Send` is not implemented for `std::sync::MutexGuard<'_, ()>`
+note: future is not `Send` as this value is used across an await
+  --> tests/ui/send-not-implemented.rs:11:13
+   |
+10 |         let _guard = mutex.lock().unwrap();
+   |             ------ has type `std::sync::MutexGuard<'_, ()>` which is not `Send`
+11 |         f().await;
+   |             ^^^^^ await occurs here, with `_guard` maybe used later
+   = note: required for the cast from `Pin<Box<{async block@$DIR/tests/ui/send-not-implemented.rs:8:5: 8:10}>>` to `Pin<Box<dyn Future<Output = ()> + Send>>`
+
+error: future cannot be sent between threads safely
+  --> tests/ui/send-not-implemented.rs:14:5
+   |
+14 |     async fn test_ret(&self) -> bool {
+   |     ^^^^^ future created by async block is not `Send`
+   |
+   = help: within `{async block@$DIR/tests/ui/send-not-implemented.rs:14:5: 14:10}`, the trait `Send` is not implemented for `std::sync::MutexGuard<'_, ()>`
+note: future is not `Send` as this value is used across an await
+  --> tests/ui/send-not-implemented.rs:17:13
+   |
+16 |         let _guard = mutex.lock().unwrap();
+   |             ------ has type `std::sync::MutexGuard<'_, ()>` which is not `Send`
+17 |         f().await;
+   |             ^^^^^ await occurs here, with `_guard` maybe used later
+   = note: required for the cast from `Pin<Box<{async block@$DIR/tests/ui/send-not-implemented.rs:14:5: 14:10}>>` to `Pin<Box<dyn Future<Output = bool> + Send>>`

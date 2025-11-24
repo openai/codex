@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OneOrMany(int32,PreferOne)",
+  "anyOf": [
+    {
+      "type": "integer",
+      "format": "int32"
+    },
+    {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "int32"
+      }
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+[package]
+name = "askama_parser"
+version = "0.14.0"
+description = "Parser for Askama templates"
+documentation = "https://docs.rs/askama"
+keywords = ["markup", "template", "jinja2", "html"]
+categories = ["template-engine"]
+homepage = "https://github.com/askama-rs/askama"
+repository = "https://github.com/askama-rs/askama"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+edition = "2021"
+rust-version = "1.83"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--generate-link-to-definition", "--cfg=docsrs"]
+
+[[bench]]
+name = "from_str"
+harness = false
+
+[dependencies]
+memchr = "2"
+serde = { version = "1.0", optional = true }
+serde_derive = { version = "1.0", optional = true }
+winnow = "0.7.0"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[features]
+config = ["dep:serde", "dep:serde_derive"]

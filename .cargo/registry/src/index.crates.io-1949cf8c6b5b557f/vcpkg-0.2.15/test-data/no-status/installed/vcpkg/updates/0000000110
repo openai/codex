@@ -1,0 +1,6 @@
+Package: zlib
+Version: 1.2.11-3
+Architecture: x64-windows
+Multi-Arch: same
+Description: A compression library
+Status: install ok half-installed

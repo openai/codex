@@ -1,0 +1,6 @@
+build/
+testglue/Cargo.lock
+testglue/target/
+test-ios-app.xcodeproj/xcuserdata/
+test-ios-app.xcodeproj/project.xcworkspace/
+

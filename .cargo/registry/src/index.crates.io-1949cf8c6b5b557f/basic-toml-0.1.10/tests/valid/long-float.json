@@ -1,0 +1,4 @@
+{
+    "longpi": {"type": "float", "value": "3.141592653589793"},
+    "neglongpi": {"type": "float", "value": "-3.141592653589793"}
+}

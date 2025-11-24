@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Struct",
+  "type": "object",
+  "required": [
+    "bar",
+    "foo"
+  ],
+  "properties": {
+    "foo": {
+      "description": "This is a document",
+      "type": "integer",
+      "format": "int32"
+    },
+    "bar": {
+      "type": "boolean"
+    }
+  }
+}

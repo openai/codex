@@ -1,0 +1,200 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Adjacent",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "t"
+      ],
+      "properties": {
+        "t": {
+          "type": "string",
+          "enum": [
+            "UnitOne"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "c",
+        "t"
+      ],
+      "properties": {
+        "c": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "t": {
+          "type": "string",
+          "enum": [
+            "StringMap"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "c",
+        "t"
+      ],
+      "properties": {
+        "c": {
+          "$ref": "#/definitions/UnitStruct"
+        },
+        "t": {
+          "type": "string",
+          "enum": [
+            "UnitStructNewType"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "c",
+        "t"
+      ],
+      "properties": {
+        "c": {
+          "$ref": "#/definitions/Struct"
+        },
+        "t": {
+          "type": "string",
+          "enum": [
+            "StructNewType"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "c",
+        "t"
+      ],
+      "properties": {
+        "c": {
+          "type": "object",
+          "required": [
+            "bar",
+            "foo"
+          ],
+          "properties": {
+            "bar": {
+              "type": "boolean"
+            },
+            "foo": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          "additionalProperties": false
+        },
+        "t": {
+          "type": "string",
+          "enum": [
+            "Struct"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "c",
+        "t"
+      ],
+      "properties": {
+        "c": {
+          "type": "array",
+          "items": [
+            {
+              "type": "integer",
+              "format": "int32"
+            },
+            {
+              "type": "boolean"
+            }
+          ],
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "t": {
+          "type": "string",
+          "enum": [
+            "Tuple"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "t"
+      ],
+      "properties": {
+        "t": {
+          "type": "string",
+          "enum": [
+            "UnitTwo"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "c",
+        "t"
+      ],
+      "properties": {
+        "c": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "t": {
+          "type": "string",
+          "enum": [
+            "WithInt"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  ],
+  "definitions": {
+    "Struct": {
+      "type": "object",
+      "required": [
+        "bar",
+        "foo"
+      ],
+      "properties": {
+        "bar": {
+          "type": "boolean"
+        },
+        "foo": {
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    },
+    "UnitStruct": {
+      "type": "null"
+    }
+  }
+}

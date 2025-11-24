@@ -1,0 +1,15 @@
+pretty = proc(u) {
+  return ~(floor(u*1000)/1000);
+};
+
+f_cotf = x/tan(x);
+
+Q = fpminimax(f_cotf, [|0, 2, 4, 6, 8|], [|1, D...|], [0, pi/32]);
+
+err_p = -log2(dirtyinfnorm(Q-f_cotf, [0, pi/32]));
+display = decimal;
+print (Q);
+display = decimal;
+print ("absolute error:", pretty(err_p));
+
+for i from 0 to degree(Q) by 2 do printdouble(coeff(Q, i));
