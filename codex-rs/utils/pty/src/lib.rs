@@ -1,19 +1,19 @@
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::Path;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use anyhow::Result;
-use portable_pty::native_pty_system;
 use portable_pty::CommandBuilder;
 use portable_pty::PtySize;
+use portable_pty::native_pty_system;
+use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
-use tokio::sync::Mutex as TokioMutex;
 use tokio::task::JoinHandle;
 
 #[derive(Debug)]
@@ -75,26 +75,26 @@ impl ExecCommandSession {
 
 impl Drop for ExecCommandSession {
     fn drop(&mut self) {
-        if let Ok(mut killer_opt) = self.killer.lock() {
-            if let Some(mut killer) = killer_opt.take() {
-                let _ = killer.kill();
-            }
+        if let Ok(mut killer_opt) = self.killer.lock()
+            && let Some(mut killer) = killer_opt.take()
+        {
+            let _ = killer.kill();
         }
 
-        if let Ok(mut h) = self.reader_handle.lock() {
-            if let Some(handle) = h.take() {
-                handle.abort();
-            }
+        if let Ok(mut h) = self.reader_handle.lock()
+            && let Some(handle) = h.take()
+        {
+            handle.abort();
         }
-        if let Ok(mut h) = self.writer_handle.lock() {
-            if let Some(handle) = h.take() {
-                handle.abort();
-            }
+        if let Ok(mut h) = self.writer_handle.lock()
+            && let Some(handle) = h.take()
+        {
+            handle.abort();
         }
-        if let Ok(mut h) = self.wait_handle.lock() {
-            if let Some(handle) = h.take() {
-                handle.abort();
-            }
+        if let Ok(mut h) = self.wait_handle.lock()
+            && let Some(handle) = h.take()
+        {
+            handle.abort();
         }
     }
 }

@@ -1,8 +1,8 @@
 [package]
-name = "codex-tui"
-version.workspace = true
 edition.workspace = true
 license.workspace = true
+name = "codex-tui"
+version.workspace = true
 
 [[bin]]
 name = "codex-tui"
@@ -31,11 +31,7 @@ codex-ansi-escape = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-backend-client = { workspace = true }
-codex-common = { workspace = true, features = [
-    "cli",
-    "elapsed",
-    "sandbox_summary",
-] }
+codex-common = { workspace = true, features = ["cli", "elapsed", "sandbox_summary"] }
 codex-core = { workspace = true }
 codex-feedback = { workspace = true }
 codex-file-search = { workspace = true }

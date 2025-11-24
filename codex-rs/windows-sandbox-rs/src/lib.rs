@@ -9,16 +9,16 @@ windows_modules!(acl, allow, audit, cap, env, logging, policy, token, winutil);
 #[cfg(target_os = "windows")]
 pub use audit::apply_world_writable_scan_and_denies;
 #[cfg(target_os = "windows")]
-pub use windows_impl::run_windows_sandbox_capture;
-#[cfg(target_os = "windows")]
 pub use windows_impl::CaptureResult;
+#[cfg(target_os = "windows")]
+pub use windows_impl::run_windows_sandbox_capture;
 
+#[cfg(not(target_os = "windows"))]
+pub use stub::CaptureResult;
 #[cfg(not(target_os = "windows"))]
 pub use stub::apply_world_writable_scan_and_denies;
 #[cfg(not(target_os = "windows"))]
 pub use stub::run_windows_sandbox_capture;
-#[cfg(not(target_os = "windows"))]
-pub use stub::CaptureResult;
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
@@ -26,8 +26,8 @@ mod windows_impl {
     use super::acl::add_deny_write_ace;
     use super::acl::allow_null_device;
     use super::acl::revoke_ace;
-    use super::allow::compute_allow_paths;
     use super::allow::AllowDenyPaths;
+    use super::allow::compute_allow_paths;
     use super::cap::cap_sid_file;
     use super::cap::load_or_create_cap_sids;
     use super::env::apply_no_network_to_env;
@@ -37,8 +37,8 @@ mod windows_impl {
     use super::logging::log_failure;
     use super::logging::log_start;
     use super::logging::log_success;
-    use super::policy::parse_policy;
     use super::policy::SandboxPolicy;
+    use super::policy::parse_policy;
     use super::token::convert_string_sid_to_sid;
     use super::winutil::format_last_error;
     use super::winutil::to_wide;
@@ -52,18 +52,18 @@ mod windows_impl {
     use std::ptr;
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::Foundation::GetLastError;
-    use windows_sys::Win32::Foundation::SetHandleInformation;
     use windows_sys::Win32::Foundation::HANDLE;
     use windows_sys::Win32::Foundation::HANDLE_FLAG_INHERIT;
+    use windows_sys::Win32::Foundation::SetHandleInformation;
     use windows_sys::Win32::System::Pipes::CreatePipe;
+    use windows_sys::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
     use windows_sys::Win32::System::Threading::CreateProcessAsUserW;
     use windows_sys::Win32::System::Threading::GetExitCodeProcess;
-    use windows_sys::Win32::System::Threading::WaitForSingleObject;
-    use windows_sys::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
     use windows_sys::Win32::System::Threading::INFINITE;
     use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
     use windows_sys::Win32::System::Threading::STARTF_USESTDHANDLES;
     use windows_sys::Win32::System::Threading::STARTUPINFOW;
+    use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
     type PipeHandles = ((HANDLE, HANDLE), (HANDLE, HANDLE), (HANDLE, HANDLE));
 
@@ -464,8 +464,8 @@ mod windows_impl {
 
 #[cfg(not(target_os = "windows"))]
 mod stub {
-    use anyhow::bail;
     use anyhow::Result;
+    use anyhow::bail;
     use codex_protocol::protocol::SandboxPolicy;
     use std::collections::HashMap;
     use std::path::Path;
