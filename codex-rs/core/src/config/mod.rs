@@ -70,7 +70,7 @@ pub const GPT_5_CODEX_MEDIUM_MODEL: &str = "gpt-5.1-codex";
 /// the context window.
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
-pub(crate) const CONFIG_TOML_FILE: &str = "config.toml";
+pub const CONFIG_TOML_FILE: &str = "config.toml";
 
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]

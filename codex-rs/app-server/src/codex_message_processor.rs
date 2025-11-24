@@ -472,6 +472,11 @@ impl CodexMessageProcessor {
             ClientRequest::ExecOneOffCommand { request_id, params } => {
                 self.exec_one_off_command(request_id, params).await;
             }
+            ClientRequest::ConfigRead { .. }
+            | ClientRequest::ConfigValueWrite { .. }
+            | ClientRequest::ConfigBatchWrite { .. } => {
+                warn!("Config request reached CodexMessageProcessor unexpectedly");
+            }
             ClientRequest::GetAccountRateLimits {
                 request_id,
                 params: _,
