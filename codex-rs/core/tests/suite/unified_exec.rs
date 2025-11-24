@@ -26,9 +26,11 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use core_test_support::wait_for_event_with_timeout;
 use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
+use tokio::time::Duration;
 
 fn extract_output_text(item: &Value) -> Option<&str> {
     item.get("output").and_then(|value| match value {
@@ -814,7 +816,7 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
 
     let call_id = "uexec-metadata";
     let args = serde_json::json!({
-        "cmd": "printf 'abcdefghijklmnopqrstuvwxyz'",
+        "cmd": "printf 'token one token two token three token four token five token six token seven'",
         "yield_time_ms": 500,
         "max_output_tokens": 6,
     });
@@ -897,6 +899,98 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
     assert!(
         original_tokens > 6,
         "original token count should exceed max_output_tokens"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_respects_early_exit_notifications() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::UnifiedExec);
+    });
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let call_id = "uexec-early-exit";
+    let args = serde_json::json!({
+        "cmd": "sleep 0.05",
+        "yield_time_ms": 31415,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    mount_sse_sequence(&server, responses).await;
+
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "watch early exit timing".into(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+
+    let requests = server.received_requests().await.expect("recorded requests");
+    assert!(!requests.is_empty(), "expected at least one POST request");
+
+    let bodies = requests
+        .iter()
+        .map(|req| req.body_json::<Value>().expect("request json"))
+        .collect::<Vec<_>>();
+
+    let outputs = collect_tool_outputs(&bodies)?;
+    let output = outputs
+        .get(call_id)
+        .expect("missing early exit unified_exec output");
+
+    assert!(
+        output.session_id.is_none(),
+        "short-lived process should not keep a session alive"
+    );
+    assert_eq!(
+        output.exit_code,
+        Some(0),
+        "short-lived process should exit successfully"
+    );
+
+    let wall_time = output.wall_time_seconds;
+    assert!(
+        wall_time < 0.75,
+        "wall_time should reflect early exit rather than the full yield time; got {wall_time}"
+    );
+    assert!(
+        output.output.is_empty(),
+        "sleep command should not emit output, got {:?}",
+        output.output
     );
 
     Ok(())
@@ -1295,7 +1389,7 @@ async fn unified_exec_streams_after_lagged_output() -> Result<()> {
 import sys
 import time
 
-chunk = b'x' * (1 << 20)
+chunk = b'long content here to trigger truncation' * (1 << 10)
 for _ in range(4):
     sys.stdout.buffer.write(chunk)
     sys.stdout.flush()
@@ -1365,8 +1459,13 @@ PY
             summary: ReasoningSummary::Auto,
         })
         .await?;
-
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    // This is a worst case scenario for the truncate logic.
+    wait_for_event_with_timeout(
+        &codex,
+        |event| matches!(event, EventMsg::TaskComplete(_)),
+        Duration::from_secs(10),
+    )
+    .await;
 
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(!requests.is_empty(), "expected at least one POST request");
@@ -1523,14 +1622,15 @@ async fn unified_exec_formats_large_output_summary() -> Result<()> {
     } = builder.build(&server).await?;
 
     let script = r#"python3 - <<'PY'
-for i in range(300):
-    print(f"line-{i}")
+import sys
+sys.stdout.write("token token \n" * 5000)
 PY
 "#;
 
     let call_id = "uexec-large-output";
     let args = serde_json::json!({
         "cmd": script,
+        "max_output_tokens": 100,
         "yield_time_ms": 500,
     });
 
@@ -1577,15 +1677,14 @@ PY
     let outputs = collect_tool_outputs(&bodies)?;
     let large_output = outputs.get(call_id).expect("missing large output summary");
 
-    assert_regex_match(
-        concat!(
-            r"(?s)",
-            r"line-0.*?",
-            r"\[\.{3} omitted \d+ of \d+ lines \.{3}\].*?",
-            r"line-299",
-        ),
-        &large_output.output,
-    );
+    let output_text = large_output.output.replace("\r\n", "\n");
+    let truncated_pattern = r"(?s)^Total output lines: \d+\n\n(token token \n){5,}.*…\d+ tokens truncated….*(token token \n){5,}$";
+    assert_regex_match(truncated_pattern, &output_text);
+
+    let original_tokens = large_output
+        .original_token_count
+        .expect("missing original_token_count for large output summary");
+    assert!(original_tokens > 0);
 
     Ok(())
 }

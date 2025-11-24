@@ -64,7 +64,7 @@ Notes:
 The model that Codex should use.
 
 ```toml
-model = "gpt-5.1"  # overrides the default ("gpt-5.1-codex" on macOS/Linux, "gpt-5.1" on Windows)
+model = "gpt-5.1"  # overrides the default ("gpt-5.1-codex-max" across platforms)
 ```
 
 ### model_providers
@@ -191,7 +191,7 @@ model = "mistral"
 
 ### model_reasoning_effort
 
-If the selected model is known to support reasoning (for example: `o3`, `o4-mini`, `codex-*`, `gpt-5.1`, `gpt-5.1-codex`), reasoning is enabled by default when using the Responses API. As explained in the [OpenAI Platform documentation](https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning), this can be set to:
+If the selected model is known to support reasoning (for example: `o3`, `o4-mini`, `codex-*`, `gpt-5.1-codex-max`, `gpt-5.1`, `gpt-5.1-codex`), reasoning is enabled by default when using the Responses API. As explained in the [OpenAI Platform documentation](https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning), this can be set to:
 
 - `"minimal"`
 - `"low"`
@@ -246,12 +246,6 @@ model_supports_reasoning_summaries = true
 The size of the context window for the model, in tokens.
 
 In general, Codex knows the context window for the most common OpenAI models, but if you are using a new model with an old version of the Codex CLI, then you can use `model_context_window` to tell Codex what value to use to determine how much context is left during a conversation.
-
-### model_max_output_tokens
-
-This is analogous to `model_context_window`, but for the maximum number of output tokens for the model.
-
-> See also [`codex exec`](./exec.md) to see how these model settings influence non-interactive runs.
 
 ### oss_provider
 
@@ -442,7 +436,7 @@ You can configure Codex to use [MCP servers](https://modelcontextprotocol.io/abo
 command = "npx"
 # Optional
 args = ["-y", "mcp-server"]
-# Optional: propagate additional env vars to the MVP server.
+# Optional: propagate additional env vars to the MCP server.
 # A default whitelist of env vars will be propagated to the MCP server.
 # https://github.com/openai/codex/blob/main/codex-rs/rmcp-client/src/utils.rs#L82
 env = { "API_KEY" = "value" }
@@ -651,6 +645,23 @@ Set `otel.exporter` to control where events go:
   }}
   ```
 
+Both OTLP exporters accept an optional `tls` block so you can trust a custom CA
+or enable mutual TLS. Relative paths are resolved against `~/.codex/`:
+
+```toml
+[otel]
+exporter = { otlp-http = {
+  endpoint = "https://otel.example.com/v1/logs",
+  protocol = "binary",
+  headers = { "x-otlp-api-key" = "${OTLP_TOKEN}" },
+  tls = {
+    ca-certificate = "certs/otel-ca.pem",
+    client-certificate = "/etc/codex/certs/client.pem",
+    client-private-key = "/etc/codex/certs/client-key.pem",
+  }
+}}
+```
+
 If the exporter is `none` nothing is written anywhere; otherwise you must run or point to your
 own collector. All exporters run on a background batch worker that is flushed on
 shutdown.
@@ -818,7 +829,7 @@ Users can specify config values at multiple levels. Order of precedence is as fo
 1. custom command-line argument, e.g., `--model o3`
 2. as part of a profile, where the `--profile` is specified via a CLI (or in the config file itself)
 3. as an entry in `config.toml`, e.g., `model = "o3"`
-4. the default value that comes with Codex CLI (i.e., Codex CLI defaults to `gpt-5.1-codex`)
+4. the default value that comes with Codex CLI (i.e., Codex CLI defaults to `gpt-5.1-codex-max`)
 
 ### history
 
@@ -876,6 +887,10 @@ notifications = true
 # You can optionally filter to specific notification types.
 # Available types are "agent-turn-complete" and "approval-requested".
 notifications = [ "agent-turn-complete", "approval-requested" ]
+
+# Disable terminal animations (welcome screen, status shimmer, spinner).
+# Defaults to true.
+animations = false
 ```
 
 > [!NOTE]
@@ -921,10 +936,10 @@ Valid values:
 
 | Key                                              | Type / Values                                                     | Notes                                                                                                                      |
 | ------------------------------------------------ | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `model`                                          | string                                                            | Model to use (e.g., `gpt-5.1-codex`).                                                                                      |
+| `model`                                          | string                                                            | Model to use (e.g., `gpt-5.1-codex-max`).                                                                                  |
 | `model_provider`                                 | string                                                            | Provider id from `model_providers` (default: `openai`).                                                                    |
 | `model_context_window`                           | number                                                            | Context window tokens.                                                                                                     |
-| `model_max_output_tokens`                        | number                                                            | Max output tokens.                                                                                                         |
+| `tool_output_token_limit`                        | number                                                            | Token budget for stored function/tool outputs in history (default: 2,560 tokens).                                          |
 | `approval_policy`                                | `untrusted` \| `on-failure` \| `on-request` \| `never`            | When to prompt for approval.                                                                                               |
 | `sandbox_mode`                                   | `read-only` \| `workspace-write` \| `danger-full-access`          | OS sandbox policy.                                                                                                         |
 | `sandbox_workspace_write.writable_roots`         | array<string>                                                     | Extra writable roots in workspace‑write.                                                                                   |
@@ -932,6 +947,7 @@ Valid values:
 | `sandbox_workspace_write.exclude_tmpdir_env_var` | boolean                                                           | Exclude `$TMPDIR` from writable roots (default: false).                                                                    |
 | `sandbox_workspace_write.exclude_slash_tmp`      | boolean                                                           | Exclude `/tmp` from writable roots (default: false).                                                                       |
 | `notify`                                         | array<string>                                                     | External program for notifications.                                                                                        |
+| `tui.animations`                                 | boolean                                                           | Enable terminal animations (welcome screen, shimmer, spinner). Defaults to true; set to `false` to disable visual motion.  |
 | `instructions`                                   | string                                                            | Currently ignored; use `experimental_instructions_file` or `AGENTS.md`.                                                    |
 | `features.<feature-flag>`                        | boolean                                                           | See [feature flags](#feature-flags) for details                                                                            |
 | `mcp_servers.<id>.command`                       | string                                                            | MCP server launcher command (stdio servers only).                                                                          |

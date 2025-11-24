@@ -26,6 +26,7 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_util::io::ReaderStream;
 use tracing::debug;
+use tracing::enabled;
 use tracing::trace;
 use tracing::warn;
 
@@ -55,6 +56,7 @@ use crate::model_family::ModelFamily;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::openai_model_info::get_model_info;
+use crate::protocol::CreditsSnapshot;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::RateLimitWindow;
 use crate::protocol::TokenUsage;
@@ -76,6 +78,18 @@ struct Error {
     // Optional fields available on "usage_limit_reached" and "usage_not_included" errors
     plan_type: Option<PlanType>,
     resets_at: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+struct CompactHistoryRequest<'a> {
+    model: &'a str,
+    input: &'a [ResponseItem],
+    instructions: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+struct CompactHistoryResponse {
+    output: Vec<ResponseItem>,
 }
 
 #[derive(Debug, Clone)]
@@ -507,6 +521,70 @@ impl ModelClient {
     pub fn get_auth_manager(&self) -> Option<Arc<AuthManager>> {
         self.auth_manager.clone()
     }
+
+    pub async fn compact_conversation_history(&self, prompt: &Prompt) -> Result<Vec<ResponseItem>> {
+        if prompt.input.is_empty() {
+            return Ok(Vec::new());
+        }
+        let auth_manager = self.auth_manager.clone();
+        let auth = auth_manager.as_ref().and_then(|m| m.auth());
+        let mut req_builder = self
+            .provider
+            .create_compact_request_builder(&self.client, &auth)
+            .await?;
+        if let SessionSource::SubAgent(sub) = &self.session_source {
+            let subagent = if let crate::protocol::SubAgentSource::Other(label) = sub {
+                label.clone()
+            } else {
+                serde_json::to_value(sub)
+                    .ok()
+                    .and_then(|v| v.as_str().map(std::string::ToString::to_string))
+                    .unwrap_or_else(|| "other".to_string())
+            };
+            req_builder = req_builder.header("x-openai-subagent", subagent);
+        }
+        if let Some(auth) = auth.as_ref()
+            && auth.mode == AuthMode::ChatGPT
+            && let Some(account_id) = auth.get_account_id()
+        {
+            req_builder = req_builder.header("chatgpt-account-id", account_id);
+        }
+        let payload = CompactHistoryRequest {
+            model: &self.config.model,
+            input: &prompt.input,
+            instructions: &prompt.get_full_instructions(&self.config.model_family),
+        };
+
+        if enabled!(tracing::Level::TRACE) {
+            trace!(
+                "POST to {}: {}",
+                self.provider
+                    .get_compact_url(&auth)
+                    .unwrap_or("<none>".to_string()),
+                serde_json::to_value(&payload).unwrap_or_default()
+            );
+        }
+
+        let response = req_builder
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|source| CodexErr::ConnectionFailed(ConnectionFailedError { source }))?;
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|source| CodexErr::ConnectionFailed(ConnectionFailedError { source }))?;
+        if !status.is_success() {
+            return Err(CodexErr::UnexpectedStatus(UnexpectedResponseError {
+                status,
+                body,
+                request_id: None,
+            }));
+        }
+        let CompactHistoryResponse { output } = serde_json::from_str(&body)?;
+        Ok(output)
+    }
 }
 
 enum StreamAttemptError {
@@ -649,7 +727,13 @@ fn parse_rate_limit_snapshot(headers: &HeaderMap) -> Option<RateLimitSnapshot> {
         "x-codex-secondary-reset-at",
     );
 
-    Some(RateLimitSnapshot { primary, secondary })
+    let credits = parse_credits_snapshot(headers);
+
+    Some(RateLimitSnapshot {
+        primary,
+        secondary,
+        credits,
+    })
 }
 
 fn parse_rate_limit_window(
@@ -676,6 +760,20 @@ fn parse_rate_limit_window(
     })
 }
 
+fn parse_credits_snapshot(headers: &HeaderMap) -> Option<CreditsSnapshot> {
+    let has_credits = parse_header_bool(headers, "x-codex-credits-has-credits")?;
+    let unlimited = parse_header_bool(headers, "x-codex-credits-unlimited")?;
+    let balance = parse_header_str(headers, "x-codex-credits-balance")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(std::string::ToString::to_string);
+    Some(CreditsSnapshot {
+        has_credits,
+        unlimited,
+        balance,
+    })
+}
+
 fn parse_header_f64(headers: &HeaderMap, name: &str) -> Option<f64> {
     parse_header_str(headers, name)?
         .parse::<f64>()
@@ -685,6 +783,17 @@ fn parse_header_f64(headers: &HeaderMap, name: &str) -> Option<f64> {
 
 fn parse_header_i64(headers: &HeaderMap, name: &str) -> Option<i64> {
     parse_header_str(headers, name)?.parse::<i64>().ok()
+}
+
+fn parse_header_bool(headers: &HeaderMap, name: &str) -> Option<bool> {
+    let raw = parse_header_str(headers, name)?;
+    if raw.eq_ignore_ascii_case("true") || raw == "1" {
+        Some(true)
+    } else if raw.eq_ignore_ascii_case("false") || raw == "0" {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 fn parse_header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {

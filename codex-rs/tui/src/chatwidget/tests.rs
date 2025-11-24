@@ -38,6 +38,9 @@ use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TaskStartedEvent;
+use codex_core::protocol::TokenCountEvent;
+use codex_core::protocol::TokenUsage;
+use codex_core::protocol::TokenUsageInfo;
 use codex_core::protocol::UndoCompletedEvent;
 use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
@@ -47,6 +50,7 @@ use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::protocol::CodexErrorInfo;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -57,6 +61,11 @@ use tempfile::NamedTempFile;
 use tempfile::tempdir;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::unbounded_channel;
+
+#[cfg(target_os = "windows")]
+fn set_windows_sandbox_enabled(enabled: bool) {
+    codex_core::set_windows_sandbox_enabled(enabled);
+}
 
 fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
@@ -76,6 +85,7 @@ fn snapshot(percent: f64) -> RateLimitSnapshot {
             resets_at: None,
         }),
         secondary: None,
+        credits: None,
     }
 }
 
@@ -88,6 +98,10 @@ fn resumed_initial_messages_render_history() {
     let configured = codex_core::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::ReadOnly,
+        cwd: PathBuf::from("/home/user/project"),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
@@ -205,6 +219,81 @@ fn exited_review_mode_emits_results_and_finishes() {
     assert!(!chat.is_review_mode);
 }
 
+/// Exiting review restores the pre-review context window indicator.
+#[test]
+fn review_restores_context_window_indicator() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+
+    let context_window = 13_000;
+    let pre_review_tokens = 12_700; // ~30% remaining after subtracting baseline.
+    let review_tokens = 12_030; // ~97% remaining after subtracting baseline.
+
+    chat.handle_codex_event(Event {
+        id: "token-before".into(),
+        msg: EventMsg::TokenCount(TokenCountEvent {
+            info: Some(make_token_info(pre_review_tokens, context_window)),
+            rate_limits: None,
+        }),
+    });
+    assert_eq!(chat.bottom_pane.context_window_percent(), Some(30));
+
+    chat.handle_codex_event(Event {
+        id: "review-start".into(),
+        msg: EventMsg::EnteredReviewMode(ReviewRequest {
+            prompt: "Review the latest changes".to_string(),
+            user_facing_hint: "feature branch".to_string(),
+            append_to_original_thread: true,
+        }),
+    });
+
+    chat.handle_codex_event(Event {
+        id: "token-review".into(),
+        msg: EventMsg::TokenCount(TokenCountEvent {
+            info: Some(make_token_info(review_tokens, context_window)),
+            rate_limits: None,
+        }),
+    });
+    assert_eq!(chat.bottom_pane.context_window_percent(), Some(97));
+
+    chat.handle_codex_event(Event {
+        id: "review-end".into(),
+        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            review_output: None,
+        }),
+    });
+    let _ = drain_insert_history(&mut rx);
+
+    assert_eq!(chat.bottom_pane.context_window_percent(), Some(30));
+    assert!(!chat.is_review_mode);
+}
+
+/// Receiving a TokenCount event without usage clears the context indicator.
+#[test]
+fn token_count_none_resets_context_indicator() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual();
+
+    let context_window = 13_000;
+    let pre_compact_tokens = 12_700;
+
+    chat.handle_codex_event(Event {
+        id: "token-before".into(),
+        msg: EventMsg::TokenCount(TokenCountEvent {
+            info: Some(make_token_info(pre_compact_tokens, context_window)),
+            rate_limits: None,
+        }),
+    });
+    assert_eq!(chat.bottom_pane.context_window_percent(), Some(30));
+
+    chat.handle_codex_event(Event {
+        id: "token-cleared".into(),
+        msg: EventMsg::TokenCount(TokenCountEvent {
+            info: None,
+            rate_limits: None,
+        }),
+    });
+    assert_eq!(chat.bottom_pane.context_window_percent(), None);
+}
+
 #[cfg_attr(
     target_os = "macos",
     ignore = "system configuration APIs are blocked under macOS seatbelt"
@@ -250,6 +339,7 @@ fn make_chatwidget_manual() -> (
         enhanced_keys_supported: false,
         placeholder_text: "Ask Codex to do anything".to_string(),
         disable_paste_burst: false,
+        animations_enabled: cfg.animations,
     });
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
     let widget = ChatWidget {
@@ -282,6 +372,7 @@ fn make_chatwidget_manual() -> (
         suppress_session_configured_redraw: false,
         pending_notification: None,
         is_review_mode: false,
+        pre_review_token_info: None,
         needs_final_message_separator: false,
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
@@ -326,6 +417,21 @@ fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
         s.push('\n');
     }
     s
+}
+
+fn make_token_info(total_tokens: i64, context_window: i64) -> TokenUsageInfo {
+    fn usage(total_tokens: i64) -> TokenUsage {
+        TokenUsage {
+            total_tokens,
+            ..TokenUsage::default()
+        }
+    }
+
+    TokenUsageInfo {
+        total_token_usage: usage(total_tokens),
+        last_token_usage: usage(total_tokens),
+        model_context_window: Some(context_window),
+    }
 }
 
 #[test]
@@ -1459,28 +1565,6 @@ fn approvals_selection_popup_snapshot() {
 }
 
 #[test]
-fn approvals_popup_includes_wsl_note_for_auto_mode() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
-
-    if cfg!(target_os = "windows") {
-        chat.config.forced_auto_mode_downgraded_on_windows = true;
-    }
-    chat.open_approvals_popup();
-
-    let popup = render_bottom_popup(&chat, 80);
-    assert_eq!(
-        popup.contains("Requires Windows Subsystem for Linux (WSL)"),
-        cfg!(target_os = "windows"),
-        "expected auto preset description to mention WSL requirement only on Windows, popup: {popup}"
-    );
-    assert_eq!(
-        popup.contains("Codex forced your settings back to Read Only on this Windows machine."),
-        cfg!(target_os = "windows") && chat.config.forced_auto_mode_downgraded_on_windows,
-        "expected downgrade notice only when auto mode is forced off on Windows, popup: {popup}"
-    );
-}
-
-#[test]
 fn full_access_confirmation_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
@@ -1496,33 +1580,100 @@ fn full_access_confirmation_popup_snapshot() {
 
 #[cfg(target_os = "windows")]
 #[test]
-fn windows_auto_mode_instructions_popup_lists_install_steps() {
+fn windows_auto_mode_prompt_requests_enabling_sandbox_feature() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
-    chat.open_windows_auto_mode_instructions();
+    let preset = builtin_approval_presets()
+        .into_iter()
+        .find(|preset| preset.id == "auto")
+        .expect("auto preset");
+    chat.open_windows_sandbox_enable_prompt(preset);
 
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        popup.contains("wsl --install"),
-        "expected WSL instructions popup to include install command, popup: {popup}"
+        popup.contains("Agent mode on Windows uses an experimental sandbox"),
+        "expected auto mode prompt to mention enabling the sandbox feature, popup: {popup}"
     );
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn startup_prompts_for_windows_sandbox_when_agent_requested() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    set_windows_sandbox_enabled(false);
+    chat.config.forced_auto_mode_downgraded_on_windows = true;
+
+    chat.maybe_prompt_windows_sandbox_enable();
+
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup.contains("Agent mode on Windows uses an experimental sandbox"),
+        "expected startup prompt to explain sandbox: {popup}"
+    );
+    assert!(
+        popup.contains("Enable experimental sandbox"),
+        "expected startup prompt to offer enabling the sandbox: {popup}"
+    );
+
+    set_windows_sandbox_enabled(true);
 }
 
 #[test]
 fn model_reasoning_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
-    chat.config.model = "gpt-5.1-codex".to_string();
+    chat.config.model = "gpt-5.1-codex-max".to_string();
     chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::High);
 
     let preset = builtin_model_presets(None)
         .into_iter()
-        .find(|preset| preset.model == "gpt-5.1-codex")
-        .expect("gpt-5.1-codex preset");
+        .find(|preset| preset.model == "gpt-5.1-codex-max")
+        .expect("gpt-5.1-codex-max preset");
     chat.open_reasoning_popup(preset);
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("model_reasoning_selection_popup", popup);
+}
+
+#[test]
+fn model_reasoning_selection_popup_extra_high_warning_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.config.model = "gpt-5.1-codex-max".to_string();
+    chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::XHigh);
+
+    let preset = builtin_model_presets(None)
+        .into_iter()
+        .find(|preset| preset.model == "gpt-5.1-codex-max")
+        .expect("gpt-5.1-codex-max preset");
+    chat.open_reasoning_popup(preset);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("model_reasoning_selection_popup_extra_high_warning", popup);
+}
+
+#[test]
+fn reasoning_popup_shows_extra_high_with_space() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.config.model = "gpt-5.1-codex-max".to_string();
+
+    let preset = builtin_model_presets(None)
+        .into_iter()
+        .find(|preset| preset.model == "gpt-5.1-codex-max")
+        .expect("gpt-5.1-codex-max preset");
+    chat.open_reasoning_popup(preset);
+
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup.contains("Extra high"),
+        "expected popup to include 'Extra high'; popup: {popup}"
+    );
+    assert!(
+        !popup.contains("Extrahigh"),
+        "expected popup not to include 'Extrahigh'; popup: {popup}"
+    );
 }
 
 #[test]
@@ -1542,6 +1693,7 @@ fn single_reasoning_option_skips_selection() {
         supported_reasoning_efforts: &SINGLE_EFFORT,
         is_default: false,
         upgrade: None,
+        show_in_picker: true,
     };
     chat.open_reasoning_popup(preset);
 
@@ -1638,6 +1790,28 @@ fn exec_history_extends_previous_when_consecutive() {
     let begin_cat_bar = begin_exec(&mut chat, "call-cat-bar", "cat bar.txt");
     end_exec(&mut chat, begin_cat_bar, "hello from bar", "", 0);
     assert_snapshot!("exploring_step6_finish_cat_bar", active_blob(&chat));
+}
+
+#[test]
+fn user_shell_command_renders_output_not_exploring() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    let begin_ls = begin_exec_with_source(
+        &mut chat,
+        "user-shell-ls",
+        "ls",
+        ExecCommandSource::UserShell,
+    );
+    end_exec(&mut chat, begin_ls, "file1\nfile2\n", "", 0);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected a single history cell for the user command"
+    );
+    let blob = lines_to_single_string(cells.first().unwrap());
+    assert_snapshot!("user_shell_ls_output", blob);
 }
 
 #[test]
@@ -1762,6 +1936,7 @@ fn approval_modal_patch_snapshot() {
     );
     let ev = ApplyPatchApprovalRequestEvent {
         call_id: "call-approve-patch".into(),
+        turn_id: "turn-approve-patch".into(),
         changes,
         reason: Some("The model wants to apply changes".into()),
         grant_root: Some(PathBuf::from("/tmp")),
@@ -2014,6 +2189,7 @@ fn apply_patch_events_emit_history_cells() {
     );
     let ev = ApplyPatchApprovalRequestEvent {
         call_id: "c1".into(),
+        turn_id: "turn-c1".into(),
         changes,
         reason: None,
         grant_root: None,
@@ -2054,6 +2230,7 @@ fn apply_patch_events_emit_history_cells() {
     );
     let begin = PatchApplyBeginEvent {
         call_id: "c1".into(),
+        turn_id: "turn-c1".into(),
         auto_approved: true,
         changes: changes2,
     };
@@ -2070,11 +2247,20 @@ fn apply_patch_events_emit_history_cells() {
     );
 
     // 3) End apply success -> success cell
+    let mut end_changes = HashMap::new();
+    end_changes.insert(
+        PathBuf::from("foo.txt"),
+        FileChange::Add {
+            content: "hello\n".to_string(),
+        },
+    );
     let end = PatchApplyEndEvent {
         call_id: "c1".into(),
+        turn_id: "turn-c1".into(),
         stdout: "ok\n".into(),
         stderr: String::new(),
         success: true,
+        changes: end_changes,
     };
     chat.handle_codex_event(Event {
         id: "s1".into(),
@@ -2102,6 +2288,7 @@ fn apply_patch_manual_approval_adjusts_header() {
         id: "s1".into(),
         msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id: "c1".into(),
+            turn_id: "turn-c1".into(),
             changes: proposed_changes,
             reason: None,
             grant_root: None,
@@ -2120,6 +2307,7 @@ fn apply_patch_manual_approval_adjusts_header() {
         id: "s1".into(),
         msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
             call_id: "c1".into(),
+            turn_id: "turn-c1".into(),
             auto_approved: false,
             changes: apply_changes,
         }),
@@ -2149,6 +2337,7 @@ fn apply_patch_manual_flow_snapshot() {
         id: "s1".into(),
         msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id: "c1".into(),
+            turn_id: "turn-c1".into(),
             changes: proposed_changes,
             reason: Some("Manual review required".into()),
             grant_root: None,
@@ -2171,6 +2360,7 @@ fn apply_patch_manual_flow_snapshot() {
         id: "s1".into(),
         msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
             call_id: "c1".into(),
+            turn_id: "turn-c1".into(),
             auto_approved: false,
             changes: apply_changes,
         }),
@@ -2198,6 +2388,7 @@ fn apply_patch_approval_sends_op_with_submission_id() {
     );
     let ev = ApplyPatchApprovalRequestEvent {
         call_id: "call-999".into(),
+        turn_id: "turn-999".into(),
         changes,
         reason: None,
         grant_root: None,
@@ -2237,6 +2428,7 @@ fn apply_patch_full_flow_integration_like() {
         id: "sub-xyz".into(),
         msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id: "call-1".into(),
+            turn_id: "turn-call-1".into(),
             changes,
             reason: None,
             grant_root: None,
@@ -2277,17 +2469,25 @@ fn apply_patch_full_flow_integration_like() {
         id: "sub-xyz".into(),
         msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
             call_id: "call-1".into(),
+            turn_id: "turn-call-1".into(),
             auto_approved: false,
             changes: changes2,
         }),
     });
+    let mut end_changes = HashMap::new();
+    end_changes.insert(
+        PathBuf::from("pkg.rs"),
+        FileChange::Add { content: "".into() },
+    );
     chat.handle_codex_event(Event {
         id: "sub-xyz".into(),
         msg: EventMsg::PatchApplyEnd(PatchApplyEndEvent {
             call_id: "call-1".into(),
+            turn_id: "turn-call-1".into(),
             stdout: String::from("ok"),
             stderr: String::new(),
             success: true,
+            changes: end_changes,
         }),
     });
 }
@@ -2308,6 +2508,7 @@ fn apply_patch_untrusted_shows_approval_modal() {
         id: "sub-1".into(),
         msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id: "call-1".into(),
+            turn_id: "turn-call-1".into(),
             changes,
             reason: None,
             grant_root: None,
@@ -2356,6 +2557,7 @@ fn apply_patch_request_shows_diff_summary() {
         id: "sub-apply".into(),
         msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id: "call-apply".into(),
+            turn_id: "turn-apply".into(),
             changes,
             reason: None,
             grant_root: None,
@@ -2446,6 +2648,7 @@ fn stream_error_updates_status_indicator() {
         id: "sub-1".into(),
         msg: EventMsg::StreamError(StreamErrorEvent {
             message: msg.to_string(),
+            codex_error_info: Some(CodexErrorInfo::Other),
         }),
     });
 

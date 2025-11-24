@@ -61,9 +61,6 @@ pub mod edit;
 pub mod profile;
 pub mod types;
 
-#[cfg(target_os = "windows")]
-pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5.1";
-#[cfg(not(target_os = "windows"))]
 pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5.1-codex";
 const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5.1-codex";
 pub const GPT_5_CODEX_MEDIUM_MODEL: &str = "gpt-5.1-codex";
@@ -81,16 +78,13 @@ pub struct Config {
     /// Optional override of model selection.
     pub model: String,
 
-    /// Model used specifically for review sessions. Defaults to "gpt-5.1-codex".
+    /// Model used specifically for review sessions. Defaults to "gpt-5.1-codex-max".
     pub review_model: String,
 
     pub model_family: ModelFamily,
 
     /// Size of the context window for the model, in tokens.
     pub model_context_window: Option<i64>,
-
-    /// Maximum number of output tokens.
-    pub model_max_output_tokens: Option<i64>,
 
     /// Token usage threshold triggering auto-compaction of conversation history.
     pub model_auto_compact_token_limit: Option<i64>,
@@ -163,6 +157,9 @@ pub struct Config {
     /// and turn completions when not focused.
     pub tui_notifications: Notifications,
 
+    /// Enable ASCII animations and shimmer effects in the TUI.
+    pub animations: bool,
+
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
     /// resolved against this path.
@@ -194,6 +191,9 @@ pub struct Config {
 
     /// Additional filenames to try when looking for project-level docs.
     pub project_doc_fallback_filenames: Vec<String>,
+
+    /// Token budget applied when storing tool/function outputs in the context manager.
+    pub tool_output_token_limit: Option<usize>,
 
     /// Directory containing all Codex state (defaults to `~/.codex` but can be
     /// overridden by the `CODEX_HOME` environment variable).
@@ -567,9 +567,6 @@ pub struct ConfigToml {
     /// Size of the context window for the model, in tokens.
     pub model_context_window: Option<i64>,
 
-    /// Maximum number of output tokens.
-    pub model_max_output_tokens: Option<i64>,
-
     /// Token usage threshold triggering auto-compaction of conversation history.
     pub model_auto_compact_token_limit: Option<i64>,
 
@@ -635,6 +632,9 @@ pub struct ConfigToml {
 
     /// Ordered list of fallback filenames to look for when AGENTS.md is missing.
     pub project_doc_fallback_filenames: Option<Vec<String>>,
+
+    /// Token budget applied when storing tool/function outputs in the context manager.
+    pub tool_output_token_limit: Option<usize>,
 
     /// Profile to use from the `profiles` map.
     pub profile: Option<String>,
@@ -1116,11 +1116,6 @@ impl Config {
         let model_context_window = cfg
             .model_context_window
             .or_else(|| openai_model_info.as_ref().map(|info| info.context_window));
-        let model_max_output_tokens = cfg.model_max_output_tokens.or_else(|| {
-            openai_model_info
-                .as_ref()
-                .map(|info| info.max_output_tokens)
-        });
         let model_auto_compact_token_limit = cfg.model_auto_compact_token_limit.or_else(|| {
             openai_model_info
                 .as_ref()
@@ -1172,7 +1167,6 @@ impl Config {
             review_model,
             model_family,
             model_context_window,
-            model_max_output_tokens,
             model_auto_compact_token_limit,
             model_provider_id,
             model_provider,
@@ -1209,6 +1203,7 @@ impl Config {
                     }
                 })
                 .collect(),
+            tool_output_token_limit: cfg.tool_output_token_limit,
             codex_home,
             history,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
@@ -1249,6 +1244,7 @@ impl Config {
                 .as_ref()
                 .map(|t| t.notifications.clone())
                 .unwrap_or_default(),
+            animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
@@ -1312,6 +1308,16 @@ impl Config {
         } else {
             Ok(Some(s))
         }
+    }
+
+    pub fn set_windows_sandbox_globally(&mut self, value: bool) {
+        crate::safety::set_windows_sandbox_enabled(value);
+        if value {
+            self.features.enable(Feature::WindowsSandbox);
+        } else {
+            self.features.disable(Feature::WindowsSandbox);
+        }
+        self.forced_auto_mode_downgraded_on_windows = !value;
     }
 }
 
@@ -2943,7 +2949,6 @@ model_verbosity = "high"
                 review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
                 model_family: find_family_for_model("o3").expect("known model slug"),
                 model_context_window: Some(200_000),
-                model_max_output_tokens: Some(100_000),
                 model_auto_compact_token_limit: Some(180_000),
                 model_provider_id: "openai".to_string(),
                 model_provider: fixture.openai_provider.clone(),
@@ -2961,6 +2966,7 @@ model_verbosity = "high"
                 model_providers: fixture.model_provider_map.clone(),
                 project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
                 project_doc_fallback_filenames: Vec::new(),
+                tool_output_token_limit: None,
                 codex_home: fixture.codex_home(),
                 history: History::default(),
                 file_opener: UriBasedFileOpener::VsCode,
@@ -2988,6 +2994,7 @@ model_verbosity = "high"
                 notices: Default::default(),
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
+                animations: true,
                 otel: OtelConfig::default(),
             },
             o3_profile_config
@@ -3014,7 +3021,6 @@ model_verbosity = "high"
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
             model_family: find_family_for_model("gpt-3.5-turbo").expect("known model slug"),
             model_context_window: Some(16_385),
-            model_max_output_tokens: Some(4_096),
             model_auto_compact_token_limit: Some(14_746),
             model_provider_id: "openai-chat-completions".to_string(),
             model_provider: fixture.openai_chat_completions_provider.clone(),
@@ -3032,6 +3038,7 @@ model_verbosity = "high"
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
+            tool_output_token_limit: None,
             codex_home: fixture.codex_home(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
@@ -3059,6 +3066,7 @@ model_verbosity = "high"
             notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            animations: true,
             otel: OtelConfig::default(),
         };
 
@@ -3100,7 +3108,6 @@ model_verbosity = "high"
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
             model_family: find_family_for_model("o3").expect("known model slug"),
             model_context_window: Some(200_000),
-            model_max_output_tokens: Some(100_000),
             model_auto_compact_token_limit: Some(180_000),
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
@@ -3118,6 +3125,7 @@ model_verbosity = "high"
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
+            tool_output_token_limit: None,
             codex_home: fixture.codex_home(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
@@ -3145,6 +3153,7 @@ model_verbosity = "high"
             notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            animations: true,
             otel: OtelConfig::default(),
         };
 
@@ -3172,7 +3181,6 @@ model_verbosity = "high"
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
             model_family: find_family_for_model("gpt-5.1").expect("known model slug"),
             model_context_window: Some(272_000),
-            model_max_output_tokens: Some(128_000),
             model_auto_compact_token_limit: Some(244_800),
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
@@ -3190,6 +3198,7 @@ model_verbosity = "high"
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
+            tool_output_token_limit: None,
             codex_home: fixture.codex_home(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
@@ -3217,6 +3226,7 @@ model_verbosity = "high"
             notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            animations: true,
             otel: OtelConfig::default(),
         };
 

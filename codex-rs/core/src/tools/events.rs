@@ -88,6 +88,7 @@ pub(crate) enum ToolEmitter {
         cwd: PathBuf,
         source: ExecCommandSource,
         parsed_cmd: Vec<ParsedCommand>,
+        freeform: bool,
     },
     ApplyPatch {
         changes: HashMap<PathBuf, FileChange>,
@@ -103,13 +104,19 @@ pub(crate) enum ToolEmitter {
 }
 
 impl ToolEmitter {
-    pub fn shell(command: Vec<String>, cwd: PathBuf, source: ExecCommandSource) -> Self {
+    pub fn shell(
+        command: Vec<String>,
+        cwd: PathBuf,
+        source: ExecCommandSource,
+        freeform: bool,
+    ) -> Self {
         let parsed_cmd = parse_command(&command);
         Self::Shell {
             command,
             cwd,
             source,
             parsed_cmd,
+            freeform,
         }
     }
 
@@ -144,6 +151,7 @@ impl ToolEmitter {
                     cwd,
                     source,
                     parsed_cmd,
+                    ..
                 },
                 stage,
             ) => {
@@ -171,15 +179,17 @@ impl ToolEmitter {
                         ctx.turn,
                         EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                             call_id: ctx.call_id.to_string(),
+                            turn_id: ctx.turn.sub_id.clone(),
                             auto_approved: *auto_approved,
                             changes: changes.clone(),
                         }),
                     )
                     .await;
             }
-            (Self::ApplyPatch { .. }, ToolEventStage::Success(output)) => {
+            (Self::ApplyPatch { changes, .. }, ToolEventStage::Success(output)) => {
                 emit_patch_end(
                     ctx,
+                    changes.clone(),
                     output.stdout.text.clone(),
                     output.stderr.text.clone(),
                     output.exit_code == 0,
@@ -187,11 +197,12 @@ impl ToolEmitter {
                 .await;
             }
             (
-                Self::ApplyPatch { .. },
+                Self::ApplyPatch { changes, .. },
                 ToolEventStage::Failure(ToolEventFailure::Output(output)),
             ) => {
                 emit_patch_end(
                     ctx,
+                    changes.clone(),
                     output.stdout.text.clone(),
                     output.stderr.text.clone(),
                     output.exit_code == 0,
@@ -199,10 +210,17 @@ impl ToolEmitter {
                 .await;
             }
             (
-                Self::ApplyPatch { .. },
+                Self::ApplyPatch { changes, .. },
                 ToolEventStage::Failure(ToolEventFailure::Message(message)),
             ) => {
-                emit_patch_end(ctx, String::new(), (*message).to_string(), false).await;
+                emit_patch_end(
+                    ctx,
+                    changes.clone(),
+                    String::new(),
+                    (*message).to_string(),
+                    false,
+                )
+                .await;
             }
             (
                 Self::UnifiedExec {
@@ -234,6 +252,19 @@ impl ToolEmitter {
         self.emit(ctx, ToolEventStage::Begin).await;
     }
 
+    fn format_exec_output_for_model(
+        &self,
+        output: &ExecToolCallOutput,
+        ctx: ToolEventCtx<'_>,
+    ) -> String {
+        match self {
+            Self::Shell { freeform: true, .. } => {
+                super::format_exec_output_for_model_freeform(output, ctx.turn.truncation_policy)
+            }
+            _ => super::format_exec_output_for_model_structured(output, ctx.turn.truncation_policy),
+        }
+    }
+
     pub async fn finish(
         &self,
         ctx: ToolEventCtx<'_>,
@@ -241,7 +272,7 @@ impl ToolEmitter {
     ) -> Result<String, FunctionCallError> {
         let (event, result) = match out {
             Ok(output) => {
-                let content = super::format_exec_output_for_model(&output);
+                let content = self.format_exec_output_for_model(&output, ctx);
                 let exit_code = output.exit_code;
                 let event = ToolEventStage::Success(output);
                 let result = if exit_code == 0 {
@@ -253,7 +284,7 @@ impl ToolEmitter {
             }
             Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output })))
             | Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output }))) => {
-                let response = super::format_exec_output_for_model(&output);
+                let response = self.format_exec_output_for_model(&output, ctx);
                 let event = ToolEventStage::Failure(ToolEventFailure::Output(*output));
                 let result = Err(FunctionCallError::RespondToModel(response));
                 (event, result)
@@ -342,7 +373,7 @@ async fn emit_exec_stage(
                 aggregated_output: output.aggregated_output.text.clone(),
                 exit_code: output.exit_code,
                 duration: output.duration,
-                formatted_output: format_exec_output_str(&output),
+                formatted_output: format_exec_output_str(&output, ctx.turn.truncation_policy),
             };
             emit_exec_end(ctx, exec_input, exec_result).await;
         }
@@ -388,15 +419,23 @@ async fn emit_exec_end(
         .await;
 }
 
-async fn emit_patch_end(ctx: ToolEventCtx<'_>, stdout: String, stderr: String, success: bool) {
+async fn emit_patch_end(
+    ctx: ToolEventCtx<'_>,
+    changes: HashMap<PathBuf, FileChange>,
+    stdout: String,
+    stderr: String,
+    success: bool,
+) {
     ctx.session
         .send_event(
             ctx.turn,
             EventMsg::PatchApplyEnd(PatchApplyEndEvent {
                 call_id: ctx.call_id.to_string(),
+                turn_id: ctx.turn.sub_id.clone(),
                 stdout,
                 stderr,
                 success,
+                changes,
             }),
         )
         .await;

@@ -18,12 +18,11 @@ Use this example configuration as a starting point. For an explanation of each f
 # Core Model Selection
 ################################################################################
 
-# Primary model used by Codex. Default differs by OS; non-Windows defaults here.
-# Linux/macOS default: "gpt-5.1-codex"; Windows default: "gpt-5.1".
-model = "gpt-5.1-codex"
+# Primary model used by Codex. Default: "gpt-5.1-codex-max" on all platforms.
+model = "gpt-5.1-codex-max"
 
-# Model used by the /review feature (code reviews). Default: "gpt-5.1-codex".
-review_model = "gpt-5.1-codex"
+# Model used by the /review feature (code reviews). Default: "gpt-5.1-codex-max".
+review_model = "gpt-5.1-codex-max"
 
 # Provider id selected from [model_providers]. Default: "openai".
 model_provider = "openai"
@@ -31,8 +30,8 @@ model_provider = "openai"
 # Optional manual model metadata. When unset, Codex auto-detects from model.
 # Uncomment to force values.
 # model_context_window = 128000       # tokens; default: auto for model
-# model_max_output_tokens = 8192      # tokens; default: auto for model
 # model_auto_compact_token_limit = 0  # disable/override auto; default: model family specific
+# tool_output_token_limit = 10000  # tokens stored per tool output; default: 10000 for gpt-5.1-codex-max
 
 ################################################################################
 # Reasoning & Verbosity (Responses API capable models)
@@ -140,13 +139,16 @@ file_opener = "vscode"
 # Examples: false | ["agent-turn-complete", "approval-requested"]
 notifications = false
 
-# Suppress internal reasoning events from output (default: false)
+# Enables welcome/status/spinner animations. Default: true
+animations = true
+
+# Suppress internal reasoning events from output. Default: false
 hide_agent_reasoning = false
 
-# Show raw reasoning content when available (default: false)
+# Show raw reasoning content when available. Default: false
 show_raw_agent_reasoning = false
 
-# Disable burst-paste detection in the TUI (default: false)
+# Disable burst-paste detection in the TUI. Default: false
 disable_paste_burst = false
 
 # Track Windows onboarding acknowledgement (Windows only). Default: false
@@ -315,7 +317,7 @@ mcp_oauth_credentials_store = "auto"
 [profiles]
 
 # [profiles.default]
-# model = "gpt-5.1-codex"
+# model = "gpt-5.1-codex-max"
 # model_provider = "openai"
 # approval_policy = "on-request"
 # sandbox_mode = "read-only"
@@ -367,5 +369,18 @@ exporter = "none"
 # exporter = { otlp-grpc = {
 #   endpoint = "https://otel.example.com:4317",
 #   headers = { "x-otlp-meta" = "abc123" }
+# }}
+
+# Example OTLP exporter with mutual TLS
+# [otel]
+# exporter = { otlp-http = {
+#   endpoint = "https://otel.example.com/v1/logs",
+#   protocol = "binary",
+#   headers = { "x-otlp-api-key" = "${OTLP_TOKEN}" },
+#   tls = {
+#     ca-certificate = "certs/otel-ca.pem",
+#     client-certificate = "/etc/codex/certs/client.pem",
+#     client-private-key = "/etc/codex/certs/client-key.pem",
+#   }
 # }}
 ```

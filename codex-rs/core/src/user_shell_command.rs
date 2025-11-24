@@ -3,6 +3,7 @@ use std::time::Duration;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 
+use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
 use crate::tools::format_exec_output_str;
 
@@ -20,7 +21,11 @@ fn format_duration_line(duration: Duration) -> String {
     format!("Duration: {duration_seconds:.4} seconds")
 }
 
-fn format_user_shell_command_body(command: &str, exec_output: &ExecToolCallOutput) -> String {
+fn format_user_shell_command_body(
+    command: &str,
+    exec_output: &ExecToolCallOutput,
+    turn_context: &TurnContext,
+) -> String {
     let mut sections = Vec::new();
     sections.push("<command>".to_string());
     sections.push(command.to_string());
@@ -29,25 +34,33 @@ fn format_user_shell_command_body(command: &str, exec_output: &ExecToolCallOutpu
     sections.push(format!("Exit code: {}", exec_output.exit_code));
     sections.push(format_duration_line(exec_output.duration));
     sections.push("Output:".to_string());
-    sections.push(format_exec_output_str(exec_output));
+    sections.push(format_exec_output_str(
+        exec_output,
+        turn_context.truncation_policy,
+    ));
     sections.push("</result>".to_string());
     sections.join("\n")
 }
 
-pub fn format_user_shell_command_record(command: &str, exec_output: &ExecToolCallOutput) -> String {
-    let body = format_user_shell_command_body(command, exec_output);
+pub fn format_user_shell_command_record(
+    command: &str,
+    exec_output: &ExecToolCallOutput,
+    turn_context: &TurnContext,
+) -> String {
+    let body = format_user_shell_command_body(command, exec_output, turn_context);
     format!("{USER_SHELL_COMMAND_OPEN}\n{body}\n{USER_SHELL_COMMAND_CLOSE}")
 }
 
 pub fn user_shell_command_record_item(
     command: &str,
     exec_output: &ExecToolCallOutput,
+    turn_context: &TurnContext,
 ) -> ResponseItem {
     ResponseItem::Message {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
-            text: format_user_shell_command_record(command, exec_output),
+            text: format_user_shell_command_record(command, exec_output, turn_context),
         }],
     }
 }
@@ -55,6 +68,7 @@ pub fn user_shell_command_record_item(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codex::make_session_and_context;
     use crate::exec::StreamOutput;
     use pretty_assertions::assert_eq;
 
@@ -76,7 +90,8 @@ mod tests {
             duration: Duration::from_secs(1),
             timed_out: false,
         };
-        let item = user_shell_command_record_item("echo hi", &exec_output);
+        let (_, turn_context) = make_session_and_context();
+        let item = user_shell_command_record_item("echo hi", &exec_output, &turn_context);
         let ResponseItem::Message { content, .. } = item else {
             panic!("expected message");
         };
@@ -99,7 +114,8 @@ mod tests {
             duration: Duration::from_millis(120),
             timed_out: false,
         };
-        let record = format_user_shell_command_record("false", &exec_output);
+        let (_, turn_context) = make_session_and_context();
+        let record = format_user_shell_command_record("false", &exec_output, &turn_context);
         assert_eq!(
             record,
             "<user_shell_command>\n<command>\nfalse\n</command>\n<result>\nExit code: 42\nDuration: 0.1200 seconds\nOutput:\ncombined output wins\n</result>\n</user_shell_command>"

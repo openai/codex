@@ -1,5 +1,6 @@
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningEvent;
+use codex_core::protocol::AskForApproval;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -12,6 +13,7 @@ use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
+use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchEndEvent;
@@ -45,6 +47,7 @@ use codex_exec::exec_events::WebSearchItem;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::protocol::CodexErrorInfo;
 use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
 use mcp_types::TextContent;
@@ -72,6 +75,10 @@ fn session_configured_produces_thread_started_event() {
         EventMsg::SessionConfigured(SessionConfiguredEvent {
             session_id,
             model: "codex-mini-latest".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            cwd: PathBuf::from("/home/user/project"),
             reasoning_effort: None,
             history_log_id: 0,
             history_entry_count: 0,
@@ -533,6 +540,7 @@ fn error_event_produces_error() {
         "e1",
         EventMsg::Error(codex_core::protocol::ErrorEvent {
             message: "boom".to_string(),
+            codex_error_info: Some(CodexErrorInfo::Other),
         }),
     ));
     assert_eq!(
@@ -572,6 +580,7 @@ fn stream_error_event_produces_error() {
         "e1",
         EventMsg::StreamError(codex_core::protocol::StreamErrorEvent {
             message: "retrying".to_string(),
+            codex_error_info: Some(CodexErrorInfo::Other),
         }),
     ));
     assert_eq!(
@@ -590,6 +599,7 @@ fn error_followed_by_task_complete_produces_turn_failed() {
         "e1",
         EventMsg::Error(ErrorEvent {
             message: "boom".to_string(),
+            codex_error_info: Some(CodexErrorInfo::Other),
         }),
     );
     assert_eq!(
@@ -816,6 +826,7 @@ fn patch_apply_success_produces_item_completed_patchapply() {
         "p1",
         EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
             call_id: "call-1".to_string(),
+            turn_id: "turn-1".to_string(),
             auto_approved: true,
             changes: changes.clone(),
         }),
@@ -828,9 +839,11 @@ fn patch_apply_success_produces_item_completed_patchapply() {
         "p2",
         EventMsg::PatchApplyEnd(PatchApplyEndEvent {
             call_id: "call-1".to_string(),
+            turn_id: "turn-1".to_string(),
             stdout: "applied 3 changes".to_string(),
             stderr: String::new(),
             success: true,
+            changes: changes.clone(),
         }),
     );
     let out_end = ep.collect_thread_events(&end);
@@ -885,6 +898,7 @@ fn patch_apply_failure_produces_item_completed_patchapply_failed() {
         "p1",
         EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
             call_id: "call-2".to_string(),
+            turn_id: "turn-2".to_string(),
             auto_approved: false,
             changes: changes.clone(),
         }),
@@ -896,9 +910,11 @@ fn patch_apply_failure_produces_item_completed_patchapply_failed() {
         "p2",
         EventMsg::PatchApplyEnd(PatchApplyEndEvent {
             call_id: "call-2".to_string(),
+            turn_id: "turn-2".to_string(),
             stdout: String::new(),
             stderr: "failed to apply".to_string(),
             success: false,
+            changes: changes.clone(),
         }),
     );
     let out_end = ep.collect_thread_events(&end);

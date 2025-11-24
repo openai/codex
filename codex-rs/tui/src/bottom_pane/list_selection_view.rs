@@ -52,6 +52,7 @@ pub(crate) struct SelectionViewParams {
     pub is_searchable: bool,
     pub search_placeholder: Option<String>,
     pub header: Box<dyn Renderable>,
+    pub initial_selected_idx: Option<usize>,
 }
 
 impl Default for SelectionViewParams {
@@ -64,6 +65,7 @@ impl Default for SelectionViewParams {
             is_searchable: false,
             search_placeholder: None,
             header: Box::new(()),
+            initial_selected_idx: None,
         }
     }
 }
@@ -80,6 +82,7 @@ pub(crate) struct ListSelectionView {
     filtered_indices: Vec<usize>,
     last_selected_actual_idx: Option<usize>,
     header: Box<dyn Renderable>,
+    initial_selected_idx: Option<usize>,
 }
 
 impl ListSelectionView {
@@ -110,6 +113,7 @@ impl ListSelectionView {
             filtered_indices: Vec::new(),
             last_selected_actual_idx: None,
             header,
+            initial_selected_idx: params.initial_selected_idx,
         };
         s.apply_filter();
         s
@@ -132,7 +136,8 @@ impl ListSelectionView {
                 (!self.is_searchable)
                     .then(|| self.items.iter().position(|item| item.is_current))
                     .flatten()
-            });
+            })
+            .or_else(|| self.initial_selected_idx.take());
 
         if self.is_searchable && !self.search_query.is_empty() {
             let query_lower = self.search_query.to_lowercase();

@@ -32,6 +32,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_core::review_prompts::ReviewTarget;
 use codex_core::review_prompts::review_request_from_target;
+use codex_protocol::approvals::ElicitationAction;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::user_input::UserInput;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
@@ -103,29 +104,55 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         buffer
     }
 
-    // Determine prompt or review args input.
-    let parent_or_resume_prompt_arg = match &command {
-        Some(ExecCommand::Resume(args)) => args.prompt.clone().or(prompt.clone()),
-        Some(ExecCommand::Review(_)) => None, // handled separately below
+    // Determine the prompt source (parent or subcommand) and read from stdin if needed.
+    let prompt_arg = match &command {
+        // Allow prompt before the subcommand by falling back to the parent-level prompt
+        // when the Resume subcommand did not provide its own prompt.
+        Some(ExecCommand::Resume(args)) => {
+            let resume_prompt = args
+                .prompt
+                .clone()
+                // When using `resume --last <PROMPT>`, clap still parses the first positional
+                // as `session_id`. Reinterpret it as the prompt so the flag works with JSON mode.
+                .or_else(|| {
+                    if args.last {
+                        args.session_id.clone()
+                    } else {
+                        None
+                    }
+                });
+            resume_prompt.or(prompt.clone())
+        }
+        Some(ExecCommand::Review(_)) => prompt.clone(),
         None => prompt.clone(),
     };
 
     // Determine the regular prompt. If explicitly "-", read from stdin.
     // If omitted, read from stdin when non‑TTY; otherwise exit with a message.
-    let regular_prompt_opt = match parent_or_resume_prompt_arg {
-        Some(p) => {
-            if p == "-" {
-                Some(read_prompt_from_stdin_or_exit(true))
-            } else {
-                Some(p)
+    let regular_prompt_opt = match (&command, prompt_arg) {
+        (Some(ExecCommand::Review(_)), _) => None,
+        (_, Some(p)) if p != "-" => Some(p),
+        (_, maybe_dash) => {
+            let force_stdin = matches!(maybe_dash.as_deref(), Some("-"));
+            if std::io::stdin().is_terminal() && !force_stdin {
+                eprintln!(
+                    "No prompt provided. Either specify one as an argument or pipe the prompt into stdin."
+                );
+                std::process::exit(1);
             }
+            if !force_stdin {
+                eprintln!("Reading prompt from stdin...");
+            }
+            let mut buffer = String::new();
+            if let Err(e) = std::io::stdin().read_to_string(&mut buffer) {
+                eprintln!("Failed to read prompt from stdin: {e}");
+                std::process::exit(1);
+            } else if buffer.trim().is_empty() {
+                eprintln!("No prompt provided via stdin.");
+                std::process::exit(1);
+            }
+            Some(buffer)
         }
-        None => match &command {
-            // Review subcommand handles its own inputs later.
-            Some(ExecCommand::Review(_)) => None,
-            // Default/Resume flows: honor piped stdin or exit if TTY.
-            _ => Some(read_prompt_from_stdin_or_exit(false)),
-        },
     };
 
     let output_schema = load_output_schema(output_schema_path);
@@ -477,6 +504,16 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     // exit with a non-zero status for automation-friendly signaling.
     let mut error_seen = false;
     while let Some(event) = rx.recv().await {
+        if let EventMsg::ElicitationRequest(ev) = &event.msg {
+            // Automatically cancel elicitation requests in exec mode.
+            conversation
+                .submit(Op::ResolveElicitation {
+                    server_name: ev.server_name.clone(),
+                    request_id: ev.id.clone(),
+                    decision: ElicitationAction::Cancel,
+                })
+                .await?;
+        }
         if matches!(event.msg, EventMsg::Error(_)) {
             error_seen = true;
         }

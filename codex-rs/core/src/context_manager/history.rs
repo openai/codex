@@ -1,20 +1,15 @@
 use crate::codex::TurnContext;
 use crate::context_manager::normalize;
-use crate::truncate;
-use crate::truncate::format_output_for_model_body;
-use crate::truncate::globally_truncate_function_output_items;
+use crate::truncate::TruncationPolicy;
+use crate::truncate::approx_token_count;
+use crate::truncate::approx_tokens_from_byte_count;
+use crate::truncate::truncate_function_output_items_with_policy;
+use crate::truncate::truncate_text;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
-use codex_utils_tokenizer::Tokenizer;
 use std::ops::Deref;
-
-const CONTEXT_WINDOW_HARD_LIMIT_FACTOR: f64 = 1.1;
-const CONTEXT_WINDOW_HARD_LIMIT_BYTES: usize =
-    (truncate::MODEL_FORMAT_MAX_BYTES as f64 * CONTEXT_WINDOW_HARD_LIMIT_FACTOR) as usize;
-const CONTEXT_WINDOW_HARD_LIMIT_LINES: usize =
-    (truncate::MODEL_FORMAT_MAX_LINES as f64 * CONTEXT_WINDOW_HARD_LIMIT_FACTOR) as usize;
 
 /// Transcript of conversation history
 #[derive(Debug, Clone, Default)]
@@ -50,7 +45,7 @@ impl ContextManager {
     }
 
     /// `items` is ordered from oldest to newest.
-    pub(crate) fn record_items<I>(&mut self, items: I)
+    pub(crate) fn record_items<I>(&mut self, items: I, policy: TruncationPolicy)
     where
         I: IntoIterator,
         I::Item: std::ops::Deref<Target = ResponseItem>,
@@ -62,7 +57,7 @@ impl ContextManager {
                 continue;
             }
 
-            let processed = Self::process_item(&item);
+            let processed = self.process_item(item_ref, policy);
             self.items.push(processed);
         }
     }
@@ -80,26 +75,21 @@ impl ContextManager {
         history
     }
 
-    // Estimate the number of tokens in the history. Return None if no tokenizer
-    // is available. This does not consider the reasoning traces.
-    // /!\ The value is a lower bound estimate and does not represent the exact
-    // context length.
+    // Estimate token usage using byte-based heuristics from the truncation helpers.
+    // This is a coarse lower bound, not a tokenizer-accurate count.
     pub(crate) fn estimate_token_count(&self, turn_context: &TurnContext) -> Option<i64> {
-        let model = turn_context.client.get_model();
-        let tokenizer = Tokenizer::for_model(model.as_str()).ok()?;
         let model_family = turn_context.client.get_model_family();
+        let base_tokens =
+            i64::try_from(approx_token_count(model_family.base_instructions.as_str()))
+                .unwrap_or(i64::MAX);
 
-        Some(
-            self.items
-                .iter()
-                .map(|item| {
-                    serde_json::to_string(&item)
-                        .map(|item| tokenizer.count(&item))
-                        .unwrap_or_default()
-                })
-                .sum::<i64>()
-                + tokenizer.count(model_family.base_instructions.as_str()),
-        )
+        let items_tokens = self.items.iter().fold(0i64, |acc, item| {
+            let serialized = serde_json::to_string(item).unwrap_or_default();
+            let item_tokens = i64::try_from(approx_token_count(&serialized)).unwrap_or(i64::MAX);
+            acc.saturating_add(item_tokens)
+        });
+
+        Some(base_tokens.saturating_add(items_tokens))
     }
 
     pub(crate) fn remove_first_item(&mut self) {
@@ -130,6 +120,54 @@ impl ContextManager {
         );
     }
 
+    fn get_non_last_reasoning_items_tokens(&self) -> usize {
+        // get reasoning items excluding all the ones after the last user message
+        let Some(last_user_index) = self
+            .items
+            .iter()
+            .rposition(|item| matches!(item, ResponseItem::Message { role, .. } if role == "user"))
+        else {
+            return 0usize;
+        };
+
+        let total_reasoning_bytes = self
+            .items
+            .iter()
+            .take(last_user_index)
+            .filter_map(|item| {
+                if let ResponseItem::Reasoning {
+                    encrypted_content: Some(content),
+                    ..
+                } = item
+                {
+                    Some(content.len())
+                } else {
+                    None
+                }
+            })
+            .map(Self::estimate_reasoning_length)
+            .fold(0usize, usize::saturating_add);
+
+        let token_estimate = approx_tokens_from_byte_count(total_reasoning_bytes);
+        token_estimate as usize
+    }
+
+    fn estimate_reasoning_length(encoded_len: usize) -> usize {
+        encoded_len
+            .saturating_mul(3)
+            .checked_div(4)
+            .unwrap_or(0)
+            .saturating_sub(650)
+    }
+
+    pub(crate) fn get_total_token_usage(&self) -> i64 {
+        self.token_info
+            .as_ref()
+            .map(|info| info.last_token_usage.total_tokens)
+            .unwrap_or(0)
+            .saturating_add(self.get_non_last_reasoning_items_tokens() as i64)
+    }
+
     /// This function enforces a couple of invariants on the in-memory history:
     /// 1. every call (function/custom) has a corresponding output entry
     /// 2. every output has a corresponding call entry
@@ -150,18 +188,18 @@ impl ContextManager {
         items.retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
     }
 
-    fn process_item(item: &ResponseItem) -> ResponseItem {
+    fn process_item(&self, item: &ResponseItem, policy: TruncationPolicy) -> ResponseItem {
+        let policy_with_serialization_budget = policy.mul(1.2);
         match item {
             ResponseItem::FunctionCallOutput { call_id, output } => {
-                let truncated = format_output_for_model_body(
-                    output.content.as_str(),
-                    CONTEXT_WINDOW_HARD_LIMIT_BYTES,
-                    CONTEXT_WINDOW_HARD_LIMIT_LINES,
-                );
-                let truncated_items = output
-                    .content_items
-                    .as_ref()
-                    .map(|items| globally_truncate_function_output_items(items));
+                let truncated =
+                    truncate_text(output.content.as_str(), policy_with_serialization_budget);
+                let truncated_items = output.content_items.as_ref().map(|items| {
+                    truncate_function_output_items_with_policy(
+                        items,
+                        policy_with_serialization_budget,
+                    )
+                });
                 ResponseItem::FunctionCallOutput {
                     call_id: call_id.clone(),
                     output: FunctionCallOutputPayload {
@@ -172,11 +210,7 @@ impl ContextManager {
                 }
             }
             ResponseItem::CustomToolCallOutput { call_id, output } => {
-                let truncated = format_output_for_model_body(
-                    output,
-                    CONTEXT_WINDOW_HARD_LIMIT_BYTES,
-                    CONTEXT_WINDOW_HARD_LIMIT_LINES,
-                );
+                let truncated = truncate_text(output, policy_with_serialization_budget);
                 ResponseItem::CustomToolCallOutput {
                     call_id: call_id.clone(),
                     output: truncated,
@@ -188,6 +222,7 @@ impl ContextManager {
             | ResponseItem::FunctionCall { .. }
             | ResponseItem::WebSearchCall { .. }
             | ResponseItem::CustomToolCall { .. }
+            | ResponseItem::CompactionSummary { .. }
             | ResponseItem::GhostSnapshot { .. }
             | ResponseItem::Other => item.clone(),
         }
@@ -205,7 +240,8 @@ fn is_api_message(message: &ResponseItem) -> bool {
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::LocalShellCall { .. }
         | ResponseItem::Reasoning { .. }
-        | ResponseItem::WebSearchCall { .. } => true,
+        | ResponseItem::WebSearchCall { .. }
+        | ResponseItem::CompactionSummary { .. } => true,
         ResponseItem::GhostSnapshot { .. } => false,
         ResponseItem::Other => false,
     }

@@ -53,3 +53,4 @@ serial_test = { workspace = true }
 tempfile = { workspace = true }
 toml = { workspace = true }
 wiremock = { workspace = true }
+shlex = { workspace = true }

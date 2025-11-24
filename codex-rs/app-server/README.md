@@ -9,8 +9,8 @@
 - [Initialization](#initialization)
 - [Core primitives](#core-primitives)
 - [Thread & turn endpoints](#thread--turn-endpoints)
+- [Events (work-in-progress)](#events-work-in-progress)
 - [Auth endpoints](#auth-endpoints)
-- [Events (work-in-progress)](#v2-streaming-events-work-in-progress)
 
 ## Protocol
 
@@ -65,6 +65,7 @@ The JSON-RPC API exposes dedicated methods for managing Codex conversations. Thr
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success.
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
+- `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits a `item/completed` notification with a `codeReview` item when results are ready.
 
 ### 1) Start or resume a thread
 
@@ -181,6 +182,142 @@ You can cancel a running Turn with `turn/interrupt`.
 
 The server requests cancellations for running subprocesses, then emits a `turn/completed` event with `status: "interrupted"`. Rely on the `turn/completed` to know when Codex-side cleanup is done.
 
+### 6) Request a code review
+
+Use `review/start` to run Codex’s reviewer on the currently checked-out project. The request takes the thread id plus a `target` describing what should be reviewed:
+
+- `{"type":"uncommittedChanges"}` — staged, unstaged, and untracked files.
+- `{"type":"baseBranch","branch":"main"}` — diff against the provided branch’s upstream (see prompt for the exact `git merge-base`/`git diff` instructions Codex will run).
+- `{"type":"commit","sha":"abc1234","title":"Optional subject"}` — review a specific commit.
+- `{"type":"custom","instructions":"Free-form reviewer instructions"}` — fallback prompt equivalent to the legacy manual review request.
+- `appendToOriginalThread` (bool, default `false`) — when `true`, Codex also records a final assistant-style message with the review summary in the original thread. When `false`, only the `codeReview` item is emitted for the review run and no extra message is added to the original thread.
+
+Example request/response:
+
+```json
+{ "method": "review/start", "id": 40, "params": {
+    "threadId": "thr_123",
+    "appendToOriginalThread": true,
+    "target": { "type": "commit", "sha": "1234567deadbeef", "title": "Polish tui colors" }
+} }
+{ "id": 40, "result": { "turn": {
+    "id": "turn_900",
+    "status": "inProgress",
+    "items": [
+        { "type": "userMessage", "id": "turn_900", "content": [ { "type": "text", "text": "Review commit 1234567: Polish tui colors" } ] }
+    ],
+    "error": null
+} } }
+```
+
+Codex streams the usual `turn/started` notification followed by an `item/started`
+with the same `codeReview` item id so clients can show progress:
+
+```json
+{ "method": "item/started", "params": { "item": {
+    "type": "codeReview",
+    "id": "turn_900",
+    "review": "current changes"
+} } }
+```
+
+When the reviewer finishes, the server emits `item/completed` containing the same
+`codeReview` item with the final review text:
+
+```json
+{ "method": "item/completed", "params": { "item": {
+    "type": "codeReview",
+    "id": "turn_900",
+    "review": "Looks solid overall...\n\n- Prefer Stylize helpers — app.rs:10-20\n  ..."
+} } }
+```
+
+The `review` string is plain text that already bundles the overall explanation plus a bullet list for each structured finding (matching `ThreadItem::CodeReview` in the generated schema). Use this notification to render the reviewer output in your client.
+
+## Events (work-in-progress)
+
+Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `turn/*`, and `item/*` notifications.
+
+### Turn events
+
+The app-server streams JSON-RPC notifications while a turn is running. Each turn starts with `turn/started` (initial `turn`) and ends with `turn/completed` (final `turn` plus token `usage`), and clients subscribe to the events they care about, rendering each item incrementally as updates arrive. The per-item lifecycle is always: `item/started` → zero or more item-specific deltas → `item/completed`.
+
+- `turn/started` — `{ turn }` with the turn id, empty `items`, and `status: "inProgress"`.
+- `turn/completed` — `{ turn }` where `turn.status` is `completed`, `interrupted`, or `failed`; failures carry `{ error: { message, codexErrorInfo? } }`.
+
+Today both notifications carry an empty `items` array even when item events were streamed; rely on `item/*` notifications for the canonical item list until this is fixed.
+
+#### Thread items
+
+`ThreadItem` is the tagged union carried in turn responses and `item/*` notifications. Currently we support events for the following items:
+- `userMessage` — `{id, content}` where `content` is a list of user inputs (`text`, `image`, or `localImage`).
+- `agentMessage` — `{id, text}` containing the accumulated agent reply.
+- `reasoning` — `{id, summary, content}` where `summary` holds streamed reasoning summaries (applicable for most OpenAI models) and `content` holds raw reasoning blocks (applicable for e.g. open source models).
+- `commandExecution` — `{id, command, cwd, status, commandActions, aggregatedOutput?, exitCode?, durationMs?}` for sandboxed commands; `status` is `inProgress`, `completed`, `failed`, or `declined`.
+- `fileChange` — `{id, changes, status}` describing proposed edits; `changes` list `{path, kind, diff}` and `status` is `inProgress`, `completed`, `failed`, or `declined`.
+- `mcpToolCall` — `{id, server, tool, status, arguments, result?, error?}` describing MCP calls; `status` is `inProgress`, `completed`, or `failed`.
+- `webSearch` — `{id, query}` for a web search request issued by the agent.
+
+All items emit two shared lifecycle events:
+- `item/started` — emits the full `item` when a new unit of work begins so the UI can render it immediately; the `item.id` in this payload matches the `itemId` used by deltas.
+- `item/completed` — sends the final `item` once that work finishes (e.g., after a tool call or message completes); treat this as the authoritative state.
+
+There are additional item-specific events:
+#### agentMessage
+- `item/agentMessage/delta` — appends streamed text for the agent message; concatenate `delta` values for the same `itemId` in order to reconstruct the full reply.
+#### reasoning
+- `item/reasoning/summaryTextDelta` — streams readable reasoning summaries; `summaryIndex` increments when a new summary section opens.
+- `item/reasoning/summaryPartAdded` — marks the boundary between reasoning summary sections for an `itemId`; subsequent `summaryTextDelta` entries share the same `summaryIndex`.
+- `item/reasoning/textDelta` — streams raw reasoning text (only applicable for e.g. open source models); use `contentIndex` to group deltas that belong together before showing them in the UI.
+#### commandExecution
+- `item/commandExecution/outputDelta` — streams stdout/stderr for the command; append deltas in order to render live output alongside `aggregatedOutput` in the final item.
+Final `commandExecution` items include parsed `commandActions`, `status`, `exitCode`, and `durationMs` so the UI can summarize what ran and whether it succeeded.
+#### fileChange
+`fileChange` items contain a `changes` list with `{path, kind, diff}` entries (`kind` is `add`, `delete`, or `update` with an optional `movePath`). The `status` tracks whether apply succeeded (`completed`), failed, or was `declined`.
+
+### Errors
+`error` event is emitted whenever the server hits an error mid-turn (for example, upstream model errors or quota limits). Carries the same `{ error: { message, codexErrorInfo? } }` payload as `turn.status: "failed"` and may precede that terminal notification.
+
+  `codexErrorInfo` maps to the `CodexErrorInfo` enum. Common values:
+  - `ContextWindowExceeded`
+  - `UsageLimitExceeded`
+  - `HttpConnectionFailed { httpStatusCode? }`: upstream HTTP failures including 4xx/5xx
+  - `ResponseStreamConnectionFailed { httpStatusCode? }`: failure to connect to the response SSE stream
+  - `ResponseStreamDisconnected { httpStatusCode? }`: disconnect of the response SSE stream in the middle of a turn before completion
+  - `ResponseTooManyFailedAttempts { httpStatusCode? }`
+  - `BadRequest`
+  - `Unauthorized`
+  - `SandboxError`
+  - `InternalServerError`
+  - `Other`: all unclassified errors
+
+When an upstream HTTP status is available (for example, from the Responses API or a provider), it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.
+
+## Approvals
+
+Certain actions (shell commands or modifying files) may require explicit user approval depending on the user's config. When `turn/start` is used, the app-server drives an approval flow by sending a server-initiated JSON-RPC request to the client. The client must respond to tell Codex whether to proceed. UIs should present these requests inline with the active turn so users can review the proposed command or diff before choosing.
+
+- Requests include `threadId` and `turnId`—use them to scope UI state to the active conversation.
+- Respond with a single `{ "decision": "accept" | "decline" }` payload (plus optional `acceptSettings` on command executions). The server resumes or declines the work and ends the item with `item/completed`.
+
+### Command execution approvals
+
+Order of messages:
+1. `item/started` — shows the pending `commandExecution` item with `command`, `cwd`, and other fields so you can render the proposed action.
+2. `item/commandExecution/requestApproval` (request) — carries the same `itemId`, `threadId`, `turnId`, optionally `reason` or `risk`, plus `parsedCmd` for friendly display.
+3. Client response — `{ "decision": "accept", "acceptSettings": { "forSession": false } }` or `{ "decision": "decline" }`.
+4. `item/completed` — final `commandExecution` item with `status: "completed" | "failed" | "declined"` and execution output. Render this as the authoritative result.
+
+### File change approvals
+
+Order of messages:
+1. `item/started` — emits a `fileChange` item with `changes` (diff chunk summaries) and `status: "inProgress"`. Show the proposed edits and paths to the user.
+2. `item/fileChange/requestApproval` (request) — includes `itemId`, `threadId`, `turnId`, and an optional `reason`.
+3. Client response — `{ "decision": "accept" }` or `{ "decision": "decline" }`.
+4. `item/completed` — returns the same `fileChange` item with `status` updated to `completed`, `failed`, or `declined` after the patch attempt. Rely on this to show success/failure and finalize the diff state in your UI.
+
+UI guidance for IDEs: surface an approval dialog as soon as the request arrives. The turn will proceed after the server receives a response to the approval request. The terminal `item/completed` notification will be sent with the appropriate status.
+
 ## Auth endpoints
 
 The JSON-RPC auth/account surface exposes request/response methods plus server-initiated notifications (no `id`). Use these to determine auth state, start or cancel logins, logout, and inspect ChatGPT rate limits.
@@ -276,33 +413,3 @@ Field notes:
 - `codex app-server generate-ts --out <dir>` emits v2 types under `v2/`.
 - `codex app-server generate-json-schema --out <dir>` outputs `codex_app_server_protocol.schemas.json`.
 - See [“Authentication and authorization” in the config docs](../../docs/config.md#authentication-and-authorization) for configuration knobs.
-
-
-## Events (work-in-progress)
-
-Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `turn/*`, and `item/*` notifications.
-
-### Turn events
-
-The app-server streams JSON-RPC notifications while a turn is running. Each turn starts with `turn/started` (initial `turn`) and ends with `turn/completed` (final `turn` plus token `usage`), and clients subscribe to the events they care about, rendering each item incrementally as updates arrive. The per-item lifecycle is always: `item/started` → zero or more item-specific deltas → `item/completed`.
-
-#### Thread items
-
-`ThreadItem` is the tagged union carried in turn responses and `item/*` notifications. Currently we support events for the following items:
-- `userMessage` — `{id, content}` where `content` is a list of user inputs (`text`, `image`, or `localImage`).
-- `agentMessage` — `{id, text}` containing the accumulated agent reply.
-- `reasoning` — `{id, summary, content}` where `summary` holds streamed reasoning summaries (applicable for most OpenAI models) and `content` holds raw reasoning blocks (applicable for e.g. open source models).
-- `mcpToolCall` — `{id, server, tool, status, arguments, result?, error?}` describing MCP calls; `status` is `inProgress`, `completed`, or `failed`.
-- `webSearch` — `{id, query}` for a web search request issued by the agent.
-
-All items emit two shared lifecycle events:
-- `item/started` — emits the full `item` when a new unit of work begins so the UI can render it immediately; the `item.id` in this payload matches the `itemId` used by deltas.
-- `item/completed` — sends the final `item` once that work finishes (e.g., after a tool call or message completes); treat this as the authoritative state.
-
-There are additional item-specific events:
-#### agentMessage
-- `item/agentMessage/delta` — appends streamed text for the agent message; concatenate `delta` values for the same `itemId` in order to reconstruct the full reply.
-#### reasoning
-- `item/reasoning/summaryTextDelta` — streams readable reasoning summaries; `summaryIndex` increments when a new summary section opens.
-- `item/reasoning/summaryPartAdded` — marks the boundary between reasoning summary sections for an `itemId`; subsequent `summaryTextDelta` entries share the same `summaryIndex`.
-- `item/reasoning/textDelta` — streams raw reasoning text (only applicable for e.g. open source models); use `contentIndex` to group deltas that belong together before showing them in the UI.

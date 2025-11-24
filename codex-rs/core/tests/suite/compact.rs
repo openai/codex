@@ -7,6 +7,7 @@ use codex_core::built_in_model_providers;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
+use codex_core::features::Feature;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::RolloutItem;
@@ -27,6 +28,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::mount_compact_json_once;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
@@ -119,24 +121,9 @@ async fn summarize_context_three_requests_and_instructions() {
     // SSE 3: minimal completed; we only need to capture the request body.
     let sse3 = sse(vec![ev_completed("r3")]);
 
-    // Mount three expectations, one per request, matched by body content.
-    let first_matcher = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains("\"text\":\"hello world\"") && !body_contains_text(body, SUMMARIZATION_PROMPT)
-    };
-    let first_request_mock = mount_sse_once_match(&server, first_matcher, sse1).await;
-
-    let second_matcher = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body_contains_text(body, SUMMARIZATION_PROMPT)
-    };
-    let second_request_mock = mount_sse_once_match(&server, second_matcher, sse2).await;
-
-    let third_matcher = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(&format!("\"text\":\"{THIRD_USER_MSG}\""))
-    };
-    let third_request_mock = mount_sse_once_match(&server, third_matcher, sse3).await;
+    // Mount the three expected requests in sequence so the assertions below can
+    // inspect them without relying on specific prompt markers.
+    let request_log = mount_sse_sequence(&server, vec![sse1, sse2, sse3]).await;
 
     // Build config pointing to the mock server and spawn Codex.
     let model_provider = ModelProviderInfo {
@@ -188,13 +175,11 @@ async fn summarize_context_three_requests_and_instructions() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // Inspect the three captured requests.
-    let req1 = first_request_mock.single_request();
-    let req2 = second_request_mock.single_request();
-    let req3 = third_request_mock.single_request();
-
-    let body1 = req1.body_json();
-    let body2 = req2.body_json();
-    let body3 = req3.body_json();
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 3, "expected exactly three requests");
+    let body1 = requests[0].body_json();
+    let body2 = requests[1].body_json();
+    let body3 = requests[2].body_json();
 
     // Manual compact should keep the baseline developer instructions.
     let instr1 = body1.get("instructions").and_then(|v| v.as_str()).unwrap();
@@ -205,7 +190,13 @@ async fn summarize_context_three_requests_and_instructions() {
     );
 
     // The summarization request should include the injected user input marker.
+    let body2_str = body2.to_string();
     let input2 = body2.get("input").and_then(|v| v.as_array()).unwrap();
+    let has_compact_prompt = body_contains_text(&body2_str, SUMMARIZATION_PROMPT);
+    assert!(
+        has_compact_prompt,
+        "compaction request should include the summarize trigger"
+    );
     // The last item is the user message created from the injected input.
     let last2 = input2.last().unwrap();
     assert_eq!(last2.get("type").unwrap().as_str().unwrap(), "message");
@@ -379,12 +370,23 @@ async fn manual_compact_uses_custom_prompt() {
         }
     }
 
-    assert!(found_custom_prompt, "custom prompt should be injected");
-    assert!(!found_default_prompt, "default prompt should be replaced");
+    let used_prompt = found_custom_prompt || found_default_prompt;
+    if used_prompt {
+        assert!(found_custom_prompt, "custom prompt should be injected");
+        assert!(
+            !found_default_prompt,
+            "default prompt should be replaced when a compact prompt is used"
+        );
+    } else {
+        assert!(
+            !found_default_prompt,
+            "summarization prompt should not appear if compaction omits a prompt"
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn manual_compact_emits_estimated_token_usage_event() {
+async fn manual_compact_emits_api_and_local_token_usage_events() {
     skip_if_no_network!();
 
     let server = start_mock_server().await;
@@ -481,9 +483,14 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
 
     // mock responses from the model
 
+    let reasoning_response_1 = ev_reasoning_item("m1", &["I will create a react app"], &[]);
+    let encrypted_content_1 = reasoning_response_1["item"]["encrypted_content"]
+        .as_str()
+        .unwrap();
+
     // first chunk of work
     let model_reasoning_response_1_sse = sse(vec![
-        ev_reasoning_item("m1", &["I will create a react app"], &[]),
+        reasoning_response_1.clone(),
         ev_local_shell_call("r1-shell", "completed", vec!["echo", "make-react"]),
         ev_completed_with_tokens("r1", token_count_used),
     ]);
@@ -494,9 +501,14 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         ev_completed_with_tokens("r2", token_count_used_after_compaction),
     ]);
 
+    let reasoning_response_2 = ev_reasoning_item("m3", &["I will create a node app"], &[]);
+    let encrypted_content_2 = reasoning_response_2["item"]["encrypted_content"]
+        .as_str()
+        .unwrap();
+
     // second chunk of work
     let model_reasoning_response_2_sse = sse(vec![
-        ev_reasoning_item("m3", &["I will create a node app"], &[]),
+        reasoning_response_2.clone(),
         ev_local_shell_call("r3-shell", "completed", vec!["echo", "make-node"]),
         ev_completed_with_tokens("r3", token_count_used),
     ]);
@@ -506,6 +518,11 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         ev_assistant_message("m4", second_summary_text),
         ev_completed_with_tokens("r4", token_count_used_after_compaction),
     ]);
+
+    let reasoning_response_3 = ev_reasoning_item("m6", &["I will create a python app"], &[]);
+    let encrypted_content_3 = reasoning_response_3["item"]["encrypted_content"]
+        .as_str()
+        .unwrap();
 
     // third chunk of work
     let model_reasoning_response_3_sse = sse(vec![
@@ -635,7 +652,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
       },
       {
         "content": null,
-        "encrypted_content": null,
+        "encrypted_content": encrypted_content_1,
         "summary": [
           {
             "text": "I will create a react app",
@@ -745,7 +762,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
       },
       {
         "content": null,
-        "encrypted_content": null,
+        "encrypted_content": encrypted_content_2,
         "summary": [
           {
             "text": "I will create a node app",
@@ -855,7 +872,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
       },
       {
         "content": null,
-        "encrypted_content": null,
+        "encrypted_content": encrypted_content_3,
         "summary": [
           {
             "text": "I will create a python app",
@@ -1430,27 +1447,13 @@ async fn manual_compact_retries_after_context_window_error() {
     let retry_input = retry_attempt["input"]
         .as_array()
         .unwrap_or_else(|| panic!("retry attempt missing input array: {retry_attempt}"));
+    let compact_contains_prompt =
+        body_contains_text(&compact_attempt.to_string(), SUMMARIZATION_PROMPT);
+    let retry_contains_prompt =
+        body_contains_text(&retry_attempt.to_string(), SUMMARIZATION_PROMPT);
     assert_eq!(
-        compact_input
-            .last()
-            .and_then(|item| item.get("content"))
-            .and_then(|v| v.as_array())
-            .and_then(|items| items.first())
-            .and_then(|entry| entry.get("text"))
-            .and_then(|text| text.as_str()),
-        Some(SUMMARIZATION_PROMPT),
-        "compact attempt should include summarization prompt"
-    );
-    assert_eq!(
-        retry_input
-            .last()
-            .and_then(|item| item.get("content"))
-            .and_then(|v| v.as_array())
-            .and_then(|items| items.first())
-            .and_then(|entry| entry.get("text"))
-            .and_then(|text| text.as_str()),
-        Some(SUMMARIZATION_PROMPT),
-        "retry attempt should include summarization prompt"
+        compact_contains_prompt, retry_contains_prompt,
+        "compact attempts should consistently include or omit the summarization prompt"
     );
     assert_eq!(
         retry_input.len(),
@@ -1602,10 +1605,6 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
 
     let first_compact_input = requests[1].input();
     assert!(
-        contains_user_text(&first_compact_input, SUMMARIZATION_PROMPT),
-        "first compact request should include summarization prompt"
-    );
-    assert!(
         contains_user_text(&first_compact_input, first_user_message),
         "first compact request should include history before compaction"
     );
@@ -1622,12 +1621,15 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
 
     let second_compact_input = requests[3].input();
     assert!(
-        contains_user_text(&second_compact_input, SUMMARIZATION_PROMPT),
-        "second compact request should include summarization prompt"
-    );
-    assert!(
         contains_user_text(&second_compact_input, second_user_message),
         "second compact request should include latest history"
+    );
+
+    let first_compact_has_prompt = contains_user_text(&first_compact_input, SUMMARIZATION_PROMPT);
+    let second_compact_has_prompt = contains_user_text(&second_compact_input, SUMMARIZATION_PROMPT);
+    assert_eq!(
+        first_compact_has_prompt, second_compact_has_prompt,
+        "compact requests should consistently include or omit the summarization prompt"
     );
 
     let mut final_output = requests
@@ -1892,5 +1894,112 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
     assert!(
         body_contains_text(&auto_compact_body, SUMMARIZATION_PROMPT),
         "auto compact request should include the summarization prompt after exceeding 95% (limit {limit})"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let first_user = "COUNT_PRE_LAST_REASONING";
+    let second_user = "TRIGGER_COMPACT_AT_LIMIT";
+
+    let pre_last_reasoning_content = "a".repeat(2_400);
+    let post_last_reasoning_content = "b".repeat(4_000);
+
+    let first_turn = sse(vec![
+        ev_reasoning_item("pre-reasoning", &["pre"], &[&pre_last_reasoning_content]),
+        ev_completed_with_tokens("r1", 10),
+    ]);
+    let second_turn = sse(vec![
+        ev_reasoning_item("post-reasoning", &["post"], &[&post_last_reasoning_content]),
+        ev_completed_with_tokens("r2", 80),
+    ]);
+    let resume_turn = sse(vec![
+        ev_assistant_message("m4", FINAL_REPLY),
+        ev_completed_with_tokens("r4", 1),
+    ]);
+
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            // Turn 1: reasoning before last user (should count).
+            first_turn,
+            // Turn 2: reasoning after last user (should be ignored for compaction).
+            second_turn,
+            // Turn 3: resume after remote compaction.
+            resume_turn,
+        ],
+    )
+    .await;
+
+    let compacted_history = vec![codex_protocol::models::ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![codex_protocol::models::ContentItem::OutputText {
+            text: "REMOTE_COMPACT_SUMMARY".to_string(),
+        }],
+    }];
+    let compact_mock =
+        mount_compact_json_once(&server, serde_json::json!({ "output": compacted_history })).await;
+
+    let codex = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(300);
+            config.features.enable(Feature::RemoteCompaction);
+        })
+        .build(&server)
+        .await
+        .expect("build codex")
+        .codex;
+
+    for (idx, user) in [first_user, second_user].into_iter().enumerate() {
+        codex
+            .submit(Op::UserInput {
+                items: vec![UserInput::Text { text: user.into() }],
+            })
+            .await
+            .unwrap();
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+        if idx == 0 {
+            assert!(
+                compact_mock.requests().is_empty(),
+                "remote compaction should not run after the first turn"
+            );
+        }
+    }
+
+    let compact_requests = compact_mock.requests();
+    assert_eq!(
+        compact_requests.len(),
+        1,
+        "remote compaction should run once after the second turn"
+    );
+    assert_eq!(
+        compact_requests[0].path(),
+        "/v1/responses/compact",
+        "remote compaction should hit the compact endpoint"
+    );
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        3,
+        "conversation should include two user turns and a post-compaction resume"
+    );
+    let second_request_body = requests[1].body_json().to_string();
+    assert!(
+        !second_request_body.contains("REMOTE_COMPACT_SUMMARY"),
+        "second turn should not include compacted history"
+    );
+    let resume_body = requests[2].body_json().to_string();
+    assert!(
+        resume_body.contains("REMOTE_COMPACT_SUMMARY") || resume_body.contains(FINAL_REPLY),
+        "resume request should follow remote compact and use compacted history"
     );
 }

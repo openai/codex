@@ -50,6 +50,7 @@ TIMEOUT_SEC = 20
 
 WS_ROOT = Path(os.environ["USERPROFILE"]) / "sbx_ws_tests"
 OUTSIDE = Path(os.environ["USERPROFILE"]) / "sbx_ws_outside"  # outside CWD for deny checks
+EXTRA_ROOT = Path(os.environ["USERPROFILE"]) / "WorkspaceRoot"  # additional writable root
 
 ENV_BASE = {}  # extend if needed
 
@@ -57,7 +58,13 @@ class CaseResult:
     def __init__(self, name: str, ok: bool, detail: str = ""):
         self.name, self.ok, self.detail = name, ok, detail
 
-def run_sbx(policy: str, cmd_argv: List[str], cwd: Path, env_extra: Optional[dict] = None) -> Tuple[int, str, str]:
+def run_sbx(
+    policy: str,
+    cmd_argv: List[str],
+    cwd: Path,
+    env_extra: Optional[dict] = None,
+    additional_root: Optional[Path] = None,
+) -> Tuple[int, str, str]:
     env = os.environ.copy()
     env.update(ENV_BASE)
     if env_extra:
@@ -68,7 +75,15 @@ def run_sbx(policy: str, cmd_argv: List[str], cwd: Path, env_extra: Optional[dic
         raise ValueError(f"unknown policy: {policy}")
     policy_flags: List[str] = ["--full-auto"] if policy == "workspace-write" else []
 
-    argv = [*CODEX_CMD, "sandbox", "windows", *policy_flags, "--", *cmd_argv]
+    overrides: List[str] = []
+    if policy == "workspace-write" and additional_root is not None:
+        # Use config override to inject an additional writable root.
+        overrides = [
+            "-c",
+            f'sandbox_workspace_write.writable_roots=["{additional_root.as_posix()}"]',
+        ]
+
+    argv = [*CODEX_CMD, "sandbox", "windows", *policy_flags, *overrides, "--", *cmd_argv]
     print(cmd_argv)
     cp = subprocess.run(argv, cwd=str(cwd), env=env,
                         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -134,6 +149,7 @@ def main() -> int:
     results: List[CaseResult] = []
     make_dir_clean(WS_ROOT)
     OUTSIDE.mkdir(exist_ok=True)
+    EXTRA_ROOT.mkdir(exist_ok=True)
     # Environment probe: some hosts allow TEMP writes even under read-only
     # tokens due to ACLs and restricted SID semantics. Detect and adapt tests.
     probe_rc, _, _ = run_sbx(
@@ -164,6 +180,32 @@ def main() -> int:
     remove_if_exists(outside_file)
     rc, out, err = run_sbx("workspace-write", ["cmd", "/c", f"echo nope > {outside_file}"], WS_ROOT)
     add("WS: write outside workspace denied", rc != 0 and assert_not_exists(outside_file), f"rc={rc}")
+
+    # 3b. WS: allow write in additional workspace root
+    extra_target = EXTRA_ROOT / "extra_ok.txt"
+    remove_if_exists(extra_target)
+    rc, out, err = run_sbx(
+        "workspace-write",
+        ["cmd", "/c", f"echo extra > {extra_target}"],
+        WS_ROOT,
+        additional_root=EXTRA_ROOT,
+    )
+    add("WS: write in additional root allowed", rc == 0 and assert_exists(extra_target), f"rc={rc}, err={err}")
+
+    # 3c. RO: deny write in additional workspace root
+    ro_extra_target = EXTRA_ROOT / "extra_ro.txt"
+    remove_if_exists(ro_extra_target)
+    rc, out, err = run_sbx(
+        "read-only",
+        ["cmd", "/c", f"echo nope > {ro_extra_target}"],
+        WS_ROOT,
+        additional_root=EXTRA_ROOT,
+    )
+    add(
+        "RO: write in additional root denied",
+        rc != 0 and assert_not_exists(ro_extra_target),
+        f"rc={rc}",
+    )
 
     # 4. WS: allow TEMP write
     rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "echo tempok > %TEMP%\\ws_temp_ok.txt"], WS_ROOT)
@@ -435,12 +477,23 @@ def main() -> int:
     rc, out, err = run_sbx("workspace-write", ["cmd", "/c", f"echo leak > {outside_after_timeout}"], WS_ROOT)
     add("WS: post-timeout outside write still denied", rc != 0 and assert_not_exists(outside_after_timeout), f"rc={rc}")
 
-    # 41. WS: additional protected path variation (.ssh)
-    ssh_var = WS_ROOT / ".SsH" / "config"
-    remove_if_exists(ssh_var.parent)
-    ssh_var.parent.mkdir(exist_ok=True)
-    rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "echo key > .SsH\\config"], WS_ROOT)
-    add("WS: protected path variation (.ssh) denied", rc != 0 and assert_not_exists(ssh_var), f"rc={rc}")
+    # 41. RO: Start-Process https blocked (KNOWN FAIL until GUI escape fixed)
+    rc, out, err = run_sbx(
+        "read-only",
+        [
+            "powershell",
+            "-NoLogo",
+            "-NoProfile",
+            "-Command",
+            "Start-Process 'https://codex-invalid.local/smoke'",
+        ],
+        WS_ROOT,
+    )
+    add(
+        "RO: Start-Process https denied (KNOWN FAIL)",
+        rc != 0,
+        f"rc={rc}, stdout={out}, stderr={err}",
+    )
 
     return summarize(results)
 

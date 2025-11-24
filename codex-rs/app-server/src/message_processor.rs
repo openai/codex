@@ -6,7 +6,6 @@ use crate::outgoing_message::OutgoingMessageSender;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::InitializeResponse;
-
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCNotification;
@@ -118,6 +117,7 @@ impl MessageProcessor {
                     self.outgoing.send_response(request_id, response).await;
 
                     self.initialized = true;
+
                     return;
                 }
             }

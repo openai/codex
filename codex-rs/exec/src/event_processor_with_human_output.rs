@@ -163,7 +163,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
     fn process_event(&mut self, event: Event) -> CodexStatus {
         let Event { id: _, msg } = event;
         match msg {
-            EventMsg::Error(ErrorEvent { message }) => {
+            EventMsg::Error(ErrorEvent { message, .. }) => {
                 let prefix = "ERROR:".style(self.red);
                 ts_msg!(self, "{prefix} {message}");
             }
@@ -223,11 +223,24 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
                 ts_msg!(self, "{}", message.style(self.dimmed));
             }
-            EventMsg::StreamError(StreamErrorEvent { message }) => {
+            EventMsg::StreamError(StreamErrorEvent { message, .. }) => {
                 ts_msg!(self, "{}", message.style(self.dimmed));
             }
             EventMsg::TaskStarted(_) => {
                 // Ignore.
+            }
+            EventMsg::ElicitationRequest(ev) => {
+                ts_msg!(
+                    self,
+                    "{} {}",
+                    "elicitation request".style(self.magenta),
+                    ev.server_name.style(self.dimmed)
+                );
+                ts_msg!(
+                    self,
+                    "{}",
+                    "auto-cancelling (not supported in exec mode)".style(self.dimmed)
+                );
             }
             EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
                 let last_message = last_agent_message.as_deref();
@@ -348,6 +361,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 call_id,
                 auto_approved,
                 changes,
+                ..
             }) => {
                 // Store metadata so we can calculate duration later when we
                 // receive the corresponding PatchApplyEnd event.
@@ -482,11 +496,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 let SessionConfiguredEvent {
                     session_id: conversation_id,
                     model,
-                    reasoning_effort: _,
-                    history_log_id: _,
-                    history_entry_count: _,
-                    initial_messages: _,
-                    rollout_path: _,
+                    ..
                 } = session_configured_event;
 
                 ts_msg!(

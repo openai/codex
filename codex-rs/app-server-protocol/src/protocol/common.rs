@@ -129,6 +129,10 @@ client_request_definitions! {
         params: v2::TurnInterruptParams,
         response: v2::TurnInterruptResponse,
     },
+    ReviewStart => "review/start" {
+        params: v2::ReviewStartParams,
+        response: v2::TurnStartResponse,
+    },
 
     ModelList => "model/list" {
         params: v2::ModelListParams,
@@ -374,7 +378,7 @@ macro_rules! server_notification_definitions {
         impl TryFrom<JSONRPCNotification> for ServerNotification {
             type Error = serde_json::Error;
 
-            fn try_from(value: JSONRPCNotification) -> Result<Self, Self::Error> {
+            fn try_from(value: JSONRPCNotification) -> Result<Self, serde_json::Error> {
                 serde_json::from_value(serde_json::to_value(value)?)
             }
         }
@@ -434,6 +438,13 @@ server_request_definitions! {
         response: v2::CommandExecutionRequestApprovalResponse,
     },
 
+    /// Sent when approval is requested for a specific file change.
+    /// This request is used for Turns started via turn/start.
+    FileChangeRequestApproval => "item/fileChange/requestApproval" {
+        params: v2::FileChangeRequestApprovalParams,
+        response: v2::FileChangeRequestApprovalResponse,
+    },
+
     /// DEPRECATED APIs below
     /// Request to approve a patch.
     /// This request is used for Turns started via the legacy APIs (i.e. SendUserTurn, SendUserMessage).
@@ -476,6 +487,7 @@ pub struct FuzzyFileSearchResponse {
 
 server_notification_definitions! {
     /// NEW NOTIFICATIONS
+    Error => "error" (v2::ErrorNotification),
     ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
     TurnCompleted => "turn/completed" (v2::TurnCompletedNotification),
@@ -489,6 +501,9 @@ server_notification_definitions! {
     ReasoningSummaryTextDelta => "item/reasoning/summaryTextDelta" (v2::ReasoningSummaryTextDeltaNotification),
     ReasoningSummaryPartAdded => "item/reasoning/summaryPartAdded" (v2::ReasoningSummaryPartAddedNotification),
     ReasoningTextDelta => "item/reasoning/textDelta" (v2::ReasoningTextDeltaNotification),
+
+    /// Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.
+    WindowsWorldWritableWarning => "windows/worldWritableWarning" (v2::WindowsWorldWritableWarningNotification),
 
     #[serde(rename = "account/login/completed")]
     #[ts(rename = "account/login/completed")]
@@ -524,7 +539,7 @@ mod tests {
         let request = ClientRequest::NewConversation {
             request_id: RequestId::Integer(42),
             params: v1::NewConversationParams {
-                model: Some("gpt-5.1-codex".to_string()),
+                model: Some("gpt-5.1-codex-max".to_string()),
                 model_provider: None,
                 profile: None,
                 cwd: None,
@@ -542,7 +557,7 @@ mod tests {
                 "method": "newConversation",
                 "id": 42,
                 "params": {
-                    "model": "gpt-5.1-codex",
+                    "model": "gpt-5.1-codex-max",
                     "modelProvider": null,
                     "profile": null,
                     "cwd": null,

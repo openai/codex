@@ -5,16 +5,19 @@ use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::time::Duration;
 use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::StreamOutput;
 use crate::exec_env::create_env;
+use crate::exec_policy::create_approval_requirement_for_command;
 use crate::protocol::BackgroundEventEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandSource;
 use crate::sandboxing::ExecEnv;
+use crate::sandboxing::SandboxPermissions;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventFailure;
@@ -23,6 +26,9 @@ use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
 use crate::tools::sandboxing::ToolCtx;
+use crate::truncate::TruncationPolicy;
+use crate::truncate::approx_token_count;
+use crate::truncate::formatted_truncate_text;
 
 use super::ExecCommandRequest;
 use super::SessionEntry;
@@ -35,8 +41,19 @@ use super::clamp_yield_time;
 use super::generate_chunk_id;
 use super::resolve_max_tokens;
 use super::session::OutputBuffer;
+use super::session::OutputHandles;
 use super::session::UnifiedExecSession;
-use crate::truncate::truncate_output_to_tokens;
+
+struct PreparedSessionHandles {
+    writer_tx: mpsc::Sender<Vec<u8>>,
+    output_buffer: OutputBuffer,
+    output_notify: Arc<Notify>,
+    cancellation_token: CancellationToken,
+    session_ref: Arc<Session>,
+    turn_ref: Arc<TurnContext>,
+    command: Vec<String>,
+    cwd: PathBuf,
+}
 
 impl UnifiedExecSessionManager {
     pub(crate) async fn exec_command(
@@ -63,14 +80,23 @@ impl UnifiedExecSessionManager {
         let yield_time_ms = clamp_yield_time(request.yield_time_ms);
 
         let start = Instant::now();
-        let (output_buffer, output_notify) = session.output_handles();
+        let OutputHandles {
+            output_buffer,
+            output_notify,
+            cancellation_token,
+        } = session.output_handles();
         let deadline = start + Duration::from_millis(yield_time_ms);
-        let collected =
-            Self::collect_output_until_deadline(&output_buffer, &output_notify, deadline).await;
+        let collected = Self::collect_output_until_deadline(
+            &output_buffer,
+            &output_notify,
+            &cancellation_token,
+            deadline,
+        )
+        .await;
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let text = String::from_utf8_lossy(&collected).to_string();
-        let (output, original_token_count) = truncate_output_to_tokens(&text, max_tokens);
+        let output = formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
         let chunk_id = generate_chunk_id();
         let has_exited = session.has_exited();
         let stored_id = self
@@ -85,6 +111,8 @@ impl UnifiedExecSessionManager {
         // Only include a session_id in the response if the process is still alive.
         let session_id = if has_exited { None } else { Some(stored_id) };
 
+        let original_token_count = approx_token_count(&text);
+
         let response = UnifiedExecResponse {
             event_call_id: context.call_id.clone(),
             chunk_id,
@@ -92,7 +120,7 @@ impl UnifiedExecSessionManager {
             output,
             session_id,
             exit_code: exit_code.flatten(),
-            original_token_count,
+            original_token_count: Some(original_token_count),
             session_command: Some(request.command.clone()),
         };
 
@@ -123,15 +151,16 @@ impl UnifiedExecSessionManager {
     ) -> Result<UnifiedExecResponse, UnifiedExecError> {
         let session_id = request.session_id;
 
-        let (
+        let PreparedSessionHandles {
             writer_tx,
             output_buffer,
             output_notify,
+            cancellation_token,
             session_ref,
             turn_ref,
-            session_command,
-            session_cwd,
-        ) = self.prepare_session_handles(session_id).await?;
+            command: session_command,
+            cwd: session_cwd,
+        } = self.prepare_session_handles(session_id).await?;
 
         let interaction_emitter = ToolEmitter::unified_exec(
             &session_command,
@@ -170,12 +199,18 @@ impl UnifiedExecSessionManager {
         let yield_time_ms = clamp_yield_time(request.yield_time_ms);
         let start = Instant::now();
         let deadline = start + Duration::from_millis(yield_time_ms);
-        let collected =
-            Self::collect_output_until_deadline(&output_buffer, &output_notify, deadline).await;
+        let collected = Self::collect_output_until_deadline(
+            &output_buffer,
+            &output_notify,
+            &cancellation_token,
+            deadline,
+        )
+        .await;
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let text = String::from_utf8_lossy(&collected).to_string();
-        let (output, original_token_count) = truncate_output_to_tokens(&text, max_tokens);
+        let output = formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
+        let original_token_count = approx_token_count(&text);
         let chunk_id = generate_chunk_id();
 
         let status = self.refresh_session_state(session_id).await;
@@ -199,7 +234,7 @@ impl UnifiedExecSessionManager {
             output,
             session_id,
             exit_code,
-            original_token_count,
+            original_token_count: Some(original_token_count),
             session_command: Some(session_command.clone()),
         };
 
@@ -258,44 +293,27 @@ impl UnifiedExecSessionManager {
     async fn prepare_session_handles(
         &self,
         session_id: i32,
-    ) -> Result<
-        (
-            mpsc::Sender<Vec<u8>>,
-            OutputBuffer,
-            Arc<Notify>,
-            Arc<Session>,
-            Arc<TurnContext>,
-            Vec<String>,
-            PathBuf,
-        ),
-        UnifiedExecError,
-    > {
+    ) -> Result<PreparedSessionHandles, UnifiedExecError> {
         let sessions = self.sessions.lock().await;
-        let (output_buffer, output_notify, writer_tx, session, turn, command, cwd) =
-            if let Some(entry) = sessions.get(&session_id) {
-                let (buffer, notify) = entry.session.output_handles();
-                (
-                    buffer,
-                    notify,
-                    entry.session.writer_sender(),
-                    Arc::clone(&entry.session_ref),
-                    Arc::clone(&entry.turn_ref),
-                    entry.command.clone(),
-                    entry.cwd.clone(),
-                )
-            } else {
-                return Err(UnifiedExecError::UnknownSessionId { session_id });
-            };
-
-        Ok((
-            writer_tx,
+        let entry = sessions
+            .get(&session_id)
+            .ok_or(UnifiedExecError::UnknownSessionId { session_id })?;
+        let OutputHandles {
             output_buffer,
             output_notify,
-            session,
-            turn,
-            command,
-            cwd,
-        ))
+            cancellation_token,
+        } = entry.session.output_handles();
+
+        Ok(PreparedSessionHandles {
+            writer_tx: entry.session.writer_sender(),
+            output_buffer,
+            output_notify,
+            cancellation_token,
+            session_ref: Arc::clone(&entry.session_ref),
+            turn_ref: Arc::clone(&entry.turn_ref),
+            command: entry.command.clone(),
+            cwd: entry.cwd.clone(),
+        })
     }
 
     async fn send_input(
@@ -444,6 +462,13 @@ impl UnifiedExecSessionManager {
             create_env(&context.turn.shell_environment_policy),
             with_escalated_permissions,
             justification,
+            create_approval_requirement_for_command(
+                &context.turn.exec_policy,
+                command,
+                context.turn.approval_policy,
+                &context.turn.sandbox_policy,
+                SandboxPermissions::from(with_escalated_permissions.unwrap_or(false)),
+            ),
         );
         let tool_ctx = ToolCtx {
             session: context.session.as_ref(),
@@ -466,9 +491,13 @@ impl UnifiedExecSessionManager {
     pub(super) async fn collect_output_until_deadline(
         output_buffer: &OutputBuffer,
         output_notify: &Arc<Notify>,
+        cancellation_token: &CancellationToken,
         deadline: Instant,
     ) -> Vec<u8> {
+        const POST_EXIT_OUTPUT_GRACE: Duration = Duration::from_millis(25);
+
         let mut collected: Vec<u8> = Vec::with_capacity(4096);
+        let mut exit_signal_received = cancellation_token.is_cancelled();
         loop {
             let drained_chunks;
             let mut wait_for_output = None;
@@ -481,15 +510,27 @@ impl UnifiedExecSessionManager {
             }
 
             if drained_chunks.is_empty() {
+                exit_signal_received |= cancellation_token.is_cancelled();
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining == Duration::ZERO {
                     break;
                 }
 
                 let notified = wait_for_output.unwrap_or_else(|| output_notify.notified());
+                if exit_signal_received {
+                    let grace = remaining.min(POST_EXIT_OUTPUT_GRACE);
+                    if tokio::time::timeout(grace, notified).await.is_err() {
+                        break;
+                    }
+                    continue;
+                }
+
                 tokio::pin!(notified);
+                let exit_notified = cancellation_token.cancelled();
+                tokio::pin!(exit_notified);
                 tokio::select! {
                     _ = &mut notified => {}
+                    _ = &mut exit_notified => exit_signal_received = true,
                     _ = tokio::time::sleep(remaining) => break,
                 }
                 continue;
@@ -499,6 +540,7 @@ impl UnifiedExecSessionManager {
                 collected.extend_from_slice(&chunk);
             }
 
+            exit_signal_received |= cancellation_token.is_cancelled();
             if Instant::now() >= deadline {
                 break;
             }

@@ -54,6 +54,7 @@ use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_core::review_prompts::ReviewTarget;
 use codex_protocol::ConversationId;
+use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::user_input::UserInput;
 use crossterm::event::KeyCode;
@@ -96,8 +97,6 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PlainHistoryCell;
 use crate::markdown::append_markdown;
-#[cfg(target_os = "windows")]
-use crate::onboarding::WSL_INSTRUCTIONS;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::FlexRenderable;
@@ -302,6 +301,8 @@ pub(crate) struct ChatWidget {
     pending_notification: Option<Notification>,
     // Simple review mode flag; used to adjust layout and banners.
     is_review_mode: bool,
+    // Snapshot of token usage to restore after review mode exits.
+    pre_review_token_info: Option<Option<TokenUsageInfo>>,
     // Whether to add a final message separator after the last message
     needs_final_message_separator: bool,
 
@@ -501,16 +502,39 @@ impl ChatWidget {
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
-        if let Some(info) = info {
-            let context_window = info
-                .model_context_window
-                .or(self.config.model_context_window);
-            let percent = context_window.map(|window| {
+        match info {
+            Some(info) => self.apply_token_info(info),
+            None => {
+                self.bottom_pane.set_context_window_percent(None);
+                self.token_info = None;
+            }
+        }
+    }
+
+    fn apply_token_info(&mut self, info: TokenUsageInfo) {
+        let percent = self.context_remaining_percent(&info);
+        self.bottom_pane.set_context_window_percent(percent);
+        self.token_info = Some(info);
+    }
+
+    fn context_remaining_percent(&self, info: &TokenUsageInfo) -> Option<i64> {
+        info.model_context_window
+            .or(self.config.model_context_window)
+            .map(|window| {
                 info.last_token_usage
                     .percent_of_context_window_remaining(window)
-            });
-            self.bottom_pane.set_context_window_percent(percent);
-            self.token_info = Some(info);
+            })
+    }
+
+    fn restore_pre_review_token_info(&mut self) {
+        if let Some(saved) = self.pre_review_token_info.take() {
+            match saved {
+                Some(info) => self.apply_token_info(info),
+                None => {
+                    self.bottom_pane.set_context_window_percent(None);
+                    self.token_info = None;
+                }
+            }
         }
     }
 
@@ -717,6 +741,14 @@ impl ChatWidget {
         self.defer_or_handle(
             |q| q.push_apply_patch_approval(id, ev),
             |s| s.handle_apply_patch_approval_now(id2, ev2),
+        );
+    }
+
+    fn on_elicitation_request(&mut self, ev: ElicitationRequestEvent) {
+        let ev2 = ev.clone();
+        self.defer_or_handle(
+            |q| q.push_elicitation(ev),
+            |s| s.handle_elicitation_request_now(ev2),
         );
     }
 
@@ -949,6 +981,7 @@ impl ChatWidget {
                 parsed,
                 source,
                 None,
+                self.config.animations,
             )));
         }
 
@@ -1025,6 +1058,22 @@ impl ChatWidget {
         });
     }
 
+    pub(crate) fn handle_elicitation_request_now(&mut self, ev: ElicitationRequestEvent) {
+        self.flush_answer_stream_with_separator();
+
+        self.notify(Notification::ElicitationRequested {
+            server_name: ev.server_name.clone(),
+        });
+
+        let request = ApprovalRequest::McpElicitation {
+            server_name: ev.server_name,
+            request_id: ev.id,
+            message: ev.message,
+        };
+        self.bottom_pane.push_approval_request(request);
+        self.request_redraw();
+    }
+
     pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
         // Ensure the status indicator is visible while the command runs.
         self.running_commands.insert(
@@ -1058,6 +1107,7 @@ impl ChatWidget {
                 ev.parsed_cmd,
                 ev.source,
                 interaction_input,
+                self.config.animations,
             )));
         }
 
@@ -1070,6 +1120,7 @@ impl ChatWidget {
         self.active_cell = Some(Box::new(history_cell::new_active_mcp_tool_call(
             ev.call_id,
             ev.invocation,
+            self.config.animations,
         )));
         self.request_redraw();
     }
@@ -1091,7 +1142,11 @@ impl ChatWidget {
             Some(cell) if cell.call_id() == call_id => cell.complete(duration, result),
             _ => {
                 self.flush_active_cell();
-                let mut cell = history_cell::new_active_mcp_tool_call(call_id, invocation);
+                let mut cell = history_cell::new_active_mcp_tool_call(
+                    call_id,
+                    invocation,
+                    self.config.animations,
+                );
                 let extra_cell = cell.complete(duration, result);
                 self.active_cell = Some(Box::new(cell));
                 extra_cell
@@ -1133,6 +1188,7 @@ impl ChatWidget {
                 enhanced_keys_supported,
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
+                animations_enabled: config.animations,
             }),
             active_cell: None,
             config: config.clone(),
@@ -1162,6 +1218,7 @@ impl ChatWidget {
             suppress_session_configured_redraw: false,
             pending_notification: None,
             is_review_mode: false,
+            pre_review_token_info: None,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
@@ -1206,6 +1263,7 @@ impl ChatWidget {
                 enhanced_keys_supported,
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
+                animations_enabled: config.animations,
             }),
             active_cell: None,
             config: config.clone(),
@@ -1235,6 +1293,7 @@ impl ChatWidget {
             suppress_session_configured_redraw: true,
             pending_notification: None,
             is_review_mode: false,
+            pre_review_token_info: None,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
@@ -1449,6 +1508,7 @@ impl ChatWidget {
                     // }),
                     msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
                         call_id: "1".to_string(),
+                        turn_id: "turn-1".to_string(),
                         changes: HashMap::from([
                             (
                                 PathBuf::from("/tmp/test.txt"),
@@ -1639,7 +1699,7 @@ impl ChatWidget {
                 self.on_rate_limit_snapshot(ev.rate_limits);
             }
             EventMsg::Warning(WarningEvent { message }) => self.on_warning(message),
-            EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
+            EventMsg::Error(ErrorEvent { message, .. }) => self.on_error(message),
             EventMsg::McpStartupUpdate(ev) => self.on_mcp_startup_update(ev),
             EventMsg::McpStartupComplete(ev) => self.on_mcp_startup_complete(ev),
             EventMsg::TurnAborted(ev) => match ev.reason {
@@ -1660,6 +1720,9 @@ impl ChatWidget {
             }
             EventMsg::ApplyPatchApprovalRequest(ev) => {
                 self.on_apply_patch_approval_request(id.unwrap_or_default(), ev)
+            }
+            EventMsg::ElicitationRequest(ev) => {
+                self.on_elicitation_request(ev);
             }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::ExecCommandOutputDelta(delta) => self.on_exec_command_output_delta(delta),
@@ -1682,7 +1745,9 @@ impl ChatWidget {
             }
             EventMsg::UndoStarted(ev) => self.on_undo_started(ev),
             EventMsg::UndoCompleted(ev) => self.on_undo_completed(ev),
-            EventMsg::StreamError(StreamErrorEvent { message }) => self.on_stream_error(message),
+            EventMsg::StreamError(StreamErrorEvent { message, .. }) => {
+                self.on_stream_error(message)
+            }
             EventMsg::UserMessage(ev) => {
                 if from_replay {
                     self.on_user_message_event(ev);
@@ -1703,6 +1768,9 @@ impl ChatWidget {
 
     fn on_entered_review_mode(&mut self, review: ReviewRequest) {
         // Enter review mode and emit a concise banner
+        if self.pre_review_token_info.is_none() {
+            self.pre_review_token_info = Some(self.token_info.clone());
+        }
         self.is_review_mode = true;
         let banner = format!(">> Code review started: {} <<", review.user_facing_hint);
         self.add_to_history(history_cell::new_review_status_line(banner));
@@ -1743,6 +1811,7 @@ impl ChatWidget {
         }
 
         self.is_review_mode = false;
+        self.restore_pre_review_token_info();
         // Append a finishing banner at the end of this turn.
         self.add_to_history(history_cell::new_review_status_line(
             "<< Code review finished >>".to_string(),
@@ -2025,6 +2094,26 @@ impl ChatWidget {
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
         let supported = preset.supported_reasoning_efforts;
 
+        let warn_effort = if supported
+            .iter()
+            .any(|option| option.effort == ReasoningEffortConfig::XHigh)
+        {
+            Some(ReasoningEffortConfig::XHigh)
+        } else if supported
+            .iter()
+            .any(|option| option.effort == ReasoningEffortConfig::High)
+        {
+            Some(ReasoningEffortConfig::High)
+        } else {
+            None
+        };
+        let warning_text = warn_effort.map(|effort| {
+            let effort_label = Self::reasoning_effort_label(effort);
+            format!("⚠ {effort_label} reasoning effort can quickly consume Plus plan rate limits.")
+        });
+        let warn_for_model = preset.model.starts_with("gpt-5.1-codex")
+            || preset.model.starts_with("gpt-5.1-codex-max");
+
         struct EffortChoice {
             stored: Option<ReasoningEffortConfig>,
             display: ReasoningEffortConfig,
@@ -2069,13 +2158,18 @@ impl ChatWidget {
         } else {
             default_choice
         };
+        let selection_choice = highlight_choice.or(default_choice);
+        let initial_selected_idx = choices
+            .iter()
+            .position(|choice| choice.stored == selection_choice)
+            .or_else(|| {
+                selection_choice
+                    .and_then(|effort| choices.iter().position(|choice| choice.display == effort))
+            });
         let mut items: Vec<SelectionItem> = Vec::new();
         for choice in choices.iter() {
             let effort = choice.display;
-            let mut effort_label = effort.to_string();
-            if let Some(first) = effort_label.get_mut(0..1) {
-                first.make_ascii_uppercase();
-            }
+            let mut effort_label = Self::reasoning_effort_label(effort).to_string();
             if choice.stored == default_choice {
                 effort_label.push_str(" (default)");
             }
@@ -2090,14 +2184,17 @@ impl ChatWidget {
                 })
                 .filter(|text| !text.is_empty());
 
-            let warning = "⚠ High reasoning effort can quickly consume Plus plan rate limits.";
-            let show_warning =
-                preset.model.starts_with("gpt-5.1-codex") && effort == ReasoningEffortConfig::High;
-            let selected_description = show_warning.then(|| {
-                description
-                    .as_ref()
-                    .map_or(warning.to_string(), |d| format!("{d}\n{warning}"))
-            });
+            let show_warning = warn_for_model && warn_effort == Some(effort);
+            let selected_description = if show_warning {
+                warning_text.as_ref().map(|warning_message| {
+                    description.as_ref().map_or_else(
+                        || warning_message.clone(),
+                        |d| format!("{d}\n{warning_message}"),
+                    )
+                })
+            } else {
+                None
+            };
 
             let model_for_action = model_slug.clone();
             let effort_for_action = choice.stored;
@@ -2145,8 +2242,20 @@ impl ChatWidget {
             header: Box::new(header),
             footer_hint: Some(standard_popup_hint_line()),
             items,
+            initial_selected_idx,
             ..Default::default()
         });
+    }
+
+    fn reasoning_effort_label(effort: ReasoningEffortConfig) -> &'static str {
+        match effort {
+            ReasoningEffortConfig::None => "None",
+            ReasoningEffortConfig::Minimal => "Minimal",
+            ReasoningEffortConfig::Low => "Low",
+            ReasoningEffortConfig::Medium => "Medium",
+            ReasoningEffortConfig::High => "High",
+            ReasoningEffortConfig::XHigh => "Extra high",
+        }
     }
 
     fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
@@ -2181,41 +2290,12 @@ impl ChatWidget {
         let current_sandbox = self.config.sandbox_policy.clone();
         let mut items: Vec<SelectionItem> = Vec::new();
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
-        #[cfg(target_os = "windows")]
-        let header_renderable: Box<dyn Renderable> = if self
-            .config
-            .forced_auto_mode_downgraded_on_windows
-        {
-            use ratatui_macros::line;
-
-            let mut header = ColumnRenderable::new();
-            header.push(line![
-                "Codex forced your settings back to Read Only on this Windows machine.".bold()
-            ]);
-            header.push(line![
-                "To re-enable Auto mode, run Codex inside Windows Subsystem for Linux (WSL) or enable Full Access manually.".dim()
-                ]);
-            Box::new(header)
-        } else {
-            Box::new(())
-        };
-        #[cfg(not(target_os = "windows"))]
-        let header_renderable: Box<dyn Renderable> = Box::new(());
         for preset in presets.into_iter() {
             let is_current =
                 current_approval == preset.approval && current_sandbox == preset.sandbox;
             let name = preset.label.to_string();
             let description_text = preset.description;
-            let description = if cfg!(target_os = "windows")
-                && preset.id == "auto"
-                && codex_core::get_platform_sandbox().is_none()
-            {
-                Some(format!(
-                    "{description_text}\nRequires Windows Subsystem for Linux (WSL). Show installation instructions..."
-                ))
-            } else {
-                Some(description_text.to_string())
-            };
+            let description = Some(description_text.to_string());
             let requires_confirmation = preset.id == "full-access"
                 && !self
                     .config
@@ -2233,53 +2313,16 @@ impl ChatWidget {
                 #[cfg(target_os = "windows")]
                 {
                     if codex_core::get_platform_sandbox().is_none() {
-                        vec![Box::new(|tx| {
-                            tx.send(AppEvent::ShowWindowsAutoModeInstructions);
+                        let preset_clone = preset.clone();
+                        vec![Box::new(move |tx| {
+                            tx.send(AppEvent::OpenWindowsSandboxEnablePrompt {
+                                preset: preset_clone.clone(),
+                            });
                         })]
-                    } else if !self
-                        .config
-                        .notices
-                        .hide_world_writable_warning
-                        .unwrap_or(false)
-                        && self.windows_world_writable_flagged()
+                    } else if let Some((sample_paths, extra_count, failed_scan)) =
+                        self.world_writable_warning_details()
                     {
                         let preset_clone = preset.clone();
-                        // Compute sample paths for the warning popup.
-                        let mut env_map: std::collections::HashMap<String, String> =
-                            std::collections::HashMap::new();
-                        for (k, v) in std::env::vars() {
-                            env_map.insert(k, v);
-                        }
-                        let (sample_paths, extra_count, failed_scan) =
-                            match codex_windows_sandbox::preflight_audit_everyone_writable(
-                                &self.config.cwd,
-                                &env_map,
-                                Some(self.config.codex_home.as_path()),
-                            ) {
-                                Ok(paths) if !paths.is_empty() => {
-                                    fn normalize_windows_path_for_display(
-                                        p: &std::path::Path,
-                                    ) -> String {
-                                        let canon = dunce::canonicalize(p)
-                                            .unwrap_or_else(|_| p.to_path_buf());
-                                        canon.display().to_string().replace('/', "\\")
-                                    }
-                                    let as_strings: Vec<String> = paths
-                                        .iter()
-                                        .map(|p| normalize_windows_path_for_display(p))
-                                        .collect();
-                                    let samples: Vec<String> =
-                                        as_strings.iter().take(3).cloned().collect();
-                                    let extra = if as_strings.len() > samples.len() {
-                                        as_strings.len() - samples.len()
-                                    } else {
-                                        0
-                                    };
-                                    (samples, extra, false)
-                                }
-                                Err(_) => (Vec::new(), 0, true),
-                                _ => (Vec::new(), 0, false),
-                            };
                         vec![Box::new(move |tx| {
                             tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
                                 preset: Some(preset_clone.clone()),
@@ -2313,7 +2356,7 @@ impl ChatWidget {
             title: Some("Select Approval Mode".to_string()),
             footer_hint: Some(standard_popup_hint_line()),
             items,
-            header: header_renderable,
+            header: Box::new(()),
             ..Default::default()
         });
     }
@@ -2338,20 +2381,26 @@ impl ChatWidget {
     }
 
     #[cfg(target_os = "windows")]
-    fn windows_world_writable_flagged(&self) -> bool {
-        use std::collections::HashMap;
-        let mut env_map: HashMap<String, String> = HashMap::new();
-        for (k, v) in std::env::vars() {
-            env_map.insert(k, v);
+    pub(crate) fn world_writable_warning_details(&self) -> Option<(Vec<String>, usize, bool)> {
+        if self
+            .config
+            .notices
+            .hide_world_writable_warning
+            .unwrap_or(false)
+        {
+            return None;
         }
-        match codex_windows_sandbox::preflight_audit_everyone_writable(
-            &self.config.cwd,
-            &env_map,
-            Some(self.config.codex_home.as_path()),
-        ) {
-            Ok(paths) => !paths.is_empty(),
-            Err(_) => true,
-        }
+        let cwd = match std::env::current_dir() {
+            Ok(cwd) => cwd,
+            Err(_) => return Some((Vec::new(), 0, true)),
+        };
+        codex_windows_sandbox::world_writable_warning_details(self.config.codex_home.as_path(), cwd)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[allow(dead_code)]
+    pub(crate) fn world_writable_warning_details(&self) -> Option<(Vec<String>, usize, bool)> {
+        None
     }
 
     pub(crate) fn open_full_access_confirmation(&mut self, preset: ApprovalPreset) {
@@ -2431,12 +2480,15 @@ impl ChatWidget {
             None => (None, None),
         };
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
-        let mode_label = match self.config.sandbox_policy {
-            SandboxPolicy::WorkspaceWrite { .. } => "Auto mode",
+        let describe_policy = |policy: &SandboxPolicy| match policy {
+            SandboxPolicy::WorkspaceWrite { .. } => "Agent mode",
             SandboxPolicy::ReadOnly => "Read-Only mode",
-            _ => "Auto mode",
+            _ => "Agent mode",
         };
-        let title_line = Line::from("Unprotected directories found").bold();
+        let mode_label = preset
+            .as_ref()
+            .map(|p| describe_policy(&p.sandbox))
+            .unwrap_or_else(|| describe_policy(&self.config.sandbox_policy));
         let info_line = if failed_scan {
             Line::from(vec![
                 "We couldn't complete the world-writable scan, so protections cannot be verified. "
@@ -2446,14 +2498,10 @@ impl ChatWidget {
             ])
         } else {
             Line::from(vec![
-                "Some important directories on this system are world-writable. ".into(),
-                format!(
-                    "The Windows sandbox cannot protect writes to these locations in {mode_label}."
-                )
-                .fg(Color::Red),
+                "The Windows sandbox cannot protect writes to folders that are writable by Everyone.".into(),
+                " Consider removing write access for Everyone from the following folders:".into(),
             ])
         };
-        header_children.push(Box::new(title_line));
         header_children.push(Box::new(
             Paragraph::new(vec![info_line]).wrap(Wrap { trim: false }),
         ));
@@ -2461,9 +2509,9 @@ impl ChatWidget {
         if !sample_paths.is_empty() {
             // Show up to three examples and optionally an "and X more" line.
             let mut lines: Vec<Line> = Vec::new();
-            lines.push(Line::from("Examples:").bold());
+            lines.push(Line::from(""));
             for p in &sample_paths {
-                lines.push(Line::from(format!(" - {p}")));
+                lines.push(Line::from(format!("  - {p}")));
             }
             if extra_count > 0 {
                 lines.push(Line::from(format!("and {extra_count} more")));
@@ -2531,29 +2579,43 @@ impl ChatWidget {
     }
 
     #[cfg(target_os = "windows")]
-    pub(crate) fn open_windows_auto_mode_instructions(&mut self) {
+    pub(crate) fn open_windows_sandbox_enable_prompt(&mut self, preset: ApprovalPreset) {
         use ratatui_macros::line;
 
         let mut header = ColumnRenderable::new();
-        header.push(line![
-            "Auto mode requires Windows Subsystem for Linux (WSL2).".bold()
-        ]);
-        header.push(line!["Run Codex inside WSL to enable sandboxed commands."]);
-        header.push(line![""]);
-        header.push(Paragraph::new(WSL_INSTRUCTIONS).wrap(Wrap { trim: false }));
+        header.push(*Box::new(
+            Paragraph::new(vec![
+                line!["Agent mode on Windows uses an experimental sandbox to limit network and filesystem access.".bold()],
+                line![
+                    "Learn more: https://developers.openai.com/codex/windows"
+                ],
+            ])
+            .wrap(Wrap { trim: false }),
+        ));
 
-        let items = vec![SelectionItem {
-            name: "Back".to_string(),
-            description: Some(
-                "Return to the approval mode list. Auto mode stays disabled outside WSL."
-                    .to_string(),
-            ),
-            actions: vec![Box::new(|tx| {
-                tx.send(AppEvent::OpenApprovalsPopup);
-            })],
-            dismiss_on_select: true,
-            ..Default::default()
-        }];
+        let preset_clone = preset;
+        let items = vec![
+            SelectionItem {
+                name: "Enable experimental sandbox".to_string(),
+                description: None,
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
+                        preset: preset_clone.clone(),
+                    });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Go back".to_string(),
+                description: None,
+                actions: vec![Box::new(|tx| {
+                    tx.send(AppEvent::OpenApprovalsPopup);
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: None,
@@ -2565,7 +2627,31 @@ impl ChatWidget {
     }
 
     #[cfg(not(target_os = "windows"))]
-    pub(crate) fn open_windows_auto_mode_instructions(&mut self) {}
+    pub(crate) fn open_windows_sandbox_enable_prompt(&mut self, _preset: ApprovalPreset) {}
+
+    #[cfg(target_os = "windows")]
+    pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self) {
+        if self.config.forced_auto_mode_downgraded_on_windows
+            && codex_core::get_platform_sandbox().is_none()
+            && let Some(preset) = builtin_approval_presets()
+                .into_iter()
+                .find(|preset| preset.id == "auto")
+        {
+            self.open_windows_sandbox_enable_prompt(preset);
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self) {}
+
+    #[cfg(target_os = "windows")]
+    pub(crate) fn clear_forced_auto_mode_downgrade(&mut self) {
+        self.config.forced_auto_mode_downgraded_on_windows = false;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[allow(dead_code)]
+    pub(crate) fn clear_forced_auto_mode_downgrade(&mut self) {}
 
     /// Set the approval policy in the widget's config copy.
     pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
@@ -2574,7 +2660,16 @@ impl ChatWidget {
 
     /// Set the sandbox policy in the widget's config copy.
     pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) {
+        #[cfg(target_os = "windows")]
+        let should_clear_downgrade = !matches!(policy, SandboxPolicy::ReadOnly)
+            || codex_core::get_platform_sandbox().is_some();
+
         self.config.sandbox_policy = policy;
+
+        #[cfg(target_os = "windows")]
+        if should_clear_downgrade {
+            self.config.forced_auto_mode_downgraded_on_windows = false;
+        }
     }
 
     pub(crate) fn set_full_access_warning_acknowledged(&mut self, acknowledged: bool) {
@@ -2920,6 +3015,7 @@ enum Notification {
     AgentTurnComplete { response: String },
     ExecApprovalRequested { command: String },
     EditApprovalRequested { cwd: PathBuf, changes: Vec<PathBuf> },
+    ElicitationRequested { server_name: String },
 }
 
 impl Notification {
@@ -2943,6 +3039,9 @@ impl Notification {
                     }
                 )
             }
+            Notification::ElicitationRequested { server_name } => {
+                format!("Approval requested by {server_name}")
+            }
         }
     }
 
@@ -2950,7 +3049,8 @@ impl Notification {
         match self {
             Notification::AgentTurnComplete { .. } => "agent-turn-complete",
             Notification::ExecApprovalRequested { .. }
-            | Notification::EditApprovalRequested { .. } => "approval-requested",
+            | Notification::EditApprovalRequested { .. }
+            | Notification::ElicitationRequested { .. } => "approval-requested",
         }
     }
 
