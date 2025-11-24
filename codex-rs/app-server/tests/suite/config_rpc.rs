@@ -64,8 +64,8 @@ sandbox_mode = "workspace-write"
     );
     let layers = layers.expect("layers present");
     assert_eq!(layers.len(), 2);
-    assert_eq!(layers[0].name, ConfigLayerName::User);
-    assert_eq!(layers[1].name, ConfigLayerName::SessionFlags);
+    assert_eq!(layers[0].name, ConfigLayerName::SessionFlags);
+    assert_eq!(layers[1].name, ConfigLayerName::User);
 
     Ok(())
 }

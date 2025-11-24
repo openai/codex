@@ -459,15 +459,14 @@ impl LayersState {
     }
 
     fn effective_config(&self) -> TomlValue {
-        let mut merged = TomlValue::Table(toml::map::Map::new());
-        if let Some(mdm) = &self.mdm {
-            merge_toml_values(&mut merged, &mdm.config);
-        }
+        let mut merged = self.user.config.clone();
+        merge_toml_values(&mut merged, &self.session_flags.config);
         if let Some(system) = &self.system {
             merge_toml_values(&mut merged, &system.config);
         }
-        merge_toml_values(&mut merged, &self.session_flags.config);
-        merge_toml_values(&mut merged, &self.user.config);
+        if let Some(mdm) = &self.mdm {
+            merge_toml_values(&mut merged, &mdm.config);
+        }
         merged
     }
 
@@ -475,38 +474,38 @@ impl LayersState {
         let mut origins = HashMap::new();
         let mut path = Vec::new();
 
-        if let Some(mdm) = &self.mdm {
-            record_origins(&mdm.config, &mdm.metadata(), &mut path, &mut origins);
-        }
-        if let Some(system) = &self.system {
-            record_origins(&system.config, &system.metadata(), &mut path, &mut origins);
-        }
-        record_origins(
-            &self.session_flags.config,
-            &self.session_flags.metadata(),
-            &mut path,
-            &mut origins,
-        );
         record_origins(
             &self.user.config,
             &self.user.metadata(),
             &mut path,
             &mut origins,
         );
+        record_origins(
+            &self.session_flags.config,
+            &self.session_flags.metadata(),
+            &mut path,
+            &mut origins,
+        );
+        if let Some(system) = &self.system {
+            record_origins(&system.config, &system.metadata(), &mut path, &mut origins);
+        }
+        if let Some(mdm) = &self.mdm {
+            record_origins(&mdm.config, &mdm.metadata(), &mut path, &mut origins);
+        }
 
         origins
     }
 
     fn layers_high_to_low(&self) -> Vec<ConfigLayer> {
         let mut layers = Vec::new();
-        layers.push(self.user.as_layer());
-        layers.push(self.session_flags.as_layer());
-        if let Some(system) = &self.system {
-            layers.push(system.as_layer());
-        }
         if let Some(mdm) = &self.mdm {
             layers.push(mdm.as_layer());
         }
+        if let Some(system) = &self.system {
+            layers.push(system.as_layer());
+        }
+        layers.push(self.session_flags.as_layer());
+        layers.push(self.user.as_layer());
         layers
     }
 }
@@ -723,7 +722,7 @@ mod tests {
         std::fs::write(tmp.path().join(CONFIG_FILE_NAME), "model = \"user\"").unwrap();
 
         let managed_path = tmp.path().join("managed_config.toml");
-        std::fs::write(&managed_path, "approval_policy = \"on-request\"").unwrap();
+        std::fs::write(&managed_path, "approval_policy = \"never\"").unwrap();
 
         let api = ConfigApi::with_overrides(
             tmp.path().to_path_buf(),
@@ -743,6 +742,11 @@ mod tests {
             .expect("response");
 
         assert_eq!(
+            response.config.get("approval_policy"),
+            Some(&json!("never"))
+        );
+
+        assert_eq!(
             response
                 .origins
                 .get("approval_policy")
@@ -751,8 +755,9 @@ mod tests {
             ConfigLayerName::System
         );
         let layers = response.layers.expect("layers present");
-        assert_eq!(layers.first().unwrap().name, ConfigLayerName::User);
-        assert_eq!(layers.last().unwrap().name, ConfigLayerName::System);
+        assert_eq!(layers.first().unwrap().name, ConfigLayerName::System);
+        assert_eq!(layers.get(1).unwrap().name, ConfigLayerName::SessionFlags);
+        assert_eq!(layers.last().unwrap().name, ConfigLayerName::User);
     }
 
     #[tokio::test]
@@ -802,7 +807,7 @@ mod tests {
                 .get("approval_policy")
                 .expect("origin")
                 .name,
-            ConfigLayerName::User
+            ConfigLayerName::System
         );
         assert_eq!(result.status, WriteStatus::Ok);
         assert!(result.overridden_metadata.is_none());
@@ -831,13 +836,13 @@ mod tests {
                 .data
                 .as_ref()
                 .and_then(|d| d.get("config_write_error_code"))
-                .and_then(|v| v.as_str()),
+                .and_then(serde_json::Value::as_str),
             Some("config_version_conflict")
         );
     }
 
     #[tokio::test]
-    async fn read_reports_user_overrides_other_layers() {
+    async fn read_reports_managed_overrides_user_and_session_flags() {
         let tmp = tempdir().expect("tempdir");
         std::fs::write(tmp.path().join(CONFIG_FILE_NAME), "model = \"user\"").unwrap();
 
@@ -866,14 +871,49 @@ mod tests {
             .await
             .expect("response");
 
-        assert_eq!(response.config.get("model"), Some(&json!("user")));
+        assert_eq!(response.config.get("model"), Some(&json!("system")));
         assert_eq!(
             response.origins.get("model").expect("origin").name,
-            ConfigLayerName::User
+            ConfigLayerName::System
         );
         let layers = response.layers.expect("layers");
-        assert_eq!(layers.first().unwrap().name, ConfigLayerName::User);
+        assert_eq!(layers.first().unwrap().name, ConfigLayerName::System);
         assert_eq!(layers.get(1).unwrap().name, ConfigLayerName::SessionFlags);
-        assert_eq!(layers.get(2).unwrap().name, ConfigLayerName::System);
+        assert_eq!(layers.get(2).unwrap().name, ConfigLayerName::User);
+    }
+
+    #[tokio::test]
+    async fn write_value_reports_managed_override() {
+        let tmp = tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join(CONFIG_FILE_NAME), "").unwrap();
+
+        let managed_path = tmp.path().join("managed_config.toml");
+        std::fs::write(&managed_path, "approval_policy = \"never\"").unwrap();
+
+        let api = ConfigApi::with_overrides(
+            tmp.path().to_path_buf(),
+            vec![],
+            LoaderOverrides {
+                managed_config_path: Some(managed_path),
+                #[cfg(target_os = "macos")]
+                managed_preferences_base64: None,
+            },
+        );
+
+        let result = api
+            .write_value(ConfigValueWriteParams {
+                file_path: tmp.path().join(CONFIG_FILE_NAME).display().to_string(),
+                key_path: "approval_policy".to_string(),
+                value: json!("on-request"),
+                merge_strategy: MergeStrategy::Replace,
+                expected_version: None,
+            })
+            .await
+            .expect("result");
+
+        assert_eq!(result.status, WriteStatus::OkOverridden);
+        let overridden = result.overridden_metadata.expect("overridden metadata");
+        assert_eq!(overridden.overriding_layer.name, ConfigLayerName::System);
+        assert_eq!(overridden.effective_value, json!("never"));
     }
 }
