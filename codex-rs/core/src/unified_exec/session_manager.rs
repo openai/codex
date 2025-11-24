@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use rand::Rng;
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::time::Duration;
@@ -62,13 +63,13 @@ struct PreparedSessionHandles {
 
 impl UnifiedExecSessionManager {
     pub(crate) async fn allocate_process_id(&self) -> (i32, String) {
-        let mut rng = rand::rng();
         loop {
-            let candidate = rng.random_range(1_000..100_000);
-            let mut sessions = self.sessions.lock().await;
-            if sessions.contains_key(&candidate) {
+            let candidate = rand::rng().random_range(1_000..100_000);
+            let mut store = self.used_session_ids.lock().await;
+            if store.contains(&candidate) {
                 continue;
             }
+            store.insert(candidate);
             return (candidate, Self::render_process_id(candidate));
         }
     }
@@ -374,6 +375,7 @@ impl UnifiedExecSessionManager {
             .map_err(|_| UnifiedExecError::WriteToStdin)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn store_session(
         &self,
         session: UnifiedExecSession,

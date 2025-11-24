@@ -964,7 +964,7 @@ unified_exec = true
         mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
     )
     .await??;
-    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+    let TurnStartResponse { turn: _turn } = to_response::<TurnStartResponse>(turn_resp)?;
 
     let started_command = timeout(DEFAULT_READ_TIMEOUT, async {
         loop {
