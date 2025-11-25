@@ -1581,11 +1581,11 @@ fn preset_matching_ignores_extra_writable_roots() {
     };
 
     assert!(
-        super::preset_matches_current(AskForApproval::OnRequest, &current_sandbox, &preset),
+        ChatWidget::preset_matches_current(AskForApproval::OnRequest, &current_sandbox, &preset),
         "WorkspaceWrite with extra roots should still match the Agent preset"
     );
     assert!(
-        !super::preset_matches_current(AskForApproval::Never, &current_sandbox, &preset),
+        !ChatWidget::preset_matches_current(AskForApproval::Never, &current_sandbox, &preset),
         "approval mismatch should prevent matching the preset"
     );
 }
