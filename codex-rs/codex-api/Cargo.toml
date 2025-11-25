@@ -2,28 +2,29 @@
 name = "codex-api"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
-async-trait = "0.1"
-bytes = "1"
-codex-client = { path = "../codex-client" }
-codex-protocol = { path = "../protocol" }
-futures = "0.3"
-http = "1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
-tracing = "0.1"
+async-trait = { workspace = true }
+bytes = { workspace = true }
+codex-client = { workspace = true }
+codex-protocol = { workspace = true }
+futures = { workspace = true }
+http = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tracing = { workspace = true }
 eventsource-stream = { workspace = true }
 regex-lite = { workspace = true }
-tokio-util = { version = "0.7", features = ["codec"] }
+tokio-util = { workspace = true, features = ["codec"] }
 
 [dev-dependencies]
 anyhow = { workspace = true }
 assert_matches = { workspace = true }
 pretty_assertions = { workspace = true }
-tokio-test = "0.4"
+tokio-test = { workspace = true }
 
 [lints]
 workspace = true

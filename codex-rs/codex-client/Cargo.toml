@@ -2,18 +2,19 @@
 name = "codex-client"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
-async-trait = "0.1"
-bytes = "1"
-futures = "0.3"
-http = "1"
-reqwest = { version = "0.12", features = ["json", "stream"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt", "time", "sync"] }
-rand = "0.9"
+async-trait = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+http = { workspace = true }
+reqwest = { workspace = true, features = ["json", "stream"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "time", "sync"] }
+rand = { workspace = true }
 eventsource-stream = { workspace = true }
 
 [lints]
