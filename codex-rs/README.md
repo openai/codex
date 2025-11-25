@@ -52,6 +52,23 @@ You can enable notifications by configuring a script that is run whenever the ag
 
 To run Codex non-interactively, run `codex exec PROMPT` (you can also pass the prompt via `stdin`) and Codex will work on your task until it decides that it is done and exits. Output is printed to the terminal directly. You can set the `RUST_LOG` environment variable to see more about what's going on.
 
+You can also run the review flow headlessly:
+
+```
+# Review uncommitted changes
+codex exec review --uncommitted
+
+# Review changes against a base branch
+codex exec review --branch main
+
+# Review a specific commit
+codex exec review --commit abcd123
+
+# Custom review instructions (from arg or stdin)
+codex exec review "Review changes in src/ with focus on error handling"
+echo "Review all TODOs left in code" | codex exec review -
+```
+
 ### Experimenting with the Codex Sandbox
 
 To test to see what happens when a command is run under the sandbox provided by Codex, we provide the following subcommands in Codex CLI:

@@ -53,6 +53,7 @@ use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
+use codex_core::review_prompts::ReviewTarget;
 use codex_protocol::ConversationId;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::parse_command::ParsedCommand;
@@ -158,6 +159,15 @@ impl UnifiedExecWaitState {
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
 const NUDGE_MODEL_SLUG: &str = "gpt-5.1-codex-mini";
 const RATE_LIMIT_SWITCH_PROMPT_THRESHOLD: f64 = 90.0;
+
+fn build_review_request(target: ReviewTarget) -> Option<ReviewRequest> {
+    codex_core::review_prompts::review_request_from_target(target, true)
+        .map(|built| built.review_request)
+        .map_err(|err| {
+            debug!(?err, "invalid review target");
+        })
+        .ok()
+}
 
 #[derive(Default)]
 struct RateLimitWarningState {
@@ -2864,19 +2874,14 @@ impl ChatWidget {
             ..Default::default()
         });
 
+        let uncommitted_request = build_review_request(ReviewTarget::UncommittedChanges);
         items.push(SelectionItem {
             name: "Review uncommitted changes".to_string(),
-            actions: vec![Box::new(
-                move |tx: &AppEventSender| {
-                    tx.send(AppEvent::CodexOp(Op::Review {
-                        review_request: ReviewRequest {
-                            prompt: "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.".to_string(),
-                            user_facing_hint: "current changes".to_string(),
-                            append_to_original_thread: true,
-                        },
-                    }));
-                },
-            )],
+            actions: vec![Box::new(move |tx: &AppEventSender| {
+                if let Some(review_request) = uncommitted_request.clone() {
+                    tx.send(AppEvent::CodexOp(Op::Review { review_request }));
+                }
+            })],
             dismiss_on_select: true,
             ..Default::default()
         });
@@ -2923,15 +2928,11 @@ impl ChatWidget {
             items.push(SelectionItem {
                 name: format!("{current_branch} -> {branch}"),
                 actions: vec![Box::new(move |tx3: &AppEventSender| {
-                    tx3.send(AppEvent::CodexOp(Op::Review {
-                        review_request: ReviewRequest {
-                            prompt: format!(
-                                "Review the code changes against the base branch '{branch}'. Start by finding the merge diff between the current branch and {branch}'s upstream e.g. (`git merge-base HEAD \"$(git rev-parse --abbrev-ref \"{branch}@{{upstream}}\")\"`), then run `git diff` against that SHA to see what changes we would merge into the {branch} branch. Provide prioritized, actionable findings."
-                            ),
-                            user_facing_hint: format!("changes against '{branch}'"),
-                            append_to_original_thread: true,
-                        },
-                    }));
+                    if let Some(review_request) = build_review_request(ReviewTarget::BaseBranch {
+                        branch: branch.clone(),
+                    }) {
+                        tx3.send(AppEvent::CodexOp(Op::Review { review_request }));
+                    }
                 })],
                 dismiss_on_select: true,
                 search_value: Some(option),
@@ -2956,23 +2957,17 @@ impl ChatWidget {
         for entry in commits {
             let subject = entry.subject.clone();
             let sha = entry.sha.clone();
-            let short = sha.chars().take(7).collect::<String>();
             let search_val = format!("{subject} {sha}");
 
             items.push(SelectionItem {
                 name: subject.clone(),
                 actions: vec![Box::new(move |tx3: &AppEventSender| {
-                    let hint = format!("commit {short}");
-                    let prompt = format!(
-                        "Review the code changes introduced by commit {sha} (\"{subject}\"). Provide prioritized, actionable findings."
-                    );
-                    tx3.send(AppEvent::CodexOp(Op::Review {
-                        review_request: ReviewRequest {
-                            prompt,
-                            user_facing_hint: hint,
-                            append_to_original_thread: true,
-                        },
-                    }));
+                    if let Some(review_request) = build_review_request(ReviewTarget::Commit {
+                        sha: sha.clone(),
+                        title: Some(subject.clone()),
+                    }) {
+                        tx3.send(AppEvent::CodexOp(Op::Review { review_request }));
+                    }
                 })],
                 dismiss_on_select: true,
                 search_value: Some(search_val),
@@ -3001,13 +2996,11 @@ impl ChatWidget {
                 if trimmed.is_empty() {
                     return;
                 }
-                tx.send(AppEvent::CodexOp(Op::Review {
-                    review_request: ReviewRequest {
-                        prompt: trimmed.clone(),
-                        user_facing_hint: trimmed,
-                        append_to_original_thread: true,
-                    },
-                }));
+                if let Some(review_request) = build_review_request(ReviewTarget::Custom {
+                    instructions: trimmed,
+                }) {
+                    tx.send(AppEvent::CodexOp(Op::Review { review_request }));
+                }
             }),
         );
         self.bottom_pane.show_view(Box::new(view));
@@ -3207,23 +3200,17 @@ pub(crate) fn show_review_commit_picker_with_entries(
     for entry in entries {
         let subject = entry.subject.clone();
         let sha = entry.sha.clone();
-        let short = sha.chars().take(7).collect::<String>();
         let search_val = format!("{subject} {sha}");
 
         items.push(SelectionItem {
             name: subject.clone(),
             actions: vec![Box::new(move |tx3: &AppEventSender| {
-                let hint = format!("commit {short}");
-                let prompt = format!(
-                    "Review the code changes introduced by commit {sha} (\"{subject}\"). Provide prioritized, actionable findings."
-                );
-                tx3.send(AppEvent::CodexOp(Op::Review {
-                    review_request: ReviewRequest {
-                        prompt,
-                        user_facing_hint: hint,
-                        append_to_original_thread: true,
-                    },
-                }));
+                if let Some(review_request) = build_review_request(ReviewTarget::Commit {
+                    sha: sha.clone(),
+                    title: Some(subject.clone()),
+                }) {
+                    tx3.send(AppEvent::CodexOp(Op::Review { review_request }));
+                }
             })],
             dismiss_on_select: true,
             search_value: Some(search_val),
