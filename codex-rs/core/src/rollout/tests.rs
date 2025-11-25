@@ -431,7 +431,7 @@ async fn test_pagination_cursor() {
                 path: p3,
                 head: head_3,
                 created_at: Some("2025-03-03T09-00-00".into()),
-                updated_at: updated_page2.get(0).cloned().flatten(),
+                updated_at: updated_page2.first().cloned().flatten(),
             },
             ConversationItem {
                 path: p2,
@@ -746,7 +746,7 @@ async fn test_stable_ordering_same_second_pagination() {
             path: p1,
             head: head(u1),
             created_at: Some(ts.to_string()),
-            updated_at: updated_page2.get(0).cloned().flatten(),
+            updated_at: updated_page2.first().cloned().flatten(),
         }],
         next_cursor: None,
         num_scanned_files: 3, // scanned u3, u2 (anchor), u1
