@@ -1,6 +1,7 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_apply_patch_sse_response;
+use app_test_support::create_exec_command_sse_response;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_chat_completions_server;
 use app_test_support::create_mock_chat_completions_server_unchecked;
@@ -1059,43 +1060,4 @@ stream_max_retries = 0
 "#
         ),
     )
-}
-
-fn create_exec_command_sse_response(call_id: &str) -> anyhow::Result<String> {
-    let (cmd, args) = if cfg!(windows) {
-        ("cmd.exe", vec!["/d", "/c", "echo hi"])
-    } else {
-        ("/bin/sh", vec!["-c", "echo hi"])
-    };
-    let command = std::iter::once(cmd.to_string())
-        .chain(args.into_iter().map(str::to_string))
-        .collect::<Vec<_>>();
-    let tool_call_arguments = serde_json::to_string(&serde_json::json!({
-        "cmd": command.join(" "),
-        "yield_time_ms": 500
-    }))?;
-    let tool_call = serde_json::json!({
-        "choices": [
-            {
-                "delta": {
-                    "tool_calls": [
-                        {
-                            "id": call_id,
-                            "function": {
-                                "name": "exec_command",
-                                "arguments": tool_call_arguments
-                            }
-                        }
-                    ]
-                },
-                "finish_reason": "tool_calls"
-            }
-        ]
-    });
-
-    let sse = format!(
-        "data: {}\n\ndata: DONE\n\n",
-        serde_json::to_string(&tool_call)?
-    );
-    Ok(sse)
 }
