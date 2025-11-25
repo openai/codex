@@ -131,7 +131,7 @@ client_request_definitions! {
     },
     ReviewStart => "review/start" {
         params: v2::ReviewStartParams,
-        response: v2::TurnStartResponse,
+        response: v2::ReviewStartResponse,
     },
 
     ModelList => "model/list" {

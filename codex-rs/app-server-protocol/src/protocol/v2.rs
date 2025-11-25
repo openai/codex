@@ -17,6 +17,7 @@ use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::user_input::UserInput as CoreUserInput;
+use codex_protocol::protocol::ReviewDelivery as CoreReviewDelivery;
 use mcp_types::ContentBlock as McpContentBlock;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -847,9 +848,18 @@ pub struct ReviewStartParams {
     pub thread_id: String,
     pub target: ReviewTarget,
 
-    /// When true, also append the final review message to the original thread.
     #[serde(default)]
-    pub append_to_original_thread: bool,
+    pub delivery: Option<CoreReviewDelivery>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ReviewStartResponse {
+    pub turn: Turn,
+    /// When present, identifies the detached review thread. For inline reviews,
+    /// this is `None` and the review runs on the original thread.
+    pub review_thread_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

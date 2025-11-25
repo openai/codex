@@ -62,6 +62,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ResumeConversationParams;
 use codex_app_server_protocol::ResumeConversationResponse;
 use codex_app_server_protocol::ReviewStartParams;
+use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::SendUserMessageParams;
@@ -120,6 +121,7 @@ use codex_core::git_info::git_diff_to_remote;
 use codex_core::parse_cursor;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
+use codex_core::protocol::ReviewDelivery;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::read_head_for_summary;
@@ -253,7 +255,6 @@ impl CodexMessageProcessor {
 
     fn review_request_from_target(
         target: ReviewTarget,
-        append_to_original_thread: bool,
     ) -> Result<(ReviewRequest, String), JSONRPCErrorError> {
         fn invalid_request(message: String) -> JSONRPCErrorError {
             JSONRPCErrorError {
@@ -269,7 +270,6 @@ impl CodexMessageProcessor {
                 ReviewRequest {
                     prompt: "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.".to_string(),
                     user_facing_hint: "current changes".to_string(),
-                    append_to_original_thread,
                 },
                 "Review uncommitted changes".to_string(),
             )),
@@ -285,7 +285,6 @@ impl CodexMessageProcessor {
                     ReviewRequest {
                         prompt,
                         user_facing_hint: hint,
-                        append_to_original_thread,
                     },
                     display,
                 ))
@@ -314,7 +313,6 @@ impl CodexMessageProcessor {
                     ReviewRequest {
                         prompt,
                         user_facing_hint: hint,
-                        append_to_original_thread,
                     },
                     display,
                 ))
@@ -328,7 +326,6 @@ impl CodexMessageProcessor {
                     ReviewRequest {
                         prompt: trimmed.clone(),
                         user_facing_hint: trimmed.clone(),
-                        append_to_original_thread,
                     },
                     trimmed,
                 ))
@@ -2494,57 +2491,185 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn review_start(&self, request_id: RequestId, params: ReviewStartParams) {
+    async fn review_start(&mut self, request_id: RequestId, params: ReviewStartParams) {
         let ReviewStartParams {
             thread_id,
             target,
-            append_to_original_thread,
+            delivery,
         } = params;
-        let (_, conversation) = match self.conversation_from_thread_id(&thread_id).await {
-            Ok(v) => v,
-            Err(error) => {
+        let (parent_conversation_id, parent_conversation) =
+            match self.conversation_from_thread_id(&thread_id).await {
+                Ok(v) => v,
+                Err(error) => {
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
+
+        let (review_request, display_text) = match Self::review_request_from_target(target) {
+            Ok(value) => value,
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+                return;
+            }
+        };
+
+        let delivery = delivery.unwrap_or(ReviewDelivery::Inline);
+
+        if matches!(delivery, ReviewDelivery::Inline) {
+            // Inline review: use existing Op::Review flow on the parent thread.
+            let turn_id = parent_conversation
+                .submit(Op::Review { review_request })
+                .await;
+
+            match turn_id {
+                Ok(turn_id) => {
+                    let mut items = Vec::new();
+                    if !display_text.is_empty() {
+                        items.push(ThreadItem::UserMessage {
+                            id: turn_id.clone(),
+                            content: vec![V2UserInput::Text { text: display_text }],
+                        });
+                    }
+                    let turn = Turn {
+                        id: turn_id.clone(),
+                        items,
+                        status: TurnStatus::InProgress,
+                    };
+                    let response = ReviewStartResponse {
+                        turn: turn.clone(),
+                        review_thread_id: None,
+                    };
+                    self.outgoing.send_response(request_id, response).await;
+
+                    let notif = TurnStartedNotification { turn };
+                    self.outgoing
+                        .send_server_notification(ServerNotification::TurnStarted(notif))
+                        .await;
+                }
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("failed to start review: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                }
+            }
+            return;
+        }
+
+        // Detached review: fork a new conversation using the review model and
+        // seed it with the review prompt as the first user turn. We fork with
+        // `nth_user_message = usize::MAX` so the new conversation starts with
+        // an empty history (only the new review prompt will appear).
+        let existing_conversation_id = parent_conversation_id;
+        let rollout_path = match find_conversation_path_by_id_str(
+            &self.config.codex_home,
+            &existing_conversation_id.to_string(),
+        )
+        .await
+        {
+            Ok(Some(path)) => path,
+            Ok(None) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!(
+                        "no rollout found for conversation id {existing_conversation_id}"
+                    ),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!(
+                        "failed to locate conversation id {existing_conversation_id}: {err}"
+                    ),
+                    data: None,
+                };
                 self.outgoing.send_error(request_id, error).await;
                 return;
             }
         };
 
-        let (review_request, display_text) =
-            match Self::review_request_from_target(target, append_to_original_thread) {
-                Ok(value) => value,
-                Err(err) => {
-                    self.outgoing.send_error(request_id, err).await;
-                    return;
+        let mut config = self.config.as_ref().clone();
+        config.model = self.config.review_model.clone();
+
+        match self
+            .conversation_manager
+            .fork_conversation(usize::MAX, config, rollout_path)
+            .await
+        {
+            Ok(NewConversation {
+                conversation_id,
+                conversation,
+                ..
+            }) => {
+                // Attach a listener for the new review conversation so events stream to the client.
+                if let Err(err) = self
+                    .attach_conversation_listener(conversation_id, false, ApiVersion::V2)
+                    .await
+                {
+                    tracing::warn!(
+                        "failed to attach listener for review conversation {}: {}",
+                        conversation_id,
+                        err.message
+                    );
                 }
-            };
 
-        let turn_id = conversation.submit(Op::Review { review_request }).await;
+                // Start the review by submitting the auto-generated review prompt.
+                let mapped_items: Vec<CoreInputItem> = vec![CoreInputItem::Text {
+                    text: review_request.prompt.clone(),
+                }];
 
-        match turn_id {
-            Ok(turn_id) => {
-                let mut items = Vec::new();
-                if !display_text.is_empty() {
-                    items.push(ThreadItem::UserMessage {
-                        id: turn_id.clone(),
-                        content: vec![V2UserInput::Text { text: display_text }],
-                    });
-                }
-                let turn = Turn {
-                    id: turn_id.clone(),
-                    items,
-                    status: TurnStatus::InProgress,
-                };
-                let response = TurnStartResponse { turn: turn.clone() };
-                self.outgoing.send_response(request_id, response).await;
-
-                let notif = TurnStartedNotification { turn };
-                self.outgoing
-                    .send_server_notification(ServerNotification::TurnStarted(notif))
+                let turn_id = conversation
+                    .submit(Op::UserInput {
+                        items: mapped_items,
+                    })
                     .await;
+
+                match turn_id {
+                    Ok(turn_id) => {
+                        let mut items = Vec::new();
+                        if !display_text.is_empty() {
+                            items.push(ThreadItem::UserMessage {
+                                id: turn_id.clone(),
+                                content: vec![V2UserInput::Text { text: display_text }],
+                            });
+                        }
+                        let turn = Turn {
+                            id: turn_id.clone(),
+                            items,
+                            status: TurnStatus::InProgress,
+                        };
+                        let response = ReviewStartResponse {
+                            turn: turn.clone(),
+                            review_thread_id: Some(conversation_id.to_string()),
+                        };
+                        self.outgoing.send_response(request_id, response).await;
+
+                        let notif = TurnStartedNotification { turn };
+                        self.outgoing
+                            .send_server_notification(ServerNotification::TurnStarted(notif))
+                            .await;
+                    }
+                    Err(err) => {
+                        let error = JSONRPCErrorError {
+                            code: INTERNAL_ERROR_CODE,
+                            message: format!("failed to start detached review turn: {err}"),
+                            data: None,
+                        };
+                        self.outgoing.send_error(request_id, error).await;
+                    }
+                }
             }
             Err(err) => {
                 let error = JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to start review: {err}"),
+                    message: format!("error creating detached review conversation: {err}"),
                     data: None,
                 };
                 self.outgoing.send_error(request_id, error).await;
