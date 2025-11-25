@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -140,6 +141,20 @@ struct RunningCommand {
     source: ExecCommandSource,
 }
 
+struct UnifiedExecWaitState {
+    command_display: String,
+}
+
+impl UnifiedExecWaitState {
+    fn new(command_display: String) -> Self {
+        Self { command_display }
+    }
+
+    fn is_duplicate(&self, command_display: &str) -> bool {
+        self.command_display == command_display
+    }
+}
+
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
 const NUDGE_MODEL_SLUG: &str = "gpt-5.1-codex-mini";
 const RATE_LIMIT_SWITCH_PROMPT_THRESHOLD: f64 = 90.0;
@@ -266,6 +281,8 @@ pub(crate) struct ChatWidget {
     // Stream lifecycle controller
     stream_controller: Option<StreamController>,
     running_commands: HashMap<String, RunningCommand>,
+    suppressed_exec_calls: HashSet<String>,
+    last_unified_wait: Option<UnifiedExecWaitState>,
     task_complete_pending: bool,
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
     // Queue of interruptive UI events deferred during an active write cycle
@@ -479,6 +496,8 @@ impl ChatWidget {
         // Mark task stopped and request redraw now that all content is in history.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
+        self.suppressed_exec_calls.clear();
+        self.last_unified_wait = None;
         self.request_redraw();
 
         // If there is a queued user message, send exactly one now to begin the next turn.
@@ -588,6 +607,8 @@ impl ChatWidget {
         // Reset running state and clear streaming buffers.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
+        self.suppressed_exec_calls.clear();
+        self.last_unified_wait = None;
         self.stream_controller = None;
         self.maybe_show_pending_rate_limit_prompt();
     }
@@ -947,6 +968,9 @@ impl ChatWidget {
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
         let running = self.running_commands.remove(&ev.call_id);
+        if self.suppressed_exec_calls.remove(&ev.call_id) {
+            return;
+        }
         let (command, parsed, source) = match running {
             Some(rc) => (rc.command, rc.parsed_cmd, rc.source),
             None => (
@@ -1074,6 +1098,27 @@ impl ChatWidget {
                 source: ev.source,
             },
         );
+        let is_wait_interaction = matches!(ev.source, ExecCommandSource::UnifiedExecInteraction)
+            && ev
+                .interaction_input
+                .as_deref()
+                .map(str::is_empty)
+                .unwrap_or(true);
+        let command_display = ev.command.join(" ");
+        let should_suppress_unified_wait = is_wait_interaction
+            && self
+                .last_unified_wait
+                .as_ref()
+                .is_some_and(|wait| wait.is_duplicate(&command_display));
+        if is_wait_interaction {
+            self.last_unified_wait = Some(UnifiedExecWaitState::new(command_display));
+        } else {
+            self.last_unified_wait = None;
+        }
+        if should_suppress_unified_wait {
+            self.suppressed_exec_calls.insert(ev.call_id);
+            return;
+        }
         let interaction_input = ev.interaction_input.clone();
         if let Some(cell) = self
             .active_cell
@@ -1195,6 +1240,8 @@ impl ChatWidget {
             rate_limit_poller: None,
             stream_controller: None,
             running_commands: HashMap::new(),
+            suppressed_exec_calls: HashSet::new(),
+            last_unified_wait: None,
             task_complete_pending: false,
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
@@ -1270,6 +1317,8 @@ impl ChatWidget {
             rate_limit_poller: None,
             stream_controller: None,
             running_commands: HashMap::new(),
+            suppressed_exec_calls: HashSet::new(),
+            last_unified_wait: None,
             task_complete_pending: false,
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),

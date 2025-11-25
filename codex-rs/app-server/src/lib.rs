@@ -18,6 +18,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::io::{self};
 use tokio::sync::mpsc;
+use toml::Value as TomlValue;
 use tracing::Level;
 use tracing::debug;
 use tracing::error;
@@ -30,6 +31,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 mod bespoke_event_handling;
 mod codex_message_processor;
+mod config_api;
 mod error_code;
 mod fuzzy_file_search;
 mod message_processor;
@@ -80,11 +82,12 @@ pub async fn run_main(
             format!("error parsing -c overrides: {e}"),
         )
     })?;
-    let config = Config::load_with_cli_overrides(cli_kv_overrides, ConfigOverrides::default())
-        .await
-        .map_err(|e| {
-            std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
-        })?;
+    let config =
+        Config::load_with_cli_overrides(cli_kv_overrides.clone(), ConfigOverrides::default())
+            .await
+            .map_err(|e| {
+                std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
+            })?;
 
     let feedback = CodexFeedback::new();
 
@@ -121,10 +124,12 @@ pub async fn run_main(
     // Task: process incoming messages.
     let processor_handle = tokio::spawn({
         let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
+        let cli_overrides: Vec<(String, TomlValue)> = cli_kv_overrides.clone();
         let mut processor = MessageProcessor::new(
             outgoing_message_sender,
             codex_linux_sandbox_exe,
             std::sync::Arc::new(config),
+            cli_overrides,
             feedback.clone(),
         );
         async move {

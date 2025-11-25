@@ -1,4 +1,5 @@
 mod account;
+mod config_rpc;
 mod model_list;
 mod rate_limits;
 mod review;

@@ -56,6 +56,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
 use tempfile::tempdir;
@@ -358,6 +359,8 @@ fn make_chatwidget_manual() -> (
         rate_limit_poller: None,
         stream_controller: None,
         running_commands: HashMap::new(),
+        suppressed_exec_calls: HashSet::new(),
+        last_unified_wait: None,
         task_complete_pending: false,
         mcp_startup_status: None,
         interrupts: InterruptManager::new(),
