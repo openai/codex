@@ -140,10 +140,6 @@ jobs:
             image: ubuntu:22.04
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
-            variant: ubuntu-20.04
-            image: ubuntu:20.04
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-musl
             variant: debian-12
             image: debian:12
           - runner: ubuntu-24.04
