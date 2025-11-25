@@ -46,6 +46,7 @@ struct ExecCommandArgs {
 
 #[derive(Debug, Deserialize)]
 struct WriteStdinArgs {
+    // The model is trained on `session_id`.
     session_id: i32,
     #[serde(default)]
     chars: String,
@@ -128,6 +129,7 @@ impl ToolHandler for UnifiedExecHandler {
                         "failed to parse exec_command arguments: {err:?}"
                     ))
                 })?;
+                let process_id = manager.allocate_process_id().await;
 
                 let command = get_command(&args);
                 let ExecCommandArgs {
@@ -168,6 +170,7 @@ impl ToolHandler for UnifiedExecHandler {
                     cwd.clone(),
                     ExecCommandSource::UnifiedExecStartup,
                     None,
+                    Some(process_id.clone()),
                 );
                 emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
@@ -175,6 +178,7 @@ impl ToolHandler for UnifiedExecHandler {
                     .exec_command(
                         ExecCommandRequest {
                             command,
+                            process_id,
                             yield_time_ms,
                             max_output_tokens,
                             workdir,
@@ -197,7 +201,7 @@ impl ToolHandler for UnifiedExecHandler {
                 manager
                     .write_stdin(WriteStdinRequest {
                         call_id: &call_id,
-                        session_id: args.session_id,
+                        process_id: &args.session_id.to_string(),
                         input: &args.chars,
                         yield_time_ms: args.yield_time_ms,
                         max_output_tokens: args.max_output_tokens,
@@ -255,8 +259,9 @@ fn format_response(response: &UnifiedExecResponse) -> String {
         sections.push(format!("Process exited with code {exit_code}"));
     }
 
-    if let Some(session_id) = response.session_id {
-        sections.push(format!("Process running with session ID {session_id}"));
+    if let Some(process_id) = &response.process_id {
+        // Training still uses "session ID".
+        sections.push(format!("Process running with session ID {process_id}"));
     }
 
     if let Some(original_token_count) = response.original_token_count {

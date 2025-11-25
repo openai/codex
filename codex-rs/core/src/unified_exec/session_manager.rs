@@ -1,9 +1,9 @@
+use rand::Rng;
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
-
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::time::Duration;
@@ -75,9 +75,38 @@ struct PreparedSessionHandles {
     turn_ref: Arc<TurnContext>,
     command: Vec<String>,
     cwd: PathBuf,
+    process_id: String,
 }
 
 impl UnifiedExecSessionManager {
+    pub(crate) async fn allocate_process_id(&self) -> String {
+        loop {
+            let mut store = self.used_session_ids.lock().await;
+
+            let process_id = if !cfg!(test) && !cfg!(feature = "deterministic_process_ids") {
+                // production mode → random
+                rand::rng().random_range(1_000..100_000).to_string()
+            } else {
+                // test or deterministic mode
+                let next = store
+                    .iter()
+                    .filter_map(|s| s.parse::<i32>().ok())
+                    .max()
+                    .map(|m| std::cmp::max(m, 999) + 1)
+                    .unwrap_or(1000);
+
+                next.to_string()
+            };
+
+            if store.contains(&process_id) {
+                continue;
+            }
+
+            store.insert(process_id.clone());
+            return process_id;
+        }
+    }
+
     pub(crate) async fn exec_command(
         &self,
         request: ExecCommandRequest,
@@ -122,14 +151,20 @@ impl UnifiedExecSessionManager {
         let has_exited = session.has_exited();
         let exit_code = session.exit_code();
         let chunk_id = generate_chunk_id();
-        let session_id = if has_exited {
+        let process_id = if has_exited {
             None
         } else {
             // Only store session if not exited.
-            let stored_id = self
-                .store_session(session, context, &request.command, cwd.clone(), start)
-                .await;
-            Some(stored_id)
+            self.store_session(
+                session,
+                context,
+                &request.command,
+                cwd.clone(),
+                start,
+                request.process_id.clone(),
+            )
+            .await;
+            Some(request.process_id.clone())
         };
         let original_token_count = approx_token_count(&text);
 
@@ -138,18 +173,18 @@ impl UnifiedExecSessionManager {
             chunk_id,
             wall_time,
             output,
-            session_id,
+            process_id: process_id.clone(),
             exit_code,
             original_token_count: Some(original_token_count),
             session_command: Some(request.command.clone()),
         };
 
-        if response.session_id.is_some() {
+        if !has_exited {
             Self::emit_waiting_status(&context.session, &context.turn, &request.command).await;
         }
 
         // If the command completed during this call, emit an ExecCommandEnd via the emitter.
-        if response.session_id.is_none() {
+        if has_exited {
             let exit = response.exit_code.unwrap_or(-1);
             Self::emit_exec_end_from_context(
                 context,
@@ -158,6 +193,9 @@ impl UnifiedExecSessionManager {
                 response.output.clone(),
                 exit,
                 response.wall_time,
+                // We always emit the process ID in order to keep consistency between the Begin
+                // event and the End event.
+                Some(request.process_id),
             )
             .await;
         }
@@ -169,7 +207,7 @@ impl UnifiedExecSessionManager {
         &self,
         request: WriteStdinRequest<'_>,
     ) -> Result<UnifiedExecResponse, UnifiedExecError> {
-        let session_id = request.session_id;
+        let process_id = request.process_id.to_string();
 
         let PreparedSessionHandles {
             writer_tx,
@@ -180,13 +218,15 @@ impl UnifiedExecSessionManager {
             turn_ref,
             command: session_command,
             cwd: session_cwd,
-        } = self.prepare_session_handles(session_id).await?;
+            process_id,
+        } = self.prepare_session_handles(process_id.as_str()).await?;
 
         let interaction_emitter = ToolEmitter::unified_exec(
             &session_command,
             session_cwd.clone(),
             ExecCommandSource::UnifiedExecInteraction,
             (!request.input.is_empty()).then(|| request.input.to_string()),
+            Some(process_id.clone()),
         );
         let make_event_ctx = || {
             ToolEventCtx::new(
@@ -233,17 +273,21 @@ impl UnifiedExecSessionManager {
         let original_token_count = approx_token_count(&text);
         let chunk_id = generate_chunk_id();
 
-        let status = self.refresh_session_state(session_id).await;
-        let (session_id, exit_code, completion_entry, event_call_id) = match status {
-            SessionStatus::Alive { exit_code, call_id } => {
-                (Some(session_id), exit_code, None, call_id)
-            }
+        let status = self.refresh_session_state(process_id.as_str()).await;
+        let (process_id, exit_code, completion_entry, event_call_id) = match status {
+            SessionStatus::Alive {
+                exit_code,
+                call_id,
+                process_id,
+            } => (Some(process_id), exit_code, None, call_id),
             SessionStatus::Exited { exit_code, entry } => {
                 let call_id = entry.call_id.clone();
                 (None, exit_code, Some(*entry), call_id)
             }
             SessionStatus::Unknown => {
-                return Err(UnifiedExecError::UnknownSessionId { session_id });
+                return Err(UnifiedExecError::UnknownSessionId {
+                    process_id: request.process_id.to_string(),
+                });
             }
         };
 
@@ -252,7 +296,7 @@ impl UnifiedExecSessionManager {
             chunk_id,
             wall_time,
             output,
-            session_id,
+            process_id,
             exit_code,
             original_token_count: Some(original_token_count),
             session_command: Some(session_command.clone()),
@@ -273,7 +317,7 @@ impl UnifiedExecSessionManager {
             )
             .await;
 
-        if response.session_id.is_some() {
+        if response.process_id.is_some() {
             Self::emit_waiting_status(&session_ref, &turn_ref, &session_command).await;
         }
 
@@ -286,16 +330,17 @@ impl UnifiedExecSessionManager {
         Ok(response)
     }
 
-    async fn refresh_session_state(&self, session_id: i32) -> SessionStatus {
+    async fn refresh_session_state(&self, process_id: &str) -> SessionStatus {
         let mut sessions = self.sessions.lock().await;
-        let Some(entry) = sessions.get(&session_id) else {
+        let Some(entry) = sessions.get(process_id) else {
             return SessionStatus::Unknown;
         };
 
         let exit_code = entry.session.exit_code();
+        let process_id = entry.process_id.clone();
 
         if entry.session.has_exited() {
-            let Some(entry) = sessions.remove(&session_id) else {
+            let Some(entry) = sessions.remove(&process_id) else {
                 return SessionStatus::Unknown;
             };
             SessionStatus::Exited {
@@ -306,18 +351,21 @@ impl UnifiedExecSessionManager {
             SessionStatus::Alive {
                 exit_code,
                 call_id: entry.call_id.clone(),
+                process_id,
             }
         }
     }
 
     async fn prepare_session_handles(
         &self,
-        session_id: i32,
+        process_id: &str,
     ) -> Result<PreparedSessionHandles, UnifiedExecError> {
         let mut sessions = self.sessions.lock().await;
         let entry = sessions
-            .get_mut(&session_id)
-            .ok_or(UnifiedExecError::UnknownSessionId { session_id })?;
+            .get_mut(process_id)
+            .ok_or(UnifiedExecError::UnknownSessionId {
+                process_id: process_id.to_string(),
+            })?;
         entry.last_used = Instant::now();
         let OutputHandles {
             output_buffer,
@@ -334,6 +382,7 @@ impl UnifiedExecSessionManager {
             turn_ref: Arc::clone(&entry.turn_ref),
             command: entry.command.clone(),
             cwd: entry.cwd.clone(),
+            process_id: entry.process_id.clone(),
         })
     }
 
@@ -347,6 +396,7 @@ impl UnifiedExecSessionManager {
             .map_err(|_| UnifiedExecError::WriteToStdin)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn store_session(
         &self,
         session: UnifiedExecSession,
@@ -354,15 +404,14 @@ impl UnifiedExecSessionManager {
         command: &[String],
         cwd: PathBuf,
         started_at: Instant,
-    ) -> i32 {
-        let session_id = self
-            .next_session_id
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        process_id: String,
+    ) {
         let entry = SessionEntry {
             session,
             session_ref: Arc::clone(&context.session),
             turn_ref: Arc::clone(&context.turn),
             call_id: context.call_id.clone(),
+            process_id: process_id.clone(),
             command: command.to_vec(),
             cwd,
             started_at,
@@ -370,8 +419,7 @@ impl UnifiedExecSessionManager {
         };
         let mut sessions = self.sessions.lock().await;
         Self::prune_sessions_if_needed(&mut sessions);
-        sessions.insert(session_id, entry);
-        session_id
+        sessions.insert(process_id, entry);
     }
 
     async fn emit_exec_end_from_entry(
@@ -399,6 +447,7 @@ impl UnifiedExecSessionManager {
             entry.cwd,
             ExecCommandSource::UnifiedExecStartup,
             None,
+            Some(entry.process_id.clone()),
         );
         emitter
             .emit(event_ctx, ToolEventStage::Success(output))
@@ -412,6 +461,7 @@ impl UnifiedExecSessionManager {
         aggregated_output: String,
         exit_code: i32,
         duration: Duration,
+        process_id: Option<String>,
     ) {
         let output = ExecToolCallOutput {
             exit_code,
@@ -427,8 +477,13 @@ impl UnifiedExecSessionManager {
             &context.call_id,
             None,
         );
-        let emitter =
-            ToolEmitter::unified_exec(command, cwd, ExecCommandSource::UnifiedExecStartup, None);
+        let emitter = ToolEmitter::unified_exec(
+            command,
+            cwd,
+            ExecCommandSource::UnifiedExecStartup,
+            None,
+            process_id,
+        );
         emitter
             .emit(event_ctx, ToolEventStage::Success(output))
             .await;
@@ -574,14 +629,14 @@ impl UnifiedExecSessionManager {
         collected
     }
 
-    fn prune_sessions_if_needed(sessions: &mut HashMap<i32, SessionEntry>) {
+    fn prune_sessions_if_needed(sessions: &mut HashMap<String, SessionEntry>) {
         if sessions.len() < MAX_UNIFIED_EXEC_SESSIONS {
             return;
         }
 
-        let meta: Vec<(i32, Instant, bool)> = sessions
+        let meta: Vec<(String, Instant, bool)> = sessions
             .iter()
-            .map(|(id, entry)| (*id, entry.last_used, entry.session.has_exited()))
+            .map(|(id, entry)| (id.clone(), entry.last_used, entry.session.has_exited()))
             .collect();
 
         if let Some(session_id) = Self::session_id_to_prune_from_meta(&meta) {
@@ -590,32 +645,32 @@ impl UnifiedExecSessionManager {
     }
 
     // Centralized pruning policy so we can easily swap strategies later.
-    fn session_id_to_prune_from_meta(meta: &[(i32, Instant, bool)]) -> Option<i32> {
+    fn session_id_to_prune_from_meta(meta: &[(String, Instant, bool)]) -> Option<String> {
         if meta.is_empty() {
             return None;
         }
 
         let mut by_recency = meta.to_vec();
         by_recency.sort_by_key(|(_, last_used, _)| Reverse(*last_used));
-        let protected: HashSet<i32> = by_recency
+        let protected: HashSet<String> = by_recency
             .iter()
             .take(8)
-            .map(|(session_id, _, _)| *session_id)
+            .map(|(process_id, _, _)| process_id.clone())
             .collect();
 
         let mut lru = meta.to_vec();
         lru.sort_by_key(|(_, last_used, _)| *last_used);
 
-        if let Some((session_id, _, _)) = lru
+        if let Some((process_id, _, _)) = lru
             .iter()
-            .find(|(session_id, _, exited)| !protected.contains(session_id) && *exited)
+            .find(|(process_id, _, exited)| !protected.contains(process_id) && *exited)
         {
-            return Some(*session_id);
+            return Some(process_id.clone());
         }
 
         lru.into_iter()
-            .find(|(session_id, _, _)| !protected.contains(session_id))
-            .map(|(session_id, _, _)| session_id)
+            .find(|(process_id, _, _)| !protected.contains(process_id))
+            .map(|(process_id, _, _)| process_id)
     }
 
     pub(crate) async fn terminate_all_sessions(&self) {
@@ -628,6 +683,7 @@ enum SessionStatus {
     Alive {
         exit_code: Option<i32>,
         call_id: String,
+        process_id: String,
     },
     Exited {
         exit_code: Option<i32>,
@@ -675,64 +731,67 @@ mod tests {
     #[test]
     fn pruning_prefers_exited_sessions_outside_recently_used() {
         let now = Instant::now();
+        let id = |n: i32| n.to_string();
         let meta = vec![
-            (1, now - Duration::from_secs(40), false),
-            (2, now - Duration::from_secs(30), true),
-            (3, now - Duration::from_secs(20), false),
-            (4, now - Duration::from_secs(19), false),
-            (5, now - Duration::from_secs(18), false),
-            (6, now - Duration::from_secs(17), false),
-            (7, now - Duration::from_secs(16), false),
-            (8, now - Duration::from_secs(15), false),
-            (9, now - Duration::from_secs(14), false),
-            (10, now - Duration::from_secs(13), false),
+            (id(1), now - Duration::from_secs(40), false),
+            (id(2), now - Duration::from_secs(30), true),
+            (id(3), now - Duration::from_secs(20), false),
+            (id(4), now - Duration::from_secs(19), false),
+            (id(5), now - Duration::from_secs(18), false),
+            (id(6), now - Duration::from_secs(17), false),
+            (id(7), now - Duration::from_secs(16), false),
+            (id(8), now - Duration::from_secs(15), false),
+            (id(9), now - Duration::from_secs(14), false),
+            (id(10), now - Duration::from_secs(13), false),
         ];
 
         let candidate = UnifiedExecSessionManager::session_id_to_prune_from_meta(&meta);
 
-        assert_eq!(candidate, Some(2));
+        assert_eq!(candidate, Some(id(2)));
     }
 
     #[test]
     fn pruning_falls_back_to_lru_when_no_exited() {
         let now = Instant::now();
+        let id = |n: i32| n.to_string();
         let meta = vec![
-            (1, now - Duration::from_secs(40), false),
-            (2, now - Duration::from_secs(30), false),
-            (3, now - Duration::from_secs(20), false),
-            (4, now - Duration::from_secs(19), false),
-            (5, now - Duration::from_secs(18), false),
-            (6, now - Duration::from_secs(17), false),
-            (7, now - Duration::from_secs(16), false),
-            (8, now - Duration::from_secs(15), false),
-            (9, now - Duration::from_secs(14), false),
-            (10, now - Duration::from_secs(13), false),
+            (id(1), now - Duration::from_secs(40), false),
+            (id(2), now - Duration::from_secs(30), false),
+            (id(3), now - Duration::from_secs(20), false),
+            (id(4), now - Duration::from_secs(19), false),
+            (id(5), now - Duration::from_secs(18), false),
+            (id(6), now - Duration::from_secs(17), false),
+            (id(7), now - Duration::from_secs(16), false),
+            (id(8), now - Duration::from_secs(15), false),
+            (id(9), now - Duration::from_secs(14), false),
+            (id(10), now - Duration::from_secs(13), false),
         ];
 
         let candidate = UnifiedExecSessionManager::session_id_to_prune_from_meta(&meta);
 
-        assert_eq!(candidate, Some(1));
+        assert_eq!(candidate, Some(id(1)));
     }
 
     #[test]
     fn pruning_protects_recent_sessions_even_if_exited() {
         let now = Instant::now();
+        let id = |n: i32| n.to_string();
         let meta = vec![
-            (1, now - Duration::from_secs(40), false),
-            (2, now - Duration::from_secs(30), false),
-            (3, now - Duration::from_secs(20), true),
-            (4, now - Duration::from_secs(19), false),
-            (5, now - Duration::from_secs(18), false),
-            (6, now - Duration::from_secs(17), false),
-            (7, now - Duration::from_secs(16), false),
-            (8, now - Duration::from_secs(15), false),
-            (9, now - Duration::from_secs(14), false),
-            (10, now - Duration::from_secs(13), true),
+            (id(1), now - Duration::from_secs(40), false),
+            (id(2), now - Duration::from_secs(30), false),
+            (id(3), now - Duration::from_secs(20), true),
+            (id(4), now - Duration::from_secs(19), false),
+            (id(5), now - Duration::from_secs(18), false),
+            (id(6), now - Duration::from_secs(17), false),
+            (id(7), now - Duration::from_secs(16), false),
+            (id(8), now - Duration::from_secs(15), false),
+            (id(9), now - Duration::from_secs(14), false),
+            (id(10), now - Duration::from_secs(13), true),
         ];
 
         let candidate = UnifiedExecSessionManager::session_id_to_prune_from_meta(&meta);
 
         // (10) is exited but among the last 8; we should drop the LRU outside that set.
-        assert_eq!(candidate, Some(1));
+        assert_eq!(candidate, Some(id(1)));
     }
 }
