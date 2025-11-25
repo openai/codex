@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use crate::AuthManager;
+use crate::ResponseStream;
 use crate::SandboxState;
 use crate::client_common::REVIEW_PROMPT;
 use crate::compact;
@@ -2186,22 +2188,13 @@ async fn try_run_turn(
     let client = turn_context.client.clone();
     let mut stream_future = Box::pin(client.stream(prompt).or_cancel(&cancellation_token));
 
-    let mut stream = loop {
-        tokio::select! {
-            biased;
-            result = &mut stream_future => break result??,
-            _ = sleep_until(idle_warning.deadline()) => {
-                if let Some(message) = idle_warning.maybe_warning_message().await {
-                    sess.send_event(
-                        &turn_context,
-                        EventMsg::Warning(WarningEvent { message }),
-                    )
-                    .await;
-                }
-                continue;
-            }
-        }
-    };
+    let mut stream = await_stream_with_idle_warning(
+        stream_future.as_mut(),
+        &mut idle_warning,
+        &sess,
+        &turn_context,
+    )
+    .await?;
 
     idle_warning.mark_event();
 
@@ -2430,6 +2423,34 @@ async fn try_run_turn(
                         .await;
                 } else {
                     error_or_panic("ReasoningRawContentDelta without active item".to_string());
+                }
+            }
+        }
+    }
+}
+
+async fn await_stream_with_idle_warning<F>(
+    mut stream_future: Pin<&mut F>,
+    idle_warning: &mut IdleWarning,
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+) -> CodexResult<ResponseStream>
+where
+    F: std::future::Future<
+            Output = Result<CodexResult<ResponseStream>, codex_async_utils::CancelErr>,
+        > + Send,
+{
+    loop {
+        tokio::select! {
+            biased;
+            result = &mut stream_future => return result?,
+            _ = sleep_until(idle_warning.deadline()) => {
+                if let Some(message) = idle_warning.maybe_warning_message().await {
+                    sess.send_event(
+                        turn_context,
+                        EventMsg::Warning(WarningEvent { message }),
+                    )
+                    .await;
                 }
             }
         }
