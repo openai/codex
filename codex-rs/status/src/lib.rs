@@ -1,16 +1,14 @@
-use anyhow::{bail, Context, Result};
-use reqwest::{header::CONTENT_TYPE, Url};
-use serde::{Deserialize, Serialize};
+use anyhow::Context;
+use anyhow::Result;
+use anyhow::anyhow;
+use anyhow::bail;
+use reqwest::header::CONTENT_TYPE;
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
-use std::env;
-use std::fmt;
 use std::time::Duration;
 
-pub const DEFAULT_STATUS_WIDGET_URL: &str = "https://status.openai.com/proxy/status.openai.com";
-pub const STATUS_WIDGET_ENV_VAR: &str = "STATUS_WIDGET_URL";
-pub const CODEX_COMPONENT_NAME: &str = "Codex";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Display, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ComponentHealth {
     Operational,
@@ -23,165 +21,105 @@ pub enum ComponentHealth {
 }
 
 impl ComponentHealth {
-    fn operational() -> Self {
-        Self::Operational
-    }
-
     pub fn is_operational(self) -> bool {
         self == Self::Operational
     }
-
 }
 
-impl fmt::Display for ComponentHealth {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let value = Value::from(self)
-            .as_str()
-            .ok_or(fmt::Error)?;
+pub async fn fetch_codex_health() -> Result<ComponentHealth> {
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(10))
+        .build()
+        .context("building HTTP client")?;
 
-        f.write_str(value)
-    }
-}
+    let response = client
+        .get(STATUS_WIDGET_URL)
+        .send()
+        .await
+        .context("requesting status widget")?
+        .error_for_status()
+        .context("status widget returned error")?;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AffectedComponent {
-    pub component_id: String,
-    #[serde(default = "ComponentHealth::operational")]
-    pub status: ComponentHealth,
-}
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Component {
-    pub id: String,
-    pub name: String,
-    pub status_page_id: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct Summary {
-    pub id: String,
-    pub name: String,
-    #[serde(default)]
-    pub components: Vec<Component>,
-    #[serde(default)]
-    pub affected_components: Vec<AffectedComponent>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct StatusPayload {
-    pub summary: Summary,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct CodexStatus {
-    pub component_id: String,
-    pub name: String,
-    pub status: ComponentHealth,
-    pub is_operational: bool,
-    pub raw_affected: Option<AffectedComponent>,
-}
-
-#[derive(Debug, Clone)]
-pub struct StatusClient {
-    client: reqwest::Client,
-    widget_url: Url,
-}
-
-impl StatusClient {
-    pub fn new() -> Result<Self> {
-        let widget_url = env::var(STATUS_WIDGET_ENV_VAR)
-            .unwrap_or_else(|_| DEFAULT_STATUS_WIDGET_URL.to_string());
-        Self::with_widget_url(Url::parse(&widget_url)?)
-    }
-
-    pub fn with_widget_url(widget_url: Url) -> Result<Self> {
-        let version = env!("CARGO_PKG_VERSION");
-        let user_agent = format!("codex-status/{version}");
-
-        let client = reqwest::Client::builder()
-            .user_agent(user_agent)
-            .connect_timeout(Duration::from_secs(5))
-            .timeout(Duration::from_secs(10))
-            .build()
-            .context("building HTTP client")?;
-
-        Ok(Self { client, widget_url })
-    }
-
-    pub async fn fetch_status_payload(&self) -> Result<StatusPayload> {
-        let response = self
-            .client
-            .get(self.widget_url.clone())
-            .send()
+    if !content_type.contains("json") {
+        let snippet = response
+            .text()
             .await
-            .context("requesting status widget")?
-            .error_for_status()
-            .context("status widget returned error")?;
-
-        let content_type = response
-            .headers()
-            .get(CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
             .unwrap_or_default()
-            .to_ascii_lowercase();
+            .chars()
+            .take(200)
+            .collect::<String>();
 
-        if !content_type.contains("json") {
-            let snippet = response
-                .text()
-                .await
-                .unwrap_or_default()
-                .chars()
-                .take(200)
-                .collect::<String>();
-
-            let url = &self.widget_url;
-            bail!(
-                "Expected JSON from {url}, got Content-Type={content_type}. Body starts with: {snippet:?}"
-            );
-        }
-
-        response
-            .json::<StatusPayload>()
-            .await
-            .context("parsing status widget JSON")
+        bail!(
+            "Expected JSON from {STATUS_WIDGET_URL}: Content-Type={content_type}. Body starts with: {snippet:?}"
+        );
     }
 
-    pub async fn fetch_codex_status(&self) -> Result<CodexStatus> {
-        let payload = self.fetch_status_payload().await?;
-        derive_component_status(&payload, CODEX_COMPONENT_NAME)
-    }
+    let payload = response
+        .json::<StatusPayload>()
+        .await
+        .context("parsing status widget JSON")?;
+
+    derive_component_health(&payload, CODEX_COMPONENT_NAME)
 }
 
-pub fn derive_component_status(payload: &StatusPayload, component_name: &str) -> Result<CodexStatus> {
+const STATUS_WIDGET_URL: &str = "https://status.openai.com/proxy/status.openai.com";
+const CODEX_COMPONENT_NAME: &str = "Codex";
+
+#[derive(Debug, Clone, Deserialize)]
+struct StatusPayload {
+    #[serde(default)]
+    summary: Summary,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct Summary {
+    #[serde(default)]
+    components: Vec<Component>,
+    #[serde(default)]
+    affected_components: Vec<AffectedComponent>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct Component {
+    id: String,
+    name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AffectedComponent {
+    component_id: String,
+    #[serde(default = "ComponentHealth::operational")]
+    status: ComponentHealth,
+}
+
+fn derive_component_health(
+    payload: &StatusPayload,
+    component_name: &str,
+) -> Result<ComponentHealth> {
     let component = payload
         .summary
         .components
         .iter()
         .find(|component| component.name == component_name)
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("Component {component_name:?} not found in status summary"))?;
+        .ok_or_else(|| anyhow!("Component {component_name:?} not found in status summary"))?;
 
-    let affected = payload
+    let status = payload
         .summary
         .affected_components
         .iter()
         .find(|affected| affected.component_id == component.id)
-        .cloned();
-
-    let status = affected
-        .as_ref()
         .map(|affected| affected.status)
         .unwrap_or(ComponentHealth::Operational);
 
-    let is_operational = status.is_operational();
-
-    Ok(CodexStatus {
-        component_id: component.id,
-        name: component.name,
-        status,
-        is_operational,
-        raw_affected: affected,
-    })
+    Ok(status)
 }
 
 #[cfg(test)]
@@ -204,11 +142,10 @@ mod tests {
         }))
         .expect("valid payload");
 
-        let status = derive_component_status(&payload, "Codex").expect("codex component exists");
+        let status = derive_component_health(&payload, "Codex").expect("codex component exists");
 
-        assert_eq!(status.status, ComponentHealth::Operational);
-        assert!(status.is_operational);
-        assert!(status.raw_affected.is_none());
+        assert_eq!(status, ComponentHealth::Operational);
+        assert!(status.is_operational());
     }
 
     #[test]
@@ -227,17 +164,10 @@ mod tests {
         }))
         .expect("valid payload");
 
-        let status = derive_component_status(&payload, "Codex").expect("codex component exists");
+        let status = derive_component_health(&payload, "Codex").expect("codex component exists");
 
-        assert_eq!(status.status, ComponentHealth::MajorOutage);
-        assert!(!status.is_operational);
-        assert_eq!(
-            status
-                .raw_affected
-                .as_ref()
-                .map(|affected| affected.status),
-            Some(ComponentHealth::MajorOutage)
-        );
+        assert_eq!(status, ComponentHealth::MajorOutage);
+        assert!(!status.is_operational());
     }
 
     #[test]
@@ -256,10 +186,10 @@ mod tests {
         }))
         .expect("valid payload");
 
-        let status = derive_component_status(&payload, "Codex").expect("codex component exists");
+        let status = derive_component_health(&payload, "Codex").expect("codex component exists");
 
-        assert_eq!(status.status, ComponentHealth::Unknown);
-        assert!(!status.is_operational);
+        assert_eq!(status, ComponentHealth::Unknown);
+        assert!(!status.is_operational());
     }
 
     #[test]
@@ -274,10 +204,13 @@ mod tests {
         }))
         .expect("valid payload");
 
-        let error = derive_component_status(&payload, "Codex").expect_err("missing component should error");
+        let error =
+            derive_component_health(&payload, "Codex").expect_err("missing component should error");
 
-        assert!(error
-            .to_string()
-            .contains("Component \"Codex\" not found in status summary"));
+        assert!(
+            error
+                .to_string()
+                .contains("Component \"Codex\" not found in status summary")
+        );
     }
 }
