@@ -16,6 +16,7 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use pretty_assertions::assert_eq;
 use wiremock::Mock;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
@@ -63,9 +64,10 @@ async fn emits_warning_when_stream_is_idle_and_status_is_degraded() {
     let EventMsg::Warning(WarningEvent { message }) = warning else {
         panic!("expected warning event");
     };
-    assert!(
-        message.contains("OpenAI status: MajorOutage"),
-        "unexpected warning message: {message}"
+    assert_eq!(
+        message,
+        "Codex is facing an incident. Current status: major outage. Responses may be delayed or stalled.",
+        "unexpected warning message"
     );
 
     let status_requests = status_server
