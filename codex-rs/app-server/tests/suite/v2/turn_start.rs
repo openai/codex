@@ -906,6 +906,7 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
 }
 
 #[tokio::test]
+#[cfg_attr(windows, ignore = "process id reporting differs on Windows")]
 async fn command_execution_notifications_include_process_id() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
