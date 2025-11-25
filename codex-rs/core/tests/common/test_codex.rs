@@ -36,6 +36,7 @@ pub enum ApplyPatchModelOutput {
     Function,
     Shell,
     ShellViaHeredoc,
+    ShellCommandViaHeredoc,
 }
 
 /// A collection of different ways the model can output an apply_patch call
@@ -312,7 +313,10 @@ impl TestCodexHarness {
             ApplyPatchModelOutput::Freeform => self.custom_tool_call_output(call_id).await,
             ApplyPatchModelOutput::Function
             | ApplyPatchModelOutput::Shell
-            | ApplyPatchModelOutput::ShellViaHeredoc => self.function_call_stdout(call_id).await,
+            | ApplyPatchModelOutput::ShellViaHeredoc
+            | ApplyPatchModelOutput::ShellCommandViaHeredoc => {
+                self.function_call_stdout(call_id).await
+            }
         }
     }
 }
