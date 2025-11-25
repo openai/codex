@@ -17,7 +17,7 @@ use tokio::time::Instant;
 
 const STATUS_WIDGET_URL: &str = "https://status.openai.com/proxy/status.openai.com";
 const CODEX_COMPONENT_NAME: &str = "Codex";
-const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
 
 static TEST_STATUS_WIDGET_URL: OnceLock<String> = OnceLock::new();
 static TEST_IDLE_TIMEOUT: OnceLock<Duration> = OnceLock::new();
