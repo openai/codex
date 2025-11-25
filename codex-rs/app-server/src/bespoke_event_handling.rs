@@ -545,11 +545,13 @@ pub(crate) async fn apply_bespoke_event_handling(
 }
 
 async fn emit_turn_completed_with_status(
+    conversation_id: ConversationId,
     event_id: String,
     status: TurnStatus,
     outgoing: &OutgoingMessageSender,
 ) {
     let notification = TurnCompletedNotification {
+        thread_id: conversation_id.to_string(),
         turn: Turn {
             id: event_id,
             items: vec![],
@@ -645,7 +647,7 @@ async fn handle_turn_complete(
         TurnStatus::Completed
     };
 
-    emit_turn_completed_with_status(event_id, status, outgoing).await;
+    emit_turn_completed_with_status(conversation_id, event_id, status, outgoing).await;
 }
 
 async fn handle_turn_interrupted(
@@ -656,7 +658,8 @@ async fn handle_turn_interrupted(
 ) {
     find_and_remove_turn_summary(conversation_id, turn_summary_store).await;
 
-    emit_turn_completed_with_status(event_id, TurnStatus::Interrupted, outgoing).await;
+    emit_turn_completed_with_status(conversation_id, event_id, TurnStatus::Interrupted, outgoing)
+        .await;
 }
 
 async fn handle_error(

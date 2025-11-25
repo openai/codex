@@ -95,6 +95,7 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     .await??;
     let started: TurnStartedNotification =
         serde_json::from_value(notif.params.expect("params must be present"))?;
+    assert_eq!(started.thread_id, thread.id);
     assert_eq!(
         started.turn.status,
         codex_app_server_protocol::TurnStatus::InProgress
@@ -138,6 +139,7 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
             .params
             .expect("turn/completed params must be present"),
     )?;
+    assert_eq!(completed.thread_id, thread.id);
     assert_eq!(completed.turn.status, TurnStatus::Completed);
 
     Ok(())
