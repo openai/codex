@@ -76,6 +76,7 @@ impl IdleWarning {
             && !status.is_operational()
         {
             self.warning_sent = true;
+            self.mark_event();
             return Some(format!(
                 "Codex is facing an incident. Current status: {status:?}. Responses may be delayed or stalled."
             ));
