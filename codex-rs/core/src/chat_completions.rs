@@ -359,10 +359,13 @@ pub(crate) async fn stream_chat_completions(
     }
 
     // Remove assistant messages with incomplete tool calls (no matching responses).
+    // Also collect tool_call_ids from assistant messages that will be removed.
     let incomplete_ids: Vec<String> = expected_tool_call_ids
         .difference(&provided_tool_call_ids)
         .cloned()
         .collect();
+
+    let mut removed_assistant_call_ids = std::collections::HashSet::new();
 
     if !incomplete_ids.is_empty() {
         messages.retain(|msg| {
@@ -370,11 +373,33 @@ pub(crate) async fn stream_chat_completions(
                 if obj.get("role").and_then(|v| v.as_str()) == Some("assistant")
                     && let Some(tool_calls) = obj.get("tool_calls").and_then(|v| v.as_array())
                 {
+                    // Check if this assistant message has any incomplete tool calls.
                     for tc in tool_calls {
                         if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
                             if incomplete_ids.contains(&id.to_string()) {
+                                // Collect ALL tool_call_ids from this assistant message.
+                                // We need to remove their corresponding tool responses too.
+                                for tc2 in tool_calls {
+                                    if let Some(id2) = tc2.get("id").and_then(|v| v.as_str()) {
+                                        removed_assistant_call_ids.insert(id2.to_string());
+                                    }
+                                }
                                 return false;
                             }
+                        }
+                    }
+                }
+            }
+            true
+        });
+
+        // Remove tool response messages whose assistant origin was removed.
+        messages.retain(|msg| {
+            if let Some(obj) = msg.as_object() {
+                if obj.get("role").and_then(|v| v.as_str()) == Some("tool") {
+                    if let Some(tool_call_id) = obj.get("tool_call_id").and_then(|v| v.as_str()) {
+                        if removed_assistant_call_ids.contains(tool_call_id) {
+                            return false;
                         }
                     }
                 }
