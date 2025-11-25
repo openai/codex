@@ -8,9 +8,12 @@ use crate::unified_exec::UnifiedExecSessionManager;
 use crate::user_notification::UserNotifier;
 use codex_otel::otel_event_manager::OtelEventManager;
 use tokio::sync::Mutex;
+use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
 
 pub(crate) struct SessionServices {
-    pub(crate) mcp_connection_manager: McpConnectionManager,
+    pub(crate) mcp_connection_manager: Arc<RwLock<McpConnectionManager>>,
+    pub(crate) mcp_startup_cancellation_token: CancellationToken,
     pub(crate) unified_exec_manager: UnifiedExecSessionManager,
     pub(crate) notifier: UserNotifier,
     pub(crate) rollout: Mutex<Option<RolloutRecorder>>,

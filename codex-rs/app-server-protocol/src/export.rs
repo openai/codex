@@ -61,7 +61,32 @@ pub fn generate_types(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct GenerateTsOptions {
+    pub generate_indices: bool,
+    pub ensure_headers: bool,
+    pub run_prettier: bool,
+}
+
+impl Default for GenerateTsOptions {
+    fn default() -> Self {
+        Self {
+            generate_indices: true,
+            ensure_headers: true,
+            run_prettier: true,
+        }
+    }
+}
+
 pub fn generate_ts(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
+    generate_ts_with_options(out_dir, prettier, GenerateTsOptions::default())
+}
+
+pub fn generate_ts_with_options(
+    out_dir: &Path,
+    prettier: Option<&Path>,
+    options: GenerateTsOptions,
+) -> Result<()> {
     let v2_out_dir = out_dir.join("v2");
     ensure_dir(out_dir)?;
     ensure_dir(&v2_out_dir)?;
@@ -74,17 +99,28 @@ pub fn generate_ts(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
     export_server_responses(out_dir)?;
     ServerNotification::export_all_to(out_dir)?;
 
-    generate_index_ts(out_dir)?;
-    generate_index_ts(&v2_out_dir)?;
+    if options.generate_indices {
+        generate_index_ts(out_dir)?;
+        generate_index_ts(&v2_out_dir)?;
+    }
 
     // Ensure our header is present on all TS files (root + subdirs like v2/).
-    let ts_files = ts_files_in_recursive(out_dir)?;
-    for file in &ts_files {
-        prepend_header_if_missing(file)?;
+    let mut ts_files = Vec::new();
+    let should_collect_ts_files =
+        options.ensure_headers || (options.run_prettier && prettier.is_some());
+    if should_collect_ts_files {
+        ts_files = ts_files_in_recursive(out_dir)?;
+    }
+
+    if options.ensure_headers {
+        for file in &ts_files {
+            prepend_header_if_missing(file)?;
+        }
     }
 
     // Optionally run Prettier on all generated TS files.
-    if let Some(prettier_bin) = prettier
+    if options.run_prettier
+        && let Some(prettier_bin) = prettier
         && !ts_files.is_empty()
     {
         let status = Command::new(prettier_bin)
@@ -723,7 +759,13 @@ mod tests {
 
         let _guard = TempDirGuard(output_dir.clone());
 
-        generate_ts(&output_dir, None)?;
+        // Avoid doing more work than necessary to keep the test from timing out.
+        let options = GenerateTsOptions {
+            generate_indices: false,
+            ensure_headers: false,
+            run_prettier: false,
+        };
+        generate_ts_with_options(&output_dir, None, options)?;
 
         let mut undefined_offenders = Vec::new();
         let mut optional_nullable_offenders = BTreeSet::new();

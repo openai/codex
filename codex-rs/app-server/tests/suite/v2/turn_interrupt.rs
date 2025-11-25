@@ -3,16 +3,19 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_mock_chat_completions_server;
-use app_test_support::create_shell_sse_response;
+use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
+use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -38,7 +41,7 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
     std::fs::create_dir(&working_directory)?;
 
     // Mock server: long-running shell command then (after abort) nothing else needed.
-    let server = create_mock_chat_completions_server(vec![create_shell_sse_response(
+    let server = create_mock_chat_completions_server(vec![create_shell_command_sse_response(
         shell_command.clone(),
         Some(&working_directory),
         Some(10_000),
@@ -62,7 +65,7 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
     )
     .await??;
-    let ThreadStartResponse { thread } = to_response::<ThreadStartResponse>(thread_resp)?;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
 
     // Start a turn that triggers a long-running command.
     let turn_req = mcp
@@ -99,7 +102,18 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
     .await??;
     let _resp: TurnInterruptResponse = to_response::<TurnInterruptResponse>(interrupt_resp)?;
 
-    // No fields to assert on; successful deserialization confirms proper response shape.
+    let completed_notif: JSONRPCNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    let completed: TurnCompletedNotification = serde_json::from_value(
+        completed_notif
+            .params
+            .expect("turn/completed params must be present"),
+    )?;
+    assert_eq!(completed.turn.status, TurnStatus::Interrupted);
+
     Ok(())
 }
 

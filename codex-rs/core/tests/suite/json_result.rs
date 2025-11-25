@@ -31,12 +31,12 @@ const SCHEMA: &str = r#"
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_returns_json_result_for_gpt5() -> anyhow::Result<()> {
-    codex_returns_json_result("gpt-5".to_string()).await
+    codex_returns_json_result("gpt-5.1".to_string()).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_returns_json_result_for_gpt5_codex() -> anyhow::Result<()> {
-    codex_returns_json_result("gpt-5-codex".to_string()).await
+    codex_returns_json_result("gpt-5.1-codex".to_string()).await
 }
 
 async fn codex_returns_json_result(model: String) -> anyhow::Result<()> {

@@ -1,10 +1,14 @@
+use crate::key_hint;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableExt as _;
+use crate::selection_list::selection_option_row;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
+use codex_common::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
+use codex_common::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -12,6 +16,7 @@ use crossterm::event::KeyModifiers;
 use ratatui::prelude::Stylize as _;
 use ratatui::prelude::Widget;
 use ratatui::text::Line;
+use ratatui::text::Span;
 use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
@@ -19,12 +24,51 @@ use ratatui::widgets::Wrap;
 use tokio_stream::StreamExt;
 
 /// Outcome of the migration prompt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ModelMigrationOutcome {
     Accepted,
+    Rejected,
     Exit,
 }
 
-pub(crate) async fn run_model_migration_prompt(tui: &mut Tui) -> ModelMigrationOutcome {
+#[derive(Clone)]
+pub(crate) struct ModelMigrationCopy {
+    pub heading: Vec<Span<'static>>,
+    pub content: Vec<Line<'static>>,
+    pub can_opt_out: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MigrationMenuOption {
+    TryNewModel,
+    UseExistingModel,
+}
+
+impl MigrationMenuOption {
+    fn all() -> [Self; 2] {
+        [Self::TryNewModel, Self::UseExistingModel]
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::TryNewModel => "Try new model",
+            Self::UseExistingModel => "Use existing model",
+        }
+    }
+}
+
+pub(crate) fn migration_copy_for_config(migration_config_key: &str) -> ModelMigrationCopy {
+    match migration_config_key {
+        HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG => gpt5_migration_copy(),
+        HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG => gpt_5_1_codex_max_migration_copy(),
+        _ => gpt_5_1_codex_max_migration_copy(),
+    }
+}
+
+pub(crate) async fn run_model_migration_prompt(
+    tui: &mut Tui,
+    copy: ModelMigrationCopy,
+) -> ModelMigrationOutcome {
     // Render the prompt on the terminal's alternate screen so exiting or cancelling
     // does not leave a large blank region in the normal scrollback. This does not
     // change the prompt's appearance – only where it is drawn.
@@ -45,7 +89,7 @@ pub(crate) async fn run_model_migration_prompt(tui: &mut Tui) -> ModelMigrationO
 
     let alt = AltScreenGuard::enter(tui);
 
-    let mut screen = ModelMigrationScreen::new(alt.tui.frame_requester());
+    let mut screen = ModelMigrationScreen::new(alt.tui.frame_requester(), copy);
 
     let _ = alt.tui.draw(u16::MAX, |frame| {
         frame.render_widget_ref(&screen, frame.area());
@@ -76,22 +120,57 @@ pub(crate) async fn run_model_migration_prompt(tui: &mut Tui) -> ModelMigrationO
 
 struct ModelMigrationScreen {
     request_frame: FrameRequester,
+    copy: ModelMigrationCopy,
     done: bool,
-    should_exit: bool,
+    outcome: ModelMigrationOutcome,
+    highlighted_option: MigrationMenuOption,
 }
 
 impl ModelMigrationScreen {
-    fn new(request_frame: FrameRequester) -> Self {
+    fn new(request_frame: FrameRequester, copy: ModelMigrationCopy) -> Self {
         Self {
             request_frame,
+            copy,
             done: false,
-            should_exit: false,
+            outcome: ModelMigrationOutcome::Accepted,
+            highlighted_option: MigrationMenuOption::TryNewModel,
         }
     }
 
-    fn accept(&mut self) {
+    fn finish_with(&mut self, outcome: ModelMigrationOutcome) {
+        self.outcome = outcome;
         self.done = true;
         self.request_frame.schedule_frame();
+    }
+
+    fn accept(&mut self) {
+        self.finish_with(ModelMigrationOutcome::Accepted);
+    }
+
+    fn reject(&mut self) {
+        self.finish_with(ModelMigrationOutcome::Rejected);
+    }
+
+    fn exit(&mut self) {
+        self.finish_with(ModelMigrationOutcome::Exit);
+    }
+
+    fn confirm_selection(&mut self) {
+        if self.copy.can_opt_out {
+            match self.highlighted_option {
+                MigrationMenuOption::TryNewModel => self.accept(),
+                MigrationMenuOption::UseExistingModel => self.reject(),
+            }
+        } else {
+            self.accept();
+        }
+    }
+
+    fn highlight_option(&mut self, option: MigrationMenuOption) {
+        if self.highlighted_option != option {
+            self.highlighted_option = option;
+            self.request_frame.schedule_frame();
+        }
     }
 
     fn handle_key(&mut self, key_event: KeyEvent) {
@@ -102,14 +181,36 @@ impl ModelMigrationScreen {
         if key_event.modifiers.contains(KeyModifiers::CONTROL)
             && matches!(key_event.code, KeyCode::Char('c') | KeyCode::Char('d'))
         {
-            self.should_exit = true;
-            self.done = true;
-            self.request_frame.schedule_frame();
+            self.exit();
             return;
         }
 
-        if matches!(key_event.code, KeyCode::Esc | KeyCode::Enter) {
-            self.accept();
+        if !self.copy.can_opt_out {
+            if matches!(key_event.code, KeyCode::Esc | KeyCode::Enter) {
+                self.accept();
+            }
+            return;
+        }
+
+        match key_event.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.highlight_option(MigrationMenuOption::TryNewModel);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.highlight_option(MigrationMenuOption::UseExistingModel);
+            }
+            KeyCode::Char('1') => {
+                self.highlight_option(MigrationMenuOption::TryNewModel);
+                self.accept();
+            }
+            KeyCode::Char('2') => {
+                self.highlight_option(MigrationMenuOption::UseExistingModel);
+                self.reject();
+            }
+            KeyCode::Enter | KeyCode::Esc => {
+                self.confirm_selection();
+            }
+            _ => {}
         }
     }
 
@@ -118,11 +219,7 @@ impl ModelMigrationScreen {
     }
 
     fn outcome(&self) -> ModelMigrationOutcome {
-        if self.should_exit {
-            ModelMigrationOutcome::Exit
-        } else {
-            ModelMigrationOutcome::Accepted
-        }
+        self.outcome
     }
 }
 
@@ -133,51 +230,106 @@ impl WidgetRef for &ModelMigrationScreen {
         let mut column = ColumnRenderable::new();
 
         column.push("");
-        column.push(Line::from(vec![
-            "> ".into(),
-            "Introducing our gpt-5.1 models".bold(),
-        ]));
+        let mut heading = vec![Span::raw("> ")];
+        heading.extend(self.copy.heading.clone());
+        column.push(Line::from(heading));
         column.push(Line::from(""));
 
-        column.push(
-            Paragraph::new(Line::from(
+        for (idx, line) in self.copy.content.iter().enumerate() {
+            if idx != 0 {
+                column.push(Line::from(""));
+            }
+
+            column.push(
+                Paragraph::new(line.clone())
+                    .wrap(Wrap { trim: false })
+                    .inset(Insets::tlbr(0, 2, 0, 0)),
+            );
+        }
+
+        if self.copy.can_opt_out {
+            column.push(Line::from(""));
+            column.push(
+                Paragraph::new("Choose how you'd like Codex to proceed.")
+                    .wrap(Wrap { trim: false })
+                    .inset(Insets::tlbr(0, 2, 0, 0)),
+            );
+            column.push(Line::from(""));
+
+            for (idx, option) in MigrationMenuOption::all().into_iter().enumerate() {
+                column.push(selection_option_row(
+                    idx,
+                    option.label().to_string(),
+                    self.highlighted_option == option,
+                ));
+            }
+
+            column.push(Line::from(""));
+            column.push(
+                Line::from(vec![
+                    "Use ".dim(),
+                    key_hint::plain(KeyCode::Up).into(),
+                    "/".dim(),
+                    key_hint::plain(KeyCode::Down).into(),
+                    " to move, press ".dim(),
+                    key_hint::plain(KeyCode::Enter).into(),
+                    " to confirm".dim(),
+                ])
+                .inset(Insets::tlbr(0, 2, 0, 0)),
+            );
+        }
+
+        column.render(area, buf);
+    }
+}
+
+fn gpt_5_1_codex_max_migration_copy() -> ModelMigrationCopy {
+    ModelMigrationCopy {
+        heading: vec!["Codex just got an upgrade. Introducing gpt-5.1-codex-max".bold()],
+        content: vec![
+            Line::from(
+                "Codex is now powered by gpt-5.1-codex-max, our latest frontier agentic coding model. It is smarter and faster than its predecessors and capable of long-running project-scale work.",
+            ),
+            Line::from(vec![
+                "Learn more at ".into(),
+                "www.openai.com/index/gpt-5-1-codex-max".cyan().underlined(),
+                ".".into(),
+            ]),
+        ],
+        can_opt_out: true,
+    }
+}
+
+fn gpt5_migration_copy() -> ModelMigrationCopy {
+    ModelMigrationCopy {
+        heading: vec!["Introducing our gpt-5.1 models".bold()],
+        content: vec![
+            Line::from(
                 "We've upgraded our family of models supported in Codex to gpt-5.1, gpt-5.1-codex and gpt-5.1-codex-mini.",
-            ))
-            .wrap(Wrap { trim: false })
-            .inset(Insets::tlbr(0, 2, 0, 0)),
-        );
-        column.push(Line::from(""));
-        column.push(
-            Paragraph::new(Line::from(
+            ),
+            Line::from(
                 "You can continue using legacy models by specifying them directly with the -m option or in your config.toml.",
-            ))
-            .wrap(Wrap { trim: false })
-            .inset(Insets::tlbr(0, 2, 0, 0)),
-        );
-        column.push(Line::from(""));
-        column.push(
+            ),
             Line::from(vec![
                 "Learn more at ".into(),
                 "www.openai.com/index/gpt-5-1".cyan().underlined(),
                 ".".into(),
-            ])
-            .inset(Insets::tlbr(0, 2, 0, 0)),
-        );
-        column.push(Line::from(""));
-        column.push(
-            Line::from(vec!["Press enter to continue".dim()]).inset(Insets::tlbr(0, 2, 0, 0)),
-        );
-
-        column.render(area, buf);
+            ]),
+            Line::from(vec!["Press enter to continue".dim()]),
+        ],
+        can_opt_out: false,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::ModelMigrationScreen;
+    use super::gpt_5_1_codex_max_migration_copy;
+    use super::migration_copy_for_config;
     use crate::custom_terminal::Terminal;
     use crate::test_backend::VT100Backend;
     use crate::tui::FrameRequester;
+    use codex_common::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use insta::assert_snapshot;
@@ -186,12 +338,15 @@ mod tests {
     #[test]
     fn prompt_snapshot() {
         let width: u16 = 60;
-        let height: u16 = 12;
+        let height: u16 = 20;
         let backend = VT100Backend::new(width, height);
         let mut terminal = Terminal::with_options(backend).expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, width, height));
 
-        let screen = ModelMigrationScreen::new(FrameRequester::test_dummy());
+        let screen = ModelMigrationScreen::new(
+            FrameRequester::test_dummy(),
+            gpt_5_1_codex_max_migration_copy(),
+        );
 
         {
             let mut frame = terminal.get_frame();
@@ -208,7 +363,10 @@ mod tests {
         let mut terminal = Terminal::with_options(backend).expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, 65, 12));
 
-        let screen = ModelMigrationScreen::new(FrameRequester::test_dummy());
+        let screen = ModelMigrationScreen::new(
+            FrameRequester::test_dummy(),
+            migration_copy_for_config(HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG),
+        );
         {
             let mut frame = terminal.get_frame();
             frame.render_widget_ref(&screen, frame.area());
@@ -223,7 +381,10 @@ mod tests {
         let mut terminal = Terminal::with_options(backend).expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, 60, 12));
 
-        let screen = ModelMigrationScreen::new(FrameRequester::test_dummy());
+        let screen = ModelMigrationScreen::new(
+            FrameRequester::test_dummy(),
+            migration_copy_for_config(HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG),
+        );
         {
             let mut frame = terminal.get_frame();
             frame.render_widget_ref(&screen, frame.area());
@@ -238,7 +399,10 @@ mod tests {
         let mut terminal = Terminal::with_options(backend).expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, 60, 12));
 
-        let screen = ModelMigrationScreen::new(FrameRequester::test_dummy());
+        let screen = ModelMigrationScreen::new(
+            FrameRequester::test_dummy(),
+            migration_copy_for_config(HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG),
+        );
         {
             let mut frame = terminal.get_frame();
             frame.render_widget_ref(&screen, frame.area());
@@ -249,7 +413,10 @@ mod tests {
 
     #[test]
     fn escape_key_accepts_prompt() {
-        let mut screen = ModelMigrationScreen::new(FrameRequester::test_dummy());
+        let mut screen = ModelMigrationScreen::new(
+            FrameRequester::test_dummy(),
+            gpt_5_1_codex_max_migration_copy(),
+        );
 
         // Simulate pressing Escape
         screen.handle_key(KeyEvent::new(
@@ -261,6 +428,29 @@ mod tests {
         assert!(matches!(
             screen.outcome(),
             super::ModelMigrationOutcome::Accepted
+        ));
+    }
+
+    #[test]
+    fn selecting_use_existing_model_rejects_upgrade() {
+        let mut screen = ModelMigrationScreen::new(
+            FrameRequester::test_dummy(),
+            gpt_5_1_codex_max_migration_copy(),
+        );
+
+        screen.handle_key(KeyEvent::new(
+            KeyCode::Down,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        screen.handle_key(KeyEvent::new(
+            KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+
+        assert!(screen.is_done());
+        assert!(matches!(
+            screen.outcome(),
+            super::ModelMigrationOutcome::Rejected
         ));
     }
 }

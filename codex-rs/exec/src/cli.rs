@@ -18,8 +18,14 @@ pub struct Cli {
     #[arg(long, short = 'm')]
     pub model: Option<String>,
 
+    /// Use open-source provider.
     #[arg(long = "oss", default_value_t = false)]
     pub oss: bool,
+
+    /// Specify which local provider to use (lmstudio or ollama).
+    /// If not specified with --oss, will use config default or show selection.
+    #[arg(long = "local-provider")]
+    pub oss_provider: Option<String>,
 
     /// Select the sandbox policy to use when executing model-generated shell
     /// commands.
@@ -95,7 +101,7 @@ pub struct ResumeArgs {
     pub session_id: Option<String>,
 
     /// Resume the most recent recorded session (newest) without specifying an id.
-    #[arg(long = "last", default_value_t = false, conflicts_with = "session_id")]
+    #[arg(long = "last", default_value_t = false)]
     pub last: bool,
 
     /// Prompt to send after resuming the session. If `-` is used, read from stdin.

@@ -27,7 +27,7 @@ fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
     std::fs::write(
         config_toml,
         r#"
-model = "gpt-5-codex"
+model = "gpt-5.1-codex-max"
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
 model_reasoning_summary = "detailed"
@@ -87,7 +87,7 @@ async fn get_config_toml_parses_all_fields() -> Result<()> {
             }),
             forced_chatgpt_workspace_id: Some("12345678-0000-0000-0000-000000000000".into()),
             forced_login_method: Some(ForcedLoginMethod::Chatgpt),
-            model: Some("gpt-5-codex".into()),
+            model: Some("gpt-5.1-codex-max".into()),
             model_reasoning_effort: Some(ReasoningEffort::High),
             model_reasoning_summary: Some(ReasoningSummary::Detailed),
             model_verbosity: Some(Verbosity::Medium),

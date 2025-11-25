@@ -28,15 +28,23 @@ pub struct Cli {
     #[clap(skip)]
     pub resume_session_id: Option<String>,
 
+    /// Internal: show all sessions (disables cwd filtering and shows CWD column).
+    #[clap(skip)]
+    pub resume_show_all: bool,
+
     /// Model the agent should use.
     #[arg(long, short = 'm')]
     pub model: Option<String>,
 
-    /// Convenience flag to select the local open source model provider.
-    /// Equivalent to -c model_provider=oss; verifies a local Ollama server is
-    /// running.
+    /// Convenience flag to select the local open source model provider. Equivalent to -c
+    /// model_provider=oss; verifies a local LM Studio or Ollama server is running.
     #[arg(long = "oss", default_value_t = false)]
     pub oss: bool,
+
+    /// Specify which local provider to use (lmstudio or ollama).
+    /// If not specified with --oss, will use config default or show selection.
+    #[arg(long = "local-provider")]
+    pub oss_provider: Option<String>,
 
     /// Configuration profile from config.toml to specify default options.
     #[arg(long = "profile", short = 'p')]

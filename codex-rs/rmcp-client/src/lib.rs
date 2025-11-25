@@ -17,4 +17,8 @@ pub use oauth::delete_oauth_tokens;
 pub(crate) use oauth::load_oauth_tokens;
 pub use oauth::save_oauth_tokens;
 pub use perform_oauth_login::perform_oauth_login;
+pub use rmcp::model::ElicitationAction;
+pub use rmcp_client::Elicitation;
+pub use rmcp_client::ElicitationResponse;
 pub use rmcp_client::RmcpClient;
+pub use rmcp_client::SendElicitation;

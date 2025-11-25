@@ -1,3 +1,4 @@
+use crate::key_hint::is_altgr;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -247,16 +248,13 @@ impl TextArea {
             } if modifiers == (KeyModifiers::CONTROL | KeyModifiers::ALT) => {
                 self.delete_backward_word()
             },
+            // Windows AltGr generates ALT|CONTROL; treat as a plain character input unless
+            // we match a specific Control+Alt binding above.
             KeyEvent {
                 code: KeyCode::Char(c),
                 modifiers,
                 ..
-            } if modifiers.contains(KeyModifiers::ALT)
-                && modifiers.contains(KeyModifiers::CONTROL) =>
-            {
-                // AltGr on many keyboards reports as Ctrl+Alt; treat it as a literal char.
-                self.insert_str(&c.to_string());
-            },
+            } if is_altgr(modifiers) => self.insert_str(&c.to_string()),
             KeyEvent {
                 code: KeyCode::Backspace,
                 modifiers: KeyModifiers::ALT,
@@ -1464,6 +1462,7 @@ mod tests {
         assert_eq!(t.cursor(), 3);
     }
 
+    #[cfg_attr(not(windows), ignore = "AltGr modifier only applies on Windows")]
     #[test]
     fn altgr_ctrl_alt_char_inserts_literal() {
         let mut t = ta_with("");

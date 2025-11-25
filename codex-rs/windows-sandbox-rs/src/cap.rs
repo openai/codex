@@ -13,8 +13,8 @@ pub struct CapSids {
     pub readonly: String,
 }
 
-pub fn cap_sid_file(policy_cwd: &Path) -> PathBuf {
-    policy_cwd.join(".codex").join("cap_sid")
+pub fn cap_sid_file(codex_home: &Path) -> PathBuf {
+    codex_home.join("cap_sid")
 }
 
 fn make_random_cap_sid_string() -> String {
@@ -26,8 +26,8 @@ fn make_random_cap_sid_string() -> String {
     format!("S-1-5-21-{}-{}-{}-{}", a, b, c, d)
 }
 
-pub fn load_or_create_cap_sids(policy_cwd: &Path) -> CapSids {
-    let path = cap_sid_file(policy_cwd);
+pub fn load_or_create_cap_sids(codex_home: &Path) -> CapSids {
+    let path = cap_sid_file(codex_home);
     if path.exists() {
         if let Ok(txt) = fs::read_to_string(&path) {
             let t = txt.trim();

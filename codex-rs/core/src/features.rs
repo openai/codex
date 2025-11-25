@@ -27,11 +27,10 @@ pub enum Stage {
 /// Unique features toggled via configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Feature {
+    /// Create a ghost commit at each turn.
+    GhostCommit,
     /// Use the single unified PTY-backed exec tool.
     UnifiedExec,
-    /// Use the shell command tool that takes `command` as a single string of
-    /// shell instead of an array of args passed to `execvp(3)`.
-    ShellCommandTool,
     /// Enable experimental RMCP features such as OAuth login.
     RmcpClient,
     /// Include the freeform apply_patch tool.
@@ -40,12 +39,18 @@ pub enum Feature {
     ViewImageTool,
     /// Allow the model to request web searches.
     WebSearchRequest,
+    /// Gate the execpolicy enforcement for shell/unified exec.
+    ExecPolicy,
     /// Enable the model-based risk assessments for sandboxed commands.
     SandboxCommandAssessment,
-    /// Create a ghost commit at each turn.
-    GhostCommit,
     /// Enable Windows sandbox (restricted token) on Windows.
     WindowsSandbox,
+    /// Remote compaction enabled (only for ChatGPT auth)
+    RemoteCompaction,
+    /// Enable the default shell tool.
+    ShellTool,
+    /// Allow model to call multiple tools in parallel (only for models supporting it).
+    ParallelToolCalls,
 }
 
 impl Feature {
@@ -247,15 +252,23 @@ pub struct FeatureSpec {
 }
 
 pub const FEATURES: &[FeatureSpec] = &[
+    // Stable features.
+    FeatureSpec {
+        id: Feature::GhostCommit,
+        key: "undo",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ViewImageTool,
+        key: "view_image_tool",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    // Unstable features.
     FeatureSpec {
         id: Feature::UnifiedExec,
         key: "unified_exec",
-        stage: Stage::Experimental,
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::ShellCommandTool,
-        key: "shell_command_tool",
         stage: Stage::Experimental,
         default_enabled: false,
     },
@@ -272,16 +285,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::ViewImageTool,
-        key: "view_image_tool",
-        stage: Stage::Stable,
-        default_enabled: true,
-    },
-    FeatureSpec {
         id: Feature::WebSearchRequest,
         key: "web_search_request",
         stage: Stage::Stable,
         default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ExecPolicy,
+        key: "exec_policy",
+        stage: Stage::Experimental,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::SandboxCommandAssessment,
@@ -290,15 +303,27 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::GhostCommit,
-        key: "ghost_commit",
-        stage: Stage::Experimental,
-        default_enabled: true,
-    },
-    FeatureSpec {
         id: Feature::WindowsSandbox,
         key: "enable_experimental_windows_sandbox",
         stage: Stage::Experimental,
         default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RemoteCompaction,
+        key: "remote_compaction",
+        stage: Stage::Experimental,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ParallelToolCalls,
+        key: "parallel",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ShellTool,
+        key: "shell_tool",
+        stage: Stage::Stable,
+        default_enabled: true,
     },
 ];

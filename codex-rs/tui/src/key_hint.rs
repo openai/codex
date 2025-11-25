@@ -89,3 +89,19 @@ impl From<&KeyBinding> for Span<'static> {
 fn key_hint_style() -> Style {
     Style::default().dim()
 }
+
+pub(crate) fn has_ctrl_or_alt(mods: KeyModifiers) -> bool {
+    (mods.contains(KeyModifiers::CONTROL) || mods.contains(KeyModifiers::ALT)) && !is_altgr(mods)
+}
+
+#[cfg(windows)]
+#[inline]
+pub(crate) fn is_altgr(mods: KeyModifiers) -> bool {
+    mods.contains(KeyModifiers::ALT) && mods.contains(KeyModifiers::CONTROL)
+}
+
+#[cfg(not(windows))]
+#[inline]
+pub(crate) fn is_altgr(_mods: KeyModifiers) -> bool {
+    false
+}

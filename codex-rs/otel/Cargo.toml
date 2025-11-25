@@ -1,7 +1,8 @@
 [package]
-edition = "2024"
 name = "codex-otel"
-version = { workspace = true }
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [lib]
 doctest = false
@@ -27,18 +28,26 @@ opentelemetry-otlp = { workspace = true, features = [
     "grpc-tonic",
     "http-proto",
     "http-json",
+    "logs",
     "reqwest",
     "reqwest-rustls",
+    "tls",
+    "tls-roots",
 ], optional = true }
 opentelemetry-semantic-conventions = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = [
     "logs",
     "rt-tokio",
 ], optional = true }
+http = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 strum_macros = { workspace = true }
 tokio = { workspace = true }
-tonic = { workspace = true, optional = true }
+tonic = { workspace = true, optional = true, features = [
+    "transport",
+    "tls-native-roots",
+    "tls-ring",
+] }
 tracing = { workspace = true }

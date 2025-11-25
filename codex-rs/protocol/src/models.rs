@@ -132,6 +132,9 @@ pub enum ResponseItem {
     GhostSnapshot {
         ghost_commit: GhostCommit,
     },
+    CompactionSummary {
+        encrypted_content: String,
+    },
     #[serde(other)]
     Other,
 }
@@ -152,6 +155,19 @@ fn local_image_error_placeholder(
     ContentItem::InputText {
         text: format!(
             "Codex could not read the local image at `{}`: {}",
+            path.display(),
+            error
+        ),
+    }
+}
+
+fn invalid_image_error_placeholder(
+    path: &std::path::Path,
+    error: impl std::fmt::Display,
+) -> ContentItem {
+    ContentItem::InputText {
+        text: format!(
+            "Image located at `{}` is invalid: {}",
             path.display(),
             error
         ),
@@ -214,8 +230,24 @@ pub struct LocalShellExecAction {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WebSearchAction {
     Search {
-        query: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        query: Option<String>,
     },
+    OpenPage {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        url: Option<String>,
+    },
+    FindInPage {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        url: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        pattern: Option<String>,
+    },
+
     #[serde(other)]
     Other,
 }
@@ -247,9 +279,10 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                             image_url: image.into_data_url(),
                         },
                         Err(err) => {
-                            tracing::warn!("Failed to resize image {}: {}", path.display(), err);
                             if matches!(&err, ImageProcessingError::Read { .. }) {
                                 local_image_error_placeholder(&path, &err)
+                            } else if err.is_invalid_image() {
+                                invalid_image_error_placeholder(&path, &err)
                             } else {
                                 match std::fs::read(&path) {
                                     Ok(bytes) => {
@@ -365,6 +398,7 @@ impl Serialize for FunctionCallOutputPayload {
     where
         S: Serializer,
     {
+        tracing::debug!("Function call output payload: {:?}", self);
         if let Some(items) = &self.content_items {
             items.serialize(serializer)
         } else {
@@ -452,7 +486,7 @@ fn convert_content_blocks_to_items(
 ) -> Option<Vec<FunctionCallOutputContentItem>> {
     let mut saw_image = false;
     let mut items = Vec::with_capacity(blocks.len());
-
+    tracing::warn!("Blocks: {:?}", blocks);
     for block in blocks {
         match block {
             ContentBlock::TextContent(text) => {
@@ -612,6 +646,72 @@ mod tests {
 
         let expected_content = serde_json::to_string(&expected_items)?;
         assert_eq!(payload.content, expected_content);
+
+        Ok(())
+    }
+
+    #[test]
+    fn roundtrips_web_search_call_actions() -> Result<()> {
+        let cases = vec![
+            (
+                r#"{
+                    "type": "web_search_call",
+                    "status": "completed",
+                    "action": {
+                        "type": "search",
+                        "query": "weather seattle"
+                    }
+                }"#,
+                WebSearchAction::Search {
+                    query: Some("weather seattle".into()),
+                },
+                Some("completed".into()),
+            ),
+            (
+                r#"{
+                    "type": "web_search_call",
+                    "status": "open",
+                    "action": {
+                        "type": "open_page",
+                        "url": "https://example.com"
+                    }
+                }"#,
+                WebSearchAction::OpenPage {
+                    url: Some("https://example.com".into()),
+                },
+                Some("open".into()),
+            ),
+            (
+                r#"{
+                    "type": "web_search_call",
+                    "status": "in_progress",
+                    "action": {
+                        "type": "find_in_page",
+                        "url": "https://example.com/docs",
+                        "pattern": "installation"
+                    }
+                }"#,
+                WebSearchAction::FindInPage {
+                    url: Some("https://example.com/docs".into()),
+                    pattern: Some("installation".into()),
+                },
+                Some("in_progress".into()),
+            ),
+        ];
+
+        for (json_literal, expected_action, expected_status) in cases {
+            let parsed: ResponseItem = serde_json::from_str(json_literal)?;
+            let expected = ResponseItem::WebSearchCall {
+                id: None,
+                status: expected_status.clone(),
+                action: expected_action.clone(),
+            };
+            assert_eq!(parsed, expected);
+
+            let serialized = serde_json::to_value(&parsed)?;
+            let original_value: serde_json::Value = serde_json::from_str(json_literal)?;
+            assert_eq!(serialized, original_value);
+        }
 
         Ok(())
     }

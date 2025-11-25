@@ -29,7 +29,7 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
     // Start a v2 thread with an explicit model override.
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-5".to_string()),
+            model: Some("gpt-5.1".to_string()),
             ..Default::default()
         })
         .await?;
@@ -40,13 +40,17 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
     )
     .await??;
-    let ThreadStartResponse { thread } = to_response::<ThreadStartResponse>(resp)?;
+    let ThreadStartResponse {
+        thread,
+        model_provider,
+        ..
+    } = to_response::<ThreadStartResponse>(resp)?;
     assert!(!thread.id.is_empty(), "thread id should not be empty");
     assert!(
         thread.preview.is_empty(),
         "new threads should start with an empty preview"
     );
-    assert_eq!(thread.model_provider, "mock_provider");
+    assert_eq!(model_provider, "mock_provider");
     assert!(
         thread.created_at > 0,
         "created_at should be a positive UNIX timestamp"

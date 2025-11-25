@@ -1,0 +1,26 @@
+name: cargo-deny
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  cargo-deny:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./codex-rs
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v1
+        with:
+          rust-version: stable
+          manifest-path: ./codex-rs/Cargo.toml

@@ -1,0 +1,24 @@
+diff --git a/execute_cmd.c b/execute_cmd.c
+index 070f5119..d20ad2b9 100644
+--- a/execute_cmd.c
++++ b/execute_cmd.c
+@@ -6129,6 +6129,19 @@ shell_execve (char *command, char **args, char **env)
+   char sample[HASH_BANG_BUFSIZ];
+   size_t larray;
+ 
++  char* exec_wrapper = getenv("BASH_EXEC_WRAPPER");
++  if (exec_wrapper && *exec_wrapper && !whitespace (*exec_wrapper))
++    {
++      char *orig_command = command;
++
++      larray = strvec_len (args);
++
++      memmove (args + 2, args, (++larray) * sizeof (char *));
++      args[0] = exec_wrapper;
++      args[1] = orig_command;
++      command = exec_wrapper;
++    }
++
+   SETOSTYPE (0);		/* Some systems use for USG/POSIX semantics */
+   execve (command, args, env);
+   i = errno;			/* error from execve() */

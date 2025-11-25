@@ -1,7 +1,8 @@
 [package]
-edition = "2024"
 name = "codex-cli"
-version = { workspace = true }
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "codex"
@@ -26,6 +27,7 @@ codex-cloud-tasks = { path = "../cloud-tasks" }
 codex-common = { workspace = true, features = ["cli"] }
 codex-core = { workspace = true }
 codex-exec = { workspace = true }
+codex-execpolicy = { workspace = true }
 codex-login = { workspace = true }
 codex-mcp-server = { workspace = true }
 codex-process-hardening = { workspace = true }

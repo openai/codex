@@ -814,6 +814,7 @@ async fn test_tail_skips_trailing_non_responses() -> Result<()> {
         timestamp: format!("{ts}-compacted"),
         item: RolloutItem::Compacted(CompactedItem {
             message: "compacted".into(),
+            replacement_history: None,
         }),
     };
     writeln!(file, "{}", serde_json::to_string(&compacted_line)?)?;

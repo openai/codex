@@ -33,6 +33,7 @@ pub struct ConfigProfile {
     /// Optional feature toggles scoped to this profile.
     #[serde(default)]
     pub features: Option<crate::features::FeaturesToml>,
+    pub oss_provider: Option<String>,
 }
 
 impl From<ConfigProfile> for codex_app_server_protocol::Profile {

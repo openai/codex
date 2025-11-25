@@ -7,6 +7,7 @@ use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::PatchApplyEndEvent;
+use codex_protocol::approvals::ElicitationRequestEvent;
 
 use super::ChatWidget;
 
@@ -14,6 +15,7 @@ use super::ChatWidget;
 pub(crate) enum QueuedInterrupt {
     ExecApproval(String, ExecApprovalRequestEvent),
     ApplyPatchApproval(String, ApplyPatchApprovalRequestEvent),
+    Elicitation(ElicitationRequestEvent),
     ExecBegin(ExecCommandBeginEvent),
     ExecEnd(ExecCommandEndEvent),
     McpBegin(McpToolCallBeginEvent),
@@ -51,6 +53,10 @@ impl InterruptManager {
             .push_back(QueuedInterrupt::ApplyPatchApproval(id, ev));
     }
 
+    pub(crate) fn push_elicitation(&mut self, ev: ElicitationRequestEvent) {
+        self.queue.push_back(QueuedInterrupt::Elicitation(ev));
+    }
+
     pub(crate) fn push_exec_begin(&mut self, ev: ExecCommandBeginEvent) {
         self.queue.push_back(QueuedInterrupt::ExecBegin(ev));
     }
@@ -78,6 +84,7 @@ impl InterruptManager {
                 QueuedInterrupt::ApplyPatchApproval(id, ev) => {
                     chat.handle_apply_patch_approval_now(id, ev)
                 }
+                QueuedInterrupt::Elicitation(ev) => chat.handle_elicitation_request_now(ev),
                 QueuedInterrupt::ExecBegin(ev) => chat.handle_exec_begin_now(ev),
                 QueuedInterrupt::ExecEnd(ev) => chat.handle_exec_end_now(ev),
                 QueuedInterrupt::McpBegin(ev) => chat.handle_mcp_begin_now(ev),

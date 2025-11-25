@@ -7,3 +7,7 @@ slow-timeout = { period = "15s", terminate-after = 2 }
 # Do not add new tests here
 filter = 'test(rmcp_client) | test(humanlike_typing_1000_chars_appears_live_no_placeholder)'
 slow-timeout = { period = "1m", terminate-after = 4 }
+
+[[profile.default.overrides]]
+filter = 'test(approval_matrix_covers_all_modes)'
+slow-timeout = { period = "30s", terminate-after = 2 }

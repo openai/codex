@@ -1,4 +1,5 @@
 use shlex::split as shlex_split;
+use std::path::Path;
 
 /// On Windows, we conservatively allow only clearly read-only PowerShell invocations
 /// that match a small safelist. Anything else (including direct CMD commands) is unsafe.
@@ -131,8 +132,14 @@ fn split_into_commands(tokens: Vec<String>) -> Option<Vec<Vec<String>>> {
 
 /// Returns true when the executable name is one of the supported PowerShell binaries.
 fn is_powershell_executable(exe: &str) -> bool {
+    let executable_name = Path::new(exe)
+        .file_name()
+        .and_then(|osstr| osstr.to_str())
+        .unwrap_or(exe)
+        .to_ascii_lowercase();
+
     matches!(
-        exe.to_ascii_lowercase().as_str(),
+        executable_name.as_str(),
         "powershell" | "powershell.exe" | "pwsh" | "pwsh.exe"
     )
 }
@@ -310,6 +317,27 @@ mod tests {
             "-NoProfile",
             "-Command",
             "Get-ChildItem",
+        ])));
+    }
+
+    #[test]
+    fn accepts_full_path_powershell_invocations() {
+        if !cfg!(windows) {
+            // Windows only because on Linux path splitting doesn't handle `/` separators properly
+            return;
+        }
+
+        assert!(is_safe_command_windows(&vec_str(&[
+            r"C:\Program Files\PowerShell\7\pwsh.exe",
+            "-NoProfile",
+            "-Command",
+            "Get-ChildItem -Path .",
+        ])));
+
+        assert!(is_safe_command_windows(&vec_str(&[
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            "-Command",
+            "Get-Content Cargo.toml",
         ])));
     }
 
