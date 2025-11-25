@@ -10,6 +10,9 @@ use serde::Serialize;
 use std::time::Duration;
 use strum::Display;
 
+const STATUS_WIDGET_URL: &str = "https://status.openai.com/proxy/status.openai.com";
+const CODEX_COMPONENT_NAME: &str = "Codex";
+
 #[derive(Debug, Clone, Display, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ComponentHealth {
@@ -70,9 +73,6 @@ pub async fn fetch_codex_health() -> Result<ComponentHealth> {
 
     derive_component_health(&payload, CODEX_COMPONENT_NAME)
 }
-
-const STATUS_WIDGET_URL: &str = "https://status.openai.com/proxy/status.openai.com";
-const CODEX_COMPONENT_NAME: &str = "Codex";
 
 #[derive(Debug, Clone, Deserialize)]
 struct StatusPayload {
