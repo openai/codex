@@ -272,40 +272,45 @@ async fn read_raw_response_item(
     mcp: &mut McpProcess,
     conversation_id: ConversationId,
 ) -> ResponseItem {
-    let raw_notification: JSONRPCNotification = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/raw_response_item"),
-    )
-    .await
-    .expect("codex/event/raw_response_item notification timeout")
-    .expect("codex/event/raw_response_item notification resp");
+    loop {
+        let raw_notification: JSONRPCNotification = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message("codex/event/raw_response_item"),
+        )
+        .await
+        .expect("codex/event/raw_response_item notification timeout")
+        .expect("codex/event/raw_response_item notification resp");
 
-    let serde_json::Value::Object(params) = raw_notification
-        .params
-        .expect("codex/event/raw_response_item should have params")
-    else {
-        panic!("codex/event/raw_response_item should have params");
-    };
+        let serde_json::Value::Object(params) = raw_notification
+            .params
+            .expect("codex/event/raw_response_item should have params")
+        else {
+            panic!("codex/event/raw_response_item should have params");
+        };
 
-    let conversation_id_value = params
-        .get("conversationId")
-        .and_then(|value| value.as_str())
-        .expect("raw response item should include conversationId");
+        let conversation_id_value = params
+            .get("conversationId")
+            .and_then(|value| value.as_str())
+            .expect("raw response item should include conversationId");
 
-    assert_eq!(
-        conversation_id_value,
-        conversation_id.to_string(),
-        "raw response item conversation mismatch"
-    );
+        assert_eq!(
+            conversation_id_value,
+            conversation_id.to_string(),
+            "raw response item conversation mismatch"
+        );
 
-    let msg_value = params
-        .get("msg")
-        .cloned()
-        .expect("raw response item should include msg payload");
+        let msg_value = params
+            .get("msg")
+            .cloned()
+            .expect("raw response item should include msg payload");
 
-    let event: RawResponseItemEvent =
-        serde_json::from_value(msg_value).expect("deserialize raw response item");
-    event.item
+        // Ghost snapshots are produced concurrently and may arrive before the model reply.
+        let event: RawResponseItemEvent =
+            serde_json::from_value(msg_value).expect("deserialize raw response item");
+        if !matches!(event.item, ResponseItem::GhostSnapshot { .. }) {
+            return event.item;
+        }
+    }
 }
 
 fn assert_instructions_message(item: &ResponseItem) {
