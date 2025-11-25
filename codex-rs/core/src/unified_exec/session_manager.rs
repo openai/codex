@@ -48,6 +48,24 @@ use super::session::OutputBuffer;
 use super::session::OutputHandles;
 use super::session::UnifiedExecSession;
 
+const UNIFIED_EXEC_ENV: [(&str, &str); 8] = [
+    ("NO_COLOR", "1"),
+    ("TERM", "dumb"),
+    ("LANG", "C.UTF-8"),
+    ("LC_CTYPE", "C.UTF-8"),
+    ("LC_ALL", "C.UTF-8"),
+    ("COLORTERM", ""),
+    ("PAGER", "cat"),
+    ("GIT_PAGER", "cat"),
+];
+
+fn apply_unified_exec_env(mut env: HashMap<String, String>) -> HashMap<String, String> {
+    for (key, value) in UNIFIED_EXEC_ENV {
+        env.insert(key.to_string(), value.to_string());
+    }
+    env
+}
+
 struct PreparedSessionHandles {
     writer_tx: mpsc::Sender<Vec<u8>>,
     output_buffer: OutputBuffer,
@@ -101,20 +119,18 @@ impl UnifiedExecSessionManager {
 
         let text = String::from_utf8_lossy(&collected).to_string();
         let output = formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
-        let chunk_id = generate_chunk_id();
         let has_exited = session.has_exited();
-        let stored_id = self
-            .store_session(session, context, &request.command, cwd.clone(), start)
-            .await;
-        let exit_code = self
-            .sessions
-            .lock()
-            .await
-            .get(&stored_id)
-            .map(|entry| entry.session.exit_code());
-        // Only include a session_id in the response if the process is still alive.
-        let session_id = if has_exited { None } else { Some(stored_id) };
-
+        let exit_code = session.exit_code();
+        let chunk_id = generate_chunk_id();
+        let session_id = if has_exited {
+            None
+        } else {
+            // Only store session if not exited.
+            let stored_id = self
+                .store_session(session, context, &request.command, cwd.clone(), start)
+                .await;
+            Some(stored_id)
+        };
         let original_token_count = approx_token_count(&text);
 
         let response = UnifiedExecResponse {
@@ -123,7 +139,7 @@ impl UnifiedExecSessionManager {
             wall_time,
             output,
             session_id,
-            exit_code: exit_code.flatten(),
+            exit_code,
             original_token_count: Some(original_token_count),
             session_command: Some(request.command.clone()),
         };
@@ -462,12 +478,13 @@ impl UnifiedExecSessionManager {
         justification: Option<String>,
         context: &UnifiedExecContext,
     ) -> Result<UnifiedExecSession, UnifiedExecError> {
+        let env = apply_unified_exec_env(create_env(&context.turn.shell_environment_policy));
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);
         let req = UnifiedExecToolRequest::new(
             command.to_vec(),
             cwd,
-            create_env(&context.turn.shell_environment_policy),
+            env,
             with_escalated_permissions,
             justification,
             create_approval_requirement_for_command(
@@ -620,6 +637,35 @@ mod tests {
     use pretty_assertions::assert_eq;
     use tokio::time::Duration;
     use tokio::time::Instant;
+
+    #[test]
+    fn unified_exec_env_injects_defaults() {
+        let env = apply_unified_exec_env(HashMap::new());
+        let expected = HashMap::from([
+            ("NO_COLOR".to_string(), "1".to_string()),
+            ("TERM".to_string(), "dumb".to_string()),
+            ("LANG".to_string(), "C.UTF-8".to_string()),
+            ("LC_CTYPE".to_string(), "C.UTF-8".to_string()),
+            ("LC_ALL".to_string(), "C.UTF-8".to_string()),
+            ("COLORTERM".to_string(), String::new()),
+            ("PAGER".to_string(), "cat".to_string()),
+            ("GIT_PAGER".to_string(), "cat".to_string()),
+        ]);
+
+        assert_eq!(env, expected);
+    }
+
+    #[test]
+    fn unified_exec_env_overrides_existing_values() {
+        let mut base = HashMap::new();
+        base.insert("NO_COLOR".to_string(), "0".to_string());
+        base.insert("PATH".to_string(), "/usr/bin".to_string());
+
+        let env = apply_unified_exec_env(base);
+
+        assert_eq!(env.get("NO_COLOR"), Some(&"1".to_string()));
+        assert_eq!(env.get("PATH"), Some(&"/usr/bin".to_string()));
+    }
 
     #[test]
     fn pruning_prefers_exited_sessions_outside_recently_used() {
