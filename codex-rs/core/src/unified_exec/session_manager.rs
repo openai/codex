@@ -1,9 +1,9 @@
+use rand::Rng;
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
-use rand::Rng;
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::time::Duration;
@@ -155,7 +155,15 @@ impl UnifiedExecSessionManager {
             None
         } else {
             // Only store session if not exited.
-            self.store_session(session, context, &request.command, cwd.clone(), start, request.process_id.clone()).await;
+            self.store_session(
+                session,
+                context,
+                &request.command,
+                cwd.clone(),
+                start,
+                request.process_id.clone(),
+            )
+            .await;
             Some(request.process_id.clone())
         };
         let original_token_count = approx_token_count(&text);
