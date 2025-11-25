@@ -1,5 +1,0 @@
----
-source: notify/src/event.rs
-expression: json
----
-{"type":"modify","kind":"rename","mode":"both","paths":[],"attrs":{}}

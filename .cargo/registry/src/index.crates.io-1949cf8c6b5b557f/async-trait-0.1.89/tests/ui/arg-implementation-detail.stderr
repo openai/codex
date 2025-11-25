@@ -1,5 +1,0 @@
-error[E0425]: cannot find value `__arg0` in this scope
-  --> tests/ui/arg-implementation-detail.rs:18:17
-   |
-18 |         let _ = __arg0;
-   |                 ^^^^^^ not found in this scope

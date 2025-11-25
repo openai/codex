@@ -1,6 +1,0 @@
-/// This encoding offsets the non-ASCII bytes by `0xF700` thereby decoding
-/// them to the Private Use Area of Unicode. It was used for loading binary
-/// data into a JavaScript string using `XMLHttpRequest` before XHR supported
-/// the `"arraybuffer"` response type.
-///
-/// This encoding does not have a Windows code page number.

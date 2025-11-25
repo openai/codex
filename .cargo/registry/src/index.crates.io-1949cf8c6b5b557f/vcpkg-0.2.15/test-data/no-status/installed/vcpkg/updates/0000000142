@@ -1,7 +1,0 @@
-Package: boost-serialization
-Version: 1.67.0
-Depends: boost-array, boost-assert, boost-build, boost-compatibility, boost-config, boost-core, boost-detail, boost-function, boost-integer, boost-io, boost-iterator, boost-modular-build-helper, boost-move, boost-mpl, boost-optional, boost-preprocessor, boost-smart-ptr, boost-spirit, boost-static-assert, boost-type-traits, boost-unordered, boost-utility, boost-variant, boost-vcpkg-helpers
-Architecture: x64-windows
-Multi-Arch: same
-Description: Boost serialization module
-Status: install ok half-installed

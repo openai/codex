@@ -1,7 +1,0 @@
---out src/offset/local/win_bindings.rs
---flat --sys --no-comment
---filter
-    GetTimeZoneInformationForYear
-    SystemTimeToFileTime
-    SystemTimeToTzSpecificLocalTime
-    TzSpecificLocalTimeToSystemTime

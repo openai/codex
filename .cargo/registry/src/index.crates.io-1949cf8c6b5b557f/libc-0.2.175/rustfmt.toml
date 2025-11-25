@@ -1,4 +1,0 @@
-edition = "2021"
-error_on_line_overflow = true
-group_imports = "StdExternalCrate"
-imports_granularity = "Module"

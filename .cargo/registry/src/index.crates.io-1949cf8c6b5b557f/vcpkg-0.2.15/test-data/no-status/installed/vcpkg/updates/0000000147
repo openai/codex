@@ -1,6 +1,0 @@
-Package: openssl
-Version: 1.0.2o-3
-Architecture: x64-windows
-Multi-Arch: same
-Description: OpenSSL is an open source project that provides a robust, commercial-grade, and full-featured toolkit for the Transport Layer Security (TLS) and Secure Sockets Layer (SSL) protocols. It is also a general-purpose cryptography library.
-Status: install ok installed

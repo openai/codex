@@ -1,8 +1,0 @@
-/// This decode-only encoding uses 16-bit code units due to Unicode originally
-/// having been designed as a 16-bit reportoire. In the absence of a byte order
-/// mark the little endian byte order is assumed.
-///
-/// There is no corresponding encoder in this crate or in the Encoding
-/// Standard. The output encoding of this encoding is UTF-8.
-///
-/// This encoding matches the Windows code page 1200.

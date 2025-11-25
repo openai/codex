@@ -1,3 +1,0 @@
-[submodule "rust-vmm-ci"]
-	path = rust-vmm-ci
-	url = https://github.com/rust-vmm/rust-vmm-ci.git

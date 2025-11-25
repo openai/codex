@@ -1,7 +1,0 @@
-/// This is the Western encoding for Windows. It is an extension of ISO-8859-1,
-/// which is known as Latin 1.
-///
-/// [Index visualization](https://encoding.spec.whatwg.org/windows-1252.html),
-/// [Visualization of BMP coverage](https://encoding.spec.whatwg.org/windows-1252-bmp.html)
-///
-/// This encoding matches the Windows code page 1252.

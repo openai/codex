@@ -1,5 +1,0 @@
-error: only one #[error(...)] attribute is allowed
- --> tests/ui/duplicate-fmt.rs:5:1
-  |
-5 | #[error("...")]
-  | ^^^^^^^^^^^^^^^

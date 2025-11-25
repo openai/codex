@@ -1,7 +1,0 @@
-Package: boost-mpl
-Version: 1.67.0
-Depends: boost-config, boost-core, boost-detail, boost-predef, boost-preprocessor, boost-type-traits, boost-vcpkg-helpers
-Architecture: x64-windows
-Multi-Arch: same
-Description: Boost mpl module
-Status: install ok installed

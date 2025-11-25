@@ -1,3 +1,0 @@
-# Temporarily disable rustfmt completely to avoid conflicts of newly formatted
-# code with old PRs.
-ignore = ["/"]

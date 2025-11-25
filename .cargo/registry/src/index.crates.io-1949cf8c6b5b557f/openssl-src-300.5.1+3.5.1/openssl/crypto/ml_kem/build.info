@@ -1,6 +1,0 @@
-LIBS = ../../libcrypto
-
-IF[{- !$disabled{'ml-kem'} -}]
-    SOURCE[../../libcrypto]=ml_kem.c
-    SOURCE[../../providers/libfips.a]=ml_kem.c
-ENDIF

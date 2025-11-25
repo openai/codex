@@ -1,8 +1,0 @@
-# @generated
-# To regenerate, run:
-# ```
-# STARLARK_RUST_REGENERATE_GOLDEN_TESTS=1 cargo test -p starlark --lib
-# ```
-
-module;function 16
-module;test.star.test;list 8

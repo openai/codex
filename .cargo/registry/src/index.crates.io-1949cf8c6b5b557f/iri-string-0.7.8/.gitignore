@@ -1,8 +1,0 @@
-/target
-**/*.rs.bk
-Cargo.lock
-
-# for `cargo flamegraph`
-/perf.data
-/perf.data.old
-/*.svg

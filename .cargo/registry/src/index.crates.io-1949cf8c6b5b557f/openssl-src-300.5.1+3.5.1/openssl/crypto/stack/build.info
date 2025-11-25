@@ -1,3 +1,0 @@
-LIBS=../../libcrypto
-SOURCE[../../libcrypto]=stack.c
-SOURCE[../../providers/libfips.a]=stack.c

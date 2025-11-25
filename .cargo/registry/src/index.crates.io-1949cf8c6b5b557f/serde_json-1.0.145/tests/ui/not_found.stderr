@@ -1,5 +1,0 @@
-error[E0425]: cannot find value `x` in this scope
- --> tests/ui/not_found.rs:4:19
-  |
-4 |     json!({ "a" : x });
-  |                   ^ not found in this scope

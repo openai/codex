@@ -1,7 +1,0 @@
-f = log(x + 1)/x;
-
-I = [1; sqrt(2)];
-P = fpminimax(f, 12, [|1, -0.5, 128...|], I, relative, floating);
-print("Log(x+1) [1; sqrt(2)]");
-print(P);
-for i from 0 to degree(P) do print(coeff(P, i));

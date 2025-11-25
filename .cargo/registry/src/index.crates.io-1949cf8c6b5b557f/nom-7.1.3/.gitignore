@@ -1,9 +1,0 @@
-target/*
-Cargo.lock
-FullRecognition.jpg
-map.rs
-oldsrc/
-realworld/
-src/generator.rs
-.DS_Store
-private-docs/

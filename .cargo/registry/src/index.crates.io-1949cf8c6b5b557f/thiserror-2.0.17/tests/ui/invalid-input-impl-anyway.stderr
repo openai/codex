@@ -1,5 +1,0 @@
-error: expected attribute arguments in parentheses: #[error(...)]
- --> tests/ui/invalid-input-impl-anyway.rs:4:3
-  |
-4 | #[error]
-  |   ^^^^^

@@ -1,7 +1,0 @@
-error: RefCast trait requires #[repr(transparent)]
- --> tests/ui/no-repr.rs:3:10
-  |
-3 | #[derive(RefCast)]
-  |          ^^^^^^^
-  |
-  = note: this error originates in the derive macro `RefCast` (in Nightly builds, run with -Z macro-backtrace for more info)

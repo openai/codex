@@ -1,5 +1,0 @@
-error: argument must be a single string literal
- --> tests/ui/non-lit.rs:4:12
-  |
-4 |     indoc!(fail);
-  |            ^^^^

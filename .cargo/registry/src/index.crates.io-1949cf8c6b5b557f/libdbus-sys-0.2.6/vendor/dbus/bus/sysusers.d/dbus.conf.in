@@ -1,5 +1,0 @@
-# sysusers.d snippet for creating the D-Bus system user automatically
-# at boot on systemd-based systems that ship with an unpopulated
-# /etc. See sysusers.d(5) for details.
-
-u @DBUS_USER@ - "System Message Bus"

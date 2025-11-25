@@ -1,5 +1,0 @@
-error: the `Self` constructor can only be used with tuple or unit structs
-  --> tests/ui/unsupported-self.rs:11:17
-   |
-11 |         let _ = Self;
-   |                 ^^^^

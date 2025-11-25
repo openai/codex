@@ -1,5 +1,0 @@
-error: duplicate #[source] attribute
- --> tests/ui/duplicate-enum-source.rs:8:9
-  |
-8 |         #[source]
-  |         ^^^^^^^^^

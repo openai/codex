@@ -1,5 +1,0 @@
-error: unexpected modifier
- --> tests/ui/unexpected-modifier.rs:4:10
-  |
-4 |     fn [<:lower x>]() {}
-  |          ^^^^^^

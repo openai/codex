@@ -1,7 +1,0 @@
-IF[{- $target{build_scheme}->[1] eq "unix" -}]
-  SCRIPTS{noinst}=shlib_wrap.sh
-  SOURCE[shlib_wrap.sh]=shlib_wrap.sh.in
-ENDIF
-SCRIPTS{noinst}=wrap.pl
-SOURCE[wrap.pl]=wrap.pl.in
-DEPEND[wrap.pl]=../configdata.pm

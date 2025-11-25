@@ -1,6 +1,0 @@
-/target
-/fuzz/target
-/fuzz/out
-/fuzz/in
-**/*.rs.bk
-Cargo.lock

@@ -1,5 +1,0 @@
-error[E0425]: cannot find value `named` in this scope
- --> tests/ui/printdoc-no-named-arg.rs:4:17
-  |
-4 |     printdoc!("{named}");
-  |                 ^^^^^ not found in this scope

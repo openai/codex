@@ -1,5 +1,0 @@
-error: unsupported modifier
- --> tests/ui/unsupported-modifier.rs:4:11
-  |
-4 |     fn [<a:pillow>]() {}
-  |           ^^^^^^^

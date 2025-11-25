@@ -1,6 +1,0 @@
-Package: icu
-Version: 61.1-1
-Architecture: x64-windows
-Multi-Arch: same
-Description: Mature and widely used Unicode and localization library.
-Status: install ok installed

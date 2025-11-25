@@ -1,7 +1,0 @@
-Package: boost-thread
-Version: 1.67.0
-Depends: boost-algorithm, boost-assert, boost-atomic, boost-bind, boost-build, boost-chrono, boost-concept-check, boost-config, boost-container, boost-core, boost-date-time, boost-detail, boost-exception, boost-function, boost-functional, boost-integer, boost-intrusive, boost-io, boost-lexical-cast, boost-math, boost-modular-build-helper, boost-move, boost-mpl, boost-optional, boost-predef, boost-preprocessor, boost-smart-ptr, boost-static-assert, boost-system, boost-throw-exception, boost-tuple, boost-type-traits, boost-utility, boost-vcpkg-helpers, boost-winapi
-Architecture: x64-windows
-Multi-Arch: same
-Description: Boost thread module
-Status: install ok installed

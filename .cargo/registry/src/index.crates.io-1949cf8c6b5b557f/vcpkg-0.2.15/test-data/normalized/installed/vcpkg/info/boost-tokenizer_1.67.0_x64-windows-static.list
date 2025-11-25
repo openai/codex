@@ -1,9 +1,0 @@
-x64-windows-static/
-x64-windows-static/include/
-x64-windows-static/include/boost/
-x64-windows-static/include/boost/token_functions.hpp
-x64-windows-static/include/boost/token_iterator.hpp
-x64-windows-static/include/boost/tokenizer.hpp
-x64-windows-static/share/
-x64-windows-static/share/boost-tokenizer/
-x64-windows-static/share/boost-tokenizer/copyright

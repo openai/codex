@@ -1,9 +1,0 @@
-error[E0512]: cannot transmute between types of different sizes, or dependently-sized types
-  --> tests/ui-stable/try_transmute_mut-size-decrease.rs:20:45
-   |
-20 |     let decrease_size: Result<&mut u8, _> = try_transmute_mut!(src);
-   |                                             ^^^^^^^^^^^^^^^^^^^^^^^
-   |
-   = note: source type: `AU16` (16 bits)
-   = note: target type: `u8` (8 bits)
-   = note: this error originates in the macro `$crate::assert_size_eq` which comes from the expansion of the macro `try_transmute_mut` (in Nightly builds, run with -Z macro-backtrace for more info)

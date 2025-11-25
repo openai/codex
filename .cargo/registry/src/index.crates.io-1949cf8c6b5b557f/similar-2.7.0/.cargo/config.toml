@@ -1,2 +1,0 @@
-[target.wasm32-wasip1]
-runner = ["./scripts/wasmtime-wrapper.sh"]

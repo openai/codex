@@ -1,7 +1,0 @@
-Package: boost-locale
-Version: 1.67.0
-Depends: boost-assert, boost-build, boost-config, boost-function, boost-integer, boost-iterator, boost-modular-build-helper, boost-smart-ptr, boost-static-assert, boost-thread, boost-type-traits, boost-unordered, boost-vcpkg-helpers
-Architecture: x64-windows
-Multi-Arch: same
-Description: Boost locale module
-Status: install ok installed

@@ -1,6 +1,0 @@
-# We include the provider implementation into ../libfips.a, so that all
-# platforms can resolve symbols in other members of that library.
-SOURCE[../libfips.a]=fipsprov.c self_test.c self_test_kats.c fipsindicator.c
-
-# It is necessary to have an explicit entry point
-SOURCE[../fips]=fips_entry.c

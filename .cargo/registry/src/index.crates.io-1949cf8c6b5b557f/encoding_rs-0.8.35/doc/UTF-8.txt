@@ -1,5 +1,0 @@
-/// This is the encoding that should be used for all new development it can
-/// represent all of Unicode.
-///
-/// This encoding matches the Windows code page 65001, except Windows differs
-/// in the number of errors generated for some erroneous byte sequences.

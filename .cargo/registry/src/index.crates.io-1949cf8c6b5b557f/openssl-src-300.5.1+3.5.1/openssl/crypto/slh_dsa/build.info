@@ -1,9 +1,0 @@
-LIBS=../../libcrypto
-
-$COMMON=slh_adrs.c slh_dsa.c slh_dsa_hash_ctx.c slh_dsa_key.c slh_fors.c slh_hash.c \
-        slh_hypertree.c slh_params.c slh_wots.c slh_xmss.c
-
-IF[{- !$disabled{'slh-dsa'} -}]
-  SOURCE[../../libcrypto]=$COMMON
-  SOURCE[../../providers/libfips.a]=$COMMON
-ENDIF

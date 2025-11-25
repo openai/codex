@@ -1,5 +1,0 @@
-error: ambiguous reference to positional arguments by number in a tuple struct; change this to a named argument
- --> tests/ui/numbered-positional-tuple.rs:4:61
-  |
-4 | #[error("invalid rdo_lookahead_frames {0} (expected < {})", i32::MAX)]
-  |                                                             ^^^^^^^^

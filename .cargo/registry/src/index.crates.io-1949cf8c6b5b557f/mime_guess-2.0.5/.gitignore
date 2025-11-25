@@ -1,6 +1,0 @@
-*.swp
-target
-Cargo.lock
-src/mime_types_generated.rs
-.idea/
-*.iml

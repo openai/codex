@@ -1,9 +1,0 @@
-/target
-**/target
-**/*.rs.bk
-Cargo.lock
-.vscode
-.rls.toml
-.DS_STORE
-[._]*.sw?
-[._]sw?

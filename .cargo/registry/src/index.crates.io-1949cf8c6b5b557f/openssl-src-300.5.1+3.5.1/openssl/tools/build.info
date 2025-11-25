@@ -1,7 +1,0 @@
-{- our $c_rehash_name =
-       $config{target} =~ /^(VC|vms)-/ ? "c_rehash.pl" : "c_rehash";
-   "" -}
-IF[{- !$disabled{apps} -}]
-  SCRIPTS={- $c_rehash_name -}
-  SOURCE[{- $c_rehash_name -}]=c_rehash.in
-ENDIF

@@ -1,8 +1,0 @@
-[dependencies.openssl-sys]
-version = "0.5.2"
-
-[dependencies]
-libc = "0.1"
-
-[dependencies]
-bitflags = "0.1.1"

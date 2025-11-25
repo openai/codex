@@ -1,6 +1,0 @@
-[clog]
-repository = "https://github.com/gluon-lang/lsp-types"
-
-changelog = "CHANGELOG.md"
-
-from-latest-tag = true

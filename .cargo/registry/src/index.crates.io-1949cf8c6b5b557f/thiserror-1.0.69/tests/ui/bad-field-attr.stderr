@@ -1,5 +1,0 @@
-error: #[error(transparent)] needs to go outside the enum or struct, not on an individual field
- --> tests/ui/bad-field-attr.rs:5:18
-  |
-5 | pub struct Error(#[error(transparent)] std::io::Error);
-  |                  ^^^^^^^^^^^^^^^^^^^^^

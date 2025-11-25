@@ -1,8 +1,0 @@
-language: rust
-
-cache: cargo
-
-rust:
-  - stable
-  - beta
-  - nightly

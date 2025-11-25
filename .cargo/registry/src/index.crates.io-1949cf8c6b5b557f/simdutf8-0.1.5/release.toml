@@ -1,7 +1,0 @@
-pre-release-replacements = [
-  {file="CHANGELOG.md", search="## \\[Unreleased\\]", replace="## [Unreleased]\n\n## [{{version}}] - {{date}}", exactly=1},
-  {file="CHANGELOG.md", search="\\[Unreleased\\]: https://github\\.com/rusticstuff/simdutf8/compare/v[0-9.]+\\.\\.\\.HEAD", replace="[Unreleased]: https://github.com/rusticstuff/simdutf8/compare/v{{version}}...HEAD\n[{{version}}]: https://github.com/rusticstuff/simdutf8/compare/v{{prev_version}}...v{{version}}", exactly=1},
-  {file="README.md", search="simdutf8 = \"[0-9.]+\"", replace="simdutf8 = \"{{version}}\"", exactly=1},
-  {file="src/lib.rs", search="simdutf8 = \"[0-9.]+\"", replace="simdutf8 = \"{{version}}\"", exactly=1},
-]
-allow-branch = ["main"]

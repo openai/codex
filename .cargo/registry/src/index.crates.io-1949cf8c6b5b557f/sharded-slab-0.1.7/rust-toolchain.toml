@@ -1,7 +1,0 @@
-[toolchain]
-channel = "stable"
-profile = "default"
-targets = [
-    "i686-unknown-linux-musl",
-    "x86_64-unknown-linux-gnu",
-]

@@ -1,7 +1,0 @@
-# @generated
-# To regenerate, run:
-# ```
-# ALLOCATIVE_REGENERATE_TESTS=1 cargo test -p allocative
-# ```
-either::Either<u32, alloc::string::String> 20
-either::Either<u32, alloc::string::String>;Left;u32 4

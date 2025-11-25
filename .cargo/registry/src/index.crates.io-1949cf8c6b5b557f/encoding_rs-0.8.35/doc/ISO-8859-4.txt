@@ -1,6 +1,0 @@
-/// This is the North European part of the ISO/IEC 8859 encoding family. This encoding is also known as Latin 4.
-///
-/// [Index visualization](https://encoding.spec.whatwg.org/iso-8859-4.html),
-/// [Visualization of BMP coverage](https://encoding.spec.whatwg.org/iso-8859-4-bmp.html)
-///
-/// This encoding matches the Windows code page 28594.

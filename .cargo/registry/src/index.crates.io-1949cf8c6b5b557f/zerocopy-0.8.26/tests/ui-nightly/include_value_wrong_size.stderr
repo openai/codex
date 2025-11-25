@@ -1,9 +1,0 @@
-error[E0512]: cannot transmute between types of different sizes, or dependently-sized types
-  --> tests/ui-nightly/include_value_wrong_size.rs:15:25
-   |
-15 | const WRONG_SIZE: u64 = include_value!("../../testdata/include_value/data");
-   |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-   = note: source type: `[u8; 4]` (32 bits)
-   = note: target type: `u64` (64 bits)
-   = note: this error originates in the macro `$crate::transmute` which comes from the expansion of the macro `include_value` (in Nightly builds, run with -Z macro-backtrace for more info)

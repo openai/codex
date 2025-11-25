@@ -1,8 +1,0 @@
-/// This is the Hebrew encoding for Windows. It is an extension of ISO-8859-8-I,
-/// except for a currency sign swap.
-///
-/// [Index visualization](https://encoding.spec.whatwg.org/windows-1255.html),
-/// [Visualization of BMP coverage](https://encoding.spec.whatwg.org/windows-1255-bmp.html)
-///
-/// This encoding matches the Windows code page 1255, except Windows decodes
-/// unassigned code points to the Private Use Area of Unicode.

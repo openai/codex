@@ -1,4 +1,0 @@
-{
-    "answer": {"type": "integer", "value": "9223372036854775807"},
-    "neganswer": {"type": "integer", "value": "-9223372036854775808"}
-}

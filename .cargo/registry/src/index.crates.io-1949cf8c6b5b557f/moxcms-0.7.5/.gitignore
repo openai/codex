@@ -1,9 +1,0 @@
-/target
-Cargo.lock
-.idea
-app/target
-flamegraph.svg
-perf.data
-profile.json.gz
-.cargo
-rust-toolchain.toml

@@ -1,7 +1,0 @@
-error: unexpected end of macro invocation, expected format string
- --> tests/ui/no-arguments.rs:4:5
-  |
-4 |     indoc!();
-  |     ^^^^^^^^
-  |
-  = note: this error originates in the macro `indoc` (in Nightly builds, run with -Z macro-backtrace for more info)

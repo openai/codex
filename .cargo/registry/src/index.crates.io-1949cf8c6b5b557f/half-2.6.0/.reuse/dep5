@@ -1,7 +1,0 @@
-Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-Copyright: Kathryn Long <squeeself@gmail.com>
-License: MIT OR Apache-2.0
-
-Files: *
-Copyright: 2021 Kathryn Long <squeeself@gmail.com>
-License: MIT OR Apache-2.0

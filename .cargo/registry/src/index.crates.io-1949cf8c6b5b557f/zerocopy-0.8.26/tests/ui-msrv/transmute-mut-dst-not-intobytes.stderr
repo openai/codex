@@ -1,7 +1,0 @@
-error[E0277]: the trait bound `Dst: IntoBytes` is not satisfied
-  --> tests/ui-msrv/transmute-mut-dst-not-intobytes.rs:24:36
-   |
-24 | const DST_NOT_AS_BYTES: &mut Dst = transmute_mut!(&mut Src);
-   |                                    ^^^^^^^^^^^^^^^^^^^^^^^^ the trait `IntoBytes` is not implemented for `Dst`
-   |
-   = note: this error originates in the macro `transmute_mut` (in Nightly builds, run with -Z macro-backtrace for more info)

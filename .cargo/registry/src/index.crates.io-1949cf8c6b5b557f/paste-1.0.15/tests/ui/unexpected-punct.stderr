@@ -1,5 +1,0 @@
-error: unexpected punct
- --> tests/ui/unexpected-punct.rs:4:12
-  |
-4 |     fn [<a + b>]() {}
-  |            ^

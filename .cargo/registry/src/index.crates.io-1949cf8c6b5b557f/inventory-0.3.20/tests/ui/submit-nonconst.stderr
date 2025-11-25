@@ -1,8 +1,0 @@
-error[E0015]: cannot call non-const associated function `Thing::new` in statics
-  --> tests/ui/submit-nonconst.rs:11:20
-   |
-11 | inventory::submit!(Thing::new());
-   |                    ^^^^^^^^^^^^
-   |
-   = note: calls in statics are limited to constant functions, tuple structs and tuple variants
-   = note: consider wrapping this expression in `std::sync::LazyLock::new(|| ...)`

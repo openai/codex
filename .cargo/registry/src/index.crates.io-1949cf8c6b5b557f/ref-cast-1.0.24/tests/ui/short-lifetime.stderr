@@ -1,7 +1,0 @@
-error[E0621]: explicit lifetime required in the type of `s`
- --> tests/ui/short-lifetime.rs:9:48
-  |
-9 |     pub fn ref_cast<'a>(s: &String) -> &'a Self;
-  |                            -------             ^ lifetime `'a` required
-  |                            |
-  |                            help: add explicit lifetime `'a` to the type of `s`: `&'a String`

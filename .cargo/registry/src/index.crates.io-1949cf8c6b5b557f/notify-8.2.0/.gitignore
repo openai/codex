@@ -1,6 +1,0 @@
-/target
-/Cargo.lock
-.*.sw*
-tests/last-fails
-tests/last-run.log
-.cargo

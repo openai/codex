@@ -1,6 +1,0 @@
-[ext]
-issuerSignTool = signTool
-sbgp-autonomousSysNum = AS
-issuingDistributionPoint = fullname
-sbgp-ipAddrBlock = IPv4-SAFI
-

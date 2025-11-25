@@ -1,5 +1,0 @@
-error: transparent error struct can't contain #[source]
- --> tests/ui/transparent-struct-source.rs:5:18
-  |
-5 | pub struct Error(#[source] anyhow::Error);
-  |                  ^^^^^^^^^

@@ -1,7 +1,0 @@
-/// This is the Baltic encoding for Windows.
-///
-/// [Index visualization](https://encoding.spec.whatwg.org/windows-1257.html),
-/// [Visualization of BMP coverage](https://encoding.spec.whatwg.org/windows-1257-bmp.html)
-///
-/// This encoding matches the Windows code page 1257, except Windows decodes
-/// unassigned code points to the Private Use Area of Unicode.

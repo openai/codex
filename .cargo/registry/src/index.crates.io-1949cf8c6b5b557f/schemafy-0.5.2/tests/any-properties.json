@@ -1,6 +1,0 @@
-{
-    "$schema": "http://json-schema.org/draft-04/schema#",
-    "title": "any-properties",
-    "type": "object",
-    "additionalProperties": true
-}

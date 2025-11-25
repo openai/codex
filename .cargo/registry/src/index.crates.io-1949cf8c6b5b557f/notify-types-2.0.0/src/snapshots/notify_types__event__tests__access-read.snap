@@ -1,5 +1,0 @@
----
-source: notify/src/event.rs
-expression: json
----
-{"type":"access","kind":"read","paths":[],"attrs":{}}

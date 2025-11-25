@@ -1,7 +1,0 @@
-Package: boost-property-map
-Version: 1.67.0
-Depends: boost-any, boost-assert, boost-bind, boost-concept-check, boost-config, boost-core, boost-detail, boost-function, boost-integer, boost-iterator, boost-lexical-cast, boost-math, boost-mpl, boost-multi-index, boost-optional, boost-serialization, boost-smart-ptr, boost-static-assert, boost-throw-exception, boost-type-traits, boost-utility, boost-vcpkg-helpers
-Architecture: x64-windows
-Multi-Arch: same
-Description: Boost property_map module
-Status: install ok half-installed

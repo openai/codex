@@ -1,6 +1,0 @@
-Package: boost-vcpkg-helpers
-Version: 4
-Architecture: x64-windows
-Multi-Arch: same
-Description: a set of vcpkg-internal scripts used to modularize boost
-Status: install ok installed

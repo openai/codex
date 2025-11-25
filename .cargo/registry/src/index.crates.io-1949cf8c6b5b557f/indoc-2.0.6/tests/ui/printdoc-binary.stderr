@@ -1,5 +1,0 @@
-error: byte strings are not supported in formatting macros
- --> tests/ui/printdoc-binary.rs:4:15
-  |
-4 |     printdoc!(b"");
-  |               ^^^

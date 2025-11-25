@@ -1,9 +1,0 @@
-# This is an API configuration to generate an HTTP/JSON -> gRPC gateway for the
-# OpenTelemetry service using github.com/grpc-ecosystem/grpc-gateway.
-type: google.api.Service
-config_version: 3
-http:
- rules:
- - selector: opentelemetry.proto.collector.logs.v1.LogsService.Export
-   post: /v1/logs
-   body: "*"

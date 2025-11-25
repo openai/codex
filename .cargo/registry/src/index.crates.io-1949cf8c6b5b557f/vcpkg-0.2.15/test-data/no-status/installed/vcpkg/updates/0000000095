@@ -1,7 +1,0 @@
-Package: boost-polygon
-Version: 1.67.0
-Depends: boost-config, boost-integer, boost-mpl, boost-utility, boost-vcpkg-helpers
-Architecture: x64-windows
-Multi-Arch: same
-Description: Boost polygon module
-Status: install ok installed

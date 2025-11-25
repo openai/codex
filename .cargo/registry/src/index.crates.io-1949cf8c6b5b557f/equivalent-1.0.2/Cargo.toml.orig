@@ -1,9 +1,0 @@
-[package]
-name = "equivalent"
-version = "1.0.2"
-rust-version = "1.6"
-license = "Apache-2.0 OR MIT"
-description = "Traits for key comparison in maps."
-repository = "https://github.com/indexmap-rs/equivalent"
-keywords = ["hashmap", "no_std"]
-categories = ["data-structures", "no-std"]

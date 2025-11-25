@@ -1,9 +1,0 @@
-# We make separate GOAL variables for each algorithm, to make it easy to
-# switch each to the Legacy provider when needed.
-
-$STORE_GOAL=../../libdefault.a
-
-SOURCE[$STORE_GOAL]=file_store.c file_store_any2obj.c
-IF[{- !$disabled{winstore} -}]
-    SOURCE[$STORE_GOAL]=winstore_store.c
-ENDIF

@@ -1,5 +1,0 @@
-error: Unexpected field: `word`. `#[darling(word)]` can only be applied to a unit variant
- --> tests/compile-fail/word_on_wrong_variant_type.rs:6:15
-  |
-6 |     #[darling(word)]
-  |               ^^^^

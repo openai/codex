@@ -1,9 +1,0 @@
-x64-windows/
-x64-windows/include/
-x64-windows/include/boost/
-x64-windows/include/boost/exception/
-x64-windows/include/boost/exception/exception.hpp
-x64-windows/include/boost/throw_exception.hpp
-x64-windows/share/
-x64-windows/share/boost-throw-exception/
-x64-windows/share/boost-throw-exception/copyright

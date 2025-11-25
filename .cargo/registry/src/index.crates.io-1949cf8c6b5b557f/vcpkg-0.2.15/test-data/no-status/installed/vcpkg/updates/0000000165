@@ -1,7 +1,0 @@
-Package: boost-timer
-Version: 1.67.0
-Depends: boost-build, boost-chrono, boost-compatibility, boost-config, boost-core, boost-integer, boost-io, boost-modular-build-helper, boost-system, boost-throw-exception, boost-vcpkg-helpers
-Architecture: x64-windows
-Multi-Arch: same
-Description: Boost timer module
-Status: install ok installed

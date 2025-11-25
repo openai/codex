@@ -1,9 +1,0 @@
-error[E0512]: cannot transmute between types of different sizes, or dependently-sized types
-  --> tests/ui-nightly/try_transmute-size-decrease.rs:19:40
-   |
-19 |     let decrease_size: Result<u8, _> = try_transmute!(AU16(0));
-   |                                        ^^^^^^^^^^^^^^^^^^^^^^^
-   |
-   = note: source type: `AU16` (16 bits)
-   = note: target type: `u8` (8 bits)
-   = note: this error originates in the macro `try_transmute` (in Nightly builds, run with -Z macro-backtrace for more info)

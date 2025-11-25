@@ -1,3 +1,0 @@
-[submodule "vendor/keyutils"]
-	path = vendor/keyutils
-	url = git://git.kernel.org/pub/scm/linux/kernel/git/dhowells/keyutils.git

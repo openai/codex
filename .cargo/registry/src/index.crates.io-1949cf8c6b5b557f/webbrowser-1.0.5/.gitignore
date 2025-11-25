@@ -1,7 +1,0 @@
-/target/
-/Cargo.lock
-/.idea/
-/*.code-workspace
-/screenshot.png
-**/.DS_Store
-/.vscode/

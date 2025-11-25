@@ -1,6 +1,0 @@
-{
-  "git": {
-    "sha1": "dc1a01a79729d9a43f9dfaf32080c5e7bdf05090"
-  },
-  "path_in_vcs": "crates/env_filter"
-}

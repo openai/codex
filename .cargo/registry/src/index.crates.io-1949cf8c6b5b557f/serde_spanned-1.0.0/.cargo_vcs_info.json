@@ -1,6 +1,0 @@
-{
-  "git": {
-    "sha1": "af19b49e5477de77ebfaca01b2b7a085e06183b9"
-  },
-  "path_in_vcs": "crates/serde_spanned"
-}

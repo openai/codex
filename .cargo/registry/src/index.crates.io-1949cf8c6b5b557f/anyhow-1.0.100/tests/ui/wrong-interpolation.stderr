@@ -1,5 +1,0 @@
-error: 1 positional argument in format string, but no arguments were given
- --> tests/ui/wrong-interpolation.rs:4:12
-  |
-4 |     bail!("{} not found");
-  |            ^^

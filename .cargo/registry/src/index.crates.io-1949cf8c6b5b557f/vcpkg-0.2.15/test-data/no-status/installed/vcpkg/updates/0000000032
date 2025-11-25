@@ -1,7 +1,0 @@
-Package: boost-system
-Version: 1.67.0
-Depends: boost-assert, boost-build, boost-config, boost-core, boost-integer, boost-modular-build-helper, boost-predef, boost-utility, boost-vcpkg-helpers, boost-winapi
-Architecture: x64-windows
-Multi-Arch: same
-Description: Boost system module
-Status: install ok half-installed

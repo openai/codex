@@ -1,8 +1,0 @@
-openssl_conf = openssl_init
-config_diagnostics = yes
-
-[openssl_init]
-providers = provider_sect
-
-[provider_sect]
- = provider_sect

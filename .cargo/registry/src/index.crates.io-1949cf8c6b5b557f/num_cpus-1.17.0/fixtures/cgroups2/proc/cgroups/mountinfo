@@ -1,5 +1,0 @@
-1 0 8:1 / / rw,noatime shared:1 - ext4 /dev/sda1 rw,errors=remount-ro,data=reordered
-2 1 0:1 / /dev rw,relatime shared:2 - devtmpfs udev rw,size=10240k,nr_inodes=16487629,mode=755
-3 1 0:2 / /proc rw,nosuid,nodev,noexec,relatime shared:3 - proc proc rw
-4 1 0:3 / /sys rw,nosuid,nodev,noexec,relatime shared:4 - sysfs sysfs rw
-5 4 0:4 / /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime shared:5 - cgroup2 cgroup2 rw,nsdelegate,memory_recursiveprot

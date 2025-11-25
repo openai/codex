@@ -1,8 +1,0 @@
-error[E0271]: type mismatch resolving `<[u8; 1] as KnownLayout>::PointerMetadata == usize`
-  --> tests/ui-stable/transmute-mut-src-unsized.rs:17:35
-   |
-17 | const SRC_UNSIZED: &mut [u8; 1] = transmute_mut!(&mut [0u8][..]);
-   |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `usize`, found `()`
-   |
-   = note: required for `Wrap<&mut [u8], &mut [u8; 1]>` to implement `TransmuteMutDst<'_>`
-   = note: this error originates in the macro `transmute_mut` (in Nightly builds, run with -Z macro-backtrace for more info)

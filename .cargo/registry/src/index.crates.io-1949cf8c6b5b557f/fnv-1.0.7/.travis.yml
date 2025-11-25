@@ -1,8 +1,0 @@
-language: rust
-rust:
-  - nightly
-  - beta
-  - stable
-script:
-  - cargo test --verbose --all # default features
-  - cargo test --verbose --all --no-default-features # excludes std

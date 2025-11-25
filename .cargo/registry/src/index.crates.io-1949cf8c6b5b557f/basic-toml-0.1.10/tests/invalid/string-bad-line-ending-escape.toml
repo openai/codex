@@ -1,3 +1,0 @@
-invalid-escape = """\
-    This string has a non whitespace-character after the line ending escape. \  a
-"""

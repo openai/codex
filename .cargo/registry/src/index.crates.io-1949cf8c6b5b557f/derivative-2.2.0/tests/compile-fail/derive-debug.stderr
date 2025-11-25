@@ -1,9 +1,0 @@
-error[E0277]: `U` doesn't implement `std::fmt::Debug`
-  --> $DIR/derive-debug.rs:11:36
-   |
-11 |     #[derivative(Debug(format_with="std::fmt::Debug::fmt"))]
-   |                                    ^^^^^^^^^^^^^^^^^^^^^^ `U` cannot be formatted using `{:?}` because it doesn't implement `std::fmt::Debug`
-   |
-   = help: the trait `std::fmt::Debug` is not implemented for `U`
-   = help: consider adding a `where U: std::fmt::Debug` bound
-   = note: required by `std::fmt::Debug::fmt`

@@ -1,7 +1,0 @@
-Package: boost-any
-Version: 1.67.0
-Depends: boost-config, boost-core, boost-mpl, boost-static-assert, boost-throw-exception, boost-type-index, boost-type-traits, boost-utility, boost-vcpkg-helpers
-Architecture: x64-windows
-Multi-Arch: same
-Description: Boost any module
-Status: install ok installed

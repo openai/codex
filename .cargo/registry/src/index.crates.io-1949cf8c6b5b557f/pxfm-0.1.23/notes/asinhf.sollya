@@ -1,6 +1,0 @@
-R = remez(asinh(x)/x, [|0, 2, 4, 6, 8, 10, 12, 14, 16, 18|], [0, 2^-3]);
-P = fpminimax(asinh(x)/x, [|0, 2, 4, 6, 8, 10, 12, 14, 16, 18|], [|D...|], [0, 2^-3], absolute, floating, R);
-display = decimal;
-print(P);
-
-for i from 0 to degree(P) by 2 do print(coeff(P, i));

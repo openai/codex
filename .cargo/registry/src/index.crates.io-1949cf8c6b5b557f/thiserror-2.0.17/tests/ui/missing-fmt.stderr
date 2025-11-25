@@ -1,5 +1,0 @@
-error: missing #[error("...")] display attribute
- --> tests/ui/missing-fmt.rs:7:5
-  |
-7 |     B(usize),
-  |     ^^^^^^^^

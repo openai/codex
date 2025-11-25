@@ -1,8 +1,0 @@
-# @generated
-# To regenerate, run:
-# ```
-# ALLOCATIVE_REGENERATE_TESTS=1 cargo test -p allocative
-# ```
-core::cell::once::OnceCell<alloc::string::String>;data;alloc::string::String 16
-core::cell::once::OnceCell<alloc::string::String>;data;alloc::string::String;ptr 8
-core::cell::once::OnceCell<alloc::string::String>;data;alloc::string::String;ptr;capacity;u8 3

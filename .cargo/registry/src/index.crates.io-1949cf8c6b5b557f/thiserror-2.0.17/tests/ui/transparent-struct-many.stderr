@@ -1,5 +1,0 @@
-error: #[error(transparent)] requires exactly one field
- --> tests/ui/transparent-struct-many.rs:4:1
-  |
-4 | #[error(transparent)]
-  | ^^^^^^^^^^^^^^^^^^^^^

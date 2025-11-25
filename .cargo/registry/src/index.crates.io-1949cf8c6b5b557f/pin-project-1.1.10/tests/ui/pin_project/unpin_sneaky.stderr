@@ -1,5 +1,0 @@
-error[E0412]: cannot find type `__S` in this scope
-  --> tests/ui/pin_project/unpin_sneaky.rs:11:16
-   |
-11 | impl Unpin for __S {} //~ ERROR E0412,E0321
-   |                ^^^ not found in this scope

@@ -1,7 +1,0 @@
-Package: boost-filesystem
-Version: 1.67.0
-Depends: boost-assert, boost-build, boost-config, boost-detail, boost-functional, boost-integer, boost-io, boost-iterator, boost-modular-build-helper, boost-range, boost-smart-ptr, boost-static-assert, boost-system, boost-type-traits, boost-utility, boost-vcpkg-helpers
-Architecture: x64-windows
-Multi-Arch: same
-Description: Boost filesystem module
-Status: install ok installed

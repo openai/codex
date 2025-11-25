@@ -1,8 +1,0 @@
-error[E0119]: conflicting implementations of trait `Unpin` for type `Foo<MyPhantomPinned, ()>`
-  --> tests/ui/unsafe_unpin/negative_impls_stable.rs:5:28
-   |
-5  | #[pin_project::pin_project(UnsafeUnpin)]
-   |                            ^^^^^^^^^^^ conflicting implementation for `Foo<MyPhantomPinned, ()>`
-...
-16 | impl Unpin for Foo<MyPhantomPinned, ()> {}
-   | --------------------------------------- first implementation here

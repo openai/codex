@@ -1,5 +1,0 @@
-error: no rules expected the token `pub`
- --> $DIR/pub_const.rs:5:9
-  |
-5 |         pub const FLAG_A = 0b00000001;
-  |         ^^^ no rules expected this token in macro call

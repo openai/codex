@@ -1,7 +1,0 @@
-error: argument never used
- --> tests/ui/printdoc-extra-arg.rs:4:19
-  |
-4 |     printdoc!("", 0);
-  |               --  ^ argument never used
-  |               |
-  |               formatting specifier missing

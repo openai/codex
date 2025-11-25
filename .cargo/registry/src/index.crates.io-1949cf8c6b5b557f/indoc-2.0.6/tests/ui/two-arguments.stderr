@@ -1,5 +1,0 @@
-error: unexpected token in macro invocation; indoc argument must be a single string literal
- --> tests/ui/two-arguments.rs:8:11
-  |
-8 |         " 64);
-  |           ^^
