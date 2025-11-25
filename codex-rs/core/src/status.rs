@@ -25,12 +25,18 @@ static TEST_IDLE_TIMEOUT: OnceLock<Duration> = OnceLock::new();
 #[derive(Debug, Clone, Display, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ComponentHealth {
+    #[strum(to_string = "operational")]
     Operational,
+    #[strum(to_string = "degraded performance")]
     DegradedPerformance,
+    #[strum(to_string = "partial outage")]
     PartialOutage,
+    #[strum(to_string = "major outage")]
     MajorOutage,
+    #[strum(to_string = "under maintenance")]
     UnderMaintenance,
     #[serde(other)]
+    #[strum(to_string = "unknown")]
     Unknown,
 }
 
@@ -78,7 +84,7 @@ impl IdleWarning {
             self.warning_sent = true;
             self.mark_event();
             return Some(format!(
-                "Codex is facing an incident. Current status: {status:?}. Responses may be delayed or stalled."
+                "Codex is facing an incident. Current status: {status}. Responses may be delayed or stalled."
             ));
         }
 
