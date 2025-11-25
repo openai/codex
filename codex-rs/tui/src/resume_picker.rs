@@ -21,9 +21,11 @@ use ratatui::layout::Rect;
 use ratatui::style::Stylize as _;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use std::time::Instant;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
+use tracing::error;
 use unicode_width::UnicodeWidthStr;
 
 use crate::diff_render::display_path_for;
@@ -87,6 +89,7 @@ pub async fn run_resume_picker(
     let page_loader: PageLoader = Arc::new(move |request: PageLoadRequest| {
         let tx = loader_tx.clone();
         tokio::spawn(async move {
+            let started = Instant::now();
             let provider_filter = vec![request.default_provider.clone()];
             let page = RolloutRecorder::list_conversations(
                 &request.codex_home,
@@ -97,6 +100,30 @@ pub async fn run_resume_picker(
                 request.default_provider.as_str(),
             )
             .await;
+            match &page {
+                Ok(p) => {
+                    error!(
+                        elapsed_ms = started.elapsed().as_millis(),
+                        request_token = request.request_token,
+                        search_token = request.search_token,
+                        scanned = p.num_scanned_files,
+                        returned = p.items.len(),
+                        reached_scan_cap = p.reached_scan_cap,
+                        cursor = ?request.cursor,
+                        "resume_picker list_conversations page",
+                    );
+                }
+                Err(e) => {
+                    error!(
+                        elapsed_ms = started.elapsed().as_millis(),
+                        request_token = request.request_token,
+                        search_token = request.search_token,
+                        cursor = ?request.cursor,
+                        error = %e,
+                        "resume_picker list_conversations error",
+                    );
+                }
+            }
             let _ = tx.send(BackgroundEvent::PageLoaded {
                 request_token: request.request_token,
                 search_token: request.search_token,
@@ -113,7 +140,7 @@ pub async fn run_resume_picker(
         show_all,
         filter_cwd,
     );
-    state.load_initial_page().await?;
+    state.start_initial_load();
     state.request_frame();
 
     let mut tui_events = alt.tui.event_stream().fuse();
@@ -359,25 +386,28 @@ impl PickerState {
         Ok(None)
     }
 
-    async fn load_initial_page(&mut self) -> Result<()> {
-        let provider_filter = vec![self.default_provider.clone()];
-        let page = RolloutRecorder::list_conversations(
-            &self.codex_home,
-            PAGE_SIZE,
-            None,
-            INTERACTIVE_SESSION_SOURCES,
-            Some(provider_filter.as_slice()),
-            self.default_provider.as_str(),
-        )
-        .await?;
+    fn start_initial_load(&mut self) {
         self.reset_pagination();
         self.all_rows.clear();
         self.filtered_rows.clear();
         self.seen_paths.clear();
         self.search_state = SearchState::Idle;
         self.selected = 0;
-        self.ingest_page(page);
-        Ok(())
+
+        let request_token = self.allocate_request_token();
+        self.pagination.loading = LoadingState::Pending(PendingLoad {
+            request_token,
+            search_token: None,
+        });
+        self.request_frame();
+
+        (self.page_loader)(PageLoadRequest {
+            codex_home: self.codex_home.clone(),
+            cursor: None,
+            request_token,
+            search_token: None,
+            default_provider: self.default_provider.clone(),
+        });
     }
 
     fn handle_background_event(&mut self, event: BackgroundEvent) -> Result<()> {
