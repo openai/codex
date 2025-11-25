@@ -617,6 +617,11 @@ impl UnifiedExecSessionManager {
             .find(|(session_id, _, _)| !protected.contains(session_id))
             .map(|(session_id, _, _)| session_id)
     }
+
+    pub(crate) async fn terminate_all_sessions(&self) {
+        let mut sessions = self.sessions.lock().await;
+        sessions.clear();
+    }
 }
 
 enum SessionStatus {
