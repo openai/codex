@@ -9,6 +9,7 @@ use codex_api::Provider;
 use codex_api::ResponseEvent;
 use codex_api::ResponsesClient;
 use codex_api::WireApi;
+use codex_api::provider::RequestCompression;
 use codex_client::HttpTransport;
 use codex_client::Request;
 use codex_client::Response;
@@ -74,6 +75,7 @@ fn provider(name: &str, wire: WireApi) -> Provider {
             retry_5xx: false,
             retry_transport: true,
         },
+        request_compression: RequestCompression::None,
         stream_idle_timeout: Duration::from_millis(50),
     }
 }

@@ -6,6 +6,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::user_input::UserInput;
+use core_test_support::RequestBodyExt;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
@@ -54,7 +55,7 @@ async fn codex_returns_json_result(model: String) -> anyhow::Result<()> {
 
     let expected_schema: serde_json::Value = serde_json::from_str(SCHEMA)?;
     let match_json_text_param = move |req: &wiremock::Request| {
-        let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap_or_default();
+        let body: serde_json::Value = req.json_body();
         let Some(text) = body.get("text") else {
             return false;
         };

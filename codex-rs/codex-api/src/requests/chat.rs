@@ -351,6 +351,7 @@ fn push_tool_call_message(messages: &mut Vec<Value>, tool_call: Value, reasoning
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider::RequestCompression;
     use crate::provider::RetryConfig;
     use crate::provider::WireApi;
     use codex_protocol::models::FunctionCallOutputPayload;
@@ -374,6 +375,7 @@ mod tests {
                 retry_5xx: true,
                 retry_transport: true,
             },
+            request_compression: RequestCompression::None,
             stream_idle_timeout: Duration::from_secs(1),
         }
     }

@@ -172,6 +172,7 @@ fn attach_item_ids(payload_json: &mut Value, original_items: &[ResponseItem]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider::RequestCompression;
     use crate::provider::RetryConfig;
     use crate::provider::WireApi;
     use codex_protocol::protocol::SubAgentSource;
@@ -193,6 +194,7 @@ mod tests {
                 retry_5xx: true,
                 retry_transport: true,
             },
+            request_compression: RequestCompression::None,
             stream_idle_timeout: Duration::from_secs(5),
         }
     }

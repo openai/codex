@@ -89,6 +89,7 @@ url = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4", "v5"] }
 which = { workspace = true }
 wildmatch = { workspace = true }
+zstd = { workspace = true }
 
 [features]
 deterministic_process_ids = []

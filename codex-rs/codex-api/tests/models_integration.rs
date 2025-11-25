@@ -1,6 +1,7 @@
 use codex_api::AuthProvider;
 use codex_api::ModelsClient;
 use codex_api::provider::Provider;
+use codex_api::provider::RequestCompression;
 use codex_api::provider::RetryConfig;
 use codex_api::provider::WireApi;
 use codex_client::ReqwestTransport;
@@ -42,6 +43,7 @@ fn provider(base_url: &str) -> Provider {
             retry_5xx: true,
             retry_transport: true,
         },
+        request_compression: RequestCompression::None,
         stream_idle_timeout: std::time::Duration::from_secs(1),
     }
 }

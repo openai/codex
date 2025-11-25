@@ -5,6 +5,7 @@ use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::provider::WireApi;
 use crate::telemetry::run_with_request_telemetry;
+use codex_client::Body;
 use codex_client::HttpTransport;
 use codex_client::RequestTelemetry;
 use codex_protocol::models::ResponseItem;
@@ -54,7 +55,7 @@ impl<T: HttpTransport, A: AuthProvider> CompactClient<T, A> {
         let builder = || {
             let mut req = self.provider.build_request(Method::POST, path);
             req.headers.extend(extra_headers.clone());
-            req.body = Some(body.clone());
+            req.body = Some(Body::Json(body.clone()));
             add_auth_headers(&self.auth, req)
         };
 
@@ -89,6 +90,7 @@ struct CompactHistoryResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider::RequestCompression;
     use crate::provider::RetryConfig;
     use async_trait::async_trait;
     use codex_client::Request;
@@ -135,6 +137,7 @@ mod tests {
                 retry_5xx: true,
                 retry_transport: true,
             },
+            request_compression: RequestCompression::None,
             stream_idle_timeout: Duration::from_secs(1),
         }
     }

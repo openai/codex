@@ -8,6 +8,7 @@ use codex_core::ContentItem;
 use codex_core::ModelClient;
 use codex_core::ModelProviderInfo;
 use codex_core::Prompt;
+use codex_core::RequestCompression;
 use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
@@ -51,6 +52,7 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
         env_key_instructions: None,
         experimental_bearer_token: None,
         wire_api: WireApi::Chat,
+        request_compression: RequestCompression::None,
         query_params: None,
         http_headers: None,
         env_http_headers: None,

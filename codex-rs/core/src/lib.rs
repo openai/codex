@@ -56,6 +56,7 @@ pub use model_provider_info::DEFAULT_OLLAMA_PORT;
 pub use model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 pub use model_provider_info::ModelProviderInfo;
 pub use model_provider_info::OLLAMA_OSS_PROVIDER_ID;
+pub use model_provider_info::RequestCompression;
 pub use model_provider_info::WireApi;
 pub use model_provider_info::built_in_model_providers;
 pub use model_provider_info::create_oss_provider_with_base_url;

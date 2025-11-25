@@ -1,8 +1,10 @@
 use codex_core::ModelProviderInfo;
+use codex_core::RequestCompression;
 use codex_core::WireApi;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_protocol::user_input::UserInput;
+use core_test_support::body_contains;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
@@ -11,7 +13,6 @@ use core_test_support::wait_for_event;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
-use wiremock::matchers::body_string_contains;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
@@ -38,7 +39,7 @@ async fn continue_after_stream_error() {
     // so the failing request should only occur once.
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
-        .and(body_string_contains("first message"))
+        .and(body_contains("first message"))
         .respond_with(fail)
         .up_to_n_times(2)
         .mount(&server)
@@ -50,7 +51,7 @@ async fn continue_after_stream_error() {
 
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
-        .and(body_string_contains("follow up"))
+        .and(body_contains("follow up"))
         .respond_with(ok)
         .expect(1)
         .mount(&server)
@@ -66,6 +67,7 @@ async fn continue_after_stream_error() {
         env_key_instructions: None,
         experimental_bearer_token: None,
         wire_api: WireApi::Responses,
+        request_compression: RequestCompression::None,
         query_params: None,
         http_headers: None,
         env_http_headers: None,

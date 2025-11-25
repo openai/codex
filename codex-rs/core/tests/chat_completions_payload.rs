@@ -10,6 +10,7 @@ use codex_core::LocalShellStatus;
 use codex_core::ModelClient;
 use codex_core::ModelProviderInfo;
 use codex_core::Prompt;
+use codex_core::RequestCompression;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
 use codex_core::models_manager::manager::ModelsManager;
@@ -52,6 +53,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         env_key_instructions: None,
         experimental_bearer_token: None,
         wire_api: WireApi::Chat,
+        request_compression: RequestCompression::None,
         query_params: None,
         http_headers: None,
         env_http_headers: None,

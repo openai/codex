@@ -41,6 +41,12 @@ impl RetryConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestCompression {
+    None,
+    Zstd,
+}
+
 /// HTTP endpoint configuration used to talk to a concrete API deployment.
 ///
 /// Encapsulates base URL, default headers, query params, retry policy, and
@@ -53,6 +59,7 @@ pub struct Provider {
     pub wire: WireApi,
     pub headers: HeaderMap,
     pub retry: RetryConfig,
+    pub request_compression: RequestCompression,
     pub stream_idle_timeout: Duration,
 }
 
