@@ -1,13 +1,13 @@
 ---
 source: tui/src/resume_picker.rs
-assertion_line: 1368
+assertion_line: 1438
 expression: snapshot
 ---
 Resume a previous session
 Type to search
-  Updated         Branch          CWD           Conversation
-> 42 seconds ago  feature/resume  /tmp/project  Fix resume picker timestamps
-  35 minutes ago  main            /tmp/other    Investigate lazy pagination cap
+  Updated  Branch  CWD  Conversation
+No sessions yet
+
 
 
 

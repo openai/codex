@@ -1282,10 +1282,88 @@ mod tests {
     fn resume_picker_screen_snapshot() {
         use crate::custom_terminal::Terminal;
         use crate::test_backend::VT100Backend;
+        use uuid::Uuid;
+
+        // Create real rollout files so the snapshot uses the actual listing pipeline.
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let sessions_root = tempdir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_root).expect("mkdir sessions root");
+
+        let now = Utc::now();
+
+        // Helper to write a rollout file with minimal meta + one user message.
+        let write_rollout = |ts: DateTime<Utc>, cwd: &str, branch: &str, preview: &str| {
+            let dir = sessions_root
+                .join(ts.format("%Y").to_string())
+                .join(ts.format("%m").to_string())
+                .join(ts.format("%d").to_string());
+            std::fs::create_dir_all(&dir).expect("mkdir date dirs");
+            let filename = format!(
+                "rollout-{}-{}.jsonl",
+                ts.format("%Y-%m-%dT%H-%M-%S"),
+                Uuid::new_v4()
+            );
+            let path = dir.join(filename);
+            let meta = serde_json::json!({
+                "timestamp": ts.to_rfc3339(),
+                "item": {
+                    "SessionMeta": {
+                        "meta": {
+                            "id": Uuid::new_v4(),
+                            "timestamp": ts.to_rfc3339(),
+                            "cwd": cwd,
+                            "originator": "user",
+                            "cli_version": "0.0.0",
+                            "instructions": null,
+                            "source": "Cli",
+                            "model_provider": "openai",
+                        }
+                    }
+                }
+            });
+            let user = serde_json::json!({
+                "timestamp": ts.to_rfc3339(),
+                "item": {
+                    "EventMsg": {
+                        "UserMessage": {
+                            "message": preview,
+                            "images": null
+                        }
+                    }
+                }
+            });
+            let branch_meta = serde_json::json!({
+                "timestamp": ts.to_rfc3339(),
+                "item": {
+                    "EventMsg": {
+                        "SessionMeta": {
+                            "meta": {
+                                "git_branch": branch
+                            }
+                        }
+                    }
+                }
+            });
+            std::fs::write(&path, format!("{}\n{}\n{}\n", meta, user, branch_meta))
+                .expect("write rollout");
+        };
+
+        write_rollout(
+            now - Duration::seconds(42),
+            "/tmp/project",
+            "feature/resume",
+            "Fix resume picker timestamps",
+        );
+        write_rollout(
+            now - Duration::minutes(35),
+            "/tmp/other",
+            "main",
+            "Investigate lazy pagination cap",
+        );
 
         let loader: PageLoader = Arc::new(|_| {});
         let mut state = PickerState::new(
-            PathBuf::from("/tmp"),
+            sessions_root.clone(),
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
@@ -1293,25 +1371,17 @@ mod tests {
             None,
         );
 
-        let now = Utc::now();
-        let rows = vec![
-            Row {
-                path: PathBuf::from("/tmp/a.jsonl"),
-                preview: String::from("Fix resume picker timestamps"),
-                created_at: Some(now - Duration::minutes(16)),
-                updated_at: Some(now - Duration::seconds(42)),
-                cwd: Some(PathBuf::from("/tmp/project")),
-                git_branch: Some(String::from("feature/resume")),
-            },
-            Row {
-                path: PathBuf::from("/tmp/b.jsonl"),
-                preview: String::from("Investigate lazy pagination cap"),
-                created_at: Some(now - Duration::hours(1)),
-                updated_at: Some(now - Duration::minutes(35)),
-                cwd: Some(PathBuf::from("/tmp/other")),
-                git_branch: Some(String::from("main")),
-            },
-        ];
+        let page = block_on_future(RolloutRecorder::list_conversations(
+            &sessions_root,
+            PAGE_SIZE,
+            None,
+            INTERACTIVE_SESSION_SOURCES,
+            Some(&[String::from("openai")]),
+            "openai",
+        ))
+        .expect("list conversations");
+
+        let rows = rows_from_items(page.items);
         state.all_rows = rows.clone();
         state.filtered_rows = rows;
         state.view_rows = Some(4);
