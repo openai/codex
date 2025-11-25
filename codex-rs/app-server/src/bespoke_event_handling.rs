@@ -14,6 +14,7 @@ use codex_app_server_protocol::CommandExecutionOutputDeltaNotification;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
+use codex_app_server_protocol::ContextCompactedNotification;
 use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
@@ -232,6 +233,15 @@ pub(crate) async fn apply_bespoke_event_handling(
             };
             outgoing
                 .send_server_notification(ServerNotification::AgentMessageDelta(notification))
+                .await;
+        }
+        EventMsg::ContextCompacted(..) => {
+            let notification = ContextCompactedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_id.clone(),
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ContextCompacted(notification))
                 .await;
         }
         EventMsg::ReasoningContentDelta(event) => {

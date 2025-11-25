@@ -455,6 +455,9 @@ pub enum EventMsg {
     /// indicates the task continued but the user should still be notified.
     Warning(WarningEvent),
 
+    /// Conversation history was compacted (either automatically or manually).
+    ContextCompacted(ContextCompactedEvent),
+
     /// Agent has started a task
     TaskStarted(TaskStartedEvent),
 
@@ -738,6 +741,9 @@ pub struct ErrorEvent {
 pub struct WarningEvent {
     pub message: String,
 }
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ContextCompactedEvent;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TaskCompleteEvent {
