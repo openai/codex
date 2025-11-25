@@ -2512,7 +2512,7 @@ impl CodexMessageProcessor {
 
     async fn emit_review_started(
         &self,
-        request_id: RequestId,
+        request_id: &RequestId,
         turn: Turn,
         review_thread_id: Option<String>,
     ) {
@@ -2520,7 +2520,9 @@ impl CodexMessageProcessor {
             turn: turn.clone(),
             review_thread_id,
         };
-        self.outgoing.send_response(request_id, response).await;
+        self.outgoing
+            .send_response(request_id.clone(), response)
+            .await;
 
         let notif = TurnStartedNotification { turn };
         self.outgoing
@@ -2542,8 +2544,7 @@ impl CodexMessageProcessor {
         match turn_id {
             Ok(turn_id) => {
                 let turn = Self::build_review_turn(turn_id, display_text);
-                self.emit_review_started(request_id.clone(), turn, None)
-                    .await;
+                self.emit_review_started(request_id, turn, None).await;
                 Ok(())
             }
             Err(err) => Err(JSONRPCErrorError {
@@ -2615,7 +2616,7 @@ impl CodexMessageProcessor {
             })?;
 
         let turn = Self::build_review_turn(turn_id, display_text);
-        self.emit_review_started(request_id.clone(), turn, Some(conversation_id.to_string()))
+        self.emit_review_started(request_id, turn, Some(conversation_id.to_string()))
             .await;
 
         Ok(())
