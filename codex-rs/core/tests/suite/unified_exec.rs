@@ -329,7 +329,7 @@ async fn unified_exec_emits_exec_command_end_event() -> Result<()> {
     let poll_call_id = "uexec-end-event-poll";
     let poll_args = json!({
         "chars": "",
-        "process_id": "1000",
+        "session_id": "1000",
         "yield_time_ms": 250,
     });
 
@@ -487,7 +487,7 @@ async fn unified_exec_emits_output_delta_for_write_stdin() -> Result<()> {
     let stdin_call_id = "uexec-stdin-delta";
     let stdin_args = json!({
         "chars": "echo WSTDIN-MARK\\n",
-        "process_id": "1000",
+        "session_id": "1000",
         "yield_time_ms": 800,
     });
 
@@ -586,7 +586,7 @@ async fn unified_exec_emits_begin_for_write_stdin() -> Result<()> {
     let stdin_call_id = "uexec-stdin-begin";
     let stdin_args = json!({
         "chars": "echo hello",
-        "process_id": "1000",
+        "session_id": "1000",
         "yield_time_ms": 400,
     });
 
@@ -688,7 +688,7 @@ async fn unified_exec_emits_begin_event_for_write_stdin_requests() -> Result<()>
     let poll_call_id = "uexec-poll-empty";
     let poll_args = json!({
         "chars": "",
-        "process_id": "1000",
+        "session_id": "1000",
         "yield_time_ms": 150,
     });
 
@@ -1017,12 +1017,12 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
     });
     let send_args = serde_json::json!({
         "chars": "hello unified exec\n",
-        "process_id": "1000",
+        "session_id": "1000",
         "yield_time_ms": 500,
     });
     let exit_args = serde_json::json!({
         "chars": "\u{0004}",
-        "process_id": "1000",
+        "session_id": "1000",
         "yield_time_ms": 500,
     });
 
@@ -1178,14 +1178,14 @@ async fn unified_exec_emits_end_event_when_session_dies_via_stdin() -> Result<()
     let echo_call_id = "uexec-end-on-exit-echo";
     let echo_args = serde_json::json!({
         "chars": "bye-END\n",
-        "process_id": "1000",
+        "session_id": "1000",
         "yield_time_ms": 300,
     });
 
     let exit_call_id = "uexec-end-on-exit";
     let exit_args = serde_json::json!({
         "chars": "\u{0004}",
-        "process_id": "1000",
+        "session_id": "1000",
         "yield_time_ms": 500,
     });
 
@@ -1281,7 +1281,7 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
     let second_call_id = "uexec-stdin";
     let second_args = serde_json::json!({
         "chars": "hello unified exec\n",
-        "process_id": "1000",
+        "session_id": "1000",
         "yield_time_ms": 500,
     });
 
@@ -1412,7 +1412,7 @@ PY
     let second_call_id = "uexec-lag-poll";
     let second_args = serde_json::json!({
         "chars": "",
-        "process_id": "1000",
+        "session_id": "1000",
         "yield_time_ms": 2_000,
     });
 
@@ -1523,7 +1523,7 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
     let second_call_id = "uexec-poll";
     let second_args = serde_json::json!({
         "chars": "",
-        "process_id": "1000",
+        "session_id": "1000",
         "yield_time_ms": 800,
     });
 
@@ -1823,7 +1823,7 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
     let keep_write_call_id = "uexec-prune-keep-write";
     let keep_write_args = serde_json::json!({
         "chars": "still alive\n",
-        "process_id": "1000",
+        "session_id": "1000",
         "yield_time_ms": 500,
     });
     events.push(ev_function_call(
@@ -1835,7 +1835,7 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
     let probe_call_id = "uexec-prune-probe";
     let probe_args = serde_json::json!({
         "chars": "should fail\n",
-        "process_id": "1001",
+        "session_id": "1001",
         "yield_time_ms": 500,
     });
     events.push(ev_function_call(
