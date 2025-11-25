@@ -155,9 +155,7 @@ impl UnifiedExecSessionManager {
             None
         } else {
             // Only store session if not exited.
-            let stored_id = self
-                .store_session(session, context, &request.command, cwd.clone(), start, request.process_id.clone())
-                .await;
+            self.store_session(session, context, &request.command, cwd.clone(), start, request.process_id.clone()).await;
             Some(request.process_id.clone())
         };
         let original_token_count = approx_token_count(&text);
@@ -167,7 +165,7 @@ impl UnifiedExecSessionManager {
             chunk_id,
             wall_time,
             output,
-            process_id,
+            process_id: process_id.clone(),
             exit_code,
             original_token_count: Some(original_token_count),
             session_command: Some(request.command.clone()),
