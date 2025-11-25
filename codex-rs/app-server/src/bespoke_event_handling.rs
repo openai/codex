@@ -14,6 +14,7 @@ use codex_app_server_protocol::CommandExecutionOutputDeltaNotification;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
+use codex_app_server_protocol::ContextCompactedNotification;
 use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
@@ -37,6 +38,7 @@ use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnCompletedNotification;
+use codex_app_server_protocol::TurnDiffUpdatedNotification;
 use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStatus;
@@ -52,6 +54,7 @@ use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
+use codex_core::protocol::TurnDiffEvent;
 use codex_core::review_format::format_review_findings_block;
 use codex_protocol::ConversationId;
 use codex_protocol::protocol::ReviewOutputEvent;
@@ -117,7 +120,11 @@ pub(crate) async fn apply_bespoke_event_handling(
                         changes: patch_changes.clone(),
                         status: PatchApplyStatus::InProgress,
                     };
-                    let notification = ItemStartedNotification { item };
+                    let notification = ItemStartedNotification {
+                        thread_id: conversation_id.to_string(),
+                        turn_id: event_id.clone(),
+                        item,
+                    };
                     outgoing
                         .send_server_notification(ServerNotification::ItemStarted(notification))
                         .await;
@@ -200,6 +207,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 tokio::spawn(async move {
                     on_command_execution_request_approval_response(
                         event_id,
+                        conversation_id,
                         item_id,
                         command_string,
                         cwd,
@@ -214,13 +222,23 @@ pub(crate) async fn apply_bespoke_event_handling(
         },
         // TODO(celia): properly construct McpToolCall TurnItem in core.
         EventMsg::McpToolCallBegin(begin_event) => {
-            let notification = construct_mcp_tool_call_notification(begin_event).await;
+            let notification = construct_mcp_tool_call_notification(
+                begin_event,
+                conversation_id.to_string(),
+                event_id.clone(),
+            )
+            .await;
             outgoing
                 .send_server_notification(ServerNotification::ItemStarted(notification))
                 .await;
         }
         EventMsg::McpToolCallEnd(end_event) => {
-            let notification = construct_mcp_tool_call_end_notification(end_event).await;
+            let notification = construct_mcp_tool_call_end_notification(
+                end_event,
+                conversation_id.to_string(),
+                event_id.clone(),
+            )
+            .await;
             outgoing
                 .send_server_notification(ServerNotification::ItemCompleted(notification))
                 .await;
@@ -232,6 +250,15 @@ pub(crate) async fn apply_bespoke_event_handling(
             };
             outgoing
                 .send_server_notification(ServerNotification::AgentMessageDelta(notification))
+                .await;
+        }
+        EventMsg::ContextCompacted(..) => {
+            let notification = ContextCompactedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_id.clone(),
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ContextCompacted(notification))
                 .await;
         }
         EventMsg::ReasoningContentDelta(event) => {
@@ -287,6 +314,8 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing
                 .send_server_notification(ServerNotification::Error(ErrorNotification {
                     error: turn_error,
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event_id.clone(),
                 }))
                 .await;
         }
@@ -300,11 +329,15 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing
                 .send_server_notification(ServerNotification::Error(ErrorNotification {
                     error: turn_error,
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event_id.clone(),
                 }))
                 .await;
         }
         EventMsg::EnteredReviewMode(review_request) => {
             let notification = ItemStartedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_id.clone(),
                 item: ThreadItem::CodeReview {
                     id: event_id.clone(),
                     review: review_request.user_facing_hint,
@@ -316,14 +349,22 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::ItemStarted(item_started_event) => {
             let item: ThreadItem = item_started_event.item.clone().into();
-            let notification = ItemStartedNotification { item };
+            let notification = ItemStartedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_id.clone(),
+                item,
+            };
             outgoing
                 .send_server_notification(ServerNotification::ItemStarted(notification))
                 .await;
         }
         EventMsg::ItemCompleted(item_completed_event) => {
             let item: ThreadItem = item_completed_event.item.clone().into();
-            let notification = ItemCompletedNotification { item };
+            let notification = ItemCompletedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_id.clone(),
+                item,
+            };
             outgoing
                 .send_server_notification(ServerNotification::ItemCompleted(notification))
                 .await;
@@ -333,9 +374,12 @@ pub(crate) async fn apply_bespoke_event_handling(
                 Some(output) => render_review_output_text(&output),
                 None => REVIEW_FALLBACK_MESSAGE.to_string(),
             };
+            let review_item_id = event_id.clone();
             let notification = ItemCompletedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_id.clone(),
                 item: ThreadItem::CodeReview {
-                    id: event_id,
+                    id: review_item_id,
                     review: review_text,
                 },
             };
@@ -359,7 +403,11 @@ pub(crate) async fn apply_bespoke_event_handling(
                     changes: convert_patch_changes(&patch_begin_event.changes),
                     status: PatchApplyStatus::InProgress,
                 };
-                let notification = ItemStartedNotification { item };
+                let notification = ItemStartedNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event_id.clone(),
+                    item,
+                };
                 outgoing
                     .send_server_notification(ServerNotification::ItemStarted(notification))
                     .await;
@@ -381,6 +429,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 item_id,
                 changes,
                 status,
+                event_id.clone(),
                 outgoing.as_ref(),
                 &turn_summary_store,
             )
@@ -406,7 +455,11 @@ pub(crate) async fn apply_bespoke_event_handling(
                 exit_code: None,
                 duration_ms: None,
             };
-            let notification = ItemStartedNotification { item };
+            let notification = ItemStartedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_id.clone(),
+                item,
+            };
             outgoing
                 .send_server_notification(ServerNotification::ItemStarted(notification))
                 .await;
@@ -463,7 +516,11 @@ pub(crate) async fn apply_bespoke_event_handling(
                 duration_ms: Some(duration_ms),
             };
 
-            let notification = ItemCompletedNotification { item };
+            let notification = ItemCompletedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_id.clone(),
+                item,
+            };
             outgoing
                 .send_server_notification(ServerNotification::ItemCompleted(notification))
                 .await;
@@ -494,17 +551,39 @@ pub(crate) async fn apply_bespoke_event_handling(
             handle_turn_interrupted(conversation_id, event_id, &outgoing, &turn_summary_store)
                 .await;
         }
+        EventMsg::TurnDiff(turn_diff_event) => {
+            handle_turn_diff(&event_id, turn_diff_event, api_version, outgoing.as_ref()).await;
+        }
 
         _ => {}
     }
 }
 
+async fn handle_turn_diff(
+    event_id: &str,
+    turn_diff_event: TurnDiffEvent,
+    api_version: ApiVersion,
+    outgoing: &OutgoingMessageSender,
+) {
+    if let ApiVersion::V2 = api_version {
+        let notification = TurnDiffUpdatedNotification {
+            turn_id: event_id.to_string(),
+            diff: turn_diff_event.unified_diff,
+        };
+        outgoing
+            .send_server_notification(ServerNotification::TurnDiffUpdated(notification))
+            .await;
+    }
+}
+
 async fn emit_turn_completed_with_status(
+    conversation_id: ConversationId,
     event_id: String,
     status: TurnStatus,
     outgoing: &OutgoingMessageSender,
 ) {
     let notification = TurnCompletedNotification {
+        thread_id: conversation_id.to_string(),
         turn: Turn {
             id: event_id,
             items: vec![],
@@ -521,6 +600,7 @@ async fn complete_file_change_item(
     item_id: String,
     changes: Vec<FileUpdateChange>,
     status: PatchApplyStatus,
+    turn_id: String,
     outgoing: &OutgoingMessageSender,
     turn_summary_store: &TurnSummaryStore,
 ) {
@@ -536,13 +616,20 @@ async fn complete_file_change_item(
         changes,
         status,
     };
-    let notification = ItemCompletedNotification { item };
+    let notification = ItemCompletedNotification {
+        thread_id: conversation_id.to_string(),
+        turn_id,
+        item,
+    };
     outgoing
         .send_server_notification(ServerNotification::ItemCompleted(notification))
         .await;
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn complete_command_execution_item(
+    conversation_id: ConversationId,
+    turn_id: String,
     item_id: String,
     command: String,
     cwd: PathBuf,
@@ -560,7 +647,11 @@ async fn complete_command_execution_item(
         exit_code: None,
         duration_ms: None,
     };
-    let notification = ItemCompletedNotification { item };
+    let notification = ItemCompletedNotification {
+        thread_id: conversation_id.to_string(),
+        turn_id,
+        item,
+    };
     outgoing
         .send_server_notification(ServerNotification::ItemCompleted(notification))
         .await;
@@ -588,7 +679,7 @@ async fn handle_turn_complete(
         TurnStatus::Completed
     };
 
-    emit_turn_completed_with_status(event_id, status, outgoing).await;
+    emit_turn_completed_with_status(conversation_id, event_id, status, outgoing).await;
 }
 
 async fn handle_turn_interrupted(
@@ -599,7 +690,8 @@ async fn handle_turn_interrupted(
 ) {
     find_and_remove_turn_summary(conversation_id, turn_summary_store).await;
 
-    emit_turn_completed_with_status(event_id, TurnStatus::Interrupted, outgoing).await;
+    emit_turn_completed_with_status(conversation_id, event_id, TurnStatus::Interrupted, outgoing)
+        .await;
 }
 
 async fn handle_error(
@@ -798,6 +890,7 @@ async fn on_file_change_request_approval_response(
             item_id,
             changes,
             status,
+            event_id.clone(),
             outgoing.as_ref(),
             &turn_summary_store,
         )
@@ -818,6 +911,7 @@ async fn on_file_change_request_approval_response(
 #[allow(clippy::too_many_arguments)]
 async fn on_command_execution_request_approval_response(
     event_id: String,
+    conversation_id: ConversationId,
     item_id: String,
     command: String,
     cwd: PathBuf,
@@ -867,6 +961,8 @@ async fn on_command_execution_request_approval_response(
 
     if let Some(status) = completion_status {
         complete_command_execution_item(
+            conversation_id,
+            event_id.clone(),
             item_id.clone(),
             command.clone(),
             cwd.clone(),
@@ -891,6 +987,8 @@ async fn on_command_execution_request_approval_response(
 /// similar to handle_mcp_tool_call_begin in exec
 async fn construct_mcp_tool_call_notification(
     begin_event: McpToolCallBeginEvent,
+    thread_id: String,
+    turn_id: String,
 ) -> ItemStartedNotification {
     let item = ThreadItem::McpToolCall {
         id: begin_event.call_id,
@@ -901,12 +999,18 @@ async fn construct_mcp_tool_call_notification(
         result: None,
         error: None,
     };
-    ItemStartedNotification { item }
+    ItemStartedNotification {
+        thread_id,
+        turn_id,
+        item,
+    }
 }
 
 /// simiilar to handle_mcp_tool_call_end in exec
 async fn construct_mcp_tool_call_end_notification(
     end_event: McpToolCallEndEvent,
+    thread_id: String,
+    turn_id: String,
 ) -> ItemCompletedNotification {
     let status = if end_event.is_success() {
         McpToolCallStatus::Completed
@@ -939,7 +1043,11 @@ async fn construct_mcp_tool_call_end_notification(
         result,
         error,
     };
-    ItemCompletedNotification { item }
+    ItemCompletedNotification {
+        thread_id,
+        turn_id,
+        item,
+    }
 }
 
 #[cfg(test)]
@@ -1122,9 +1230,18 @@ mod tests {
             },
         };
 
-        let notification = construct_mcp_tool_call_notification(begin_event.clone()).await;
+        let thread_id = ConversationId::new().to_string();
+        let turn_id = "turn_1".to_string();
+        let notification = construct_mcp_tool_call_notification(
+            begin_event.clone(),
+            thread_id.clone(),
+            turn_id.clone(),
+        )
+        .await;
 
         let expected = ItemStartedNotification {
+            thread_id,
+            turn_id,
             item: ThreadItem::McpToolCall {
                 id: begin_event.call_id,
                 server: begin_event.invocation.server,
@@ -1267,9 +1384,18 @@ mod tests {
             },
         };
 
-        let notification = construct_mcp_tool_call_notification(begin_event.clone()).await;
+        let thread_id = ConversationId::new().to_string();
+        let turn_id = "turn_2".to_string();
+        let notification = construct_mcp_tool_call_notification(
+            begin_event.clone(),
+            thread_id.clone(),
+            turn_id.clone(),
+        )
+        .await;
 
         let expected = ItemStartedNotification {
+            thread_id,
+            turn_id,
             item: ThreadItem::McpToolCall {
                 id: begin_event.call_id,
                 server: begin_event.invocation.server,
@@ -1308,9 +1434,18 @@ mod tests {
             result: Ok(result),
         };
 
-        let notification = construct_mcp_tool_call_end_notification(end_event.clone()).await;
+        let thread_id = ConversationId::new().to_string();
+        let turn_id = "turn_3".to_string();
+        let notification = construct_mcp_tool_call_end_notification(
+            end_event.clone(),
+            thread_id.clone(),
+            turn_id.clone(),
+        )
+        .await;
 
         let expected = ItemCompletedNotification {
+            thread_id,
+            turn_id,
             item: ThreadItem::McpToolCall {
                 id: end_event.call_id,
                 server: end_event.invocation.server,
@@ -1341,9 +1476,18 @@ mod tests {
             result: Err("boom".to_string()),
         };
 
-        let notification = construct_mcp_tool_call_end_notification(end_event.clone()).await;
+        let thread_id = ConversationId::new().to_string();
+        let turn_id = "turn_4".to_string();
+        let notification = construct_mcp_tool_call_end_notification(
+            end_event.clone(),
+            thread_id.clone(),
+            turn_id.clone(),
+        )
+        .await;
 
         let expected = ItemCompletedNotification {
+            thread_id,
+            turn_id,
             item: ThreadItem::McpToolCall {
                 id: end_event.call_id,
                 server: end_event.invocation.server,
@@ -1358,5 +1502,57 @@ mod tests {
         };
 
         assert_eq!(notification, expected);
+    }
+
+    #[tokio::test]
+    async fn test_handle_turn_diff_emits_v2_notification() -> Result<()> {
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = OutgoingMessageSender::new(tx);
+        let unified_diff = "--- a\n+++ b\n".to_string();
+
+        handle_turn_diff(
+            "turn-1",
+            TurnDiffEvent {
+                unified_diff: unified_diff.clone(),
+            },
+            ApiVersion::V2,
+            &outgoing,
+        )
+        .await;
+
+        let msg = rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("should send one notification"))?;
+        match msg {
+            OutgoingMessage::AppServerNotification(ServerNotification::TurnDiffUpdated(
+                notification,
+            )) => {
+                assert_eq!(notification.turn_id, "turn-1");
+                assert_eq!(notification.diff, unified_diff);
+            }
+            other => bail!("unexpected message: {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "no extra messages expected");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_turn_diff_is_noop_for_v1() -> Result<()> {
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = OutgoingMessageSender::new(tx);
+
+        handle_turn_diff(
+            "turn-1",
+            TurnDiffEvent {
+                unified_diff: "diff".to_string(),
+            },
+            ApiVersion::V1,
+            &outgoing,
+        )
+        .await;
+
+        assert!(rx.try_recv().is_err(), "no messages expected");
+        Ok(())
     }
 }

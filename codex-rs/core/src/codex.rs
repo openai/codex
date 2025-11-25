@@ -2342,7 +2342,7 @@ async fn try_run_turn(
                     sess.send_event(&turn_context, EventMsg::AgentMessageContentDelta(event))
                         .await;
                 } else {
-                    error_or_panic("ReasoningSummaryDelta without active item".to_string());
+                    error_or_panic("OutputTextDelta without active item".to_string());
                 }
             }
             ResponseEvent::ReasoningSummaryDelta {
