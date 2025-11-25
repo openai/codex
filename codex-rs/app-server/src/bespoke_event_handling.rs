@@ -449,11 +449,13 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .collect::<Vec<_>>();
             let command = shlex_join(&exec_command_begin_event.command);
             let cwd = exec_command_begin_event.cwd;
+            let process_id = exec_command_begin_event.process_id;
 
             let item = ThreadItem::CommandExecution {
                 id: item_id,
                 command,
                 cwd,
+                process_id,
                 status: CommandExecutionStatus::InProgress,
                 command_actions,
                 aggregated_output: None,
@@ -486,6 +488,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 command,
                 cwd,
                 parsed_cmd,
+                process_id,
                 aggregated_output,
                 exit_code,
                 duration,
@@ -514,6 +517,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 id: call_id,
                 command: shlex_join(&command),
                 cwd,
+                process_id,
                 status,
                 command_actions,
                 aggregated_output,
@@ -649,6 +653,7 @@ async fn complete_command_execution_item(
     item_id: String,
     command: String,
     cwd: PathBuf,
+    process_id: Option<String>,
     command_actions: Vec<V2ParsedCommand>,
     status: CommandExecutionStatus,
     outgoing: &OutgoingMessageSender,
@@ -657,6 +662,7 @@ async fn complete_command_execution_item(
         id: item_id,
         command,
         cwd,
+        process_id,
         status,
         command_actions,
         aggregated_output: None,
@@ -1015,6 +1021,7 @@ async fn on_command_execution_request_approval_response(
             item_id.clone(),
             command.clone(),
             cwd.clone(),
+            None,
             command_actions.clone(),
             status,
             outgoing.as_ref(),

@@ -1020,6 +1020,8 @@ pub enum ThreadItem {
         command: String,
         /// The command's working directory.
         cwd: PathBuf,
+        /// Identifier for the underlying PTY process (when available).
+        process_id: Option<String>,
         status: CommandExecutionStatus,
         /// A best-effort parsing of the command to understand the action(s) it will perform.
         /// This returns a list of CommandAction objects because a single shell command may

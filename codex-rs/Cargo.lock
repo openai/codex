@@ -1145,6 +1145,7 @@ dependencies = [
  "codex-arg0",
  "codex-async-utils",
  "codex-client",
+ "codex-core",
  "codex-execpolicy",
  "codex-file-search",
  "codex-git",
