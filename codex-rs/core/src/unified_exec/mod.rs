@@ -47,6 +47,7 @@ pub(crate) const DEFAULT_MAX_OUTPUT_TOKENS: usize = 10_000;
 pub(crate) const UNIFIED_EXEC_OUTPUT_MAX_BYTES: usize = 1024 * 1024; // 1 MiB
 pub(crate) const UNIFIED_EXEC_OUTPUT_MAX_TOKENS: usize = UNIFIED_EXEC_OUTPUT_MAX_BYTES / 4;
 pub(crate) const MAX_UNIFIED_EXEC_SESSIONS: usize = 64;
+pub(crate) const STALE_SESSION_AGE: Duration = Duration::from_secs(10 * 60);
 
 pub(crate) struct UnifiedExecContext {
     pub session: Arc<Session>,
