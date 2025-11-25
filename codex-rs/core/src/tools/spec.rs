@@ -223,7 +223,7 @@ fn create_write_stdin_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
         "session_id".to_string(),
-        JsonSchema::String {
+        JsonSchema::Number {
             description: Some("Identifier of the running unified exec session.".to_string()),
         },
     );

@@ -47,7 +47,7 @@ struct ExecCommandArgs {
 #[derive(Debug, Deserialize)]
 struct WriteStdinArgs {
     // The model is trained on `session_id`.
-    session_id: String,
+    session_id: i32,
     #[serde(default)]
     chars: String,
     #[serde(default = "default_write_stdin_yield_time_ms")]
@@ -201,7 +201,7 @@ impl ToolHandler for UnifiedExecHandler {
                 manager
                     .write_stdin(WriteStdinRequest {
                         call_id: &call_id,
-                        process_id: &args.session_id,
+                        process_id: &args.session_id.to_string(),
                         input: &args.chars,
                         yield_time_ms: args.yield_time_ms,
                         max_output_tokens: args.max_output_tokens,
