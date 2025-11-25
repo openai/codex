@@ -1,5 +1,5 @@
 use clap::Args;
-use codex_status::CodexStatusReport;
+use codex_status::CodexStatus;
 use codex_status::StatusClient;
 use std::io::Write;
 use std::io::{self};
@@ -13,46 +13,27 @@ pub struct StatusCommand {
 
 pub async fn run_status(cmd: StatusCommand) -> anyhow::Result<()> {
     let client = StatusClient::new()?;
-    let report = client.fetch_codex_status().await?;
+    let codex_status = client.fetch_codex_status().await?;
 
     if cmd.json {
-        let json = serde_json::to_string_pretty(&report)?;
+        let json = serde_json::to_string_pretty(&codex_status)?;
         println!("{json}");
     } else {
-        write_human(&report, &mut io::stdout())?;
+        write_human(&codex_status, &mut io::stdout())?;
     }
 
     Ok(())
 }
 
-fn write_human<W: Write>(report: &CodexStatusReport, writer: &mut W) -> anyhow::Result<()> {
-    writeln!(
-        writer,
-        "overall: {} ({})",
-        report.overall_description, report.overall_indicator
-    )?;
-    writeln!(writer, "updated_at: {}", report.updated_at)?;
+fn write_human<W: Write>(status: &CodexStatus, writer: &mut W) -> anyhow::Result<()> {
+    writeln!(writer, "Codex status: {}", status.status)?;
+    writeln!(writer, "operational: {}", status.is_operational)?;
+    writeln!(writer, "component_id: {}", status.component_id)?;
 
-    writeln!(writer, "codex components:")?;
-    if report.components.is_empty() {
-        writeln!(writer, "  none")?;
+    if let Some(affected) = &status.raw_affected {
+        writeln!(writer, "affected status: {}", affected.status)?;
     } else {
-        for component in &report.components {
-            writeln!(writer, "  {}: {}", component.name, component.status)?;
-        }
-    }
-
-    writeln!(writer, "codex incidents:")?;
-    if report.incidents.is_empty() {
-        writeln!(writer, "  none")?;
-    } else {
-        for incident in &report.incidents {
-            writeln!(
-                writer,
-                "  {}: status={} impact={} updated={}",
-                incident.name, incident.status, incident.impact, incident.updated_at
-            )?;
-        }
+        writeln!(writer, "affected status: none")?;
     }
 
     Ok(())
@@ -61,56 +42,50 @@ fn write_human<W: Write>(report: &CodexStatusReport, writer: &mut W) -> anyhow::
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_status::ComponentStatus;
-    use codex_status::IncidentStatus;
+    use codex_status::AffectedComponent;
+    use codex_status::ComponentHealth;
 
     #[test]
-    fn human_output_handles_empty_lists() -> anyhow::Result<()> {
-        let report = CodexStatusReport {
-            overall_description: "All Systems Operational".to_string(),
-            overall_indicator: "none".to_string(),
-            updated_at: "2025-11-07T21:55:20Z".to_string(),
-            components: Vec::new(),
-            incidents: Vec::new(),
+    fn human_output_handles_absent_affected_entry() -> anyhow::Result<()> {
+        let status = CodexStatus {
+            component_id: "cmp-1".to_string(),
+            name: "Codex".to_string(),
+            status: ComponentHealth::Operational,
+            is_operational: true,
+            raw_affected: None,
         };
 
         let mut buffer = Vec::new();
-        write_human(&report, &mut buffer)?;
+        write_human(&status, &mut buffer)?;
 
         let output = String::from_utf8(buffer).expect("utf8");
-        assert!(output.contains("overall: All Systems Operational (none)"));
-        assert!(output.contains("updated_at: 2025-11-07T21:55:20Z"));
-        assert!(output.contains("codex components:\n  none"));
-        assert!(output.contains("codex incidents:\n  none"));
+        assert!(output.contains("Codex status: operational"));
+        assert!(output.contains("operational: true"));
+        assert!(output.contains("component_id: cmp-1"));
+        assert!(output.contains("affected status: none"));
         Ok(())
     }
 
     #[test]
-    fn human_output_lists_components_and_incidents() -> anyhow::Result<()> {
-        let report = CodexStatusReport {
-            overall_description: "Degraded".to_string(),
-            overall_indicator: "minor".to_string(),
-            updated_at: "2025-11-07T21:55:20Z".to_string(),
-            components: vec![ComponentStatus {
-                name: "Codex".to_string(),
-                status: "degraded_performance".to_string(),
-            }],
-            incidents: vec![IncidentStatus {
-                name: "Codex degraded".to_string(),
-                status: "investigating".to_string(),
-                impact: "minor".to_string(),
-                updated_at: "2025-11-07T21:45:00Z".to_string(),
-            }],
+    fn human_output_shows_affected_status() -> anyhow::Result<()> {
+        let status = CodexStatus {
+            component_id: "cmp-1".to_string(),
+            name: "Codex".to_string(),
+            status: ComponentHealth::DegradedPerformance,
+            is_operational: false,
+            raw_affected: Some(AffectedComponent {
+                component_id: "cmp-1".to_string(),
+                status: ComponentHealth::DegradedPerformance,
+            }),
         };
 
         let mut buffer = Vec::new();
-        write_human(&report, &mut buffer)?;
+        write_human(&status, &mut buffer)?;
 
         let output = String::from_utf8(buffer).expect("utf8");
-        assert!(output.contains("codex components:\n  Codex: degraded_performance"));
-        assert!(output.contains(
-            "codex incidents:\n  Codex degraded: status=investigating impact=minor updated=2025-11-07T21:45:00Z"
-        ));
+        assert!(output.contains("Codex status: degraded_performance"));
+        assert!(output.contains("operational: false"));
+        assert!(output.contains("affected status: degraded_performance"));
         Ok(())
     }
 }

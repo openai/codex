@@ -1,47 +1,103 @@
-use anyhow::Context;
-use reqwest::Url;
-use serde::Deserialize;
-use serde::Serialize;
+use anyhow::{bail, Context, Result};
+use reqwest::{header::CONTENT_TYPE, Url};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::env;
+use std::fmt;
 use std::time::Duration;
 
-pub const STATUS_SUMMARY_URL: &str = "https://status.openai.com/api/v2/summary.json";
+pub const DEFAULT_STATUS_WIDGET_URL: &str = "https://status.openai.com/proxy/status.openai.com";
+pub const STATUS_WIDGET_ENV_VAR: &str = "STATUS_WIDGET_URL";
+pub const CODEX_COMPONENT_NAME: &str = "Codex";
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct CodexStatusReport {
-    pub overall_description: String,
-    pub overall_indicator: String,
-    pub updated_at: String,
-    pub components: Vec<ComponentStatus>,
-    pub incidents: Vec<IncidentStatus>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ComponentHealth {
+    Operational,
+    DegradedPerformance,
+    PartialOutage,
+    MajorOutage,
+    UnderMaintenance,
+    #[serde(other)]
+    Unknown,
+}
+
+impl ComponentHealth {
+    fn operational() -> Self {
+        Self::Operational
+    }
+
+    pub fn is_operational(self) -> bool {
+        self == Self::Operational
+    }
+
+}
+
+impl fmt::Display for ComponentHealth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = Value::from(self)
+            .as_str()
+            .ok_or(fmt::Error)?;
+
+        f.write_str(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AffectedComponent {
+    pub component_id: String,
+    #[serde(default = "ComponentHealth::operational")]
+    pub status: ComponentHealth,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Component {
+    pub id: String,
+    pub name: String,
+    pub status_page_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Summary {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub components: Vec<Component>,
+    #[serde(default)]
+    pub affected_components: Vec<AffectedComponent>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct StatusPayload {
+    pub summary: Summary,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ComponentStatus {
+pub struct CodexStatus {
+    pub component_id: String,
     pub name: String,
-    pub status: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct IncidentStatus {
-    pub name: String,
-    pub status: String,
-    pub impact: String,
-    pub updated_at: String,
+    pub status: ComponentHealth,
+    pub is_operational: bool,
+    pub raw_affected: Option<AffectedComponent>,
 }
 
 #[derive(Debug, Clone)]
 pub struct StatusClient {
     client: reqwest::Client,
-    summary_url: Url,
+    widget_url: Url,
 }
 
 impl StatusClient {
-    pub fn new() -> anyhow::Result<Self> {
-        Self::with_summary_url(Url::parse(STATUS_SUMMARY_URL)?)
+    pub fn new() -> Result<Self> {
+        let widget_url = env::var(STATUS_WIDGET_ENV_VAR)
+            .unwrap_or_else(|_| DEFAULT_STATUS_WIDGET_URL.to_string());
+        Self::with_widget_url(Url::parse(&widget_url)?)
     }
 
-    pub fn with_summary_url(summary_url: Url) -> anyhow::Result<Self> {
-        let user_agent = format!("codex-status/{}", env!("CARGO_PKG_VERSION"));
+    pub fn with_widget_url(widget_url: Url) -> Result<Self> {
+        let version = env!("CARGO_PKG_VERSION");
+        let user_agent = format!("codex-status/{version}");
+
         let client = reqwest::Client::builder()
             .user_agent(user_agent)
             .connect_timeout(Duration::from_secs(5))
@@ -49,125 +105,83 @@ impl StatusClient {
             .build()
             .context("building HTTP client")?;
 
-        Ok(Self {
-            client,
-            summary_url,
-        })
+        Ok(Self { client, widget_url })
     }
 
-    pub async fn fetch_codex_status(&self) -> anyhow::Result<CodexStatusReport> {
+    pub async fn fetch_status_payload(&self) -> Result<StatusPayload> {
         let response = self
             .client
-            .get(self.summary_url.clone())
+            .get(self.widget_url.clone())
             .send()
             .await
-            .context("requesting status summary")?;
-
-        let summary: StatusSummary = response
+            .context("requesting status widget")?
             .error_for_status()
-            .context("status summary returned error")?
-            .json()
+            .context("status widget returned error")?;
+
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+
+        if !content_type.contains("json") {
+            let snippet = response
+                .text()
+                .await
+                .unwrap_or_default()
+                .chars()
+                .take(200)
+                .collect::<String>();
+
+            let url = &self.widget_url;
+            bail!(
+                "Expected JSON from {url}, got Content-Type={content_type}. Body starts with: {snippet:?}"
+            );
+        }
+
+        response
+            .json::<StatusPayload>()
             .await
-            .context("parsing status summary JSON")?;
+            .context("parsing status widget JSON")
+    }
 
-        Ok(CodexStatusReport::from_summary(summary))
+    pub async fn fetch_codex_status(&self) -> Result<CodexStatus> {
+        let payload = self.fetch_status_payload().await?;
+        derive_component_status(&payload, CODEX_COMPONENT_NAME)
     }
 }
 
-impl CodexStatusReport {
-    fn from_summary(summary: StatusSummary) -> Self {
-        let components = summary
-            .components
-            .into_iter()
-            .filter(|component| is_codex_name(&component.name))
-            .map(ComponentStatus::from)
-            .collect();
+pub fn derive_component_status(payload: &StatusPayload, component_name: &str) -> Result<CodexStatus> {
+    let component = payload
+        .summary
+        .components
+        .iter()
+        .find(|component| component.name == component_name)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("Component {component_name:?} not found in status summary"))?;
 
-        let incidents = summary
-            .incidents
-            .into_iter()
-            .filter(|incident| is_codex_name(&incident.name))
-            .map(IncidentStatus::from)
-            .collect();
+    let affected = payload
+        .summary
+        .affected_components
+        .iter()
+        .find(|affected| affected.component_id == component.id)
+        .cloned();
 
-        CodexStatusReport {
-            overall_description: summary.status.description,
-            overall_indicator: summary.status.indicator,
-            updated_at: summary.page.updated_at,
-            components,
-            incidents,
-        }
-    }
-}
+    let status = affected
+        .as_ref()
+        .map(|affected| affected.status)
+        .unwrap_or(ComponentHealth::Operational);
 
-fn is_codex_name(name: &str) -> bool {
-    name.to_ascii_lowercase().contains("codex")
-}
+    let is_operational = status.is_operational();
 
-#[derive(Debug, Deserialize)]
-struct StatusSummary {
-    #[serde(default)]
-    page: Page,
-    #[serde(default)]
-    status: OverallStatus,
-    #[serde(default)]
-    components: Vec<Component>,
-    #[serde(default)]
-    incidents: Vec<Incident>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct Page {
-    #[serde(default)]
-    updated_at: String,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct OverallStatus {
-    #[serde(default)]
-    indicator: String,
-    #[serde(default)]
-    description: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct Component {
-    name: String,
-    status: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct Incident {
-    name: String,
-    status: String,
-    #[serde(default = "default_impact")]
-    impact: String,
-    #[serde(default)]
-    updated_at: String,
-}
-
-fn default_impact() -> String {
-    "unknown".to_string()
-}
-
-impl From<Component> for ComponentStatus {
-    fn from(value: Component) -> Self {
-        Self {
-            name: value.name,
-            status: value.status,
-        }
-    }
-}
-
-impl From<Incident> for IncidentStatus {
-    fn from(value: Incident) -> Self {
-        Self {
-            name: value.name,
-            status: value.status,
-            impact: value.impact,
-            updated_at: value.updated_at,
-        }
-    }
+    Ok(CodexStatus {
+        component_id: component.id,
+        name: component.name,
+        status,
+        is_operational,
+        raw_affected: affected,
+    })
 }
 
 #[cfg(test)]
@@ -177,54 +191,93 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn filters_non_codex_components_and_incidents() {
-        let summary = serde_json::from_value::<StatusSummary>(json!({
-            "page": {"updated_at": "2025-11-07T21:55:20Z"},
-            "status": {"description": "All Systems Operational", "indicator": "none"},
-            "components": [
-                {"name": "Codex", "status": "operational"},
-                {"name": "Chat Completions", "status": "operational"}
-            ],
-            "incidents": [
-                {"name": "Codex degraded performance", "status": "investigating", "impact": "minor", "updated_at": "2025-11-07T21:50:00Z"},
-                {"name": "Chat downtime", "status": "resolved", "impact": "critical", "updated_at": "2025-11-07T21:00:00Z"}
-            ]
+    fn defaults_to_operational_when_not_affected() {
+        let payload = serde_json::from_value::<StatusPayload>(json!({
+            "summary": {
+                "id": "sum-1",
+                "name": "OpenAI",
+                "components": [
+                    {"id": "cmp-1", "name": "Codex", "status_page_id": "page-1"},
+                    {"id": "cmp-2", "name": "Chat", "status_page_id": "page-1"}
+                ]
+            }
         }))
-        .expect("valid summary");
+        .expect("valid payload");
 
-        let report = CodexStatusReport::from_summary(summary);
+        let status = derive_component_status(&payload, "Codex").expect("codex component exists");
 
-        assert_eq!(report.overall_description, "All Systems Operational");
-        assert_eq!(report.overall_indicator, "none");
-        assert_eq!(report.updated_at, "2025-11-07T21:55:20Z");
-        assert_eq!(report.components.len(), 1);
-        assert_eq!(report.components[0].name, "Codex");
-        assert_eq!(report.components[0].status, "operational");
-        assert_eq!(report.incidents.len(), 1);
-        assert_eq!(report.incidents[0].name, "Codex degraded performance");
-        assert_eq!(report.incidents[0].status, "investigating");
-        assert_eq!(report.incidents[0].impact, "minor");
-        assert_eq!(report.incidents[0].updated_at, "2025-11-07T21:50:00Z");
+        assert_eq!(status.status, ComponentHealth::Operational);
+        assert!(status.is_operational);
+        assert!(status.raw_affected.is_none());
     }
 
     #[test]
-    fn handles_missing_fields_with_defaults() {
-        let summary =
-            serde_json::from_value::<StatusSummary>(json!({})).expect("valid empty summary");
+    fn uses_affected_component_status() {
+        let payload = serde_json::from_value::<StatusPayload>(json!({
+            "summary": {
+                "id": "sum-1",
+                "name": "OpenAI",
+                "components": [
+                    {"id": "cmp-1", "name": "Codex", "status_page_id": "page-1"}
+                ],
+                "affected_components": [
+                    {"component_id": "cmp-1", "status": "major_outage"}
+                ]
+            }
+        }))
+        .expect("valid payload");
 
-        let report = CodexStatusReport::from_summary(summary);
+        let status = derive_component_status(&payload, "Codex").expect("codex component exists");
 
-        assert_eq!(report.overall_description, "");
-        assert_eq!(report.overall_indicator, "");
-        assert_eq!(report.updated_at, "");
-        assert!(report.components.is_empty());
-        assert!(report.incidents.is_empty());
+        assert_eq!(status.status, ComponentHealth::MajorOutage);
+        assert!(!status.is_operational);
+        assert_eq!(
+            status
+                .raw_affected
+                .as_ref()
+                .map(|affected| affected.status),
+            Some(ComponentHealth::MajorOutage)
+        );
     }
 
     #[test]
-    fn is_codex_name_matches_case_insensitive() {
-        assert!(is_codex_name("Codex"));
-        assert!(is_codex_name("my-codex-component"));
-        assert!(!is_codex_name("Chat"));
+    fn unknown_status_is_preserved_as_unknown() {
+        let payload = serde_json::from_value::<StatusPayload>(json!({
+            "summary": {
+                "id": "sum-1",
+                "name": "OpenAI",
+                "components": [
+                    {"id": "cmp-1", "name": "Codex", "status_page_id": "page-1"}
+                ],
+                "affected_components": [
+                    {"component_id": "cmp-1", "status": "custom_status"}
+                ]
+            }
+        }))
+        .expect("valid payload");
+
+        let status = derive_component_status(&payload, "Codex").expect("codex component exists");
+
+        assert_eq!(status.status, ComponentHealth::Unknown);
+        assert!(!status.is_operational);
+    }
+
+    #[test]
+    fn missing_component_returns_error() {
+        let payload = serde_json::from_value::<StatusPayload>(json!({
+            "summary": {
+                "id": "sum-1",
+                "name": "OpenAI",
+                "components": [],
+                "affected_components": []
+            }
+        }))
+        .expect("valid payload");
+
+        let error = derive_component_status(&payload, "Codex").expect_err("missing component should error");
+
+        assert!(error
+            .to_string()
+            .contains("Component \"Codex\" not found in status summary"));
     }
 }
