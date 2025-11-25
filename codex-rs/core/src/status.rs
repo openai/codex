@@ -1,3 +1,4 @@
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -17,6 +18,9 @@ use tokio::time::Instant;
 const STATUS_WIDGET_URL: &str = "https://status.openai.com/proxy/status.openai.com";
 const CODEX_COMPONENT_NAME: &str = "Codex";
 const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+
+static TEST_STATUS_WIDGET_URL: OnceLock<String> = OnceLock::new();
+static TEST_IDLE_TIMEOUT: OnceLock<Duration> = OnceLock::new();
 
 #[derive(Debug, Clone, Display, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -83,11 +87,13 @@ impl IdleWarning {
 
 impl Default for IdleWarning {
     fn default() -> Self {
-        Self::new(DEFAULT_IDLE_TIMEOUT)
+        Self::new(idle_timeout())
     }
 }
 
 async fn fetch_codex_health() -> Result<ComponentHealth> {
+    let status_widget_url = status_widget_url();
+
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(10))
@@ -95,7 +101,7 @@ async fn fetch_codex_health() -> Result<ComponentHealth> {
         .context("building HTTP client")?;
 
     let response = ReqwestTransport::new(client)
-        .execute(Request::new(Method::GET, STATUS_WIDGET_URL.to_string()))
+        .execute(Request::new(Method::GET, status_widget_url.clone()))
         .await
         .context("requesting status widget")?;
 
@@ -113,7 +119,7 @@ async fn fetch_codex_health() -> Result<ComponentHealth> {
             .collect::<String>();
 
         bail!(
-            "Expected JSON from {STATUS_WIDGET_URL}: Content-Type={content_type}. Body starts with: {snippet:?}"
+            "Expected JSON from {status_widget_url}: Content-Type={content_type}. Body starts with: {snippet:?}"
         );
     }
 
@@ -170,6 +176,32 @@ fn derive_component_health(
         .unwrap_or(ComponentHealth::Operational);
 
     Ok(status)
+}
+
+fn idle_timeout() -> Duration {
+    TEST_IDLE_TIMEOUT
+        .get()
+        .copied()
+        .unwrap_or(DEFAULT_IDLE_TIMEOUT)
+}
+
+fn status_widget_url() -> String {
+    TEST_STATUS_WIDGET_URL
+        .get()
+        .cloned()
+        .unwrap_or_else(|| STATUS_WIDGET_URL.to_string())
+}
+
+#[doc(hidden)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn set_test_status_widget_url(url: impl Into<String>) {
+    let _ = TEST_STATUS_WIDGET_URL.set(url.into());
+}
+
+#[doc(hidden)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn set_test_idle_timeout(duration: Duration) {
+    let _ = TEST_IDLE_TIMEOUT.set(duration);
 }
 
 #[cfg(test)]

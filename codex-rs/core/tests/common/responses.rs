@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use anyhow::Result;
 use base64::Engine;
@@ -540,6 +541,19 @@ where
 pub async fn mount_sse_once(server: &MockServer, body: String) -> ResponseMock {
     let (mock, response_mock) = base_mock();
     mock.respond_with(sse_response(body))
+        .up_to_n_times(1)
+        .mount(server)
+        .await;
+    response_mock
+}
+
+pub async fn mount_sse_once_with_delay(
+    server: &MockServer,
+    body: String,
+    delay: Duration,
+) -> ResponseMock {
+    let (mock, response_mock) = base_mock();
+    mock.respond_with(sse_response(body).set_delay(delay))
         .up_to_n_times(1)
         .mount(server)
         .await;

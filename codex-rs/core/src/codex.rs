@@ -2182,14 +2182,28 @@ async fn try_run_turn(
     });
 
     sess.persist_rollout_items(&[rollout_item]).await;
-    let mut stream = turn_context
-        .client
-        .clone()
-        .stream(prompt)
-        .or_cancel(&cancellation_token)
-        .await??;
-
     let mut idle_warning = IdleWarning::default();
+    let client = turn_context.client.clone();
+    let mut stream_future = Box::pin(client.stream(prompt).or_cancel(&cancellation_token));
+
+    let mut stream = loop {
+        tokio::select! {
+            biased;
+            result = &mut stream_future => break result??,
+            _ = sleep_until(idle_warning.deadline()) => {
+                if let Some(message) = idle_warning.maybe_warning_message().await {
+                    sess.send_event(
+                        &turn_context,
+                        EventMsg::Warning(WarningEvent { message }),
+                    )
+                    .await;
+                }
+                continue;
+            }
+        }
+    };
+
+    idle_warning.mark_event();
 
     let tool_runtime = ToolCallRuntime::new(
         Arc::clone(&router),
