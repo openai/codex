@@ -1,7 +1,8 @@
 [package]
-edition = "2024"
 name = "codex-stdio-to-uds"
-version = { workspace = true }
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "codex-stdio-to-uds"

@@ -51,6 +51,7 @@ version = "0.0.0"
 # crates created with `cargo new -w ...` automatically inherit the 2024
 # edition.
 edition = "2024"
+license = "Apache-2.0"
 
 [workspace.dependencies]
 # Internal
@@ -138,7 +139,7 @@ itertools = "0.14.0"
 keyring = { version = "3.6", default-features = false }
 landlock = "0.4.1"
 lazy_static = "1"
-libc = "0.2.175"
+libc = "0.2.177"
 log = "0.4"
 lru = "0.12.5"
 maplit = "1.0.2"
@@ -165,7 +166,7 @@ rand = "0.9"
 ratatui = "0.29.0"
 ratatui-macros = "0.6.0"
 regex-lite = "0.1.7"
-regex = "1.11.1"
+regex = "1.12.2"
 reqwest = "0.12"
 rmcp = { version = "0.9.0", default-features = false }
 schemars = "0.8.22"
@@ -195,7 +196,7 @@ tokio-stream = "0.1.17"
 tokio-test = "0.4"
 tokio-util = "0.7.16"
 toml = "0.9.5"
-toml_edit = "0.23.4"
+toml_edit = "0.23.5"
 tonic = "0.13.1"
 tracing = "0.1.41"
 tracing-appender = "0.2.3"
