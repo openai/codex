@@ -36,6 +36,7 @@ use codex_app_server_protocol::SandboxCommandAssessment as V2SandboxCommandAsses
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnCompletedNotification;
@@ -78,10 +79,19 @@ pub(crate) async fn apply_bespoke_event_handling(
     turn_summary_store: TurnSummaryStore,
     api_version: ApiVersion,
 ) {
-    let Event { id: event_id, msg } = event;
+    let Event {
+        id: event_turn_id,
+        msg,
+    } = event;
     match msg {
         EventMsg::TaskComplete(_ev) => {
-            handle_turn_complete(conversation_id, event_id, &outgoing, &turn_summary_store).await;
+            handle_turn_complete(
+                conversation_id,
+                event_turn_id,
+                &outgoing,
+                &turn_summary_store,
+            )
+            .await;
         }
         EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id,
@@ -102,7 +112,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .send_request(ServerRequestPayload::ApplyPatchApproval(params))
                     .await;
                 tokio::spawn(async move {
-                    on_patch_approval_response(event_id, rx, conversation).await;
+                    on_patch_approval_response(event_turn_id, rx, conversation).await;
                 });
             }
             ApiVersion::V2 => {
@@ -124,7 +134,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     };
                     let notification = ItemStartedNotification {
                         thread_id: conversation_id.to_string(),
-                        turn_id: event_id.clone(),
+                        turn_id: event_turn_id.clone(),
                         item,
                     };
                     outgoing
@@ -144,7 +154,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .await;
                 tokio::spawn(async move {
                     on_file_change_request_approval_response(
-                        event_id,
+                        event_turn_id,
                         conversation_id,
                         item_id,
                         patch_changes,
@@ -180,7 +190,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .send_request(ServerRequestPayload::ExecCommandApproval(params))
                     .await;
                 tokio::spawn(async move {
-                    on_exec_approval_response(event_id, rx, conversation).await;
+                    on_exec_approval_response(event_turn_id, rx, conversation).await;
                 });
             }
             ApiVersion::V2 => {
@@ -208,7 +218,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .await;
                 tokio::spawn(async move {
                     on_command_execution_request_approval_response(
-                        event_id,
+                        event_turn_id,
                         conversation_id,
                         item_id,
                         command_string,
@@ -227,7 +237,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             let notification = construct_mcp_tool_call_notification(
                 begin_event,
                 conversation_id.to_string(),
-                event_id.clone(),
+                event_turn_id.clone(),
             )
             .await;
             outgoing
@@ -238,7 +248,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             let notification = construct_mcp_tool_call_end_notification(
                 end_event,
                 conversation_id.to_string(),
-                event_id.clone(),
+                event_turn_id.clone(),
             )
             .await;
             outgoing
@@ -257,7 +267,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::ContextCompacted(..) => {
             let notification = ContextCompactedNotification {
                 thread_id: conversation_id.to_string(),
-                turn_id: event_id.clone(),
+                turn_id: event_turn_id.clone(),
             };
             outgoing
                 .send_server_notification(ServerNotification::ContextCompacted(notification))
@@ -297,7 +307,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::TokenCount(token_count_event) => {
-            handle_token_count_event(conversation_id, event_id, token_count_event, &outgoing).await;
+            handle_token_count_event(conversation_id, event_turn_id, token_count_event, &outgoing)
+                .await;
         }
         EventMsg::Error(ev) => {
             let turn_error = TurnError {
@@ -309,7 +320,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .send_server_notification(ServerNotification::Error(ErrorNotification {
                     error: turn_error,
                     thread_id: conversation_id.to_string(),
-                    turn_id: event_id.clone(),
+                    turn_id: event_turn_id.clone(),
                 }))
                 .await;
         }
@@ -324,16 +335,16 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .send_server_notification(ServerNotification::Error(ErrorNotification {
                     error: turn_error,
                     thread_id: conversation_id.to_string(),
-                    turn_id: event_id.clone(),
+                    turn_id: event_turn_id.clone(),
                 }))
                 .await;
         }
         EventMsg::EnteredReviewMode(review_request) => {
             let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
-                turn_id: event_id.clone(),
+                turn_id: event_turn_id.clone(),
                 item: ThreadItem::CodeReview {
-                    id: event_id.clone(),
+                    id: event_turn_id.clone(),
                     review: review_request.user_facing_hint,
                 },
             };
@@ -345,7 +356,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             let item: ThreadItem = item_started_event.item.clone().into();
             let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
-                turn_id: event_id.clone(),
+                turn_id: event_turn_id.clone(),
                 item,
             };
             outgoing
@@ -356,7 +367,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             let item: ThreadItem = item_completed_event.item.clone().into();
             let notification = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
-                turn_id: event_id.clone(),
+                turn_id: event_turn_id.clone(),
                 item,
             };
             outgoing
@@ -368,10 +379,10 @@ pub(crate) async fn apply_bespoke_event_handling(
                 Some(output) => render_review_output_text(&output),
                 None => REVIEW_FALLBACK_MESSAGE.to_string(),
             };
-            let review_item_id = event_id.clone();
+            let review_item_id = event_turn_id.clone();
             let notification = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
-                turn_id: event_id.clone(),
+                turn_id: event_turn_id.clone(),
                 item: ThreadItem::CodeReview {
                     id: review_item_id,
                     review: review_text,
@@ -399,7 +410,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 };
                 let notification = ItemStartedNotification {
                     thread_id: conversation_id.to_string(),
-                    turn_id: event_id.clone(),
+                    turn_id: event_turn_id.clone(),
                     item,
                 };
                 outgoing
@@ -423,7 +434,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 item_id,
                 changes,
                 status,
-                event_id.clone(),
+                event_turn_id.clone(),
                 outgoing.as_ref(),
                 &turn_summary_store,
             )
@@ -451,7 +462,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             };
             let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
-                turn_id: event_id.clone(),
+                turn_id: event_turn_id.clone(),
                 item,
             };
             outgoing
@@ -512,7 +523,7 @@ pub(crate) async fn apply_bespoke_event_handling(
 
             let notification = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
-                turn_id: event_id.clone(),
+                turn_id: event_turn_id.clone(),
                 item,
             };
             outgoing
@@ -542,11 +553,22 @@ pub(crate) async fn apply_bespoke_event_handling(
                 }
             }
 
-            handle_turn_interrupted(conversation_id, event_id, &outgoing, &turn_summary_store)
-                .await;
+            handle_turn_interrupted(
+                conversation_id,
+                event_turn_id,
+                &outgoing,
+                &turn_summary_store,
+            )
+            .await;
         }
         EventMsg::TurnDiff(turn_diff_event) => {
-            handle_turn_diff(&event_id, turn_diff_event, api_version, outgoing.as_ref()).await;
+            handle_turn_diff(
+                &event_turn_id,
+                turn_diff_event,
+                api_version,
+                outgoing.as_ref(),
+            )
+            .await;
         }
 
         _ => {}
@@ -554,14 +576,14 @@ pub(crate) async fn apply_bespoke_event_handling(
 }
 
 async fn handle_turn_diff(
-    event_id: &str,
+    event_turn_id: &str,
     turn_diff_event: TurnDiffEvent,
     api_version: ApiVersion,
     outgoing: &OutgoingMessageSender,
 ) {
     if let ApiVersion::V2 = api_version {
         let notification = TurnDiffUpdatedNotification {
-            turn_id: event_id.to_string(),
+            turn_id: event_turn_id.to_string(),
             diff: turn_diff_event.unified_diff,
         };
         outgoing
@@ -572,14 +594,14 @@ async fn handle_turn_diff(
 
 async fn emit_turn_completed_with_status(
     conversation_id: ConversationId,
-    event_id: String,
+    event_turn_id: String,
     status: TurnStatus,
     outgoing: &OutgoingMessageSender,
 ) {
     let notification = TurnCompletedNotification {
         thread_id: conversation_id.to_string(),
         turn: Turn {
-            id: event_id,
+            id: event_turn_id,
             items: vec![],
             status,
         },
@@ -661,7 +683,7 @@ async fn find_and_remove_turn_summary(
 
 async fn handle_turn_complete(
     conversation_id: ConversationId,
-    event_id: String,
+    event_turn_id: String,
     outgoing: &OutgoingMessageSender,
     turn_summary_store: &TurnSummaryStore,
 ) {
@@ -673,19 +695,24 @@ async fn handle_turn_complete(
         TurnStatus::Completed
     };
 
-    emit_turn_completed_with_status(conversation_id, event_id, status, outgoing).await;
+    emit_turn_completed_with_status(conversation_id, event_turn_id, status, outgoing).await;
 }
 
 async fn handle_turn_interrupted(
     conversation_id: ConversationId,
-    event_id: String,
+    event_turn_id: String,
     outgoing: &OutgoingMessageSender,
     turn_summary_store: &TurnSummaryStore,
 ) {
     find_and_remove_turn_summary(conversation_id, turn_summary_store).await;
 
-    emit_turn_completed_with_status(conversation_id, event_id, TurnStatus::Interrupted, outgoing)
-        .await;
+    emit_turn_completed_with_status(
+        conversation_id,
+        event_turn_id,
+        TurnStatus::Interrupted,
+        outgoing,
+    )
+    .await;
 }
 
 async fn handle_token_count_event(
@@ -695,15 +722,16 @@ async fn handle_token_count_event(
     outgoing: &OutgoingMessageSender,
 ) {
     let TokenCountEvent { info, rate_limits } = token_count_event;
-    let notification = ThreadTokenUsageUpdatedNotification {
-        thread_id: conversation_id.to_string(),
-        turn_id,
-        token_usage: info.map(Into::into),
-    };
-    outgoing
-        .send_server_notification(ServerNotification::ThreadTokenUsageUpdated(notification))
-        .await;
-
+    if let Some(token_usage) = info.map(ThreadTokenUsage::from) {
+        let notification = ThreadTokenUsageUpdatedNotification {
+            thread_id: conversation_id.to_string(),
+            turn_id,
+            token_usage,
+        };
+        outgoing
+            .send_server_notification(ServerNotification::ThreadTokenUsageUpdated(notification))
+            .await;
+    }
     if let Some(rate_limits) = rate_limits {
         outgoing
             .send_server_notification(ServerNotification::AccountRateLimitsUpdated(
@@ -725,7 +753,7 @@ async fn handle_error(
 }
 
 async fn on_patch_approval_response(
-    event_id: String,
+    event_turn_id: String,
     receiver: oneshot::Receiver<JsonValue>,
     codex: Arc<CodexConversation>,
 ) {
@@ -736,7 +764,7 @@ async fn on_patch_approval_response(
             error!("request failed: {err:?}");
             if let Err(submit_err) = codex
                 .submit(Op::PatchApproval {
-                    id: event_id.clone(),
+                    id: event_turn_id.clone(),
                     decision: ReviewDecision::Denied,
                 })
                 .await
@@ -757,7 +785,7 @@ async fn on_patch_approval_response(
 
     if let Err(err) = codex
         .submit(Op::PatchApproval {
-            id: event_id,
+            id: event_turn_id,
             decision: response.decision,
         })
         .await
@@ -767,7 +795,7 @@ async fn on_patch_approval_response(
 }
 
 async fn on_exec_approval_response(
-    event_id: String,
+    event_turn_id: String,
     receiver: oneshot::Receiver<JsonValue>,
     conversation: Arc<CodexConversation>,
 ) {
@@ -793,7 +821,7 @@ async fn on_exec_approval_response(
 
     if let Err(err) = conversation
         .submit(Op::ExecApproval {
-            id: event_id,
+            id: event_turn_id,
             decision: response.decision,
         })
         .await
@@ -866,7 +894,7 @@ fn format_file_change_diff(change: &CoreFileChange) -> String {
 
 #[allow(clippy::too_many_arguments)]
 async fn on_file_change_request_approval_response(
-    event_id: String,
+    event_turn_id: String,
     conversation_id: ConversationId,
     item_id: String,
     changes: Vec<FileUpdateChange>,
@@ -911,7 +939,7 @@ async fn on_file_change_request_approval_response(
             item_id,
             changes,
             status,
-            event_id.clone(),
+            event_turn_id.clone(),
             outgoing.as_ref(),
             &turn_summary_store,
         )
@@ -920,7 +948,7 @@ async fn on_file_change_request_approval_response(
 
     if let Err(err) = codex
         .submit(Op::PatchApproval {
-            id: event_id,
+            id: event_turn_id,
             decision,
         })
         .await
@@ -931,7 +959,7 @@ async fn on_file_change_request_approval_response(
 
 #[allow(clippy::too_many_arguments)]
 async fn on_command_execution_request_approval_response(
-    event_id: String,
+    event_turn_id: String,
     conversation_id: ConversationId,
     item_id: String,
     command: String,
@@ -983,7 +1011,7 @@ async fn on_command_execution_request_approval_response(
     if let Some(status) = completion_status {
         complete_command_execution_item(
             conversation_id,
-            event_id.clone(),
+            event_turn_id.clone(),
             item_id.clone(),
             command.clone(),
             cwd.clone(),
@@ -996,7 +1024,7 @@ async fn on_command_execution_request_approval_response(
 
     if let Err(err) = conversation
         .submit(Op::ExecApproval {
-            id: event_id,
+            id: event_turn_id,
             decision,
         })
         .await
@@ -1129,14 +1157,14 @@ mod tests {
     #[tokio::test]
     async fn test_handle_turn_complete_emits_completed_without_error() -> Result<()> {
         let conversation_id = ConversationId::new();
-        let event_id = "complete1".to_string();
+        let event_turn_id = "complete1".to_string();
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = Arc::new(OutgoingMessageSender::new(tx));
         let turn_summary_store = new_turn_summary_store();
 
         handle_turn_complete(
             conversation_id,
-            event_id.clone(),
+            event_turn_id.clone(),
             &outgoing,
             &turn_summary_store,
         )
@@ -1148,7 +1176,7 @@ mod tests {
             .ok_or_else(|| anyhow!("should send one notification"))?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
-                assert_eq!(n.turn.id, event_id);
+                assert_eq!(n.turn.id, event_turn_id);
                 assert_eq!(n.turn.status, TurnStatus::Completed);
             }
             other => bail!("unexpected message: {other:?}"),
@@ -1160,7 +1188,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_turn_interrupted_emits_interrupted_with_error() -> Result<()> {
         let conversation_id = ConversationId::new();
-        let event_id = "interrupt1".to_string();
+        let event_turn_id = "interrupt1".to_string();
         let turn_summary_store = new_turn_summary_store();
         handle_error(
             conversation_id,
@@ -1176,7 +1204,7 @@ mod tests {
 
         handle_turn_interrupted(
             conversation_id,
-            event_id.clone(),
+            event_turn_id.clone(),
             &outgoing,
             &turn_summary_store,
         )
@@ -1188,7 +1216,7 @@ mod tests {
             .ok_or_else(|| anyhow!("should send one notification"))?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
-                assert_eq!(n.turn.id, event_id);
+                assert_eq!(n.turn.id, event_turn_id);
                 assert_eq!(n.turn.status, TurnStatus::Interrupted);
             }
             other => bail!("unexpected message: {other:?}"),
@@ -1200,7 +1228,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_turn_complete_emits_failed_with_error() -> Result<()> {
         let conversation_id = ConversationId::new();
-        let event_id = "complete_err1".to_string();
+        let event_turn_id = "complete_err1".to_string();
         let turn_summary_store = new_turn_summary_store();
         handle_error(
             conversation_id,
@@ -1216,7 +1244,7 @@ mod tests {
 
         handle_turn_complete(
             conversation_id,
-            event_id.clone(),
+            event_turn_id.clone(),
             &outgoing,
             &turn_summary_store,
         )
@@ -1228,7 +1256,7 @@ mod tests {
             .ok_or_else(|| anyhow!("should send one notification"))?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
-                assert_eq!(n.turn.id, event_id);
+                assert_eq!(n.turn.id, event_turn_id);
                 assert_eq!(
                     n.turn.status,
                     TurnStatus::Failed {
@@ -1304,9 +1332,7 @@ mod tests {
             ) => {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, turn_id);
-                let usage = payload
-                    .token_usage
-                    .expect("token usage should be present in notification");
+                let usage = payload.token_usage;
                 assert_eq!(usage.total.total_tokens, 200);
                 assert_eq!(usage.total.cached_input_tokens, 25);
                 assert_eq!(usage.last.output_tokens, 7);
@@ -1349,21 +1375,10 @@ mod tests {
         )
         .await;
 
-        let msg = rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow!("expected usage notification even without info"))?;
-        match msg {
-            OutgoingMessage::AppServerNotification(
-                ServerNotification::ThreadTokenUsageUpdated(payload),
-            ) => {
-                assert_eq!(payload.thread_id, conversation_id.to_string());
-                assert_eq!(payload.turn_id, turn_id);
-                assert!(payload.token_usage.is_none());
-            }
-            other => bail!("unexpected notification: {other:?}"),
-        }
-        assert!(rx.try_recv().is_err(), "no extra messages expected");
+        assert!(
+            rx.try_recv().is_err(),
+            "no notifications should be emitted when token usage info is absent"
+        );
         Ok(())
     }
 

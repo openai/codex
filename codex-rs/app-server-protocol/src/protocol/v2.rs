@@ -788,7 +788,7 @@ pub struct AccountUpdatedNotification {
 pub struct ThreadTokenUsageUpdatedNotification {
     pub thread_id: String,
     pub turn_id: String,
-    pub token_usage: Option<ThreadTokenUsage>,
+    pub token_usage: ThreadTokenUsage,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
