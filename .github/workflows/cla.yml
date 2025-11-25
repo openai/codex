@@ -48,4 +48,5 @@ jobs:
           branch: cla-signatures
           allowlist: |
             codex
+            dependabot
             dependabot[bot]

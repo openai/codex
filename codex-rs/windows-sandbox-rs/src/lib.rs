@@ -23,9 +23,11 @@ pub use stub::CaptureResult;
 #[cfg(target_os = "windows")]
 mod windows_impl {
     use super::acl::add_allow_ace;
+    use super::acl::add_deny_write_ace;
     use super::acl::allow_null_device;
     use super::acl::revoke_ace;
     use super::allow::compute_allow_paths;
+    use super::allow::AllowDenyPaths;
     use super::cap::cap_sid_file;
     use super::cap::load_or_create_cap_sids;
     use super::env::apply_no_network_to_env;
@@ -195,8 +197,6 @@ mod windows_impl {
         ensure_codex_home_exists(codex_home)?;
 
         let current_dir = cwd.to_path_buf();
-        // for now, don't fail if we detect world-writable directories
-        // audit::audit_everyone_writable(&current_dir, &env_map)?;
         let logs_base_dir = Some(codex_home);
         log_start(&command, logs_base_dir);
         let cap_sid_path = cap_sid_file(codex_home);
@@ -238,7 +238,8 @@ mod windows_impl {
         }
 
         let persist_aces = is_workspace_write;
-        let allow = compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map);
+        let AllowDenyPaths { allow, deny } =
+            compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map);
         let mut guards: Vec<(PathBuf, *mut c_void)> = Vec::new();
         unsafe {
             for p in &allow {
@@ -251,6 +252,13 @@ mod windows_impl {
                         } else {
                             guards.push((p.clone(), psid_to_use));
                         }
+                    }
+                }
+            }
+            for p in &deny {
+                if let Ok(added) = add_deny_write_ace(p, psid_to_use) {
+                    if added && !persist_aces {
+                        guards.push((p.clone(), psid_to_use));
                     }
                 }
             }
