@@ -193,7 +193,9 @@ impl UnifiedExecSessionManager {
                 response.output.clone(),
                 exit,
                 response.wall_time,
-                process_id,
+                // We always emit the process ID in order to keep consistency between the Begin
+                // event and the End event.
+                Some(request.process_id),
             )
             .await;
         }
