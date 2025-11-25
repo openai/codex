@@ -30,8 +30,8 @@ use codex_core::config::edit::ConfigEditsBuilder;
 #[cfg(target_os = "windows")]
 use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
+use codex_core::protocol::EventMsg;
 use codex_core::protocol::FinalOutput;
-#[cfg(target_os = "windows")]
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
@@ -222,11 +222,23 @@ pub(crate) struct App {
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
 
+    /// Ignore the next ShutdownComplete event when we're intentionally
+    /// stopping a conversation (e.g., before starting a new one).
+    suppress_shutdown_complete: bool,
+
     // One-shot suppression of the next world-writable scan after user confirmation.
     skip_world_writable_scan_once: bool,
 }
 
 impl App {
+    async fn shutdown_current_conversation(&mut self) {
+        if let Some(conversation_id) = self.chat_widget.conversation_id() {
+            self.suppress_shutdown_complete = true;
+            self.chat_widget.submit_op(Op::Shutdown);
+            self.server.remove_conversation(&conversation_id).await;
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn run(
         tui: &mut tui::Tui,
@@ -323,6 +335,7 @@ impl App {
             backtrack: BacktrackState::default(),
             feedback: feedback.clone(),
             pending_update_action: None,
+            suppress_shutdown_complete: false,
             skip_world_writable_scan_once: false,
         };
 
@@ -433,6 +446,7 @@ impl App {
                     self.chat_widget.token_usage(),
                     self.chat_widget.conversation_id(),
                 );
+                self.shutdown_current_conversation().await;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: self.config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -503,6 +517,12 @@ impl App {
                 self.chat_widget.on_commit_tick();
             }
             AppEvent::CodexEvent(event) => {
+                if self.suppress_shutdown_complete
+                    && matches!(event.msg, EventMsg::ShutdownComplete)
+                {
+                    self.suppress_shutdown_complete = false;
+                    return Ok(true);
+                }
                 self.chat_widget.handle_codex_event(event);
             }
             AppEvent::ConversationHistory(ev) => {
@@ -999,6 +1019,8 @@ mod tests {
     use codex_core::CodexAuth;
     use codex_core::ConversationManager;
     use codex_core::protocol::AskForApproval;
+    use codex_core::protocol::Event;
+    use codex_core::protocol::EventMsg;
     use codex_core::protocol::SandboxPolicy;
     use codex_core::protocol::SessionConfiguredEvent;
     use codex_protocol::ConversationId;
@@ -1034,8 +1056,49 @@ mod tests {
             backtrack: BacktrackState::default(),
             feedback: codex_feedback::CodexFeedback::new(),
             pending_update_action: None,
+            suppress_shutdown_complete: false,
             skip_world_writable_scan_once: false,
         }
+    }
+
+    fn make_test_app_with_channels() -> (
+        App,
+        tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+        tokio::sync::mpsc::UnboundedReceiver<Op>,
+    ) {
+        let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender();
+        let config = chat_widget.config_ref().clone();
+        let server = Arc::new(ConversationManager::with_auth(CodexAuth::from_api_key(
+            "Test API Key",
+        )));
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+
+        (
+            App {
+                server,
+                app_event_tx,
+                chat_widget,
+                auth_manager,
+                config,
+                active_profile: None,
+                file_search,
+                transcript_cells: Vec::new(),
+                overlay: None,
+                deferred_history_lines: Vec::new(),
+                has_emitted_history_lines: false,
+                enhanced_keys_supported: false,
+                commit_anim_running: Arc::new(AtomicBool::new(false)),
+                backtrack: BacktrackState::default(),
+                feedback: codex_feedback::CodexFeedback::new(),
+                pending_update_action: None,
+                suppress_shutdown_complete: false,
+                skip_world_writable_scan_once: false,
+            },
+            rx,
+            op_rx,
+        )
     }
 
     #[test]
@@ -1158,6 +1221,42 @@ mod tests {
         let (_, nth, prefill) = app.backtrack.pending.clone().expect("pending backtrack");
         assert_eq!(nth, 1);
         assert_eq!(prefill, "follow-up (edited)");
+    }
+
+    #[tokio::test]
+    async fn new_session_requests_shutdown_for_previous_conversation() {
+        let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels();
+
+        let conversation_id = ConversationId::new();
+        let event = SessionConfiguredEvent {
+            session_id: conversation_id,
+            model: "gpt-test".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            cwd: PathBuf::from("/home/user/project"),
+            reasoning_effort: None,
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            rollout_path: PathBuf::new(),
+        };
+
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(event),
+        });
+
+        while app_event_rx.try_recv().is_ok() {}
+        while op_rx.try_recv().is_ok() {}
+
+        app.shutdown_current_conversation().await;
+
+        match op_rx.try_recv() {
+            Ok(Op::Shutdown) => {}
+            Ok(other) => panic!("expected Op::Shutdown, got {other:?}"),
+            Err(_) => panic!("expected shutdown op to be sent"),
+        }
     }
 
     #[test]
