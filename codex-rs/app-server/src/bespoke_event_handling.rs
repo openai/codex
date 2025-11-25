@@ -37,6 +37,7 @@ use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnCompletedNotification;
+use codex_app_server_protocol::TurnDiffUpdatedNotification;
 use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStatus;
@@ -52,6 +53,7 @@ use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
+use codex_core::protocol::TurnDiffEvent;
 use codex_core::review_format::format_review_findings_block;
 use codex_protocol::ConversationId;
 use codex_protocol::protocol::ReviewOutputEvent;
@@ -494,8 +496,28 @@ pub(crate) async fn apply_bespoke_event_handling(
             handle_turn_interrupted(conversation_id, event_id, &outgoing, &turn_summary_store)
                 .await;
         }
+        EventMsg::TurnDiff(turn_diff_event) => {
+            handle_turn_diff(&event_id, turn_diff_event, api_version, outgoing.as_ref()).await;
+        }
 
         _ => {}
+    }
+}
+
+async fn handle_turn_diff(
+    event_id: &str,
+    turn_diff_event: TurnDiffEvent,
+    api_version: ApiVersion,
+    outgoing: &OutgoingMessageSender,
+) {
+    if let ApiVersion::V2 = api_version {
+        let notification = TurnDiffUpdatedNotification {
+            turn_id: event_id.to_string(),
+            diff: turn_diff_event.unified_diff,
+        };
+        outgoing
+            .send_server_notification(ServerNotification::TurnDiffUpdated(notification))
+            .await;
     }
 }
 
@@ -1358,5 +1380,57 @@ mod tests {
         };
 
         assert_eq!(notification, expected);
+    }
+
+    #[tokio::test]
+    async fn test_handle_turn_diff_emits_v2_notification() -> Result<()> {
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = OutgoingMessageSender::new(tx);
+        let unified_diff = "--- a\n+++ b\n".to_string();
+
+        handle_turn_diff(
+            "turn-1",
+            TurnDiffEvent {
+                unified_diff: unified_diff.clone(),
+            },
+            ApiVersion::V2,
+            &outgoing,
+        )
+        .await;
+
+        let msg = rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("should send one notification"))?;
+        match msg {
+            OutgoingMessage::AppServerNotification(ServerNotification::TurnDiffUpdated(
+                notification,
+            )) => {
+                assert_eq!(notification.turn_id, "turn-1");
+                assert_eq!(notification.diff, unified_diff);
+            }
+            other => bail!("unexpected message: {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "no extra messages expected");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_turn_diff_is_noop_for_v1() -> Result<()> {
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = OutgoingMessageSender::new(tx);
+
+        handle_turn_diff(
+            "turn-1",
+            TurnDiffEvent {
+                unified_diff: "diff".to_string(),
+            },
+            ApiVersion::V1,
+            &outgoing,
+        )
+        .await;
+
+        assert!(rx.try_recv().is_err(), "no messages expected");
+        Ok(())
     }
 }

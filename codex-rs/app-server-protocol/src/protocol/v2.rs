@@ -1019,6 +1019,14 @@ pub struct TurnCompletedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct TurnDiffUpdatedNotification {
+    pub turn_id: String,
+    pub diff: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ItemStartedNotification {
     pub item: ThreadItem,
 }
