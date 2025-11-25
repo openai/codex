@@ -32,6 +32,13 @@ pub(crate) trait WithStatus {
     fn status(&self) -> StatusCode;
 }
 
+fn http_status(err: &TransportError) -> Option<StatusCode> {
+    match err {
+        TransportError::Http { status, .. } => Some(*status),
+        _ => None,
+    }
+}
+
 impl WithStatus for Response {
     fn status(&self) -> StatusCode {
         self.status
@@ -66,7 +73,7 @@ where
             if let Some(t) = telemetry.as_ref() {
                 let (status, err) = match &result {
                     Ok(resp) => (Some(resp.status()), None),
-                    Err(err) => (None, Some(err)),
+                    Err(err) => (http_status(err), Some(err)),
                 };
                 t.on_request(attempt, status, err, start.elapsed());
             }
