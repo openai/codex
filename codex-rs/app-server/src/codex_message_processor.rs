@@ -61,6 +61,7 @@ use codex_app_server_protocol::RemoveConversationSubscriptionResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ResumeConversationParams;
 use codex_app_server_protocol::ResumeConversationResponse;
+use codex_app_server_protocol::ReviewDelivery as ApiReviewDelivery;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::ReviewTarget;
@@ -121,7 +122,7 @@ use codex_core::git_info::git_diff_to_remote;
 use codex_core::parse_cursor;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
-use codex_core::protocol::ReviewDelivery;
+use codex_core::protocol::ReviewDelivery as CoreReviewDelivery;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::read_head_for_summary;
@@ -2517,6 +2518,7 @@ impl CodexMessageProcessor {
         &self,
         request_id: &RequestId,
         turn: Turn,
+        parent_thread_id: String,
         review_thread_id: Option<String>,
     ) {
         let response = ReviewStartResponse {
@@ -2527,7 +2529,10 @@ impl CodexMessageProcessor {
             .send_response(request_id.clone(), response)
             .await;
 
-        let notif = TurnStartedNotification { turn };
+        let notif = TurnStartedNotification {
+            thread_id: parent_thread_id,
+            turn,
+        };
         self.outgoing
             .send_server_notification(ServerNotification::TurnStarted(notif))
             .await;
@@ -2539,6 +2544,7 @@ impl CodexMessageProcessor {
         parent_conversation: Arc<CodexConversation>,
         review_request: ReviewRequest,
         display_text: &str,
+        parent_thread_id: String,
     ) -> std::result::Result<(), JSONRPCErrorError> {
         let turn_id = parent_conversation
             .submit(Op::Review { review_request })
@@ -2547,7 +2553,8 @@ impl CodexMessageProcessor {
         match turn_id {
             Ok(turn_id) => {
                 let turn = Self::build_review_turn(turn_id, display_text);
-                self.emit_review_started(request_id, turn, None).await;
+                self.emit_review_started(request_id, turn, parent_thread_id, None)
+                    .await;
                 Ok(())
             }
             Err(err) => Err(JSONRPCErrorError {
@@ -2587,6 +2594,7 @@ impl CodexMessageProcessor {
         let NewConversation {
             conversation_id,
             conversation,
+            session_configured,
             ..
         } = self
             .conversation_manager
@@ -2609,6 +2617,25 @@ impl CodexMessageProcessor {
             );
         }
 
+        let rollout_path = conversation.rollout_path();
+        let fallback_provider = self.config.model_provider_id.as_str();
+        match read_summary_from_rollout(rollout_path.as_path(), fallback_provider).await {
+            Ok(summary) => {
+                let thread = summary_to_thread(summary);
+                let notif = ThreadStartedNotification { thread };
+                self.outgoing
+                    .send_server_notification(ServerNotification::ThreadStarted(notif))
+                    .await;
+            }
+            Err(err) => {
+                tracing::warn!(
+                    "failed to load summary for review conversation {}: {}",
+                    session_configured.session_id,
+                    err
+                );
+            }
+        }
+
         let turn_id = conversation
             .submit(Op::Review { review_request })
             .await
@@ -2619,8 +2646,14 @@ impl CodexMessageProcessor {
             })?;
 
         let turn = Self::build_review_turn(turn_id, display_text);
-        self.emit_review_started(request_id, turn, Some(conversation_id.to_string()))
-            .await;
+        let review_thread_id = conversation_id.to_string();
+        self.emit_review_started(
+            request_id,
+            turn,
+            review_thread_id.clone(),
+            Some(review_thread_id),
+        )
+        .await;
 
         Ok(())
     }
@@ -2648,21 +2681,23 @@ impl CodexMessageProcessor {
             }
         };
 
-        match delivery.unwrap_or(ReviewDelivery::Inline) {
-            ReviewDelivery::Inline => {
+        let delivery = delivery.unwrap_or(ApiReviewDelivery::Inline).to_core();
+        match delivery {
+            CoreReviewDelivery::Inline => {
                 if let Err(err) = self
                     .start_inline_review(
                         &request_id,
                         parent_conversation,
                         review_request,
                         display_text.as_str(),
+                        thread_id.clone(),
                     )
                     .await
                 {
                     self.outgoing.send_error(request_id, err).await;
                 }
             }
-            ReviewDelivery::Detached => {
+            CoreReviewDelivery::Detached => {
                 if let Err(err) = self
                     .start_detached_review(
                         &request_id,

@@ -15,7 +15,6 @@ use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
-use codex_protocol::protocol::ReviewDelivery as CoreReviewDelivery;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::user_input::UserInput as CoreUserInput;
 use mcp_types::ContentBlock as McpContentBlock;
@@ -126,6 +125,12 @@ v2_enum_from_core!(
 v2_enum_from_core!(
     pub enum SandboxMode from codex_protocol::config_types::SandboxMode {
         ReadOnly, WorkspaceWrite, DangerFullAccess
+    }
+);
+
+v2_enum_from_core!(
+    pub enum ReviewDelivery from codex_protocol::protocol::ReviewDelivery {
+        Inline, Detached
     }
 );
 
@@ -850,8 +855,10 @@ pub struct ReviewStartParams {
     pub thread_id: String,
     pub target: ReviewTarget,
 
+    /// Where to run the review: inline (default) on the current thread or
+    /// detached on a new thread (returned in `reviewThreadId`).
     #[serde(default)]
-    pub delivery: Option<CoreReviewDelivery>,
+    pub delivery: Option<ReviewDelivery>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
