@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+codex-client = { path = "../codex-client" }
 reqwest = { workspace = true, features = ["json"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

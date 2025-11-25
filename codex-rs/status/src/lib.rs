@@ -2,13 +2,16 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
-use reqwest::header::CONTENT_TYPE;
+use codex_client::Request;
+use codex_client::ReqwestTransport;
+use http::header::CONTENT_TYPE;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use std::fmt;
 use std::time::Duration;
 
-#[derive(Debug, Clone, Display, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ComponentHealth {
     Operational,
@@ -21,8 +24,20 @@ pub enum ComponentHealth {
 }
 
 impl ComponentHealth {
+    fn operational() -> Self {
+        Self::Operational
+    }
+
     pub fn is_operational(self) -> bool {
         self == Self::Operational
+    }
+}
+
+impl fmt::Display for ComponentHealth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = Value::from(self).as_str().ok_or(fmt::Error)?;
+
+        f.write_str(value)
     }
 }
 
@@ -33,26 +48,23 @@ pub async fn fetch_codex_health() -> Result<ComponentHealth> {
         .build()
         .context("building HTTP client")?;
 
-    let response = client
-        .get(STATUS_WIDGET_URL)
-        .send()
+    let response = ReqwestTransport::new(client)
+        .execute(Request::new(
+            http::Method::GET,
+            STATUS_WIDGET_URL.to_string(),
+        ))
         .await
-        .context("requesting status widget")?
-        .error_for_status()
-        .context("status widget returned error")?;
+        .context("requesting status widget")?;
 
     let content_type = response
-        .headers()
+        .headers
         .get(CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default()
         .to_ascii_lowercase();
 
     if !content_type.contains("json") {
-        let snippet = response
-            .text()
-            .await
-            .unwrap_or_default()
+        let snippet = String::from_utf8_lossy(&response.body)
             .chars()
             .take(200)
             .collect::<String>();
@@ -62,10 +74,8 @@ pub async fn fetch_codex_health() -> Result<ComponentHealth> {
         );
     }
 
-    let payload = response
-        .json::<StatusPayload>()
-        .await
-        .context("parsing status widget JSON")?;
+    let payload: StatusPayload =
+        serde_json::from_slice(&response.body).context("parsing status widget JSON")?;
 
     derive_component_health(&payload, CODEX_COMPONENT_NAME)
 }
