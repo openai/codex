@@ -21,11 +21,9 @@ use ratatui::layout::Rect;
 use ratatui::style::Stylize as _;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use std::time::Instant;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::error;
 use unicode_width::UnicodeWidthStr;
 
 use crate::diff_render::display_path_for;
@@ -89,7 +87,6 @@ pub async fn run_resume_picker(
     let page_loader: PageLoader = Arc::new(move |request: PageLoadRequest| {
         let tx = loader_tx.clone();
         tokio::spawn(async move {
-            let started = Instant::now();
             let provider_filter = vec![request.default_provider.clone()];
             let page = RolloutRecorder::list_conversations(
                 &request.codex_home,
@@ -100,30 +97,6 @@ pub async fn run_resume_picker(
                 request.default_provider.as_str(),
             )
             .await;
-            match &page {
-                Ok(p) => {
-                    error!(
-                        elapsed_ms = started.elapsed().as_millis(),
-                        request_token = request.request_token,
-                        search_token = request.search_token,
-                        scanned = p.num_scanned_files,
-                        returned = p.items.len(),
-                        reached_scan_cap = p.reached_scan_cap,
-                        cursor = ?request.cursor,
-                        "resume_picker list_conversations page",
-                    );
-                }
-                Err(e) => {
-                    error!(
-                        elapsed_ms = started.elapsed().as_millis(),
-                        request_token = request.request_token,
-                        search_token = request.search_token,
-                        cursor = ?request.cursor,
-                        error = %e,
-                        "resume_picker list_conversations error",
-                    );
-                }
-            }
             let _ = tx.send(BackgroundEvent::PageLoaded {
                 request_token: request.request_token,
                 search_token: request.search_token,
