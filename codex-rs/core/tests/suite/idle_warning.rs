@@ -59,17 +59,6 @@ async fn emits_warning_when_stream_is_idle_and_status_is_degraded() {
         .await
         .unwrap();
 
-    tokio::time::sleep(Duration::from_millis(35)).await;
-
-    let status_requests = status_server
-        .received_requests()
-        .await
-        .expect("status server running");
-    assert!(
-        !status_requests.is_empty(),
-        "status widget was not queried before idle warning"
-    );
-
     let warning = wait_for_event(&codex, |event| matches!(event, EventMsg::Warning(_))).await;
     let EventMsg::Warning(WarningEvent { message }) = warning else {
         panic!("expected warning event");
@@ -79,7 +68,14 @@ async fn emits_warning_when_stream_is_idle_and_status_is_degraded() {
         "unexpected warning message: {message}"
     );
 
-    tokio::time::sleep(Duration::from_millis(25)).await;
+    let status_requests = status_server
+        .received_requests()
+        .await
+        .expect("status server running");
+    assert!(
+        !status_requests.is_empty(),
+        "status widget was not queried before idle warning"
+    );
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 }
