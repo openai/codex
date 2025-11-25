@@ -234,7 +234,7 @@ async fn test_list_conversations_latest_first() {
                 path: p1,
                 head: head_3,
                 created_at: Some("2025-01-03T12-00-00".into()),
-                updated_at: updated_times.get(0).cloned().flatten(),
+                updated_at: updated_times.first().cloned().flatten(),
             },
             ConversationItem {
                 path: p2,
@@ -364,7 +364,7 @@ async fn test_pagination_cursor() {
                 path: p5,
                 head: head_5,
                 created_at: Some("2025-03-05T09-00-00".into()),
-                updated_at: updated_page1.get(0).cloned().flatten(),
+                updated_at: updated_page1.first().cloned().flatten(),
             },
             ConversationItem {
                 path: p4,
@@ -479,7 +479,7 @@ async fn test_pagination_cursor() {
             path: p1,
             head: head_1,
             created_at: Some("2025-03-01T09-00-00".into()),
-            updated_at: updated_page3.get(0).cloned().flatten(),
+            updated_at: updated_page3.first().cloned().flatten(),
         }],
         next_cursor: None,
         num_scanned_files: 5, // scanned 05, 04 (anchor), 03, 02 (anchor), 01
@@ -708,7 +708,7 @@ async fn test_stable_ordering_same_second_pagination() {
                 path: p3,
                 head: head(u3),
                 created_at: Some(ts.to_string()),
-                updated_at: updated_page1.get(0).cloned().flatten(),
+                updated_at: updated_page1.first().cloned().flatten(),
             },
             ConversationItem {
                 path: p2,
