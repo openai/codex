@@ -1279,6 +1279,96 @@ mod tests {
     }
 
     #[test]
+    fn resume_picker_screen_snapshot() {
+        use crate::custom_terminal::Terminal;
+        use crate::test_backend::VT100Backend;
+
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+            true,
+            None,
+        );
+
+        let now = Utc::now();
+        let rows = vec![
+            Row {
+                path: PathBuf::from("/tmp/a.jsonl"),
+                preview: String::from("Fix resume picker timestamps"),
+                created_at: Some(now - Duration::minutes(16)),
+                updated_at: Some(now - Duration::seconds(42)),
+                cwd: Some(PathBuf::from("/tmp/project")),
+                git_branch: Some(String::from("feature/resume")),
+            },
+            Row {
+                path: PathBuf::from("/tmp/b.jsonl"),
+                preview: String::from("Investigate lazy pagination cap"),
+                created_at: Some(now - Duration::hours(1)),
+                updated_at: Some(now - Duration::minutes(35)),
+                cwd: Some(PathBuf::from("/tmp/other")),
+                git_branch: Some(String::from("main")),
+            },
+        ];
+        state.all_rows = rows.clone();
+        state.filtered_rows = rows;
+        state.view_rows = Some(4);
+        state.selected = 0;
+        state.scroll_top = 0;
+        state.update_view_rows(4);
+
+        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all);
+
+        let width: u16 = 80;
+        let height: u16 = 9;
+        let backend = VT100Backend::new(width, height);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+        {
+            let mut frame = terminal.get_frame();
+            let area = frame.area();
+            let [header, search, columns, list, hint] = Layout::vertical([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Min(area.height.saturating_sub(4)),
+                Constraint::Length(1),
+            ])
+            .areas(area);
+
+            frame.render_widget_ref(
+                Line::from(vec!["Resume a previous session".bold().cyan()]),
+                header,
+            );
+
+            frame.render_widget_ref(Line::from("Type to search".dim()), search);
+
+            render_column_headers(&mut frame, columns, &metrics);
+            render_list(&mut frame, list, &state, &metrics);
+
+            let hint_line: Line = vec![
+                key_hint::plain(KeyCode::Enter).into(),
+                " to resume ".dim(),
+                "    ".dim(),
+                key_hint::plain(KeyCode::Esc).into(),
+                " to start new ".dim(),
+                "    ".dim(),
+                key_hint::ctrl(KeyCode::Char('c')).into(),
+                " to quit ".dim(),
+            ]
+            .into();
+            frame.render_widget_ref(hint_line, hint);
+        }
+        terminal.flush().expect("flush");
+
+        let snapshot = terminal.backend().to_string();
+        assert_snapshot!("resume_picker_screen", snapshot);
+    }
+
+    #[test]
     fn pageless_scrolling_deduplicates_and_keeps_order() {
         let loader: PageLoader = Arc::new(|_| {});
         let mut state = PickerState::new(
