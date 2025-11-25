@@ -33,7 +33,7 @@ async fn emits_warning_when_stream_is_idle_and_status_is_degraded() {
         .await;
 
     set_test_status_widget_url(format!("{}{}", status_server.uri(), status_path));
-    set_test_idle_timeout(Duration::from_millis(30));
+    set_test_idle_timeout(Duration::from_millis(300));
 
     let responses_server = start_mock_server().await;
     let stalled_response = sse(vec![
@@ -45,7 +45,7 @@ async fn emits_warning_when_stream_is_idle_and_status_is_degraded() {
     let _responses_mock = mount_sse_once_with_delay(
         &responses_server,
         stalled_response,
-        Duration::from_millis(40),
+        Duration::from_millis(400),
     )
     .await;
 
