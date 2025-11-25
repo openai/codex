@@ -1,15 +1,14 @@
 use std::sync::Arc;
 
 use crate::api_bridge::auth_provider_from_auth;
-use crate::api_bridge::create_transport;
 use crate::api_bridge::map_api_error;
-use crate::api_bridge::to_api_provider;
 use codex_api::AggregateStreamExt;
 use codex_api::ChatClient as ApiChatClient;
 use codex_api::CompactClient as ApiCompactClient;
 use codex_api::CompactionInput as ApiCompactionInput;
 use codex_api::Prompt as ApiPrompt;
 use codex_api::RequestTelemetry;
+use codex_api::ReqwestTransport;
 use codex_api::ResponseStream as ApiResponseStream;
 use codex_api::ResponsesClient as ApiResponsesClient;
 use codex_api::ResponsesOptions as ApiResponsesOptions;
@@ -43,6 +42,7 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::config::Config;
+use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
@@ -160,9 +160,11 @@ impl ModelClient {
         let mut refreshed = false;
         loop {
             let auth = auth_manager.as_ref().and_then(|m| m.auth());
-            let api_provider = to_api_provider(&self.provider, auth.as_ref().map(|a| a.mode))?;
+            let api_provider = self
+                .provider
+                .to_api_provider(auth.as_ref().map(|a| a.mode))?;
             let api_auth = auth_provider_from_auth(auth.clone(), &self.provider).await?;
-            let transport = create_transport();
+            let transport = ReqwestTransport::new(build_reqwest_client());
             let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
             let client = ApiChatClient::new(transport, api_provider, api_auth)
                 .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
@@ -246,9 +248,11 @@ impl ModelClient {
         let mut refreshed = false;
         loop {
             let auth = auth_manager.as_ref().and_then(|m| m.auth());
-            let api_provider = to_api_provider(&self.provider, auth.as_ref().map(|a| a.mode))?;
+            let api_provider = self
+                .provider
+                .to_api_provider(auth.as_ref().map(|a| a.mode))?;
             let api_auth = auth_provider_from_auth(auth.clone(), &self.provider).await?;
-            let transport = create_transport();
+            let transport = ReqwestTransport::new(build_reqwest_client());
             let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
             let client = ApiResponsesClient::new(transport, api_provider, api_auth)
                 .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
@@ -328,9 +332,11 @@ impl ModelClient {
         }
         let auth_manager = self.auth_manager.clone();
         let auth = auth_manager.as_ref().and_then(|m| m.auth());
-        let api_provider = to_api_provider(&self.provider, auth.as_ref().map(|a| a.mode))?;
+        let api_provider = self
+            .provider
+            .to_api_provider(auth.as_ref().map(|a| a.mode))?;
         let api_auth = auth_provider_from_auth(auth.clone(), &self.provider).await?;
-        let transport = create_transport();
+        let transport = ReqwestTransport::new(build_reqwest_client());
         let request_telemetry = self.build_request_telemetry();
         let client = ApiCompactClient::new(transport, api_provider, api_auth)
             .with_telemetry(Some(request_telemetry));

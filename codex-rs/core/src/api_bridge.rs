@@ -1,17 +1,13 @@
 use chrono::DateTime;
 use chrono::Utc;
 use codex_api::AuthProvider as ApiAuthProvider;
-use codex_api::Provider as ApiProvider;
-use codex_api::ReqwestTransport;
 use codex_api::TransportError;
 use codex_api::error::ApiError;
 use codex_api::rate_limits::parse_rate_limit;
-use codex_app_server_protocol::AuthMode;
 use http::HeaderMap;
 use serde::Deserialize;
 
 use crate::auth::CodexAuth;
-use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::RetryLimitReachedError;
 use crate::error::UnexpectedResponseError;
@@ -19,20 +15,6 @@ use crate::error::UsageLimitReachedError;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::token_data::PlanType;
 
-#[allow(dead_code)]
-pub(crate) fn to_api_provider(
-    provider: &ModelProviderInfo,
-    auth_mode: Option<AuthMode>,
-) -> crate::error::Result<ApiProvider> {
-    provider.to_api_provider(auth_mode)
-}
-
-#[allow(dead_code)]
-pub(crate) fn create_transport() -> ReqwestTransport {
-    ReqwestTransport::new(build_reqwest_client())
-}
-
-#[allow(dead_code)]
 pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
     match err {
         ApiError::ContextWindowExceeded => CodexErr::ContextWindowExceeded,
@@ -110,7 +92,6 @@ fn extract_request_id(headers: Option<&HeaderMap>) -> Option<String> {
     })
 }
 
-#[allow(dead_code)]
 pub(crate) async fn auth_provider_from_auth(
     auth: Option<CodexAuth>,
     provider: &ModelProviderInfo,
@@ -157,17 +138,9 @@ struct UsageErrorBody {
 }
 
 #[derive(Clone, Default)]
-#[allow(dead_code)]
 pub(crate) struct CoreAuthProvider {
     token: Option<String>,
     account_id: Option<String>,
-}
-
-impl CoreAuthProvider {
-    #[allow(dead_code)]
-    pub(crate) fn with_token(token: Option<String>, account_id: Option<String>) -> Self {
-        Self { token, account_id }
-    }
 }
 
 impl ApiAuthProvider for CoreAuthProvider {
