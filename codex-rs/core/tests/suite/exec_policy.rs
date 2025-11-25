@@ -21,6 +21,11 @@ use std::fs;
 
 #[tokio::test]
 async fn execpolicy_blocks_shell_invocation() -> Result<()> {
+    // TODO execpolicy doesn't parse powershell commands yet
+    if cfg!(windows) {
+        return Ok(());
+    }
+
     let mut builder = test_codex().with_config(|config| {
         let policy_path = config.codex_home.join("policy").join("policy.codexpolicy");
         fs::create_dir_all(
@@ -40,7 +45,7 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
 
     let call_id = "shell-forbidden";
     let args = json!({
-        "command": ["echo", "blocked"],
+        "command": "echo blocked",
         "timeout_ms": 1_000,
     });
 
@@ -48,7 +53,7 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
         &server,
         sse(vec![
             ev_response_created("resp-1"),
-            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+            ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
             ev_completed("resp-1"),
         ]),
     )

@@ -1,0 +1,6 @@
+[advisories]
+ignore = [
+    "RUSTSEC-2024-0388", # derivative 2.2.0 via starlark; upstream crate is unmaintained
+    "RUSTSEC-2025-0057", # fxhash 0.2.1 via starlark_map; upstream crate is unmaintained
+    "RUSTSEC-2024-0436", # paste 1.0.15 via starlark/ratatui; upstream crate is unmaintained
+]

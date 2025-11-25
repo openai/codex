@@ -1,7 +1,8 @@
 [package]
-edition = "2024"
 name = "codex-exec-server"
-version = { workspace = true }
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "codex-execve-wrapper"
@@ -49,6 +50,7 @@ tokio = { workspace = true, features = [
     "rt-multi-thread",
     "signal",
 ] }
+tokio-util = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 

@@ -164,6 +164,19 @@ client_request_definitions! {
         response: v2::FeedbackUploadResponse,
     },
 
+    ConfigRead => "config/read" {
+        params: v2::ConfigReadParams,
+        response: v2::ConfigReadResponse,
+    },
+    ConfigValueWrite => "config/value/write" {
+        params: v2::ConfigValueWriteParams,
+        response: v2::ConfigWriteResponse,
+    },
+    ConfigBatchWrite => "config/batchWrite" {
+        params: v2::ConfigBatchWriteParams,
+        response: v2::ConfigWriteResponse,
+    },
+
     GetAccount => "account/read" {
         params: v2::GetAccountParams,
         response: v2::GetAccountResponse,
@@ -378,7 +391,7 @@ macro_rules! server_notification_definitions {
         impl TryFrom<JSONRPCNotification> for ServerNotification {
             type Error = serde_json::Error;
 
-            fn try_from(value: JSONRPCNotification) -> Result<Self, Self::Error> {
+            fn try_from(value: JSONRPCNotification) -> Result<Self, serde_json::Error> {
                 serde_json::from_value(serde_json::to_value(value)?)
             }
         }
@@ -487,6 +500,7 @@ pub struct FuzzyFileSearchResponse {
 
 server_notification_definitions! {
     /// NEW NOTIFICATIONS
+    Error => "error" (v2::ErrorNotification),
     ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
     TurnCompleted => "turn/completed" (v2::TurnCompletedNotification),

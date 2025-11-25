@@ -2,8 +2,11 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use codex_rmcp_client::ElicitationAction;
+use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::RmcpClient;
 use escargot::CargoBuild;
+use futures::FutureExt as _;
 use mcp_types::ClientCapabilities;
 use mcp_types::Implementation;
 use mcp_types::InitializeRequestParams;
@@ -55,7 +58,19 @@ async fn rmcp_client_can_list_and_read_resources() -> anyhow::Result<()> {
     .await?;
 
     client
-        .initialize(init_params(), Some(Duration::from_secs(5)))
+        .initialize(
+            init_params(),
+            Some(Duration::from_secs(5)),
+            Box::new(|_, _| {
+                async {
+                    Ok(ElicitationResponse {
+                        action: ElicitationAction::Accept,
+                        content: Some(json!({})),
+                    })
+                }
+                .boxed()
+            }),
+        )
         .await?;
 
     let list = client

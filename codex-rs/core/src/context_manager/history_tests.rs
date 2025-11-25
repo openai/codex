@@ -56,6 +56,17 @@ fn reasoning_msg(text: &str) -> ResponseItem {
     }
 }
 
+fn reasoning_with_encrypted_content(len: usize) -> ResponseItem {
+    ResponseItem::Reasoning {
+        id: String::new(),
+        summary: vec![ReasoningItemReasoningSummary::SummaryText {
+            text: "summary".to_string(),
+        }],
+        content: None,
+        encrypted_content: Some("a".repeat(len)),
+    }
+}
+
 fn truncate_exec_output(content: &str) -> String {
     truncate::truncate_text(content, TruncationPolicy::Tokens(EXEC_FORMAT_MAX_TOKENS))
 }
@@ -110,6 +121,28 @@ fn filters_non_api_messages() {
             }
         ]
     );
+}
+
+#[test]
+fn non_last_reasoning_tokens_return_zero_when_no_user_messages() {
+    let history = create_history_with_items(vec![reasoning_with_encrypted_content(800)]);
+
+    assert_eq!(history.get_non_last_reasoning_items_tokens(), 0);
+}
+
+#[test]
+fn non_last_reasoning_tokens_ignore_entries_after_last_user() {
+    let history = create_history_with_items(vec![
+        reasoning_with_encrypted_content(900),
+        user_msg("first"),
+        reasoning_with_encrypted_content(1_000),
+        user_msg("second"),
+        reasoning_with_encrypted_content(2_000),
+    ]);
+    // first: (900 * 0.75 - 650) / 4 = 6.25 tokens
+    // second: (1000 * 0.75 - 650) / 4 = 25 tokens
+    // first + second = 62.5
+    assert_eq!(history.get_non_last_reasoning_items_tokens(), 32);
 }
 
 #[test]

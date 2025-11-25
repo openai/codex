@@ -1,7 +1,8 @@
 [package]
-edition = "2024"
 name = "codex-app-server"
-version = { workspace = true }
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "codex-app-server"
@@ -29,6 +30,9 @@ codex-utils-json-to-toml = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
+tempfile = { workspace = true }
+toml = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",
@@ -40,7 +44,6 @@ tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 opentelemetry-appender-tracing = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v7"] }
-codex-windows-sandbox.workspace = true
 
 [dev-dependencies]
 app_test_support = { workspace = true }
@@ -51,6 +54,5 @@ mcp-types = { workspace = true }
 os_info = { workspace = true }
 pretty_assertions = { workspace = true }
 serial_test = { workspace = true }
-tempfile = { workspace = true }
-toml = { workspace = true }
 wiremock = { workspace = true }
+shlex = { workspace = true }

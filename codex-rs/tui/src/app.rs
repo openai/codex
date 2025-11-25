@@ -44,6 +44,8 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::Wrap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -343,7 +345,8 @@ impl App {
                 let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
                 let tx = app.app_event_tx.clone();
                 let logs_base_dir = app.config.codex_home.clone();
-                Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, tx);
+                let sandbox_policy = app.config.sandbox_policy.clone();
+                Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, sandbox_policy, tx);
             }
         }
 
@@ -717,7 +720,14 @@ impl App {
                             std::env::vars().collect();
                         let tx = self.app_event_tx.clone();
                         let logs_base_dir = self.config.codex_home.clone();
-                        Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, tx);
+                        let sandbox_policy = self.config.sandbox_policy.clone();
+                        Self::spawn_world_writable_scan(
+                            cwd,
+                            env_map,
+                            logs_base_dir,
+                            sandbox_policy,
+                            tx,
+                        );
                     }
                 }
             }
@@ -821,6 +831,23 @@ impl App {
                         "E X E C".to_string(),
                     ));
                 }
+                ApprovalRequest::McpElicitation {
+                    server_name,
+                    message,
+                    ..
+                } => {
+                    let _ = tui.enter_alt_screen();
+                    let paragraph = Paragraph::new(vec![
+                        Line::from(vec!["Server: ".into(), server_name.bold()]),
+                        Line::from(""),
+                        Line::from(message),
+                    ])
+                    .wrap(Wrap { trim: false });
+                    self.overlay = Some(Overlay::new_static_with_renderables(
+                        vec![Box::new(paragraph)],
+                        "E L I C I T A T I O N".to_string(),
+                    ));
+                }
             },
         }
         Ok(true)
@@ -911,47 +938,23 @@ impl App {
         cwd: PathBuf,
         env_map: std::collections::HashMap<String, String>,
         logs_base_dir: PathBuf,
+        sandbox_policy: codex_core::protocol::SandboxPolicy,
         tx: AppEventSender,
     ) {
-        #[inline]
-        fn normalize_windows_path_for_display(p: &std::path::Path) -> String {
-            let canon = dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-            canon.display().to_string().replace('/', "\\")
-        }
         tokio::task::spawn_blocking(move || {
-            let result = codex_windows_sandbox::preflight_audit_everyone_writable(
+            let result = codex_windows_sandbox::apply_world_writable_scan_and_denies(
+                &logs_base_dir,
                 &cwd,
                 &env_map,
+                &sandbox_policy,
                 Some(logs_base_dir.as_path()),
             );
-            if let Ok(ref paths) = result
-                && !paths.is_empty()
-            {
-                let as_strings: Vec<String> = paths
-                    .iter()
-                    .map(|p| normalize_windows_path_for_display(p))
-                    .collect();
-                let sample_paths: Vec<String> = as_strings.iter().take(3).cloned().collect();
-                let extra_count = if as_strings.len() > sample_paths.len() {
-                    as_strings.len() - sample_paths.len()
-                } else {
-                    0
-                };
-
+            if result.is_err() {
+                // Scan failed: warn without examples.
                 tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
                     preset: None,
-                    sample_paths,
-                    extra_count,
-                    failed_scan: false,
-                });
-            } else if result.is_err() {
-                // Scan failed: still warn, but with no examples and mark as failed.
-                let sample_paths: Vec<String> = Vec::new();
-                let extra_count = 0usize;
-                tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
-                    preset: None,
-                    sample_paths,
-                    extra_count,
+                    sample_paths: Vec::new(),
+                    extra_count: 0usize,
                     failed_scan: true,
                 });
             }

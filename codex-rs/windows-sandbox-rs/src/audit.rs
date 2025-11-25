@@ -1,7 +1,13 @@
+use crate::acl::add_deny_write_ace;
+use crate::cap::cap_sid_file;
+use crate::cap::load_or_create_cap_sids;
+use crate::logging::log_note;
+use crate::policy::SandboxPolicy;
+use crate::token::convert_string_sid_to_sid;
 use crate::token::world_sid;
+use anyhow::anyhow;
 use crate::winutil::to_wide;
 use anyhow::Result;
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::c_void;
 use std::path::Path;
@@ -271,6 +277,13 @@ pub fn audit_everyone_writable(
         for p in &flagged {
             list.push_str(&format!("\n - {}", p.display()));
         }
+        crate::logging::log_note(
+            &format!(
+                "AUDIT: world-writable scan FAILED; cwd={cwd:?}; checked={checked}; duration_ms={elapsed_ms}; flagged:{}",
+                list
+            ),
+            logs_base_dir,
+        );
 
         return Ok(flagged);
     }
@@ -282,29 +295,94 @@ pub fn audit_everyone_writable(
     Ok(Vec::new())
 }
 
-fn normalize_windows_path_for_display(p: impl AsRef<Path>) -> String {
-    let canon = dunce::canonicalize(p.as_ref()).unwrap_or_else(|_| p.as_ref().to_path_buf());
-    canon.display().to_string().replace('/', "\\")
+pub fn apply_world_writable_scan_and_denies(
+    codex_home: &Path,
+    cwd: &Path,
+    env_map: &std::collections::HashMap<String, String>,
+    sandbox_policy: &SandboxPolicy,
+    logs_base_dir: Option<&Path>,
+) -> Result<()> {
+    let flagged = audit_everyone_writable(cwd, env_map, logs_base_dir)?;
+    if flagged.is_empty() {
+        return Ok(());
+    }
+    if let Err(err) = apply_capability_denies_for_world_writable(
+        codex_home,
+        &flagged,
+        sandbox_policy,
+        cwd,
+        logs_base_dir,
+    ) {
+        log_note(
+            &format!("AUDIT: failed to apply capability deny ACEs: {}", err),
+            logs_base_dir,
+        );
+    }
+    Ok(())
 }
 
-pub fn world_writable_warning_details(
-    codex_home: impl AsRef<Path>,
-    cwd: impl AsRef<Path>,
-) -> Option<(Vec<String>, usize, bool)> {
-    let env_map: HashMap<String, String> = std::env::vars().collect();
-    match audit_everyone_writable(cwd.as_ref(), &env_map, Some(codex_home.as_ref())) {
-        Ok(paths) if paths.is_empty() => None,
-        Ok(paths) => {
-            let as_strings: Vec<String> = paths
-                .iter()
-                .map(normalize_windows_path_for_display)
-                .collect();
-            let sample_paths: Vec<String> = as_strings.iter().take(3).cloned().collect();
-            let extra_count = as_strings.len().saturating_sub(sample_paths.len());
-            Some((sample_paths, extra_count, false))
-        }
-        Err(_) => Some((Vec::new(), 0, true)),
+pub fn apply_capability_denies_for_world_writable(
+    codex_home: &Path,
+    flagged: &[PathBuf],
+    sandbox_policy: &SandboxPolicy,
+    cwd: &Path,
+    logs_base_dir: Option<&Path>,
+) -> Result<()> {
+    if flagged.is_empty() {
+        return Ok(());
     }
+    std::fs::create_dir_all(codex_home)?;
+    let cap_path = cap_sid_file(codex_home);
+    let caps = load_or_create_cap_sids(codex_home);
+    std::fs::write(&cap_path, serde_json::to_string(&caps)?)?;
+    let (active_sid, workspace_roots): (*mut c_void, Vec<PathBuf>) = match sandbox_policy {
+        SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+            let sid = unsafe { convert_string_sid_to_sid(&caps.workspace) }
+                .ok_or_else(|| anyhow!("ConvertStringSidToSidW failed for workspace capability"))?;
+            let mut roots: Vec<PathBuf> =
+                vec![dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf())];
+            for root in writable_roots {
+                let candidate = if root.is_absolute() {
+                    root.clone()
+                } else {
+                    cwd.join(root)
+                };
+                roots.push(dunce::canonicalize(&candidate).unwrap_or(candidate));
+            }
+            (sid, roots)
+        }
+        SandboxPolicy::ReadOnly => (
+            unsafe { convert_string_sid_to_sid(&caps.readonly) }.ok_or_else(|| {
+                anyhow!("ConvertStringSidToSidW failed for readonly capability")
+            })?,
+            Vec::new(),
+        ),
+        SandboxPolicy::DangerFullAccess => {
+            return Ok(());
+        }
+    };
+    for path in flagged {
+        if workspace_roots.iter().any(|root| path.starts_with(root)) {
+            continue;
+        }
+        let res = unsafe { add_deny_write_ace(path, active_sid) };
+        match res {
+            Ok(true) => log_note(
+                &format!("AUDIT: applied capability deny ACE to {}", path.display()),
+                logs_base_dir,
+            ),
+            Ok(false) => {}
+            Err(err) => log_note(
+                &format!(
+                    "AUDIT: failed to apply capability deny ACE to {}: {}",
+                    path.display(),
+                    err
+                ),
+                logs_base_dir,
+            ),
+        }
+    }
+    Ok(())
 }
 // Fast mask-based check: does the DACL contain any ACCESS_ALLOWED ACE for
 // Everyone that grants write after generic bits are expanded? Skips inherit-only

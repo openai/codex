@@ -16,7 +16,7 @@ jobs:
     outputs:
       codex_output: ${{ steps.codex.outputs.final-message }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Prepare Codex inputs
         env:
@@ -46,7 +46,6 @@ jobs:
         with:
           openai-api-key: ${{ secrets.CODEX_OPENAI_API_KEY }}
           allow-users: "*"
-          model: gpt-5.1
           prompt: |
             You are an assistant that triages new GitHub issues by identifying potential duplicates.
 

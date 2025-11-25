@@ -1,3 +1,6 @@
+use std::cmp::Reverse;
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -5,6 +8,7 @@ use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::time::Duration;
 use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
@@ -30,6 +34,7 @@ use crate::truncate::approx_token_count;
 use crate::truncate::formatted_truncate_text;
 
 use super::ExecCommandRequest;
+use super::MAX_UNIFIED_EXEC_SESSIONS;
 use super::SessionEntry;
 use super::UnifiedExecContext;
 use super::UnifiedExecError;
@@ -40,7 +45,37 @@ use super::clamp_yield_time;
 use super::generate_chunk_id;
 use super::resolve_max_tokens;
 use super::session::OutputBuffer;
+use super::session::OutputHandles;
 use super::session::UnifiedExecSession;
+
+const UNIFIED_EXEC_ENV: [(&str, &str); 8] = [
+    ("NO_COLOR", "1"),
+    ("TERM", "dumb"),
+    ("LANG", "C.UTF-8"),
+    ("LC_CTYPE", "C.UTF-8"),
+    ("LC_ALL", "C.UTF-8"),
+    ("COLORTERM", ""),
+    ("PAGER", "cat"),
+    ("GIT_PAGER", "cat"),
+];
+
+fn apply_unified_exec_env(mut env: HashMap<String, String>) -> HashMap<String, String> {
+    for (key, value) in UNIFIED_EXEC_ENV {
+        env.insert(key.to_string(), value.to_string());
+    }
+    env
+}
+
+struct PreparedSessionHandles {
+    writer_tx: mpsc::Sender<Vec<u8>>,
+    output_buffer: OutputBuffer,
+    output_notify: Arc<Notify>,
+    cancellation_token: CancellationToken,
+    session_ref: Arc<Session>,
+    turn_ref: Arc<TurnContext>,
+    command: Vec<String>,
+    cwd: PathBuf,
+}
 
 impl UnifiedExecSessionManager {
     pub(crate) async fn exec_command(
@@ -67,28 +102,35 @@ impl UnifiedExecSessionManager {
         let yield_time_ms = clamp_yield_time(request.yield_time_ms);
 
         let start = Instant::now();
-        let (output_buffer, output_notify) = session.output_handles();
+        let OutputHandles {
+            output_buffer,
+            output_notify,
+            cancellation_token,
+        } = session.output_handles();
         let deadline = start + Duration::from_millis(yield_time_ms);
-        let collected =
-            Self::collect_output_until_deadline(&output_buffer, &output_notify, deadline).await;
+        let collected = Self::collect_output_until_deadline(
+            &output_buffer,
+            &output_notify,
+            &cancellation_token,
+            deadline,
+        )
+        .await;
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let text = String::from_utf8_lossy(&collected).to_string();
         let output = formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
-        let chunk_id = generate_chunk_id();
         let has_exited = session.has_exited();
-        let stored_id = self
-            .store_session(session, context, &request.command, cwd.clone(), start)
-            .await;
-        let exit_code = self
-            .sessions
-            .lock()
-            .await
-            .get(&stored_id)
-            .map(|entry| entry.session.exit_code());
-        // Only include a session_id in the response if the process is still alive.
-        let session_id = if has_exited { None } else { Some(stored_id) };
-
+        let exit_code = session.exit_code();
+        let chunk_id = generate_chunk_id();
+        let session_id = if has_exited {
+            None
+        } else {
+            // Only store session if not exited.
+            let stored_id = self
+                .store_session(session, context, &request.command, cwd.clone(), start)
+                .await;
+            Some(stored_id)
+        };
         let original_token_count = approx_token_count(&text);
 
         let response = UnifiedExecResponse {
@@ -97,7 +139,7 @@ impl UnifiedExecSessionManager {
             wall_time,
             output,
             session_id,
-            exit_code: exit_code.flatten(),
+            exit_code,
             original_token_count: Some(original_token_count),
             session_command: Some(request.command.clone()),
         };
@@ -129,15 +171,16 @@ impl UnifiedExecSessionManager {
     ) -> Result<UnifiedExecResponse, UnifiedExecError> {
         let session_id = request.session_id;
 
-        let (
+        let PreparedSessionHandles {
             writer_tx,
             output_buffer,
             output_notify,
+            cancellation_token,
             session_ref,
             turn_ref,
-            session_command,
-            session_cwd,
-        ) = self.prepare_session_handles(session_id).await?;
+            command: session_command,
+            cwd: session_cwd,
+        } = self.prepare_session_handles(session_id).await?;
 
         let interaction_emitter = ToolEmitter::unified_exec(
             &session_command,
@@ -176,8 +219,13 @@ impl UnifiedExecSessionManager {
         let yield_time_ms = clamp_yield_time(request.yield_time_ms);
         let start = Instant::now();
         let deadline = start + Duration::from_millis(yield_time_ms);
-        let collected =
-            Self::collect_output_until_deadline(&output_buffer, &output_notify, deadline).await;
+        let collected = Self::collect_output_until_deadline(
+            &output_buffer,
+            &output_notify,
+            &cancellation_token,
+            deadline,
+        )
+        .await;
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let text = String::from_utf8_lossy(&collected).to_string();
@@ -265,44 +313,28 @@ impl UnifiedExecSessionManager {
     async fn prepare_session_handles(
         &self,
         session_id: i32,
-    ) -> Result<
-        (
-            mpsc::Sender<Vec<u8>>,
-            OutputBuffer,
-            Arc<Notify>,
-            Arc<Session>,
-            Arc<TurnContext>,
-            Vec<String>,
-            PathBuf,
-        ),
-        UnifiedExecError,
-    > {
-        let sessions = self.sessions.lock().await;
-        let (output_buffer, output_notify, writer_tx, session, turn, command, cwd) =
-            if let Some(entry) = sessions.get(&session_id) {
-                let (buffer, notify) = entry.session.output_handles();
-                (
-                    buffer,
-                    notify,
-                    entry.session.writer_sender(),
-                    Arc::clone(&entry.session_ref),
-                    Arc::clone(&entry.turn_ref),
-                    entry.command.clone(),
-                    entry.cwd.clone(),
-                )
-            } else {
-                return Err(UnifiedExecError::UnknownSessionId { session_id });
-            };
-
-        Ok((
-            writer_tx,
+    ) -> Result<PreparedSessionHandles, UnifiedExecError> {
+        let mut sessions = self.sessions.lock().await;
+        let entry = sessions
+            .get_mut(&session_id)
+            .ok_or(UnifiedExecError::UnknownSessionId { session_id })?;
+        entry.last_used = Instant::now();
+        let OutputHandles {
             output_buffer,
             output_notify,
-            session,
-            turn,
-            command,
-            cwd,
-        ))
+            cancellation_token,
+        } = entry.session.output_handles();
+
+        Ok(PreparedSessionHandles {
+            writer_tx: entry.session.writer_sender(),
+            output_buffer,
+            output_notify,
+            cancellation_token,
+            session_ref: Arc::clone(&entry.session_ref),
+            turn_ref: Arc::clone(&entry.turn_ref),
+            command: entry.command.clone(),
+            cwd: entry.cwd.clone(),
+        })
     }
 
     async fn send_input(
@@ -334,8 +366,11 @@ impl UnifiedExecSessionManager {
             command: command.to_vec(),
             cwd,
             started_at,
+            last_used: started_at,
         };
-        self.sessions.lock().await.insert(session_id, entry);
+        let mut sessions = self.sessions.lock().await;
+        Self::prune_sessions_if_needed(&mut sessions);
+        sessions.insert(session_id, entry);
         session_id
     }
 
@@ -443,12 +478,13 @@ impl UnifiedExecSessionManager {
         justification: Option<String>,
         context: &UnifiedExecContext,
     ) -> Result<UnifiedExecSession, UnifiedExecError> {
+        let env = apply_unified_exec_env(create_env(&context.turn.shell_environment_policy));
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);
         let req = UnifiedExecToolRequest::new(
             command.to_vec(),
             cwd,
-            create_env(&context.turn.shell_environment_policy),
+            env,
             with_escalated_permissions,
             justification,
             create_approval_requirement_for_command(
@@ -480,9 +516,13 @@ impl UnifiedExecSessionManager {
     pub(super) async fn collect_output_until_deadline(
         output_buffer: &OutputBuffer,
         output_notify: &Arc<Notify>,
+        cancellation_token: &CancellationToken,
         deadline: Instant,
     ) -> Vec<u8> {
+        const POST_EXIT_OUTPUT_GRACE: Duration = Duration::from_millis(25);
+
         let mut collected: Vec<u8> = Vec::with_capacity(4096);
+        let mut exit_signal_received = cancellation_token.is_cancelled();
         loop {
             let drained_chunks;
             let mut wait_for_output = None;
@@ -495,15 +535,27 @@ impl UnifiedExecSessionManager {
             }
 
             if drained_chunks.is_empty() {
+                exit_signal_received |= cancellation_token.is_cancelled();
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining == Duration::ZERO {
                     break;
                 }
 
                 let notified = wait_for_output.unwrap_or_else(|| output_notify.notified());
+                if exit_signal_received {
+                    let grace = remaining.min(POST_EXIT_OUTPUT_GRACE);
+                    if tokio::time::timeout(grace, notified).await.is_err() {
+                        break;
+                    }
+                    continue;
+                }
+
                 tokio::pin!(notified);
+                let exit_notified = cancellation_token.cancelled();
+                tokio::pin!(exit_notified);
                 tokio::select! {
                     _ = &mut notified => {}
+                    _ = &mut exit_notified => exit_signal_received = true,
                     _ = tokio::time::sleep(remaining) => break,
                 }
                 continue;
@@ -513,12 +565,57 @@ impl UnifiedExecSessionManager {
                 collected.extend_from_slice(&chunk);
             }
 
+            exit_signal_received |= cancellation_token.is_cancelled();
             if Instant::now() >= deadline {
                 break;
             }
         }
 
         collected
+    }
+
+    fn prune_sessions_if_needed(sessions: &mut HashMap<i32, SessionEntry>) {
+        if sessions.len() < MAX_UNIFIED_EXEC_SESSIONS {
+            return;
+        }
+
+        let meta: Vec<(i32, Instant, bool)> = sessions
+            .iter()
+            .map(|(id, entry)| (*id, entry.last_used, entry.session.has_exited()))
+            .collect();
+
+        if let Some(session_id) = Self::session_id_to_prune_from_meta(&meta) {
+            sessions.remove(&session_id);
+        }
+    }
+
+    // Centralized pruning policy so we can easily swap strategies later.
+    fn session_id_to_prune_from_meta(meta: &[(i32, Instant, bool)]) -> Option<i32> {
+        if meta.is_empty() {
+            return None;
+        }
+
+        let mut by_recency = meta.to_vec();
+        by_recency.sort_by_key(|(_, last_used, _)| Reverse(*last_used));
+        let protected: HashSet<i32> = by_recency
+            .iter()
+            .take(8)
+            .map(|(session_id, _, _)| *session_id)
+            .collect();
+
+        let mut lru = meta.to_vec();
+        lru.sort_by_key(|(_, last_used, _)| *last_used);
+
+        if let Some((session_id, _, _)) = lru
+            .iter()
+            .find(|(session_id, _, exited)| !protected.contains(session_id) && *exited)
+        {
+            return Some(*session_id);
+        }
+
+        lru.into_iter()
+            .find(|(session_id, _, _)| !protected.contains(session_id))
+            .map(|(session_id, _, _)| session_id)
     }
 }
 
@@ -532,4 +629,105 @@ enum SessionStatus {
         entry: Box<SessionEntry>,
     },
     Unknown,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use tokio::time::Duration;
+    use tokio::time::Instant;
+
+    #[test]
+    fn unified_exec_env_injects_defaults() {
+        let env = apply_unified_exec_env(HashMap::new());
+        let expected = HashMap::from([
+            ("NO_COLOR".to_string(), "1".to_string()),
+            ("TERM".to_string(), "dumb".to_string()),
+            ("LANG".to_string(), "C.UTF-8".to_string()),
+            ("LC_CTYPE".to_string(), "C.UTF-8".to_string()),
+            ("LC_ALL".to_string(), "C.UTF-8".to_string()),
+            ("COLORTERM".to_string(), String::new()),
+            ("PAGER".to_string(), "cat".to_string()),
+            ("GIT_PAGER".to_string(), "cat".to_string()),
+        ]);
+
+        assert_eq!(env, expected);
+    }
+
+    #[test]
+    fn unified_exec_env_overrides_existing_values() {
+        let mut base = HashMap::new();
+        base.insert("NO_COLOR".to_string(), "0".to_string());
+        base.insert("PATH".to_string(), "/usr/bin".to_string());
+
+        let env = apply_unified_exec_env(base);
+
+        assert_eq!(env.get("NO_COLOR"), Some(&"1".to_string()));
+        assert_eq!(env.get("PATH"), Some(&"/usr/bin".to_string()));
+    }
+
+    #[test]
+    fn pruning_prefers_exited_sessions_outside_recently_used() {
+        let now = Instant::now();
+        let meta = vec![
+            (1, now - Duration::from_secs(40), false),
+            (2, now - Duration::from_secs(30), true),
+            (3, now - Duration::from_secs(20), false),
+            (4, now - Duration::from_secs(19), false),
+            (5, now - Duration::from_secs(18), false),
+            (6, now - Duration::from_secs(17), false),
+            (7, now - Duration::from_secs(16), false),
+            (8, now - Duration::from_secs(15), false),
+            (9, now - Duration::from_secs(14), false),
+            (10, now - Duration::from_secs(13), false),
+        ];
+
+        let candidate = UnifiedExecSessionManager::session_id_to_prune_from_meta(&meta);
+
+        assert_eq!(candidate, Some(2));
+    }
+
+    #[test]
+    fn pruning_falls_back_to_lru_when_no_exited() {
+        let now = Instant::now();
+        let meta = vec![
+            (1, now - Duration::from_secs(40), false),
+            (2, now - Duration::from_secs(30), false),
+            (3, now - Duration::from_secs(20), false),
+            (4, now - Duration::from_secs(19), false),
+            (5, now - Duration::from_secs(18), false),
+            (6, now - Duration::from_secs(17), false),
+            (7, now - Duration::from_secs(16), false),
+            (8, now - Duration::from_secs(15), false),
+            (9, now - Duration::from_secs(14), false),
+            (10, now - Duration::from_secs(13), false),
+        ];
+
+        let candidate = UnifiedExecSessionManager::session_id_to_prune_from_meta(&meta);
+
+        assert_eq!(candidate, Some(1));
+    }
+
+    #[test]
+    fn pruning_protects_recent_sessions_even_if_exited() {
+        let now = Instant::now();
+        let meta = vec![
+            (1, now - Duration::from_secs(40), false),
+            (2, now - Duration::from_secs(30), false),
+            (3, now - Duration::from_secs(20), true),
+            (4, now - Duration::from_secs(19), false),
+            (5, now - Duration::from_secs(18), false),
+            (6, now - Duration::from_secs(17), false),
+            (7, now - Duration::from_secs(16), false),
+            (8, now - Duration::from_secs(15), false),
+            (9, now - Duration::from_secs(14), false),
+            (10, now - Duration::from_secs(13), true),
+        ];
+
+        let candidate = UnifiedExecSessionManager::session_id_to_prune_from_meta(&meta);
+
+        // (10) is exited but among the last 8; we should drop the LRU outside that set.
+        assert_eq!(candidate, Some(1));
+    }
 }

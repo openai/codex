@@ -50,11 +50,13 @@ use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::protocol::CodexErrorInfo;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
 use tempfile::tempdir;
@@ -338,6 +340,7 @@ fn make_chatwidget_manual() -> (
         enhanced_keys_supported: false,
         placeholder_text: "Ask Codex to do anything".to_string(),
         disable_paste_burst: false,
+        animations_enabled: cfg.animations,
     });
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
     let widget = ChatWidget {
@@ -356,6 +359,8 @@ fn make_chatwidget_manual() -> (
         rate_limit_poller: None,
         stream_controller: None,
         running_commands: HashMap::new(),
+        suppressed_exec_calls: HashSet::new(),
+        last_unified_wait: None,
         task_complete_pending: false,
         mcp_startup_status: None,
         interrupts: InterruptManager::new(),
@@ -1791,6 +1796,28 @@ fn exec_history_extends_previous_when_consecutive() {
 }
 
 #[test]
+fn user_shell_command_renders_output_not_exploring() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    let begin_ls = begin_exec_with_source(
+        &mut chat,
+        "user-shell-ls",
+        "ls",
+        ExecCommandSource::UserShell,
+    );
+    end_exec(&mut chat, begin_ls, "file1\nfile2\n", "", 0);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected a single history cell for the user command"
+    );
+    let blob = lines_to_single_string(cells.first().unwrap());
+    assert_snapshot!("user_shell_ls_output", blob);
+}
+
+#[test]
 fn disabled_slash_command_while_task_running_snapshot() {
     // Build a chat widget and simulate an active task
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
@@ -2624,6 +2651,7 @@ fn stream_error_updates_status_indicator() {
         id: "sub-1".into(),
         msg: EventMsg::StreamError(StreamErrorEvent {
             message: msg.to_string(),
+            codex_error_info: Some(CodexErrorInfo::Other),
         }),
     });
 

@@ -585,7 +585,7 @@ async fn unified_exec_emits_begin_for_write_stdin() -> Result<()> {
 
     let open_call_id = "uexec-open-for-begin";
     let open_args = json!({
-        "cmd": "/bin/sh -c echo ready".to_string(),
+        "cmd": "bash -i".to_string(),
         "yield_time_ms": 200,
     });
 
@@ -651,7 +651,7 @@ async fn unified_exec_emits_begin_for_write_stdin() -> Result<()> {
         vec![
             "/bin/bash".to_string(),
             "-lc".to_string(),
-            "/bin/sh -c echo ready".to_string()
+            "bash -i".to_string()
         ]
     );
     assert_eq!(
@@ -687,7 +687,7 @@ async fn unified_exec_emits_begin_event_for_write_stdin_requests() -> Result<()>
 
     let open_call_id = "uexec-open-session";
     let open_args = json!({
-        "cmd": "/bin/sh -c echo ready".to_string(),
+        "cmd": "bash -i".to_string(),
         "yield_time_ms": 250,
     });
 
@@ -767,7 +767,7 @@ async fn unified_exec_emits_begin_event_for_write_stdin_requests() -> Result<()>
         vec![
             "/bin/bash".to_string(),
             "-lc".to_string(),
-            "/bin/sh -c echo ready".to_string()
+            "bash -i".to_string()
         ]
     );
     assert!(
@@ -785,7 +785,7 @@ async fn unified_exec_emits_begin_event_for_write_stdin_requests() -> Result<()>
         vec![
             "/bin/bash".to_string(),
             "-lc".to_string(),
-            "/bin/sh -c echo ready".to_string()
+            "bash -i".to_string()
         ]
     );
     assert!(
@@ -899,6 +899,98 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
     assert!(
         original_tokens > 6,
         "original token count should exceed max_output_tokens"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_respects_early_exit_notifications() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::UnifiedExec);
+    });
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let call_id = "uexec-early-exit";
+    let args = serde_json::json!({
+        "cmd": "sleep 0.05",
+        "yield_time_ms": 31415,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    mount_sse_sequence(&server, responses).await;
+
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "watch early exit timing".into(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+
+    let requests = server.received_requests().await.expect("recorded requests");
+    assert!(!requests.is_empty(), "expected at least one POST request");
+
+    let bodies = requests
+        .iter()
+        .map(|req| req.body_json::<Value>().expect("request json"))
+        .collect::<Vec<_>>();
+
+    let outputs = collect_tool_outputs(&bodies)?;
+    let output = outputs
+        .get(call_id)
+        .expect("missing early exit unified_exec output");
+
+    assert!(
+        output.session_id.is_none(),
+        "short-lived process should not keep a session alive"
+    );
+    assert_eq!(
+        output.exit_code,
+        Some(0),
+        "short-lived process should exit successfully"
+    );
+
+    let wall_time = output.wall_time_seconds;
+    assert!(
+        wall_time < 0.75,
+        "wall_time should reflect early exit rather than the full yield time; got {wall_time}"
+    );
+    assert!(
+        output.output.is_empty(),
+        "sleep command should not emit output, got {:?}",
+        output.output
     );
 
     Ok(())
@@ -1530,8 +1622,8 @@ async fn unified_exec_formats_large_output_summary() -> Result<()> {
     } = builder.build(&server).await?;
 
     let script = r#"python3 - <<'PY'
-for i in range(10000):
-    print("token token ")
+import sys
+sys.stdout.write("token token \n" * 5000)
 PY
 "#;
 
@@ -1665,6 +1757,165 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
     let output = outputs.get(call_id).expect("missing output");
 
     assert_regex_match("hello[\r\n]+", &output.output);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore]
+async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config.features.enable(Feature::UnifiedExec);
+    });
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    const MAX_SESSIONS_FOR_TEST: i32 = 64;
+    const FILLER_SESSIONS: i32 = MAX_SESSIONS_FOR_TEST - 1;
+
+    let keep_call_id = "uexec-prune-keep";
+    let keep_args = serde_json::json!({
+        "cmd": "/bin/cat",
+        "yield_time_ms": 250,
+    });
+
+    let prune_call_id = "uexec-prune-target";
+    // Give the sleeper time to exit before the filler sessions trigger pruning.
+    let prune_args = serde_json::json!({
+        "cmd": "sleep 1",
+        "yield_time_ms": 1_250,
+    });
+
+    let mut events = vec![ev_response_created("resp-prune-1")];
+    events.push(ev_function_call(
+        keep_call_id,
+        "exec_command",
+        &serde_json::to_string(&keep_args)?,
+    ));
+    events.push(ev_function_call(
+        prune_call_id,
+        "exec_command",
+        &serde_json::to_string(&prune_args)?,
+    ));
+
+    for idx in 0..FILLER_SESSIONS {
+        let filler_args = serde_json::json!({
+            "cmd": format!("echo filler {idx}"),
+            "yield_time_ms": 250,
+        });
+        let call_id = format!("uexec-prune-fill-{idx}");
+        events.push(ev_function_call(
+            &call_id,
+            "exec_command",
+            &serde_json::to_string(&filler_args)?,
+        ));
+    }
+
+    let keep_write_call_id = "uexec-prune-keep-write";
+    let keep_write_args = serde_json::json!({
+        "chars": "still alive\n",
+        "session_id": 0,
+        "yield_time_ms": 500,
+    });
+    events.push(ev_function_call(
+        keep_write_call_id,
+        "write_stdin",
+        &serde_json::to_string(&keep_write_args)?,
+    ));
+
+    let probe_call_id = "uexec-prune-probe";
+    let probe_args = serde_json::json!({
+        "chars": "should fail\n",
+        "session_id": 1,
+        "yield_time_ms": 500,
+    });
+    events.push(ev_function_call(
+        probe_call_id,
+        "write_stdin",
+        &serde_json::to_string(&probe_args)?,
+    ));
+
+    events.push(ev_completed("resp-prune-1"));
+    let first_response = sse(events);
+    let completion_response = sse(vec![
+        ev_response_created("resp-prune-2"),
+        ev_assistant_message("msg-prune", "done"),
+        ev_completed("resp-prune-2"),
+    ]);
+    let response_mock =
+        mount_sse_sequence(&server, vec![first_response, completion_response]).await;
+
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "fill session cache".into(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+
+    let requests = response_mock.requests();
+    assert!(
+        !requests.is_empty(),
+        "expected at least one response request"
+    );
+
+    let keep_start = requests
+        .iter()
+        .find_map(|req| req.function_call_output_text(keep_call_id))
+        .expect("missing initial keep session output");
+    let keep_start_output = parse_unified_exec_output(&keep_start)?;
+    pretty_assertions::assert_eq!(keep_start_output.session_id, Some(0));
+    assert!(keep_start_output.exit_code.is_none());
+
+    let prune_start = requests
+        .iter()
+        .find_map(|req| req.function_call_output_text(prune_call_id))
+        .expect("missing initial prune session output");
+    let prune_start_output = parse_unified_exec_output(&prune_start)?;
+    pretty_assertions::assert_eq!(prune_start_output.session_id, Some(1));
+    assert!(prune_start_output.exit_code.is_none());
+
+    let keep_write = requests
+        .iter()
+        .find_map(|req| req.function_call_output_text(keep_write_call_id))
+        .expect("missing keep write output");
+    let keep_write_output = parse_unified_exec_output(&keep_write)?;
+    pretty_assertions::assert_eq!(keep_write_output.session_id, Some(0));
+    assert!(
+        keep_write_output.output.contains("still alive"),
+        "expected cat session to echo input, got {:?}",
+        keep_write_output.output
+    );
+
+    let pruned_probe = requests
+        .iter()
+        .find_map(|req| req.function_call_output_text(probe_call_id))
+        .expect("missing probe output");
+    assert!(
+        pruned_probe.contains("UnknownSessionId") || pruned_probe.contains("Unknown session id"),
+        "expected probe to fail after pruning, got {pruned_probe:?}"
+    );
 
     Ok(())
 }

@@ -4,7 +4,6 @@ use codex_core::CodexConversation;
 use codex_core::ConversationManager;
 use codex_core::NewConversation;
 use codex_core::config::Config;
-use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -37,7 +36,7 @@ pub(crate) fn spawn_agent(
                 eprintln!("{message}");
                 app_event_tx_clone.send(AppEvent::CodexEvent(Event {
                     id: "".to_string(),
-                    msg: EventMsg::Error(ErrorEvent { message }),
+                    msg: EventMsg::Error(err.to_error_event(None)),
                 }));
                 app_event_tx_clone.send(AppEvent::ExitRequest);
                 tracing::error!("failed to initialize codex: {err}");

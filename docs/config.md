@@ -33,7 +33,6 @@ Optional and experimental capabilities are toggled via the `[features]` table in
 
 ```toml
 [features]
-streamable_shell = true          # enable the streamable exec tool
 web_search_request = true        # allow the model to request web searches
 # view_image_tool defaults to true; omit to keep defaults
 ```
@@ -43,7 +42,6 @@ Supported features:
 | Key                                       | Default | Stage        | Description                                          |
 | ----------------------------------------- | :-----: | ------------ | ---------------------------------------------------- |
 | `unified_exec`                            |  false  | Experimental | Use the unified PTY-backed exec tool                 |
-| `streamable_shell`                        |  false  | Experimental | Use the streamable exec-command/write-stdin pair     |
 | `rmcp_client`                             |  false  | Experimental | Enable oauth support for streamable HTTP MCP servers |
 | `apply_patch_freeform`                    |  false  | Beta         | Include the freeform `apply_patch` tool              |
 | `view_image_tool`                         |  true   | Stable       | Include the `view_image` tool                        |
@@ -246,12 +244,6 @@ model_supports_reasoning_summaries = true
 The size of the context window for the model, in tokens.
 
 In general, Codex knows the context window for the most common OpenAI models, but if you are using a new model with an old version of the Codex CLI, then you can use `model_context_window` to tell Codex what value to use to determine how much context is left during a conversation.
-
-### model_max_output_tokens
-
-This is analogous to `model_context_window`, but for the maximum number of output tokens for the model.
-
-> See also [`codex exec`](./exec.md) to see how these model settings influence non-interactive runs.
 
 ### oss_provider
 
@@ -937,6 +929,10 @@ notifications = true
 # You can optionally filter to specific notification types.
 # Available types are "agent-turn-complete" and "approval-requested".
 notifications = [ "agent-turn-complete", "approval-requested" ]
+
+# Disable terminal animations (welcome screen, status shimmer, spinner).
+# Defaults to true.
+animations = false
 ```
 
 > [!NOTE]
@@ -985,7 +981,6 @@ Valid values:
 | `model`                                          | string                                                            | Model to use (e.g., `gpt-5.1-codex-max`).                                                                                  |
 | `model_provider`                                 | string                                                            | Provider id from `model_providers` (default: `openai`).                                                                    |
 | `model_context_window`                           | number                                                            | Context window tokens.                                                                                                     |
-| `model_max_output_tokens`                        | number                                                            | Max output tokens.                                                                                                         |
 | `tool_output_token_limit`                        | number                                                            | Token budget for stored function/tool outputs in history (default: 2,560 tokens).                                          |
 | `approval_policy`                                | `untrusted` \| `on-failure` \| `on-request` \| `never`            | When to prompt for approval.                                                                                               |
 | `sandbox_mode`                                   | `read-only` \| `workspace-write` \| `danger-full-access`          | OS sandbox policy.                                                                                                         |
@@ -994,6 +989,7 @@ Valid values:
 | `sandbox_workspace_write.exclude_tmpdir_env_var` | boolean                                                           | Exclude `$TMPDIR` from writable roots (default: false).                                                                    |
 | `sandbox_workspace_write.exclude_slash_tmp`      | boolean                                                           | Exclude `/tmp` from writable roots (default: false).                                                                       |
 | `notify`                                         | array<string>                                                     | External program for notifications.                                                                                        |
+| `tui.animations`                                 | boolean                                                           | Enable terminal animations (welcome screen, shimmer, spinner). Defaults to true; set to `false` to disable visual motion.  |
 | `instructions`                                   | string                                                            | Currently ignored; use `experimental_instructions_file` or `AGENTS.md`.                                                    |
 | `features.<feature-flag>`                        | boolean                                                           | See [feature flags](#feature-flags) for details                                                                            |
 | `mcp_servers.<id>.command`                       | string                                                            | MCP server launcher command (stdio servers only).                                                                          |
@@ -1025,6 +1021,7 @@ Valid values:
 | `tui`                                            | table                                                             | TUI‑specific options.                                                                                                      |
 | `tui.notifications`                              | boolean \| array<string>                                          | Enable desktop notifications in the tui (default: true).                                                                   |
 | `hide_agent_reasoning`                           | boolean                                                           | Hide model reasoning events.                                                                                               |
+| `check_for_update_on_startup`                    | boolean                                                           | Check for Codex updates on startup (default: true). Set to `false` only if updates are centrally managed.                  |
 | `show_raw_agent_reasoning`                       | boolean                                                           | Show raw reasoning (when available).                                                                                       |
 | `model_reasoning_effort`                         | `minimal` \| `low` \| `medium` \| `high`                          | Responses API reasoning effort.                                                                                            |
 | `model_reasoning_summary`                        | `auto` \| `concise` \| `detailed` \| `none`                       | Reasoning summaries.                                                                                                       |

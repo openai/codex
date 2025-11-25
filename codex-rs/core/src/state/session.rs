@@ -82,6 +82,10 @@ impl SessionState {
         self.history.set_token_usage_full(context_window);
     }
 
+    pub(crate) fn get_total_token_usage(&self) -> i64 {
+        self.history.get_total_token_usage()
+    }
+
     pub(crate) fn auto_continue(&self) -> &AutoContinueRuntimeState {
         &self.auto_continue
     }
