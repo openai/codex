@@ -1061,8 +1061,16 @@ stream_max_retries = 0
 }
 
 fn create_exec_command_sse_response(call_id: &str) -> anyhow::Result<String> {
+    let (cmd, args) = if cfg!(windows) {
+        ("cmd.exe", vec!["/d", "/c", "echo hi"])
+    } else {
+        ("/bin/sh", vec!["-c", "echo hi"])
+    };
+    let command = std::iter::once(cmd.to_string())
+        .chain(args.into_iter().map(str::to_string))
+        .collect::<Vec<_>>();
     let tool_call_arguments = serde_json::to_string(&serde_json::json!({
-        "cmd": "/bin/sh -c echo hi",
+        "cmd": command.join(" "),
         "yield_time_ms": 500
     }))?;
     let tool_call = serde_json::json!({
