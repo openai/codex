@@ -52,6 +52,7 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
+use tokio::time::sleep_until;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::error;
@@ -106,6 +107,7 @@ use crate::shell;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
 use crate::state::SessionState;
+use crate::status::IdleWarning;
 use crate::tasks::GhostSnapshotTask;
 use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
@@ -2187,6 +2189,8 @@ async fn try_run_turn(
         .or_cancel(&cancellation_token)
         .await??;
 
+    let mut idle_warning = IdleWarning::default();
+
     let tool_runtime = ToolCallRuntime::new(
         Arc::clone(&router),
         Arc::clone(&sess),
@@ -2202,7 +2206,24 @@ async fn try_run_turn(
         // Poll the next item from the model stream. We must inspect *both* Ok and Err
         // cases so that transient stream failures (e.g., dropped SSE connection before
         // `response.completed`) bubble up and trigger the caller's retry logic.
-        let event = match stream.next().or_cancel(&cancellation_token).await {
+        let event = tokio::select! {
+            biased;
+            result = stream.next().or_cancel(&cancellation_token) => result,
+            _ = sleep_until(idle_warning.deadline()) => {
+                if let Some(message) = idle_warning.maybe_warning_message().await {
+                    sess.send_event(
+                        &turn_context,
+                        EventMsg::Warning(WarningEvent { message }),
+                    )
+                    .await;
+                }
+                continue;
+            }
+        };
+
+        idle_warning.mark_event();
+
+        let event = match event {
             Ok(event) => event,
             Err(codex_async_utils::CancelErr::Cancelled) => {
                 let processed_items = output.try_collect().await?;
