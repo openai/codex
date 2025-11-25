@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
-
+use rand::Rng;
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::time::Duration;
@@ -63,9 +63,23 @@ struct PreparedSessionHandles {
 impl UnifiedExecSessionManager {
     pub(crate) async fn allocate_process_id(&self) -> String {
         loop {
-            let process_id = generate_process_id().to_string();
-
             let mut store = self.used_session_ids.lock().await;
+
+            let process_id = if !cfg!(test) && !cfg!(feature = "deterministic_process_ids") {
+                // production mode → random
+                rand::rng().random_range(1_000..100_000).to_string()
+            } else {
+                // test or deterministic mode
+                let next = store
+                    .iter()
+                    .filter_map(|s| s.parse::<i32>().ok())
+                    .max()
+                    .map(|m| std::cmp::max(m, 999) + 1)
+                    .unwrap_or(1000);
+
+                next.to_string()
+            };
+
             if store.contains(&process_id) {
                 continue;
             }
@@ -652,18 +666,6 @@ enum SessionStatus {
         entry: Box<SessionEntry>,
     },
     Unknown,
-}
-
-#[cfg(any(test, feature = "deterministic_process_ids"))]
-fn generate_process_id() -> i32 {
-    use std::sync::atomic::{AtomicI32, Ordering};
-    static NEXT_ID: AtomicI32 = AtomicI32::new(1000);
-    NEXT_ID.fetch_add(1, Ordering::SeqCst)
-}
-
-#[cfg(not(any(test, feature = "deterministic_process_ids")))]
-fn generate_process_id() -> i32 {
-    rand::rng().random_range(1_000..100_000)
 }
 
 #[cfg(test)]
