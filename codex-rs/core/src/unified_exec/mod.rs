@@ -68,7 +68,6 @@ impl UnifiedExecContext {
 pub(crate) struct ExecCommandRequest {
     pub command: Vec<String>,
     pub process_id: String,
-    pub session_id: i32,
     pub yield_time_ms: u64,
     pub max_output_tokens: Option<usize>,
     pub workdir: Option<PathBuf>,
@@ -91,7 +90,6 @@ pub(crate) struct UnifiedExecResponse {
     pub chunk_id: String,
     pub wall_time: Duration,
     pub output: String,
-    pub session_id: Option<i32>,
     pub process_id: Option<String>,
     pub exit_code: Option<i32>,
     pub original_token_count: Option<usize>,
@@ -100,12 +98,12 @@ pub(crate) struct UnifiedExecResponse {
 
 #[derive(Default)]
 pub(crate) struct UnifiedExecSessionManager {
-    sessions: Mutex<HashMap<i32, SessionEntry>>,
-    used_session_ids: Mutex<HashSet<i32>>,
+    sessions: Mutex<HashMap<String, SessionEntry>>,
+    used_session_ids: Mutex<HashSet<String>>,
 }
 
 struct SessionEntry {
-    session: session::UnifiedExecSession,
+    session: UnifiedExecSession,
     session_ref: Arc<Session>,
     turn_ref: Arc<TurnContext>,
     call_id: String,
@@ -163,7 +161,7 @@ mod tests {
     ) -> Result<UnifiedExecResponse, UnifiedExecError> {
         let context =
             UnifiedExecContext::new(Arc::clone(session), Arc::clone(turn), "call".to_string());
-        let (session_id, process_id) = session
+        let process_id = session
             .services
             .unified_exec_manager
             .allocate_process_id()
@@ -176,7 +174,6 @@ mod tests {
                 ExecCommandRequest {
                     command: vec!["bash".to_string(), "-lc".to_string(), cmd.to_string()],
                     process_id,
-                    session_id,
                     yield_time_ms,
                     max_output_tokens: None,
                     workdir: None,
@@ -284,9 +281,10 @@ mod tests {
 
         let out_2 =
             exec_command(&session, &turn, "echo $CODEX_INTERACTIVE_SHELL_VAR", 2_500).await?;
+        tokio::time::sleep(Duration::from_secs(2)).await;
         assert!(
-            out_2.process_id.is_some(),
-            "short command should report a process id even if it exits quickly"
+            out_2.process_id.is_none(),
+            "short command should not report a process id if it exits quickly"
         );
         assert!(
             !out_2.output.contains("codex"),
@@ -417,12 +415,8 @@ mod tests {
             .expect_err("expected unknown session error");
 
         match err {
-            UnifiedExecError::UnknownSessionId { session_id: err_id } => {
-                assert_eq!(
-                    err_id.to_string(),
-                    process_id,
-                    "numeric id should match process id string"
-                );
+            UnifiedExecError::UnknownSessionId { process_id: err_id } => {
+                assert_eq!(err_id, process_id, "process id should match request");
             }
             other => panic!("expected UnknownSessionId, got {other:?}"),
         }

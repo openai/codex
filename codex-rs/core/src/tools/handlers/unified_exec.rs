@@ -128,7 +128,7 @@ impl ToolHandler for UnifiedExecHandler {
                         "failed to parse exec_command arguments: {err:?}"
                     ))
                 })?;
-                let (session_id, process_id) = manager.allocate_process_id().await;
+                let process_id = manager.allocate_process_id().await;
 
                 let command = get_command(&args);
                 let ExecCommandArgs {
@@ -178,7 +178,6 @@ impl ToolHandler for UnifiedExecHandler {
                         ExecCommandRequest {
                             command,
                             process_id,
-                            session_id,
                             yield_time_ms,
                             max_output_tokens,
                             workdir,
@@ -259,12 +258,9 @@ fn format_response(response: &UnifiedExecResponse) -> String {
         sections.push(format!("Process exited with code {exit_code}"));
     }
 
-    if let Some(session_id) = response.session_id {
-        sections.push(format!("Session ID: {session_id}"));
-    }
-
     if let Some(process_id) = &response.process_id {
-        sections.push(format!("Process running with process ID {process_id}"));
+        // Training still uses "session ID".
+        sections.push(format!("Process running with session ID {process_id}"));
     }
 
     if let Some(original_token_count) = response.original_token_count {
