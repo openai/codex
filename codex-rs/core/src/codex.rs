@@ -2342,7 +2342,7 @@ async fn try_run_turn(
                     sess.send_event(&turn_context, EventMsg::AgentMessageContentDelta(event))
                         .await;
                 } else {
-                    error_or_panic("ReasoningSummaryDelta without active item".to_string());
+                    error_or_panic("OutputTextDelta without active item".to_string());
                 }
             }
             ResponseEvent::ReasoningSummaryDelta {
@@ -2435,6 +2435,9 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
 use crate::features::Features;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
+
+#[cfg(test)]
+pub(crate) use tests::make_session_and_context_with_rx;
 
 #[cfg(test)]
 mod tests {
@@ -2712,7 +2715,7 @@ mod tests {
 
     // Like make_session_and_context, but returns Arc<Session> and the event receiver
     // so tests can assert on emitted events.
-    fn make_session_and_context_with_rx() -> (
+    pub(crate) fn make_session_and_context_with_rx() -> (
         Arc<Session>,
         Arc<TurnContext>,
         async_channel::Receiver<Event>,
