@@ -808,6 +808,8 @@ pub struct TurnError {
 #[ts(export_to = "v2/")]
 pub struct ErrorNotification {
     pub error: TurnError,
+    pub thread_id: String,
+    pub turn_id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1128,6 +1130,7 @@ pub struct ThreadStartedNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct TurnStartedNotification {
+    pub thread_id: String,
     pub turn: Turn,
 }
 
@@ -1144,7 +1147,18 @@ pub struct Usage {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct TurnCompletedNotification {
+    pub thread_id: String,
     pub turn: Turn,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// Notification that the turn-level unified diff has changed.
+/// Contains the latest aggregated diff across all file changes in the turn.
+pub struct TurnDiffUpdatedNotification {
+    pub turn_id: String,
+    pub diff: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1152,6 +1166,8 @@ pub struct TurnCompletedNotification {
 #[ts(export_to = "v2/")]
 pub struct ItemStartedNotification {
     pub item: ThreadItem,
+    pub thread_id: String,
+    pub turn_id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1159,6 +1175,8 @@ pub struct ItemStartedNotification {
 #[ts(export_to = "v2/")]
 pub struct ItemCompletedNotification {
     pub item: ThreadItem,
+    pub thread_id: String,
+    pub turn_id: String,
 }
 
 // Item-specific progress notifications
@@ -1219,6 +1237,14 @@ pub struct WindowsWorldWritableWarningNotification {
     pub sample_paths: Vec<String>,
     pub extra_count: usize,
     pub failed_scan: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ContextCompactedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

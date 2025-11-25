@@ -41,6 +41,8 @@ members = [
     "utils/pty",
     "utils/readiness",
     "utils/string",
+    "codex-client",
+    "codex-api",
 ]
 resolver = "2"
 
@@ -63,6 +65,8 @@ codex-apply-patch = { path = "apply-patch" }
 codex-arg0 = { path = "arg0" }
 codex-async-utils = { path = "async-utils" }
 codex-backend-client = { path = "backend-client" }
+codex-api = { path = "codex-api" }
+codex-client = { path = "codex-client" }
 codex-chatgpt = { path = "chatgpt" }
 codex-common = { path = "common" }
 codex-core = { path = "core" }
@@ -171,6 +175,7 @@ reqwest = "0.12"
 rmcp = { version = "0.9.0", default-features = false }
 schemars = "0.8.22"
 seccompiler = "0.5.0"
+sentry = "0.34.0"
 serde = "1"
 serde_json = "1"
 serde_with = "3.14"

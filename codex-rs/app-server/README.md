@@ -257,6 +257,7 @@ Today both notifications carry an empty `items` array even when item events were
 - `fileChange` — `{id, changes, status}` describing proposed edits; `changes` list `{path, kind, diff}` and `status` is `inProgress`, `completed`, `failed`, or `declined`.
 - `mcpToolCall` — `{id, server, tool, status, arguments, result?, error?}` describing MCP calls; `status` is `inProgress`, `completed`, or `failed`.
 - `webSearch` — `{id, query}` for a web search request issued by the agent.
+- `compacted` - `{threadId, turnId}` when codex compacts the conversation history. This can happen automatically.
 
 All items emit two shared lifecycle events:
 - `item/started` — emits the full `item` when a new unit of work begins so the UI can render it immediately; the `item.id` in this payload matches the `itemId` used by deltas.

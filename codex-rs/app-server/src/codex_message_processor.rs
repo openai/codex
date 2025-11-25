@@ -2475,7 +2475,10 @@ impl CodexMessageProcessor {
                 self.outgoing.send_response(request_id, response).await;
 
                 // Emit v2 turn/started notification.
-                let notif = TurnStartedNotification { turn };
+                let notif = TurnStartedNotification {
+                    thread_id: params.thread_id,
+                    turn,
+                };
                 self.outgoing
                     .send_server_notification(ServerNotification::TurnStarted(notif))
                     .await;
