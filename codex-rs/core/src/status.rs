@@ -72,13 +72,13 @@ impl IdleWarning {
             return None;
         }
 
-        if let Ok(status) = fetch_codex_health().await {
-            if !status.is_operational() {
-                self.warning_sent = true;
-                return Some(format!(
-                    "OpenAI status: {status:?}. Responses may be delayed or stalled."
-                ));
-            }
+        if let Ok(status) = fetch_codex_health().await
+            && !status.is_operational()
+        {
+            self.warning_sent = true;
+            return Some(format!(
+                "Codex is facing an incident. Current status: {status:?}. Responses may be delayed or stalled."
+            ));
         }
 
         None
