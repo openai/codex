@@ -424,6 +424,15 @@ impl ModelClient {
                     return Err(stream_error);
                 }
 
+                if status == StatusCode::BAD_REQUEST {
+                    let body = res.text().await.unwrap_or_default();
+                    if body.contains("The image data you provided does not represent a valid image")
+                    {
+                        return Err(StreamAttemptError::Fatal(CodexErr::InvalidImageRequest()));
+                    }
+                    return Err(StreamAttemptError::Fatal(CodexErr::InvalidRequest(body)));
+                }
+
                 // The OpenAI Responses endpoint returns structured JSON bodies even for 4xx/5xx
                 // errors. When we bubble early with only the HTTP status the caller sees an opaque
                 // "unexpected status 400 Bad Request" which makes debugging nearly impossible.
