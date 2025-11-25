@@ -1344,7 +1344,7 @@ mod tests {
                     }
                 }
             });
-            std::fs::write(&path, format!("{}\n{}\n{}\n", meta, user, branch_meta))
+            std::fs::write(&path, format!("{meta}\n{user}\n{branch_meta}\n"))
                 .expect("write rollout");
         };
 
