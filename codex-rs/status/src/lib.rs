@@ -7,11 +7,10 @@ use codex_client::ReqwestTransport;
 use http::header::CONTENT_TYPE;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::Value;
-use std::fmt;
 use std::time::Duration;
+use strum::Display;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Display, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ComponentHealth {
     Operational,
@@ -30,14 +29,6 @@ impl ComponentHealth {
 
     pub fn is_operational(self) -> bool {
         self == Self::Operational
-    }
-}
-
-impl fmt::Display for ComponentHealth {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let value = Value::from(self).as_str().ok_or(fmt::Error)?;
-
-        f.write_str(value)
     }
 }
 
