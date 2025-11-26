@@ -183,6 +183,8 @@ pub(crate) async fn exit_review_mode(
     review_output: Option<ReviewOutputEvent>,
     ctx: Arc<TurnContext>,
 ) {
+    const REVIEW_USER_MESSAGE_ID: &str = "review:rollout:user";
+    const REVIEW_ASSISTANT_MESSAGE_ID: &str = "review:rollout:assistant";
     let (user_message, assistant_message) = if let Some(out) = review_output.clone() {
         let mut findings_str = String::new();
         let text = out.overall_explanation.trim();
@@ -209,7 +211,7 @@ pub(crate) async fn exit_review_mode(
         .record_conversation_items(
             &ctx,
             &[ResponseItem::Message {
-                id: None,
+                id: Some(REVIEW_USER_MESSAGE_ID.to_string()),
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText { text: user_message }],
             }],
@@ -225,7 +227,7 @@ pub(crate) async fn exit_review_mode(
         .record_response_item_and_emit_turn_item(
             ctx.as_ref(),
             ResponseItem::Message {
-                id: None,
+                id: Some(REVIEW_ASSISTANT_MESSAGE_ID.to_string()),
                 role: "assistant".to_string(),
                 content: vec![ContentItem::OutputText {
                     text: assistant_message,
