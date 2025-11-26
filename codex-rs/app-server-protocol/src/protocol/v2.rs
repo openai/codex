@@ -925,8 +925,10 @@ pub struct ReviewStartParams {
 #[ts(export_to = "v2/")]
 pub struct ReviewStartResponse {
     pub turn: Turn,
-    /// When present, identifies the detached review thread. For inline reviews,
-    /// this is `None` and the review runs on the original thread.
+    /// Identifies the thread where the review runs.
+    ///
+    /// For inline reviews, this is the original thread id.
+    /// For detached reviews, this is the id of the new review thread.
     pub review_thread_id: Option<String>,
 }
 
@@ -1080,7 +1082,10 @@ pub enum ThreadItem {
     ImageView { id: String, path: String },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    CodeReview { id: String, review: String },
+    EnteredReviewMode { id: String, review: String },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    ExitedReviewMode { id: String, review: String },
 }
 
 impl From<CoreTurnItem> for ThreadItem {

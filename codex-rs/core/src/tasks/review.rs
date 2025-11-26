@@ -182,7 +182,7 @@ pub(crate) async fn exit_review_mode(
     review_output: Option<ReviewOutputEvent>,
     ctx: Arc<TurnContext>,
 ) {
-    let user_message = if let Some(out) = review_output.clone() {
+    let (user_message, assistant_message) = if let Some(out) = review_output.clone() {
         let mut findings_str = String::new();
         let text = out.overall_explanation.trim();
         if !text.is_empty() {
@@ -192,9 +192,12 @@ pub(crate) async fn exit_review_mode(
             let block = format_review_findings_block(&out.findings, None);
             findings_str.push_str(&format!("\n{block}"));
         }
-        crate::client_common::REVIEW_EXIT_SUCCESS_TMPL.replace("{results}", &findings_str)
+        let rendered =
+            crate::client_common::REVIEW_EXIT_SUCCESS_TMPL.replace("{results}", &findings_str);
+        (rendered.clone(), rendered)
     } else {
-        crate::client_common::REVIEW_EXIT_INTERRUPTED_TMPL.to_string()
+        let rendered = crate::client_common::REVIEW_EXIT_INTERRUPTED_TMPL.to_string();
+        (rendered.clone(), rendered)
     };
 
     session
@@ -211,6 +214,18 @@ pub(crate) async fn exit_review_mode(
         .send_event(
             ctx.as_ref(),
             EventMsg::ExitedReviewMode(ExitedReviewModeEvent { review_output }),
+        )
+        .await;
+    session
+        .record_response_item_and_emit_turn_item(
+            ctx.as_ref(),
+            ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: assistant_message,
+                }],
+            },
         )
         .await;
 }

@@ -340,16 +340,26 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::EnteredReviewMode(review_request) => {
-            let notification = ItemStartedNotification {
+            let review = review_request.user_facing_hint;
+            let item = ThreadItem::EnteredReviewMode {
+                id: event_turn_id.clone(),
+                review,
+            };
+            let started = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
-                item: ThreadItem::CodeReview {
-                    id: event_turn_id.clone(),
-                    review: review_request.user_facing_hint,
-                },
+                item: item.clone(),
             };
             outgoing
-                .send_server_notification(ServerNotification::ItemStarted(notification))
+                .send_server_notification(ServerNotification::ItemStarted(started))
+                .await;
+            let completed = ItemCompletedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemCompleted(completed))
                 .await;
         }
         EventMsg::ItemStarted(item_started_event) => {
@@ -375,21 +385,29 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::ExitedReviewMode(review_event) => {
-            let review_text = match review_event.review_output {
+            let review = match review_event.review_output {
                 Some(output) => render_review_output_text(&output),
                 None => REVIEW_FALLBACK_MESSAGE.to_string(),
             };
-            let review_item_id = event_turn_id.clone();
-            let notification = ItemCompletedNotification {
+            let item = ThreadItem::ExitedReviewMode {
+                id: event_turn_id.clone(),
+                review,
+            };
+            let started = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
-                item: ThreadItem::CodeReview {
-                    id: review_item_id,
-                    review: review_text,
-                },
+                item: item.clone(),
             };
             outgoing
-                .send_server_notification(ServerNotification::ItemCompleted(notification))
+                .send_server_notification(ServerNotification::ItemStarted(started))
+                .await;
+            let completed = ItemCompletedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemCompleted(completed))
                 .await;
         }
         EventMsg::PatchApplyBegin(patch_begin_event) => {

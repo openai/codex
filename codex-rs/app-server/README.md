@@ -65,7 +65,7 @@ The JSON-RPC API exposes dedicated methods for managing Codex conversations. Thr
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success.
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
-- `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits a `item/completed` notification with a `codeReview` item when results are ready.
+- `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
 
 ### 1) Start or resume a thread
 
@@ -211,28 +211,28 @@ Example request/response:
 ```
 
 Codex streams the usual `turn/started` notification followed by an `item/started`
-with the same `codeReview` item id so clients can show progress:
+with an `enteredReviewMode` item so clients can show progress:
 
 ```json
 { "method": "item/started", "params": { "item": {
-    "type": "codeReview",
+    "type": "enteredReviewMode",
     "id": "turn_900",
     "review": "current changes"
 } } }
 ```
 
-When the reviewer finishes, the server emits `item/completed` containing the same
-`codeReview` item with the final review text:
+When the reviewer finishes, the server emits `item/started` and `item/completed`
+containing an `exitedReviewMode` item with the final review text:
 
 ```json
 { "method": "item/completed", "params": { "item": {
-    "type": "codeReview",
+    "type": "exitedReviewMode",
     "id": "turn_900",
     "review": "Looks solid overall...\n\n- Prefer Stylize helpers — app.rs:10-20\n  ..."
 } } }
 ```
 
-The `review` string is plain text that already bundles the overall explanation plus a bullet list for each structured finding (matching `ThreadItem::CodeReview` in the generated schema). Use this notification to render the reviewer output in your client.
+The `review` string is plain text that already bundles the overall explanation plus a bullet list for each structured finding (matching `ThreadItem::ExitedReviewMode` in the generated schema). Use this notification to render the reviewer output in your client.
 
 ## Events (work-in-progress)
 

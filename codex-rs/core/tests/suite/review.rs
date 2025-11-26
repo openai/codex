@@ -244,7 +244,7 @@ async fn review_filters_agent_message_related_events() {
     let mut saw_entered = false;
     let mut saw_exited = false;
 
-    // Drain until TaskComplete; assert filtered events never surface.
+    // Drain until TaskComplete; assert streaming-related events never surface.
     wait_for_event(&codex, |event| match event {
         EventMsg::TaskComplete(_) => true,
         EventMsg::EnteredReviewMode(_) => {
@@ -262,12 +262,6 @@ async fn review_filters_agent_message_related_events() {
         EventMsg::AgentMessageDelta(_) => {
             panic!("unexpected AgentMessageDelta surfaced during review")
         }
-        EventMsg::ItemCompleted(ev) => match &ev.item {
-            codex_protocol::items::TurnItem::AgentMessage(_) => {
-                panic!("unexpected ItemCompleted for TurnItem::AgentMessage surfaced during review")
-            }
-            _ => false,
-        },
         _ => false,
     })
     .await;
@@ -276,8 +270,9 @@ async fn review_filters_agent_message_related_events() {
     server.verify().await;
 }
 
-/// When the model returns structured JSON in a review, ensure no AgentMessage
-/// is emitted; the UI consumes the structured result via ExitedReviewMode.
+/// When the model returns structured JSON in a review, ensure only a single
+/// non-streaming AgentMessage is emitted; the UI consumes the structured
+/// result via ExitedReviewMode plus a final assistant message.
 // Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
 #[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
 #[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
@@ -325,13 +320,16 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
         .await
         .unwrap();
 
-    // Drain events until TaskComplete; ensure none are AgentMessage.
+    // Drain events until TaskComplete; ensure we only see a final
+    // AgentMessage (no streaming assistant messages).
     let mut saw_entered = false;
     let mut saw_exited = false;
+    let mut agent_messages = 0;
     wait_for_event(&codex, |event| match event {
         EventMsg::TaskComplete(_) => true,
         EventMsg::AgentMessage(_) => {
-            panic!("unexpected AgentMessage during review with structured output")
+            agent_messages += 1;
+            false
         }
         EventMsg::EnteredReviewMode(_) => {
             saw_entered = true;

@@ -76,7 +76,11 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
         turn,
         review_thread_id,
     } = to_response::<ReviewStartResponse>(review_resp)?;
-    assert!(review_thread_id.is_none(), "expected inline review");
+    assert_eq!(
+        review_thread_id,
+        Some(thread_id.clone()),
+        "expected inline review to run on parent thread id"
+    );
     let turn_id = turn.id.clone();
     assert_eq!(turn.status, TurnStatus::InProgress);
     assert_eq!(turn.items.len(), 1);
@@ -104,15 +108,15 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
     let started: ItemStartedNotification =
         serde_json::from_value(item_started.params.expect("params must be present"))?;
     match started.item {
-        ThreadItem::CodeReview { id, review } => {
+        ThreadItem::EnteredReviewMode { id, review } => {
             assert_eq!(id, turn_id);
             assert_eq!(review, "commit 1234567");
         }
-        other => panic!("expected code review item, got {other:?}"),
+        other => panic!("expected enteredReviewMode item, got {other:?}"),
     }
 
     let mut review_body: Option<String> = None;
-    for _ in 0..5 {
+    for _ in 0..10 {
         let review_notif: JSONRPCNotification = timeout(
             DEFAULT_READ_TIMEOUT,
             mcp.read_stream_until_notification_message("item/completed"),
@@ -121,12 +125,13 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
         let completed: ItemCompletedNotification =
             serde_json::from_value(review_notif.params.expect("params must be present"))?;
         match completed.item {
-            ThreadItem::CodeReview { id, review } => {
+            ThreadItem::ExitedReviewMode { id, review } => {
                 assert_eq!(id, turn_id);
                 review_body = Some(review);
                 break;
             }
             ThreadItem::UserMessage { .. } => continue,
+            ThreadItem::EnteredReviewMode { .. } => continue,
             other => panic!("unexpected item/completed payload: {other:?}"),
         }
     }

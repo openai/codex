@@ -2553,8 +2553,13 @@ impl CodexMessageProcessor {
         match turn_id {
             Ok(turn_id) => {
                 let turn = Self::build_review_turn(turn_id, display_text);
-                self.emit_review_started(request_id, turn, parent_thread_id, None)
-                    .await;
+                self.emit_review_started(
+                    request_id,
+                    turn,
+                    parent_thread_id.clone(),
+                    Some(parent_thread_id),
+                )
+                .await;
                 Ok(())
             }
             Err(err) => Err(JSONRPCErrorError {
