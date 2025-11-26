@@ -17,7 +17,6 @@ use crate::tools::router::ToolRouter;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 
-#[derive(Clone)]
 pub(crate) struct ToolCallRuntime {
     router: Arc<ToolRouter>,
     session: Arc<Session>,

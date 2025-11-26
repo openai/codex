@@ -2179,12 +2179,12 @@ async fn try_run_turn(
         .or_cancel(&cancellation_token)
         .await??;
 
-    let tool_runtime = ToolCallRuntime::new(
+    let tool_runtime = Arc::new(ToolCallRuntime::new(
         Arc::clone(&router),
         Arc::clone(&sess),
         Arc::clone(&turn_context),
         Arc::clone(&turn_diff_tracker),
-    );
+    ));
     let mut in_flight: FuturesUnordered<BoxFuture<CodexResult<ResponseInputItem>>> =
         FuturesUnordered::new();
     let mut responses: Vec<ResponseInputItem> = Vec::new();
@@ -2225,7 +2225,7 @@ async fn try_run_turn(
                         handle_output_item_done(
                             &sess,
                             &turn_context,
-                            &tool_runtime,
+                            Arc::clone(&tool_runtime),
                             item,
                             previously_active_item,
                             &mut in_flight,
