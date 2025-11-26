@@ -164,6 +164,19 @@ client_request_definitions! {
         response: v2::FeedbackUploadResponse,
     },
 
+    ConfigRead => "config/read" {
+        params: v2::ConfigReadParams,
+        response: v2::ConfigReadResponse,
+    },
+    ConfigValueWrite => "config/value/write" {
+        params: v2::ConfigValueWriteParams,
+        response: v2::ConfigWriteResponse,
+    },
+    ConfigBatchWrite => "config/batchWrite" {
+        params: v2::ConfigBatchWriteParams,
+        response: v2::ConfigWriteResponse,
+    },
+
     GetAccount => "account/read" {
         params: v2::GetAccountParams,
         response: v2::GetAccountResponse,
@@ -489,8 +502,10 @@ server_notification_definitions! {
     /// NEW NOTIFICATIONS
     Error => "error" (v2::ErrorNotification),
     ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
+    ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
     TurnCompleted => "turn/completed" (v2::TurnCompletedNotification),
+    TurnDiffUpdated => "turn/diff/updated" (v2::TurnDiffUpdatedNotification),
     ItemStarted => "item/started" (v2::ItemStartedNotification),
     ItemCompleted => "item/completed" (v2::ItemCompletedNotification),
     AgentMessageDelta => "item/agentMessage/delta" (v2::AgentMessageDeltaNotification),
@@ -501,6 +516,7 @@ server_notification_definitions! {
     ReasoningSummaryTextDelta => "item/reasoning/summaryTextDelta" (v2::ReasoningSummaryTextDeltaNotification),
     ReasoningSummaryPartAdded => "item/reasoning/summaryPartAdded" (v2::ReasoningSummaryPartAddedNotification),
     ReasoningTextDelta => "item/reasoning/textDelta" (v2::ReasoningTextDeltaNotification),
+    ContextCompacted => "thread/compacted" (v2::ContextCompactedNotification),
 
     /// Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.
     WindowsWorldWritableWarning => "windows/worldWritableWarning" (v2::WindowsWorldWritableWarningNotification),

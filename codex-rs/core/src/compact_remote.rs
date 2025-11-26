@@ -4,8 +4,8 @@ use crate::Prompt;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::error::Result as CodexResult;
-use crate::protocol::AgentMessageEvent;
 use crate::protocol::CompactedItem;
+use crate::protocol::ContextCompactedEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::RolloutItem;
 use crate::protocol::TaskStartedEvent;
@@ -74,9 +74,7 @@ async fn run_remote_compact_task_inner_impl(
     sess.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])
         .await;
 
-    let event = EventMsg::AgentMessage(AgentMessageEvent {
-        message: "Compact task completed".to_string(),
-    });
+    let event = EventMsg::ContextCompacted(ContextCompactedEvent {});
     sess.send_event(turn_context, event).await;
 
     Ok(())

@@ -1,0 +1,21 @@
+[package]
+name = "codex-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+http = { workspace = true }
+reqwest = { workspace = true, features = ["json", "stream"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "time", "sync"] }
+rand = { workspace = true }
+eventsource-stream = { workspace = true }
+
+[lints]
+workspace = true

@@ -46,3 +46,5 @@ features = [
     "Win32_Security_Authentication_Identity",
 ]
 version = "0.52"
+[dev-dependencies]
+tempfile = "3"

@@ -1745,6 +1745,10 @@ mod handlers {
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+        sess.services
+            .unified_exec_manager
+            .terminate_all_sessions()
+            .await;
         info!("Shutting down Codex instance");
 
         // Gracefully flush and shutdown rollout recorder on session end so tests
@@ -2342,7 +2346,7 @@ async fn try_run_turn(
                     sess.send_event(&turn_context, EventMsg::AgentMessageContentDelta(event))
                         .await;
                 } else {
-                    error_or_panic("ReasoningSummaryDelta without active item".to_string());
+                    error_or_panic("OutputTextDelta without active item".to_string());
                 }
             }
             ResponseEvent::ReasoningSummaryDelta {
