@@ -17,6 +17,7 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex_delegate::run_codex_conversation_one_shot;
 use crate::review_format::format_review_findings_block;
+use crate::review_format::render_review_output_text;
 use crate::state::TaskKind;
 use codex_protocol::user_input::UserInput;
 
@@ -194,10 +195,14 @@ pub(crate) async fn exit_review_mode(
         }
         let rendered =
             crate::client_common::REVIEW_EXIT_SUCCESS_TMPL.replace("{results}", &findings_str);
-        (rendered.clone(), rendered)
+        let assistant_message = render_review_output_text(&out);
+        (rendered, assistant_message)
     } else {
         let rendered = crate::client_common::REVIEW_EXIT_INTERRUPTED_TMPL.to_string();
-        (rendered.clone(), rendered)
+        let assistant_message =
+            "Review was interrupted. Please re-run /review and wait for it to complete."
+                .to_string();
+        (rendered, assistant_message)
     };
 
     session

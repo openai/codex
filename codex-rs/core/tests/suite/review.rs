@@ -18,6 +18,7 @@ use codex_core::protocol::ReviewOutputEvent;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
+use codex_core::review_format::render_review_output_text;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id_from_str;
@@ -123,22 +124,36 @@ async fn review_op_emits_lifecycle_and_review_output() {
 
     let mut saw_header = false;
     let mut saw_finding_line = false;
+    let expected_assistant_text = render_review_output_text(&expected);
+    let mut saw_assistant_plain = false;
+    let mut saw_assistant_xml = false;
     for line in text.lines() {
         if line.trim().is_empty() {
             continue;
         }
         let v: serde_json::Value = serde_json::from_str(line).expect("jsonl line");
         let rl: RolloutLine = serde_json::from_value(v).expect("rollout line");
-        if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = rl.item
-            && role == "user"
-        {
-            for c in content {
-                if let ContentItem::InputText { text } = c {
-                    if text.contains("full review output from reviewer model") {
-                        saw_header = true;
+        if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = rl.item {
+            if role == "user" {
+                for c in content {
+                    if let ContentItem::InputText { text } = c {
+                        if text.contains("full review output from reviewer model") {
+                            saw_header = true;
+                        }
+                        if text.contains("- Prefer Stylize helpers — /tmp/file.rs:10-20") {
+                            saw_finding_line = true;
+                        }
                     }
-                    if text.contains("- Prefer Stylize helpers — /tmp/file.rs:10-20") {
-                        saw_finding_line = true;
+                }
+            } else if role == "assistant" {
+                for c in content {
+                    if let ContentItem::OutputText { text } = c {
+                        if text.contains("<user_action>") {
+                            saw_assistant_xml = true;
+                        }
+                        if text == expected_assistant_text {
+                            saw_assistant_plain = true;
+                        }
                     }
                 }
             }
@@ -148,6 +163,14 @@ async fn review_op_emits_lifecycle_and_review_output() {
     assert!(
         saw_finding_line,
         "formatted finding line missing from rollout"
+    );
+    assert!(
+        saw_assistant_plain,
+        "assistant review output missing from rollout"
+    );
+    assert!(
+        !saw_assistant_xml,
+        "assistant review output contains user_action markup"
     );
 
     server.verify().await;
