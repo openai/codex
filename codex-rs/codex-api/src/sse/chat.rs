@@ -6,6 +6,7 @@ use codex_client::StreamResponse;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::TokenUsage;
 use eventsource_stream::Eventsource;
 use futures::Stream;
 use futures::StreamExt;
@@ -50,6 +51,8 @@ pub async fn process_chat_sse<S>(
     let mut assistant_item: Option<ResponseItem> = None;
     let mut reasoning_item: Option<ResponseItem> = None;
     let mut completed_sent = false;
+    let mut token_usage: Option<TokenUsage> = None;
+    let mut response_id = String::new();
 
     loop {
         let start = Instant::now();
@@ -78,8 +81,8 @@ pub async fn process_chat_sse<S>(
                 if !completed_sent {
                     let _ = tx_event
                         .send(Ok(ResponseEvent::Completed {
-                            response_id: String::new(),
-                            token_usage: None,
+                            response_id: response_id.clone(),
+                            token_usage: token_usage.clone(),
                         }))
                         .await;
                 }
@@ -109,6 +112,16 @@ pub async fn process_chat_sse<S>(
                 continue;
             }
         };
+
+        if response_id.is_empty() {
+            if let Some(id) = value.get("id").and_then(|s| s.as_str()) {
+                response_id = id.to_string();
+            }
+        }
+
+        if let Some(usage) = value.get("usage") {
+            token_usage = parse_openai_usage(usage);
+        }
 
         let Some(choices) = value.get("choices").and_then(|c| c.as_array()) else {
             continue;
@@ -201,8 +214,8 @@ pub async fn process_chat_sse<S>(
                 if !completed_sent {
                     let _ = tx_event
                         .send(Ok(ResponseEvent::Completed {
-                            response_id: String::new(),
-                            token_usage: None,
+                            response_id: response_id.clone(),
+                            token_usage: token_usage.clone(),
                         }))
                         .await;
                     completed_sent = true;
@@ -295,6 +308,43 @@ async fn append_reasoning_text(
             }))
             .await;
     }
+}
+
+fn parse_openai_usage(usage: &serde_json::Value) -> Option<TokenUsage> {
+    let prompt_tokens = usage
+        .get("prompt_tokens")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(0);
+
+    let completion_tokens = usage
+        .get("completion_tokens")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(0);
+
+    let total_tokens = usage
+        .get("total_tokens")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(0);
+
+    let cached_input_tokens = usage
+        .get("prompt_tokens_details")
+        .and_then(|d| d.get("cached_tokens"))
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(0);
+
+    let reasoning_output_tokens = usage
+        .get("completion_tokens_details")
+        .and_then(|d| d.get("reasoning_tokens"))
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(0);
+
+    Some(TokenUsage {
+        input_tokens: prompt_tokens,
+        cached_input_tokens,
+        output_tokens: completion_tokens,
+        reasoning_output_tokens,
+        total_tokens,
+    })
 }
 
 #[cfg(test)]
