@@ -87,6 +87,9 @@ uuid = { workspace = true, features = ["serde", "v4", "v5"] }
 which = { workspace = true }
 wildmatch = { workspace = true }
 
+[features]
+deterministic_process_ids = []
+
 
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = { workspace = true }
@@ -115,6 +118,7 @@ keyring = { workspace = true, features = ["sync-secret-service"] }
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
 codex-arg0 = { workspace = true }
+codex-core = { path = ".", features = ["deterministic_process_ids"] }
 core_test_support = { workspace = true }
 ctor = { workspace = true }
 escargot = { workspace = true }
