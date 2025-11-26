@@ -58,7 +58,7 @@ Send a `tools/list` request and you will see that there are two tools available:
 | **`prompt`** (required)         | string | The next user prompt to continue the Codex conversation. |
 | **`conversationId`** (required) | string | The id of the conversation to continue.                  |
 
-### Trying it Out {#mcp-server-trying-it-out}
+### Trying it Out
 
 > [!TIP]
 > Codex often takes a few minutes to run. To accommodate this, adjust the MCP inspector's Request and Total timeouts to 600000ms (10 minutes) under ⛭ Configuration.
