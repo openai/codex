@@ -113,10 +113,9 @@ pub async fn process_chat_sse<S>(
             }
         };
 
-        if response_id.is_empty() {
-            if let Some(id) = value.get("id").and_then(|s| s.as_str()) {
-                response_id = id.to_string();
-            }
+        if response_id.is_empty()
+            && let Some(id) = value.get("id").and_then(serde_json::Value::as_str) {
+            response_id = id.to_string();
         }
 
         if let Some(usage) = value.get("usage") {
