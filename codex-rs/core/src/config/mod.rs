@@ -1,6 +1,7 @@
 use crate::auth::AuthCredentialsStoreMode;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config::types::History;
+use crate::config::types::Ide;
 use crate::config::types::McpServerConfig;
 use crate::config::types::Notice;
 use crate::config::types::Notifications;
@@ -34,6 +35,7 @@ use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use codex_app_server_protocol::IdeConfig;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -656,6 +658,9 @@ pub struct ConfigToml {
     /// output will be hyperlinked using the specified URI scheme.
     pub file_opener: Option<UriBasedFileOpener>,
 
+    /// Preferences for IDE clients such as the Codex VS Code window.
+    pub ide: Option<Ide>,
+
     /// Collection of settings that are specific to the TUI.
     pub tui: Option<Tui>,
 
@@ -740,6 +745,7 @@ impl From<ConfigToml> for UserSavedConfig {
             model_reasoning_summary: config_toml.model_reasoning_summary,
             model_verbosity: config_toml.model_verbosity,
             tools: config_toml.tools.map(From::from),
+            ide: config_toml.ide.map(From::from),
             profile: config_toml.profile,
             profiles,
         }
@@ -776,6 +782,14 @@ impl From<ToolsToml> for Tools {
         Self {
             web_search: tools_toml.web_search,
             view_image: tools_toml.view_image,
+        }
+    }
+}
+
+impl From<Ide> for IdeConfig {
+    fn from(ide: Ide) -> Self {
+        Self {
+            font_size: ide.font_size,
         }
     }
 }

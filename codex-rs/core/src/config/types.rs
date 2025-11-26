@@ -397,6 +397,13 @@ impl Notice {
     pub(crate) const TABLE_KEY: &'static str = "notice";
 }
 
+/// Preferences for IDE clients such as the Codex VS Code window.
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct Ide {
+    /// Override the font size used by IDE clients (e.g., VS Code Codex window).
+    pub font_size: Option<i64>,
+}
+
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct SandboxWorkspaceWrite {
     #[serde(default)]

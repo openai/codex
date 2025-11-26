@@ -2,6 +2,7 @@ use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use codex_app_server_protocol::GetUserSavedConfigResponse;
+use codex_app_server_protocol::IdeConfig;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::Profile;
 use codex_app_server_protocol::RequestId;
@@ -46,6 +47,9 @@ exclude_slash_tmp = true
 [tools]
 web_search = false
 view_image = true
+
+[ide]
+font_size = 15
 
 [profiles.test]
 model = "gpt-4o"
@@ -95,6 +99,9 @@ async fn get_config_toml_parses_all_fields() -> Result<()> {
                 web_search: Some(false),
                 view_image: Some(true),
             }),
+            ide: Some(IdeConfig {
+                font_size: Some(15),
+            }),
             profile: Some("test".to_string()),
             profiles: HashMap::from([(
                 "test".into(),
@@ -142,6 +149,7 @@ async fn get_config_toml_empty() -> Result<()> {
             model_reasoning_summary: None,
             model_verbosity: None,
             tools: None,
+            ide: None,
             profile: None,
             profiles: HashMap::new(),
         },

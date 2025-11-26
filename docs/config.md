@@ -896,6 +896,16 @@ animations = false
 
 > [!NOTE] > `tui.notifications` is built‑in and limited to the TUI session. For programmatic or cross‑environment notifications—or to integrate with OS‑specific notifiers—use the top‑level `notify` option to run an external program that receives event JSON. The two settings are independent and can be used together.
 
+### ide
+
+Preferences for IDE clients such as the Codex window in VS Code, Windsurf, or Cursor.
+
+```toml
+[ide]
+# Override the Codex window font size in your IDE (points). Defaults to the IDE's Codex UI setting.
+font_size = 14
+```
+
 ## Authentication and authorization
 
 ### Forcing a login method
@@ -976,6 +986,7 @@ Valid values:
 | `file_opener`                                    | `vscode` \| `vscode-insiders` \| `windsurf` \| `cursor` \| `none` | URI scheme for clickable citations (default: `vscode`).                                                                    |
 | `tui`                                            | table                                                             | TUI‑specific options.                                                                                                      |
 | `tui.notifications`                              | boolean \| array<string>                                          | Enable desktop notifications in the tui (default: true).                                                                   |
+| `ide.font_size`                                  | number                                                            | Override the Codex window font size in IDE clients (points).                                                               |
 | `hide_agent_reasoning`                           | boolean                                                           | Hide model reasoning events.                                                                                               |
 | `check_for_update_on_startup`                    | boolean                                                           | Check for Codex updates on startup (default: true). Set to `false` only if updates are centrally managed.                  |
 | `show_raw_agent_reasoning`                       | boolean                                                           | Show raw reasoning (when available).                                                                                       |

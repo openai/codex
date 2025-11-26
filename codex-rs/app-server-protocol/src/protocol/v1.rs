@@ -323,6 +323,12 @@ pub struct SetDefaultModelResponse {}
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Serialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct IdeConfig {
+    pub font_size: Option<i64>,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Serialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct UserSavedConfig {
     pub approval_policy: Option<AskForApproval>,
     pub sandbox_mode: Option<SandboxMode>,
@@ -334,6 +340,7 @@ pub struct UserSavedConfig {
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
     pub tools: Option<Tools>,
+    pub ide: Option<IdeConfig>,
     pub profile: Option<String>,
     pub profiles: HashMap<String, Profile>,
 }

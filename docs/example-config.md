@@ -142,6 +142,10 @@ notifications = false
 # Enables welcome/status/spinner animations. Default: true
 animations = true
 
+[ide]
+# Override Codex window font size in IDE clients (points). Default: unset.
+# font_size = 14
+
 # Suppress internal reasoning events from output. Default: false
 hide_agent_reasoning = false
 
