@@ -66,7 +66,7 @@ async fn emits_warning_when_stream_is_idle_and_status_is_degraded() {
     };
     assert_eq!(
         message,
-        "Codex is facing an incident. Current status: major outage. Responses may be delayed or stalled.",
+        "Codex is experiencing a major outage. If a response stalls, try again later. You can follow incident updates at status.openai.com.",
         "unexpected warning message"
     );
 

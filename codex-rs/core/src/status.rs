@@ -84,7 +84,7 @@ impl IdleWarning {
             self.warning_sent = true;
             self.mark_event();
             return Some(format!(
-                "Codex is facing an incident. Current status: {status}. Responses may be delayed or stalled."
+                "Codex is experiencing a {status}. If a response stalls, try again later. You can follow incident updates at status.openai.com."
             ));
         }
 
