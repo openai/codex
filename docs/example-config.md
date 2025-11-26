@@ -215,7 +215,6 @@ rmcp_client = false
 apply_patch_freeform = false
 view_image_tool = true
 web_search_request = false
-experimental_sandbox_command_assessment = false
 ghost_commit = false
 enable_experimental_windows_sandbox = false
 
@@ -239,8 +238,8 @@ experimental_sandbox_command_assessment = false
 # MCP (Model Context Protocol) servers
 ################################################################################
 
-# Preferred store for MCP OAuth credentials: auto (default) | file | keyring
-mcp_oauth_credentials_store = "auto"
+# Preferred store for MCP OAuth credentials. Default: false
+mcp_oauth_credentials_store = false
 
 # Define MCP servers under this table. Leave empty to disable.
 [mcp_servers]
