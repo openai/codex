@@ -1745,6 +1745,10 @@ mod handlers {
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+        sess.services
+            .unified_exec_manager
+            .terminate_all_sessions()
+            .await;
         info!("Shutting down Codex instance");
 
         // Gracefully flush and shutdown rollout recorder on session end so tests

@@ -472,6 +472,11 @@ impl CodexMessageProcessor {
             ClientRequest::ExecOneOffCommand { request_id, params } => {
                 self.exec_one_off_command(request_id, params).await;
             }
+            ClientRequest::ConfigRead { .. }
+            | ClientRequest::ConfigValueWrite { .. }
+            | ClientRequest::ConfigBatchWrite { .. } => {
+                warn!("Config request reached CodexMessageProcessor unexpectedly");
+            }
             ClientRequest::GetAccountRateLimits {
                 request_id,
                 params: _,
@@ -2473,7 +2478,10 @@ impl CodexMessageProcessor {
                 self.outgoing.send_response(request_id, response).await;
 
                 // Emit v2 turn/started notification.
-                let notif = TurnStartedNotification { turn };
+                let notif = TurnStartedNotification {
+                    thread_id: params.thread_id,
+                    turn,
+                };
                 self.outgoing
                     .send_server_notification(ServerNotification::TurnStarted(notif))
                     .await;
@@ -2531,7 +2539,7 @@ impl CodexMessageProcessor {
                 let response = TurnStartResponse { turn: turn.clone() };
                 self.outgoing.send_response(request_id, response).await;
 
-                let notif = TurnStartedNotification { turn };
+                let notif = TurnStartedNotification { thread_id, turn };
                 self.outgoing
                     .send_server_notification(ServerNotification::TurnStarted(notif))
                     .await;

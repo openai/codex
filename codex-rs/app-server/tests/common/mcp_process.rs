@@ -18,6 +18,9 @@ use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginChatGptParams;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
+use codex_app_server_protocol::ConfigBatchWriteParams;
+use codex_app_server_protocol::ConfigReadParams;
+use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAuthStatusParams;
@@ -399,6 +402,30 @@ impl McpProcess {
     /// Send a `logoutChatGpt` JSON-RPC request.
     pub async fn send_logout_chat_gpt_request(&mut self) -> anyhow::Result<i64> {
         self.send_request("logoutChatGpt", None).await
+    }
+
+    pub async fn send_config_read_request(
+        &mut self,
+        params: ConfigReadParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("config/read", params).await
+    }
+
+    pub async fn send_config_value_write_request(
+        &mut self,
+        params: ConfigValueWriteParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("config/value/write", params).await
+    }
+
+    pub async fn send_config_batch_write_request(
+        &mut self,
+        params: ConfigBatchWriteParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("config/batchWrite", params).await
     }
 
     /// Send an `account/logout` JSON-RPC request.

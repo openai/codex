@@ -844,6 +844,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-api"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "assert_matches",
+ "async-trait",
+ "bytes",
+ "codex-client",
+ "codex-protocol",
+ "eventsource-stream",
+ "futures",
+ "http",
+ "pretty_assertions",
+ "regex-lite",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-test",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "codex-app-server"
 version = "0.0.0"
 dependencies = [
@@ -870,6 +894,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
+ "sha2",
  "shlex",
  "tempfile",
  "tokio",
@@ -1029,6 +1054,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-client"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "eventsource-stream",
+ "futures",
+ "http",
+ "rand 0.9.2",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tokio",
+]
+
+[[package]]
 name = "codex-cloud-tasks"
 version = "0.0.0"
 dependencies = [
@@ -1095,13 +1137,14 @@ dependencies = [
  "async-channel",
  "async-trait",
  "base64",
- "bytes",
  "chardetng",
  "chrono",
+ "codex-api",
  "codex-app-server-protocol",
  "codex-apply-patch",
  "codex-arg0",
  "codex-async-utils",
+ "codex-core",
  "codex-execpolicy",
  "codex-file-search",
  "codex-git",

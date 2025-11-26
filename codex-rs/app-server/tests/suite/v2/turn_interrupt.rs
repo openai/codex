@@ -88,10 +88,11 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
     // Give the command a brief moment to start.
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
+    let thread_id = thread.id.clone();
     // Interrupt the in-progress turn by id (v2 API).
     let interrupt_id = mcp
         .send_turn_interrupt_request(TurnInterruptParams {
-            thread_id: thread.id,
+            thread_id: thread_id.clone(),
             turn_id: turn.id,
         })
         .await?;
@@ -112,6 +113,7 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
             .params
             .expect("turn/completed params must be present"),
     )?;
+    assert_eq!(completed.thread_id, thread_id);
     assert_eq!(completed.turn.status, TurnStatus::Interrupted);
 
     Ok(())
