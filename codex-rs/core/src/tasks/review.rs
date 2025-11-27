@@ -96,6 +96,8 @@ async fn start_review_conversation(
     sub_agent_config.user_instructions = None;
     // Avoid loading project docs; reviewer only needs findings
     sub_agent_config.project_doc_max_bytes = 0;
+    // Enforce read-only sandbox for the review child session.
+    sub_agent_config.sandbox_mode = SandboxPolicy::ReadOnly;
     // Carry over review-only feature restrictions so the delegate cannot
     // re-enable blocked tools (web search, view image).
     sub_agent_config
