@@ -122,6 +122,10 @@ pub struct CommitLogEntry {
 /// Each entry contains the SHA, commit timestamp (seconds), and subject line.
 /// Returns an empty vector if not in a git repo or on error/timeout.
 pub async fn recent_commits(cwd: &Path, limit: usize) -> Vec<CommitLogEntry> {
+    if limit == 0 {
+        return Vec::new();
+    }
+
     // Ensure we're in a git repo first to avoid noisy errors.
     let Some(out) = run_git_command_with_timeout(&["rev-parse", "--git-dir"], cwd).await else {
         return Vec::new();
@@ -131,7 +135,7 @@ pub async fn recent_commits(cwd: &Path, limit: usize) -> Vec<CommitLogEntry> {
     }
 
     let fmt = "%H%x1f%ct%x1f%s"; // <sha> <US> <commit_time> <US> <subject>
-    let n = limit.max(1).to_string();
+    let n = limit.to_string();
     let Some(log_out) =
         run_git_command_with_timeout(&["log", "-n", &n, &format!("--pretty=format:{fmt}")], cwd)
             .await
@@ -600,6 +604,7 @@ mod tests {
     use super::*;
 
     use core_test_support::skip_if_sandbox;
+    use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -667,6 +672,18 @@ mod tests {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let entries = recent_commits(temp_dir.path(), 10).await;
         assert!(entries.is_empty(), "expected no commits outside a git repo");
+    }
+
+    #[tokio::test]
+    async fn test_recent_commits_zero_limit_is_empty_even_with_history() {
+        skip_if_sandbox!();
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let repo_path = create_test_git_repo(&temp_dir).await;
+
+        let entries = recent_commits(&repo_path, 0).await;
+
+        assert_eq!(entries.len(), 0);
     }
 
     #[tokio::test]
