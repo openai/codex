@@ -102,6 +102,7 @@ use crate::protocol::TurnDiffEvent;
 use crate::protocol::WarningEvent;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
+use crate::rollout::map_session_init_error;
 use crate::shell;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
@@ -206,7 +207,7 @@ impl Codex {
         .await
         .map_err(|e| {
             error!("Failed to create session: {e:#}");
-            CodexErr::InternalAgentDied
+            map_session_init_error(&e, &config.codex_home)
         })?;
         let conversation_id = session.conversation_id;
 
@@ -508,7 +509,7 @@ impl Session {
 
         let rollout_recorder = rollout_recorder.map_err(|e| {
             error!("failed to initialize rollout recorder: {e:#}");
-            anyhow::anyhow!("failed to initialize rollout recorder: {e:#}")
+            anyhow::Error::from(e)
         })?;
         let rollout_path = rollout_recorder.rollout_path.clone();
 
