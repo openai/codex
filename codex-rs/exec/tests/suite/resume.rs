@@ -1,6 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use anyhow::Context;
 use core_test_support::test_codex_exec::test_codex_exec;
+use predicates::prelude::*;
+use predicates::str::contains;
 use serde_json::Value;
 use std::path::Path;
 use std::string::ToString;
@@ -178,6 +180,26 @@ fn exec_resume_last_accepts_prompt_after_flag_in_json_mode() -> anyhow::Result<(
 }
 
 #[test]
+fn exec_resume_last_conflicts_with_session_id() -> anyhow::Result<()> {
+    let test = test_codex_exec();
+    let session_id = Uuid::new_v4().to_string();
+
+    // With conflicts_with, clap rejects this combination immediately
+    test.cmd()
+        .arg("--skip-git-repo-check")
+        .arg("-C")
+        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg("resume")
+        .arg(&session_id)
+        .arg("--last")
+        .assert()
+        .failure()
+        .stderr(contains("cannot be used with").or(contains("conflicts")));
+
+    Ok(())
+}
+
+#[test]
 fn exec_resume_by_id_appends_to_existing_file() -> anyhow::Result<()> {
     let test = test_codex_exec();
     let fixture =
@@ -307,5 +329,141 @@ fn exec_resume_preserves_cli_configuration_overrides() -> anyhow::Result<()> {
     let content = std::fs::read_to_string(&resumed_path)?;
     assert!(content.contains(&marker));
     assert!(content.contains(&marker2));
+    Ok(())
+}
+
+#[test]
+fn exec_resume_last_with_prompt_as_positional_after_flag() -> anyhow::Result<()> {
+    let test = test_codex_exec();
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli_responses_fixture.sse");
+
+    // 1) First run: create a session
+    let marker = format!("resume-last-positional-{}", Uuid::new_v4());
+    let prompt = format!("echo {marker}");
+
+    test.cmd()
+        .env("CODEX_RS_SSE_FIXTURE", &fixture)
+        .env("OPENAI_BASE_URL", "http://unused.local")
+        .arg("--skip-git-repo-check")
+        .arg("-C")
+        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg(&prompt)
+        .assert()
+        .success();
+
+    let sessions_dir = test.home_path().join("sessions");
+    let path = find_session_file_containing_marker(&sessions_dir, &marker)
+        .expect("no session file found after first run");
+
+    // 2) Resume with --last and prompt as separate positional (simulating JSON mode issue)
+    let marker2 = format!("resume-last-positional-2-{}", Uuid::new_v4());
+    let prompt2 = format!("echo {marker2}");
+
+    // This simulates: codex exec resume --last "prompt"
+    // where clap might parse "prompt" as session_id instead of as --last value
+    test.cmd()
+        .env("CODEX_RS_SSE_FIXTURE", &fixture)
+        .env("OPENAI_BASE_URL", "http://unused.local")
+        .arg("--skip-git-repo-check")
+        .arg("-C")
+        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg("resume")
+        .arg("--last")
+        .arg(&prompt2)
+        .assert()
+        .success();
+
+    let resumed_path = find_session_file_containing_marker(&sessions_dir, &marker2)
+        .expect("no resumed session file containing marker2");
+    assert_eq!(
+        resumed_path, path,
+        "resume --last should append to existing file"
+    );
+    let content = std::fs::read_to_string(&resumed_path)?;
+    assert!(content.contains(&marker));
+    assert!(content.contains(&marker2));
+    Ok(())
+}
+
+#[test]
+fn exec_resume_last_rejects_real_uuid_as_session_id() -> anyhow::Result<()> {
+    let test = test_codex_exec();
+    let session_id = Uuid::new_v4().to_string();
+
+    // This should fail because we're providing both --last and a real UUID as session_id
+    test.cmd()
+        .arg("--skip-git-repo-check")
+        .arg("-C")
+        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg("resume")
+        .arg(&session_id)
+        .arg("--last")
+        .assert()
+        .failure()
+        .stderr(contains("cannot be used with"));
+
+    Ok(())
+}
+
+#[test]
+fn exec_resume_last_rejects_positional_before_flag() -> anyhow::Result<()> {
+    // With conflicts_with, clap rejects any positional argument before --last
+    // This ensures users use the documented form: codex exec resume --last "prompt"
+    let test = test_codex_exec();
+    let prompt = "echo test";
+
+    test.cmd()
+        .arg("--skip-git-repo-check")
+        .arg("-C")
+        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg("resume")
+        .arg(prompt) // This will be parsed as session_id by clap
+        .arg("--last")
+        .assert()
+        .failure()
+        .stderr(contains("cannot be used with").or(contains("conflicts")));
+
+    Ok(())
+}
+
+#[test]
+fn exec_resume_rejects_invalid_session_id() -> anyhow::Result<()> {
+    let test = test_codex_exec();
+    let invalid_id = "sdfsdfgfds2546456";
+
+    // Invalid session ID should fail with an error message
+    test.cmd()
+        .arg("--skip-git-repo-check")
+        .arg("-C")
+        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg("resume")
+        .arg(invalid_id)
+        .arg("2+2")
+        .assert()
+        .failure()
+        .stderr(contains("No saved session found with ID"));
+
+    Ok(())
+}
+
+#[test]
+fn exec_resume_rejects_nonexistent_valid_uuid() -> anyhow::Result<()> {
+    let test = test_codex_exec();
+    // Generate a valid UUID that doesn't exist
+    let nonexistent_id = Uuid::new_v4().to_string();
+
+    // Valid UUID format but not found should fail with an error message
+    test.cmd()
+        .arg("--skip-git-repo-check")
+        .arg("-C")
+        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg("resume")
+        .arg(&nonexistent_id)
+        .arg("2+2")
+        .assert()
+        .failure()
+        .stderr(contains("No saved session found with ID"));
+
     Ok(())
 }

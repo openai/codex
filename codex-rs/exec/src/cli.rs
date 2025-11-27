@@ -3,6 +3,8 @@ use clap::ValueEnum;
 use codex_common::CliConfigOverrides;
 use std::path::PathBuf;
 
+const RESUME_LAST_PROMPT_SENTINEL: &str = "__codex_resume_last_flag__";
+
 #[derive(Parser, Debug)]
 #[command(version)]
 pub struct Cli {
@@ -104,8 +106,16 @@ pub struct ResumeArgs {
     pub session_id: Option<String>,
 
     /// Resume the most recent recorded session (newest) without specifying an id.
-    #[arg(long = "last", default_value_t = false)]
-    pub last: bool,
+    /// Optionally accepts a prompt directly after the flag (e.g. `--last <PROMPT>`).
+    #[arg(
+        long = "last",
+        value_name = "PROMPT",
+        value_hint = clap::ValueHint::Other,
+        num_args = 0..=1,
+        default_missing_value = "__codex_resume_last_flag__",
+        conflicts_with = "session_id"
+    )]
+    pub last: Option<String>,
 
     /// Prompt to send after resuming the session. If `-` is used, read from stdin.
     #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]
@@ -154,4 +164,16 @@ pub enum Color {
     Never,
     #[default]
     Auto,
+}
+
+impl ResumeArgs {
+    pub fn resume_last(&self) -> bool {
+        self.last.is_some()
+    }
+
+    pub fn last_prompt(&self) -> Option<&str> {
+        self.last
+            .as_deref()
+            .filter(|value| *value != RESUME_LAST_PROMPT_SENTINEL)
+    }
 }

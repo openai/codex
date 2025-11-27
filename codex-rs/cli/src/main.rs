@@ -1,6 +1,7 @@
 use clap::Args;
 use clap::CommandFactory;
 use clap::Parser;
+use clap::ValueHint;
 use clap_complete::Shell;
 use clap_complete::generate;
 use codex_arg0::arg0_dispatch_or_else;
@@ -38,6 +39,8 @@ use crate::mcp_cmd::McpCli;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::features::is_known_feature_key;
+
+const RESUME_LAST_PROMPT_SENTINEL: &str = "__codex_resume_last_flag__";
 
 /// Codex CLI
 ///
@@ -140,9 +143,17 @@ struct ResumeCommand {
     #[arg(value_name = "SESSION_ID")]
     session_id: Option<String>,
 
-    /// Continue the most recent session without showing the picker.
-    #[arg(long = "last", default_value_t = false, conflicts_with = "session_id")]
-    last: bool,
+    /// Continue the most recent session without showing the picker. Optionally provide a prompt
+    /// right after the flag (e.g. `--last <PROMPT>`).
+    #[arg(
+        long = "last",
+        value_name = "PROMPT",
+        value_hint = ValueHint::Other,
+        num_args = 0..=1,
+        default_missing_value = RESUME_LAST_PROMPT_SENTINEL,
+        conflicts_with = "session_id"
+    )]
+    last: Option<String>,
 
     /// Show all sessions (disables cwd filtering and shows CWD column).
     #[arg(long = "all", default_value_t = false)]
@@ -655,20 +666,31 @@ fn finalize_resume_interactive(
     mut interactive: TuiCli,
     root_config_overrides: CliConfigOverrides,
     session_id: Option<String>,
-    last: bool,
+    last: Option<String>,
     show_all: bool,
     resume_cli: TuiCli,
 ) -> TuiCli {
     // Start with the parsed interactive CLI so resume shares the same
     // configuration surface area as `codex` without additional flags.
     let resume_session_id = session_id;
-    interactive.resume_picker = resume_session_id.is_none() && !last;
-    interactive.resume_last = last;
+    let resume_last = last.is_some();
+    let last_prompt = last
+        .as_deref()
+        .filter(|value| *value != RESUME_LAST_PROMPT_SENTINEL)
+        .map(str::to_owned);
+    interactive.resume_picker = resume_session_id.is_none() && !resume_last;
+    interactive.resume_last = resume_last;
     interactive.resume_session_id = resume_session_id;
     interactive.resume_show_all = show_all;
 
     // Merge resume-scoped flags and overrides with highest precedence.
     merge_resume_cli_flags(&mut interactive, resume_cli);
+
+    if interactive.prompt.is_none()
+        && let Some(prompt) = last_prompt
+    {
+        interactive.prompt = Some(prompt);
+    }
 
     // Propagate any root-level config overrides (e.g. `-c key=value`).
     prepend_config_flags(&mut interactive.config_overrides, root_config_overrides);
@@ -840,6 +862,59 @@ mod tests {
         assert!(interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
         assert!(!interactive.resume_show_all);
+    }
+
+    #[test]
+    fn resume_last_accepts_prompt_after_flag() {
+        let interactive = finalize_from_args(["codex", "resume", "--last", "next steps"].as_ref());
+        assert!(interactive.resume_last);
+        assert_eq!(interactive.prompt.as_deref(), Some("next steps"));
+    }
+
+    #[test]
+    fn resume_last_rejects_uuid_with_last_flag() {
+        // Interactive mode uses conflicts_with, so clap should reject this combination
+        let result = MultitoolCli::try_parse_from([
+            "codex",
+            "resume",
+            "123e4567-e89b-12d3-a456-426614174000",
+            "--last",
+        ]);
+        assert!(result.is_err(), "Should reject UUID with --last flag");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("cannot be used") || err_msg.contains("conflicts"),
+            "Error message should mention conflict: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn resume_last_rejects_uuid_with_last_flag_and_prompt() {
+        // Test UUID with --last and prompt value
+        let result = MultitoolCli::try_parse_from([
+            "codex",
+            "resume",
+            "123e4567-e89b-12d3-a456-426614174000",
+            "--last",
+            "prompt",
+        ]);
+        assert!(
+            result.is_err(),
+            "Should reject UUID with --last flag even with prompt"
+        );
+    }
+
+    #[test]
+    fn resume_prompt_before_last_flag_parsed_as_session_id() {
+        // When prompt comes before --last, clap parses it as session_id
+        // But since it's not a UUID and conflicts_with is set, it should still error
+        // This tests the edge case mentioned in the issue comment
+        let result = MultitoolCli::try_parse_from(["codex", "resume", "2+2", "--last"]);
+        // With conflicts_with, clap will reject this because session_id is set
+        assert!(
+            result.is_err(),
+            "Should reject when positional before --last conflicts"
+        );
     }
 
     #[test]
