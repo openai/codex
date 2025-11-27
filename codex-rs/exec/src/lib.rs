@@ -87,15 +87,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             let resume_prompt = args
                 .prompt
                 .clone()
-                // When using `resume --last <PROMPT>`, clap still parses the first positional
-                // as `session_id`. Reinterpret it as the prompt so the flag works with JSON mode.
-                .or_else(|| {
-                    if args.last {
-                        args.session_id.clone()
-                    } else {
-                        None
-                    }
-                });
+                .or_else(|| args.last_prompt().map(str::to_owned));
             resume_prompt.or(prompt)
         }
         None => prompt,
@@ -336,7 +328,12 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             conversation_manager
                 .resume_conversation_from_rollout(config.clone(), path, auth_manager.clone())
                 .await?
+        } else if let Some(id_str) = args.session_id.as_deref() {
+            // If a session_id was explicitly provided but not found, error out.
+            eprintln!("No saved session found with ID {id_str}.");
+            std::process::exit(1);
         } else {
+            // No session_id provided and --last didn't find anything, start fresh.
             conversation_manager
                 .new_conversation(config.clone())
                 .await?
@@ -452,7 +449,9 @@ async fn resolve_resume_path(
     config: &Config,
     args: &crate::cli::ResumeArgs,
 ) -> anyhow::Result<Option<PathBuf>> {
-    if args.last {
+    if args.resume_last() {
+        // If --last is present, use it to find the most recent session.
+        // With conflicts_with, session_id cannot be present when --last is set.
         let default_provider_filter = vec![config.model_provider_id.clone()];
         match codex_core::RolloutRecorder::list_conversations(
             &config.codex_home,
