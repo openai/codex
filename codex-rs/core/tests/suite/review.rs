@@ -365,6 +365,7 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
         _ => false,
     })
     .await;
+    assert_eq!(1, agent_messages, "expected exactly one AgentMessage event");
     assert!(saw_entered && saw_exited, "missing review lifecycle events");
 
     server.verify().await;

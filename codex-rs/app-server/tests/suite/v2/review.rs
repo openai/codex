@@ -100,20 +100,30 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
         mcp.read_stream_until_notification_message("turn/started"),
     )
     .await??;
-    let item_started: JSONRPCNotification = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("item/started"),
-    )
-    .await??;
-    let started: ItemStartedNotification =
-        serde_json::from_value(item_started.params.expect("params must be present"))?;
-    match started.item {
-        ThreadItem::EnteredReviewMode { id, review } => {
-            assert_eq!(id, turn_id);
-            assert_eq!(review, "commit 1234567");
+    let mut saw_entered_review_mode = false;
+    for _ in 0..10 {
+        let item_started: JSONRPCNotification = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message("item/started"),
+        )
+        .await??;
+        let started: ItemStartedNotification =
+            serde_json::from_value(item_started.params.expect("params must be present"))?;
+        match started.item {
+            ThreadItem::EnteredReviewMode { id, review } => {
+                assert_eq!(id, turn_id);
+                assert_eq!(review, "commit 1234567");
+                saw_entered_review_mode = true;
+                break;
+            }
+            ThreadItem::UserMessage { .. } => continue,
+            other => panic!("unexpected item/started payload: {other:?}"),
         }
-        other => panic!("expected enteredReviewMode item, got {other:?}"),
     }
+    assert!(
+        saw_entered_review_mode,
+        "did not observe enteredReviewMode item"
+    );
 
     let mut review_body: Option<String> = None;
     for _ in 0..10 {
