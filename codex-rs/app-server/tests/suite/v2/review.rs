@@ -78,7 +78,7 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
     } = to_response::<ReviewStartResponse>(review_resp)?;
     assert_eq!(
         review_thread_id,
-        Some(thread_id.clone()),
+        thread_id.clone(),
         "expected inline review to run on parent thread id"
     );
     let turn_id = turn.id.clone();
@@ -219,8 +219,6 @@ async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<(
     } = to_response::<ReviewStartResponse>(review_resp)?;
 
     assert_eq!(turn.status, TurnStatus::InProgress);
-    let review_thread_id =
-        review_thread_id.expect("expected detached review to return review_thread_id");
     assert_ne!(
         review_thread_id, thread_id,
         "detached review should run on a different thread"
