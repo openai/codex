@@ -929,7 +929,7 @@ pub struct ReviewStartResponse {
     ///
     /// For inline reviews, this is the original thread id.
     /// For detached reviews, this is the id of the new review thread.
-    pub review_thread_id: Option<String>,
+    pub review_thread_id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

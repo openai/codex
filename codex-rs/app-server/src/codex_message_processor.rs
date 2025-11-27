@@ -2519,7 +2519,7 @@ impl CodexMessageProcessor {
         request_id: &RequestId,
         turn: Turn,
         parent_thread_id: String,
-        review_thread_id: Option<String>,
+        review_thread_id: String,
     ) {
         let response = ReviewStartResponse {
             turn: turn.clone(),
@@ -2557,7 +2557,7 @@ impl CodexMessageProcessor {
                     request_id,
                     turn,
                     parent_thread_id.clone(),
-                    Some(parent_thread_id),
+                    parent_thread_id,
                 )
                 .await;
                 Ok(())
@@ -2652,13 +2652,8 @@ impl CodexMessageProcessor {
 
         let turn = Self::build_review_turn(turn_id, display_text);
         let review_thread_id = conversation_id.to_string();
-        self.emit_review_started(
-            request_id,
-            turn,
-            review_thread_id.clone(),
-            Some(review_thread_id),
-        )
-        .await;
+        self.emit_review_started(request_id, turn, review_thread_id.clone(), review_thread_id)
+            .await;
 
         Ok(())
     }
