@@ -117,6 +117,7 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
                 break;
             }
             ThreadItem::UserMessage { .. } => continue,
+            ThreadItem::AgentMessage { .. } => continue,
             other => panic!("unexpected item/started payload: {other:?}"),
         }
     }
@@ -142,6 +143,7 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
             }
             ThreadItem::UserMessage { .. } => continue,
             ThreadItem::EnteredReviewMode { .. } => continue,
+            ThreadItem::AgentMessage { .. } => continue,
             other => panic!("unexpected item/completed payload: {other:?}"),
         }
     }
