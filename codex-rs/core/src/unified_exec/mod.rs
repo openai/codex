@@ -109,7 +109,7 @@ pub(crate) struct SessionStore {
 }
 
 impl SessionStore {
-    pub(crate) fn remove(&mut self, session_id: &str) -> Option<SessionEntry> {
+    fn remove(&mut self, session_id: &str) -> Option<SessionEntry> {
         self.reserved_sessions_id.remove(session_id);
         self.sessions.remove(session_id)
     }
