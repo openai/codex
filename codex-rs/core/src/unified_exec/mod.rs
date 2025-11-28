@@ -21,7 +21,8 @@
 //! - `session.rs`: PTY session lifecycle + output buffering.
 //! - `session_manager.rs`: orchestration (approvals, sandboxing, reuse) and request handling.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -104,16 +105,16 @@ pub(crate) struct UnifiedExecSessionManager {
 #[derive(Default)]
 pub(crate) struct SessionStore {
     sessions: HashMap<String, SessionEntry>,
-    reserved_sessions_id: HashSet<String>
+    reserved_sessions_id: HashSet<String>,
 }
 
 impl SessionStore {
-    pub fn remove(&mut self, session_id: &str) -> Option<SessionEntry> {
-        self.reserved_sessions_id.remove(&session_id);
-        self.sessions.remove(&session_id)
+    pub(crate) fn remove(&mut self, session_id: &str) -> Option<SessionEntry> {
+        self.reserved_sessions_id.remove(session_id);
+        self.sessions.remove(session_id)
     }
 
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.reserved_sessions_id.clear();
         self.sessions.clear();
     }

@@ -33,9 +33,10 @@ use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::formatted_truncate_text;
 
-use super::{ExecCommandRequest, SessionStore};
+use super::ExecCommandRequest;
 use super::MAX_UNIFIED_EXEC_SESSIONS;
 use super::SessionEntry;
+use super::SessionStore;
 use super::UnifiedExecContext;
 use super::UnifiedExecError;
 use super::UnifiedExecResponse;
@@ -88,7 +89,8 @@ impl UnifiedExecSessionManager {
                 rand::rng().random_range(1_000..100_000).to_string()
             } else {
                 // test or deterministic mode
-                let next = store.reserved_sessions_id
+                let next = store
+                    .reserved_sessions_id
                     .iter()
                     .filter_map(|s| s.parse::<i32>().ok())
                     .max()
@@ -361,11 +363,13 @@ impl UnifiedExecSessionManager {
         process_id: &str,
     ) -> Result<PreparedSessionHandles, UnifiedExecError> {
         let mut store = self.session_store.lock().await;
-        let entry = store.sessions
-            .get_mut(process_id)
-            .ok_or(UnifiedExecError::UnknownSessionId {
-                process_id: process_id.to_string(),
-            })?;
+        let entry =
+            store
+                .sessions
+                .get_mut(process_id)
+                .ok_or(UnifiedExecError::UnknownSessionId {
+                    process_id: process_id.to_string(),
+                })?;
         entry.last_used = Instant::now();
         let OutputHandles {
             output_buffer,
@@ -634,7 +638,8 @@ impl UnifiedExecSessionManager {
             return;
         }
 
-        let meta: Vec<(String, Instant, bool)> = store.sessions
+        let meta: Vec<(String, Instant, bool)> = store
+            .sessions
             .iter()
             .map(|(id, entry)| (id.clone(), entry.last_used, entry.session.has_exited()))
             .collect();
