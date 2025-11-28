@@ -241,12 +241,12 @@ impl PagerView {
                 self.scroll_offset = self.scroll_offset.saturating_add(1);
             }
             e if KEY_PAGE_UP.is_press(e) => {
-                let area = self.content_area(tui.terminal.viewport_area);
-                self.scroll_offset = self.scroll_offset.saturating_sub(area.height as usize);
+                let page_h = self.page_step(tui.terminal.viewport_area);
+                self.scroll_offset = self.scroll_offset.saturating_sub(page_h);
             }
             e if KEY_PAGE_DOWN.is_press(e) || KEY_SPACE.is_press(e) => {
-                let area = self.content_area(tui.terminal.viewport_area);
-                self.scroll_offset = self.scroll_offset.saturating_add(area.height as usize);
+                let page_h = self.page_step(tui.terminal.viewport_area);
+                self.scroll_offset = self.scroll_offset.saturating_add(page_h);
             }
             e if KEY_HOME.is_press(e) => {
                 self.scroll_offset = 0;
@@ -261,6 +261,11 @@ impl PagerView {
         tui.frame_requester()
             .schedule_frame_in(Duration::from_millis(16));
         Ok(())
+    }
+
+    fn page_step(&self, viewport_area: Rect) -> usize {
+        self.last_content_height
+            .unwrap_or_else(|| self.content_area(viewport_area).height as usize)
     }
 
     fn update_last_content_height(&mut self, height: u16) {
@@ -810,6 +815,95 @@ mod tests {
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
             .expect("draw");
         assert_snapshot!(term.backend());
+    }
+
+    /// Render transcript overlay and return visible line numbers (`line-NN`) in order.
+    fn transcript_line_numbers(overlay: &mut TranscriptOverlay, area: Rect) -> Vec<usize> {
+        let mut buf = Buffer::empty(area);
+        overlay.render(area, &mut buf);
+
+        let top_h = area.height.saturating_sub(3);
+        let top = Rect::new(area.x, area.y, area.width, top_h);
+        let content_area = overlay.view.content_area(top);
+
+        let mut nums = Vec::new();
+        for y in content_area.y..content_area.bottom() {
+            let mut line = String::new();
+            for x in content_area.x..content_area.right() {
+                line.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+            }
+            if let Some(n) = line
+                .split_whitespace()
+                .find_map(|w| w.strip_prefix("line-"))
+                .and_then(|s| s.parse().ok())
+            {
+                nums.push(n);
+            }
+        }
+        nums
+    }
+
+    #[test]
+    fn transcript_overlay_paging_is_continuous_and_round_trips() {
+        let mut overlay = TranscriptOverlay::new(
+            (0..50)
+                .map(|i| {
+                    Arc::new(TestCell {
+                        lines: vec![Line::from(format!("line-{i:02}"))],
+                    }) as Arc<dyn HistoryCell>
+                })
+                .collect(),
+        );
+        let area = Rect::new(0, 0, 40, 15);
+
+        // Prime layout so last_content_height is populated and we know the page height.
+        let mut buf = Buffer::empty(area);
+        overlay.view.scroll_offset = 0;
+        overlay.render(area, &mut buf);
+        let page_step = overlay.view.page_step(area);
+
+        for &start in &[0_usize, 3, page_step] {
+            // PageDown continuity.
+            overlay.view.scroll_offset = start;
+            let page1 = transcript_line_numbers(&mut overlay, area);
+            assert!(!page1.is_empty());
+            let last1 = *page1.last().unwrap();
+
+            overlay.view.scroll_offset = overlay.view.scroll_offset.saturating_add(page_step);
+            let page2 = transcript_line_numbers(&mut overlay, area);
+            assert!(!page2.is_empty());
+            assert_eq!(
+                last1 + 1,
+                page2[0],
+                "PageDown from {start} should be continuous"
+            );
+
+            // PageDown then PageUp round-trips.
+            overlay.view.scroll_offset = start;
+            let before = transcript_line_numbers(&mut overlay, area);
+            overlay.view.scroll_offset = overlay.view.scroll_offset.saturating_add(page_step);
+            let _ = transcript_line_numbers(&mut overlay, area);
+            overlay.view.scroll_offset = overlay.view.scroll_offset.saturating_sub(page_step);
+            let after = transcript_line_numbers(&mut overlay, area);
+            assert_eq!(
+                before, after,
+                "PageDown+PageUp from {start} should round-trip"
+            );
+
+            // PageUp then PageDown round-trips for interior offsets.
+            if start == page_step {
+                overlay.view.scroll_offset = start;
+                let before = transcript_line_numbers(&mut overlay, area);
+                overlay.view.scroll_offset = overlay.view.scroll_offset.saturating_sub(page_step);
+                let _ = transcript_line_numbers(&mut overlay, area);
+                overlay.view.scroll_offset = overlay.view.scroll_offset.saturating_add(page_step);
+                let after = transcript_line_numbers(&mut overlay, area);
+                assert_eq!(
+                    before, after,
+                    "PageUp+PageDown from {start} should round-trip"
+                );
+            }
+        }
     }
 
     #[test]
