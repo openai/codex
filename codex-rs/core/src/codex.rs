@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use crate::AuthManager;
+use crate::ResponseStream;
 use crate::SandboxState;
 use crate::client_common::REVIEW_PROMPT;
 use crate::compact;
@@ -52,6 +54,7 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
+use tokio::time::sleep_until;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::error;
@@ -107,6 +110,7 @@ use crate::shell;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
 use crate::state::SessionState;
+use crate::status::IdleWarning;
 use crate::tasks::GhostSnapshotTask;
 use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
@@ -2172,12 +2176,19 @@ async fn try_run_turn(
     });
 
     sess.persist_rollout_items(&[rollout_item]).await;
-    let mut stream = turn_context
-        .client
-        .clone()
-        .stream(prompt)
-        .or_cancel(&cancellation_token)
-        .await??;
+    let mut idle_warning = IdleWarning::default();
+    let client = turn_context.client.clone();
+    let mut stream_future = Box::pin(client.stream(prompt).or_cancel(&cancellation_token));
+
+    let mut stream = await_stream_with_idle_warning(
+        stream_future.as_mut(),
+        &mut idle_warning,
+        &sess,
+        &turn_context,
+    )
+    .await?;
+
+    idle_warning.mark_event();
 
     let tool_runtime = ToolCallRuntime::new(
         Arc::clone(&router),
@@ -2194,7 +2205,24 @@ async fn try_run_turn(
         // Poll the next item from the model stream. We must inspect *both* Ok and Err
         // cases so that transient stream failures (e.g., dropped SSE connection before
         // `response.completed`) bubble up and trigger the caller's retry logic.
-        let event = match stream.next().or_cancel(&cancellation_token).await {
+        let event = tokio::select! {
+            biased;
+            result = stream.next().or_cancel(&cancellation_token) => result,
+            _ = sleep_until(idle_warning.deadline()) => {
+                if let Some(message) = idle_warning.maybe_warning_message().await {
+                    sess.send_event(
+                        &turn_context,
+                        EventMsg::Warning(WarningEvent { message }),
+                    )
+                    .await;
+                }
+                continue;
+            }
+        };
+
+        idle_warning.mark_event();
+
+        let event = match event {
             Ok(event) => event,
             Err(codex_async_utils::CancelErr::Cancelled) => {
                 let processed_items = output.try_collect().await?;
@@ -2387,6 +2415,34 @@ async fn try_run_turn(
                         .await;
                 } else {
                     error_or_panic("ReasoningRawContentDelta without active item".to_string());
+                }
+            }
+        }
+    }
+}
+
+async fn await_stream_with_idle_warning<F>(
+    mut stream_future: Pin<&mut F>,
+    idle_warning: &mut IdleWarning,
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+) -> CodexResult<ResponseStream>
+where
+    F: std::future::Future<
+            Output = Result<CodexResult<ResponseStream>, codex_async_utils::CancelErr>,
+        > + Send,
+{
+    loop {
+        tokio::select! {
+            biased;
+            result = &mut stream_future => return result?,
+            _ = sleep_until(idle_warning.deadline()) => {
+                if let Some(message) = idle_warning.maybe_warning_message().await {
+                    sess.send_event(
+                        turn_context,
+                        EventMsg::Warning(WarningEvent { message }),
+                    )
+                    .await;
                 }
             }
         }
