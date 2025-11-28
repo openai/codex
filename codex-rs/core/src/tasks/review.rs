@@ -16,6 +16,7 @@ use tokio_util::sync::CancellationToken;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex_delegate::run_codex_conversation_one_shot;
+use crate::protocol::SandboxPolicy;
 use crate::review_format::format_review_findings_block;
 use crate::review_format::render_review_output_text;
 use crate::state::TaskKind;
@@ -81,6 +82,8 @@ async fn start_review_conversation(
     sub_agent_config.user_instructions = None;
     // Avoid loading project docs; reviewer only needs findings
     sub_agent_config.project_doc_max_bytes = 0;
+    // Enforce read-only sandbox for the review child session.
+    sub_agent_config.sandbox_policy = SandboxPolicy::ReadOnly;
     // Carry over review-only feature restrictions so the delegate cannot
     // re-enable blocked tools (web search, view image).
     sub_agent_config
