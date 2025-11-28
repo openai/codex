@@ -599,11 +599,10 @@ async fn review_input_isolated_from_parent_history() {
     server.verify().await;
 }
 
-/// After a review thread finishes, its conversation should not leak into the
-/// parent session. A subsequent parent turn must not include any review
-/// messages in its request `input`.
+/// After a review thread finishes, its conversation should be visible in the
+/// parent session so later turns can reference the results.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn review_history_does_not_leak_into_parent_session() {
+async fn review_history_surfaces_in_parent_session() {
     skip_if_no_network!();
 
     // Respond to both the review request and the subsequent parent request.
@@ -666,20 +665,26 @@ async fn review_history_does_not_leak_into_parent_session() {
     let last_text = last["content"][0]["text"].as_str().unwrap();
     assert_eq!(last_text, followup);
 
-    // Ensure no review-thread content leaked into the parent request
-    let contains_review_prompt = input
-        .iter()
-        .any(|msg| msg["content"][0]["text"].as_str().unwrap_or_default() == "Start a review");
+    // Ensure review-thread content is present for downstream turns.
+    let contains_review_rollout_user = input.iter().any(|msg| {
+        msg["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("User initiated a review task.")
+    });
     let contains_review_assistant = input.iter().any(|msg| {
-        msg["content"][0]["text"].as_str().unwrap_or_default() == "review assistant output"
+        msg["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("review assistant output")
     });
     assert!(
-        !contains_review_prompt,
-        "review prompt leaked into parent turn input"
+        contains_review_rollout_user,
+        "review rollout user message missing from parent turn input"
     );
     assert!(
-        !contains_review_assistant,
-        "review assistant output leaked into parent turn input"
+        contains_review_assistant,
+        "review assistant output missing from parent turn input"
     );
 
     server.verify().await;
