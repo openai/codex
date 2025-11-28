@@ -204,6 +204,55 @@ async fn python_getpwuid_works_under_seatbelt() {
 }
 
 #[tokio::test]
+async fn brew_shellenv_runs_under_seatbelt_workspace_write_policy() {
+    if std::env::var(CODEX_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {
+        eprintln!("{CODEX_SANDBOX_ENV_VAR} is set to 'seatbelt', skipping test.");
+        return;
+    }
+
+    let Ok(brew_path) = which::which("brew") else {
+        eprintln!("brew not found in PATH, skipping test.");
+        return;
+    };
+
+    let policy = SandboxPolicy::new_workspace_write_policy();
+    let command_cwd = std::env::current_dir().expect("getcwd");
+    let sandbox_cwd = command_cwd.clone();
+
+    let mut env: HashMap<String, String> = std::env::vars().collect();
+    env.remove(CODEX_SANDBOX_ENV_VAR);
+
+    let child = spawn_command_under_seatbelt(
+        vec![
+            brew_path.to_string_lossy().to_string(),
+            "shellenv".to_string(),
+        ],
+        command_cwd,
+        &policy,
+        sandbox_cwd.as_path(),
+        StdioPolicy::RedirectForShellTool,
+        env,
+    )
+    .await
+    .expect("should be able to spawn brew shellenv under seatbelt");
+
+    let output = child
+        .wait_with_output()
+        .await
+        .expect("should be able to wait for brew shellenv child");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "brew shellenv under seatbelt exited with {:?}, stderr: {stderr}",
+        output.status
+    );
+    assert!(
+        !stderr.contains("Operation not permitted"),
+        "brew shellenv under seatbelt should not hit permission errors, stderr: {stderr}"
+    );
+}
+
+#[tokio::test]
 async fn java_home_finds_runtime_under_seatbelt() {
     if std::env::var(CODEX_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {
         eprintln!("{CODEX_SANDBOX_ENV_VAR} is set to 'seatbelt', skipping test.");

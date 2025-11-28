@@ -12,6 +12,10 @@
 (allow process-fork)
 (allow signal (target same-sandbox))
 
+; Permit /bin/ps to run without sandboxing so Homebrew's `brew shellenv`
+; can detect the shell even though /bin/ps is setuid.
+(allow process-exec (path "/bin/ps") (with no-sandbox))
+
 ; Allow cf prefs to work.
 (allow user-preference-read)
 
