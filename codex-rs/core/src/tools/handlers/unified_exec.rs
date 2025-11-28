@@ -164,6 +164,7 @@ impl ToolHandler for UnifiedExecHandler {
                     context.turn.as_ref(),
                     &context.call_id,
                     None,
+                    None,
                 );
                 let emitter = ToolEmitter::unified_exec(
                     &command,

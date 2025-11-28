@@ -3111,6 +3111,8 @@ mod tests {
             with_escalated_permissions: Some(true),
             justification: Some("test".to_string()),
             arg0: None,
+            max_output_tokens: None,
+            max_output_chars: None,
         };
 
         let params2 = ExecParams {
@@ -3121,6 +3123,8 @@ mod tests {
             env: HashMap::new(),
             justification: params.justification.clone(),
             arg0: None,
+            max_output_tokens: None,
+            max_output_chars: None,
         };
 
         let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));

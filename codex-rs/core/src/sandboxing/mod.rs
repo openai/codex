@@ -58,6 +58,8 @@ pub struct CommandSpec {
     pub expiration: ExecExpiration,
     pub with_escalated_permissions: Option<bool>,
     pub justification: Option<String>,
+    pub max_output_tokens: Option<usize>,
+    pub max_output_chars: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -70,6 +72,8 @@ pub struct ExecEnv {
     pub with_escalated_permissions: Option<bool>,
     pub justification: Option<String>,
     pub arg0: Option<String>,
+    pub max_output_tokens: Option<usize>,
+    pub max_output_chars: Option<usize>,
 }
 
 pub enum SandboxPreference {
@@ -184,6 +188,8 @@ impl SandboxManager {
             with_escalated_permissions: spec.with_escalated_permissions,
             justification: spec.justification,
             arg0: arg0_override,
+            max_output_tokens: spec.max_output_tokens,
+            max_output_chars: spec.max_output_chars,
         })
     }
 
