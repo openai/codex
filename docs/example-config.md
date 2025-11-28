@@ -180,6 +180,9 @@ chatgpt_base_url = "https://chatgpt.com/backend-api/"
 # Allowed values: chatgpt | api
 # forced_login_method = "chatgpt"
 
+# Preferred store for MCP OAuth credentials: auto (default) | file | keyring
+mcp_oauth_credentials_store = "auto"
+
 ################################################################################
 # Project Documentation Controls
 ################################################################################
@@ -231,16 +234,6 @@ experimental_use_rmcp_client = false
 
 # Include apply_patch via freeform editing path (affects default tool set). Default: false
 experimental_use_freeform_apply_patch = false
-
-# Enable model-based sandbox command assessment. Default: false
-experimental_sandbox_command_assessment = false
-
-################################################################################
-# MCP (Model Context Protocol) servers
-################################################################################
-
-# Preferred store for MCP OAuth credentials: auto (default) | file | keyring
-mcp_oauth_credentials_store = "auto"
 
 # Define MCP servers under this table. Leave empty to disable.
 [mcp_servers]

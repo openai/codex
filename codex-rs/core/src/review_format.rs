@@ -1,4 +1,5 @@
 use crate::protocol::ReviewFinding;
+use crate::protocol::ReviewOutputEvent;
 
 // Note: We keep this module UI-agnostic. It returns plain strings that
 // higher layers (e.g., TUI) may style as needed.
@@ -9,6 +10,8 @@ fn format_location(item: &ReviewFinding) -> String {
     let end = item.code_location.line_range.end;
     format!("{path}:{start}-{end}")
 }
+
+const REVIEW_FALLBACK_MESSAGE: &str = "Reviewer failed to output a response.";
 
 /// Format a full review findings block as plain text lines.
 ///
@@ -52,4 +55,28 @@ pub fn format_review_findings_block(
     }
 
     lines.join("\n")
+}
+
+/// Render a human-readable review summary suitable for a user-facing message.
+///
+/// Returns either the explanation, the formatted findings block, or both
+/// separated by a blank line. If neither is present, emits a fallback message.
+pub fn render_review_output_text(output: &ReviewOutputEvent) -> String {
+    let mut sections = Vec::new();
+    let explanation = output.overall_explanation.trim();
+    if !explanation.is_empty() {
+        sections.push(explanation.to_string());
+    }
+    if !output.findings.is_empty() {
+        let findings = format_review_findings_block(&output.findings, None);
+        let trimmed = findings.trim();
+        if !trimmed.is_empty() {
+            sections.push(trimmed.to_string());
+        }
+    }
+    if sections.is_empty() {
+        REVIEW_FALLBACK_MESSAGE.to_string()
+    } else {
+        sections.join("\n\n")
+    }
 }
