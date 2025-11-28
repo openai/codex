@@ -121,7 +121,7 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
                 assert_eq!(id, turn_id);
                 review_body = Some(review);
                 break;
-            },
+            }
             _ => continue,
         }
     }
