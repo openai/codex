@@ -1,9 +1,15 @@
 use crate::decision::Decision;
+use crate::error::Error;
+use crate::error::Result;
+use crate::rule::PatternToken;
+use crate::rule::PrefixPattern;
+use crate::rule::PrefixRule;
 use crate::rule::RuleMatch;
 use crate::rule::RuleRef;
 use multimap::MultiMap;
 use serde::Deserialize;
 use serde::Serialize;
+use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub struct Policy {
@@ -21,6 +27,27 @@ impl Policy {
 
     pub fn rules(&self) -> &MultiMap<String, RuleRef> {
         &self.rules_by_program
+    }
+
+    pub fn add_prefix_rule(&mut self, prefix: &[String], decision: Decision) -> Result<()> {
+        let (first_token, rest) = prefix
+            .split_first()
+            .ok_or_else(|| Error::InvalidPattern("prefix cannot be empty".to_string()))?;
+
+        let rule: RuleRef = Arc::new(PrefixRule {
+            pattern: PrefixPattern {
+                first: Arc::from(first_token.as_str()),
+                rest: rest
+                    .iter()
+                    .map(|token| PatternToken::Single(token.clone()))
+                    .collect::<Vec<_>>()
+                    .into(),
+            },
+            decision,
+        });
+
+        self.rules_by_program.insert(first_token.clone(), rule);
+        Ok(())
     }
 
     pub fn check(&self, cmd: &[String]) -> Evaluation {
