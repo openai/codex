@@ -21,7 +21,7 @@
 //! - `session.rs`: PTY session lifecycle + output buffering.
 //! - `session_manager.rs`: orchestration (approvals, sandboxing, reuse) and request handling.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -97,7 +97,26 @@ pub(crate) struct UnifiedExecResponse {
 
 #[derive(Default)]
 pub(crate) struct UnifiedExecSessionManager {
-    sessions: Mutex<HashMap<String, SessionEntry>>,
+    session_store: Mutex<SessionStore>,
+}
+
+// Required for mutex sharing.
+#[derive(Default)]
+pub(crate) struct SessionStore {
+    sessions: HashMap<String, SessionEntry>,
+    reserved_sessions_id: HashSet<String>
+}
+
+impl SessionStore {
+    pub fn remove(&mut self, session_id: &str) {
+        self.sessions.remove(&session_id);
+        self.reserved_sessions_id.remove(&session_id);
+    }
+
+    pub fn clear(&mut self) {
+        self.reserved_sessions_id.clear();
+        self.sessions.clear();
+    }
 }
 
 struct SessionEntry {
@@ -382,9 +401,10 @@ mod tests {
             session
                 .services
                 .unified_exec_manager
-                .sessions
+                .session_store
                 .lock()
                 .await
+                .sessions
                 .is_empty()
         );
 
@@ -423,9 +443,10 @@ mod tests {
             session
                 .services
                 .unified_exec_manager
-                .sessions
+                .session_store
                 .lock()
                 .await
+                .sessions
                 .is_empty()
         );
 

@@ -33,7 +33,7 @@ use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::formatted_truncate_text;
 
-use super::ExecCommandRequest;
+use super::{ExecCommandRequest, SessionStore};
 use super::MAX_UNIFIED_EXEC_SESSIONS;
 use super::SessionEntry;
 use super::UnifiedExecContext;
@@ -81,16 +81,16 @@ struct PreparedSessionHandles {
 impl UnifiedExecSessionManager {
     pub(crate) async fn allocate_process_id(&self) -> String {
         loop {
-            let store = self.sessions.lock().await;
+            let mut store = self.session_store.lock().await;
 
             let process_id = if !cfg!(test) && !cfg!(feature = "deterministic_process_ids") {
                 // production mode → random
                 rand::rng().random_range(1_000..100_000).to_string()
             } else {
                 // test or deterministic mode
-                let next = store
+                let next = store.reserved_sessions_id
                     .iter()
-                    .filter_map(|(s, _)| s.parse::<i32>().ok())
+                    .filter_map(|s| s.parse::<i32>().ok())
                     .max()
                     .map(|m| std::cmp::max(m, 999) + 1)
                     .unwrap_or(1000);
@@ -98,10 +98,11 @@ impl UnifiedExecSessionManager {
                 next.to_string()
             };
 
-            if store.contains_key(&process_id) {
+            if store.reserved_sessions_id.contains(&process_id) {
                 continue;
             }
 
+            store.reserved_sessions_id.insert(process_id.clone());
             return process_id;
         }
     }
@@ -330,8 +331,8 @@ impl UnifiedExecSessionManager {
     }
 
     async fn refresh_session_state(&self, process_id: &str) -> SessionStatus {
-        let mut sessions = self.sessions.lock().await;
-        let Some(entry) = sessions.get(process_id) else {
+        let mut store = self.session_store.lock().await;
+        let Some(entry) = store.sessions.get(process_id) else {
             return SessionStatus::Unknown;
         };
 
@@ -339,7 +340,7 @@ impl UnifiedExecSessionManager {
         let process_id = entry.process_id.clone();
 
         if entry.session.has_exited() {
-            let Some(entry) = sessions.remove(&process_id) else {
+            let Some(entry) = store.remove(&process_id) else {
                 return SessionStatus::Unknown;
             };
             SessionStatus::Exited {
@@ -359,8 +360,8 @@ impl UnifiedExecSessionManager {
         &self,
         process_id: &str,
     ) -> Result<PreparedSessionHandles, UnifiedExecError> {
-        let mut sessions = self.sessions.lock().await;
-        let entry = sessions
+        let mut store = self.session_store.lock().await;
+        let entry = store.sessions
             .get_mut(process_id)
             .ok_or(UnifiedExecError::UnknownSessionId {
                 process_id: process_id.to_string(),
@@ -416,9 +417,9 @@ impl UnifiedExecSessionManager {
             started_at,
             last_used: started_at,
         };
-        let mut sessions = self.sessions.lock().await;
-        Self::prune_sessions_if_needed(&mut sessions);
-        sessions.insert(process_id, entry);
+        let mut store = self.session_store.lock().await;
+        Self::prune_sessions_if_needed(&mut store);
+        store.sessions.insert(process_id, entry);
     }
 
     async fn emit_exec_end_from_entry(
@@ -628,18 +629,18 @@ impl UnifiedExecSessionManager {
         collected
     }
 
-    fn prune_sessions_if_needed(sessions: &mut HashMap<String, SessionEntry>) {
-        if sessions.len() < MAX_UNIFIED_EXEC_SESSIONS {
+    fn prune_sessions_if_needed(store: &mut SessionStore) {
+        if store.sessions.len() < MAX_UNIFIED_EXEC_SESSIONS {
             return;
         }
 
-        let meta: Vec<(String, Instant, bool)> = sessions
+        let meta: Vec<(String, Instant, bool)> = store.sessions
             .iter()
             .map(|(id, entry)| (id.clone(), entry.last_used, entry.session.has_exited()))
             .collect();
 
         if let Some(session_id) = Self::session_id_to_prune_from_meta(&meta) {
-            sessions.remove(&session_id);
+            store.remove(&session_id);
         }
     }
 
@@ -673,7 +674,7 @@ impl UnifiedExecSessionManager {
     }
 
     pub(crate) async fn terminate_all_sessions(&self) {
-        let mut sessions = self.sessions.lock().await;
+        let mut sessions = self.session_store.lock().await;
         sessions.clear();
     }
 }
