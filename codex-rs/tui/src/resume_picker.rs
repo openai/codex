@@ -1075,7 +1075,6 @@ mod tests {
         ConversationItem {
             path: PathBuf::from(path),
             head: head_with_ts_and_user_text(ts, &[preview]),
-            tail: Vec::new(),
             created_at: Some(ts.to_string()),
             updated_at: Some(ts.to_string()),
         }
@@ -1150,14 +1149,12 @@ mod tests {
         let a = ConversationItem {
             path: PathBuf::from("/tmp/a.jsonl"),
             head: head_with_ts_and_user_text("2025-01-01T00:00:00Z", &["A"]),
-            tail: Vec::new(),
             created_at: Some("2025-01-01T00:00:00Z".into()),
             updated_at: Some("2025-01-01T00:00:00Z".into()),
         };
         let b = ConversationItem {
             path: PathBuf::from("/tmp/b.jsonl"),
             head: head_with_ts_and_user_text("2025-01-02T00:00:00Z", &["B"]),
-            tail: Vec::new(),
             created_at: Some("2025-01-02T00:00:00Z".into()),
             updated_at: Some("2025-01-02T00:00:00Z".into()),
         };
@@ -1171,21 +1168,9 @@ mod tests {
     #[test]
     fn row_uses_tail_timestamp_for_updated_at() {
         let head = head_with_ts_and_user_text("2025-01-01T00:00:00Z", &["Hello"]);
-        let tail = vec![json!({
-            "timestamp": "2025-01-01T01:00:00Z",
-            "type": "message",
-            "role": "assistant",
-            "content": [
-                {
-                    "type": "output_text",
-                    "text": "hi",
-                }
-            ],
-        })];
         let item = ConversationItem {
             path: PathBuf::from("/tmp/a.jsonl"),
             head,
-            tail,
             created_at: Some("2025-01-01T00:00:00Z".into()),
             updated_at: Some("2025-01-01T01:00:00Z".into()),
         };
