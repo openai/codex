@@ -40,7 +40,6 @@ mod message_history;
 mod model_provider_info;
 pub mod parse_command;
 pub mod powershell;
-mod response_processing;
 pub mod sandboxing;
 mod text_encoding;
 pub mod token_data;
