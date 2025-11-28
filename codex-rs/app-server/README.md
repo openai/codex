@@ -65,7 +65,7 @@ The JSON-RPC API exposes dedicated methods for managing Codex conversations. Thr
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success.
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
-- `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits a `item/completed` notification with a `codeReview` item when results are ready.
+- `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
 
 ### 1) Start or resume a thread
 
@@ -190,49 +190,56 @@ Use `review/start` to run Codex’s reviewer on the currently checked-out projec
 - `{"type":"baseBranch","branch":"main"}` — diff against the provided branch’s upstream (see prompt for the exact `git merge-base`/`git diff` instructions Codex will run).
 - `{"type":"commit","sha":"abc1234","title":"Optional subject"}` — review a specific commit.
 - `{"type":"custom","instructions":"Free-form reviewer instructions"}` — fallback prompt equivalent to the legacy manual review request.
-- `appendToOriginalThread` (bool, default `false`) — when `true`, Codex also records a final assistant-style message with the review summary in the original thread. When `false`, only the `codeReview` item is emitted for the review run and no extra message is added to the original thread.
+- `delivery` (`"inline"` or `"detached"`, default `"inline"`) — where the review runs:
+  - `"inline"`: run the review as a new turn on the existing thread. The response’s `reviewThreadId` equals the original `threadId`, and no new `thread/started` notification is emitted.
+  - `"detached"`: fork a new review thread from the parent conversation and run the review there. The response’s `reviewThreadId` is the id of this new review thread, and the server emits a `thread/started` notification for it before streaming review items.
 
 Example request/response:
 
 ```json
 { "method": "review/start", "id": 40, "params": {
     "threadId": "thr_123",
-    "appendToOriginalThread": true,
+    "delivery": "inline",
     "target": { "type": "commit", "sha": "1234567deadbeef", "title": "Polish tui colors" }
 } }
-{ "id": 40, "result": { "turn": {
-    "id": "turn_900",
-    "status": "inProgress",
-    "items": [
-        { "type": "userMessage", "id": "turn_900", "content": [ { "type": "text", "text": "Review commit 1234567: Polish tui colors" } ] }
-    ],
-    "error": null
-} } }
+{ "id": 40, "result": {
+    "turn": {
+        "id": "turn_900",
+        "status": "inProgress",
+        "items": [
+            { "type": "userMessage", "id": "turn_900", "content": [ { "type": "text", "text": "Review commit 1234567: Polish tui colors" } ] }
+        ],
+        "error": null
+    },
+    "reviewThreadId": "thr_123"
+} }
 ```
 
+For a detached review, use `"delivery": "detached"`. The response is the same shape, but `reviewThreadId` will be the id of the new review thread (different from the original `threadId`). The server also emits a `thread/started` notification for that new thread before streaming the review turn.
+
 Codex streams the usual `turn/started` notification followed by an `item/started`
-with the same `codeReview` item id so clients can show progress:
+with an `enteredReviewMode` item so clients can show progress:
 
 ```json
 { "method": "item/started", "params": { "item": {
-    "type": "codeReview",
+    "type": "enteredReviewMode",
     "id": "turn_900",
     "review": "current changes"
 } } }
 ```
 
-When the reviewer finishes, the server emits `item/completed` containing the same
-`codeReview` item with the final review text:
+When the reviewer finishes, the server emits `item/started` and `item/completed`
+containing an `exitedReviewMode` item with the final review text:
 
 ```json
 { "method": "item/completed", "params": { "item": {
-    "type": "codeReview",
+    "type": "exitedReviewMode",
     "id": "turn_900",
     "review": "Looks solid overall...\n\n- Prefer Stylize helpers — app.rs:10-20\n  ..."
 } } }
 ```
 
-The `review` string is plain text that already bundles the overall explanation plus a bullet list for each structured finding (matching `ThreadItem::CodeReview` in the generated schema). Use this notification to render the reviewer output in your client.
+The `review` string is plain text that already bundles the overall explanation plus a bullet list for each structured finding (matching `ThreadItem::ExitedReviewMode` in the generated schema). Use this notification to render the reviewer output in your client.
 
 ## Events (work-in-progress)
 

@@ -71,6 +71,7 @@ impl ContextManager {
     // With extra response items filtered out and GhostCommits removed.
     pub(crate) fn get_history_for_prompt(&mut self) -> Vec<ResponseItem> {
         let mut history = self.get_history();
+        history.retain(|item| !is_review_rollout_item(item));
         Self::remove_ghost_snapshots(&mut history);
         history
     }
@@ -247,6 +248,15 @@ fn is_api_message(message: &ResponseItem) -> bool {
         ResponseItem::GhostSnapshot { .. } => false,
         ResponseItem::Other => false,
     }
+}
+
+fn is_review_rollout_item(item: &ResponseItem) -> bool {
+    matches!(item,
+        ResponseItem::Message {
+            id: Some(id),
+            ..
+        } if id.starts_with("review:rollout:")
+    )
 }
 
 fn estimate_reasoning_length(encoded_len: usize) -> usize {

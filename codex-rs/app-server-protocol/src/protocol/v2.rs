@@ -130,6 +130,12 @@ v2_enum_from_core!(
     }
 );
 
+v2_enum_from_core!(
+    pub enum ReviewDelivery from codex_protocol::protocol::ReviewDelivery {
+        Inline, Detached
+    }
+);
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -908,9 +914,22 @@ pub struct ReviewStartParams {
     pub thread_id: String,
     pub target: ReviewTarget,
 
-    /// When true, also append the final review message to the original thread.
+    /// Where to run the review: inline (default) on the current thread or
+    /// detached on a new thread (returned in `reviewThreadId`).
     #[serde(default)]
-    pub append_to_original_thread: bool,
+    pub delivery: Option<ReviewDelivery>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ReviewStartResponse {
+    pub turn: Turn,
+    /// Identifies the thread where the review runs.
+    ///
+    /// For inline reviews, this is the original thread id.
+    /// For detached reviews, this is the id of the new review thread.
+    pub review_thread_id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1063,7 +1082,10 @@ pub enum ThreadItem {
     ImageView { id: String, path: String },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    CodeReview { id: String, review: String },
+    EnteredReviewMode { id: String, review: String },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    ExitedReviewMode { id: String, review: String },
 }
 
 impl From<CoreTurnItem> for ThreadItem {
