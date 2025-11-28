@@ -1,0 +1,7 @@
+---
+source: tui/src/history_cell/agent.rs
+expression: cell.display_string(34)
+---
+• Here is how to fix the failing
+  tests by adjusting the mock
+  responses.

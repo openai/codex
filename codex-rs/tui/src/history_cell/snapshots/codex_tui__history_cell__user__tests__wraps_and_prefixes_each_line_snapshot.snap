@@ -1,0 +1,9 @@
+---
+source: tui/src/history_cell/user.rs
+assertion_line: 63
+expression: rendered
+---
+› one two
+  three
+  four five
+  six seven

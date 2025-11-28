@@ -1,0 +1,7 @@
+---
+source: tui/src/history_cell/plan.rs
+assertion_line: 131
+expression: rendered
+---
+• Updated Plan
+  └ (no steps provided)

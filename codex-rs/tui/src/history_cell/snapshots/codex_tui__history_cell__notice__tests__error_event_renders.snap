@@ -1,0 +1,6 @@
+---
+source: tui/src/history_cell/notice.rs
+assertion_line: 55
+expression: cell.display_string(50)
+---
+■ Patch apply failed; see stderr for details.

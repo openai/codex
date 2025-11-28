@@ -1,0 +1,9 @@
+---
+source: tui/src/history_cell/patch.rs
+expression: cell.display_string(56)
+---
+• Added src/lib.rs (+3 -0)
+    1 +fn main() {
+    2 +    println!("hello world from a very chatty func
+       tion that will wrap");
+    3 +}
