@@ -484,10 +484,6 @@ impl McpProcess {
         method: &str,
         params: Option<serde_json::Value>,
     ) -> anyhow::Result<i64> {
-        // Drop any stale notifications from previous requests so callers don't
-        // accidentally consume old events when waiting for the next response.
-        self.pending_notifications.clear();
-
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
 
         let message = JSONRPCMessage::Request(JSONRPCRequest {
@@ -497,6 +493,14 @@ impl McpProcess {
         });
         self.send_jsonrpc_message(message).await?;
         Ok(request_id)
+    }
+
+    /// Clear any queued notifications.
+    ///
+    /// Tests can call this between turns when they want to guarantee that the
+    /// next read_* call sees only events from the new turn.
+    pub fn clear_pending_notifications(&mut self) {
+        self.pending_notifications.clear();
     }
 
     pub async fn send_response(

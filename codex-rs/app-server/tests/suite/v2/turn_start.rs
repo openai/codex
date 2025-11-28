@@ -553,6 +553,10 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     )
     .await??;
 
+    // Drop any leftover notifications from the first turn before we wait for
+    // events from the second turn.
+    mcp.clear_pending_notifications();
+
     // second turn with workspace-write and second_cwd, ensure exec begins in second_cwd
     let second_turn = mcp
         .send_turn_start_request(TurnStartParams {
