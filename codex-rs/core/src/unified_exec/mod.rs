@@ -22,7 +22,6 @@
 //! - `session_manager.rs`: orchestration (approvals, sandboxing, reuse) and request handling.
 
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -99,7 +98,6 @@ pub(crate) struct UnifiedExecResponse {
 #[derive(Default)]
 pub(crate) struct UnifiedExecSessionManager {
     sessions: Mutex<HashMap<String, SessionEntry>>,
-    used_session_ids: Mutex<HashSet<String>>,
 }
 
 struct SessionEntry {

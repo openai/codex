@@ -81,7 +81,7 @@ struct PreparedSessionHandles {
 impl UnifiedExecSessionManager {
     pub(crate) async fn allocate_process_id(&self) -> String {
         loop {
-            let mut store = self.used_session_ids.lock().await;
+            let store = self.sessions.lock().await;
 
             let process_id = if !cfg!(test) && !cfg!(feature = "deterministic_process_ids") {
                 // production mode → random
@@ -90,7 +90,7 @@ impl UnifiedExecSessionManager {
                 // test or deterministic mode
                 let next = store
                     .iter()
-                    .filter_map(|s| s.parse::<i32>().ok())
+                    .filter_map(|(s, _)| s.parse::<i32>().ok())
                     .max()
                     .map(|m| std::cmp::max(m, 999) + 1)
                     .unwrap_or(1000);
@@ -98,11 +98,10 @@ impl UnifiedExecSessionManager {
                 next.to_string()
             };
 
-            if store.contains(&process_id) {
+            if store.contains_key(&process_id) {
                 continue;
             }
 
-            store.insert(process_id.clone());
             return process_id;
         }
     }
