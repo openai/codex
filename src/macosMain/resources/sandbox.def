@@ -1,0 +1,49 @@
+---
+language: C
+cInterop: true
+package: ai.solace.coder.exec.sandbox
+headers:
+  - sandbox.h
+  - sys/types.h
+  - sys/stat.h
+  - fcntl.h
+  -unistd.h
+---
+
+// Sandbox execution function prototypes
+int sandbox_init(
+    const void *profile,
+    uint64_t flags,
+    char **errorbuf
+);
+
+int sandbox_init_with_parameters(
+    const void *profile,
+    uint64_t flags,
+    const char *const *argv,
+    char **errorbuf
+);
+
+int sandbox_init_with_extensions(
+    const void *profile,
+    uint64_t flags,
+    const char *const *argv,
+    const char *const *exts,
+    char **errorbuf
+);
+
+void sandbox_free_error(char *errorbuf);
+
+// Sandbox flags
+#define SANDBOX_NAMED 0x0100
+
+// Helper functions for Kotlin interop
+int seatbelt_apply_profile(const char *profile_text, const char *const *params);
+int seatbelt_apply_profile_with_error(const char *profile_text, const char *const *params, char **error);
+void seatbelt_free_error(char *error);
+
+// Constants for common sandbox operations
+extern const char *SEATBELT_BASE_POLICY;
+extern const char *SEATBELT_NETWORK_POLICY;
+extern const char *SEATBELT_FILE_READ_POLICY;
+extern const char *SEATBELT_FILE_WRITE_POLICY;
