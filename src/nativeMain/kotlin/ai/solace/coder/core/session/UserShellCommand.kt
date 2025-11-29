@@ -1,5 +1,6 @@
 package ai.solace.coder.core.session
 
+import ai.solace.coder.exec.process.ExecToolCallOutput
 import ai.solace.coder.protocol.models.ContentItem
 import ai.solace.coder.protocol.models.ResponseItem
 
@@ -24,8 +25,8 @@ fun isUserShellCommandText(text: String): Boolean {
 /**
  * Format duration line for output.
  */
-private fun formatDurationLine(durationMs: Long): String {
-    val durationSeconds = durationMs / 1000.0
+private fun formatDurationLine(duration: kotlin.time.Duration): String {
+    val durationSeconds = duration.inWholeMilliseconds / 1000.0
     // Manual formatting since Kotlin Native doesn't have String.format
     val intPart = durationSeconds.toLong()
     val fracPart = ((durationSeconds - intPart) * 10000).toLong()
@@ -47,7 +48,7 @@ private fun formatUserShellCommandBody(
     sections.add("</command>")
     sections.add("<result>")
     sections.add("Exit code: ${execOutput.exitCode}")
-    sections.add(formatDurationLine(execOutput.durationMs))
+    sections.add(formatDurationLine(execOutput.duration))
     sections.add("Output:")
     sections.add(formatExecOutputStr(execOutput, truncationPolicy))
     sections.add("</result>")
@@ -93,32 +94,20 @@ private fun formatExecOutputStr(
     truncationPolicy: ai.solace.coder.core.context.TruncationPolicy
 ): String {
     // Use aggregated output if available, otherwise combine stdout/stderr
-    val content = if (output.aggregatedOutput.isNotEmpty()) {
-        output.aggregatedOutput
+    val content = if (output.aggregatedOutput.text.isNotEmpty()) {
+        output.aggregatedOutput.text
     } else {
         buildString {
-            if (output.stdout.isNotEmpty()) {
-                append(output.stdout)
+            if (output.stdout.text.isNotEmpty()) {
+                append(output.stdout.text)
             }
-            if (output.stderr.isNotEmpty()) {
+            if (output.stderr.text.isNotEmpty()) {
                 if (isNotEmpty()) append("\n")
-                append(output.stderr)
+                append(output.stderr.text)
             }
         }
     }
     return ai.solace.coder.core.context.truncateText(content, truncationPolicy)
 }
 
-/**
- * Output from executing a tool call.
- *
- * Ported from Rust codex-rs/core/src/exec/mod.rs
- */
-data class ExecToolCallOutput(
-    val exitCode: Int,
-    val stdout: String,
-    val stderr: String,
-    val aggregatedOutput: String,
-    val durationMs: Long,
-    val timedOut: Boolean
-)
+// ExecToolCallOutput is now imported from ai.solace.coder.exec.process

@@ -525,17 +525,7 @@ class ApprovalStore {
     }
 }
 
-/**
- * Review decision from user approval flow.
- *
- * Ported from Rust codex-rs/protocol/src/protocol.rs ReviewDecision
- */
-enum class ReviewDecision {
-    Approved,
-    ApprovedForSession,
-    Rejected,
-    Cancelled
-}
+// ReviewDecision is defined in ai.solace.coder.protocol.Protocol
 
 /**
  * Context for approval requests.
@@ -646,11 +636,10 @@ sealed class ToolError {
 data class SandboxAttempt(
     val sandbox: ai.solace.coder.exec.process.SandboxType,
     val policy: SandboxPolicy,
+    val manager: SandboxManager,
     val sandboxCwd: String,
     val codexLinuxSandboxExe: String? = null
 ) {
-    private val manager = SandboxManager()
-
     /**
      * Transform a command spec into an execution environment with sandboxing.
      */

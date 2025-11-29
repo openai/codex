@@ -5,8 +5,12 @@ import ai.solace.coder.core.error.CodexResult
 import ai.solace.coder.core.session.Session
 import ai.solace.coder.core.session.TurnContext
 import ai.solace.coder.exec.process.SandboxType
+import ai.solace.coder.exec.sandbox.ApprovalRequirement
+import ai.solace.coder.exec.sandbox.SandboxAttempt
 import ai.solace.coder.exec.sandbox.SandboxManager
+import ai.solace.coder.exec.sandbox.SandboxOverride
 import ai.solace.coder.exec.sandbox.SandboxPreference
+import ai.solace.coder.exec.sandbox.defaultApprovalRequirement
 import ai.solace.coder.protocol.AskForApproval
 import ai.solace.coder.protocol.ReviewDecision
 import ai.solace.coder.protocol.SandboxPolicy as ProtocolSandboxPolicy
@@ -41,8 +45,9 @@ class ToolOrchestrator {
         var alreadyApproved = false
 
         // 1) Approval
+        val modelsSandboxPolicyForApproval = turnCtx.sandboxPolicy.toModelsPolicy()
         val requirement = tool.approvalRequirement(request)
-            ?: defaultApprovalRequirement(approvalPolicy, turnCtx.sandboxPolicy)
+            ?: defaultApprovalRequirement(approvalPolicy, modelsSandboxPolicyForApproval)
 
         when (requirement) {
             is ApprovalRequirement.Skip -> {
@@ -78,7 +83,7 @@ class ToolOrchestrator {
         }
 
         // 2) First attempt under the selected sandbox
-        val modelsSandboxPolicy = turnCtx.sandboxPolicy.toModelsPolicy()
+        val modelsSandboxPolicy = modelsSandboxPolicyForApproval
         val initialSandbox = when (tool.sandboxModeForFirstAttempt(request)) {
             SandboxOverride.BypassSandboxFirstAttempt -> SandboxType.None
             SandboxOverride.NoOverride -> sandbox.selectInitialSandbox(
@@ -159,7 +164,7 @@ class ToolOrchestrator {
         val escalatedAttempt = SandboxAttempt(
             sandbox = SandboxType.None,
             policy = turnCtx.sandboxPolicy.toModelsPolicy(),
-            manager = sandbox,
+            manager = this@ToolOrchestrator.sandbox,
             sandboxCwd = turnCtx.cwd,
             codexLinuxSandboxExe = null
         )
@@ -176,27 +181,6 @@ class ToolOrchestrator {
         return error is CodexError.SandboxError
     }
 
-    /**
-     * Default approval requirement based on policy.
-     */
-    private fun defaultApprovalRequirement(
-        approvalPolicy: AskForApproval,
-        sandboxPolicy: ProtocolSandboxPolicy
-    ): ApprovalRequirement {
-        // AskForApproval enum values: UnlessTrusted, OnFailure, OnRequest, Never
-        return when (approvalPolicy) {
-            AskForApproval.Never -> ApprovalRequirement.Skip()
-            AskForApproval.OnRequest -> ApprovalRequirement.Skip()
-            AskForApproval.OnFailure -> ApprovalRequirement.Skip()
-            AskForApproval.UnlessTrusted -> {
-                when (sandboxPolicy) {
-                    is ProtocolSandboxPolicy.DangerFullAccess ->
-                        ApprovalRequirement.NeedsApproval("full disk access enabled")
-                    else -> ApprovalRequirement.Skip()
-                }
-            }
-        }
-    }
 }
 
 /**
@@ -236,34 +220,6 @@ data class ApprovalContext(
     val callId: String,
     val retryReason: String?,
     val risk: String?
-)
-
-/**
- * Approval requirement for a tool invocation.
- */
-sealed class ApprovalRequirement {
-    data class Skip(val reason: String? = null) : ApprovalRequirement()
-    data class Forbidden(val reason: String) : ApprovalRequirement()
-    data class NeedsApproval(val reason: String?) : ApprovalRequirement()
-}
-
-/**
- * Override for sandbox behavior on first attempt.
- */
-enum class SandboxOverride {
-    NoOverride,
-    BypassSandboxFirstAttempt
-}
-
-/**
- * Sandbox attempt configuration.
- */
-data class SandboxAttempt(
-    val sandbox: SandboxType,
-    val policy: ModelsSandboxPolicy,
-    val manager: SandboxManager,
-    val sandboxCwd: String,
-    val codexLinuxSandboxExe: String?
 )
 
 /**

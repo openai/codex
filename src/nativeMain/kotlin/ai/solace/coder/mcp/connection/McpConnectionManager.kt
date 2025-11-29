@@ -9,6 +9,17 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.serialization.json.JsonElement
 
 /**
+ * MCP server configuration.
+ *
+ * Ported from Rust codex-rs/core/src/config/types.rs McpServerConfig
+ */
+data class McpServerConfig(
+    val command: String,
+    val args: List<String> = emptyList(),
+    val env: Map<String, String> = emptyMap()
+)
+
+/**
  * MCP Connection Manager stub.
  *
  * Manages connections to MCP (Model Context Protocol) servers and provides
@@ -29,12 +40,6 @@ class McpConnectionManager {
     data class ElicitationResponse(
         val action: ElicitationAction,
         val content: String?
-    )
-
-    data class McpServerConfig(
-        val command: String,
-        val args: List<String> = emptyList(),
-        val env: Map<String, String> = emptyMap()
     )
 
     /**

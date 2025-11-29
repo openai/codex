@@ -1,5 +1,7 @@
 package ai.solace.coder.protocol.models
 
+import ai.solace.coder.protocol.RateLimitSnapshot
+import ai.solace.coder.protocol.TokenUsage
 import ai.solace.coder.utils.git.GhostCommit
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
@@ -502,4 +504,49 @@ data class Result<T, E>(
 ) {
     val isSuccess: Boolean get() = error == null
     val isFailure: Boolean get() = error != null
+}
+
+/**
+ * Response event from the SSE stream.
+ *
+ * Ported from Rust codex-rs/codex-api/src/common.rs ResponseEvent
+ */
+sealed class ResponseEvent {
+    /** Stream created */
+    object Created : ResponseEvent()
+
+    /** Output item added (streaming started for this item) */
+    data class OutputItemAdded(val item: ResponseItem) : ResponseEvent()
+
+    /** Output item completed */
+    data class OutputItemDone(val item: ResponseItem) : ResponseEvent()
+
+    /** Text content delta (streaming text) */
+    data class OutputTextDelta(val delta: String) : ResponseEvent()
+
+    /** Reasoning summary delta */
+    data class ReasoningSummaryDelta(
+        val delta: String,
+        val summaryIndex: Long
+    ) : ResponseEvent()
+
+    /** Reasoning summary part added */
+    data class ReasoningSummaryPartAdded(
+        val summaryIndex: Long
+    ) : ResponseEvent()
+
+    /** Reasoning content delta */
+    data class ReasoningContentDelta(
+        val delta: String,
+        val contentIndex: Long
+    ) : ResponseEvent()
+
+    /** Rate limit information */
+    data class RateLimits(val snapshot: RateLimitSnapshot) : ResponseEvent()
+
+    /** Response completed */
+    data class Completed(
+        val responseId: String?,
+        val tokenUsage: TokenUsage?
+    ) : ResponseEvent()
 }

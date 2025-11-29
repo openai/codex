@@ -16,11 +16,14 @@ import ai.solace.coder.core.tools.ToolCallRuntime
 import ai.solace.coder.core.tools.ToolRegistry
 import ai.solace.coder.core.tools.ToolRouter
 import ai.solace.coder.core.tools.SharedTurnDiffTracker
+import ai.solace.coder.core.tools.ApplyPatchToolType
 import ai.solace.coder.exec.sandbox.ApprovalStore
 import ai.solace.coder.exec.sandbox.SandboxCommandAssessment
 import ai.solace.coder.exec.shell.Shell
 import ai.solace.coder.exec.shell.ShellDetector
 import ai.solace.coder.mcp.connection.McpConnectionManager
+import ai.solace.coder.mcp.connection.McpServerConfig
+import ai.solace.coder.protocol.models.ResponseEvent
 import ai.solace.coder.utils.concurrent.CancellationToken
 import ai.solace.coder.protocol.AskForApproval
 import ai.solace.coder.protocol.ApplyPatchApprovalRequestEvent
@@ -1456,7 +1459,7 @@ data class ToolsConfig(
 )
 
 enum class ShellToolType { Default, UnifiedExec, None }
-enum class ApplyPatchToolType { Structured, Freeform }
+// ApplyPatchToolType is imported from ai.solace.coder.core.tools.ToolSpec
 
 /**
  * Execution policy for commands.
@@ -2198,48 +2201,7 @@ private suspend fun tryRunTurn(
     return Result.success(processedItems)
 }
 
-/**
- * Streaming events from model client.
- *
- * Ported from Rust codex-rs/core/src/client/stream.rs ResponseEvent
- */
-sealed class ResponseEvent {
-    /** Stream created */
-    object Created : ResponseEvent()
-
-    /** Output item added (streaming started for this item) */
-    data class OutputItemAdded(val item: ResponseItem) : ResponseEvent()
-
-    /** Output item completed */
-    data class OutputItemDone(val item: ResponseItem) : ResponseEvent()
-
-    /** Rate limit information */
-    data class RateLimits(val snapshot: RateLimitSnapshot) : ResponseEvent()
-
-    /** Response completed */
-    data class Completed(
-        val responseId: String?,
-        val tokenUsage: TokenUsage?
-    ) : ResponseEvent()
-
-    /** Text content delta (streaming text) */
-    data class OutputTextDelta(val delta: String) : ResponseEvent()
-
-    /** Reasoning summary delta */
-    data class ReasoningSummaryDelta(
-        val delta: String,
-        val summaryIndex: Long
-    ) : ResponseEvent()
-
-    /** Reasoning summary section break */
-    data class ReasoningSummaryPartAdded(val summaryIndex: Long) : ResponseEvent()
-
-    /** Raw reasoning content delta */
-    data class ReasoningContentDelta(
-        val delta: String,
-        val contentIndex: Long
-    ) : ResponseEvent()
-}
+// ResponseEvent is now imported from ai.solace.coder.protocol.models
 
 /**
  * Handle a non-tool response item.
@@ -2613,11 +2575,7 @@ data class ModelFamily(
 enum class ReasoningEffort { Low, Medium, High }
 enum class ReasoningSummary { None, Brief, Detailed }
 
-data class McpServerConfig(
-    val command: String,
-    val args: List<String> = emptyList(),
-    val env: Map<String, String> = emptyMap()
-)
+// McpServerConfig is now imported from ai.solace.coder.mcp.connection
 
 data class NotifyConfig(
     val enabled: Boolean = false

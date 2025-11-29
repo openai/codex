@@ -1,10 +1,10 @@
 package ai.solace.coder.client.http
 
 import ai.solace.coder.client.auth.AuthManager
-import ai.solace.coder.client.http.ResponseEvent
 import ai.solace.coder.client.streaming.SseParser
 import ai.solace.coder.core.error.CodexError
 import ai.solace.coder.core.error.CodexResult
+import ai.solace.coder.protocol.models.ResponseEvent
 import ai.solace.coder.protocol.models.ResponseItem
 import io.ktor.client.*
 import io.ktor.client.engine.curl.*
@@ -188,7 +188,7 @@ data class ResponsesPrompt(
  * Options for /responses requests.
  */
 data class ResponsesOptions(
-    val reasoning: Reasoning? = null,
+    val reasoning: ReasoningConfig? = null,
     val include: List<String> = emptyList(),
     val promptCacheKey: String? = null,
     val text: TextOptions? = null,
@@ -198,8 +198,9 @@ data class ResponsesOptions(
 
 /**
  * Reasoning configuration for the API.
+ * Renamed from Reasoning to avoid conflict with ResponseItem.Reasoning
  */
-data class Reasoning(
+data class ReasoningConfig(
     val effort: String? = null,
     val summary: Boolean = true
 )
@@ -211,38 +212,4 @@ data class TextOptions(
     val verbosity: String? = null
 )
 
-/**
- * Response event from the SSE stream.
- */
-sealed class ResponseEvent {
-    object Created : ResponseEvent()
-    
-    data class OutputItemAdded(val item: ResponseItem) : ResponseEvent()
-    
-    data class OutputItemDone(val item: ResponseItem) : ResponseEvent()
-    
-    data class OutputTextDelta(val delta: String) : ResponseEvent()
-    
-    data class ReasoningSummaryDelta(
-        val delta: String,
-        val summaryIndex: Long
-    ) : ResponseEvent()
-    
-    data class ReasoningSummaryPartAdded(
-        val summaryIndex: Long
-    ) : ResponseEvent()
-    
-    data class ReasoningContentDelta(
-        val delta: String,
-        val contentIndex: Long
-    ) : ResponseEvent()
-    
-    data class RateLimits(
-        val snapshot: ai.solace.coder.protocol.RateLimitSnapshot
-    ) : ResponseEvent()
-    
-    data class Completed(
-        val responseId: String,
-        val tokenUsage: ai.solace.coder.protocol.TokenUsage?
-    ) : ResponseEvent()
-}
+// ResponseEvent is now imported from ai.solace.coder.protocol.models
