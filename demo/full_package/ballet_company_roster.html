@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ballet Company Roster</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  </head>
+  <body class="bg-black">
+    <div id="root"></div>
+
+    <script type="text/babel">
+      const Icon = ({ label }) => (
+        <span className="inline-flex items-center justify-center w-4 h-4 text-sm align-middle">
+          {label}
+        </span>
+      );
+
+      const FilterButton = ({ active, label, onClick }) => (
+        <button
+          onClick={onClick}
+          className={`px-6 py-2 text-sm uppercase tracking-wider transition-all ${
+            active
+              ? "border-b-2 border-white text-white font-medium"
+              : "text-gray-500 hover:text-gray-300"
+          }`}
+        >
+          {label}
+        </button>
+      );
+
+      const BadgeColor = {
+        principal: "bg-amber-600 text-amber-50",
+        soloist: "bg-purple-600 text-purple-50",
+        corps: "bg-blue-600 text-blue-50",
+        faculty: "bg-gray-700 text-gray-50",
+      };
+
+      const companyMembers = [
+        {
+          id: 1,
+          name: "Diana Castellanos",
+          title: "Principal Dancer",
+          rank: "principal",
+          pronouns: "she/her",
+          image:
+            "https://images.unsplash.com/photo-1508807526345-15e9b5f4eaff?w=800&q=80",
+          hometown: "Havana, Cuba",
+          training: "Cuban National Ballet School, Royal Ballet School",
+          joined: "2015",
+          repertoire: [
+            "Odette/Odile (Swan Lake)",
+            "Juliet (Romeo & Juliet)",
+            "Aurora (Sleeping Beauty)",
+            "Giselle",
+            "Principal in Agon (Balanchine)",
+          ],
+          awards: [
+            "Prix de Lausanne Gold Medal (2014)",
+            "Benois de la Danse (2020)",
+          ],
+          bio: "Diana Castellanos joined the company in 2015 and was promoted to Principal Dancer in 2018. Known for her ethereal quality and technical precision, she has captivated audiences worldwide. Her interpretation of Balanchine's neoclassical works has been described as 'transcendent' by The New York Times.",
+          instagram: "@diana.castellanos",
+          website: null,
+        },
+        {
+          id: 2,
+          name: "Marcus Chen",
+          title: "Principal Dancer",
+          rank: "principal",
+          pronouns: "he/him",
+          image:
+            "https://images.unsplash.com/photo-1547153760-18fc86324498?w=800&q=80",
+          hometown: "San Francisco, CA",
+          training: "San Francisco Ballet School, School of American Ballet",
+          joined: "2013",
+          repertoire: [
+            "Prince Siegfried (Swan Lake)",
+            "Albrecht (Giselle)",
+            "Apollo (Balanchine)",
+            "Lead in Agon",
+            "Contemporary repertoire",
+          ],
+          awards: [
+            "Erik Bruhn Competition Silver Medal (2012)",
+            "Dance Magazine Award (2021)",
+          ],
+          bio: "A versatile artist equally at home in classical and contemporary repertoire, Marcus brings athleticism and emotional depth to every role. His partnership with Diana Castellanos has been hailed as one of the defining artistic collaborations of this generation.",
+          instagram: "@marcuschen_ballet",
+          website: "www.marcuschenofficial.com",
+        },
+        {
+          id: 3,
+          name: "Amélie Laurent",
+          title: "Soloist",
+          rank: "soloist",
+          pronouns: "she/her",
+          image:
+            "https://images.unsplash.com/photo-1534329539061-64caeb388c42?w=800&q=80",
+          hometown: "Paris, France",
+          training: "Paris Opéra Ballet School",
+          joined: "2017",
+          repertoire: [
+            "Bluebird Pas de Deux (Sleeping Beauty)",
+            "Terpsichore (Apollo)",
+            "Emeralds (Jewels)",
+            "Lead in Serenade",
+          ],
+          awards: ["Youth America Grand Prix Gold Medal (2016)"],
+          bio: "Amélie's exquisite musicality and refined technique mark her as a rising star. Promoted to Soloist in 2021, she brings French elegance to the American neoclassical tradition.",
+          instagram: "@amelie.laurent.ballet",
+          website: null,
+        },
+        {
+          id: 4,
+          name: "George Balanchine",
+          title: "Artistic Director Emeritus",
+          rank: "faculty",
+          pronouns: "he/him (legacy)",
+          image:
+            "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=800&q=80",
+          hometown: "St. Petersburg, Russia",
+          training: "Imperial Ballet School",
+          joined: "1948 (Founding)",
+          repertoire: [
+            "Creator of 465+ ballets",
+            "Agon, Apollo, Serenade, Jewels",
+            "Defined American neoclassicism",
+          ],
+          awards: [
+            "Kennedy Center Honors",
+            "Presidential Medal of Freedom",
+            "Architectural Digest Hall of Fame",
+          ],
+          bio: "The father of American ballet and co-founder of New York City Ballet. Balanchine revolutionized classical ballet with his neoclassical style, emphasizing speed, precision, and musicality. His artistic philosophy—'Ballet is woman'—and his collaborations with Stravinsky created some of the 20th century's most enduring masterworks.",
+          instagram: null,
+          website: "balanchine.org",
+        },
+        {
+          id: 5,
+          name: "Elena Volkov",
+          title: "Ballet Mistress",
+          rank: "faculty",
+          pronouns: "she/her",
+          image:
+            "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=800&q=80",
+          hometown: "Moscow, Russia",
+          training:
+            "Bolshoi Ballet Academy, Former Principal Dancer Mariinsky Theatre",
+          joined: "2019",
+          repertoire: [
+            "Coached over 200 productions",
+            "Specialist in Russian repertoire",
+            "Vaganova method expert",
+          ],
+          awards: ["People's Artist of Russia", "Anna Pavlova Prize"],
+          bio: "Elena Volkov brings 35 years of performing and teaching experience to her role as Ballet Mistress. A former Principal with the Mariinsky Theatre, she maintains the highest artistic standards while nurturing the next generation of dancers.",
+          instagram: null,
+          website: null,
+        },
+        {
+          id: 6,
+          name: "James Morrison",
+          title: "Corps de Ballet",
+          rank: "corps",
+          pronouns: "he/him",
+          image:
+            "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=800&q=80",
+          hometown: "Atlanta, GA",
+          training: "The Ailey School, Juilliard",
+          joined: "2022",
+          repertoire: [
+            "Corps roles in Swan Lake",
+            "Featured in Agon ensemble",
+            "Contemporary mixed bills",
+          ],
+          awards: ["NAACP Theatre Award (2021)"],
+          bio: "A recent addition to the company, James brings contemporary sensibilities and powerful stage presence. His commitment to expanding ballet's expressive range makes him an exciting talent to watch.",
+          instagram: "@jamesmorrison.dances",
+          website: null,
+        },
+      ];
+
+      function BalletCompanyRoster() {
+        const [selectedMember, setSelectedMember] = React.useState(null);
+        const [filter, setFilter] = React.useState("all");
+
+        const filters = [
+          { value: "all", label: "Full Company" },
+          { value: "principal", label: "Principals" },
+          { value: "soloist", label: "Soloists" },
+          { value: "corps", label: "Corps de Ballet" },
+          { value: "faculty", label: "Faculty & Staff" },
+        ];
+
+        const filteredMembers =
+          filter === "all"
+            ? companyMembers
+            : companyMembers.filter((member) => member.rank === filter);
+
+        return (
+          <div className="min-h-screen bg-gradient-to-b from-black via-gray-900 to-black text-white">
+            <header className="border-b border-gray-800 bg-black/80 backdrop-blur-md sticky top-0 z-40">
+              <div className="max-w-7xl mx-auto px-6 py-8">
+                <div className="text-center mb-6">
+                  <h1 className="text-5xl font-serif tracking-wide mb-2">
+                    Company Roster
+                  </h1>
+                  <p className="text-gray-400 text-sm uppercase tracking-widest">
+                    2024-2025 Season
+                  </p>
+                </div>
+                <nav className="flex justify-center gap-4 flex-wrap">
+                  {filters.map((option) => (
+                    <FilterButton
+                      key={option.value}
+                      active={filter === option.value}
+                      label={option.label}
+                      onClick={() => setFilter(option.value)}
+                    />
+                  ))}
+                </nav>
+              </div>
+            </header>
+
+            <main className="max-w-7xl mx-auto px-6 py-12">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                {filteredMembers.map((member) => (
+                  <button
+                    key={member.id}
+                    onClick={() => setSelectedMember(member)}
+                    className="group cursor-pointer text-left"
+                  >
+                    <div className="relative overflow-hidden bg-gray-900 aspect-[3/4] mb-4">
+                      <img
+                        src={member.image}
+                        alt={member.name}
+                        className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
+                      />
+                      <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-40 transition-all duration-300 flex items-center justify-center">
+                        <span className="text-white opacity-0 group-hover:opacity-100 transition-opacity duration-300 text-sm uppercase tracking-widest">
+                          View Biography
+                        </span>
+                      </div>
+                      <div
+                        className={`absolute top-3 left-3 px-3 py-1 text-xs uppercase tracking-wider font-medium ${
+                          BadgeColor[member.rank] ?? "bg-gray-600 text-gray-50"
+                        }`}
+                      >
+                        {member.title}
+                      </div>
+                    </div>
+
+                    <div className="text-center">
+                      <h3 className="text-xl font-serif mb-1">{member.name}</h3>
+                      <p className="text-gray-400 text-sm">{member.pronouns}</p>
+                      <p className="text-gray-500 text-xs mt-1">Joined {member.joined}</p>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </main>
+
+            {selectedMember && (
+              <div className="fixed inset-0 bg-black bg-opacity-95 z-50 overflow-y-auto">
+                <div className="min-h-screen flex items-center justify-center p-6">
+                  <div className="max-w-5xl w-full bg-gray-900 relative">
+                    <button
+                      onClick={() => setSelectedMember(null)}
+                      className="absolute top-6 right-6 z-10 p-2 bg-black bg-opacity-50 hover:bg-opacity-70 rounded-full transition-all"
+                      aria-label="Close biography"
+                    >
+                      <Icon label="✕" />
+                    </button>
+
+                    <div className="grid md:grid-cols-5 gap-0">
+                      <div className="md:col-span-2 relative">
+                        <img
+                          src={selectedMember.image}
+                          alt={selectedMember.name}
+                          className="w-full h-full object-cover min-h-[500px]"
+                        />
+                        <div
+                          className={`absolute bottom-0 left-0 right-0 px-6 py-4 ${
+                            BadgeColor[selectedMember.rank] ?? "bg-gray-600 text-gray-50"
+                          } bg-opacity-90`}
+                        >
+                          <p className="text-sm uppercase tracking-widest">
+                            {selectedMember.title}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="md:col-span-3 p-8 md:p-12">
+                        <div className="mb-6">
+                          <h2 className="text-4xl font-serif mb-2">
+                            {selectedMember.name}
+                          </h2>
+                          <p className="text-gray-400">{selectedMember.pronouns}</p>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4 mb-8 pb-8 border-b border-gray-800">
+                          <div>
+                            <div className="flex items-center gap-2 text-gray-400 text-xs uppercase tracking-wider mb-1">
+                              <Icon label="📍" />
+                              Hometown
+                            </div>
+                            <p className="text-sm">{selectedMember.hometown}</p>
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2 text-gray-400 text-xs uppercase tracking-wider mb-1">
+                              <Icon label="📅" />
+                              Joined Company
+                            </div>
+                            <p className="text-sm">{selectedMember.joined}</p>
+                          </div>
+                        </div>
+
+                        <div className="mb-8">
+                          <h3 className="text-xs uppercase tracking-widest text-gray-400 mb-3">
+                            Biography
+                          </h3>
+                          <p className="text-gray-300 leading-relaxed">
+                            {selectedMember.bio}
+                          </p>
+                        </div>
+
+                        <div className="mb-8">
+                          <h3 className="text-xs uppercase tracking-widest text-gray-400 mb-3">
+                            Training
+                          </h3>
+                          <p className="text-sm text-gray-300">{selectedMember.training}</p>
+                        </div>
+
+                        <div className="mb-8">
+                          <h3 className="text-xs uppercase tracking-widest text-gray-400 mb-3">
+                            Select Repertoire
+                          </h3>
+                          <ul className="space-y-2">
+                            {selectedMember.repertoire.map((role, idx) => (
+                              <li key={idx} className="text-sm text-gray-300 flex items-start">
+                                <span className="text-amber-600 mr-2">•</span>
+                                <span>{role}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+
+                        {selectedMember.awards.length > 0 && (
+                          <div className="mb-8">
+                            <h3 className="text-xs uppercase tracking-widest text-gray-400 mb-3 flex items-center gap-2">
+                              <Icon label="🏅" />
+                              Awards & Honors
+                            </h3>
+                            <ul className="space-y-2">
+                              {selectedMember.awards.map((award, idx) => (
+                                <li key={idx} className="text-sm text-gray-300">
+                                  {award}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+
+                        <div className="flex flex-wrap gap-4 pt-6 border-t border-gray-800">
+                          {selectedMember.instagram && (
+                            <a
+                              href={`https://instagram.com/${selectedMember.instagram.replace("@", "")}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-2 text-sm text-gray-400 hover:text-white transition-colors"
+                            >
+                              <Icon label="📸" />
+                              {selectedMember.instagram}
+                            </a>
+                          )}
+                          {selectedMember.website && (
+                            <a
+                              href={`https://${selectedMember.website}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-2 text-sm text-gray-400 hover:text-white transition-colors"
+                            >
+                              <Icon label="↗" />
+                              Website
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <footer className="border-t border-gray-800 mt-20 py-8">
+              <div className="max-w-7xl mx-auto px-6 text-center text-gray-500 text-xs">
+                <p className="uppercase tracking-widest">Company Roster 2024-2025</p>
+                <p className="mt-2">Curated with precision. Crafted with reverence.</p>
+              </div>
+            </footer>
+          </div>
+        );
+      }
+
+      ReactDOM.createRoot(document.getElementById("root")).render(
+        <React.StrictMode>
+          <BalletCompanyRoster />
+        </React.StrictMode>,
+      );
+    </script>
+  </body>
+</html>
