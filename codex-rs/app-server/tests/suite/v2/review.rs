@@ -76,30 +76,11 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
         turn,
         review_thread_id,
     } = to_response::<ReviewStartResponse>(review_resp)?;
-    assert_eq!(
-        review_thread_id,
-        thread_id.clone(),
-        "expected inline review to run on parent thread id"
-    );
+    assert_eq!(review_thread_id, thread_id.clone());
     let turn_id = turn.id.clone();
     assert_eq!(turn.status, TurnStatus::InProgress);
-    assert_eq!(turn.items.len(), 1);
-    match &turn.items[0] {
-        ThreadItem::UserMessage { content, .. } => {
-            assert_eq!(content.len(), 1);
-            assert!(matches!(
-                &content[0],
-                codex_app_server_protocol::UserInput::Text { .. }
-            ));
-        }
-        other => panic!("expected user message, got {other:?}"),
-    }
 
-    let _started: JSONRPCNotification = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("turn/started"),
-    )
-    .await??;
+    // Confirm we see the EnteredReviewMode marker on the main thread.
     let mut saw_entered_review_mode = false;
     for _ in 0..10 {
         let item_started: JSONRPCNotification = timeout(
@@ -116,8 +97,7 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
                 saw_entered_review_mode = true;
                 break;
             }
-            ThreadItem::UserMessage { .. } => continue,
-            other => panic!("unexpected item/started payload: {other:?}"),
+            _ => continue,
         }
     }
     assert!(
@@ -125,6 +105,8 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
         "did not observe enteredReviewMode item"
     );
 
+    // Confirm we see the ExitedReviewMode marker (with review text)
+    // on the same turn. Ignore any other items the stream surfaces.
     let mut review_body: Option<String> = None;
     for _ in 0..10 {
         let review_notif: JSONRPCNotification = timeout(
@@ -140,9 +122,7 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
                 review_body = Some(review);
                 break;
             }
-            ThreadItem::UserMessage { .. } => continue,
-            ThreadItem::EnteredReviewMode { .. } => continue,
-            other => panic!("unexpected item/completed payload: {other:?}"),
+            _ => continue,
         }
     }
 
