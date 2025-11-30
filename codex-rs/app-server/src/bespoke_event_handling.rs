@@ -18,6 +18,7 @@ use codex_app_server_protocol::ContextCompactedNotification;
 use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
+use codex_app_server_protocol::FileChangeOutputDeltaNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::FileUpdateChange;
@@ -501,17 +502,44 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::ExecCommandOutputDelta(exec_command_output_delta_event) => {
-            let notification = CommandExecutionOutputDeltaNotification {
-                thread_id: conversation_id.to_string(),
-                turn_id: event_turn_id.clone(),
-                item_id: exec_command_output_delta_event.call_id.clone(),
-                delta: String::from_utf8_lossy(&exec_command_output_delta_event.chunk).to_string(),
+            let item_id = exec_command_output_delta_event.call_id.clone();
+            let delta = String::from_utf8_lossy(&exec_command_output_delta_event.chunk).to_string();
+            // The underlying EventMsg::ExecCommandOutputDelta is used for shell, unified_exec,
+            // and apply_patch tool calls. We represent apply_patch with the FileChange item, and
+            // everything else with the CommandExecution item.
+            //
+            // We need to detect which item type it is so we can emit the right notification.
+            // We already have state tracking FileChange items on item/started, so let's use that.
+            let is_file_change = {
+                let map = turn_summary_store.lock().await;
+                map.get(&conversation_id)
+                    .is_some_and(|summary| summary.file_change_started.contains(&item_id))
             };
-            outgoing
-                .send_server_notification(ServerNotification::CommandExecutionOutputDelta(
-                    notification,
-                ))
-                .await;
+            if is_file_change {
+                let notification = FileChangeOutputDeltaNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event_turn_id.clone(),
+                    item_id,
+                    delta,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::FileChangeOutputDelta(
+                        notification,
+                    ))
+                    .await;
+            } else {
+                let notification = CommandExecutionOutputDeltaNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event_turn_id.clone(),
+                    item_id,
+                    delta,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::CommandExecutionOutputDelta(
+                        notification,
+                    ))
+                    .await;
+            }
         }
         EventMsg::ExecCommandEnd(exec_command_end_event) => {
             let ExecCommandEndEvent {
