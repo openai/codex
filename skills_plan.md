@@ -1,16 +1,21 @@
-Skills Injection Plan for codex-rs
-==================================
+Skills Injection Design Doc
+===========================
 
 Context and motivation
 ----------------------
-codex-rs currently has no notion of reusable “skills” that can be discovered on disk and injected into the runtime context. We want to mirror the productive parts of Claude’s Agent Skills model while keeping the first iteration deliberately small and safe. The goals:
+Codex currently has no notion of reusable “skills” that can be discovered on disk and injected into the runtime context. We want to mirror the productive parts of other prior art in this space while keeping the first iteration deliberately small and safe. 
+
+Goals:
+- Act as an extension of the existing agents.md mechanism, which allows progressive disclosure of content and instructions driven by the agent's own decision making process.
 - Reduce repeated prompting by letting users package domain expertise once.
+
+Non-goals for first implementation (v1): tool restrictions, hot reload, network/package installation, hierarchies of skills with their own progressive disclosure or supporting skills defined elsewhere than the user home root.
+
+Implementation considerations:
 - Keep the runtime context lean by injecting only lightweight metadata (name, description, path) and not inlining full instructions.
 - Avoid mutating source files; the feature should be entirely runtime-driven and reversible.
 - Establish a structure that can grow to project-local skills later (e.g., alongside agents.md in a workspace).
 - Provide strong validation and clear failure modes so misconfigured skills do not silently degrade agent behavior.
-
-Non-goals for v1: tool restrictions, hot reload, network/package installation, or inlining SKILL.md bodies. We also will not modify agents.md on disk.
 
 High-level behavior
 -------------------
@@ -116,3 +121,46 @@ Acceptance criteria
 - If no skills are present, no Skills section is injected.
 - Any invalid skill causes a blocking, dismissible startup modal listing all invalid paths and errors; errors also logged; invalid skills are excluded from rendering. The modal reappears on subsequent startups until resolved.
 
+ASCII data flow (current + future roots)
+----------------------------------------
+
+Current (v1):
+
+```
+~/.codex/skills/...
+   ├─ skill_a/SKILL.md
+   └─ skill_b/SKILL.md
+          |
+          v
+[core] load_skills -> validated SkillMetadata list
+          |
+          v
+[core] render_skills_section -> "## Skills\n- name: desc (file: ...)"
+          |
+          v
+[core] read_project_docs(agents.md) --+
+          |                           |
+          +----------- merge ---------+--> runtime instructions (agents.md + Skills section)
+```
+
+Future (multi-root example):
+
+```
+Roots:
+  ~/.codex/skills
+  <repo>/agents.md + <repo>/skills/
+  <repo>/crates/foo/agents.md + <repo>/crates/foo/skills/
+
+For each root:
+  - discover skills (same rules: recursive, skip hidden/symlinks, SKILL.md only)
+  - validate -> SkillMetadata
+  - render section (optional if any skills)
+
+Per agents.md:
+  - read agents.md content
+  - append its local Skills section (if any)
+  - concatenate higher-level agents.md + Skills sections (root -> cwd)
+
+Result:
+  runtime instructions = user_instructions? + "--- project-doc ---" + concatenated (agents.md + per-root Skills section)
+```
