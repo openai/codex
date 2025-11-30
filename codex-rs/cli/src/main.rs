@@ -406,12 +406,36 @@ fn stage_str(stage: codex_core::features::Stage) -> &'static str {
     }
 }
 
-/// As early as possible in the process lifecycle, apply hardening measures. We
-/// skip this in debug builds to avoid interfering with debugging.
+/// As early as possible in the process lifecycle, apply hardening measures.
+///
+/// # Activation
+/// - **Debug builds**: Always disabled (to avoid interfering with debugging).
+/// - **Release builds**: Opt-in via `CODEX_SECURE_MODE=1` environment variable.
+///
+/// # Why Opt-In on Linux?
+/// The hardening routine removes all `LD_*` environment variables to prevent
+/// library injection attacks. However, this breaks legitimate workflows:
+/// - **Conda environments**: MKL/OpenBLAS found via `LD_LIBRARY_PATH`
+/// - **CUDA workloads**: `libcublas`, `libcudart` often require `LD_LIBRARY_PATH`
+/// - **Custom library paths**: Any non-system library location
+///
+/// Making this opt-in preserves compatibility while allowing security-conscious
+/// users to enable full hardening when needed.
+///
+/// See: https://github.com/openai/codex/issues/XXXX (benchmark results)
 #[ctor::ctor]
 #[cfg(not(debug_assertions))]
 fn pre_main_hardening() {
-    codex_process_hardening::pre_main_hardening();
+    const CODEX_SECURE_MODE_ENV_VAR: &str = "CODEX_SECURE_MODE";
+    let enabled = matches!(std::env::var(CODEX_SECURE_MODE_ENV_VAR).as_deref(), Ok("1"));
+    // Remove the env var so child processes don't inherit the trigger
+    // (the hardening itself is what we want to propagate, not the flag).
+    unsafe {
+        std::env::remove_var(CODEX_SECURE_MODE_ENV_VAR);
+    }
+    if enabled {
+        codex_process_hardening::pre_main_hardening();
+    }
 }
 
 fn main() -> anyhow::Result<()> {
