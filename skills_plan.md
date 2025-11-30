@@ -129,7 +129,7 @@ flowchart TD
     subgraph Current_v1["Current (v1)"]
         skills_dir["~/.codex/skills/**/SKILL.md (skip hidden/symlinks)"]
         load[load_skills -> validate + sanitize -> SkillMetadata]
-        render[render_skills_section -> \"## Skills\\n- name: desc (file: ...)\"]
+        render[render_skills_section -> \"## Skills\\n- name: desc (file: ... )\"]
         agents[read_project_docs(agents.md)]
         merge[merge agents.md + Skills section\n(runtime only, no disk changes)]
         skills_dir --> load --> render --> merge
@@ -146,4 +146,70 @@ flowchart TD
         final_future["runtime instructions\n= user_instructions? + \"--- project-doc ---\" + concatenated agents+skills"]
         roots --> per_root_discover --> per_root_validate --> per_root_render --> per_agents --> concat --> final_future
     end
+```
+
+ASCII data flow (detailed v1)
+-----------------------------
+
+```
+            +-----------------------+
+            | ~/.codex/skills/**/   |
+            |   SKILL.md files      |
+            | (skip hidden/symlink) |
+            +-----------+-----------+
+                        |
+                        v
+          +--------------------------+
+          | load_skills (core)       |
+          | - walk dirs              |
+          | - parse YAML frontmatter |
+          | - sanitize name/desc     |
+          | - enforce length caps    |
+          | - collect SkillMetadata  |
+          | - collect SkillError     |
+          +------+-------------------+
+                 | valid skills
+                 v
+          +--------------------------+
+          | render_skills_section    |
+          | - build "## Skills"      |
+          | - one-line bullets       |
+          | - absolute paths         |
+          +------+-------------------+
+                 | skills section (optional)
+                 v
+   +-------------+---------------------------+
+   | read_project_docs (core)                |
+   | - read AGENTS.md chain (root->cwd)      |
+   | - respect byte budget                   |
+   +-------------+---------------------------+
+                 |
+                 v
+   +-------------+---------------------------+
+   | merge_project_docs_with_skills          |
+   | - doc only                              |
+   | - doc + skills                          |
+   | - skills only                           |
+   | - none -> None                          |
+   +-------------+---------------------------+
+                 |
+                 v
+   +-------------+---------------------------+
+   | get_user_instructions                   |
+   | - combine with user_instructions +      |
+   |   "--- project-doc ---" separator       |
+   | - returned to session config            |
+   +-----------------------------------------+
+
+Invalid skills path (parallel):
+
+  SkillError list --------------+
+                                v
+                  +-----------------------------+
+                  | TUI startup modal           |
+                  | - lists path + error        |
+                  | - dismiss to continue       |
+                  | - Ctrl+C/Ctrl+D to exit     |
+                  | - logs at error level       |
+                  +-----------------------------+
 ```
