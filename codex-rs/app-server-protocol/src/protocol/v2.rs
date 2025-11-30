@@ -1230,6 +1230,7 @@ pub struct TurnCompletedNotification {
 /// Notification that the turn-level unified diff has changed.
 /// Contains the latest aggregated diff across all file changes in the turn.
 pub struct TurnDiffUpdatedNotification {
+    pub thread_id: String,
     pub turn_id: String,
     pub diff: String,
 }
@@ -1257,6 +1258,8 @@ pub struct ItemCompletedNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct AgentMessageDeltaNotification {
+    pub thread_id: String,
+    pub turn_id: String,
     pub item_id: String,
     pub delta: String,
 }
@@ -1265,6 +1268,8 @@ pub struct AgentMessageDeltaNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ReasoningSummaryTextDeltaNotification {
+    pub thread_id: String,
+    pub turn_id: String,
     pub item_id: String,
     pub delta: String,
     pub summary_index: i64,
@@ -1274,6 +1279,8 @@ pub struct ReasoningSummaryTextDeltaNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ReasoningSummaryPartAddedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
     pub item_id: String,
     pub summary_index: i64,
 }
@@ -1282,6 +1289,8 @@ pub struct ReasoningSummaryPartAddedNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ReasoningTextDeltaNotification {
+    pub thread_id: String,
+    pub turn_id: String,
     pub item_id: String,
     pub delta: String,
     pub content_index: i64,
@@ -1291,6 +1300,8 @@ pub struct ReasoningTextDeltaNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct CommandExecutionOutputDeltaNotification {
+    pub thread_id: String,
+    pub turn_id: String,
     pub item_id: String,
     pub delta: String,
 }
@@ -1299,6 +1310,8 @@ pub struct CommandExecutionOutputDeltaNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct McpToolCallProgressNotification {
+    pub thread_id: String,
+    pub turn_id: String,
     pub item_id: String,
     pub message: String,
 }

@@ -257,6 +257,8 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::AgentMessageContentDelta(event) => {
             let notification = AgentMessageDeltaNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
                 item_id: event.item_id,
                 delta: event.delta,
             };
@@ -275,6 +277,8 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::ReasoningContentDelta(event) => {
             let notification = ReasoningSummaryTextDeltaNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
                 item_id: event.item_id,
                 delta: event.delta,
                 summary_index: event.summary_index,
@@ -287,6 +291,8 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::ReasoningRawContentDelta(event) => {
             let notification = ReasoningTextDeltaNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
                 item_id: event.item_id,
                 delta: event.delta,
                 content_index: event.content_index,
@@ -297,6 +303,8 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::AgentReasoningSectionBreak(event) => {
             let notification = ReasoningSummaryPartAddedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
                 item_id: event.item_id,
                 summary_index: event.summary_index,
             };
@@ -491,6 +499,8 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::ExecCommandOutputDelta(exec_command_output_delta_event) => {
             let notification = CommandExecutionOutputDeltaNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
                 item_id: exec_command_output_delta_event.call_id.clone(),
                 delta: String::from_utf8_lossy(&exec_command_output_delta_event.chunk).to_string(),
             };
@@ -585,6 +595,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::TurnDiff(turn_diff_event) => {
             handle_turn_diff(
+                conversation_id,
                 &event_turn_id,
                 turn_diff_event,
                 api_version,
@@ -598,6 +609,7 @@ pub(crate) async fn apply_bespoke_event_handling(
 }
 
 async fn handle_turn_diff(
+    conversation_id: ConversationId,
     event_turn_id: &str,
     turn_diff_event: TurnDiffEvent,
     api_version: ApiVersion,
@@ -605,6 +617,7 @@ async fn handle_turn_diff(
 ) {
     if let ApiVersion::V2 = api_version {
         let notification = TurnDiffUpdatedNotification {
+            thread_id: conversation_id.to_string(),
             turn_id: event_turn_id.to_string(),
             diff: turn_diff_event.unified_diff,
         };
@@ -1697,8 +1710,10 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = OutgoingMessageSender::new(tx);
         let unified_diff = "--- a\n+++ b\n".to_string();
+        let conversation_id = ConversationId::new();
 
         handle_turn_diff(
+            conversation_id,
             "turn-1",
             TurnDiffEvent {
                 unified_diff: unified_diff.clone(),
@@ -1716,6 +1731,7 @@ mod tests {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnDiffUpdated(
                 notification,
             )) => {
+                assert_eq!(notification.thread_id, conversation_id.to_string());
                 assert_eq!(notification.turn_id, "turn-1");
                 assert_eq!(notification.diff, unified_diff);
             }
@@ -1729,8 +1745,10 @@ mod tests {
     async fn test_handle_turn_diff_is_noop_for_v1() -> Result<()> {
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = OutgoingMessageSender::new(tx);
+        let conversation_id = ConversationId::new();
 
         handle_turn_diff(
+            conversation_id,
             "turn-1",
             TurnDiffEvent {
                 unified_diff: "diff".to_string(),
