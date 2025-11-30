@@ -121,46 +121,29 @@ Acceptance criteria
 - If no skills are present, no Skills section is injected.
 - Any invalid skill causes a blocking, dismissible startup modal listing all invalid paths and errors; errors also logged; invalid skills are excluded from rendering. The modal reappears on subsequent startups until resolved.
 
-ASCII data flow (current + future roots)
-----------------------------------------
+Mermaid data flow (current + future roots)
+------------------------------------------
 
-Current (v1):
+```mermaid
+flowchart TD
+    subgraph Current_v1["Current (v1)"]
+        skills_dir["~/.codex/skills/**/SKILL.md (skip hidden/symlinks)"]
+        load[load_skills -> validate + sanitize -> SkillMetadata]
+        render[render_skills_section -> \"## Skills\\n- name: desc (file: ...)\"]
+        agents[read_project_docs(agents.md)]
+        merge[merge agents.md + Skills section\n(runtime only, no disk changes)]
+        skills_dir --> load --> render --> merge
+        agents --> merge --> final_v1["runtime instructions"]
+    end
 
-```
-~/.codex/skills/...
-   ├─ skill_a/SKILL.md
-   └─ skill_b/SKILL.md
-          |
-          v
-[core] load_skills -> validated SkillMetadata list
-          |
-          v
-[core] render_skills_section -> "## Skills\n- name: desc (file: ...)"
-          |
-          v
-[core] read_project_docs(agents.md) --+
-          |                           |
-          +----------- merge ---------+--> runtime instructions (agents.md + Skills section)
-```
-
-Future (multi-root example):
-
-```
-Roots:
-  ~/.codex/skills
-  <repo>/agents.md + <repo>/skills/
-  <repo>/crates/foo/agents.md + <repo>/crates/foo/skills/
-
-For each root:
-  - discover skills (same rules: recursive, skip hidden/symlinks, SKILL.md only)
-  - validate -> SkillMetadata
-  - render section (optional if any skills)
-
-Per agents.md:
-  - read agents.md content
-  - append its local Skills section (if any)
-  - concatenate higher-level agents.md + Skills sections (root -> cwd)
-
-Result:
-  runtime instructions = user_instructions? + "--- project-doc ---" + concatenated (agents.md + per-root Skills section)
+    subgraph Future_multi_root["Future (multi-root)"]
+        roots["Roots: ~/.codex/skills; <repo>/skills next to agents.md; nested crate skills"]
+        per_root_discover["per-root: discover skills (recursive, same rules)"]
+        per_root_validate["per-root: validate -> SkillMetadata"]
+        per_root_render["per-root: render optional Skills section"]
+        per_agents["per agents.md: read content, append its Skills section"]
+        concat["concatenate from repo root -> cwd"]
+        final_future["runtime instructions\n= user_instructions? + \"--- project-doc ---\" + concatenated agents+skills"]
+        roots --> per_root_discover --> per_root_validate --> per_root_render --> per_agents --> concat --> final_future
+    end
 ```
