@@ -25,8 +25,20 @@ pub struct VT100Backend {
 impl VT100Backend {
     /// Creates a new `TestBackend` with the specified width and height.
     pub fn new(width: u16, height: u16) -> Self {
+        Self::new_with_scrollback(width, height, 0)
+    }
+
+    /// Creates a new `VT100Backend` with an explicit scrollback length.
+    ///
+    /// This is useful for tests that need to assert against the terminal
+    /// scrollback buffer instead of only the visible screen contents.
+    pub fn new_with_scrollback(width: u16, height: u16, scrollback_len: usize) -> Self {
         Self {
-            crossterm_backend: CrosstermBackend::new(vt100::Parser::new(height, width, 0)),
+            crossterm_backend: CrosstermBackend::new(vt100::Parser::new(
+                height,
+                width,
+                scrollback_len,
+            )),
         }
     }
 
