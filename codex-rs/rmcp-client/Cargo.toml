@@ -36,6 +36,7 @@ rmcp = { workspace = true, default-features = false, features = [
     "transport-streamable-http-client-reqwest",
     "transport-streamable-http-server",
 ] }
+schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

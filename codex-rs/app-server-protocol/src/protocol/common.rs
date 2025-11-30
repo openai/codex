@@ -168,6 +168,10 @@ client_request_definitions! {
         params: v2::ConfigReadParams,
         response: v2::ConfigReadResponse,
     },
+    ConfigSchemaRead => "config/schema/read" {
+        params: v2::ConfigSchemaReadParams,
+        response: v2::ConfigSchemaReadResponse,
+    },
     ConfigValueWrite => "config/value/write" {
         params: v2::ConfigValueWriteParams,
         response: v2::ConfigWriteResponse,

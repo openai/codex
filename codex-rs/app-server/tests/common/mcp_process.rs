@@ -20,6 +20,7 @@ use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadParams;
+use codex_app_server_protocol::ConfigSchemaReadParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::GetAccountParams;
@@ -410,6 +411,14 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("config/read", params).await
+    }
+
+    pub async fn send_config_schema_read_request(
+        &mut self,
+        params: ConfigSchemaReadParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("config/schema/read", params).await
     }
 
     pub async fn send_config_value_write_request(

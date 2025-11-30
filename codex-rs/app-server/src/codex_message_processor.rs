@@ -471,6 +471,7 @@ impl CodexMessageProcessor {
                 self.exec_one_off_command(request_id, params).await;
             }
             ClientRequest::ConfigRead { .. }
+            | ClientRequest::ConfigSchemaRead { .. }
             | ClientRequest::ConfigValueWrite { .. }
             | ClientRequest::ConfigBatchWrite { .. } => {
                 warn!("Config request reached CodexMessageProcessor unexpectedly");
