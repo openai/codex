@@ -160,54 +160,6 @@ pub(crate) async fn stream_chat_completions(
     // in the outbound Chat Completions payload (can happen if a final
     // aggregated assistant message was recorded alongside an earlier partial).
     let mut last_assistant_text: Option<String> = None;
-    let mut last_assistant_index: Option<usize> = None;
-
-    fn attach_tool_call(
-        messages: &mut Vec<serde_json::Value>,
-        last_assistant_index: &mut Option<usize>,
-        last_assistant_text: &mut Option<String>,
-        tool_call: serde_json::Value,
-        reasoning: Option<String>,
-    ) {
-        if let Some(idx) = *last_assistant_index
-            && let Some(serde_json::Value::Object(obj)) = messages.get_mut(idx)
-            && obj.get("role").and_then(|v| v.as_str()) == Some("assistant")
-        {
-            let entry = obj
-                .entry("tool_calls")
-                .or_insert_with(|| serde_json::Value::Array(Vec::new()));
-            if let serde_json::Value::Array(arr) = entry {
-                arr.push(tool_call);
-            }
-            if let Some(reasoning) = reasoning.as_ref() {
-                let entry = obj
-                    .entry("reasoning")
-                    .or_insert_with(|| serde_json::Value::String(String::new()));
-                if let serde_json::Value::String(existing) = entry {
-                    existing.push_str(reasoning);
-                }
-            }
-            return;
-        }
-
-        let mut msg = json!({
-            "role": "assistant",
-            "content": null,
-            "tool_calls": [tool_call],
-        });
-        if let Some(reasoning) = reasoning
-            && let Some(obj) = msg.as_object_mut()
-        {
-            obj.insert(
-                "reasoning".to_string(),
-                serde_json::Value::String(reasoning),
-            );
-        }
-        let idx = messages.len();
-        messages.push(msg);
-        *last_assistant_index = Some(idx);
-        *last_assistant_text = None;
-    }
 
     for (idx, item) in input.iter().enumerate() {
         match item {
@@ -261,14 +213,7 @@ pub(crate) async fn stream_chat_completions(
                     obj.insert("reasoning".to_string(), json!(reasoning));
                 }
 
-                let msg_index = messages.len();
                 messages.push(msg);
-
-                if role == "assistant" {
-                    last_assistant_index = Some(msg_index);
-                } else {
-                    last_assistant_index = None;
-                }
             }
             ResponseItem::FunctionCall {
                 name,
@@ -276,23 +221,25 @@ pub(crate) async fn stream_chat_completions(
                 call_id,
                 ..
             } => {
-                let reasoning = reasoning_by_anchor_index.remove(&idx);
-                let tool_call = json!({
-                    "id": call_id,
-                    "type": "function",
-                    "function": {
-                        "name": name,
-                        "arguments": arguments,
-                    }
+                let mut msg = json!({
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "arguments": arguments,
+                        }
+                    }]
                 });
-
-                attach_tool_call(
-                    &mut messages,
-                    &mut last_assistant_index,
-                    &mut last_assistant_text,
-                    tool_call,
-                    reasoning,
-                );
+                if let Some(reasoning) = reasoning_by_anchor_index.remove(&idx)
+                    && let Some(obj) = msg.as_object_mut()
+                {
+                    obj.insert("reasoning".to_string(), json!(reasoning));
+                }
+                messages.push(msg);
+                last_assistant_text = None;
             }
             ResponseItem::LocalShellCall {
                 id,
@@ -300,21 +247,24 @@ pub(crate) async fn stream_chat_completions(
                 status,
                 action,
             } => {
-                let reasoning = reasoning_by_anchor_index.remove(&idx);
-                let tool_call = json!({
-                    "id": id.clone().unwrap_or_default(),
-                    "type": "local_shell_call",
-                    "status": status,
-                    "action": action,
+                // Confirm with API team.
+                let mut msg = json!({
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": id.clone().unwrap_or_else(|| "".to_string()),
+                        "type": "local_shell_call",
+                        "status": status,
+                        "action": action,
+                    }]
                 });
-
-                attach_tool_call(
-                    &mut messages,
-                    &mut last_assistant_index,
-                    &mut last_assistant_text,
-                    tool_call,
-                    reasoning,
-                );
+                if let Some(reasoning) = reasoning_by_anchor_index.remove(&idx)
+                    && let Some(obj) = msg.as_object_mut()
+                {
+                    obj.insert("reasoning".to_string(), json!(reasoning));
+                }
+                messages.push(msg);
+                last_assistant_text = None;
             }
             ResponseItem::FunctionCallOutput { call_id, output } => {
                 // Prefer structured content items when available (e.g., images)
@@ -341,8 +291,6 @@ pub(crate) async fn stream_chat_completions(
                     "tool_call_id": call_id,
                     "content": content_value,
                 }));
-
-                last_assistant_index = None;
             }
             ResponseItem::CustomToolCall {
                 id,
@@ -351,23 +299,19 @@ pub(crate) async fn stream_chat_completions(
                 input,
                 status: _,
             } => {
-                let reasoning = reasoning_by_anchor_index.remove(&idx);
-                let tool_call = json!({
-                    "id": id,
-                    "type": "custom",
-                    "custom": {
-                        "name": name,
-                        "input": input,
-                    }
-                });
-
-                attach_tool_call(
-                    &mut messages,
-                    &mut last_assistant_index,
-                    &mut last_assistant_text,
-                    tool_call,
-                    reasoning,
-                );
+                messages.push(json!({
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": id,
+                        "type": "custom",
+                        "custom": {
+                            "name": name,
+                            "input": input,
+                        }
+                    }]
+                }));
+                last_assistant_text = None;
             }
             ResponseItem::CustomToolCallOutput { call_id, output } => {
                 messages.push(json!({
@@ -375,8 +319,6 @@ pub(crate) async fn stream_chat_completions(
                     "tool_call_id": call_id,
                     "content": output,
                 }));
-
-                last_assistant_index = None;
             }
             ResponseItem::GhostSnapshot { .. } => {
                 // Ghost snapshots annotate history but are not sent to the model.

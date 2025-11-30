@@ -305,30 +305,15 @@ async fn skips_empty_reasoning_segments() {
 async fn suppresses_duplicate_assistant_messages() {
     skip_if_no_network!();
 
-    let body = run_request(vec![
-        user_message("u1"),
-        assistant_message("assistant content"),
-        function_call(),
-    ])
-    .await;
+    let body = run_request(vec![assistant_message("dup"), assistant_message("dup")]).await;
     let messages = messages_from(&body);
-
     let assistant_messages: Vec<_> = messages
         .iter()
         .filter(|msg| msg["role"] == "assistant")
         .collect();
-    assert_eq!(assistant_messages.len(), 1, "messages: {messages:?}");
-
-    let assistant = assistant_messages[0];
+    assert_eq!(assistant_messages.len(), 1);
     assert_eq!(
-        assistant["content"],
-        Value::String("assistant content".into())
+        assistant_messages[0]["content"],
+        Value::String("dup".into())
     );
-
-    let tool_calls = assistant["tool_calls"]
-        .as_array()
-        .unwrap_or_else(|| panic!("expected tool_calls on assistant message, got {assistant:?}"));
-    assert_eq!(tool_calls.len(), 1);
-    assert_eq!(tool_calls[0]["type"], Value::String("function".into()));
-    assert_eq!(tool_calls[0]["id"], Value::String("c1".into()));
 }
