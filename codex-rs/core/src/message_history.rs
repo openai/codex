@@ -280,12 +280,16 @@ fn lookup_history_entry(path: &Path, log_id: u64, offset: usize) -> Option<Histo
 }
 
 fn history_log_id(metadata: &std::fs::Metadata) -> Option<u64> {
-    if cfg!(windows) {
-        use std::os::windows::fs::MetadataExt;
-        Some(metadata.creation_time())
-    } else {
+    #[cfg(unix)]
+    {
         use std::os::unix::fs::MetadataExt;
         Some(metadata.ino())
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        Some(metadata.creation_time())
     }
 }
 
