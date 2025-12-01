@@ -467,7 +467,8 @@ impl CodexMessageProcessor {
             ClientRequest::FuzzyFileSearch { request_id, params } => {
                 self.fuzzy_file_search(request_id, params).await;
             }
-            ClientRequest::ExecOneOffCommand { request_id, params } => {
+            ClientRequest::OneOffCommandExec { request_id, params }
+            | ClientRequest::ExecOneOffCommand { request_id, params } => {
                 self.exec_one_off_command(request_id, params).await;
             }
             ClientRequest::ConfigRead { .. }
@@ -1182,6 +1183,7 @@ impl CodexMessageProcessor {
 
         let effective_policy = params
             .sandbox_policy
+            .map(|policy| policy.to_core())
             .unwrap_or_else(|| self.config.sandbox_policy.clone());
 
         let codex_linux_sandbox_exe = self.config.codex_linux_sandbox_exe.clone();

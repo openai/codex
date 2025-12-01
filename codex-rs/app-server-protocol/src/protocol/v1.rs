@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+pub use crate::protocol::v2::ExecOneOffCommandParams;
+pub use crate::protocol::v2::ExecOneOffCommandResponse;
 use codex_protocol::ConversationId;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningEffort;
@@ -265,23 +267,6 @@ pub struct LogoutChatGptResponse {}
 pub struct GetAuthStatusParams {
     pub include_token: Option<bool>,
     pub refresh_token: Option<bool>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ExecOneOffCommandParams {
-    pub command: Vec<String>,
-    pub timeout_ms: Option<u64>,
-    pub cwd: Option<PathBuf>,
-    pub sandbox_policy: Option<SandboxPolicy>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ExecOneOffCommandResponse {
-    pub exit_code: i32,
-    pub stdout: String,
-    pub stderr: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
