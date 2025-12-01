@@ -43,6 +43,8 @@ use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnDiffUpdatedNotification;
 use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptResponse;
+use codex_app_server_protocol::TurnPlanStep;
+use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_core::CodexConversation;
 use codex_core::parse_command::shlex_join;
@@ -60,6 +62,7 @@ use codex_core::protocol::TokenCountEvent;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::review_format::format_review_findings_block;
 use codex_protocol::ConversationId;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::ReviewOutputEvent;
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -592,6 +595,15 @@ pub(crate) async fn apply_bespoke_event_handling(
             )
             .await;
         }
+        EventMsg::PlanUpdate(plan_update_event) => {
+            handle_turn_plan_update(
+                &event_turn_id,
+                plan_update_event,
+                api_version,
+                outgoing.as_ref(),
+            )
+            .await;
+        }
 
         _ => {}
     }
@@ -610,6 +622,28 @@ async fn handle_turn_diff(
         };
         outgoing
             .send_server_notification(ServerNotification::TurnDiffUpdated(notification))
+            .await;
+    }
+}
+
+async fn handle_turn_plan_update(
+    event_turn_id: &str,
+    plan_update_event: UpdatePlanArgs,
+    api_version: ApiVersion,
+    outgoing: &OutgoingMessageSender,
+) {
+    if let ApiVersion::V2 = api_version {
+        let notification = TurnPlanUpdatedNotification {
+            turn_id: event_turn_id.to_string(),
+            explanation: plan_update_event.explanation,
+            plan: plan_update_event
+                .plan
+                .into_iter()
+                .map(TurnPlanStep::from)
+                .collect(),
+        };
+        outgoing
+            .send_server_notification(ServerNotification::TurnPlanUpdated(notification))
             .await;
     }
 }
@@ -1133,12 +1167,15 @@ mod tests {
     use anyhow::Result;
     use anyhow::anyhow;
     use anyhow::bail;
+    use codex_app_server_protocol::TurnPlanStepStatus;
     use codex_core::protocol::CreditsSnapshot;
     use codex_core::protocol::McpInvocation;
     use codex_core::protocol::RateLimitSnapshot;
     use codex_core::protocol::RateLimitWindow;
     use codex_core::protocol::TokenUsage;
     use codex_core::protocol::TokenUsageInfo;
+    use codex_protocol::plan_tool::PlanItemArg;
+    use codex_protocol::plan_tool::StepStatus;
     use mcp_types::CallToolResult;
     use mcp_types::ContentBlock;
     use mcp_types::TextContent;
@@ -1291,6 +1328,46 @@ mod tests {
                         }
                     }
                 );
+            }
+            other => bail!("unexpected message: {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "no extra messages expected");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_turn_plan_update_emits_notification_for_v2() -> Result<()> {
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = OutgoingMessageSender::new(tx);
+        let update = UpdatePlanArgs {
+            explanation: Some("need plan".to_string()),
+            plan: vec![
+                PlanItemArg {
+                    step: "first".to_string(),
+                    status: StepStatus::Pending,
+                },
+                PlanItemArg {
+                    step: "second".to_string(),
+                    status: StepStatus::Completed,
+                },
+            ],
+        };
+
+        handle_turn_plan_update("turn-123", update, ApiVersion::V2, &outgoing).await;
+
+        let msg = rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("should send one notification"))?;
+        match msg {
+            OutgoingMessage::AppServerNotification(ServerNotification::TurnPlanUpdated(n)) => {
+                assert_eq!(n.turn_id, "turn-123");
+                assert_eq!(n.explanation.as_deref(), Some("need plan"));
+                assert_eq!(n.plan.len(), 2);
+                assert_eq!(n.plan[0].step, "first");
+                assert_eq!(n.plan[0].status, TurnPlanStepStatus::Pending);
+                assert_eq!(n.plan[1].step, "second");
+                assert_eq!(n.plan[1].status, TurnPlanStepStatus::Completed);
             }
             other => bail!("unexpected message: {other:?}"),
         }
