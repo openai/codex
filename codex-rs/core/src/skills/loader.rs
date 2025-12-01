@@ -1,4 +1,7 @@
 use crate::config::Config;
+use crate::skills::model::SkillError;
+use crate::skills::model::SkillLoadOutcome;
+use crate::skills::model::SkillMetadata;
 use dunce::canonicalize as normalize_path;
 use serde::Deserialize;
 use std::collections::VecDeque;
@@ -6,25 +9,6 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use tracing::error;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SkillMetadata {
-    pub name: String,
-    pub description: String,
-    pub path: PathBuf,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SkillError {
-    pub path: PathBuf,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct SkillLoadOutcome {
-    pub skills: Vec<SkillMetadata>,
-    pub errors: Vec<SkillError>,
-}
 
 #[derive(Debug, Deserialize)]
 struct SkillFrontmatter {
@@ -49,26 +33,6 @@ pub fn load_skills(config: &Config) -> SkillLoadOutcome {
         .sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.path.cmp(&b.path)));
 
     outcome
-}
-
-pub fn render_skills_section(skills: &[SkillMetadata]) -> Option<String> {
-    if skills.is_empty() {
-        return None;
-    }
-
-    let mut lines: Vec<String> = Vec::new();
-    lines.push("## Skills".to_string());
-    lines.push("These skills are discovered at startup from ~/.codex/skills; each entry shows name, description, and file path so you can open the source for full instructions. Content is not inlined to keep context lean.".to_string());
-
-    for skill in skills {
-        let path_str = skill.path.to_string_lossy().replace('\\', "/");
-        lines.push(format!(
-            "- {}: {} (file: {})",
-            skill.name, skill.description, path_str
-        ));
-    }
-
-    Some(lines.join("\n"))
 }
 
 fn skill_roots(config: &Config) -> Vec<PathBuf> {
