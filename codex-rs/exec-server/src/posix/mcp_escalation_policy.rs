@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use rmcp::ErrorData as McpError;
 use rmcp::RoleServer;
@@ -18,7 +19,11 @@ use crate::posix::stopwatch::Stopwatch;
 /// `argv` is the argv, including the program name (`argv[0]`).
 /// `workdir` is the absolute, canonical path to the working directory in which to execute the
 /// command.
-pub(crate) type ExecPolicy = fn(file: &Path, argv: &[String], workdir: &Path) -> ExecPolicyOutcome;
+pub(crate) trait ExecPolicy: Send + Sync {
+    fn evaluate(&self, file: &Path, argv: &[String], workdir: &Path) -> ExecPolicyOutcome;
+}
+
+pub(crate) type SharedExecPolicy = Arc<dyn ExecPolicy>;
 
 pub(crate) enum ExecPolicyOutcome {
     Allow {
@@ -33,14 +38,14 @@ pub(crate) enum ExecPolicyOutcome {
 /// ExecPolicy with access to the MCP RequestContext so that it can leverage
 /// elicitations.
 pub(crate) struct McpEscalationPolicy {
-    policy: ExecPolicy,
+    policy: SharedExecPolicy,
     context: RequestContext<RoleServer>,
     stopwatch: Stopwatch,
 }
 
 impl McpEscalationPolicy {
     pub(crate) fn new(
-        policy: ExecPolicy,
+        policy: SharedExecPolicy,
         context: RequestContext<RoleServer>,
         stopwatch: Stopwatch,
     ) -> Self {
@@ -103,7 +108,7 @@ impl EscalationPolicy for McpEscalationPolicy {
         argv: &[String],
         workdir: &Path,
     ) -> Result<EscalateAction, rmcp::ErrorData> {
-        let outcome = (self.policy)(file, argv, workdir);
+        let outcome = self.policy.evaluate(file, argv, workdir);
         let action = match outcome {
             ExecPolicyOutcome::Allow {
                 run_with_escalated_permissions,

@@ -55,19 +55,21 @@
 //!   |      |
 //!   o<-----x
 //!
-use std::path::Path;
 use std::path::PathBuf;
 
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::{self};
 
-use crate::posix::mcp_escalation_policy::ExecPolicyOutcome;
+use crate::posix::exec_policy::ExecPolicyEvaluator;
+use crate::posix::exec_policy::load_policy_from_codex_home;
+use crate::posix::mcp_escalation_policy::SharedExecPolicy;
 
 mod escalate_client;
 mod escalate_protocol;
 mod escalate_server;
 mod escalation_policy;
+mod exec_policy;
 mod mcp;
 mod mcp_escalation_policy;
 mod socket;
@@ -114,7 +116,10 @@ pub async fn main_mcp_server() -> anyhow::Result<()> {
     };
 
     tracing::info!("Starting MCP server");
-    let service = mcp::serve(bash_path, execve_wrapper, dummy_exec_policy)
+    let policy = load_policy_from_codex_home().await?;
+    let policy: SharedExecPolicy = std::sync::Arc::new(ExecPolicyEvaluator::new(policy));
+
+    let service = mcp::serve(bash_path, execve_wrapper, policy)
         .await
         .inspect_err(|e| {
             tracing::error!("serving error: {:?}", e);
@@ -143,28 +148,4 @@ pub async fn main_execve_wrapper() -> anyhow::Result<()> {
     let ExecveWrapperCli { file, argv } = ExecveWrapperCli::parse();
     let exit_code = escalate_client::run(file, argv).await?;
     std::process::exit(exit_code);
-}
-
-// TODO: replace with execpolicy
-
-fn dummy_exec_policy(file: &Path, argv: &[String], _workdir: &Path) -> ExecPolicyOutcome {
-    if file.ends_with("rm") {
-        ExecPolicyOutcome::Forbidden
-    } else if file.ends_with("git") {
-        ExecPolicyOutcome::Prompt {
-            run_with_escalated_permissions: false,
-        }
-    } else if file == Path::new("/opt/homebrew/bin/gh")
-        && let [_, arg1, arg2, ..] = argv
-        && arg1 == "issue"
-        && arg2 == "list"
-    {
-        ExecPolicyOutcome::Allow {
-            run_with_escalated_permissions: true,
-        }
-    } else {
-        ExecPolicyOutcome::Allow {
-            run_with_escalated_permissions: false,
-        }
-    }
 }
