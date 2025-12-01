@@ -162,12 +162,8 @@ pub(crate) fn lookup(log_id: u64, offset: usize, config: &Config) -> Option<Hist
 
 /// On Unix systems, ensure the file permissions are `0o600` (rw-------). If the
 /// permissions cannot be changed the error is propagated to the caller.
+#[cfg(unix)]
 async fn ensure_owner_only_permissions(file: &File) -> Result<()> {
-    if cfg!(windows) {
-        // On Windows, do nothing.
-        return Ok(());
-    }
-
     let metadata = file.metadata()?;
     let current_mode = metadata.permissions().mode() & 0o777;
     if current_mode != 0o600 {
@@ -177,6 +173,12 @@ async fn ensure_owner_only_permissions(file: &File) -> Result<()> {
         let file_clone = file.try_clone()?;
         tokio::task::spawn_blocking(move || file_clone.set_permissions(perms_clone)).await??;
     }
+    Ok(())
+}
+
+#[cfg(windows)]
+// On Windows, simply succeed.
+async fn ensure_owner_only_permissions(_file: &File) -> Result<()> {
     Ok(())
 }
 
