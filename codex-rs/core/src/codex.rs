@@ -723,7 +723,8 @@ impl Session {
                 let reconstructed_history =
                     self.reconstruct_history_from_rollout(&turn_context, &rollout_items);
                 if !reconstructed_history.is_empty() {
-                    self.record_into_history(&reconstructed_history, &turn_context)
+                    let _ = self
+                        .record_into_history(&reconstructed_history, &turn_context)
                         .await;
                 }
 
@@ -1034,8 +1035,8 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) {
-        self.record_into_history(items, turn_context).await;
-        self.persist_rollout_response_items(items).await;
+        let processed = self.record_into_history(items, turn_context).await;
+        self.persist_rollout_response_items(&processed).await;
         self.send_raw_response_items(turn_context, items).await;
     }
 
@@ -1074,14 +1075,19 @@ impl Session {
         history.get_history()
     }
 
-    /// Append ResponseItems to the in-memory conversation history only.
+    /// Append ResponseItems to the in-memory conversation history only and return the processed items.
     pub(crate) async fn record_into_history(
         &self,
         items: &[ResponseItem],
         turn_context: &TurnContext,
-    ) {
+    ) -> Vec<ResponseItem> {
+        let processed = crate::context_manager::process_response_items(
+            items.iter(),
+            turn_context.truncation_policy,
+        );
         let mut state = self.state.lock().await;
-        state.record_items(items.iter(), turn_context.truncation_policy);
+        state.history.append_processed(processed.clone());
+        processed
     }
 
     pub(crate) async fn record_model_warning(&self, message: impl Into<String>, ctx: &TurnContext) {

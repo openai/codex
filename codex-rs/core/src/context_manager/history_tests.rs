@@ -345,6 +345,40 @@ fn record_items_truncates_custom_tool_call_output_content() {
 }
 
 #[test]
+fn process_response_items_truncates_and_preserves_original() {
+    let policy = TruncationPolicy::Bytes(128);
+    let long_output = "line\n".repeat(2_000);
+    let item = ResponseItem::FunctionCallOutput {
+        call_id: "call-42".to_string(),
+        output: FunctionCallOutputPayload {
+            content: long_output.clone(),
+            success: Some(true),
+            ..Default::default()
+        },
+    };
+
+    let processed = process_response_items([&item], policy);
+
+    assert_eq!(processed.len(), 1);
+    match &processed[0] {
+        ResponseItem::FunctionCallOutput { output, .. } => {
+            assert_ne!(output.content, long_output);
+            assert!(
+                output.content.len() < long_output.len(),
+                "expected truncated content to be shorter than original"
+            );
+        }
+        other => panic!("unexpected processed item: {other:?}"),
+    }
+    match &item {
+        ResponseItem::FunctionCallOutput { output, .. } => {
+            assert_eq!(output.content, long_output);
+        }
+        other => panic!("unexpected original item: {other:?}"),
+    }
+}
+
+#[test]
 fn record_items_respects_custom_token_limit() {
     let mut history = ContextManager::new();
     let policy = TruncationPolicy::Tokens(10);

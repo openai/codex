@@ -143,7 +143,7 @@ fn format_large_untracked_warning(report: &GhostSnapshotReport) -> Option<String
         parts.push(format!("{remaining} more"));
     }
     Some(format!(
-        "Repository snapshot encountered large untracked directories: {}. This can slow Codex; consider adding these paths to .gitignore or disabling undo in your config.",
+        "Repository snapshot encountered large untracked/ignored directories: {}. This can slow Codex; consider disabling undo in your config.",
         parts.join(", ")
     ))
 }
