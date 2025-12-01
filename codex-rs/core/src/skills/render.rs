@@ -13,9 +13,7 @@ pub fn render_skills_section(skills: &[SkillMetadata]) -> Option<String> {
         let path_str = skill.path.to_string_lossy().replace('\\', "/");
         lines.push(format!(
             "- {}: {} (file: {})",
-            skill.name,
-            skill.description,
-            path_str
+            skill.name, skill.description, path_str
         ));
     }
 
