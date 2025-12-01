@@ -30,7 +30,6 @@ pub(crate) struct OutputItemResult {
     pub needs_follow_up: bool,
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_output_item_done(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
