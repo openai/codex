@@ -50,10 +50,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         }
     }
 
-    pub async fn stream_request(
-        &self,
-        request: ResponsesRequest,
-    ) -> Result<ResponseStream, ApiError> {
+    async fn stream_request(&self, request: ResponsesRequest) -> Result<ResponseStream, ApiError> {
         self.stream(request.body, request.headers).await
     }
 
@@ -95,6 +92,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         }
     }
 
+    // Pub mainly for testing purpose.
     pub async fn stream(
         &self,
         body: Value,

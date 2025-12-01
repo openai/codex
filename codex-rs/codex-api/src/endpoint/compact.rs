@@ -45,7 +45,7 @@ impl<T: HttpTransport, A: AuthProvider> CompactClient<T, A> {
         }
     }
 
-    pub async fn compact(
+    async fn compact(
         &self,
         body: serde_json::Value,
         extra_headers: HeaderMap,

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::client_common::PromptBuilder;
+use crate::PromptBuilder;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::error::Result as CodexResult;
@@ -9,6 +9,7 @@ use crate::protocol::ContextCompactedEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::RolloutItem;
 use crate::protocol::TaskStartedEvent;
+use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use codex_protocol::models::ResponseItem;
 
 pub(crate) async fn run_inline_remote_auto_compact_task(
@@ -41,14 +42,14 @@ async fn run_remote_compact_task_inner_impl(
     turn_context: &Arc<TurnContext>,
 ) -> CodexResult<()> {
     let mut history = sess.clone_history().await;
-    let mut prompt = PromptBuilder::new()
-        .wire_api(turn_context.client.get_provider().wire_api)
-        .with_input(history.get_history_for_prompt());
-    prompt.base_instructions_override = turn_context.base_instructions.clone();
+    let prompt = PromptBuilder::new()
+        .with_input(history.get_history_for_prompt())
+        .with_base_instructions_override_opt(turn_context.base_instructions.clone())
+        .build(&turn_context.client.get_model_family())?;
 
     let mut new_history = turn_context
         .client
-        .compact_conversation_history(&prompt)
+        .compact_conversation_history(&prompt.input, &prompt.instructions)
         .await?;
     // Required to keep `/undo` available after compaction
     let ghost_snapshots: Vec<ResponseItem> = history

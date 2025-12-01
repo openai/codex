@@ -5,7 +5,6 @@ use crate::model_family::ModelFamily;
 use crate::model_provider_info::WireApi;
 use crate::tools::spec::create_tools_json_for_chat_completions_api;
 use crate::tools::spec::create_tools_json_for_responses_api;
-use codex_api::CompactionInput;
 use codex_api::Prompt;
 pub use codex_api::common::ResponseEvent;
 use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
@@ -151,18 +150,6 @@ impl PromptBuilder {
             parallel_tool_calls: self.parallel_tool_calls,
             output_schema: self.output_schema.clone(),
         })
-    }
-
-    pub(crate) fn build_compaction_input<'a>(
-        &'a self,
-        model: &'a str,
-        instructions: &'a str,
-    ) -> CompactionInput<'a> {
-        CompactionInput {
-            model,
-            input: &self.input,
-            instructions,
-        }
     }
 
     pub(crate) fn get_full_instructions<'a>(&'a self, model: &'a ModelFamily) -> Cow<'a, str> {

@@ -322,9 +322,10 @@ impl ModelClient {
     /// `ResponseItem`s representing the compacted transcript.
     pub async fn compact_conversation_history(
         &self,
-        prompt: &PromptBuilder,
+        input: &[ResponseItem],
+        instructions: &str,
     ) -> Result<Vec<ResponseItem>> {
-        if prompt.input.is_empty() {
+        if input.is_empty() {
             return Ok(Vec::new());
         }
         let auth_manager = self.auth_manager.clone();
@@ -338,10 +339,11 @@ impl ModelClient {
         let client = ApiCompactClient::new(transport, api_provider, api_auth)
             .with_telemetry(Some(request_telemetry));
 
-        let instructions = prompt
-            .get_full_instructions(&self.config.model_family)
-            .into_owned();
-        let payload = prompt.build_compaction_input(&self.config.model, &instructions);
+        let payload = codex_api::CompactionInput {
+            model: &self.config.model,
+            input,
+            instructions,
+        };
 
         let mut extra_headers = ApiHeaderMap::new();
         if let SessionSource::SubAgent(sub) = &self.session_source {
