@@ -17,6 +17,7 @@
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::Result;
+use std::io::Write;
 use std::path::PathBuf;
 
 use serde::Deserialize;
