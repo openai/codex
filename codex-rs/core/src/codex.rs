@@ -12,8 +12,6 @@ use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::features::Feature;
-#[cfg(test)]
-use crate::function_tool::FunctionCallError;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::terminal;
@@ -130,8 +128,6 @@ use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ContentItem;
-#[cfg(test)]
-use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CodexErrorInfo;
@@ -2377,8 +2373,10 @@ mod tests {
     use crate::config::ConfigOverrides;
     use crate::config::ConfigToml;
     use crate::exec::ExecToolCallOutput;
+    use crate::function_tool::FunctionCallError;
     use crate::shell::default_user_shell;
     use crate::tools::format_exec_output_str;
+    use codex_protocol::models::FunctionCallOutputPayload;
 
     use crate::protocol::CompactedItem;
     use crate::protocol::InitialHistory;
