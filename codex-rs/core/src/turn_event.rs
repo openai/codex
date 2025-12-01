@@ -1,17 +1,18 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
+use codex_protocol::items::TurnItem;
 use futures::stream::FuturesUnordered;
 use tokio_util::sync::CancellationToken;
 
-use super::CodexErr;
-use super::CodexResult;
-use super::Session;
-use super::ToolRouter;
-use super::TurnContext;
-use super::TurnItem;
+use crate::codex::Session;
+use crate::codex::TurnContext;
+use crate::error::CodexErr;
+use crate::error::Result;
 use crate::function_tool::FunctionCallError;
 use crate::parse_turn_item;
+use crate::tools::parallel::ToolCallRuntime;
+use crate::tools::router::ToolRouter;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -21,21 +22,21 @@ use tracing::debug;
 /// Handle a completed output item from the model stream, recording it and
 /// queuing any tool execution futures. This records items immediately so
 /// history and rollout stay in sync even if the turn is later cancelled.
-pub(super) type InFlightFuture<'f> =
-    Pin<Box<dyn Future<Output = CodexResult<ResponseInputItem>> + Send + 'f>>;
+pub(crate) type InFlightFuture<'f> =
+    Pin<Box<dyn Future<Output = Result<ResponseInputItem>> + Send + 'f>>;
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn handle_output_item_done(
+pub(crate) async fn handle_output_item_done(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    tool_runtime: Arc<super::ToolCallRuntime>,
+    tool_runtime: Arc<ToolCallRuntime>,
     item: ResponseItem,
     previously_active_item: Option<TurnItem>,
     in_flight: &mut FuturesUnordered<InFlightFuture<'_>>,
     responses: &mut Vec<ResponseInputItem>,
     last_agent_message: &mut Option<String>,
     cancellation_token: CancellationToken,
-) -> CodexResult<()> {
+) -> Result<()> {
     match ToolRouter::build_tool_call(sess.as_ref(), item.clone()).await {
         Ok(Some(call)) => {
             let payload_preview = call.payload.log_payload().into_owned();
@@ -126,7 +127,7 @@ pub(super) async fn handle_output_item_done(
     Ok(())
 }
 
-pub(super) async fn handle_non_tool_response_item(item: &ResponseItem) -> Option<TurnItem> {
+pub(crate) async fn handle_non_tool_response_item(item: &ResponseItem) -> Option<TurnItem> {
     debug!(?item, "Output item");
 
     match item {
@@ -141,7 +142,7 @@ pub(super) async fn handle_non_tool_response_item(item: &ResponseItem) -> Option
     }
 }
 
-pub(super) fn last_assistant_message_from_item(item: &ResponseItem) -> Option<String> {
+pub(crate) fn last_assistant_message_from_item(item: &ResponseItem) -> Option<String> {
     if let ResponseItem::Message { role, content, .. } = item
         && role == "assistant"
     {
@@ -153,7 +154,7 @@ pub(super) fn last_assistant_message_from_item(item: &ResponseItem) -> Option<St
     None
 }
 
-pub(super) fn response_input_to_response_item(input: &ResponseInputItem) -> Option<ResponseItem> {
+pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Option<ResponseItem> {
     match input {
         ResponseInputItem::FunctionCallOutput { call_id, output } => {
             Some(ResponseItem::FunctionCallOutput {

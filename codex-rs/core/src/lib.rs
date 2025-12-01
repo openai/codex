@@ -44,6 +44,7 @@ pub mod sandboxing;
 mod text_encoding;
 pub mod token_data;
 mod truncate;
+mod turn_event;
 mod unified_exec;
 mod user_instructions;
 pub use model_provider_info::DEFAULT_LMSTUDIO_PORT;

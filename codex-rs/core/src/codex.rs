@@ -16,9 +16,10 @@ use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
-mod turn_event;
 use crate::terminal;
 use crate::truncate::TruncationPolicy;
+use crate::turn_event::handle_non_tool_response_item;
+use crate::turn_event::handle_output_item_done;
 use crate::user_notification::UserNotifier;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
@@ -138,8 +139,6 @@ use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
-use turn_event::handle_non_tool_response_item;
-use turn_event::handle_output_item_done;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -813,7 +812,7 @@ impl Session {
         }
     }
 
-    async fn emit_turn_item_started(&self, turn_context: &TurnContext, item: &TurnItem) {
+    pub(crate) async fn emit_turn_item_started(&self, turn_context: &TurnContext, item: &TurnItem) {
         self.send_event(
             turn_context,
             EventMsg::ItemStarted(ItemStartedEvent {
@@ -825,7 +824,11 @@ impl Session {
         .await;
     }
 
-    async fn emit_turn_item_completed(&self, turn_context: &TurnContext, item: TurnItem) {
+    pub(crate) async fn emit_turn_item_completed(
+        &self,
+        turn_context: &TurnContext,
+        item: TurnItem,
+    ) {
         self.send_event(
             turn_context,
             EventMsg::ItemCompleted(ItemCompletedEvent {
