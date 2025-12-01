@@ -1,10 +1,11 @@
+// port-lint: source core/src/exec.rs
 package ai.solace.coder.exec.process
 
 import ai.solace.coder.core.error.CodexError
 import ai.solace.coder.core.error.CodexResult
 import ai.solace.coder.exec.sandbox.SandboxManager
 import ai.solace.coder.exec.shell.ShellDetector
-import ai.solace.coder.protocol.models.SandboxPolicy
+import ai.solace.coder.protocol.SandboxPolicy
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -184,7 +185,7 @@ class ProcessExecutor {
 
         val result = execute(
             params = params,
-            sandboxPolicy = SandboxPolicy.ReadOnly(),
+            sandboxPolicy = SandboxPolicy.ReadOnly,
             sandboxCwd = cwd
         )
 

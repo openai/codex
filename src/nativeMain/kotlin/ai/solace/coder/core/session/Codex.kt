@@ -1,3 +1,4 @@
+// port-lint: source core/src/codex.rs
 package ai.solace.coder.core.session
 
 import ai.solace.coder.client.auth.AuthManager
@@ -15,15 +16,15 @@ import ai.solace.coder.core.tools.ToolCallProcessor
 import ai.solace.coder.core.tools.ToolCallRuntime
 import ai.solace.coder.core.tools.ToolRegistry
 import ai.solace.coder.core.tools.ToolRouter
-import ai.solace.coder.core.tools.SharedTurnDiffTracker
 import ai.solace.coder.core.tools.ApplyPatchToolType
 import ai.solace.coder.exec.sandbox.ApprovalStore
-import ai.solace.coder.exec.sandbox.SandboxCommandAssessment
+import ai.solace.coder.protocol.SandboxCommandAssessment
+import ai.solace.coder.protocol.SandboxRiskLevel
 import ai.solace.coder.exec.shell.Shell
 import ai.solace.coder.exec.shell.ShellDetector
 import ai.solace.coder.mcp.connection.McpConnectionManager
 import ai.solace.coder.mcp.connection.McpServerConfig
-import ai.solace.coder.protocol.models.ResponseEvent
+import ai.solace.coder.protocol.ResponseEvent
 import ai.solace.coder.utils.concurrent.CancellationToken
 import ai.solace.coder.protocol.AskForApproval
 import ai.solace.coder.protocol.ApplyPatchApprovalRequestEvent
@@ -65,7 +66,9 @@ import ai.solace.coder.protocol.TokenUsageInfo
 import ai.solace.coder.protocol.RateLimitSnapshot
 import ai.solace.coder.protocol.HistoryEntry
 import ai.solace.coder.protocol.FileChange
+import ai.solace.coder.protocol.ReasoningEffort
 import ai.solace.coder.protocol.ReasoningEffortConfig
+import ai.solace.coder.protocol.ReasoningSummary
 import ai.solace.coder.protocol.ReasoningSummaryConfig
 import ai.solace.coder.protocol.TurnContextItem
 import ai.solace.coder.protocol.TurnDiffEvent
@@ -74,13 +77,18 @@ import ai.solace.coder.protocol.ReasoningContentDeltaEvent
 import ai.solace.coder.protocol.ReasoningRawContentDeltaEvent
 import ai.solace.coder.protocol.AgentReasoningSectionBreakEvent
 import ai.solace.coder.protocol.RolloutItem
-import ai.solace.coder.protocol.models.FunctionCallOutputPayload
+import ai.solace.coder.protocol.UserMessageItem
+import ai.solace.coder.protocol.ReasoningItem
+import ai.solace.coder.protocol.ReasoningItemReasoningSummary
+import ai.solace.coder.protocol.ReasoningItemContent
+import ai.solace.coder.protocol.WebSearchItem
+import ai.solace.coder.protocol.FunctionCallOutputPayload
 import ai.solace.coder.protocol.InitialHistory
 import ai.solace.coder.protocol.SessionSource
 import ai.solace.coder.protocol.UserInput as ProtocolUserInput
-import ai.solace.coder.protocol.models.ContentItem
-import ai.solace.coder.protocol.models.ResponseInputItem
-import ai.solace.coder.protocol.models.ResponseItem
+import ai.solace.coder.protocol.ContentItem
+import ai.solace.coder.protocol.ResponseInputItem
+import ai.solace.coder.protocol.ResponseItem
 import ai.solace.coder.protocol.WarningEvent
 import ai.solace.coder.protocol.ContextCompactedEvent
 import ai.solace.coder.protocol.ExitedReviewModeEvent
@@ -260,12 +268,8 @@ suspend fun spawnCodex(
     val sessionConfiguration = SessionConfiguration(
         provider = config.modelProvider,
         model = config.model,
-        modelReasoningEffort = config.modelReasoningEffort?.let {
-            ReasoningEffortConfig(level = it.name.lowercase())
-        },
-        modelReasoningSummary = ReasoningSummaryConfig(
-            enabled = config.modelReasoningSummary != ReasoningSummary.None
-        ),
+        modelReasoningEffort = config.modelReasoningEffort,
+        modelReasoningSummary = config.modelReasoningSummary,
         developerInstructions = config.developerInstructions,
         userInstructions = userInstructions,
         baseInstructions = config.baseInstructions,
@@ -474,7 +478,7 @@ class Session private constructor(
      * Send a raw event without legacy conversion.
      */
     suspend fun sendEventRaw(event: Event) {
-        val rolloutItems = listOf(RolloutItem.EventMsg(event.msg))
+        val rolloutItems = listOf(RolloutItem.EventMsgItem(event.msg))
         persistRolloutItems(rolloutItems)
         try {
             txEvent.send(event)
@@ -490,8 +494,8 @@ class Session private constructor(
         sendEvent(
             turnContext,
             EventMsg.ItemStarted(ItemStartedEvent(
-                thread_id = conversationId,
-                turn_id = turnContext.subId,
+                threadId = ai.solace.coder.protocol.ConversationId.fromString(conversationId).getOrThrow(),
+                turnId = turnContext.subId,
                 item = item
             ))
         )
@@ -504,8 +508,8 @@ class Session private constructor(
         sendEvent(
             turnContext,
             EventMsg.ItemCompleted(ItemCompletedEvent(
-                thread_id = conversationId,
-                turn_id = turnContext.subId,
+                threadId = ai.solace.coder.protocol.ConversationId.fromString(conversationId).getOrThrow(),
+                turnId = turnContext.subId,
                 item = item
             ))
         )
@@ -546,8 +550,13 @@ class Session private constructor(
         }
 
         val event = EventMsg.ExecApprovalRequest(ExecApprovalRequestEvent(
+            callId = callId,
+            turnId = turnContext.subId,
             command = command,
-            cwd = cwd
+            cwd = cwd,
+            reason = reason,
+            risk = risk,
+            parsedCmd = emptyList()
         ))
         sendEvent(turnContext, event)
 
@@ -579,7 +588,11 @@ class Session private constructor(
         }
 
         val event = EventMsg.ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent(
-            changes = changes
+            callId = callId,
+            turnId = turnContext.subId,
+            changes = changes,
+            reason = reason,
+            grantRoot = grantRoot
         ))
         sendEvent(turnContext, event)
 
@@ -620,13 +633,13 @@ class Session private constructor(
         val history = ContextManager()
         for (rolloutItem in rolloutItems) {
             when (rolloutItem) {
-                is ai.solace.coder.protocol.RolloutItem.ResponseItem -> {
+                is ai.solace.coder.protocol.RolloutItem.ResponseItemHolder -> {
                     history.recordItems(listOf(rolloutItem.payload), turnContext.truncationPolicy)
                 }
                 is ai.solace.coder.protocol.RolloutItem.Compacted -> {
                     val compacted = rolloutItem.payload
-                    if (compacted.replacement_history != null) {
-                        history.replace(compacted.replacement_history)
+                    if (compacted.replacementHistory != null) {
+                        history.replace(compacted.replacementHistory)
                     } else {
                         val snapshot = history.getHistory()
                         val userMessages = collectUserMessages(snapshot)
@@ -666,7 +679,7 @@ class Session private constructor(
      * Persist response items to rollout.
      */
     private suspend fun persistRolloutResponseItems(items: List<ResponseItem>) {
-        val rolloutItems = items.map { ai.solace.coder.protocol.RolloutItem.ResponseItem(payload = it) }
+        val rolloutItems = items.map { RolloutItem.ResponseItemHolder(payload = it) }
         persistRolloutItems(rolloutItems)
     }
 
@@ -799,7 +812,7 @@ class Session private constructor(
         }
         val event = EventMsg.TokenCount(TokenCountEvent(
             info = info,
-            rate_limits = rateLimits
+            rateLimits = rateLimits
         ))
         sendEvent(turnContext, event)
     }
@@ -826,8 +839,9 @@ class Session private constructor(
         val responseItem = responseInput.toResponseItem()
         recordConversationItems(turnContext, listOf(responseItem))
 
-        // Create a simple TurnItem for the user message
-        val turnItem = TurnItem(id = "user_${turnContext.subId}", type = "user_message")
+        // Create a TurnItem.UserMessage for the user message
+        val userMessageItem = UserMessageItem.new(emptyList())
+        val turnItem = TurnItem.UserMessage(item = userMessageItem)
         emitTurnItemStarted(turnContext, turnItem)
         emitTurnItemCompleted(turnContext, turnItem)
     }
@@ -849,11 +863,11 @@ class Session private constructor(
         codexError: CodexError
     ) {
         val codexErrorInfo = CodexErrorInfo.ResponseStreamDisconnected(
-            http_status_code = codexError.httpStatusCodeValue()
+            httpStatusCode = codexError.httpStatusCodeValue()
         )
         val event = EventMsg.StreamError(StreamErrorEvent(
             message = message,
-            codex_error_info = codexErrorInfo
+            codexErrorInfo = codexErrorInfo
         ))
         sendEvent(turnContext, event)
     }
@@ -1099,7 +1113,7 @@ class Session private constructor(
         sendEvent(
             turnContext,
             EventMsg.TaskComplete(TaskCompleteEvent(
-                last_agent_message = lastAgentMessage
+                lastAgentMessage = lastAgentMessage
             ))
         )
     }
@@ -1118,7 +1132,7 @@ class Session private constructor(
         server: String,
         tool: String,
         arguments: JsonElement?
-    ): Result<ai.solace.coder.protocol.models.CallToolResult> {
+    ): Result<ai.solace.coder.protocol.CallToolResult> {
         return services.mcpConnectionManager.callTool(server, tool, arguments)
     }
 
@@ -1142,9 +1156,9 @@ class Session private constructor(
                 return null
             }
 
-            val conversationId = when (initialHistory) {
+            val conversationId: ConversationId = when (initialHistory) {
                 is InitialHistory.New, is InitialHistory.Forked -> generateConversationId()
-                is InitialHistory.Resumed -> initialHistory.payload.conversationId
+                is InitialHistory.Resumed -> initialHistory.payload.conversationId.toString()
             }
 
             // Initialize services
@@ -1179,24 +1193,24 @@ class Session private constructor(
             val event = Event(
                 id = Codex.INITIAL_SUBMIT_ID,
                 msg = EventMsg.SessionConfigured(SessionConfiguredEvent(
-                    session_id = conversationId,
+                    sessionId = ai.solace.coder.protocol.ConversationId.fromString(conversationId).getOrThrow(),
                     model = sessionConfiguration.model,
-                    model_provider_id = config.modelProviderId ?: "",
-                    approval_policy = sessionConfiguration.approvalPolicy,
-                    sandbox_policy = sessionConfiguration.sandboxPolicy,
+                    modelProviderId = config.modelProviderId ?: "",
+                    approvalPolicy = sessionConfiguration.approvalPolicy,
+                    sandboxPolicy = sessionConfiguration.sandboxPolicy,
                     cwd = sessionConfiguration.cwd,
-                    reasoning_effort = sessionConfiguration.modelReasoningEffort,
-                    history_log_id = 0L,
-                    history_entry_count = 0L,
-                    initial_messages = emptyList(),
-                    rollout_path = rolloutRecorder?.rolloutPath ?: ""
+                    reasoningEffort = sessionConfiguration.modelReasoningEffort,
+                    historyLogId = 0L,
+                    historyEntryCount = 0L,
+                    initialMessages = emptyList(),
+                    rolloutPath = rolloutRecorder?.rolloutPath ?: ""
                 ))
             )
             session.sendEventRaw(event)
 
             // Initialize MCP connection manager
             val mcpServerConfigs = config.mcpServers.mapValues { (_, v) ->
-                McpConnectionManager.McpServerConfig(
+                ai.solace.coder.mcp.connection.McpServerConfig(
                     command = v.command,
                     args = v.args,
                     env = v.env
@@ -1303,7 +1317,7 @@ data class TurnContext(
 
     // Reasoning configuration
     val reasoningEffort: ReasoningEffortConfig? = null,
-    val reasoningSummary: ReasoningSummaryConfig = ReasoningSummaryConfig(enabled = true),
+    val reasoningSummary: ReasoningSummaryConfig = ReasoningSummary.Auto,
 
     // Stream configuration
     val streamMaxRetries: Int = 3,
@@ -1375,7 +1389,7 @@ data class SessionConfiguration(
     val provider: ModelProviderInfo,
     val model: String,
     val modelReasoningEffort: ReasoningEffortConfig? = null,
-    val modelReasoningSummary: ReasoningSummaryConfig = ReasoningSummaryConfig(enabled = true),
+    val modelReasoningSummary: ReasoningSummaryConfig = ReasoningSummary.Auto,
     val developerInstructions: String? = null,
     val userInstructions: String? = null,
     val baseInstructions: String? = null,
@@ -1448,6 +1462,7 @@ enum class ShellEnvironmentInheritFilter {
  *
  * Ported from Rust codex-rs/core/src/tools/spec.rs ToolsConfig
  */
+// port-lint: ignore-duplicate - Extended version with Features, differs from ToolSpec.ToolsConfig
 data class ToolsConfig(
     val shellType: ShellToolType = ShellToolType.Default,
     val applyPatchToolType: ApplyPatchToolType? = null,
@@ -1499,11 +1514,11 @@ private suspend fun submissionLoop(
             is Op.OverrideTurnContext -> {
                 Handlers.overrideTurnContext(sess, SessionSettingsUpdate(
                     cwd = op.cwd,
-                    approvalPolicy = op.approval_policy,
-                    sandboxPolicy = op.sandbox_policy,
+                    approvalPolicy = op.approvalPolicy,
+                    sandboxPolicy = op.sandboxPolicy,
                     model = op.model,
-                    reasoningEffort = op.effort?.let { ReasoningEffortConfig(level = it.level) },
-                    reasoningSummary = op.summary?.let { ReasoningSummaryConfig(enabled = it.enabled) }
+                    reasoningEffort = op.effort,
+                    reasoningSummary = op.summary
                 ))
             }
             is Op.UserInput -> {
@@ -1522,7 +1537,7 @@ private suspend fun submissionLoop(
                 Handlers.addToHistory(sess, config, op.text)
             }
             is Op.GetHistoryEntryRequest -> {
-                Handlers.getHistoryEntryRequest(sess, config, sub.id, op.offset.toInt(), op.log_id)
+                Handlers.getHistoryEntryRequest(sess, config, sub.id, op.offset.toInt(), op.logId)
             }
             is Op.ListMcpTools -> {
                 Handlers.listMcpTools(sess, config, sub.id)
@@ -1540,7 +1555,7 @@ private suspend fun submissionLoop(
                 previousContext = Handlers.runUserShellCommand(sess, sub.id, op.command, previousContext)
             }
             is Op.ResolveElicitation -> {
-                Handlers.resolveElicitation(sess, op.server_name, op.request_id, op.decision)
+                Handlers.resolveElicitation(sess, op.serverName, op.requestId, op.decision)
             }
             is Op.Shutdown -> {
                 if (Handlers.shutdown(sess, sub.id)) {
@@ -1548,7 +1563,7 @@ private suspend fun submissionLoop(
                 }
             }
             is Op.Review -> {
-                Handlers.review(sess, config, sub.id, op.review_request)
+                Handlers.review(sess, config, sub.id, op.reviewRequest)
             }
             else -> {
                 // Ignore unknown ops
@@ -1590,8 +1605,8 @@ private object Handlers {
                     approvalPolicy = op.approvalPolicy,
                     sandboxPolicy = op.sandboxPolicy,
                     model = op.model,
-                    reasoningEffort = op.effort?.let { ReasoningEffortConfig(level = it.level) },
-                    reasoningSummary = ReasoningSummaryConfig(enabled = op.summary.enabled),
+                    reasoningEffort = op.effort,
+                    reasoningSummary = op.summary,
                     finalOutputJsonSchema = op.finalOutputJsonSchema
                 )
             )
@@ -1599,9 +1614,13 @@ private object Handlers {
             else -> throw IllegalArgumentException("Unexpected op type")
         }
 
-        // Convert protocol UserInput to local UserInput
+        // Convert protocol UserInput to session UserInput
         val items = protocolItems.map { input ->
-            UserInput.Text(input.text)
+            when (input) {
+                is ProtocolUserInput.Text -> UserInput.Text(content = input.text)
+                is ProtocolUserInput.Image -> UserInput.Text(content = "[Image: ${input.imageUrl}]")
+                is ProtocolUserInput.LocalImage -> UserInput.FileRef(path = input.path)
+            }
         }
 
         val currentContext = sess.newTurnWithSubId(subId, updates)
@@ -1682,7 +1701,7 @@ private object Handlers {
             id = subId,
             msg = EventMsg.GetHistoryEntryResponse(GetHistoryEntryResponseEvent(
                 offset = offset.toLong(),
-                log_id = logId,
+                logId = logId,
                 entry = null
             ))
         )
@@ -1696,8 +1715,8 @@ private object Handlers {
             msg = EventMsg.McpListToolsResponse(McpListToolsResponseEvent(
                 tools = tools,
                 resources = emptyMap(),
-                resource_templates = emptyMap(),
-                auth_statuses = emptyMap()
+                resourceTemplates = emptyMap(),
+                authStatuses = emptyMap()
             ))
         )
         sess.sendEventRaw(event)
@@ -1708,7 +1727,7 @@ private object Handlers {
         val event = Event(
             id = subId,
             msg = EventMsg.ListCustomPromptsResponse(ListCustomPromptsResponseEvent(
-                custom_prompts = customPrompts
+                customPrompts = customPrompts
             ))
         )
         sess.sendEventRaw(event)
@@ -1774,7 +1793,7 @@ suspend fun runTask(
     }
 
     val event = EventMsg.TaskStarted(TaskStartedEvent(
-        model_context_window = turnContext.modelContextWindow
+        modelContextWindow = turnContext.modelContextWindow
     ))
     sess.sendEvent(turnContext, event)
 
@@ -1854,7 +1873,7 @@ suspend fun runTask(
                 println("INFO: Turn error: ${error?.message}")
                 val errorEvent = EventMsg.Error(ErrorEvent(
                     message = error?.message ?: "Unknown error",
-                    codex_error_info = null
+                    codexErrorInfo = null
                 ))
                 sess.sendEvent(turnContext, errorEvent)
                 break
@@ -1960,10 +1979,10 @@ private suspend fun tryRunTurn(
     cancellationToken: CancellationToken
 ): Result<List<ProcessedResponseItem>> {
     // Persist turn context to rollout
-    val rolloutItem = RolloutItem.TurnContext(TurnContextItem(
+    val rolloutItem = RolloutItem.TurnContextHolder(TurnContextItem(
         cwd = turnContext.cwd,
-        approval_policy = turnContext.approvalPolicy,
-        sandbox_policy = turnContext.sandboxPolicy,
+        approvalPolicy = turnContext.approvalPolicy,
+        sandboxPolicy = turnContext.sandboxPolicy,
         model = turnContext.model,
         effort = turnContext.reasoningEffort,
         summary = turnContext.reasoningSummary
@@ -2066,7 +2085,7 @@ private suspend fun tryRunTurn(
                             val errorMessage = errorResult?.error?.toException()?.message ?: "Unknown tool call error"
 
                             val response = ResponseInputItem.FunctionCallOutput(
-                                call_id = "",
+                                callId = "",
                                 output = FunctionCallOutputPayload(
                                     content = errorMessage,
                                     success = false
@@ -2107,20 +2126,9 @@ private suspend fun tryRunTurn(
                     }
 
                     // Get unified diff if available
-                    val diffs = turnDiffTracker.getDiffs()
-                    if (diffs.isNotEmpty()) {
-                        // Build unified diff string from collected diffs
-                        val unifiedDiff = diffs.joinToString("\n") { diff ->
-                            when (diff) {
-                                is ai.solace.coder.core.tools.TurnDiff.FileModified ->
-                                    "--- ${diff.path}\n+++ ${diff.path}\n${diff.content ?: ""}"
-                                is ai.solace.coder.core.tools.TurnDiff.FileCreated ->
-                                    "+++ ${diff.path} (created)"
-                                is ai.solace.coder.core.tools.TurnDiff.FileDeleted ->
-                                    "--- ${diff.path} (deleted)"
-                            }
-                        }
-                        val msg = EventMsg.TurnDiff(TurnDiffEvent(unified_diff = unifiedDiff))
+                    val unifiedDiff = turnDiffTracker.computeUnifiedDiff()
+                    if (unifiedDiff.isNotEmpty()) {
+                        val msg = EventMsg.TurnDiff(TurnDiffEvent(unifiedDiff = unifiedDiff))
                         sess.sendEvent(turnContext, msg)
                     }
 
@@ -2132,9 +2140,9 @@ private suspend fun tryRunTurn(
                     val active = activeItem
                     if (active != null) {
                         val deltaEvent = AgentMessageContentDeltaEvent(
-                            thread_id = sess.conversationId,
-                            turn_id = turnContext.subId,
-                            item_id = active.id,
+                            threadId = sess.conversationId,
+                            turnId = turnContext.subId,
+                            itemId = active.id(),
                             delta = event.delta
                         )
                         sess.sendEvent(turnContext, EventMsg.AgentMessageContentDelta(deltaEvent))
@@ -2147,11 +2155,11 @@ private suspend fun tryRunTurn(
                     val active = activeItem
                     if (active != null) {
                         val deltaEvent = ReasoningContentDeltaEvent(
-                            thread_id = sess.conversationId,
-                            turn_id = turnContext.subId,
-                            item_id = active.id,
+                            threadId = sess.conversationId,
+                            turnId = turnContext.subId,
+                            itemId = active.id(),
                             delta = event.delta,
-                            summary_index = event.summaryIndex
+                            summaryIndex = event.summaryIndex
                         )
                         sess.sendEvent(turnContext, EventMsg.ReasoningContentDelta(deltaEvent))
                     } else {
@@ -2163,8 +2171,8 @@ private suspend fun tryRunTurn(
                     val active = activeItem
                     if (active != null) {
                         val breakEvent = AgentReasoningSectionBreakEvent(
-                            item_id = active.id,
-                            summary_index = event.summaryIndex
+                            itemId = active.id(),
+                            summaryIndex = event.summaryIndex
                         )
                         sess.sendEvent(turnContext, EventMsg.AgentReasoningSectionBreak(breakEvent))
                     } else {
@@ -2176,11 +2184,11 @@ private suspend fun tryRunTurn(
                     val active = activeItem
                     if (active != null) {
                         val deltaEvent = ReasoningRawContentDeltaEvent(
-                            thread_id = sess.conversationId,
-                            turn_id = turnContext.subId,
-                            item_id = active.id,
+                            threadId = sess.conversationId,
+                            turnId = turnContext.subId,
+                            itemId = active.id(),
                             delta = event.delta,
-                            content_index = event.contentIndex
+                            contentIndex = event.contentIndex
                         )
                         sess.sendEvent(turnContext, EventMsg.ReasoningRawContentDelta(deltaEvent))
                     } else {
@@ -2225,18 +2233,33 @@ private fun handleNonToolResponseItem(item: ResponseItem): TurnItem? {
  */
 private fun parseTurnItem(item: ResponseItem): TurnItem? {
     return when (item) {
-        is ResponseItem.Message -> TurnItem(
-            id = "msg_${item.hashCode()}",
-            type = "message"
-        )
-        is ResponseItem.Reasoning -> TurnItem(
-            id = "reason_${item.hashCode()}",
-            type = "reasoning"
-        )
-        is ResponseItem.WebSearchCall -> TurnItem(
-            id = item.id ?: "search_${item.hashCode()}",
-            type = "web_search_call"
-        )
+        is ResponseItem.Message -> {
+            val content = item.content.mapNotNull { ci ->
+                when (ci) {
+                    is ContentItem.OutputText -> ProtocolUserInput.Text(text = ci.text)
+                    else -> null
+                }
+            }
+            TurnItem.UserMessage(item = UserMessageItem(id = item.id ?: "msg_${item.hashCode()}", content = content))
+        }
+        is ResponseItem.Reasoning -> {
+            TurnItem.Reasoning(item = ReasoningItem(
+                id = item.id,
+                summaryText = item.summary.mapNotNull { (it as? ReasoningItemReasoningSummary.SummaryText)?.text },
+                rawContent = item.content?.mapNotNull {
+                    when (it) {
+                        is ReasoningItemContent.ReasoningText -> it.text
+                        is ReasoningItemContent.Text -> it.text
+                    }
+                } ?: emptyList()
+            ))
+        }
+        is ResponseItem.WebSearchCall -> {
+            TurnItem.WebSearch(item = WebSearchItem(
+                id = item.id ?: "search_${item.hashCode()}",
+                query = "" // WebSearchCall doesn't have query info
+            ))
+        }
         else -> null
     }
 }
@@ -2292,8 +2315,8 @@ private suspend fun spawnReviewThread(
     val reviewPrompt = reviewRequest.prompt
 
     // Build per-turn config with review settings
-    val reviewReasoningEffort = ReasoningEffortConfig(level = "low")
-    val reviewReasoningSummary = ReasoningSummaryConfig(enabled = true)
+    val reviewReasoningEffort = ReasoningEffort.Low
+    val reviewReasoningSummary = ReasoningSummary.Auto
 
     // Create review turn context
     val reviewTurnContext = TurnContext(
@@ -2326,7 +2349,7 @@ private suspend fun spawnReviewThread(
     sess.spawnTask(
         reviewTurnContext,
         input,
-        ReviewTask(appendToOriginalThread = reviewRequest.append_to_original_thread)
+        ReviewTask(appendToOriginalThread = reviewRequest.appendToOriginalThread)
     )
 
     // Announce entering review mode so UIs can switch modes
@@ -2572,8 +2595,7 @@ data class ModelFamily(
     }
 }
 
-enum class ReasoningEffort { Low, Medium, High }
-enum class ReasoningSummary { None, Brief, Detailed }
+// ReasoningEffort and ReasoningSummary are imported from ai.solace.coder.protocol.ConfigTypes
 
 // McpServerConfig is now imported from ai.solace.coder.mcp.connection
 
@@ -2802,7 +2824,7 @@ private suspend fun runInlineAutoCompactTask(sess: Session, turnContext: TurnCon
  */
 private suspend fun runCompactTask(sess: Session, turnContext: TurnContext, input: List<UserInput>) {
     val startEvent = EventMsg.TaskStarted(TaskStartedEvent(
-        model_context_window = turnContext.modelContextWindow
+        modelContextWindow = turnContext.modelContextWindow
     ))
     sess.sendEvent(turnContext, startEvent)
     runCompactTaskInner(sess, turnContext, input)
@@ -2853,7 +2875,7 @@ private suspend fun runCompactTaskInner(sess: Session, turnContext: TurnContext,
     val rolloutItem = RolloutItem.Compacted(
         ai.solace.coder.protocol.CompactedItem(
             message = summaryText,
-            replacement_history = null
+            replacementHistory = null
         )
     )
     sess.persistRolloutItems(listOf(rolloutItem))
@@ -2976,7 +2998,7 @@ class UserShellCommandTask(private val command: String) : SessionTask {
         // Send TaskStarted event
         session.sendEvent(
             turnContext,
-            EventMsg.TaskStarted(TaskStartedEvent(model_context_window = null))
+            EventMsg.TaskStarted(TaskStartedEvent(modelContextWindow = null))
         )
 
         // Check for cancellation before execution
@@ -2985,20 +3007,20 @@ class UserShellCommandTask(private val command: String) : SessionTask {
         }
 
         val cwd = turnContext.cwd
-        val parsedCmd = listOf(ParsedCommand(command = execArgs.first(), args = execArgs.drop(1)))
+        val parsedCmd = listOf(ParsedCommand.Unknown(cmd = execArgs.first()))
 
         // Send ExecCommandBegin event
         session.sendEvent(
             turnContext,
             EventMsg.ExecCommandBegin(ExecCommandBeginEvent(
-                call_id = callId,
-                process_id = null,
-                turn_id = turnContext.subId,
+                callId = callId,
+                processId = null,
+                turnId = turnContext.subId,
                 command = execArgs,
                 cwd = cwd,
-                parsed_cmd = parsedCmd,
+                parsedCmd = parsedCmd,
                 source = ExecCommandSource.UserShell,
-                interaction_input = command
+                interactionInput = command
             ))
         )
 
@@ -3018,7 +3040,7 @@ class UserShellCommandTask(private val command: String) : SessionTask {
         execDuration = measureTime {
             val result = processExecutor.execute(
                 params = execParams,
-                sandboxPolicy = ai.solace.coder.protocol.models.SandboxPolicy.DangerFullAccess,
+                sandboxPolicy = ai.solace.coder.protocol.SandboxPolicy.DangerFullAccess,
                 sandboxCwd = cwd
             )
 
@@ -3058,20 +3080,20 @@ class UserShellCommandTask(private val command: String) : SessionTask {
         session.sendEvent(
             turnContext,
             EventMsg.ExecCommandEnd(ExecCommandEndEvent(
-                call_id = callId,
-                process_id = null,
-                turn_id = turnContext.subId,
+                callId = callId,
+                processId = null,
+                turnId = turnContext.subId,
                 command = execArgs,
                 cwd = cwd,
-                parsed_cmd = parsedCmd,
+                parsedCmd = parsedCmd,
                 source = ExecCommandSource.UserShell,
-                interaction_input = command,
+                interactionInput = command,
                 stdout = stdout,
                 stderr = stderr,
-                aggregated_output = aggregatedOutput,
-                exit_code = exitCode,
+                aggregatedOutput = aggregatedOutput,
+                exitCode = exitCode,
                 duration = execDuration.toString(),
-                formatted_output = formattedOutput
+                formattedOutput = formattedOutput
             ))
         )
 
@@ -3260,7 +3282,7 @@ class CompactTask : SessionTask {
         val rolloutItem = ai.solace.coder.protocol.RolloutItem.Compacted(
             payload = ai.solace.coder.protocol.CompactedItem(
                 message = summary,
-                replacement_history = compactedHistory
+                replacementHistory = compactedHistory
             )
         )
         session.persistRolloutItems(listOf(rolloutItem))
@@ -3308,7 +3330,7 @@ private fun formatHistoryForCompaction(history: List<ResponseItem>): String {
                 }
                 is ResponseItem.Reasoning -> {
                     item.summary.firstOrNull()?.let { summary ->
-                        if (summary is ai.solace.coder.protocol.models.ReasoningItemReasoningSummary.SummaryText) {
+                        if (summary is ai.solace.coder.protocol.ReasoningItemReasoningSummary.SummaryText) {
                             appendLine("[REASONING]: ${summary.text.take(100)}...")
                         }
                     }
@@ -3531,10 +3553,10 @@ class ReviewTask(private val appendToOriginalThread: Boolean) : SessionTask {
 
         // Fallback: create structured output from plain text
         return ReviewOutputEvent(
-            overall_explanation = text,
+            overallExplanation = text,
             findings = emptyList(),
-            overall_correctness = "",
-            overall_confidence_score = 0.0f
+            overallCorrectness = "",
+            overallConfidenceScore = 0.0f
         )
     }
 
@@ -3576,7 +3598,7 @@ class ReviewTask(private val appendToOriginalThread: Boolean) : SessionTask {
         if (appendToOriginalThread) {
             val userMessage = if (reviewOutput != null) {
                 val findingsStr = buildString {
-                    val explanation = reviewOutput.overall_explanation.trim()
+                    val explanation = reviewOutput.overallExplanation.trim()
                     if (explanation.isNotEmpty()) {
                         append(explanation)
                     }
@@ -3604,7 +3626,7 @@ class ReviewTask(private val appendToOriginalThread: Boolean) : SessionTask {
         // Send ExitedReviewMode event
         session.sendEvent(
             turnContext,
-            EventMsg.ExitedReviewMode(ExitedReviewModeEvent(review_output = reviewOutput))
+            EventMsg.ExitedReviewMode(ExitedReviewModeEvent(reviewOutput = reviewOutput))
         )
     }
 }
@@ -3613,11 +3635,11 @@ class ReviewTask(private val appendToOriginalThread: Boolean) : SessionTask {
 fun ResponseInputItem.toResponseItem(): ResponseItem {
     return when (this) {
         is ResponseInputItem.FunctionCallOutput -> ResponseItem.FunctionCallOutput(
-            call_id = call_id,
+            callId = callId,
             output = output
         )
         is ResponseInputItem.CustomToolCallOutput -> ResponseItem.CustomToolCallOutput(
-            call_id = call_id,
+            callId = callId,
             output = output
         )
         else -> ResponseItem.Message(role = "user", content = emptyList())
@@ -3628,7 +3650,7 @@ fun ResponseInputItem.Companion.fromUserInput(input: List<UserInput>): ResponseI
     val content = input.map { userInput ->
         when (userInput) {
             is UserInput.Text -> ContentItem.InputText(text = userInput.content)
-            is UserInput.Image -> ContentItem.InputImage(image_url = "data:${userInput.mimeType};base64,...")
+            is UserInput.Image -> ContentItem.InputImage(imageUrl = "data:${userInput.mimeType};base64,...")
             is UserInput.FileRef -> ContentItem.InputText(text = "[File: ${userInput.path}]")
         }
     }
@@ -3646,7 +3668,7 @@ fun UserInput.toResponseInputItem(): ResponseInputItem {
         )
         is UserInput.Image -> ResponseInputItem.Message(
             role = "user",
-            content = listOf(ContentItem.InputImage(image_url = "data:$mimeType;base64,..."))
+            content = listOf(ContentItem.InputImage(imageUrl = "data:$mimeType;base64,..."))
         )
         is UserInput.FileRef -> ResponseInputItem.Message(
             role = "user",

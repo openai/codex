@@ -1,10 +1,61 @@
+// port-lint: source async-utils/src/lib.rs
 package ai.solace.coder.utils.readiness
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import kotlin.time.Duration.Companion.milliseconds
+
+/**
+ * Error indicating that an operation was cancelled.
+ *
+ * Ported from Rust async-utils CancelErr enum.
+ */
+enum class CancelErr {
+    Cancelled
+}
+
+/**
+ * Extension trait for adding cancellation support to async operations.
+ *
+ * In Kotlin, this is implemented via extension functions rather than
+ * a formal interface, as this is more idiomatic. The [orCancel] extension
+ * function provides the equivalent functionality.
+ *
+ * Ported from Rust async-utils OrCancelExt trait.
+ */
+interface OrCancelExt<T> {
+    suspend fun orCancel(cancellation: Job): Result<T>
+}
+
+/**
+ * Race a Deferred against a cancellation signal.
+ *
+ * @param cancellation A Job that, when completed/cancelled, signals cancellation.
+ * @return Result.success with the value if the deferred completes first,
+ *         Result.failure with CancelErr.Cancelled if cancellation wins.
+ *
+ * Ported from Rust OrCancelExt trait.
+ */
+suspend fun <T> Deferred<T>.orCancel(cancellation: Job): Result<T> {
+    return select {
+        onAwait { value ->
+            Result.success(value)
+        }
+        cancellation.onJoin {
+            Result.failure(CancellationException(CancelErr.Cancelled))
+        }
+    }
+}
+
+/**
+ * Exception wrapper for CancelErr to use with Result.failure.
+ */
+class CancellationException(val error: CancelErr) : Exception("Operation cancelled")
 
 /**
  * Opaque subscription token returned by `subscribe()`.

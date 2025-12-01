@@ -1,3 +1,4 @@
+// port-lint: source exec/src/lib.rs
 package ai.solace.coder.exec.process
 
 /**

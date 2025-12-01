@@ -1,9 +1,10 @@
+// port-lint: source core/src/mcp_connection_manager.rs
 package ai.solace.coder.mcp.connection
 
 import ai.solace.coder.protocol.Event
 import ai.solace.coder.protocol.McpTool
 import ai.solace.coder.protocol.ElicitationAction
-import ai.solace.coder.protocol.models.CallToolResult
+import ai.solace.coder.protocol.CallToolResult
 import ai.solace.coder.utils.concurrent.CancellationToken
 import kotlinx.coroutines.channels.Channel
 import kotlinx.serialization.json.JsonElement

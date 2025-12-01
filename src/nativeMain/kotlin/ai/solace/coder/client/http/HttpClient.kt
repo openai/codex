@@ -1,11 +1,12 @@
+// port-lint: source codex-api/src/endpoint/streaming.rs
 package ai.solace.coder.client.http
 
 import ai.solace.coder.client.auth.AuthManager
 import ai.solace.coder.client.streaming.SseParser
 import ai.solace.coder.core.error.CodexError
 import ai.solace.coder.core.error.CodexResult
-import ai.solace.coder.protocol.models.ResponseEvent
-import ai.solace.coder.protocol.models.ResponseItem
+import ai.solace.coder.protocol.ResponseEvent
+import ai.solace.coder.protocol.ResponseItem
 import io.ktor.client.*
 import io.ktor.client.engine.curl.*
 import io.ktor.client.plugins.contentnegotiation.*
@@ -213,3 +214,92 @@ data class TextOptions(
 )
 
 // ResponseEvent is now imported from ai.solace.coder.protocol.models
+
+/**
+ * Generic streaming client for HTTP SSE requests.
+ *
+ * Ported from Rust codex-api/src/endpoint/streaming.rs StreamingClient.
+ *
+ * @param T The transport type (for Kotlin/Native, this is abstracted by Ktor)
+ * @param A The auth provider type
+ */
+class StreamingClient<A : ai.solace.coder.client.auth.AuthProvider>(
+    private val provider: Provider,
+    private val auth: A,
+    private val requestTelemetry: RequestTelemetry? = null,
+    private val sseTelemetry: SseTelemetry? = null
+) {
+    companion object {
+        /**
+         * Create a new StreamingClient.
+         *
+         * Ported from Rust StreamingClient::new()
+         */
+        fun <A : ai.solace.coder.client.auth.AuthProvider> new(
+            provider: Provider,
+            auth: A
+        ): StreamingClient<A> = StreamingClient(provider, auth, null, null)
+    }
+
+    /**
+     * Add telemetry handlers to the client.
+     *
+     * Ported from Rust StreamingClient::with_telemetry()
+     */
+    fun withTelemetry(
+        request: RequestTelemetry?,
+        sse: SseTelemetry?
+    ): StreamingClient<A> {
+        return StreamingClient(provider, auth, request, sse)
+    }
+
+    /**
+     * Get the provider configuration.
+     *
+     * Ported from Rust StreamingClient::provider()
+     */
+    fun provider(): Provider = provider
+}
+
+/**
+ * Provider configuration for API requests.
+ *
+ * Ported from Rust codex-api/src/provider/mod.rs Provider.
+ */
+data class Provider(
+    val baseUrl: String,
+    val streamIdleTimeout: Long = 30_000L, // 30 seconds default
+    val retry: RetryPolicy = RetryPolicy()
+)
+
+/**
+ * Retry policy configuration.
+ */
+data class RetryPolicy(
+    val maxRetries: Int = 3,
+    val initialBackoffMs: Long = 1000L,
+    val maxBackoffMs: Long = 16000L
+)
+
+/**
+ * Telemetry interface for HTTP requests.
+ *
+ * Ported from Rust codex-client RequestTelemetry trait.
+ */
+interface RequestTelemetry {
+    fun onRequestStart(method: String, path: String)
+    fun onRequestEnd(statusCode: Int, durationMs: Long)
+    fun onRequestError(error: String)
+}
+
+/**
+ * Telemetry interface for SSE streams.
+ *
+ * Ported from Rust codex-api/src/telemetry.rs SseTelemetry trait.
+ */
+interface SseTelemetry {
+    fun onEventReceived(eventType: String)
+    fun onStreamStart()
+    fun onStreamEnd(totalEvents: Int)
+    fun onStreamError(error: String)
+}

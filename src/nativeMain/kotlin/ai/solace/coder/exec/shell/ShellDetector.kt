@@ -1,3 +1,4 @@
+// port-lint: source core/src/shell.rs
 package ai.solace.coder.exec.shell
 
 import ai.solace.coder.exec.process.platformGetUserShellPath

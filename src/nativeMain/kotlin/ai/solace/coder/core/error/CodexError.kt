@@ -1,3 +1,4 @@
+// port-lint: source core/src/error.rs
 package ai.solace.coder.core.error
 
 import ai.solace.coder.protocol.CodexErrorInfo

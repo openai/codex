@@ -1,3 +1,4 @@
+// port-lint: source utils/git/src/ghost_commits.rs
 package ai.solace.coder.utils.git
 
 import kotlinx.cinterop.ExperimentalForeignApi

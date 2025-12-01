@@ -1,9 +1,10 @@
+// port-lint: source core/src/context_manager/mod.rs
 package ai.solace.coder.core.context
 
 import ai.solace.coder.protocol.TokenUsage
 import ai.solace.coder.protocol.TokenUsageInfo
-import ai.solace.coder.protocol.models.FunctionCallOutputPayload
-import ai.solace.coder.protocol.models.ResponseItem
+import ai.solace.coder.protocol.FunctionCallOutputPayload
+import ai.solace.coder.protocol.ResponseItem
 
 /**
  * Transcript of conversation history with token tracking.
@@ -119,10 +120,10 @@ class ContextManager {
             is ResponseItem.FunctionCallOutput -> {
                 val truncated = truncateText(item.output.content, policyWithSerializationBudget)
                 ResponseItem.FunctionCallOutput(
-                    call_id = item.call_id,
+                    callId = item.callId,
                     output = FunctionCallOutputPayload(
                         content = truncated,
-                        content_items = item.output.content_items,
+                        contentItems = item.output.contentItems,
                         success = item.output.success
                     )
                 )
@@ -130,7 +131,7 @@ class ContextManager {
             is ResponseItem.CustomToolCallOutput -> {
                 val truncated = truncateText(item.output, policyWithSerializationBudget)
                 ResponseItem.CustomToolCallOutput(
-                    call_id = item.call_id,
+                    callId = item.callId,
                     output = truncated
                 )
             }
@@ -192,15 +193,15 @@ private fun ensureCallOutputsPresent(items: MutableList<ResponseItem>) {
     for ((idx, item) in items.withIndex()) {
         when (item) {
             is ResponseItem.FunctionCall -> {
-                val callId = item.call_id
-                val hasOutput = items.any { it is ResponseItem.FunctionCallOutput && it.call_id == callId }
+                val callId = item.callId
+                val hasOutput = items.any { it is ResponseItem.FunctionCallOutput && it.callId == callId }
                 if (!hasOutput) {
                     missingOutputsToInsert.add(
                         idx to ResponseItem.FunctionCallOutput(
-                            call_id = callId,
+                            callId = callId,
                             output = FunctionCallOutputPayload(
                                 content = "aborted",
-                                content_items = null,
+                                contentItems = null,
                                 success = null
                             )
                         )
@@ -208,27 +209,27 @@ private fun ensureCallOutputsPresent(items: MutableList<ResponseItem>) {
                 }
             }
             is ResponseItem.CustomToolCall -> {
-                val callId = item.call_id
-                val hasOutput = items.any { it is ResponseItem.CustomToolCallOutput && it.call_id == callId }
+                val callId = item.callId
+                val hasOutput = items.any { it is ResponseItem.CustomToolCallOutput && it.callId == callId }
                 if (!hasOutput) {
                     missingOutputsToInsert.add(
                         idx to ResponseItem.CustomToolCallOutput(
-                            call_id = callId,
+                            callId = callId,
                             output = "aborted"
                         )
                     )
                 }
             }
             is ResponseItem.LocalShellCall -> {
-                val callId = item.call_id ?: continue
-                val hasOutput = items.any { it is ResponseItem.FunctionCallOutput && it.call_id == callId }
+                val callId = item.callId ?: continue
+                val hasOutput = items.any { it is ResponseItem.FunctionCallOutput && it.callId == callId }
                 if (!hasOutput) {
                     missingOutputsToInsert.add(
                         idx to ResponseItem.FunctionCallOutput(
-                            call_id = callId,
+                            callId = callId,
                             output = FunctionCallOutputPayload(
                                 content = "aborted",
-                                content_items = null,
+                                contentItems = null,
                                 success = null
                             )
                         )
@@ -250,19 +251,19 @@ private fun ensureCallOutputsPresent(items: MutableList<ResponseItem>) {
  */
 private fun removeOrphanOutputs(items: MutableList<ResponseItem>) {
     val functionCallIds = items.filterIsInstance<ResponseItem.FunctionCall>()
-        .map { it.call_id }.toSet()
+        .map { it.callId }.toSet()
     val localShellCallIds = items.filterIsInstance<ResponseItem.LocalShellCall>()
-        .mapNotNull { it.call_id }.toSet()
+        .mapNotNull { it.callId }.toSet()
     val customToolCallIds = items.filterIsInstance<ResponseItem.CustomToolCall>()
-        .map { it.call_id }.toSet()
+        .map { it.callId }.toSet()
 
     items.removeAll { item ->
         when (item) {
             is ResponseItem.FunctionCallOutput -> {
-                !functionCallIds.contains(item.call_id) && !localShellCallIds.contains(item.call_id)
+                !functionCallIds.contains(item.callId) && !localShellCallIds.contains(item.callId)
             }
             is ResponseItem.CustomToolCallOutput -> {
-                !customToolCallIds.contains(item.call_id)
+                !customToolCallIds.contains(item.callId)
             }
             else -> false
         }
@@ -276,39 +277,39 @@ private fun removeCorrespondingFor(items: MutableList<ResponseItem>, item: Respo
     when (item) {
         is ResponseItem.FunctionCall -> {
             val idx = items.indexOfFirst {
-                it is ResponseItem.FunctionCallOutput && it.call_id == item.call_id
+                it is ResponseItem.FunctionCallOutput && it.callId == item.callId
             }
             if (idx >= 0) items.removeAt(idx)
         }
         is ResponseItem.FunctionCallOutput -> {
             var idx = items.indexOfFirst {
-                it is ResponseItem.FunctionCall && it.call_id == item.call_id
+                it is ResponseItem.FunctionCall && it.callId == item.callId
             }
             if (idx >= 0) {
                 items.removeAt(idx)
             } else {
                 idx = items.indexOfFirst {
-                    it is ResponseItem.LocalShellCall && it.call_id == item.call_id
+                    it is ResponseItem.LocalShellCall && it.callId == item.callId
                 }
                 if (idx >= 0) items.removeAt(idx)
             }
         }
         is ResponseItem.CustomToolCall -> {
             val idx = items.indexOfFirst {
-                it is ResponseItem.CustomToolCallOutput && it.call_id == item.call_id
+                it is ResponseItem.CustomToolCallOutput && it.callId == item.callId
             }
             if (idx >= 0) items.removeAt(idx)
         }
         is ResponseItem.CustomToolCallOutput -> {
             val idx = items.indexOfFirst {
-                it is ResponseItem.CustomToolCall && it.call_id == item.call_id
+                it is ResponseItem.CustomToolCall && it.callId == item.callId
             }
             if (idx >= 0) items.removeAt(idx)
         }
         is ResponseItem.LocalShellCall -> {
-            val callId = item.call_id ?: return
+            val callId = item.callId ?: return
             val idx = items.indexOfFirst {
-                it is ResponseItem.FunctionCallOutput && it.call_id == callId
+                it is ResponseItem.FunctionCallOutput && it.callId == callId
             }
             if (idx >= 0) items.removeAt(idx)
         }

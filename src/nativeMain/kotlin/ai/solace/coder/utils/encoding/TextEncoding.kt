@@ -1,3 +1,4 @@
+// port-lint: source core/src/text_encoding.rs
 package ai.solace.coder.utils.encoding
 
 import com.fleeksoft.charset.Charset

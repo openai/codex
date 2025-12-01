@@ -1,7 +1,7 @@
 package ai.solace.coder.exec.sandbox
 
 import ai.solace.coder.exec.process.SandboxType
-import ai.solace.coder.protocol.models.SandboxPolicy
+import ai.solace.coder.protocol.SandboxPolicy
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse

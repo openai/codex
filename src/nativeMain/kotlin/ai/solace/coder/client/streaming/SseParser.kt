@@ -1,9 +1,10 @@
+// port-lint: source codex-api/src/sse/responses.rs
 package ai.solace.coder.client.streaming
 
-import ai.solace.coder.client.http.ResponseEvent
+import ai.solace.coder.protocol.ResponseEvent
+import ai.solace.coder.protocol.ResponseItem
 import ai.solace.coder.protocol.TokenUsage
 import ai.solace.coder.protocol.RateLimitSnapshot
-import ai.solace.coder.protocol.models.ResponseItem
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.jsonObject

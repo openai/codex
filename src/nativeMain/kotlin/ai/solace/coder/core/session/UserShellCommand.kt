@@ -1,8 +1,9 @@
+// port-lint: source core/src/user_shell_command.rs
 package ai.solace.coder.core.session
 
 import ai.solace.coder.exec.process.ExecToolCallOutput
-import ai.solace.coder.protocol.models.ContentItem
-import ai.solace.coder.protocol.models.ResponseItem
+import ai.solace.coder.protocol.ContentItem
+import ai.solace.coder.protocol.ResponseItem
 
 /**
  * User shell command formatting utilities.

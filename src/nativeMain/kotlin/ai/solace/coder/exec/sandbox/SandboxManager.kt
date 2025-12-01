@@ -1,21 +1,40 @@
+// port-lint: source core/src/sandboxing/mod.rs
 package ai.solace.coder.exec.sandbox
 
 import ai.solace.coder.core.error.CodexError
 import ai.solace.coder.core.error.CodexResult
+import ai.solace.coder.core.createLinuxSandboxCommandArgs
+import ai.solace.coder.core.createSeatbeltCommandArgs
+import ai.solace.coder.core.MACOS_PATH_TO_SEATBELT_EXECUTABLE
 import ai.solace.coder.exec.process.CommandSpec
 import ai.solace.coder.exec.process.ExecEnv
-import ai.solace.coder.exec.process.ExecExpiration
-import ai.solace.coder.exec.process.SandboxType
-import ai.solace.coder.exec.process.platformGetSandbox
+import ai.solace.coder.exec.process.ExecToolCallOutput
+import ai.solace.coder.exec.process.StdoutStream
+import ai.solace.coder.exec.process.executeExecEnv
+import ai.solace.coder.exec.process.isLikelySandboxDenied
 import ai.solace.coder.exec.process.platformGetMacosDirParams
-import ai.solace.coder.protocol.models.SandboxPolicy
+import ai.solace.coder.protocol.SandboxPolicy
 
 /**
  * Sandbox permissions levels
  */
 enum class SandboxPermissions {
     UseDefault,
-    RequireEscalated
+    RequireEscalated;
+
+    fun requiresEscalatedPermissions(): Boolean {
+        return this == RequireEscalated
+    }
+
+    companion object {
+        fun from(withEscalatedPermissions: Boolean): SandboxPermissions {
+            return if (withEscalatedPermissions) {
+                RequireEscalated
+            } else {
+                UseDefault
+            }
+        }
+    }
 }
 
 /**
@@ -127,9 +146,11 @@ class SandboxManager {
         policy: SandboxPolicy,
         sandboxPolicyCwd: String
     ): Triple<List<String>, Map<String, String>, String?> {
-        val seatbeltEnv = mapOf(CODEX_SANDBOX_ENV_VAR to "seatbelt")
+        val seatbeltEnv = mutableMapOf<String, String>()
+        seatbeltEnv[CODEX_SANDBOX_ENV_VAR] = "seatbelt"
         val args = createSeatbeltCommandArgs(command, policy, sandboxPolicyCwd)
-        val fullCommand = mutableListOf("/usr/bin/sandbox-exec")
+        val fullCommand = mutableListOf<String>()
+        fullCommand.add(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
         fullCommand.addAll(args)
         return Triple(fullCommand, seatbeltEnv, null)
     }
@@ -233,13 +254,6 @@ class SandboxManager {
             "--sandbox-policy", sandboxPolicyJson,
             "--"
         ) + command
-    }
-
-    /**
-     * Get platform-specific sandbox
-     */
-    private fun getPlatformSandbox(): SandboxType? {
-        return platformGetSandbox()
     }
 
     /**
@@ -447,7 +461,7 @@ class SandboxManager {
 private fun SandboxPolicy.getWritableRootsWithCwd(cwd: String): List<WritableRoot> {
     return when (this) {
         is SandboxPolicy.WorkspaceWrite -> {
-            val roots = this.writable_roots.map { path ->
+            val roots = this.writableRoots.map { path ->
                 WritableRoot(path, emptyList())
             }
             // Add cwd as writable root
@@ -487,190 +501,5 @@ private fun SandboxPolicy.hasFullDiskReadAccess(): Boolean {
     return when (this) {
         is SandboxPolicy.DangerFullAccess -> true
         else -> false
-    }
-}
-
-// =============================================================================
-// Approval Store and Context
-// Ported from Rust codex-rs/core/src/tools/sandboxing.rs
-// =============================================================================
-
-/**
- * Store for caching approval decisions across tool calls.
- *
- * Ported from Rust codex-rs/core/src/tools/sandboxing.rs ApprovalStore
- */
-class ApprovalStore {
-    private val map = mutableMapOf<String, ReviewDecision>()
-
-    /**
-     * Get a cached approval decision for a key.
-     */
-    fun <K> get(key: K): ReviewDecision? where K : Any {
-        val s = serializeKey(key) ?: return null
-        return map[s]
-    }
-
-    /**
-     * Put an approval decision into the cache.
-     */
-    fun <K> put(key: K, value: ReviewDecision) where K : Any {
-        val s = serializeKey(key) ?: return
-        map[s] = value
-    }
-
-    private fun serializeKey(key: Any): String? {
-        // Simple serialization - in production would use JSON
-        return key.toString()
-    }
-}
-
-// ReviewDecision is defined in ai.solace.coder.protocol.Protocol
-
-/**
- * Context for approval requests.
- *
- * Ported from Rust codex-rs/core/src/tools/sandboxing.rs ApprovalCtx
- */
-data class ApprovalCtx(
-    val callId: String,
-    val retryReason: String? = null,
-    val risk: SandboxCommandAssessment? = null
-)
-
-/**
- * Assessment result for sandbox command safety analysis.
- *
- * Ported from Rust codex-rs/protocol/src/protocol.rs SandboxCommandAssessment
- */
-data class SandboxCommandAssessment(
-    val safe: Boolean,
-    val reason: String? = null
-)
-
-/**
- * Specifies what tool orchestrator should do with a given tool call.
- *
- * Ported from Rust codex-rs/core/src/tools/sandboxing.rs ApprovalRequirement
- */
-sealed class ApprovalRequirement {
-    /**
-     * No approval required for this tool call.
-     */
-    data class Skip(
-        /** The first attempt should skip sandboxing (e.g., when explicitly greenlit by policy). */
-        val bypassSandbox: Boolean = false
-    ) : ApprovalRequirement()
-
-    /**
-     * Approval required for this tool call.
-     */
-    data class NeedsApproval(
-        val reason: String? = null
-    ) : ApprovalRequirement()
-
-    /**
-     * Execution forbidden for this tool call.
-     */
-    data class Forbidden(
-        val reason: String
-    ) : ApprovalRequirement()
-}
-
-/**
- * Sandbox override mode for tool execution.
- *
- * Ported from Rust codex-rs/core/src/tools/sandboxing.rs SandboxOverride
- */
-enum class SandboxOverride {
-    NoOverride,
-    BypassSandboxFirstAttempt
-}
-
-/**
- * Sandbox execution preference.
- *
- * Ported from Rust codex-rs/core/src/tools/sandboxing.rs SandboxablePreference
- */
-enum class SandboxablePreference {
-    Auto,
-    Require,
-    Forbid
-}
-
-/**
- * Captures the command metadata needed to re-run a tool request without sandboxing.
- *
- * Ported from Rust codex-rs/core/src/tools/sandboxing.rs SandboxRetryData
- */
-data class SandboxRetryData(
-    val command: List<String>,
-    val cwd: String
-)
-
-/**
- * Tool execution context.
- *
- * Ported from Rust codex-rs/core/src/tools/sandboxing.rs ToolCtx
- */
-data class ToolCtx(
-    val callId: String,
-    val toolName: String
-)
-
-/**
- * Error type for tool execution.
- *
- * Ported from Rust codex-rs/core/src/tools/sandboxing.rs ToolError
- */
-sealed class ToolError {
-    data class Rejected(val message: String) : ToolError()
-    data class Codex(val error: ai.solace.coder.core.error.CodexError) : ToolError()
-}
-
-/**
- * Sandbox attempt context for tool execution.
- *
- * Ported from Rust codex-rs/core/src/tools/sandboxing.rs SandboxAttempt
- */
-data class SandboxAttempt(
-    val sandbox: ai.solace.coder.exec.process.SandboxType,
-    val policy: SandboxPolicy,
-    val manager: SandboxManager,
-    val sandboxCwd: String,
-    val codexLinuxSandboxExe: String? = null
-) {
-    /**
-     * Transform a command spec into an execution environment with sandboxing.
-     */
-    fun envFor(spec: CommandSpec): CodexResult<ExecEnv> {
-        return manager.transform(spec, policy, sandboxCwd)
-    }
-}
-
-/**
- * Determine the default approval requirement based on policy.
- *
- * - Never, OnFailure: do not ask
- * - OnRequest: ask unless sandbox policy is DangerFullAccess
- * - UnlessTrusted: always ask
- *
- * Ported from Rust codex-rs/core/src/tools/sandboxing.rs default_approval_requirement
- */
-fun defaultApprovalRequirement(
-    policy: ai.solace.coder.protocol.AskForApproval,
-    sandboxPolicy: SandboxPolicy
-): ApprovalRequirement {
-    val needsApproval = when (policy) {
-        ai.solace.coder.protocol.AskForApproval.Never,
-        ai.solace.coder.protocol.AskForApproval.OnFailure -> false
-        ai.solace.coder.protocol.AskForApproval.OnRequest -> sandboxPolicy !is SandboxPolicy.DangerFullAccess
-        ai.solace.coder.protocol.AskForApproval.UnlessTrusted -> true
-    }
-
-    return if (needsApproval) {
-        ApprovalRequirement.NeedsApproval(reason = null)
-    } else {
-        ApprovalRequirement.Skip(bypassSandbox = false)
     }
 }

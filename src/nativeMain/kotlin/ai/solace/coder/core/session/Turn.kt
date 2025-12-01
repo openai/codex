@@ -1,10 +1,11 @@
+// port-lint: source core/src/state/turn.rs
 package ai.solace.coder.core.session
 
 import ai.solace.coder.client.auth.AuthManager
 import ai.solace.coder.protocol.ReviewDecision
 import ai.solace.coder.utils.concurrent.CancellationToken
 import ai.solace.coder.protocol.TurnAbortReason
-import ai.solace.coder.protocol.models.ResponseInputItem
+import ai.solace.coder.protocol.ResponseInputItem
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock

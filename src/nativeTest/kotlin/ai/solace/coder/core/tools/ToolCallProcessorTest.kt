@@ -1,11 +1,11 @@
 package ai.solace.coder.core.tools
 
-import ai.solace.coder.protocol.models.ContentBlock
-import ai.solace.coder.protocol.models.ContentItem
-import ai.solace.coder.protocol.models.FunctionCallOutputPayload
-import ai.solace.coder.protocol.models.ResponseInputItem
-import ai.solace.coder.protocol.models.ResponseItem
-import ai.solace.coder.protocol.models.CallToolResult
+import ai.solace.coder.protocol.ContentBlock
+import ai.solace.coder.protocol.ContentItem
+import ai.solace.coder.protocol.FunctionCallOutputPayload
+import ai.solace.coder.protocol.ResponseInputItem
+import ai.solace.coder.protocol.ResponseItem
+import ai.solace.coder.protocol.CallToolResult
 import kotlinx.serialization.json.JsonNull
 import kotlin.test.Test
 import kotlin.test.assertEquals

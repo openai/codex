@@ -12,11 +12,11 @@ import ai.solace.coder.protocol.SessionSource
 import ai.solace.coder.protocol.InitialHistory
 import ai.solace.coder.protocol.ResumedHistory
 import ai.solace.coder.protocol.TurnAbortReason
-import ai.solace.coder.protocol.models.CallToolResult
-import ai.solace.coder.protocol.models.ContentBlock
-import ai.solace.coder.protocol.models.ContentItem
-import ai.solace.coder.protocol.models.FunctionCallOutputPayload
-import ai.solace.coder.protocol.models.ResponseItem
+import ai.solace.coder.protocol.CallToolResult
+import ai.solace.coder.protocol.ContentBlock
+import ai.solace.coder.protocol.ContentItem
+import ai.solace.coder.protocol.FunctionCallOutputPayload
+import ai.solace.coder.protocol.ResponseItem
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put

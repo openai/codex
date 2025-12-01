@@ -1,3 +1,4 @@
+// port-lint: source core/src/features.rs
 package ai.solace.coder.core.features
 
 /**
