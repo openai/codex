@@ -9,6 +9,7 @@ pub use cli::Cli;
 
 use anyhow::anyhow;
 use codex_login::AuthManager;
+use std::future::Future;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::path::PathBuf;
@@ -97,7 +98,46 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
     })
 }
 
+type BoxFuture<'a, T> = std::pin::Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+trait GitInfoProvider {
+    fn default_branch_name<'a>(
+        &'a self,
+        path: &'a std::path::Path,
+    ) -> BoxFuture<'a, Option<String>>;
+
+    fn current_branch_name<'a>(
+        &'a self,
+        path: &'a std::path::Path,
+    ) -> BoxFuture<'a, Option<String>>;
+}
+
+struct RealGitInfo;
+
+impl GitInfoProvider for RealGitInfo {
+    fn default_branch_name<'a>(
+        &'a self,
+        path: &'a std::path::Path,
+    ) -> BoxFuture<'a, Option<String>> {
+        Box::pin(codex_core::git_info::default_branch_name(path))
+    }
+
+    fn current_branch_name<'a>(
+        &'a self,
+        path: &'a std::path::Path,
+    ) -> BoxFuture<'a, Option<String>> {
+        Box::pin(codex_core::git_info::current_branch_name(path))
+    }
+}
+
 async fn resolve_git_ref(branch_override: Option<&String>) -> String {
+    resolve_git_ref_with_git_info(branch_override, &RealGitInfo).await
+}
+
+async fn resolve_git_ref_with_git_info(
+    branch_override: Option<&String>,
+    git_info: &impl GitInfoProvider,
+) -> String {
     if let Some(branch) = branch_override {
         let branch = branch.trim();
         if !branch.is_empty() {
@@ -106,9 +146,9 @@ async fn resolve_git_ref(branch_override: Option<&String>) -> String {
     }
 
     if let Ok(cwd) = std::env::current_dir() {
-        if let Some(branch) = codex_core::git_info::default_branch_name(&cwd).await {
+        if let Some(branch) = git_info.default_branch_name(&cwd).await {
             branch
-        } else if let Some(branch) = codex_core::git_info::current_branch_name(&cwd).await {
+        } else if let Some(branch) = git_info.current_branch_name(&cwd).await {
             branch
         } else {
             "main".to_string()
@@ -1725,7 +1765,8 @@ fn pretty_lines_from_error(raw: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use crate::resolve_git_ref;
+
+    use crate::resolve_git_ref_with_git_info;
     use codex_tui::ComposerAction;
     use codex_tui::ComposerInput;
     use crossterm::event::KeyCode;
@@ -1734,101 +1775,89 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
-    use std::fs;
-    use std::path::Path;
-    use std::path::PathBuf;
-    use std::process::Command;
-    use tempfile::TempDir;
+
+    struct StubGitInfo {
+        default_branch: Option<String>,
+        current_branch: Option<String>,
+    }
+
+    impl StubGitInfo {
+        const fn new(default_branch: Option<String>, current_branch: Option<String>) -> Self {
+            Self {
+                default_branch,
+                current_branch,
+            }
+        }
+    }
+
+    impl super::GitInfoProvider for StubGitInfo {
+        fn default_branch_name<'a>(
+            &'a self,
+            _path: &'a std::path::Path,
+        ) -> super::BoxFuture<'a, Option<String>> {
+            Box::pin(async move { self.default_branch.clone() })
+        }
+
+        fn current_branch_name<'a>(
+            &'a self,
+            _path: &'a std::path::Path,
+        ) -> super::BoxFuture<'a, Option<String>> {
+            Box::pin(async move { self.current_branch.clone() })
+        }
+    }
 
     #[tokio::test]
     async fn branch_override_is_used_when_provided() {
-        let git_ref = resolve_git_ref(Some(&"feature/override".to_string())).await;
+        let git_ref = resolve_git_ref_with_git_info(
+            Some(&"feature/override".to_string()),
+            &StubGitInfo::new(None, None),
+        )
+        .await;
 
         assert_eq!(git_ref, "feature/override");
     }
 
     #[tokio::test]
+    async fn trims_override_whitespace() {
+        let git_ref = resolve_git_ref_with_git_info(
+            Some(&"  feature/spaces  ".to_string()),
+            &StubGitInfo::new(None, None),
+        )
+        .await;
+
+        assert_eq!(git_ref, "feature/spaces");
+    }
+
+    #[tokio::test]
     async fn prefers_default_branch_when_available() {
-        let repo = TempDir::new().expect("failed to create temp dir");
-        init_git_repo(repo.path(), "main");
-        let _guard = WorkingDirGuard::change_to(repo.path());
+        let git_ref = resolve_git_ref_with_git_info(
+            None,
+            &StubGitInfo::new(
+                Some("default-main".to_string()),
+                Some("feature/current".to_string()),
+            ),
+        )
+        .await;
 
-        let git_ref = resolve_git_ref(None).await;
-
-        assert_eq!(git_ref, "main");
+        assert_eq!(git_ref, "default-main");
     }
 
     #[tokio::test]
     async fn falls_back_to_current_branch_when_default_is_missing() {
-        let repo = TempDir::new().expect("failed to create temp dir");
-        init_git_repo(repo.path(), "develop");
-        let _guard = WorkingDirGuard::change_to(repo.path());
-
-        let git_ref = resolve_git_ref(None).await;
+        let git_ref = resolve_git_ref_with_git_info(
+            None,
+            &StubGitInfo::new(None, Some("develop".to_string())),
+        )
+        .await;
 
         assert_eq!(git_ref, "develop");
     }
 
     #[tokio::test]
-    async fn falls_back_to_main_when_outside_git_repo() {
-        let dir = TempDir::new().expect("failed to create temp dir");
-        let _guard = WorkingDirGuard::change_to(dir.path());
-
-        let git_ref = resolve_git_ref(None).await;
+    async fn falls_back_to_main_when_no_git_info_is_available() {
+        let git_ref = resolve_git_ref_with_git_info(None, &StubGitInfo::new(None, None)).await;
 
         assert_eq!(git_ref, "main");
-    }
-
-    fn init_git_repo(dir: &Path, branch: &str) {
-        fs::create_dir_all(dir).expect("failed to create repo path");
-        let envs = git_envs();
-
-        run_git(dir, envs, ["init", "-b", branch]);
-        run_git(dir, envs, ["config", "user.email", "codex@example.com"]);
-        run_git(dir, envs, ["config", "user.name", "Codex Tester"]);
-        fs::write(dir.join("README.md"), "hello").expect("failed to write file");
-        run_git(dir, envs, ["add", "."]);
-        run_git(dir, envs, ["commit", "-m", "init"]);
-    }
-
-    fn run_git<'a>(dir: &Path, envs: [(&str, &str); 2], args: impl IntoIterator<Item = &'a str>) {
-        let output = Command::new("git")
-            .current_dir(dir)
-            .envs(envs)
-            .args(args)
-            .output()
-            .expect("failed to run git command");
-
-        assert!(
-            output.status.success(),
-            "git command failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    fn git_envs() -> [(&'static str, &'static str); 2] {
-        [
-            ("GIT_CONFIG_GLOBAL", "/dev/null"),
-            ("GIT_CONFIG_NOSYSTEM", "1"),
-        ]
-    }
-
-    struct WorkingDirGuard {
-        original: PathBuf,
-    }
-
-    impl WorkingDirGuard {
-        fn change_to(path: &Path) -> Self {
-            let original = std::env::current_dir().expect("failed to capture current dir");
-            std::env::set_current_dir(path).expect("failed to change dir");
-            Self { original }
-        }
-    }
-
-    impl Drop for WorkingDirGuard {
-        fn drop(&mut self) {
-            let _ = std::env::set_current_dir(&self.original);
-        }
     }
 
     #[test]
