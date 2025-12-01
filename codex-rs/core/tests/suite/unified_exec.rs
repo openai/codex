@@ -1,5 +1,6 @@
 #![cfg(not(target_os = "windows"))]
 use std::collections::HashMap;
+use std::fs;
 use std::sync::OnceLock;
 
 use anyhow::Context;
@@ -23,6 +24,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
@@ -146,6 +148,60 @@ fn collect_tool_outputs(bodies: &[Value]) -> Result<HashMap<String, ParsedUnifie
         }
     }
     Ok(outputs)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let builder = test_codex().with_config(|config| {
+        config.include_apply_patch_tool = true;
+        config.use_experimental_unified_exec_tool = true;
+        config.features.enable(Feature::UnifiedExec);
+    });
+    let harness = TestCodexHarness::with_builder(builder).await?;
+
+    let patch =
+        "*** Begin Patch\n*** Add File: uexec_apply.txt\n+hello from unified exec\n*** End Patch";
+    let command = format!("apply_patch <<'EOF'\n{patch}\nEOF\n");
+    let call_id = "uexec-apply-patch";
+    let args = json!({
+        "cmd": command,
+        "yield_time_ms": 250,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    mount_sse_sequence(harness.server(), responses).await;
+
+    harness.submit("apply patch via unified exec").await?;
+
+    let output = harness.function_call_stdout(call_id).await;
+    assert!(
+        output.contains("Success. Updated the following files:"),
+        "expected apply_patch output, got: {output:?}"
+    );
+    assert!(
+        output.contains("A uexec_apply.txt"),
+        "expected apply_patch file summary, got: {output:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(harness.path("uexec_apply.txt"))?,
+        "hello from unified exec\n"
+    );
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
