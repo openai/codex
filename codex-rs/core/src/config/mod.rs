@@ -72,6 +72,12 @@ pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ManagedConfigLocks {
+    pub approval_policy: bool,
+    pub sandbox_mode: bool,
+}
+
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -103,6 +109,9 @@ pub struct Config {
     /// True if the user passed in an override or set a value in config.toml
     /// for either of approval_policy or sandbox_mode.
     pub did_user_set_custom_approval_policy_or_sandbox_mode: bool,
+
+    /// Whether approval_policy or sandbox_mode were set by managed config.
+    pub managed_overrides: ManagedConfigLocks,
 
     /// On Windows, indicates that a previously configured workspace-write sandbox
     /// was coerced to read-only because native auto mode is unsupported.
@@ -288,19 +297,28 @@ impl Config {
     ) -> std::io::Result<Self> {
         let codex_home = find_codex_home()?;
 
-        let root_value = load_resolved_config(
+        let layers = load_config_layers_with_overrides(
             &codex_home,
-            cli_overrides,
             crate::config_loader::LoaderOverrides::default(),
         )
         .await?;
+        let managed_config = layers.managed_config.clone();
+        let managed_preferences = layers.managed_preferences.clone();
+        let root_value = apply_overlays(layers, cli_overrides);
 
         let cfg: ConfigToml = root_value.try_into().map_err(|e| {
             tracing::error!("Failed to deserialize overridden config: {e}");
             std::io::Error::new(std::io::ErrorKind::InvalidData, e)
         })?;
 
-        Self::load_from_base_config_with_overrides(cfg, overrides, codex_home)
+        let mut config = Self::load_from_base_config_with_overrides(cfg, overrides, codex_home)?;
+        config.managed_overrides = managed_config_locks(
+            managed_config.as_ref(),
+            managed_preferences.as_ref(),
+            config.active_profile.as_deref(),
+        );
+
+        Ok(config)
     }
 }
 
@@ -351,6 +369,34 @@ fn apply_overlays(
     }
 
     base
+}
+
+fn managed_config_locks(
+    managed_config: Option<&TomlValue>,
+    managed_preferences: Option<&TomlValue>,
+    active_profile: Option<&str>,
+) -> ManagedConfigLocks {
+    let mut locks = ManagedConfigLocks::default();
+
+    for overlay in [managed_config, managed_preferences].into_iter().flatten() {
+        if let Some(table) = overlay.as_table() {
+            locks.approval_policy |= table.contains_key("approval_policy");
+            locks.sandbox_mode |= table.contains_key("sandbox_mode");
+
+            if let Some(profile) = active_profile
+                && let Some(profile_table) = table
+                    .get("profiles")
+                    .and_then(|profiles| profiles.as_table())
+                    .and_then(|profiles| profiles.get(profile))
+                    .and_then(|profile| profile.as_table())
+            {
+                locks.approval_policy |= profile_table.contains_key("approval_policy");
+                locks.sandbox_mode |= profile_table.contains_key("sandbox_mode");
+            }
+        }
+    }
+
+    locks
 }
 
 pub async fn load_global_mcp_servers(
@@ -1186,6 +1232,7 @@ impl Config {
             approval_policy,
             sandbox_policy,
             did_user_set_custom_approval_policy_or_sandbox_mode,
+            managed_overrides: ManagedConfigLocks::default(),
             forced_auto_mode_downgraded_on_windows,
             shell_environment_policy,
             notify: cfg.notify,
@@ -1710,6 +1757,27 @@ trust_level = "trusted"
         assert!(!config.features.enabled(Feature::ViewImageTool));
 
         Ok(())
+    }
+
+    #[test]
+    fn managed_config_locks_root_and_profile_keys() {
+        let managed = toml::from_str::<TomlValue>(
+            r#"
+approval_policy = "never"
+
+[profiles.work]
+sandbox_mode = "read-only"
+"#,
+        )
+        .expect("managed config should parse");
+
+        let locks_for_work = managed_config_locks(Some(&managed), None, Some("work"));
+        assert!(locks_for_work.approval_policy);
+        assert!(locks_for_work.sandbox_mode);
+
+        let locks_for_personal = managed_config_locks(Some(&managed), None, Some("personal"));
+        assert!(locks_for_personal.approval_policy);
+        assert!(!locks_for_personal.sandbox_mode);
     }
 
     #[test]
@@ -2968,6 +3036,7 @@ model_verbosity = "high"
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
+                managed_overrides: ManagedConfigLocks::default(),
                 forced_auto_mode_downgraded_on_windows: false,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 user_instructions: None,
@@ -3041,6 +3110,7 @@ model_verbosity = "high"
             approval_policy: AskForApproval::UnlessTrusted,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
+            managed_overrides: ManagedConfigLocks::default(),
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
@@ -3129,6 +3199,7 @@ model_verbosity = "high"
             approval_policy: AskForApproval::OnFailure,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
+            managed_overrides: ManagedConfigLocks::default(),
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
@@ -3203,6 +3274,7 @@ model_verbosity = "high"
             approval_policy: AskForApproval::OnFailure,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
+            managed_overrides: ManagedConfigLocks::default(),
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,

@@ -2326,6 +2326,17 @@ impl ChatWidget {
 
     /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
     pub(crate) fn open_approvals_popup(&mut self) {
+        if self.config.managed_overrides.approval_policy
+            || self.config.managed_overrides.sandbox_mode
+        {
+            self.add_info_message(
+                "Managed configuration locks approval and sandbox settings for this session."
+                    .to_string(),
+                None,
+            );
+            return;
+        }
+
         let current_approval = self.config.approval_policy;
         let current_sandbox = self.config.sandbox_policy.clone();
         let mut items: Vec<SelectionItem> = Vec::new();

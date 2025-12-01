@@ -357,6 +357,7 @@ pub(crate) struct SessionConfiguration {
 impl SessionConfiguration {
     pub(crate) fn apply(&self, updates: &SessionSettingsUpdate) -> Self {
         let mut next_configuration = self.clone();
+        let managed_overrides = self.original_config_do_not_use.managed_overrides;
         if let Some(model) = updates.model.clone() {
             next_configuration.model = model;
         }
@@ -366,10 +367,14 @@ impl SessionConfiguration {
         if let Some(summary) = updates.reasoning_summary {
             next_configuration.model_reasoning_summary = summary;
         }
-        if let Some(approval_policy) = updates.approval_policy {
+        if let Some(approval_policy) = updates.approval_policy
+            && !(managed_overrides.approval_policy && approval_policy != self.approval_policy)
+        {
             next_configuration.approval_policy = approval_policy;
         }
-        if let Some(sandbox_policy) = updates.sandbox_policy.clone() {
+        if let Some(sandbox_policy) = updates.sandbox_policy.clone()
+            && !(managed_overrides.sandbox_mode && sandbox_policy != self.sandbox_policy)
+        {
             next_configuration.sandbox_policy = sandbox_policy;
         }
         if let Some(cwd) = updates.cwd.clone() {
@@ -2440,6 +2445,7 @@ mod tests {
     use super::*;
     use crate::config::ConfigOverrides;
     use crate::config::ConfigToml;
+    use crate::config::ManagedConfigLocks;
     use crate::exec::ExecToolCallOutput;
     use crate::shell::default_user_shell;
     use crate::tools::format_exec_output_str;
@@ -2513,6 +2519,44 @@ mod tests {
             session.state.lock().await.clone_history().get_history()
         });
         assert_eq!(expected, actual);
+    }
+
+    #[tokio::test]
+    async fn managed_policies_block_session_overrides() {
+        let (session, _) = make_session_and_context();
+
+        let (initial_approval, initial_sandbox) = {
+            let state = session.state.lock().await;
+            (
+                state.session_configuration.approval_policy,
+                state.session_configuration.sandbox_policy.clone(),
+            )
+        };
+
+        {
+            let mut state = session.state.lock().await;
+            let managed_overrides = ManagedConfigLocks {
+                approval_policy: true,
+                sandbox_mode: true,
+            };
+            let config = Arc::make_mut(&mut state.session_configuration.original_config_do_not_use);
+            config.managed_overrides = managed_overrides;
+        }
+
+        session
+            .update_settings(SessionSettingsUpdate {
+                approval_policy: Some(AskForApproval::OnRequest),
+                sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
+                ..Default::default()
+            })
+            .await;
+
+        let state = session.state.lock().await;
+        assert_eq!(
+            state.session_configuration.approval_policy,
+            initial_approval
+        );
+        assert_eq!(state.session_configuration.sandbox_policy, initial_sandbox);
     }
 
     #[test]

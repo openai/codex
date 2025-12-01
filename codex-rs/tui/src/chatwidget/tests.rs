@@ -12,6 +12,7 @@ use codex_core::CodexAuth;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
+use codex_core::config::ManagedConfigLocks;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -142,6 +143,28 @@ fn resumed_initial_messages_render_history() {
     assert!(
         text_blob.contains("assistant reply"),
         "expected replayed agent message",
+    );
+}
+
+#[test]
+fn approvals_popup_respects_managed_config() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+    chat.config.managed_overrides = ManagedConfigLocks {
+        approval_policy: true,
+        sandbox_mode: true,
+    };
+
+    chat.open_approvals_popup();
+
+    let history_cells = drain_insert_history(&mut rx);
+    let merged = lines_to_single_string(
+        history_cells
+            .last()
+            .expect("managed notice should render a history cell"),
+    );
+    assert!(
+        merged.contains("Managed configuration locks approval and sandbox settings"),
+        "expected managed notice, got {merged:?}"
     );
 }
 

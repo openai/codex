@@ -25,6 +25,9 @@ Codex supports several mechanisms for setting config values:
     - Because quotes are interpreted by one's shell, `-c key="true"` will be correctly interpreted in TOML as `key = true` (a boolean) and not `key = "true"` (a string). If for some reason you needed the string `"true"`, you would need to use `-c key='"true"'` (note the two sets of quotes).
 - The `$CODEX_HOME/config.toml` configuration file where the `CODEX_HOME` environment value defaults to `~/.codex`. (Note `CODEX_HOME` will also be where logs and other Codex-related information are stored.)
 
+> [!NOTE]
+> Managed configs (`/etc/codex/managed_config.toml`, or the managed preferences payload on macOS) sit above CLI overrides. Keys set there are locked for the lifetime of a session; in-product approval/sandbox toggles are ignored until you remove or change the managed file and restart Codex.
+
 Both the `--config` flag and the `config.toml` file support the following options:
 
 ## Feature flags

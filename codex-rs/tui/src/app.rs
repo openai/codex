@@ -703,9 +703,29 @@ impl App {
                 }
             }
             AppEvent::UpdateAskForApprovalPolicy(policy) => {
+                if self.config.managed_overrides.approval_policy
+                    && policy != self.config.approval_policy
+                {
+                    self.chat_widget.add_info_message(
+                        "Managed configuration locks the approval policy for this session."
+                            .to_string(),
+                        None,
+                    );
+                    return Ok(true);
+                }
                 self.chat_widget.set_approval_policy(policy);
             }
             AppEvent::UpdateSandboxPolicy(policy) => {
+                if self.config.managed_overrides.sandbox_mode
+                    && policy != self.config.sandbox_policy
+                {
+                    self.chat_widget.add_info_message(
+                        "Managed configuration locks the sandbox mode for this session."
+                            .to_string(),
+                        None,
+                    );
+                    return Ok(true);
+                }
                 #[cfg(target_os = "windows")]
                 let policy_is_workspace_write_or_ro = matches!(
                     policy,
