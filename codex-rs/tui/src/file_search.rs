@@ -165,26 +165,28 @@ impl FileSearchManager {
     ) {
         tokio::spawn({
             let query_for_result = query.clone();
-            let cancellation_token_for_result = cancellation_token.clone();
-            let query_for_search = query.clone();
-            let cancellation_token_for_search = cancellation_token.clone();
+            let cancellation_token_for_result = Arc::clone(&cancellation_token);
             let search_state = Arc::clone(&search_state);
-            let search_dir = search_dir.clone();
             async move {
                 let compute_indices = true;
-                let matches = spawn_blocking(move || {
-                    file_search::run(
-                        &query_for_search,
-                        MAX_FILE_SEARCH_RESULTS,
-                        &search_dir,
-                        Vec::new(),
-                        NUM_FILE_SEARCH_THREADS,
-                        cancellation_token_for_search,
-                        compute_indices,
-                        true,
-                    )
-                    .map(|res| res.matches)
-                    .unwrap_or_default()
+                let matches = spawn_blocking({
+                    let query_for_search = query;
+                    let search_dir = search_dir.clone();
+                    let cancellation_token_for_search = Arc::clone(&cancellation_token);
+                    move || {
+                        file_search::run(
+                            &query_for_search,
+                            MAX_FILE_SEARCH_RESULTS,
+                            &search_dir,
+                            Vec::new(),
+                            NUM_FILE_SEARCH_THREADS,
+                            cancellation_token_for_search,
+                            compute_indices,
+                            true,
+                        )
+                        .map(|res| res.matches)
+                        .unwrap_or_default()
+                    }
                 })
                 .await
                 .unwrap_or_default();
