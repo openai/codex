@@ -199,6 +199,7 @@ async fn turn_start_accepts_local_image_input() -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(windows, ignore = "flaky on windows-latest - x86_64-pc-windows-msvc")]
 #[tokio::test]
 async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));

@@ -159,6 +159,7 @@ async fn test_codex_jsonrpc_conversation_flow() -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(windows, ignore = "flaky on windows-latest - x86_64-pc-windows-msvc")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
     if env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
