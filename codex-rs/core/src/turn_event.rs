@@ -25,6 +25,11 @@ use tracing::debug;
 pub(crate) type InFlightFuture<'f> =
     Pin<Box<dyn Future<Output = Result<ResponseInputItem>> + Send + 'f>>;
 
+pub(crate) struct OutputItemResult {
+    pub last_agent_message: Option<String>,
+    pub needs_follow_up: bool,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_output_item_done(
     sess: &Arc<Session>,
@@ -33,10 +38,13 @@ pub(crate) async fn handle_output_item_done(
     item: ResponseItem,
     previously_active_item: Option<TurnItem>,
     in_flight: &mut FuturesUnordered<InFlightFuture<'_>>,
-    responses: &mut Vec<ResponseInputItem>,
-    last_agent_message: &mut Option<String>,
     cancellation_token: CancellationToken,
-) -> Result<()> {
+) -> Result<OutputItemResult> {
+    let mut result = OutputItemResult {
+        last_agent_message: None,
+        needs_follow_up: false,
+    };
+
     match ToolRouter::build_tool_call(sess.as_ref(), item.clone()).await {
         Ok(Some(call)) => {
             let payload_preview = call.payload.log_payload().into_owned();
@@ -63,6 +71,7 @@ pub(crate) async fn handle_output_item_done(
                 }
                 Ok(response_input)
             }));
+            result.needs_follow_up = true;
         }
         Ok(None) => {
             if let Some(turn_item) = handle_non_tool_response_item(&item).await {
@@ -76,7 +85,7 @@ pub(crate) async fn handle_output_item_done(
             sess.record_conversation_items(turn_context, std::slice::from_ref(&item))
                 .await;
             if let Some(agent_message) = last_assistant_message_from_item(&item) {
-                *last_agent_message = Some(agent_message);
+                result.last_agent_message = Some(agent_message);
             }
         }
         Err(FunctionCallError::MissingLocalShellCallId) => {
@@ -100,7 +109,7 @@ pub(crate) async fn handle_output_item_done(
                 sess.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
                     .await;
             }
-            responses.push(response);
+            result.needs_follow_up = true;
         }
         Err(FunctionCallError::RespondToModel(message))
         | Err(FunctionCallError::Denied(message)) => {
@@ -117,14 +126,14 @@ pub(crate) async fn handle_output_item_done(
                 sess.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
                     .await;
             }
-            responses.push(response);
+            result.needs_follow_up = true;
         }
         Err(FunctionCallError::Fatal(message)) => {
             return Err(CodexErr::Fatal(message));
         }
     }
 
-    Ok(())
+    Ok(result)
 }
 
 pub(crate) async fn handle_non_tool_response_item(item: &ResponseItem) -> Option<TurnItem> {

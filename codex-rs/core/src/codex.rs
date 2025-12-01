@@ -1971,7 +1971,7 @@ pub(crate) async fn run_task(
         {
             Ok(turn_output) => {
                 let TurnRunResult {
-                    responses,
+                    needs_follow_up,
                     last_agent_message: turn_last_agent_message,
                 } = turn_output;
                 let limit = turn_context
@@ -1992,7 +1992,7 @@ pub(crate) async fn run_task(
                     continue;
                 }
 
-                if responses.is_empty() {
+                if !needs_follow_up {
                     last_agent_message = turn_last_agent_message;
                     sess.notifier()
                         .notify(&UserNotification::AgentTurnComplete {
@@ -2148,7 +2148,7 @@ async fn run_turn(
 
 #[derive(Debug)]
 struct TurnRunResult {
-    responses: Vec<ResponseInputItem>,
+    needs_follow_up: bool,
     last_agent_message: Option<String>,
 }
 
@@ -2186,15 +2186,15 @@ async fn try_run_turn(
     ));
     let mut in_flight: FuturesUnordered<BoxFuture<CodexResult<ResponseInputItem>>> =
         FuturesUnordered::new();
-    let mut responses: Vec<ResponseInputItem> = Vec::new();
+    let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
 
     loop {
         tokio::select! {
             Some(res) = in_flight.next(), if !in_flight.is_empty() => {
-                let response_input = res?;
-                responses.push(response_input);
+                let _ = res?;
+                needs_follow_up = true;
             }
             event = stream.next().or_cancel(&cancellation_token) => {
                 let event = match event {
@@ -2221,18 +2221,20 @@ async fn try_run_turn(
                     ResponseEvent::Created => {}
                     ResponseEvent::OutputItemDone(item) => {
                         let previously_active_item = active_item.take();
-                        handle_output_item_done(
+                        let output_result = handle_output_item_done(
                             &sess,
                             &turn_context,
                             Arc::clone(&tool_runtime),
                             item,
                             previously_active_item,
                             &mut in_flight,
-                            &mut responses,
-                            &mut last_agent_message,
                             cancellation_token.child_token(),
                         )
                         .await?;
+                        if let Some(agent_message) = output_result.last_agent_message {
+                            last_agent_message = Some(agent_message);
+                        }
+                        needs_follow_up |= output_result.needs_follow_up;
                     }
                     ResponseEvent::OutputItemAdded(item) => {
                         if let Some(turn_item) = handle_non_tool_response_item(&item).await {
@@ -2254,7 +2256,8 @@ async fn try_run_turn(
                         sess.update_token_usage_info(&turn_context, token_usage.as_ref())
                             .await;
                         while let Some(res) = in_flight.next().await {
-                            responses.push(res?);
+                            let _ = res?;
+                            needs_follow_up = true;
                         }
                         let unified_diff = {
                             let mut tracker = turn_diff_tracker.lock().await;
@@ -2266,7 +2269,7 @@ async fn try_run_turn(
                         }
 
                         return Ok(TurnRunResult {
-                            responses,
+                            needs_follow_up,
                             last_agent_message,
                         });
                     }
