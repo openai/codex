@@ -81,6 +81,7 @@ impl SessionTask for UserShellCommandTask {
                 turn_context.as_ref(),
                 EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                     call_id: call_id.clone(),
+                    process_id: None,
                     turn_id: turn_context.sub_id.clone(),
                     command: command.clone(),
                     cwd: cwd.clone(),
@@ -139,6 +140,7 @@ impl SessionTask for UserShellCommandTask {
                         turn_context.as_ref(),
                         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                             call_id,
+                            process_id: None,
                             turn_id: turn_context.sub_id.clone(),
                             command: command.clone(),
                             cwd: cwd.clone(),
@@ -161,6 +163,7 @@ impl SessionTask for UserShellCommandTask {
                         turn_context.as_ref(),
                         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                             call_id: call_id.clone(),
+                            process_id: None,
                             turn_id: turn_context.sub_id.clone(),
                             command: command.clone(),
                             cwd: cwd.clone(),
@@ -205,6 +208,7 @@ impl SessionTask for UserShellCommandTask {
                         turn_context.as_ref(),
                         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                             call_id,
+                            process_id: None,
                             turn_id: turn_context.sub_id.clone(),
                             command,
                             cwd,

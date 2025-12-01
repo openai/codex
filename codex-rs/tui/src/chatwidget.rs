@@ -1796,6 +1796,7 @@ impl ChatWidget {
                 self.on_entered_review_mode(review_request)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
+            EventMsg::ContextCompacted(_) => self.on_agent_message("Context compacted".to_owned()),
             EventMsg::RawResponseItem(_)
             | EventMsg::ItemStarted(_)
             | EventMsg::ItemCompleted(_)
@@ -2331,7 +2332,7 @@ impl ChatWidget {
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
         for preset in presets.into_iter() {
             let is_current =
-                current_approval == preset.approval && current_sandbox == preset.sandbox;
+                Self::preset_matches_current(current_approval, &current_sandbox, &preset);
             let name = preset.label.to_string();
             let description_text = preset.description;
             let description = Some(description_text.to_string());
@@ -2417,6 +2418,28 @@ impl ChatWidget {
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
             tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));
         })]
+    }
+
+    fn preset_matches_current(
+        current_approval: AskForApproval,
+        current_sandbox: &SandboxPolicy,
+        preset: &ApprovalPreset,
+    ) -> bool {
+        if current_approval != preset.approval {
+            return false;
+        }
+        matches!(
+            (&preset.sandbox, current_sandbox),
+            (SandboxPolicy::ReadOnly, SandboxPolicy::ReadOnly)
+                | (
+                    SandboxPolicy::DangerFullAccess,
+                    SandboxPolicy::DangerFullAccess
+                )
+                | (
+                    SandboxPolicy::WorkspaceWrite { .. },
+                    SandboxPolicy::WorkspaceWrite { .. }
+                )
+        )
     }
 
     #[cfg(target_os = "windows")]
@@ -2872,7 +2895,6 @@ impl ChatWidget {
                         review_request: ReviewRequest {
                             prompt: "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.".to_string(),
                             user_facing_hint: "current changes".to_string(),
-                            append_to_original_thread: true,
                         },
                     }));
                 },
@@ -2929,7 +2951,6 @@ impl ChatWidget {
                                 "Review the code changes against the base branch '{branch}'. Start by finding the merge diff between the current branch and {branch}'s upstream e.g. (`git merge-base HEAD \"$(git rev-parse --abbrev-ref \"{branch}@{{upstream}}\")\"`), then run `git diff` against that SHA to see what changes we would merge into the {branch} branch. Provide prioritized, actionable findings."
                             ),
                             user_facing_hint: format!("changes against '{branch}'"),
-                            append_to_original_thread: true,
                         },
                     }));
                 })],
@@ -2970,7 +2991,6 @@ impl ChatWidget {
                         review_request: ReviewRequest {
                             prompt,
                             user_facing_hint: hint,
-                            append_to_original_thread: true,
                         },
                     }));
                 })],
@@ -3005,7 +3025,6 @@ impl ChatWidget {
                     review_request: ReviewRequest {
                         prompt: trimmed.clone(),
                         user_facing_hint: trimmed,
-                        append_to_original_thread: true,
                     },
                 }));
             }),
@@ -3221,7 +3240,6 @@ pub(crate) fn show_review_commit_picker_with_entries(
                     review_request: ReviewRequest {
                         prompt,
                         user_facing_hint: hint,
-                        append_to_original_thread: true,
                     },
                 }));
             })],

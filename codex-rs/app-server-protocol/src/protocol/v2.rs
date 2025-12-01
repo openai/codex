@@ -11,11 +11,15 @@ use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
+use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
+use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
+use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
+use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
 use codex_protocol::user_input::UserInput as CoreUserInput;
 use mcp_types::ContentBlock as McpContentBlock;
 use schemars::JsonSchema;
@@ -127,6 +131,133 @@ v2_enum_from_core!(
         ReadOnly, WorkspaceWrite, DangerFullAccess
     }
 );
+
+v2_enum_from_core!(
+    pub enum ReviewDelivery from codex_protocol::protocol::ReviewDelivery {
+        Inline, Detached
+    }
+);
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ConfigLayerName {
+    Mdm,
+    System,
+    SessionFlags,
+    User,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ConfigLayerMetadata {
+    pub name: ConfigLayerName,
+    pub source: String,
+    pub version: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ConfigLayer {
+    pub name: ConfigLayerName,
+    pub source: String,
+    pub version: String,
+    pub config: JsonValue,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum MergeStrategy {
+    Replace,
+    Upsert,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum WriteStatus {
+    Ok,
+    OkOverridden,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct OverriddenMetadata {
+    pub message: String,
+    pub overriding_layer: ConfigLayerMetadata,
+    pub effective_value: JsonValue,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ConfigWriteResponse {
+    pub status: WriteStatus,
+    pub version: String,
+    pub overridden_metadata: Option<OverriddenMetadata>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ConfigWriteErrorCode {
+    ConfigLayerReadonly,
+    ConfigVersionConflict,
+    ConfigValidationError,
+    ConfigPathNotFound,
+    ConfigSchemaUnknownKey,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ConfigReadParams {
+    #[serde(default)]
+    pub include_layers: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ConfigReadResponse {
+    pub config: JsonValue,
+    pub origins: HashMap<String, ConfigLayerMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layers: Option<Vec<ConfigLayer>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ConfigValueWriteParams {
+    pub file_path: String,
+    pub key_path: String,
+    pub value: JsonValue,
+    pub merge_strategy: MergeStrategy,
+    pub expected_version: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ConfigBatchWriteParams {
+    pub file_path: String,
+    pub edits: Vec<ConfigEdit>,
+    pub expected_version: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ConfigEdit {
+    pub key_path: String,
+    pub value: JsonValue,
+    pub merge_strategy: MergeStrategy,
+}
 
 v2_enum_from_core!(
     pub enum CommandRiskLevel from codex_protocol::approvals::SandboxRiskLevel {
@@ -662,6 +793,63 @@ pub struct AccountUpdatedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ThreadTokenUsageUpdatedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub token_usage: ThreadTokenUsage,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTokenUsage {
+    pub total: TokenUsageBreakdown,
+    pub last: TokenUsageBreakdown,
+    #[ts(type = "number | null")]
+    pub model_context_window: Option<i64>,
+}
+
+impl From<CoreTokenUsageInfo> for ThreadTokenUsage {
+    fn from(value: CoreTokenUsageInfo) -> Self {
+        Self {
+            total: value.total_token_usage.into(),
+            last: value.last_token_usage.into(),
+            model_context_window: value.model_context_window,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TokenUsageBreakdown {
+    #[ts(type = "number")]
+    pub total_tokens: i64,
+    #[ts(type = "number")]
+    pub input_tokens: i64,
+    #[ts(type = "number")]
+    pub cached_input_tokens: i64,
+    #[ts(type = "number")]
+    pub output_tokens: i64,
+    #[ts(type = "number")]
+    pub reasoning_output_tokens: i64,
+}
+
+impl From<CoreTokenUsage> for TokenUsageBreakdown {
+    fn from(value: CoreTokenUsage) -> Self {
+        Self {
+            total_tokens: value.total_tokens,
+            input_tokens: value.input_tokens,
+            cached_input_tokens: value.cached_input_tokens,
+            output_tokens: value.output_tokens,
+            reasoning_output_tokens: value.reasoning_output_tokens,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct Turn {
     pub id: String,
     /// Only populated on a `thread/resume` response.
@@ -686,6 +874,8 @@ pub struct TurnError {
 #[ts(export_to = "v2/")]
 pub struct ErrorNotification {
     pub error: TurnError,
+    pub thread_id: String,
+    pub turn_id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -726,9 +916,22 @@ pub struct ReviewStartParams {
     pub thread_id: String,
     pub target: ReviewTarget,
 
-    /// When true, also append the final review message to the original thread.
+    /// Where to run the review: inline (default) on the current thread or
+    /// detached on a new thread (returned in `reviewThreadId`).
     #[serde(default)]
-    pub append_to_original_thread: bool,
+    pub delivery: Option<ReviewDelivery>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ReviewStartResponse {
+    pub turn: Turn,
+    /// Identifies the thread where the review runs.
+    ///
+    /// For inline reviews, this is the original thread id.
+    /// For detached reviews, this is the id of the new review thread.
+    pub review_thread_id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -838,6 +1041,8 @@ pub enum ThreadItem {
         command: String,
         /// The command's working directory.
         cwd: PathBuf,
+        /// Identifier for the underlying PTY process (when available).
+        process_id: Option<String>,
         status: CommandExecutionStatus,
         /// A best-effort parsing of the command to understand the action(s) it will perform.
         /// This returns a list of CommandAction objects because a single shell command may
@@ -879,7 +1084,10 @@ pub enum ThreadItem {
     ImageView { id: String, path: String },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    CodeReview { id: String, review: String },
+    EnteredReviewMode { id: String, review: String },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    ExitedReviewMode { id: String, review: String },
 }
 
 impl From<CoreTurnItem> for ThreadItem {
@@ -997,6 +1205,7 @@ pub struct ThreadStartedNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct TurnStartedNotification {
+    pub thread_id: String,
     pub turn: Turn,
 }
 
@@ -1013,7 +1222,64 @@ pub struct Usage {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct TurnCompletedNotification {
+    pub thread_id: String,
     pub turn: Turn,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// Notification that the turn-level unified diff has changed.
+/// Contains the latest aggregated diff across all file changes in the turn.
+pub struct TurnDiffUpdatedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub diff: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnPlanUpdatedNotification {
+    pub turn_id: String,
+    pub explanation: Option<String>,
+    pub plan: Vec<TurnPlanStep>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnPlanStep {
+    pub step: String,
+    pub status: TurnPlanStepStatus,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum TurnPlanStepStatus {
+    Pending,
+    InProgress,
+    Completed,
+}
+
+impl From<CorePlanItemArg> for TurnPlanStep {
+    fn from(value: CorePlanItemArg) -> Self {
+        Self {
+            step: value.step,
+            status: value.status.into(),
+        }
+    }
+}
+
+impl From<CorePlanStepStatus> for TurnPlanStepStatus {
+    fn from(value: CorePlanStepStatus) -> Self {
+        match value {
+            CorePlanStepStatus::Pending => Self::Pending,
+            CorePlanStepStatus::InProgress => Self::InProgress,
+            CorePlanStepStatus::Completed => Self::Completed,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1021,6 +1287,8 @@ pub struct TurnCompletedNotification {
 #[ts(export_to = "v2/")]
 pub struct ItemStartedNotification {
     pub item: ThreadItem,
+    pub thread_id: String,
+    pub turn_id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1028,6 +1296,8 @@ pub struct ItemStartedNotification {
 #[ts(export_to = "v2/")]
 pub struct ItemCompletedNotification {
     pub item: ThreadItem,
+    pub thread_id: String,
+    pub turn_id: String,
 }
 
 // Item-specific progress notifications
@@ -1035,6 +1305,8 @@ pub struct ItemCompletedNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct AgentMessageDeltaNotification {
+    pub thread_id: String,
+    pub turn_id: String,
     pub item_id: String,
     pub delta: String,
 }
@@ -1043,6 +1315,8 @@ pub struct AgentMessageDeltaNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ReasoningSummaryTextDeltaNotification {
+    pub thread_id: String,
+    pub turn_id: String,
     pub item_id: String,
     pub delta: String,
     pub summary_index: i64,
@@ -1052,6 +1326,8 @@ pub struct ReasoningSummaryTextDeltaNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ReasoningSummaryPartAddedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
     pub item_id: String,
     pub summary_index: i64,
 }
@@ -1060,6 +1336,8 @@ pub struct ReasoningSummaryPartAddedNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ReasoningTextDeltaNotification {
+    pub thread_id: String,
+    pub turn_id: String,
     pub item_id: String,
     pub delta: String,
     pub content_index: i64,
@@ -1069,6 +1347,8 @@ pub struct ReasoningTextDeltaNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct CommandExecutionOutputDeltaNotification {
+    pub thread_id: String,
+    pub turn_id: String,
     pub item_id: String,
     pub delta: String,
 }
@@ -1077,6 +1357,8 @@ pub struct CommandExecutionOutputDeltaNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct McpToolCallProgressNotification {
+    pub thread_id: String,
+    pub turn_id: String,
     pub item_id: String,
     pub message: String,
 }
@@ -1088,6 +1370,14 @@ pub struct WindowsWorldWritableWarningNotification {
     pub sample_paths: Vec<String>,
     pub extra_count: usize,
     pub failed_scan: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ContextCompactedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
