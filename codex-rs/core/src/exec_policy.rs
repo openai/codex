@@ -160,14 +160,21 @@ fn requirement_from_decision(
 /// unrolled command (multi-part scripts shouldn’t be whitelisted via prefix) and
 /// when execpolicy feature is enabled.
 fn allow_prefix_if_applicable(
+    policy: &Policy,
     commands: &[Vec<String>],
     features: &Features,
 ) -> Option<Vec<String>> {
-    if features.enabled(Feature::ExecPolicy) && commands.len() == 1 {
-        Some(commands[0].clone())
-    } else {
-        None
+    if !features.enabled(Feature::ExecPolicy) {
+        return None;
     }
+
+    // Only offer a prefix when the prompt is driven by heuristics (policy has no matches).
+    // For multi-command scripts, choose the first command segment that also has no policy
+    // match (i.e. the first segment that could plausibly be the prompt trigger).
+    commands
+        .iter()
+        .find(|cmd| matches!(policy.check(cmd), Evaluation::NoMatch))
+        .cloned()
 }
 
 pub(crate) async fn create_approval_requirement_for_command(
@@ -193,7 +200,7 @@ pub(crate) async fn create_approval_requirement_for_command(
             ) {
                 ApprovalRequirement::NeedsApproval {
                     reason: None,
-                    allow_prefix: allow_prefix_if_applicable(&commands, features),
+                    allow_prefix: allow_prefix_if_applicable(policy, &commands, features),
                 }
             } else {
                 ApprovalRequirement::Skip {
@@ -597,8 +604,35 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             requirement,
             ApprovalRequirement::NeedsApproval {
                 reason: None,
-                allow_prefix: None,
+                allow_prefix: Some(vec!["python".to_string()]),
             }
         );
+    }
+
+    #[test]
+    fn allow_prefix_uses_first_no_match_in_multi_command_scripts() {
+        let policy_src = r#"prefix_rule(pattern=["python"], decision="allow")"#;
+        let mut parser = PolicyParser::new();
+        parser
+            .parse("test.codexpolicy", policy_src)
+            .expect("parse policy");
+        let policy = parser.build();
+
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "python && echo ok".to_string(),
+        ];
+
+        let requirement = create_approval_requirement_for_command(
+            &policy,
+            &Features::with_defaults(),
+            &command,
+            AskForApproval::UnlessTrusted,
+            &SandboxPolicy::ReadOnly,
+            SandboxPermissions::UseDefault,
+        );
+
+        assert_eq!(requirement, ApprovalRequirement::Skip);
     }
 }
