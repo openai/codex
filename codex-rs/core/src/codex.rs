@@ -1035,6 +1035,19 @@ impl Session {
         state.record_items(items.iter(), turn_context.truncation_policy);
     }
 
+    pub(crate) async fn record_model_warning(&self, message: impl Into<String>) {
+        let item = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: format!("Warning: {}", message.into()),
+            }],
+        };
+
+        let mut state = self.state.lock().await;
+        state.record_items([item].iter(), TruncationPolicy::no_truncation());
+    }
+
     pub(crate) async fn replace_history(&self, items: Vec<ResponseItem>) {
         let mut state = self.state.lock().await;
         state.replace_history(items);
@@ -2785,6 +2798,32 @@ mod tests {
         });
 
         (session, turn_context, rx_event)
+    }
+
+    #[tokio::test]
+    async fn record_model_warning_appends_user_message() {
+        let (session, _turn_context) = make_session_and_context();
+
+        session
+            .record_model_warning("too many unified exec sessions")
+            .await;
+
+        let mut history = session.clone_history().await;
+        let history_items = history.get_history();
+        let last = history_items.last().expect("warning recorded");
+
+        match last {
+            ResponseItem::Message { role, content, .. } => {
+                assert_eq!(role, "user");
+                assert_eq!(
+                    content,
+                    &vec![ContentItem::InputText {
+                        text: "Warning: too many unified exec sessions".to_string(),
+                    }]
+                );
+            }
+            other => panic!("expected user message, got {other:?}"),
+        }
     }
 
     #[derive(Clone, Copy)]
