@@ -132,6 +132,7 @@ pub enum ResponseItem {
     GhostSnapshot {
         ghost_commit: GhostCommit,
     },
+    #[serde(alias = "compaction")]
     CompactionSummary {
         encrypted_content: String,
     },
