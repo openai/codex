@@ -15,6 +15,10 @@ use std::path::PathBuf;
 use crate::version::CODEX_CLI_VERSION;
 
 pub fn get_upgrade_version(config: &Config) -> Option<String> {
+    if !config.check_for_update_on_startup {
+        return None;
+    }
+
     let version_file = version_filepath(config);
     let info = read_version_info(&version_file).ok();
 
@@ -141,6 +145,10 @@ fn extract_version_from_latest_tag(latest_tag_name: &str) -> anyhow::Result<Stri
 /// Returns the latest version to show in a popup, if it should be shown.
 /// This respects the user's dismissal choice for the current latest version.
 pub fn get_upgrade_version_for_popup(config: &Config) -> Option<String> {
+    if !config.check_for_update_on_startup {
+        return None;
+    }
+
     let version_file = version_filepath(config);
     let latest = get_upgrade_version(config)?;
     // If the user dismissed this exact version previously, do not show the popup.

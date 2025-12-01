@@ -131,11 +131,15 @@ pub async fn recent_commits(cwd: &Path, limit: usize) -> Vec<CommitLogEntry> {
     }
 
     let fmt = "%H%x1f%ct%x1f%s"; // <sha> <US> <commit_time> <US> <subject>
-    let n = limit.max(1).to_string();
-    let Some(log_out) =
-        run_git_command_with_timeout(&["log", "-n", &n, &format!("--pretty=format:{fmt}")], cwd)
-            .await
-    else {
+    let limit_arg = (limit > 0).then(|| limit.to_string());
+    let mut args: Vec<String> = vec!["log".to_string()];
+    if let Some(n) = &limit_arg {
+        args.push("-n".to_string());
+        args.push(n.clone());
+    }
+    args.push(format!("--pretty=format:{fmt}"));
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let Some(log_out) = run_git_command_with_timeout(&arg_refs, cwd).await else {
         return Vec::new();
     };
     if !log_out.status.success() {

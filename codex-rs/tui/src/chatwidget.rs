@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -140,6 +141,20 @@ struct RunningCommand {
     source: ExecCommandSource,
 }
 
+struct UnifiedExecWaitState {
+    command_display: String,
+}
+
+impl UnifiedExecWaitState {
+    fn new(command_display: String) -> Self {
+        Self { command_display }
+    }
+
+    fn is_duplicate(&self, command_display: &str) -> bool {
+        self.command_display == command_display
+    }
+}
+
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
 const NUDGE_MODEL_SLUG: &str = "gpt-5.1-codex-mini";
 const RATE_LIMIT_SWITCH_PROMPT_THRESHOLD: f64 = 90.0;
@@ -266,6 +281,8 @@ pub(crate) struct ChatWidget {
     // Stream lifecycle controller
     stream_controller: Option<StreamController>,
     running_commands: HashMap<String, RunningCommand>,
+    suppressed_exec_calls: HashSet<String>,
+    last_unified_wait: Option<UnifiedExecWaitState>,
     task_complete_pending: bool,
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
     // Queue of interruptive UI events deferred during an active write cycle
@@ -479,6 +496,8 @@ impl ChatWidget {
         // Mark task stopped and request redraw now that all content is in history.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
+        self.suppressed_exec_calls.clear();
+        self.last_unified_wait = None;
         self.request_redraw();
 
         // If there is a queued user message, send exactly one now to begin the next turn.
@@ -588,6 +607,8 @@ impl ChatWidget {
         // Reset running state and clear streaming buffers.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
+        self.suppressed_exec_calls.clear();
+        self.last_unified_wait = None;
         self.stream_controller = None;
         self.maybe_show_pending_rate_limit_prompt();
     }
@@ -947,6 +968,9 @@ impl ChatWidget {
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
         let running = self.running_commands.remove(&ev.call_id);
+        if self.suppressed_exec_calls.remove(&ev.call_id) {
+            return;
+        }
         let (command, parsed, source) = match running {
             Some(rc) => (rc.command, rc.parsed_cmd, rc.source),
             None => (
@@ -1074,6 +1098,27 @@ impl ChatWidget {
                 source: ev.source,
             },
         );
+        let is_wait_interaction = matches!(ev.source, ExecCommandSource::UnifiedExecInteraction)
+            && ev
+                .interaction_input
+                .as_deref()
+                .map(str::is_empty)
+                .unwrap_or(true);
+        let command_display = ev.command.join(" ");
+        let should_suppress_unified_wait = is_wait_interaction
+            && self
+                .last_unified_wait
+                .as_ref()
+                .is_some_and(|wait| wait.is_duplicate(&command_display));
+        if is_wait_interaction {
+            self.last_unified_wait = Some(UnifiedExecWaitState::new(command_display));
+        } else {
+            self.last_unified_wait = None;
+        }
+        if should_suppress_unified_wait {
+            self.suppressed_exec_calls.insert(ev.call_id);
+            return;
+        }
         let interaction_input = ev.interaction_input.clone();
         if let Some(cell) = self
             .active_cell
@@ -1195,6 +1240,8 @@ impl ChatWidget {
             rate_limit_poller: None,
             stream_controller: None,
             running_commands: HashMap::new(),
+            suppressed_exec_calls: HashSet::new(),
+            last_unified_wait: None,
             task_complete_pending: false,
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
@@ -1270,6 +1317,8 @@ impl ChatWidget {
             rate_limit_poller: None,
             stream_controller: None,
             running_commands: HashMap::new(),
+            suppressed_exec_calls: HashSet::new(),
+            last_unified_wait: None,
             task_complete_pending: false,
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
@@ -1747,6 +1796,7 @@ impl ChatWidget {
                 self.on_entered_review_mode(review_request)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
+            EventMsg::ContextCompacted(_) => self.on_agent_message("Context compacted".to_owned()),
             EventMsg::RawResponseItem(_)
             | EventMsg::ItemStarted(_)
             | EventMsg::ItemCompleted(_)
@@ -2282,7 +2332,7 @@ impl ChatWidget {
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
         for preset in presets.into_iter() {
             let is_current =
-                current_approval == preset.approval && current_sandbox == preset.sandbox;
+                Self::preset_matches_current(current_approval, &current_sandbox, &preset);
             let name = preset.label.to_string();
             let description_text = preset.description;
             let description = Some(description_text.to_string());
@@ -2370,6 +2420,28 @@ impl ChatWidget {
         })]
     }
 
+    fn preset_matches_current(
+        current_approval: AskForApproval,
+        current_sandbox: &SandboxPolicy,
+        preset: &ApprovalPreset,
+    ) -> bool {
+        if current_approval != preset.approval {
+            return false;
+        }
+        matches!(
+            (&preset.sandbox, current_sandbox),
+            (SandboxPolicy::ReadOnly, SandboxPolicy::ReadOnly)
+                | (
+                    SandboxPolicy::DangerFullAccess,
+                    SandboxPolicy::DangerFullAccess
+                )
+                | (
+                    SandboxPolicy::WorkspaceWrite { .. },
+                    SandboxPolicy::WorkspaceWrite { .. }
+                )
+        )
+    }
+
     #[cfg(target_os = "windows")]
     pub(crate) fn world_writable_warning_details(&self) -> Option<(Vec<String>, usize, bool)> {
         if self
@@ -2380,11 +2452,18 @@ impl ChatWidget {
         {
             return None;
         }
-        let cwd = match std::env::current_dir() {
-            Ok(cwd) => cwd,
-            Err(_) => return Some((Vec::new(), 0, true)),
-        };
-        codex_windows_sandbox::world_writable_warning_details(self.config.codex_home.as_path(), cwd)
+        let cwd = self.config.cwd.clone();
+        let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
+        match codex_windows_sandbox::apply_world_writable_scan_and_denies(
+            self.config.codex_home.as_path(),
+            cwd.as_path(),
+            &env_map,
+            &self.config.sandbox_policy,
+            Some(self.config.codex_home.as_path()),
+        ) {
+            Ok(_) => None,
+            Err(_) => Some((Vec::new(), 0, true)),
+        }
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -2816,7 +2895,6 @@ impl ChatWidget {
                         review_request: ReviewRequest {
                             prompt: "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.".to_string(),
                             user_facing_hint: "current changes".to_string(),
-                            append_to_original_thread: true,
                         },
                     }));
                 },
@@ -2873,7 +2951,6 @@ impl ChatWidget {
                                 "Review the code changes against the base branch '{branch}'. Start by finding the merge diff between the current branch and {branch}'s upstream e.g. (`git merge-base HEAD \"$(git rev-parse --abbrev-ref \"{branch}@{{upstream}}\")\"`), then run `git diff` against that SHA to see what changes we would merge into the {branch} branch. Provide prioritized, actionable findings."
                             ),
                             user_facing_hint: format!("changes against '{branch}'"),
-                            append_to_original_thread: true,
                         },
                     }));
                 })],
@@ -2914,7 +2991,6 @@ impl ChatWidget {
                         review_request: ReviewRequest {
                             prompt,
                             user_facing_hint: hint,
-                            append_to_original_thread: true,
                         },
                     }));
                 })],
@@ -2949,7 +3025,6 @@ impl ChatWidget {
                     review_request: ReviewRequest {
                         prompt: trimmed.clone(),
                         user_facing_hint: trimmed,
-                        append_to_original_thread: true,
                     },
                 }));
             }),
@@ -3165,7 +3240,6 @@ pub(crate) fn show_review_commit_picker_with_entries(
                     review_request: ReviewRequest {
                         prompt,
                         user_facing_hint: hint,
-                        append_to_original_thread: true,
                     },
                 }));
             })],

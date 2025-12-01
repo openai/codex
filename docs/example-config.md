@@ -37,7 +37,7 @@ model_provider = "openai"
 # Reasoning & Verbosity (Responses API capable models)
 ################################################################################
 
-# Reasoning effort: minimal | low | medium | high (default: medium)
+# Reasoning effort: minimal | low | medium | high | xhigh (default: medium; xhigh only on gpt-5.1-codex-max)
 model_reasoning_effort = "medium"
 
 # Reasoning summary: auto | concise | detailed | none (default: auto)
@@ -180,6 +180,9 @@ chatgpt_base_url = "https://chatgpt.com/backend-api/"
 # Allowed values: chatgpt | api
 # forced_login_method = "chatgpt"
 
+# Preferred store for MCP OAuth credentials: auto (default) | file | keyring
+mcp_oauth_credentials_store = "auto"
+
 ################################################################################
 # Project Documentation Controls
 ################################################################################
@@ -211,7 +214,6 @@ view_image = true
 [features]
 # Leave this table empty to accept defaults. Set explicit booleans to opt in/out.
 unified_exec = false
-streamable_shell = false
 rmcp_client = false
 apply_patch_freeform = false
 view_image_tool = true
@@ -232,16 +234,6 @@ experimental_use_rmcp_client = false
 
 # Include apply_patch via freeform editing path (affects default tool set). Default: false
 experimental_use_freeform_apply_patch = false
-
-# Enable model-based sandbox command assessment. Default: false
-experimental_sandbox_command_assessment = false
-
-################################################################################
-# MCP (Model Context Protocol) servers
-################################################################################
-
-# Preferred store for MCP OAuth credentials: auto (default) | file | keyring
-mcp_oauth_credentials_store = "auto"
 
 # Define MCP servers under this table. Leave empty to disable.
 [mcp_servers]
