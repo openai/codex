@@ -146,7 +146,8 @@ pub(crate) async fn history_metadata(config: &Config) -> (u64, usize) {
     history_metadata_for_file(&path).await
 }
 
-/// Given a `log_id` (on Unix this is the file's inode number) and a zero-based
+/// Given a `log_id` (on Unix this is the file's inode number,
+/// on Windows this is the file's creation time) and a zero-based
 /// `offset`, return the corresponding `HistoryEntry` if the identifier matches
 /// the current history file **and** the requested offset exists. Any I/O or
 /// parsing errors are logged and result in `None`.
@@ -159,17 +160,14 @@ pub(crate) fn lookup(log_id: u64, offset: usize, config: &Config) -> Option<Hist
     lookup_history_entry(&path, log_id, offset)
 }
 
-/// Fallback stub for unsupported platforms: currently always returns `None`.
-#[cfg(not(any(unix, windows)))]
-pub(crate) fn lookup(log_id: u64, offset: usize, config: &Config) -> Option<HistoryEntry> {
-    let _ = (log_id, offset, config);
-    None
-}
-
-/// On Unix systems ensure the file permissions are `0o600` (rw-------). If the
+/// On Unix systems, ensure the file permissions are `0o600` (rw-------). If the
 /// permissions cannot be changed the error is propagated to the caller.
-#[cfg(unix)]
 async fn ensure_owner_only_permissions(file: &File) -> Result<()> {
+    if cfg!(windows) {
+        // On Windows, do nothing.
+        return Ok(());
+    }
+
     let metadata = file.metadata()?;
     let current_mode = metadata.permissions().mode() & 0o777;
     if current_mode != 0o600 {
@@ -179,12 +177,6 @@ async fn ensure_owner_only_permissions(file: &File) -> Result<()> {
         let file_clone = file.try_clone()?;
         tokio::task::spawn_blocking(move || file_clone.set_permissions(perms_clone)).await??;
     }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-async fn ensure_owner_only_permissions(_file: &File) -> Result<()> {
-    // For now, on non-Unix, simply succeed.
     Ok(())
 }
 
@@ -288,22 +280,12 @@ fn lookup_history_entry(path: &Path, log_id: u64, offset: usize) -> Option<Histo
 }
 
 fn history_log_id(metadata: &std::fs::Metadata) -> Option<u64> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        Some(metadata.ino())
-    }
-
-    #[cfg(windows)]
-    {
+    if cfg!(windows) {
         use std::os::windows::fs::MetadataExt;
         Some(metadata.creation_time())
-    }
-
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = metadata;
-        None
+    } else {
+        use std::os::unix::fs::MetadataExt;
+        Some(metadata.ino())
     }
 }
 
