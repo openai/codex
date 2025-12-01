@@ -240,13 +240,10 @@ mod tests {
         let skill = &outcome.skills[0];
         assert_eq!(skill.name, "demo-skill");
         assert_eq!(skill.description, "does things carefully");
+        let path_str = skill.path.to_string_lossy().replace('\\', "/");
         assert!(
-            skill
-                .path
-                .to_string_lossy()
-                .ends_with("skills/demo/SKILL.md"),
-            "unexpected path {}",
-            skill.path.display()
+            path_str.ends_with("skills/demo/SKILL.md"),
+            "unexpected path {path_str}"
         );
     }
 

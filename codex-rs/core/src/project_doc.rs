@@ -493,14 +493,18 @@ mod tests {
         let res = get_user_instructions(&cfg)
             .await
             .expect("instructions expected");
-        let expected_path = cfg
-            .codex_home
-            .join("skills/pdf-processing/SKILL.md")
-            .canonicalize()
-            .unwrap();
+        let expected_path = dunce::canonicalize(
+            cfg.codex_home
+                .join("skills/pdf-processing/SKILL.md")
+                .as_path(),
+        )
+        .unwrap_or_else(|_| cfg.codex_home.join("skills/pdf-processing/SKILL.md"));
+        let expected_path_str = expected_path
+            .to_string_lossy()
+            .replace('\\', "/");
         let expected = format!(
             "base doc\n\n## Skills\nThese skills are discovered at startup from ~/.codex/skills; each entry shows name, description, and file path so you can open the source for full instructions. Content is not inlined to keep context lean.\n- pdf-processing: extract from pdfs (file: {})",
-            expected_path.display()
+            expected_path_str
         );
         assert_eq!(res, expected);
     }
@@ -514,14 +518,18 @@ mod tests {
         let res = get_user_instructions(&cfg)
             .await
             .expect("instructions expected");
-        let expected_path = cfg
-            .codex_home
-            .join("skills/linting/SKILL.md")
-            .canonicalize()
-            .unwrap();
+        let expected_path = dunce::canonicalize(
+            cfg.codex_home
+                .join("skills/linting/SKILL.md")
+                .as_path(),
+        )
+        .unwrap_or_else(|_| cfg.codex_home.join("skills/linting/SKILL.md"));
+        let expected_path_str = expected_path
+            .to_string_lossy()
+            .replace('\\', "/");
         let expected = format!(
             "## Skills\nThese skills are discovered at startup from ~/.codex/skills; each entry shows name, description, and file path so you can open the source for full instructions. Content is not inlined to keep context lean.\n- linting: run clippy (file: {})",
-            expected_path.display()
+            expected_path_str
         );
         assert_eq!(res, expected);
     }
