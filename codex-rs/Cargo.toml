@@ -173,7 +173,7 @@ regex-lite = "0.1.7"
 regex = "1.12.2"
 reqwest = "0.12"
 rmcp = { version = "0.9.0", default-features = false }
-schemars = "0.8.22"
+schemars = "0.9.0"
 seccompiler = "0.5.0"
 sentry = "0.34.0"
 serde = "1"

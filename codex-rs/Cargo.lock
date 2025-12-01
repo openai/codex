@@ -914,7 +914,7 @@ dependencies = [
  "codex-protocol",
  "mcp-types",
  "pretty_assertions",
- "schemars 0.8.22",
+ "schemars 0.9.0",
  "serde",
  "serde_json",
  "strum_macros 0.27.2",
@@ -1336,7 +1336,7 @@ dependencies = [
  "once_cell",
  "pretty_assertions",
  "regex",
- "schemars 0.8.22",
+ "schemars 0.9.0",
  "serde",
  "tempfile",
  "thiserror 2.0.17",
@@ -1418,7 +1418,7 @@ dependencies = [
  "mcp_test_support",
  "os_info",
  "pretty_assertions",
- "schemars 0.8.22",
+ "schemars 0.9.0",
  "serde",
  "serde_json",
  "shlex",
@@ -1488,7 +1488,7 @@ dependencies = [
  "mcp-types",
  "mime_guess",
  "pretty_assertions",
- "schemars 0.8.22",
+ "schemars 0.9.0",
  "serde",
  "serde_json",
  "serde_with",
@@ -3775,7 +3775,7 @@ checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 name = "mcp-types"
 version = "0.0.0"
 dependencies = [
- "schemars 0.8.22",
+ "schemars 0.9.0",
  "serde",
  "serde_json",
  "ts-rs",
@@ -5386,24 +5386,13 @@ dependencies = [
 
 [[package]]
 name = "schemars"
-version = "0.8.22"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fbf2ae1b8bc8e02df939598064d22402220cd5bbcca1c76f7d6a310974d5615"
-dependencies = [
- "dyn-clone",
- "schemars_derive 0.8.22",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "schemars"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4cd191f9397d57d581cddd31014772520aa448f65ef991055d7f61582c65165f"
 dependencies = [
  "dyn-clone",
  "ref-cast",
+ "schemars_derive 0.9.0",
  "serde",
  "serde_json",
 ]
@@ -5424,9 +5413,9 @@ dependencies = [
 
 [[package]]
 name = "schemars_derive"
-version = "0.8.22"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32e265784ad618884abaea0600a9adf15393368d840e0222d101a072f3f7534d"
+checksum = "5016d94c77c6d32f0b8e08b781f7dc8a90c2007d4e77472cc2807bc10a8438fe"
 dependencies = [
  "proc-macro2",
  "quote",
