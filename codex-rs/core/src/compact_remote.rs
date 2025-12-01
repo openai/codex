@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::Prompt;
+use crate::client_common::PromptBuilder;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::error::Result as CodexResult;
@@ -41,13 +41,10 @@ async fn run_remote_compact_task_inner_impl(
     turn_context: &Arc<TurnContext>,
 ) -> CodexResult<()> {
     let mut history = sess.clone_history().await;
-    let prompt = Prompt {
-        input: history.get_history_for_prompt(),
-        tools: vec![],
-        parallel_tool_calls: false,
-        base_instructions_override: turn_context.base_instructions.clone(),
-        output_schema: None,
-    };
+    let mut prompt = PromptBuilder::new()
+        .wire_api(turn_context.client.get_provider().wire_api)
+        .with_input(history.get_history_for_prompt());
+    prompt.base_instructions_override = turn_context.base_instructions.clone();
 
     let mut new_history = turn_context
         .client

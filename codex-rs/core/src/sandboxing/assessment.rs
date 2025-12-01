@@ -7,7 +7,7 @@ use std::time::Instant;
 use crate::AuthManager;
 use crate::ModelProviderInfo;
 use crate::client::ModelClient;
-use crate::client_common::Prompt;
+use crate::client_common::PromptBuilder;
 use crate::client_common::ResponseEvent;
 use crate::config::Config;
 use crate::protocol::SandboxPolicy;
@@ -112,17 +112,15 @@ pub(crate) async fn assess_command(
         .trim()
         .to_string();
 
-    let prompt = Prompt {
-        input: vec![ResponseItem::Message {
+    let prompt = PromptBuilder::new()
+        .wire_api(provider.wire_api)
+        .with_input(vec![ResponseItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText { text: user_prompt }],
-        }],
-        tools: Vec::new(),
-        parallel_tool_calls: false,
-        base_instructions_override: Some(system_prompt),
-        output_schema: Some(sandbox_assessment_schema()),
-    };
+        }])
+        .with_base_instructions_override(system_prompt)
+        .with_output_schema(sandbox_assessment_schema());
 
     let child_otel =
         parent_otel.with_model(config.model.as_str(), config.model_family.slug.as_str());

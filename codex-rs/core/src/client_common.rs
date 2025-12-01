@@ -1,6 +1,10 @@
 use crate::client_common::tools::ToolSpec;
+use crate::error::CodexErr;
 use crate::error::Result;
 use crate::model_family::ModelFamily;
+use crate::model_provider_info::WireApi;
+use crate::tools::spec::create_tools_json_for_chat_completions_api;
+use crate::tools::spec::create_tools_json_for_responses_api;
 pub use codex_api::common::ResponseEvent;
 use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use codex_protocol::models::ResponseItem;
@@ -14,6 +18,7 @@ use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
 use tokio::sync::mpsc;
+use codex_api::{CompactionInput, Prompt};
 
 /// Review thread system prompt. Edit `core/src/review_prompt.md` to customize.
 pub const REVIEW_PROMPT: &str = include_str!("../review_prompt.md");
@@ -23,11 +28,14 @@ pub const REVIEW_EXIT_SUCCESS_TMPL: &str = include_str!("../templates/review/exi
 pub const REVIEW_EXIT_INTERRUPTED_TMPL: &str =
     include_str!("../templates/review/exit_interrupted.xml");
 
-/// API request payload for a single model turn
+/// Builder for a single model turn.
 #[derive(Default, Debug, Clone)]
-pub struct Prompt {
+pub struct PromptBuilder {
     /// Conversation context input items.
     pub input: Vec<ResponseItem>,
+
+    /// Target wire API for this prompt.
+    pub wire_api: WireApi,
 
     /// Tools available to the model, including additional tools sourced from
     /// external MCP servers.
@@ -43,7 +51,119 @@ pub struct Prompt {
     pub output_schema: Option<Value>,
 }
 
-impl Prompt {
+impl PromptBuilder {
+    pub fn new() -> Self {
+        Self {
+            wire_api: WireApi::Responses,
+            ..Self::default()
+        }
+    }
+
+    pub fn with_input(mut self, input: Vec<ResponseItem>) -> Self {
+        self.input = input;
+        self
+    }
+
+    pub fn push_input(&mut self, item: ResponseItem) {
+        self.input.push(item);
+    }
+
+    pub(crate) fn with_tools(mut self, tools: Vec<ToolSpec>) -> Self {
+        self.tools = tools;
+        self
+    }
+
+    pub fn with_parallel_tool_calls(mut self, enabled: bool) -> Self {
+        self.parallel_tool_calls = enabled;
+        self
+    }
+
+    pub fn with_base_instructions_override<S: Into<String>>(mut self, instructions: S) -> Self {
+        self.base_instructions_override = Some(instructions.into());
+        self
+    }
+
+    pub fn with_base_instructions_override_opt(mut self, instructions: Option<String>) -> Self {
+        self.base_instructions_override = instructions;
+        self
+    }
+
+    pub fn with_output_schema(mut self, schema: Value) -> Self {
+        self.output_schema = Some(schema);
+        self
+    }
+
+    pub fn with_output_schema_opt(mut self, schema: Option<Value>) -> Self {
+        self.output_schema = schema;
+        self
+    }
+
+    pub fn clear_output_schema(mut self) -> Self {
+        self.output_schema = None;
+        self
+    }
+
+    pub fn with_wire_api(self, wire_api: WireApi) -> Self {
+        self.wire_api(wire_api)
+    }
+
+    pub fn wire_api(mut self, wire_api: WireApi) -> Self {
+        self.wire_api = wire_api;
+        self
+    }
+
+    pub fn chat(mut self) -> Self {
+        self.wire_api = WireApi::Chat;
+        self
+    }
+
+    pub fn responses(mut self) -> Self {
+        self.wire_api = WireApi::Responses;
+        self
+    }
+
+    /// Builds a wire-level `codex_api::Prompt` for the configured `wire_api`.
+    ///
+    /// - For `WireApi::Responses`, tools are encoded using the Responses
+    ///   function-calling shape.
+    /// - For `WireApi::Chat`, tools are encoded using the Chat Completions
+    ///   function-calling shape, and `output_schema` is not supported.
+    pub fn build(&self, model: &ModelFamily) -> Result<Prompt> {
+        if matches!(self.wire_api, WireApi::Chat) && self.output_schema.is_some() {
+            return Err(CodexErr::UnsupportedOperation(
+                "output_schema is not supported for Chat Completions API".to_string(),
+            ));
+        }
+
+        let instructions = self.get_full_instructions(model).into_owned();
+        let input = self.get_formatted_input();
+
+        let tools_json = match self.wire_api {
+            WireApi::Responses => create_tools_json_for_responses_api(&self.tools)?,
+            WireApi::Chat => create_tools_json_for_chat_completions_api(&self.tools)?,
+        };
+
+        Ok(Prompt {
+            instructions,
+            input,
+            tools: tools_json,
+            parallel_tool_calls: self.parallel_tool_calls,
+            output_schema: self.output_schema.clone(),
+        })
+    }
+
+    pub(crate) fn build_compaction_input<'a>(
+        &'a self,
+        model: &'a str,
+        instructions: &'a str,
+    ) -> CompactionInput<'a> {
+        CompactionInput {
+            model,
+            input: &self.input,
+            instructions,
+        }
+    }
+
     pub(crate) fn get_full_instructions<'a>(&'a self, model: &'a ModelFamily) -> Cow<'a, str> {
         let base = self
             .base_instructions_override
@@ -267,7 +387,7 @@ mod tests {
     }
     #[test]
     fn get_full_instructions_no_user_content() {
-        let prompt = Prompt {
+        let prompt = PromptBuilder {
             ..Default::default()
         };
         let test_cases = vec![

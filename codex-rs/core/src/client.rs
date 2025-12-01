@@ -5,8 +5,6 @@ use crate::api_bridge::map_api_error;
 use codex_api::AggregateStreamExt;
 use codex_api::ChatClient as ApiChatClient;
 use codex_api::CompactClient as ApiCompactClient;
-use codex_api::CompactionInput as ApiCompactionInput;
-use codex_api::Prompt as ApiPrompt;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
 use codex_api::ResponseStream as ApiResponseStream;
@@ -31,14 +29,13 @@ use http::HeaderMap as ApiHeaderMap;
 use http::HeaderValue;
 use http::StatusCode as HttpStatusCode;
 use reqwest::StatusCode;
-use serde_json::Value;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::AuthManager;
 use crate::auth::RefreshTokenError;
-use crate::client_common::Prompt;
+use crate::client_common::PromptBuilder;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::config::Config;
@@ -50,8 +47,6 @@ use crate::model_family::ModelFamily;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::openai_model_info::get_model_info;
-use crate::tools::spec::create_tools_json_for_chat_completions_api;
-use crate::tools::spec::create_tools_json_for_responses_api;
 
 #[derive(Debug, Clone)]
 pub struct ModelClient {
@@ -116,7 +111,7 @@ impl ModelClient {
     ///
     /// For Chat providers, the underlying stream is optionally aggregated
     /// based on the `show_raw_agent_reasoning` flag in the config.
-    pub async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
+    pub async fn stream(&self, prompt: &PromptBuilder) -> Result<ResponseStream> {
         match self.provider.wire_api {
             WireApi::Responses => self.stream_responses_api(prompt).await,
             WireApi::Chat => {
@@ -141,19 +136,9 @@ impl ModelClient {
     ///
     /// This path is only used when the provider is configured with
     /// `WireApi::Chat`; it does not support `output_schema` today.
-    async fn stream_chat_completions(&self, prompt: &Prompt) -> Result<ApiResponseStream> {
-        if prompt.output_schema.is_some() {
-            return Err(CodexErr::UnsupportedOperation(
-                "output_schema is not supported for Chat Completions API".to_string(),
-            ));
-        }
-
+    async fn stream_chat_completions(&self, prompt: &PromptBuilder) -> Result<ApiResponseStream> {
         let auth_manager = self.auth_manager.clone();
-        let instructions = prompt
-            .get_full_instructions(&self.config.model_family)
-            .into_owned();
-        let tools_json = create_tools_json_for_chat_completions_api(&prompt.tools)?;
-        let api_prompt = build_api_prompt(prompt, instructions, tools_json);
+        let api_prompt = prompt.build(&self.config.model_family)?;
         let conversation_id = self.conversation_id.to_string();
         let session_source = self.session_source.clone();
 
@@ -195,7 +180,7 @@ impl ModelClient {
     ///
     /// Handles SSE fixtures, reasoning summaries, verbosity, and the
     /// `text` controls used for output schemas.
-    async fn stream_responses_api(&self, prompt: &Prompt) -> Result<ResponseStream> {
+    async fn stream_responses_api(&self, prompt: &PromptBuilder) -> Result<ResponseStream> {
         if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
             warn!(path, "Streaming from fixture");
             let stream = codex_api::stream_from_fixture(path, self.provider.stream_idle_timeout())
@@ -204,10 +189,6 @@ impl ModelClient {
         }
 
         let auth_manager = self.auth_manager.clone();
-        let instructions = prompt
-            .get_full_instructions(&self.config.model_family)
-            .into_owned();
-        let tools_json: Vec<Value> = create_tools_json_for_responses_api(&prompt.tools)?;
 
         let reasoning = if self.config.model_family.supports_reasoning_summaries {
             Some(Reasoning {
@@ -241,7 +222,7 @@ impl ModelClient {
         };
 
         let text = create_text_param_for_request(verbosity, &prompt.output_schema);
-        let api_prompt = build_api_prompt(prompt, instructions.clone(), tools_json);
+        let api_prompt = prompt.build(&self.config.model_family)?;
         let conversation_id = self.conversation_id.to_string();
         let session_source = self.session_source.clone();
 
@@ -326,7 +307,10 @@ impl ModelClient {
     ///
     /// This is a unary call (no streaming) that returns a new list of
     /// `ResponseItem`s representing the compacted transcript.
-    pub async fn compact_conversation_history(&self, prompt: &Prompt) -> Result<Vec<ResponseItem>> {
+    pub async fn compact_conversation_history(
+        &self,
+        prompt: &PromptBuilder,
+    ) -> Result<Vec<ResponseItem>> {
         if prompt.input.is_empty() {
             return Ok(Vec::new());
         }
@@ -344,11 +328,7 @@ impl ModelClient {
         let instructions = prompt
             .get_full_instructions(&self.config.model_family)
             .into_owned();
-        let payload = ApiCompactionInput {
-            model: &self.config.model,
-            input: &prompt.input,
-            instructions: &instructions,
-        };
+        let payload = prompt.build_compaction_input(&self.config.model, &instructions);
 
         let mut extra_headers = ApiHeaderMap::new();
         if let SessionSource::SubAgent(sub) = &self.session_source {
@@ -386,17 +366,6 @@ impl ModelClient {
         let telemetry = Arc::new(ApiTelemetry::new(self.otel_event_manager.clone()));
         let request_telemetry: Arc<dyn RequestTelemetry> = telemetry;
         request_telemetry
-    }
-}
-
-/// Adapts the core `Prompt` type into the `codex-api` payload shape.
-fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value>) -> ApiPrompt {
-    ApiPrompt {
-        instructions,
-        input: prompt.get_formatted_input(),
-        tools: tools_json,
-        parallel_tool_calls: prompt.parallel_tool_calls,
-        output_schema: prompt.output_schema.clone(),
     }
 }
 

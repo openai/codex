@@ -1,5 +1,5 @@
+use crate::Prompt;
 use crate::auth::AuthProvider;
-use crate::common::Prompt as ApiPrompt;
 use crate::common::Reasoning;
 use crate::common::ResponseStream;
 use crate::common::TextControls;
@@ -60,7 +60,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
     pub async fn stream_prompt(
         &self,
         model: &str,
-        prompt: &ApiPrompt,
+        prompt: &Prompt,
         options: ResponsesOptions,
     ) -> Result<ResponseStream, ApiError> {
         let ResponsesOptions {

@@ -60,7 +60,7 @@ use tracing::warn;
 
 use crate::ModelProviderInfo;
 use crate::client::ModelClient;
-use crate::client_common::Prompt;
+use crate::client_common::PromptBuilder;
 use crate::client_common::ResponseEvent;
 use crate::compact::collect_user_messages;
 use crate::config::Config;
@@ -2066,13 +2066,13 @@ async fn run_turn(
             base_instructions = Some(new_instructions);
         }
     }
-    let prompt = Prompt {
-        input,
-        tools: router.specs(),
-        parallel_tool_calls,
-        base_instructions_override: base_instructions,
-        output_schema: turn_context.final_output_json_schema.clone(),
-    };
+    let prompt = PromptBuilder::new()
+        .wire_api(turn_context.client.get_provider().wire_api)
+        .with_input(input)
+        .with_tools(router.specs())
+        .with_parallel_tool_calls(parallel_tool_calls)
+        .with_base_instructions_override_opt(base_instructions)
+        .with_output_schema_opt(turn_context.final_output_json_schema.clone());
 
     let mut retries = 0;
     loop {
@@ -2159,7 +2159,7 @@ async fn try_run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     turn_diff_tracker: SharedTurnDiffTracker,
-    prompt: &Prompt,
+    prompt: &PromptBuilder,
     cancellation_token: CancellationToken,
 ) -> CodexResult<Vec<ProcessedResponseItem>> {
     let rollout_item = RolloutItem::TurnContext(TurnContextItem {

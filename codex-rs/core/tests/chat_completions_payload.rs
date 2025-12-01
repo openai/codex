@@ -7,7 +7,7 @@ use codex_core::LocalShellExecAction;
 use codex_core::LocalShellStatus;
 use codex_core::ModelClient;
 use codex_core::ModelProviderInfo;
-use codex_core::Prompt;
+use codex_core::PromptBuilder;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
 use codex_otel::otel_event_manager::OtelEventManager;
@@ -93,8 +93,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         codex_protocol::protocol::SessionSource::Exec,
     );
 
-    let mut prompt = Prompt::default();
-    prompt.input = input;
+    let prompt = PromptBuilder::new().chat().with_input(input);
 
     let mut stream = match client.stream(&prompt).await {
         Ok(s) => s,

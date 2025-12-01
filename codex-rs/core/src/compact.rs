@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::Prompt;
+use crate::client_common::PromptBuilder;
 use crate::client_common::ResponseEvent;
 use crate::codex::Session;
 use crate::codex::TurnContext;
@@ -93,10 +93,9 @@ async fn run_compact_task_inner(
 
     loop {
         let turn_input = history.get_history_for_prompt();
-        let prompt = Prompt {
-            input: turn_input.clone(),
-            ..Default::default()
-        };
+        let prompt = PromptBuilder::new()
+            .wire_api(turn_context.client.get_provider().wire_api)
+            .with_input(turn_input.clone());
         let attempt_result = drain_to_completed(&sess, turn_context.as_ref(), &prompt).await;
 
         match attempt_result {
@@ -290,7 +289,7 @@ fn build_compacted_history_with_limit(
 async fn drain_to_completed(
     sess: &Session,
     turn_context: &TurnContext,
-    prompt: &Prompt,
+    prompt: &PromptBuilder,
 ) -> CodexResult<()> {
     let mut stream = turn_context.client.clone().stream(prompt).await?;
     loop {

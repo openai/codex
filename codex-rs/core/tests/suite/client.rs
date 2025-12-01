@@ -8,7 +8,7 @@ use codex_core::LocalShellStatus;
 use codex_core::ModelClient;
 use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
-use codex_core::Prompt;
+use codex_core::PromptBuilder;
 use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
@@ -970,8 +970,8 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         codex_protocol::protocol::SessionSource::Exec,
     );
 
-    let mut prompt = Prompt::default();
-    prompt.input.push(ResponseItem::Reasoning {
+    let mut prompt = PromptBuilder::new();
+    prompt.push_input(ResponseItem::Reasoning {
         id: "reasoning-id".into(),
         summary: vec![ReasoningItemReasoningSummary::SummaryText {
             text: "summary".into(),
@@ -981,27 +981,27 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         }]),
         encrypted_content: None,
     });
-    prompt.input.push(ResponseItem::Message {
+    prompt.push_input(ResponseItem::Message {
         id: Some("message-id".into()),
         role: "assistant".into(),
         content: vec![ContentItem::OutputText {
             text: "message".into(),
         }],
     });
-    prompt.input.push(ResponseItem::WebSearchCall {
+    prompt.push_input(ResponseItem::WebSearchCall {
         id: Some("web-search-id".into()),
         status: Some("completed".into()),
         action: WebSearchAction::Search {
             query: Some("weather".into()),
         },
     });
-    prompt.input.push(ResponseItem::FunctionCall {
+    prompt.push_input(ResponseItem::FunctionCall {
         id: Some("function-id".into()),
         name: "do_thing".into(),
         arguments: "{}".into(),
         call_id: "function-call-id".into(),
     });
-    prompt.input.push(ResponseItem::LocalShellCall {
+    prompt.push_input(ResponseItem::LocalShellCall {
         id: Some("local-shell-id".into()),
         call_id: Some("local-shell-call-id".into()),
         status: LocalShellStatus::Completed,
@@ -1013,7 +1013,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
             user: None,
         }),
     });
-    prompt.input.push(ResponseItem::CustomToolCall {
+    prompt.push_input(ResponseItem::CustomToolCall {
         id: Some("custom-tool-id".into()),
         status: Some("completed".into()),
         call_id: "custom-tool-call-id".into(),

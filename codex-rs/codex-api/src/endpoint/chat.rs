@@ -1,6 +1,6 @@
 use crate::ChatRequest;
+use crate::Prompt;
 use crate::auth::AuthProvider;
-use crate::common::Prompt as ApiPrompt;
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::endpoint::streaming::StreamingClient;
@@ -52,7 +52,7 @@ impl<T: HttpTransport, A: AuthProvider> ChatClient<T, A> {
     pub async fn stream_prompt(
         &self,
         model: &str,
-        prompt: &ApiPrompt,
+        prompt: &Prompt,
         conversation_id: Option<String>,
         session_source: Option<SessionSource>,
     ) -> Result<ResponseStream, ApiError> {

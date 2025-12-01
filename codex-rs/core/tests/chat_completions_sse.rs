@@ -6,7 +6,7 @@ use codex_app_server_protocol::AuthMode;
 use codex_core::ContentItem;
 use codex_core::ModelClient;
 use codex_core::ModelProviderInfo;
-use codex_core::Prompt;
+use codex_core::PromptBuilder;
 use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
@@ -93,14 +93,15 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
         codex_protocol::protocol::SessionSource::Exec,
     );
 
-    let mut prompt = Prompt::default();
-    prompt.input = vec![ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: "hello".to_string(),
-        }],
-    }];
+    let prompt = PromptBuilder::new()
+        .chat()
+        .with_input(vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "hello".to_string(),
+            }],
+        }]);
 
     let mut stream = match client.stream(&prompt).await {
         Ok(s) => s,
