@@ -16,6 +16,7 @@ use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::terminal;
 use crate::truncate::TruncationPolicy;
+use crate::turn_event::HandleOutputCtx;
 use crate::turn_event::handle_non_tool_response_item;
 use crate::turn_event::handle_output_item_done;
 use crate::user_notification::UserNotifier;
@@ -2191,152 +2192,146 @@ async fn try_run_turn(
     let mut active_item: Option<TurnItem> = None;
 
     loop {
-        tokio::select! {
-            Some(res) = in_flight.next(), if !in_flight.is_empty() => {
-                let _ = res?;
-                needs_follow_up = true;
+        let event = match stream.next().or_cancel(&cancellation_token).await {
+            Ok(event) => event,
+            Err(codex_async_utils::CancelErr::Cancelled) => {
+                while let Some(res) = in_flight.next().await {
+                    let _ = res?;
+                }
+                return Err(CodexErr::TurnAborted);
             }
-            event = stream.next().or_cancel(&cancellation_token) => {
-                let event = match event {
-                    Ok(event) => event,
-                    Err(codex_async_utils::CancelErr::Cancelled) => {
-                        while let Some(res) = in_flight.next().await {
-                            let _ = res?;
-                        }
-                        return Err(CodexErr::TurnAborted);
-                    }
+        };
+
+        let event = match event {
+            Some(res) => res?,
+            None => {
+                return Err(CodexErr::Stream(
+                    "stream closed before response.completed".into(),
+                    None,
+                ));
+            }
+        };
+
+        match event {
+            ResponseEvent::Created => {}
+            ResponseEvent::OutputItemDone(item) => {
+                let previously_active_item = active_item.take();
+                let mut ctx = HandleOutputCtx {
+                    sess: &sess,
+                    turn_context: &turn_context,
+                    tool_runtime: Arc::clone(&tool_runtime),
+                    cancellation_token: cancellation_token.child_token(),
                 };
 
-                let event = match event {
-                    Some(res) => res?,
-                    None => {
-                        return Err(CodexErr::Stream(
-                            "stream closed before response.completed".into(),
-                            None,
-                        ));
-                    }
+                let output_result =
+                    handle_output_item_done(&mut ctx, item, previously_active_item).await?;
+                if let Some(tool_future) = output_result.tool_future {
+                    in_flight.push(tool_future);
+                    needs_follow_up = true;
+                }
+                if let Some(agent_message) = output_result.last_agent_message {
+                    last_agent_message = Some(agent_message);
+                }
+                needs_follow_up |= output_result.needs_follow_up;
+            }
+            ResponseEvent::OutputItemAdded(item) => {
+                if let Some(turn_item) = handle_non_tool_response_item(&item).await {
+                    let tracked_item = turn_item.clone();
+                    sess.emit_turn_item_started(&turn_context, &turn_item).await;
+
+                    active_item = Some(tracked_item);
+                }
+            }
+            ResponseEvent::RateLimits(snapshot) => {
+                // Update internal state with latest rate limits, but defer sending until
+                // token usage is available to avoid duplicate TokenCount events.
+                sess.update_rate_limits(&turn_context, snapshot).await;
+            }
+            ResponseEvent::Completed {
+                response_id: _,
+                token_usage,
+            } => {
+                sess.update_token_usage_info(&turn_context, token_usage.as_ref())
+                    .await;
+                while let Some(res) = in_flight.next().await {
+                    let _ = res?;
+                }
+                let unified_diff = {
+                    let mut tracker = turn_diff_tracker.lock().await;
+                    tracker.get_unified_diff()
                 };
+                if let Ok(Some(unified_diff)) = unified_diff {
+                    let msg = EventMsg::TurnDiff(TurnDiffEvent { unified_diff });
+                    sess.send_event(&turn_context, msg).await;
+                }
 
-                match event {
-                    ResponseEvent::Created => {}
-                    ResponseEvent::OutputItemDone(item) => {
-                        let previously_active_item = active_item.take();
-                        let output_result = handle_output_item_done(
-                            &sess,
-                            &turn_context,
-                            Arc::clone(&tool_runtime),
-                            item,
-                            previously_active_item,
-                            &mut in_flight,
-                            cancellation_token.child_token(),
-                        )
-                        .await?;
-                        if let Some(agent_message) = output_result.last_agent_message {
-                            last_agent_message = Some(agent_message);
-                        }
-                        needs_follow_up |= output_result.needs_follow_up;
-                    }
-                    ResponseEvent::OutputItemAdded(item) => {
-                        if let Some(turn_item) = handle_non_tool_response_item(&item).await {
-                            let tracked_item = turn_item.clone();
-                            sess.emit_turn_item_started(&turn_context, &turn_item).await;
-
-                            active_item = Some(tracked_item);
-                        }
-                    }
-                    ResponseEvent::RateLimits(snapshot) => {
-                        // Update internal state with latest rate limits, but defer sending until
-                        // token usage is available to avoid duplicate TokenCount events.
-                        sess.update_rate_limits(&turn_context, snapshot).await;
-                    }
-                    ResponseEvent::Completed {
-                        response_id: _,
-                        token_usage,
-                    } => {
-                        sess.update_token_usage_info(&turn_context, token_usage.as_ref())
-                            .await;
-                        while let Some(res) = in_flight.next().await {
-                            let _ = res?;
-                            needs_follow_up = true;
-                        }
-                        let unified_diff = {
-                            let mut tracker = turn_diff_tracker.lock().await;
-                            tracker.get_unified_diff()
-                        };
-                        if let Ok(Some(unified_diff)) = unified_diff {
-                            let msg = EventMsg::TurnDiff(TurnDiffEvent { unified_diff });
-                            sess.send_event(&turn_context, msg).await;
-                        }
-
-                        return Ok(TurnRunResult {
-                            needs_follow_up,
-                            last_agent_message,
-                        });
-                    }
-                    ResponseEvent::OutputTextDelta(delta) => {
-                        // In review child threads, suppress assistant text deltas; the
-                        // UI will show a selection popup from the final ReviewOutput.
-                        if let Some(active) = active_item.as_ref() {
-                            let event = AgentMessageContentDeltaEvent {
-                                thread_id: sess.conversation_id.to_string(),
-                                turn_id: turn_context.sub_id.clone(),
-                                item_id: active.id(),
-                                delta: delta.clone(),
-                            };
-                            sess.send_event(&turn_context, EventMsg::AgentMessageContentDelta(event))
-                                .await;
-                        } else {
-                            error_or_panic("OutputTextDelta without active item".to_string());
-                        }
-                    }
-                    ResponseEvent::ReasoningSummaryDelta {
+                return Ok(TurnRunResult {
+                    needs_follow_up,
+                    last_agent_message,
+                });
+            }
+            ResponseEvent::OutputTextDelta(delta) => {
+                // In review child threads, suppress assistant text deltas; the
+                // UI will show a selection popup from the final ReviewOutput.
+                if let Some(active) = active_item.as_ref() {
+                    let event = AgentMessageContentDeltaEvent {
+                        thread_id: sess.conversation_id.to_string(),
+                        turn_id: turn_context.sub_id.clone(),
+                        item_id: active.id(),
+                        delta: delta.clone(),
+                    };
+                    sess.send_event(&turn_context, EventMsg::AgentMessageContentDelta(event))
+                        .await;
+                } else {
+                    error_or_panic("OutputTextDelta without active item".to_string());
+                }
+            }
+            ResponseEvent::ReasoningSummaryDelta {
+                delta,
+                summary_index,
+            } => {
+                if let Some(active) = active_item.as_ref() {
+                    let event = ReasoningContentDeltaEvent {
+                        thread_id: sess.conversation_id.to_string(),
+                        turn_id: turn_context.sub_id.clone(),
+                        item_id: active.id(),
                         delta,
                         summary_index,
-                    } => {
-                        if let Some(active) = active_item.as_ref() {
-                            let event = ReasoningContentDeltaEvent {
-                                thread_id: sess.conversation_id.to_string(),
-                                turn_id: turn_context.sub_id.clone(),
-                                item_id: active.id(),
-                                delta,
-                                summary_index,
-                            };
-                            sess.send_event(&turn_context, EventMsg::ReasoningContentDelta(event))
-                                .await;
-                        } else {
-                            error_or_panic("ReasoningSummaryDelta without active item".to_string());
-                        }
-                    }
-                    ResponseEvent::ReasoningSummaryPartAdded { summary_index } => {
-                        if let Some(active) = active_item.as_ref() {
-                            let event =
-                                EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {
-                                    item_id: active.id(),
-                                    summary_index,
-                                });
-                            sess.send_event(&turn_context, event).await;
-                        } else {
-                            error_or_panic("ReasoningSummaryPartAdded without active item".to_string());
-                        }
-                    }
-                    ResponseEvent::ReasoningContentDelta {
+                    };
+                    sess.send_event(&turn_context, EventMsg::ReasoningContentDelta(event))
+                        .await;
+                } else {
+                    error_or_panic("ReasoningSummaryDelta without active item".to_string());
+                }
+            }
+            ResponseEvent::ReasoningSummaryPartAdded { summary_index } => {
+                if let Some(active) = active_item.as_ref() {
+                    let event =
+                        EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {
+                            item_id: active.id(),
+                            summary_index,
+                        });
+                    sess.send_event(&turn_context, event).await;
+                } else {
+                    error_or_panic("ReasoningSummaryPartAdded without active item".to_string());
+                }
+            }
+            ResponseEvent::ReasoningContentDelta {
+                delta,
+                content_index,
+            } => {
+                if let Some(active) = active_item.as_ref() {
+                    let event = ReasoningRawContentDeltaEvent {
+                        thread_id: sess.conversation_id.to_string(),
+                        turn_id: turn_context.sub_id.clone(),
+                        item_id: active.id(),
                         delta,
                         content_index,
-                    } => {
-                        if let Some(active) = active_item.as_ref() {
-                            let event = ReasoningRawContentDeltaEvent {
-                                thread_id: sess.conversation_id.to_string(),
-                                turn_id: turn_context.sub_id.clone(),
-                                item_id: active.id(),
-                                delta,
-                                content_index,
-                            };
-                            sess.send_event(&turn_context, EventMsg::ReasoningRawContentDelta(event))
-                                .await;
-                        } else {
-                            error_or_panic("ReasoningRawContentDelta without active item".to_string());
-                        }
-                    }
+                    };
+                    sess.send_event(&turn_context, EventMsg::ReasoningRawContentDelta(event))
+                        .await;
+                } else {
+                    error_or_panic("ReasoningRawContentDelta without active item".to_string());
                 }
             }
         }

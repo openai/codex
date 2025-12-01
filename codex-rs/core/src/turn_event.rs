@@ -2,7 +2,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use codex_protocol::items::TurnItem;
-use futures::stream::FuturesUnordered;
 use tokio_util::sync::CancellationToken;
 
 use crate::codex::Session;
@@ -28,35 +27,36 @@ pub(crate) type InFlightFuture<'f> =
 pub(crate) struct OutputItemResult {
     pub last_agent_message: Option<String>,
     pub needs_follow_up: bool,
+    pub tool_future: Option<InFlightFuture<'static>>,
+}
+
+pub(crate) struct HandleOutputCtx<'a> {
+    pub sess: &'a Arc<Session>,
+    pub turn_context: &'a Arc<TurnContext>,
+    pub tool_runtime: Arc<ToolCallRuntime>,
+    pub cancellation_token: CancellationToken,
 }
 
 pub(crate) async fn handle_output_item_done(
-    sess: &Arc<Session>,
-    turn_context: &Arc<TurnContext>,
-    tool_runtime: Arc<ToolCallRuntime>,
+    ctx: &mut HandleOutputCtx<'_>,
     item: ResponseItem,
     previously_active_item: Option<TurnItem>,
-    in_flight: &mut FuturesUnordered<InFlightFuture<'_>>,
-    cancellation_token: CancellationToken,
 ) -> Result<OutputItemResult> {
-    let mut result = OutputItemResult {
-        last_agent_message: None,
-        needs_follow_up: false,
-    };
-
-    match ToolRouter::build_tool_call(sess.as_ref(), item.clone()).await {
+    let output = match ToolRouter::build_tool_call(ctx.sess.as_ref(), item.clone()).await {
         Ok(Some(call)) => {
             let payload_preview = call.payload.log_payload().into_owned();
             tracing::info!("ToolCall: {} {}", call.tool_name, payload_preview);
 
-            sess.record_conversation_items(turn_context, std::slice::from_ref(&item))
+            ctx.sess
+                .record_conversation_items(ctx.turn_context, std::slice::from_ref(&item))
                 .await;
 
-            let sess_for_output: Arc<Session> = Arc::clone(sess);
-            let turn_for_output: Arc<TurnContext> = Arc::clone(turn_context);
-            let tool_runtime = Arc::clone(&tool_runtime);
+            let sess_for_output: Arc<Session> = Arc::clone(ctx.sess);
+            let turn_for_output: Arc<TurnContext> = Arc::clone(ctx.turn_context);
+            let tool_runtime = Arc::clone(&ctx.tool_runtime);
+            let cancellation_token = ctx.cancellation_token.clone();
 
-            in_flight.push(Box::pin(async move {
+            let tool_future: InFlightFuture<'static> = Box::pin(async move {
                 let response_input = tool_runtime
                     .handle_tool_call(call, cancellation_token)
                     .await?;
@@ -69,27 +69,41 @@ pub(crate) async fn handle_output_item_done(
                         .await;
                 }
                 Ok(response_input)
-            }));
-            result.needs_follow_up = true;
+            });
+
+            OutputItemResult {
+                last_agent_message: None,
+                needs_follow_up: true,
+                tool_future: Some(tool_future),
+            }
         }
         Ok(None) => {
             if let Some(turn_item) = handle_non_tool_response_item(&item).await {
                 if previously_active_item.is_none() {
-                    sess.emit_turn_item_started(turn_context, &turn_item).await;
+                    ctx.sess
+                        .emit_turn_item_started(ctx.turn_context, &turn_item)
+                        .await;
                 }
 
-                sess.emit_turn_item_completed(turn_context, turn_item).await;
+                ctx.sess
+                    .emit_turn_item_completed(ctx.turn_context, turn_item)
+                    .await;
             }
 
-            sess.record_conversation_items(turn_context, std::slice::from_ref(&item))
+            ctx.sess
+                .record_conversation_items(ctx.turn_context, std::slice::from_ref(&item))
                 .await;
-            if let Some(agent_message) = last_assistant_message_from_item(&item) {
-                result.last_agent_message = Some(agent_message);
+            let last_agent_message = last_assistant_message_from_item(&item);
+
+            OutputItemResult {
+                last_agent_message,
+                needs_follow_up: false,
+                tool_future: None,
             }
         }
         Err(FunctionCallError::MissingLocalShellCallId) => {
             let msg = "LocalShellCall without call_id or id";
-            turn_context
+            ctx.turn_context
                 .client
                 .get_otel_event_manager()
                 .log_tool_failed("local_shell", msg);
@@ -102,13 +116,23 @@ pub(crate) async fn handle_output_item_done(
                     ..Default::default()
                 },
             };
-            sess.record_conversation_items(turn_context, std::slice::from_ref(&item))
+            ctx.sess
+                .record_conversation_items(ctx.turn_context, std::slice::from_ref(&item))
                 .await;
             if let Some(response_item) = response_input_to_response_item(&response) {
-                sess.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
+                ctx.sess
+                    .record_conversation_items(
+                        ctx.turn_context,
+                        std::slice::from_ref(&response_item),
+                    )
                     .await;
             }
-            result.needs_follow_up = true;
+
+            OutputItemResult {
+                last_agent_message: None,
+                needs_follow_up: true,
+                tool_future: None,
+            }
         }
         Err(FunctionCallError::RespondToModel(message))
         | Err(FunctionCallError::Denied(message)) => {
@@ -119,20 +143,30 @@ pub(crate) async fn handle_output_item_done(
                     ..Default::default()
                 },
             };
-            sess.record_conversation_items(turn_context, std::slice::from_ref(&item))
+            ctx.sess
+                .record_conversation_items(ctx.turn_context, std::slice::from_ref(&item))
                 .await;
             if let Some(response_item) = response_input_to_response_item(&response) {
-                sess.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
+                ctx.sess
+                    .record_conversation_items(
+                        ctx.turn_context,
+                        std::slice::from_ref(&response_item),
+                    )
                     .await;
             }
-            result.needs_follow_up = true;
+
+            OutputItemResult {
+                last_agent_message: None,
+                needs_follow_up: true,
+                tool_future: None,
+            }
         }
         Err(FunctionCallError::Fatal(message)) => {
             return Err(CodexErr::Fatal(message));
         }
-    }
+    };
 
-    Ok(result)
+    Ok(output)
 }
 
 pub(crate) async fn handle_non_tool_response_item(item: &ResponseItem) -> Option<TurnItem> {
