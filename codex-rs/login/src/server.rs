@@ -447,6 +447,16 @@ fn bind_server(port: u16) -> io::Result<Server> {
     const MAX_ATTEMPTS: u32 = 10;
     const RETRY_DELAY: Duration = Duration::from_millis(200);
 
+    fn retry_sleep(delay: Duration) {
+        if tokio::runtime::Handle::try_current().is_ok() {
+            let _ = tokio::task::block_in_place(|| {
+                std::thread::sleep(delay);
+            });
+        } else {
+            std::thread::sleep(delay);
+        }
+    }
+
     loop {
         match Server::http(&bind_address) {
             Ok(server) => return Ok(server),
@@ -467,7 +477,7 @@ fn bind_server(port: u16) -> io::Result<Server> {
                         }
                     }
 
-                    thread::sleep(RETRY_DELAY);
+                    retry_sleep(RETRY_DELAY);
 
                     if attempts >= MAX_ATTEMPTS {
                         return Err(io::Error::new(

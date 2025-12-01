@@ -288,8 +288,8 @@ mod tests {
     }
 
     #[cfg(target_os = "macos")]
-    #[test]
-    fn list_child_pids_includes_spawned_child() {
+    #[tokio::test]
+    async fn list_child_pids_includes_spawned_child() {
         let mut child = Command::new("/bin/sleep")
             .arg("5")
             .stdin(Stdio::null())
@@ -305,7 +305,7 @@ mod tests {
                 found = true;
                 break;
             }
-            std::thread::sleep(Duration::from_millis(10));
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
         let _ = child.kill();

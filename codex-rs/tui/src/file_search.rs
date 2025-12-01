@@ -25,8 +25,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use std::thread;
 use std::time::Duration;
+use tokio::task::spawn_blocking;
+use tokio::time::sleep;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -117,16 +118,16 @@ impl FileSearchManager {
         let state = self.state.clone();
         let search_dir = self.search_dir.clone();
         let tx_clone = self.app_tx.clone();
-        thread::spawn(move || {
+        tokio::spawn(async move {
             // Always do a minimum debounce, but then poll until the
             // `active_search` is cleared.
-            thread::sleep(FILE_SEARCH_DEBOUNCE);
+            sleep(FILE_SEARCH_DEBOUNCE).await;
             loop {
                 #[expect(clippy::unwrap_used)]
                 if state.lock().unwrap().active_search.is_none() {
                     break;
                 }
-                thread::sleep(ACTIVE_SEARCH_COMPLETE_POLL_INTERVAL);
+                sleep(ACTIVE_SEARCH_COMPLETE_POLL_INTERVAL).await;
             }
 
             // The debounce timer has expired, so start a search using the
@@ -162,36 +163,51 @@ impl FileSearchManager {
         cancellation_token: Arc<AtomicBool>,
         search_state: Arc<Mutex<SearchState>>,
     ) {
-        let compute_indices = true;
-        std::thread::spawn(move || {
-            let matches = file_search::run(
-                &query,
-                MAX_FILE_SEARCH_RESULTS,
-                &search_dir,
-                Vec::new(),
-                NUM_FILE_SEARCH_THREADS,
-                cancellation_token.clone(),
-                compute_indices,
-                true,
-            )
-            .map(|res| res.matches)
-            .unwrap_or_default();
+        tokio::spawn({
+            let query_for_result = query.clone();
+            let cancellation_token_for_result = cancellation_token.clone();
+            let query_for_search = query.clone();
+            let cancellation_token_for_search = cancellation_token.clone();
+            let search_state = Arc::clone(&search_state);
+            let search_dir = search_dir.clone();
+            async move {
+                let compute_indices = true;
+                let matches = spawn_blocking(move || {
+                    file_search::run(
+                        &query_for_search,
+                        MAX_FILE_SEARCH_RESULTS,
+                        &search_dir,
+                        Vec::new(),
+                        NUM_FILE_SEARCH_THREADS,
+                        cancellation_token_for_search,
+                        compute_indices,
+                        true,
+                    )
+                    .map(|res| res.matches)
+                    .unwrap_or_default()
+                })
+                .await
+                .unwrap_or_default();
 
-            let is_cancelled = cancellation_token.load(Ordering::Relaxed);
-            if !is_cancelled {
-                tx.send(AppEvent::FileSearchResult { query, matches });
-            }
+                let is_cancelled = cancellation_token_for_result.load(Ordering::Relaxed);
+                if !is_cancelled {
+                    tx.send(AppEvent::FileSearchResult {
+                        query: query_for_result,
+                        matches,
+                    });
+                }
 
-            // Reset the active search state. Do a pointer comparison to verify
-            // that we are clearing the ActiveSearch that corresponds to the
-            // cancellation token we were given.
-            {
-                #[expect(clippy::unwrap_used)]
-                let mut st = search_state.lock().unwrap();
-                if let Some(active_search) = &st.active_search
-                    && Arc::ptr_eq(&active_search.cancellation_token, &cancellation_token)
+                // Reset the active search state. Do a pointer comparison to verify
+                // that we are clearing the ActiveSearch that corresponds to the
+                // cancellation token we were given.
                 {
-                    st.active_search = None;
+                    #[expect(clippy::unwrap_used)]
+                    let mut st = search_state.lock().unwrap();
+                    if let Some(active_search) = &st.active_search
+                        && Arc::ptr_eq(&active_search.cancellation_token, &cancellation_token)
+                    {
+                        st.active_search = None;
+                    }
                 }
             }
         });

@@ -50,10 +50,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use std::thread;
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
+use tokio::time::sleep;
 
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
@@ -502,9 +502,9 @@ impl App {
                 {
                     let tx = self.app_event_tx.clone();
                     let running = self.commit_anim_running.clone();
-                    thread::spawn(move || {
+                    tokio::spawn(async move {
                         while running.load(Ordering::Relaxed) {
-                            thread::sleep(Duration::from_millis(50));
+                            sleep(Duration::from_millis(50)).await;
                             tx.send(AppEvent::CommitTick);
                         }
                     });
