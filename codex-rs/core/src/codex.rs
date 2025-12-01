@@ -2809,6 +2809,14 @@ mod tests {
         let (session, _turn_context) = make_session_and_context();
 
         session
+            .state
+            .lock()
+            .await
+            .session_configuration
+            .features
+            .enable(Feature::ModelWarnings);
+
+        session
             .record_model_warning("too many unified exec sessions")
             .await;
 
