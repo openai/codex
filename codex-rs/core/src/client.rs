@@ -112,6 +112,8 @@ impl ModelClient {
     /// For Chat providers, the underlying stream is optionally aggregated
     /// based on the `show_raw_agent_reasoning` flag in the config.
     pub async fn stream(&self, prompt: &PromptBuilder) -> Result<ResponseStream> {
+        self.validate_prompt_wire_api(prompt)?;
+
         match self.provider.wire_api {
             WireApi::Responses => self.stream_responses_api(prompt).await,
             WireApi::Chat => {
@@ -130,6 +132,17 @@ impl ModelClient {
                 }
             }
         }
+    }
+
+    fn validate_prompt_wire_api(&self, prompt: &PromptBuilder) -> Result<()> {
+        if prompt.wire_api != self.provider.wire_api {
+            return Err(CodexErr::UnsupportedOperation(format!(
+                "prompt configured for {:?} wire API but provider {} expects {:?}",
+                prompt.wire_api, self.provider.name, self.provider.wire_api
+            )));
+        }
+
+        Ok(())
     }
 
     /// Streams a turn via the OpenAI Chat Completions API.

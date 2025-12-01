@@ -10,6 +10,7 @@ use codex_core::ModelProviderInfo;
 use codex_core::PromptBuilder;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
+use codex_core::error::CodexErr;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
 use codex_protocol::models::ReasoningItemContent;
@@ -41,21 +42,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         .mount(&server)
         .await;
 
-    let provider = ModelProviderInfo {
-        name: "mock".into(),
-        base_url: Some(format!("{}/v1", server.uri())),
-        env_key: None,
-        env_key_instructions: None,
-        experimental_bearer_token: None,
-        wire_api: WireApi::Chat,
-        query_params: None,
-        http_headers: None,
-        env_http_headers: None,
-        request_max_retries: Some(0),
-        stream_max_retries: Some(0),
-        stream_idle_timeout_ms: Some(5_000),
-        requires_openai_auth: false,
-    };
+    let provider = chat_provider(format!("{}/v1", server.uri()));
 
     let codex_home = match TempDir::new() {
         Ok(dir) => dir,
@@ -181,6 +168,24 @@ fn first_assistant(messages: &[Value]) -> &Value {
     match messages.iter().find(|msg| msg["role"] == "assistant") {
         Some(v) => v,
         None => panic!("assistant message not present"),
+    }
+}
+
+fn chat_provider(base_url: String) -> ModelProviderInfo {
+    ModelProviderInfo {
+        name: "mock".into(),
+        base_url: Some(base_url),
+        env_key: None,
+        env_key_instructions: None,
+        experimental_bearer_token: None,
+        wire_api: WireApi::Chat,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: Some(0),
+        stream_max_retries: Some(0),
+        stream_idle_timeout_ms: Some(5_000),
+        requires_openai_auth: false,
     }
 }
 
@@ -315,4 +320,53 @@ async fn suppresses_duplicate_assistant_messages() {
         assistant_messages[0]["content"],
         Value::String("dup".into())
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn errors_on_mismatched_prompt_wire_api() {
+    let provider = chat_provider("https://example.com/v1".into());
+
+    let codex_home = match TempDir::new() {
+        Ok(dir) => dir,
+        Err(e) => panic!("failed to create TempDir: {e}"),
+    };
+    let mut config = load_default_config_for_test(&codex_home);
+    config.model_provider_id = provider.name.clone();
+    config.model_provider = provider.clone();
+    config.show_raw_agent_reasoning = true;
+    let effort = config.model_reasoning_effort;
+    let summary = config.model_reasoning_summary;
+    let config = Arc::new(config);
+
+    let conversation_id = ConversationId::new();
+
+    let otel_event_manager = OtelEventManager::new(
+        conversation_id,
+        config.model.as_str(),
+        config.model_family.slug.as_str(),
+        None,
+        Some("test@test.com".to_string()),
+        Some(AuthMode::ChatGPT),
+        false,
+        "test".to_string(),
+    );
+
+    let client = ModelClient::new(
+        Arc::clone(&config),
+        None,
+        otel_event_manager,
+        provider,
+        effort,
+        summary,
+        conversation_id,
+        codex_protocol::protocol::SessionSource::Exec,
+    );
+
+    let prompt = PromptBuilder::new().with_input(vec![user_message("u1")]);
+
+    let err = match client.stream(&prompt).await {
+        Ok(_) => panic!("wire API mismatch should error before sending request"),
+        Err(e) => e,
+    };
+    assert!(matches!(err, CodexErr::UnsupportedOperation(_)));
 }
