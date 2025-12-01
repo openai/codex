@@ -1476,6 +1476,7 @@ mod handlers {
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
     use crate::mcp::auth::compute_auth_statuses;
+    use crate::review_prompts::resolve_review_request;
     use crate::tasks::CompactTask;
     use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
@@ -1784,14 +1785,28 @@ mod handlers {
         let turn_context = sess
             .new_turn_with_sub_id(sub_id.clone(), SessionSettingsUpdate::default())
             .await;
-        spawn_review_thread(
-            Arc::clone(sess),
-            Arc::clone(config),
-            turn_context.clone(),
-            sub_id,
-            review_request,
-        )
-        .await;
+        match resolve_review_request(review_request) {
+            Ok(resolved) => {
+                spawn_review_thread(
+                    Arc::clone(sess),
+                    Arc::clone(config),
+                    turn_context.clone(),
+                    sub_id,
+                    resolved,
+                )
+                .await;
+            }
+            Err(err) => {
+                let event = Event {
+                    id: sub_id,
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: err.to_string(),
+                        codex_error_info: Some(CodexErrorInfo::Other),
+                    }),
+                };
+                sess.send_event(&turn_context, event.msg).await;
+            }
+        }
     }
 }
 
@@ -1801,7 +1816,7 @@ async fn spawn_review_thread(
     config: Arc<Config>,
     parent_turn_context: Arc<TurnContext>,
     sub_id: String,
-    review_request: ReviewRequest,
+    resolved: crate::review_prompts::ResolvedReviewRequest,
 ) {
     let model = config.review_model.clone();
     let review_model_family = find_family_for_model(&model)
@@ -1817,7 +1832,7 @@ async fn spawn_review_thread(
     });
 
     let base_instructions = REVIEW_PROMPT.to_string();
-    let review_prompt = review_request.prompt.clone();
+    let review_prompt = resolved.prompt.clone();
     let provider = parent_turn_context.client.get_provider();
     let auth_manager = parent_turn_context.client.get_auth_manager();
     let model_family = review_model_family.clone();
@@ -1879,6 +1894,10 @@ async fn spawn_review_thread(
     sess.spawn_task(tc.clone(), input, ReviewTask::new()).await;
 
     // Announce entering review mode so UIs can switch modes.
+    let review_request = ReviewRequest {
+        target: resolved.target,
+        user_facing_hint: Some(resolved.user_facing_hint),
+    };
     sess.send_event(&tc, EventMsg::EnteredReviewMode(review_request))
         .await;
 }
