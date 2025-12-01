@@ -9,7 +9,6 @@ use crate::protocol::ContextCompactedEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::RolloutItem;
 use crate::protocol::TaskStartedEvent;
-use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use codex_protocol::models::ResponseItem;
 
 pub(crate) async fn run_inline_remote_auto_compact_task(
