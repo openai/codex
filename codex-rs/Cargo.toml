@@ -59,15 +59,15 @@ license = "Apache-2.0"
 # Internal
 app_test_support = { path = "app-server/tests/common" }
 codex-ansi-escape = { path = "ansi-escape" }
+codex-api = { path = "codex-api" }
 codex-app-server = { path = "app-server" }
 codex-app-server-protocol = { path = "app-server-protocol" }
 codex-apply-patch = { path = "apply-patch" }
 codex-arg0 = { path = "arg0" }
 codex-async-utils = { path = "async-utils" }
 codex-backend-client = { path = "backend-client" }
-codex-api = { path = "codex-api" }
-codex-client = { path = "codex-client" }
 codex-chatgpt = { path = "chatgpt" }
+codex-client = { path = "codex-client" }
 codex-common = { path = "common" }
 codex-core = { path = "core" }
 codex-exec = { path = "exec" }
@@ -136,7 +136,7 @@ icu_decimal = "2.1"
 icu_locale_core = "2.1"
 icu_provider = { version = "2.1", features = ["sync"] }
 ignore = "0.4.23"
-image = { version = "^0.25.8", default-features = false }
+image = { version = "^0.25.9", default-features = false }
 indexmap = "2.12.0"
 insta = "1.43.2"
 itertools = "0.14.0"
@@ -169,17 +169,17 @@ pulldown-cmark = "0.10"
 rand = "0.9"
 ratatui = "0.29.0"
 ratatui-macros = "0.6.0"
-regex-lite = "0.1.7"
 regex = "1.12.2"
+regex-lite = "0.1.7"
 reqwest = "0.12"
-rmcp = { version = "0.9.0", default-features = false }
+rmcp = { version = "0.10.0", default-features = false }
 schemars = "0.8.22"
 seccompiler = "0.5.0"
 sentry = "0.34.0"
 serde = "1"
 serde_json = "1"
 serde_yaml = "0.9"
-serde_with = "3.14"
+serde_with = "3.16"
 serial_test = "3.2.0"
 sha1 = "0.10.6"
 sha2 = "0.10"
@@ -204,7 +204,7 @@ tokio-util = "0.7.16"
 toml = "0.9.5"
 toml_edit = "0.23.5"
 tonic = "0.13.1"
-tracing = "0.1.41"
+tracing = "0.1.43"
 tracing-appender = "0.2.3"
 tracing-subscriber = "0.3.20"
 tracing-test = "0.2.5"
@@ -289,7 +289,6 @@ opt-level = 0
 # ratatui = { path = "../../ratatui" }
 crossterm = { git = "https://github.com/nornagon/crossterm", branch = "nornagon/color-query" }
 ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.29.0-patch" }
-rmcp = { git = "https://github.com/bolinfest/rust-sdk", branch = "pr556" }
 
 # Uncomment to debug local changes.
 # rmcp = { path = "../../rust-sdk/crates/rmcp" }
