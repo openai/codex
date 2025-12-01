@@ -266,17 +266,20 @@ async fn tool_results_grouped() -> anyhow::Result<()> {
         }
     }
 
-    // output should come in the order of the function calls
-    let zipped = function_calls
+    // Outputs can complete in any order; just ensure we got matching call_ids.
+    let mut call_ids = function_calls
         .iter()
-        .zip(function_call_outputs.iter())
+        .filter_map(|(_, item)| item.get("call_id").and_then(Value::as_str))
         .collect::<Vec<_>>();
-    for (call, output) in zipped {
-        assert_eq!(
-            call.1.get("call_id").and_then(Value::as_str),
-            output.1.get("call_id").and_then(Value::as_str)
-        );
-    }
+    let mut output_ids = function_call_outputs
+        .iter()
+        .filter_map(|(_, item)| item.get("call_id").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+
+    call_ids.sort_unstable();
+    output_ids.sort_unstable();
+
+    assert_eq!(call_ids, output_ids);
 
     Ok(())
 }

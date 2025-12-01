@@ -2153,6 +2153,20 @@ struct TurnRunResult {
     last_agent_message: Option<String>,
 }
 
+async fn drain_in_flight(
+    in_flight: &mut FuturesUnordered<BoxFuture<'static, CodexResult<()>>>,
+) -> CodexResult<()> {
+    while let Some(res) = in_flight.next().await {
+        match res {
+            Ok(_) => {}
+            Err(err) => {
+                tracing::error!(error = ?err, "in-flight tool future failed during drain");
+            }
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn try_run_turn(
     router: Arc<ToolRouter>,
@@ -2185,27 +2199,21 @@ async fn try_run_turn(
         Arc::clone(&turn_context),
         Arc::clone(&turn_diff_tracker),
     ));
-    let mut in_flight: FuturesUnordered<BoxFuture<CodexResult<ResponseInputItem>>> =
+    let mut in_flight: FuturesUnordered<BoxFuture<'static, CodexResult<()>>> =
         FuturesUnordered::new();
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
-
-    loop {
+    let outcome: CodexResult<TurnRunResult> = loop {
         let event = match stream.next().or_cancel(&cancellation_token).await {
             Ok(event) => event,
-            Err(codex_async_utils::CancelErr::Cancelled) => {
-                while let Some(res) = in_flight.next().await {
-                    let _ = res?;
-                }
-                return Err(CodexErr::TurnAborted);
-            }
+            Err(codex_async_utils::CancelErr::Cancelled) => break Err(CodexErr::TurnAborted),
         };
 
         let event = match event {
             Some(res) => res?,
             None => {
-                return Err(CodexErr::Stream(
+                break Err(CodexErr::Stream(
                     "stream closed before response.completed".into(),
                     None,
                 ));
@@ -2227,7 +2235,6 @@ async fn try_run_turn(
                     handle_output_item_done(&mut ctx, item, previously_active_item).await?;
                 if let Some(tool_future) = output_result.tool_future {
                     in_flight.push(tool_future);
-                    needs_follow_up = true;
                 }
                 if let Some(agent_message) = output_result.last_agent_message {
                     last_agent_message = Some(agent_message);
@@ -2253,9 +2260,6 @@ async fn try_run_turn(
             } => {
                 sess.update_token_usage_info(&turn_context, token_usage.as_ref())
                     .await;
-                while let Some(res) = in_flight.next().await {
-                    let _ = res?;
-                }
                 let unified_diff = {
                     let mut tracker = turn_diff_tracker.lock().await;
                     tracker.get_unified_diff()
@@ -2265,7 +2269,7 @@ async fn try_run_turn(
                     sess.send_event(&turn_context, msg).await;
                 }
 
-                return Ok(TurnRunResult {
+                break Ok(TurnRunResult {
                     needs_follow_up,
                     last_agent_message,
                 });
@@ -2335,6 +2339,13 @@ async fn try_run_turn(
                 }
             }
         }
+    };
+
+    drain_in_flight(&mut in_flight).await?;
+
+    match outcome {
+        Ok(turn_result) => Ok(turn_result),
+        Err(err) => Err(err),
     }
 }
 

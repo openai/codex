@@ -21,8 +21,7 @@ use tracing::debug;
 /// Handle a completed output item from the model stream, recording it and
 /// queuing any tool execution futures. This records items immediately so
 /// history and rollout stay in sync even if the turn is later cancelled.
-pub(crate) type InFlightFuture<'f> =
-    Pin<Box<dyn Future<Output = Result<ResponseInputItem>> + Send + 'f>>;
+pub(crate) type InFlightFuture<'f> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'f>>;
 
 pub(crate) struct OutputItemResult {
     pub last_agent_message: Option<String>,
@@ -68,7 +67,7 @@ pub(crate) async fn handle_output_item_done(
                         )
                         .await;
                 }
-                Ok(response_input)
+                Ok(())
             });
 
             OutputItemResult {
