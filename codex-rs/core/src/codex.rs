@@ -1036,7 +1036,7 @@ impl Session {
     }
 
     pub(crate) async fn record_model_warning(&self, message: impl Into<String>) {
-        if !self.enabled(Feature::ModelWarnings) {
+        if !self.enabled(Feature::ModelWarnings).await {
             return;
         }
 
