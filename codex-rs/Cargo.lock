@@ -4465,6 +4465,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
+name = "pastey"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57d6c094ee800037dff99e02cab0eaf3142826586742a270ab3d7a62656bd27a"
+
+[[package]]
 name = "path-absolutize"
 version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5142,8 +5148,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "0.9.0"
-source = "git+https://github.com/bolinfest/rust-sdk?branch=pr556#4d9cc16f4c76c84486344f542ed9a3e9364019ba"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38b18323edc657390a6ed4d7a9110b0dec2dc3ed128eb2a123edfbafabdbddc5"
 dependencies = [
  "async-trait",
  "base64",
@@ -5154,7 +5161,7 @@ dependencies = [
  "http-body",
  "http-body-util",
  "oauth2",
- "paste",
+ "pastey",
  "pin-project-lite",
  "process-wrap",
  "rand 0.9.2",
@@ -5176,8 +5183,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp-macros"
-version = "0.9.0"
-source = "git+https://github.com/bolinfest/rust-sdk?branch=pr556#4d9cc16f4c76c84486344f542ed9a3e9364019ba"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c75d0a62676bf8c8003c4e3c348e2ceb6a7b3e48323681aaf177fdccdac2ce50"
 dependencies = [
  "darling 0.21.3",
  "proc-macro2",

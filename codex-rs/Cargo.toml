@@ -59,15 +59,15 @@ license = "Apache-2.0"
 # Internal
 app_test_support = { path = "app-server/tests/common" }
 codex-ansi-escape = { path = "ansi-escape" }
+codex-api = { path = "codex-api" }
 codex-app-server = { path = "app-server" }
 codex-app-server-protocol = { path = "app-server-protocol" }
 codex-apply-patch = { path = "apply-patch" }
 codex-arg0 = { path = "arg0" }
 codex-async-utils = { path = "async-utils" }
 codex-backend-client = { path = "backend-client" }
-codex-api = { path = "codex-api" }
-codex-client = { path = "codex-client" }
 codex-chatgpt = { path = "chatgpt" }
+codex-client = { path = "codex-client" }
 codex-common = { path = "common" }
 codex-core = { path = "core" }
 codex-exec = { path = "exec" }
@@ -169,10 +169,10 @@ pulldown-cmark = "0.10"
 rand = "0.9"
 ratatui = "0.29.0"
 ratatui-macros = "0.6.0"
-regex-lite = "0.1.7"
 regex = "1.12.2"
+regex-lite = "0.1.7"
 reqwest = "0.12"
-rmcp = { version = "0.9.0", default-features = false }
+rmcp = { version = "0.10.0", default-features = false }
 schemars = "0.8.22"
 seccompiler = "0.5.0"
 sentry = "0.34.0"
@@ -288,7 +288,6 @@ opt-level = 0
 # ratatui = { path = "../../ratatui" }
 crossterm = { git = "https://github.com/nornagon/crossterm", branch = "nornagon/color-query" }
 ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.29.0-patch" }
-rmcp = { git = "https://github.com/bolinfest/rust-sdk", branch = "pr556" }
 
 # Uncomment to debug local changes.
 # rmcp = { path = "../../rust-sdk/crates/rmcp" }
