@@ -723,9 +723,7 @@ impl Session {
                 let reconstructed_history =
                     self.reconstruct_history_from_rollout(&turn_context, &rollout_items);
                 if !reconstructed_history.is_empty() {
-                    let _ = self
-                        .record_into_history(&reconstructed_history, &turn_context)
-                        .await;
+                    self.replace_history(reconstructed_history).await;
                 }
 
                 // If persisting, persist all rollout items as-is (recorder filters)
@@ -2538,6 +2536,7 @@ mod tests {
     use super::*;
     use crate::config::ConfigOverrides;
     use crate::config::ConfigToml;
+    use crate::context_manager::process_response_items;
     use crate::exec::ExecToolCallOutput;
     use crate::shell::default_user_shell;
     use crate::tools::format_exec_output_str;
@@ -2548,6 +2547,7 @@ mod tests {
     use crate::protocol::RateLimitSnapshot;
     use crate::protocol::RateLimitWindow;
     use crate::protocol::ResumedHistory;
+    use crate::protocol::RolloutItem;
     use crate::state::TaskKind;
     use crate::tasks::SessionTask;
     use crate::tasks::SessionTaskContext;
@@ -2558,9 +2558,12 @@ mod tests {
     use crate::tools::handlers::ShellHandler;
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::registry::ToolHandler;
+    use crate::truncate::TruncationPolicy;
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_app_server_protocol::AuthMode;
     use codex_protocol::models::ContentItem;
+    use codex_protocol::models::FunctionCallOutputContentItem;
+    use codex_protocol::models::FunctionCallOutputPayload;
     use codex_protocol::models::ResponseItem;
     use std::time::Duration;
     use tokio::time::sleep;
@@ -2682,6 +2685,60 @@ mod tests {
                 credits: initial.credits,
             })
         );
+    }
+
+    #[test]
+    fn record_initial_history_avoids_reprocessing_truncated_rollout_items() {
+        let (session, _turn_context) = make_session_and_context();
+        let truncation_policy = TruncationPolicy::Bytes(64);
+
+        tokio_test::block_on(async {
+            let mut state = session.state.lock().await;
+            let mut config = (*state.session_configuration.original_config_do_not_use).clone();
+            config.model_family.truncation_policy = truncation_policy;
+            config.tool_output_token_limit = None;
+            state.session_configuration.original_config_do_not_use = Arc::new(config);
+        });
+
+        let call = ResponseItem::FunctionCall {
+            id: None,
+            name: "tool".to_string(),
+            arguments: "{}".to_string(),
+            call_id: "call-1".to_string(),
+        };
+        let raw_item = ResponseItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload {
+                content: "tool output ".repeat(20),
+                content_items: Some(vec![
+                    FunctionCallOutputContentItem::InputText {
+                        text: "first item ".repeat(20),
+                    },
+                    FunctionCallOutputContentItem::InputText {
+                        text: "second item ".repeat(20),
+                    },
+                ]),
+                success: Some(true),
+            },
+        };
+        let expected = process_response_items([&call, &raw_item], truncation_policy);
+
+        tokio_test::block_on(
+            session.record_initial_history(InitialHistory::Resumed(ResumedHistory {
+                conversation_id: ConversationId::default(),
+                history: expected
+                    .iter()
+                    .cloned()
+                    .map(RolloutItem::ResponseItem)
+                    .collect(),
+                rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            })),
+        );
+
+        let actual = tokio_test::block_on(async {
+            session.state.lock().await.clone_history().get_history()
+        });
+        assert_eq!(expected, actual);
     }
 
     #[test]
