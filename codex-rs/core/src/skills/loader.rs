@@ -16,7 +16,7 @@ struct SkillFrontmatter {
     description: String,
 }
 
-const SKILL_FILENAME: &str = "SKILL.md";
+const SKILLS_FILENAME: &str = "SKILL.md";
 const SKILLS_DIR_NAME: &str = "skills";
 const MAX_NAME_LEN: usize = 100;
 const MAX_DESCRIPTION_LEN: usize = 500;
@@ -83,7 +83,7 @@ fn discover_skills_under_root(root: &Path, outcome: &mut SkillLoadOutcome) {
                 continue;
             }
 
-            if file_type.is_file() && file_name == SKILL_FILENAME {
+            if file_type.is_file() && file_name == SKILLS_FILENAME {
                 match parse_skill_file(&path) {
                     Ok(skill) => outcome.skills.push(skill),
                     Err(message) => outcome.errors.push(SkillError { path, message }),
@@ -182,7 +182,7 @@ mod tests {
         let content = format!(
             "---\nname: {name}\ndescription: |-\n  {indented_description}\n---\n\n# Body\n"
         );
-        let path = skill_dir.join(SKILL_FILENAME);
+        let path = skill_dir.join(SKILLS_FILENAME);
         fs::write(&path, content).unwrap();
         path
     }
@@ -216,7 +216,7 @@ mod tests {
         let hidden_dir = codex_home.path().join("skills/.hidden");
         fs::create_dir_all(&hidden_dir).unwrap();
         fs::write(
-            hidden_dir.join(SKILL_FILENAME),
+            hidden_dir.join(SKILLS_FILENAME),
             "---\nname: hidden\ndescription: hidden\n---\n",
         )
         .unwrap();
@@ -224,7 +224,7 @@ mod tests {
         // Invalid because missing closing frontmatter.
         let invalid_dir = codex_home.path().join("skills/invalid");
         fs::create_dir_all(&invalid_dir).unwrap();
-        fs::write(invalid_dir.join(SKILL_FILENAME), "---\nname: bad").unwrap();
+        fs::write(invalid_dir.join(SKILLS_FILENAME), "---\nname: bad").unwrap();
 
         let cfg = make_config(&codex_home);
         let outcome = load_skills(&cfg);
