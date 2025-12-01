@@ -334,12 +334,11 @@ fn capture_existing_untracked(
     repo_prefix: Option<&Path>,
 ) -> Result<UntrackedSnapshot, GitToolingError> {
     // Ask git for the zero-delimited porcelain status so we can enumerate
-    // every untracked or ignored path (including ones filtered by prefix).
+    // every untracked path (including ones filtered by prefix).
     let mut args = vec![
         OsString::from("status"),
         OsString::from("--porcelain=2"),
         OsString::from("-z"),
-        OsString::from("--ignored=matching"),
         OsString::from("--untracked-files=all"),
     ];
     if let Some(prefix) = repo_prefix {
@@ -880,8 +879,8 @@ mod tests {
     }
 
     #[test]
-    /// Restoring removes ignored directories created after the snapshot.
-    fn restore_removes_new_ignored_directory() -> Result<(), GitToolingError> {
+    /// Restoring leaves ignored directories created after the snapshot untouched.
+    fn restore_preserves_new_ignored_directory() -> Result<(), GitToolingError> {
         let temp = tempfile::tempdir()?;
         let repo = temp.path();
         init_test_repo(repo);
@@ -910,7 +909,9 @@ mod tests {
 
         restore_ghost_commit(repo, &ghost)?;
 
-        assert!(!vscode.exists());
+        assert!(vscode.exists());
+        let settings_after = std::fs::read_to_string(vscode.join("settings.json"))?;
+        assert_eq!(settings_after, "{\n  \"after\": true\n}\n");
 
         Ok(())
     }
