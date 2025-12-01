@@ -238,15 +238,6 @@ fn is_api_message(message: &ResponseItem) -> bool {
     }
 }
 
-fn is_review_rollout_item(item: &ResponseItem) -> bool {
-    matches!(item,
-        ResponseItem::Message {
-            id: Some(id),
-            ..
-        } if id.starts_with("review:rollout:")
-    )
-}
-
 pub(crate) fn process_response_items<I>(items: I, policy: TruncationPolicy) -> Vec<ResponseItem>
 where
     I: IntoIterator,
