@@ -11,6 +11,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use crate::ConversationId;
+use crate::approvals::ElicitationRequestEvent;
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::custom_prompts::CustomPrompt;
@@ -23,6 +24,7 @@ use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
 use crate::user_input::UserInput;
 use mcp_types::CallToolResult;
+use mcp_types::RequestId;
 use mcp_types::Resource as McpResource;
 use mcp_types::ResourceTemplate as McpResourceTemplate;
 use mcp_types::Tool as McpTool;
@@ -35,6 +37,7 @@ use strum_macros::Display;
 use ts_rs::TS;
 
 pub use crate::approvals::ApplyPatchApprovalRequestEvent;
+pub use crate::approvals::ElicitationAction;
 pub use crate::approvals::ExecApprovalRequestEvent;
 pub use crate::approvals::SandboxCommandAssessment;
 pub use crate::approvals::SandboxRiskLevel;
@@ -153,6 +156,16 @@ pub enum Op {
         decision: ReviewDecision,
     },
 
+    /// Resolve an MCP elicitation request.
+    ResolveElicitation {
+        /// Name of the MCP server that issued the request.
+        server_name: String,
+        /// Request identifier from the MCP server.
+        request_id: RequestId,
+        /// User's decision for the request.
+        decision: ElicitationAction,
+    },
+
     /// Append an entry to the persistent cross-session message history.
     ///
     /// Note the entry is not guaranteed to be logged if the user has
@@ -241,7 +254,7 @@ pub enum AskForApproval {
 /// Determines execution restrictions for model shell commands.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Display, JsonSchema, TS)]
 #[strum(serialize_all = "kebab-case")]
-#[serde(tag = "mode", rename_all = "kebab-case")]
+#[serde(tag = "type", rename_all = "kebab-case")]
 pub enum SandboxPolicy {
     /// No restrictions whatsoever. Use with caution.
     #[serde(rename = "danger-full-access")]
@@ -432,6 +445,7 @@ pub struct Event {
 /// NOTE: Make sure none of these values have optional types, as it will mess up the extension code-gen.
 #[derive(Debug, Clone, Deserialize, Serialize, Display, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[ts(tag = "type")]
 #[strum(serialize_all = "snake_case")]
 pub enum EventMsg {
     /// Error while executing a submission
@@ -440,6 +454,9 @@ pub enum EventMsg {
     /// Warning issued while processing a submission. Unlike `Error`, this
     /// indicates the task continued but the user should still be notified.
     Warning(WarningEvent),
+
+    /// Conversation history was compacted (either automatically or manually).
+    ContextCompacted(ContextCompactedEvent),
 
     /// Agent has started a task
     TaskStarted(TaskStartedEvent),
@@ -477,6 +494,12 @@ pub enum EventMsg {
     /// Ack the client's configure message.
     SessionConfigured(SessionConfiguredEvent),
 
+    /// Incremental MCP startup progress updates.
+    McpStartupUpdate(McpStartupUpdateEvent),
+
+    /// Aggregate MCP startup completion summary.
+    McpStartupComplete(McpStartupCompleteEvent),
+
     McpToolCallBegin(McpToolCallBeginEvent),
 
     McpToolCallEnd(McpToolCallEndEvent),
@@ -497,6 +520,8 @@ pub enum EventMsg {
     ViewImageToolCall(ViewImageToolCallEvent),
 
     ExecApprovalRequest(ExecApprovalRequestEvent),
+
+    ElicitationRequest(ElicitationRequestEvent),
 
     ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent),
 
@@ -553,6 +578,35 @@ pub enum EventMsg {
     AgentMessageContentDelta(AgentMessageContentDeltaEvent),
     ReasoningContentDelta(ReasoningContentDeltaEvent),
     ReasoningRawContentDelta(ReasoningRawContentDeltaEvent),
+}
+
+/// Codex errors that we expose to clients.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum CodexErrorInfo {
+    ContextWindowExceeded,
+    UsageLimitExceeded,
+    HttpConnectionFailed {
+        http_status_code: Option<u16>,
+    },
+    /// Failed to connect to the response SSE stream.
+    ResponseStreamConnectionFailed {
+        http_status_code: Option<u16>,
+    },
+    InternalServerError,
+    Unauthorized,
+    BadRequest,
+    SandboxError,
+    /// The response SSE stream disconnected in the middle of a turnbefore completion.
+    ResponseStreamDisconnected {
+        http_status_code: Option<u16>,
+    },
+    /// Reached the retry limit for responses.
+    ResponseTooManyFailedAttempts {
+        http_status_code: Option<u16>,
+    },
+    Other,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -617,6 +671,9 @@ pub struct ReasoningContentDeltaEvent {
     pub turn_id: String,
     pub item_id: String,
     pub delta: String,
+    // load with default value so it's backward compatible with the old format.
+    #[serde(default)]
+    pub summary_index: i64,
 }
 
 impl HasLegacyEvent for ReasoningContentDeltaEvent {
@@ -633,6 +690,9 @@ pub struct ReasoningRawContentDeltaEvent {
     pub turn_id: String,
     pub item_id: String,
     pub delta: String,
+    // load with default value so it's backward compatible with the old format.
+    #[serde(default)]
+    pub content_index: i64,
 }
 
 impl HasLegacyEvent for ReasoningRawContentDeltaEvent {
@@ -673,12 +733,17 @@ pub struct ExitedReviewModeEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ErrorEvent {
     pub message: String,
+    #[serde(default)]
+    pub codex_error_info: Option<CodexErrorInfo>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct WarningEvent {
     pub message: String,
 }
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ContextCompactedEvent;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TaskCompleteEvent {
@@ -777,6 +842,7 @@ pub struct TokenCountEvent {
 pub struct RateLimitSnapshot {
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
+    pub credits: Option<CreditsSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
@@ -789,6 +855,13 @@ pub struct RateLimitWindow {
     /// Unix timestamp (seconds since epoch) when the window resets.
     #[ts(type = "number | null")]
     pub resets_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct CreditsSnapshot {
+    pub has_credits: bool,
+    pub unlimited: bool,
+    pub balance: Option<String>,
 }
 
 // Includes prompts, tools and space to call compact.
@@ -923,7 +996,13 @@ pub struct AgentReasoningRawContentDeltaEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct AgentReasoningSectionBreakEvent {}
+pub struct AgentReasoningSectionBreakEvent {
+    // load with default value so it's backward compatible with the old format.
+    #[serde(default)]
+    pub item_id: String,
+    #[serde(default)]
+    pub summary_index: i64,
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct AgentReasoningDeltaEvent {
@@ -1058,6 +1137,29 @@ pub enum SubAgentSource {
     Other(String),
 }
 
+impl fmt::Display for SessionSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SessionSource::Cli => f.write_str("cli"),
+            SessionSource::VSCode => f.write_str("vscode"),
+            SessionSource::Exec => f.write_str("exec"),
+            SessionSource::Mcp => f.write_str("mcp"),
+            SessionSource::SubAgent(sub_source) => write!(f, "subagent_{sub_source}"),
+            SessionSource::Unknown => f.write_str("unknown"),
+        }
+    }
+}
+
+impl fmt::Display for SubAgentSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SubAgentSource::Review => f.write_str("review"),
+            SubAgentSource::Compact => f.write_str("compact"),
+            SubAgentSource::Other(other) => f.write_str(other),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct SessionMeta {
     pub id: ConversationId,
@@ -1107,6 +1209,8 @@ pub enum RolloutItem {
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct CompactedItem {
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement_history: Option<Vec<ResponseItem>>,
 }
 
 impl From<CompactedItem> for ResponseItem {
@@ -1152,8 +1256,15 @@ pub struct GitInfo {
     pub repository_url: Option<String>,
 }
 
-/// Review request sent to the review session.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewDelivery {
+    Inline,
+    Detached,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+/// Review request sent to the review session.
 pub struct ReviewRequest {
     pub prompt: String,
     pub user_facing_hint: String,
@@ -1203,25 +1314,68 @@ pub struct ReviewLineRange {
     pub end: u32,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecCommandSource {
+    Agent,
+    UserShell,
+    UnifiedExecStartup,
+    UnifiedExecInteraction,
+}
+
+impl Default for ExecCommandSource {
+    fn default() -> Self {
+        Self::Agent
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ExecCommandBeginEvent {
     /// Identifier so this can be paired with the ExecCommandEnd event.
     pub call_id: String,
+    /// Identifier for the underlying PTY process (when available).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub process_id: Option<String>,
+    /// Turn ID that this command belongs to.
+    pub turn_id: String,
     /// The command to be executed.
     pub command: Vec<String>,
     /// The command's working directory if not the default cwd for the agent.
     pub cwd: PathBuf,
     pub parsed_cmd: Vec<ParsedCommand>,
-    /// True when this exec was initiated directly by the user (e.g. bang command),
-    /// not by the agent/model. Defaults to false for backwards compatibility.
+    /// Where the command originated. Defaults to Agent for backward compatibility.
     #[serde(default)]
-    pub is_user_shell_command: bool,
+    pub source: ExecCommandSource,
+    /// Raw input sent to a unified exec session (if this is an interaction event).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub interaction_input: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ExecCommandEndEvent {
     /// Identifier for the ExecCommandBegin that finished.
     pub call_id: String,
+    /// Identifier for the underlying PTY process (when available).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub process_id: Option<String>,
+    /// Turn ID that this command belongs to.
+    pub turn_id: String,
+    /// The command that was executed.
+    pub command: Vec<String>,
+    /// The command's working directory if not the default cwd for the agent.
+    pub cwd: PathBuf,
+    pub parsed_cmd: Vec<ParsedCommand>,
+    /// Where the command originated. Defaults to Agent for backward compatibility.
+    #[serde(default)]
+    pub source: ExecCommandSource,
+    /// Raw input sent to a unified exec session (if this is an interaction event).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub interaction_input: Option<String>,
+
     /// Captured stdout
     pub stdout: String,
     /// Captured stderr
@@ -1297,6 +1451,8 @@ pub struct UndoCompletedEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct StreamErrorEvent {
     pub message: String,
+    #[serde(default)]
+    pub codex_error_info: Option<CodexErrorInfo>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1308,6 +1464,10 @@ pub struct StreamInfoEvent {
 pub struct PatchApplyBeginEvent {
     /// Identifier so this can be paired with the PatchApplyEnd event.
     pub call_id: String,
+    /// Turn ID that this patch belongs to.
+    /// Uses `#[serde(default)]` for backwards compatibility.
+    #[serde(default)]
+    pub turn_id: String,
     /// If true, there was no ApplyPatchApprovalRequest for this patch.
     pub auto_approved: bool,
     /// The changes to be applied.
@@ -1318,12 +1478,19 @@ pub struct PatchApplyBeginEvent {
 pub struct PatchApplyEndEvent {
     /// Identifier for the PatchApplyBegin that finished.
     pub call_id: String,
+    /// Turn ID that this patch belongs to.
+    /// Uses `#[serde(default)]` for backwards compatibility.
+    #[serde(default)]
+    pub turn_id: String,
     /// Captured stdout (summary printed by apply_patch).
     pub stdout: String,
     /// Captured stderr (parser errors, IO failures, etc.).
     pub stderr: String,
     /// Whether the patch was applied successfully.
     pub success: bool,
+    /// The changes that were applied (mirrors PatchApplyBeginEvent::changes).
+    #[serde(default)]
+    pub changes: HashMap<PathBuf, FileChange>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1350,6 +1517,37 @@ pub struct McpListToolsResponseEvent {
     pub resource_templates: std::collections::HashMap<String, Vec<McpResourceTemplate>>,
     /// Authentication status for each configured MCP server.
     pub auth_statuses: std::collections::HashMap<String, McpAuthStatus>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct McpStartupUpdateEvent {
+    /// Server name being started.
+    pub server: String,
+    /// Current startup status.
+    pub status: McpStartupStatus,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case", tag = "state")]
+#[ts(rename_all = "snake_case", tag = "state")]
+pub enum McpStartupStatus {
+    Starting,
+    Ready,
+    Failed { error: String },
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, Default)]
+pub struct McpStartupCompleteEvent {
+    pub ready: Vec<String>,
+    pub failed: Vec<McpStartupFailure>,
+    pub cancelled: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct McpStartupFailure {
+    pub server: String,
+    pub error: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
@@ -1380,13 +1578,25 @@ pub struct ListCustomPromptsResponseEvent {
     pub custom_prompts: Vec<CustomPrompt>,
 }
 
-#[derive(Debug, Default, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct SessionConfiguredEvent {
     /// Name left as session_id instead of conversation_id for backwards compatibility.
     pub session_id: ConversationId,
 
     /// Tell the client what model is being queried.
     pub model: String,
+
+    pub model_provider_id: String,
+
+    /// When to escalate for approval for execution
+    pub approval_policy: AskForApproval,
+
+    /// How to sandbox commands executed in the system
+    pub sandbox_policy: SandboxPolicy,
+
+    /// Working directory that should be treated as the *root* of the
+    /// session.
+    pub cwd: PathBuf,
 
     /// The effort the model is putting into reasoning about the user's request.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1431,7 +1641,8 @@ pub enum ReviewDecision {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[ts(tag = "type")]
 pub enum FileChange {
     Add {
         content: String,
@@ -1472,6 +1683,7 @@ mod tests {
     use crate::items::UserMessageItem;
     use crate::items::WebSearchItem;
     use anyhow::Result;
+    use pretty_assertions::assert_eq;
     use serde_json::json;
     use tempfile::NamedTempFile;
 
@@ -1516,6 +1728,10 @@ mod tests {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
                 model: "codex-mini-latest".to_string(),
+                model_provider_id: "openai".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: Some(ReasoningEffortConfig::default()),
                 history_log_id: 0,
                 history_entry_count: 0,
@@ -1530,6 +1746,12 @@ mod tests {
                 "type": "session_configured",
                 "session_id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
                 "model": "codex-mini-latest",
+                "model_provider_id": "openai",
+                "approval_policy": "never",
+                "sandbox_policy": {
+                    "type": "read-only"
+                },
+                "cwd": "/home/user/project",
                 "reasoning_effort": "medium",
                 "history_log_id": 0,
                 "history_entry_count": 0,
@@ -1555,6 +1777,49 @@ mod tests {
 
         let deserialized: ExecCommandOutputDeltaEvent = serde_json::from_str(&serialized)?;
         assert_eq!(deserialized, event);
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_mcp_startup_update_event() -> Result<()> {
+        let event = Event {
+            id: "init".to_string(),
+            msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
+                server: "srv".to_string(),
+                status: McpStartupStatus::Failed {
+                    error: "boom".to_string(),
+                },
+            }),
+        };
+
+        let value = serde_json::to_value(&event)?;
+        assert_eq!(value["msg"]["type"], "mcp_startup_update");
+        assert_eq!(value["msg"]["server"], "srv");
+        assert_eq!(value["msg"]["status"]["state"], "failed");
+        assert_eq!(value["msg"]["status"]["error"], "boom");
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_mcp_startup_complete_event() -> Result<()> {
+        let event = Event {
+            id: "init".to_string(),
+            msg: EventMsg::McpStartupComplete(McpStartupCompleteEvent {
+                ready: vec!["a".to_string()],
+                failed: vec![McpStartupFailure {
+                    server: "b".to_string(),
+                    error: "bad".to_string(),
+                }],
+                cancelled: vec!["c".to_string()],
+            }),
+        };
+
+        let value = serde_json::to_value(&event)?;
+        assert_eq!(value["msg"]["type"], "mcp_startup_complete");
+        assert_eq!(value["msg"]["ready"][0], "a");
+        assert_eq!(value["msg"]["failed"][0]["server"], "b");
+        assert_eq!(value["msg"]["failed"][0]["error"], "bad");
+        assert_eq!(value["msg"]["cancelled"][0], "c");
         Ok(())
     }
 }

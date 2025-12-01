@@ -19,6 +19,7 @@ use crate::app_event::FeedbackCategory;
 use crate::app_event_sender::AppEventSender;
 use crate::history_cell;
 use crate::render::renderable::Renderable;
+use codex_core::protocol::SessionSource;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
@@ -26,7 +27,8 @@ use super::popup_consts::standard_popup_hint_line;
 use super::textarea::TextArea;
 use super::textarea::TextAreaState;
 
-const BASE_ISSUE_URL: &str = "https://github.com/openai/codex/issues/new?template=2-bug-report.yml";
+const BASE_BUG_ISSUE_URL: &str =
+    "https://github.com/openai/codex/issues/new?template=2-bug-report.yml";
 
 /// Minimal input overlay to collect an optional feedback note, then upload
 /// both logs and rollout with classification + metadata.
@@ -84,30 +86,43 @@ impl FeedbackNoteView {
             } else {
                 None
             },
+            Some(SessionSource::Cli),
         );
 
         match result {
             Ok(()) => {
-                let issue_url = format!("{BASE_ISSUE_URL}&steps=Uploaded%20thread:%20{thread_id}");
                 let prefix = if self.include_logs {
                     "• Feedback uploaded."
                 } else {
                     "• Feedback recorded (no logs)."
                 };
-                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                    history_cell::PlainHistoryCell::new(vec![
-                        Line::from(format!(
-                            "{prefix} Please open an issue using the following URL:"
-                        )),
+                let issue_url = issue_url_for_category(self.category, &thread_id);
+                let mut lines = vec![Line::from(match issue_url.as_ref() {
+                    Some(_) => format!("{prefix} Please open an issue using the following URL:"),
+                    None => format!("{prefix} Thanks for the feedback!"),
+                })];
+                if let Some(url) = issue_url {
+                    lines.extend([
                         "".into(),
-                        Line::from(vec!["  ".into(), issue_url.cyan().underlined()]),
+                        Line::from(vec!["  ".into(), url.cyan().underlined()]),
                         "".into(),
                         Line::from(vec![
                             "  Or mention your thread ID ".into(),
                             std::mem::take(&mut thread_id).bold(),
                             " in an existing issue.".into(),
                         ]),
-                    ]),
+                    ]);
+                } else {
+                    lines.extend([
+                        "".into(),
+                        Line::from(vec![
+                            "  Thread ID: ".into(),
+                            std::mem::take(&mut thread_id).bold(),
+                        ]),
+                    ]);
+                }
+                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    history_cell::PlainHistoryCell::new(lines),
                 )));
             }
             Err(e) => {
@@ -320,6 +335,15 @@ fn feedback_classification(category: FeedbackCategory) -> &'static str {
     }
 }
 
+fn issue_url_for_category(category: FeedbackCategory, thread_id: &str) -> Option<String> {
+    match category {
+        FeedbackCategory::Bug | FeedbackCategory::BadResult | FeedbackCategory::Other => Some(
+            format!("{BASE_BUG_ISSUE_URL}&steps=Uploaded%20thread:%20{thread_id}"),
+        ),
+        FeedbackCategory::GoodResult => None,
+    }
+}
+
 // Build the selection popup params for feedback categories.
 pub(crate) fn feedback_selection_params(
     app_event_tx: AppEventSender,
@@ -513,5 +537,23 @@ mod tests {
         let view = make_view(FeedbackCategory::Other);
         let rendered = render(&view, 60);
         insta::assert_snapshot!("feedback_view_other", rendered);
+    }
+
+    #[test]
+    fn issue_url_available_for_bug_bad_result_and_other() {
+        let bug_url = issue_url_for_category(FeedbackCategory::Bug, "thread-1");
+        assert!(
+            bug_url
+                .as_deref()
+                .is_some_and(|url| url.contains("template=2-bug-report"))
+        );
+
+        let bad_result_url = issue_url_for_category(FeedbackCategory::BadResult, "thread-2");
+        assert!(bad_result_url.is_some());
+
+        let other_url = issue_url_for_category(FeedbackCategory::Other, "thread-3");
+        assert!(other_url.is_some());
+
+        assert!(issue_url_for_category(FeedbackCategory::GoodResult, "t").is_none());
     }
 }

@@ -14,6 +14,7 @@ use crate::protocol::SandboxPolicy;
 use askama::Template;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
+use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SandboxCommandAssessment;
@@ -23,7 +24,8 @@ use serde_json::json;
 use tokio::time::timeout;
 use tracing::warn;
 
-const SANDBOX_ASSESSMENT_TIMEOUT: Duration = Duration::from_secs(5);
+const SANDBOX_ASSESSMENT_TIMEOUT: Duration = Duration::from_secs(15);
+const SANDBOX_ASSESSMENT_REASONING_EFFORT: ReasoningEffortConfig = ReasoningEffortConfig::Medium;
 
 #[derive(Template)]
 #[template(path = "sandboxing/assessment_prompt.md", escape = "none")]
@@ -130,7 +132,7 @@ pub(crate) async fn assess_command(
         Some(auth_manager),
         child_otel,
         provider,
-        config.model_reasoning_effort,
+        Some(SANDBOX_ASSESSMENT_REASONING_EFFORT),
         config.model_reasoning_summary,
         conversation_id,
         session_source,

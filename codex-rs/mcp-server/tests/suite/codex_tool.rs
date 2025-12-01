@@ -30,7 +30,8 @@ use mcp_test_support::McpProcess;
 use mcp_test_support::create_apply_patch_sse_response;
 use mcp_test_support::create_final_assistant_message_sse_response;
 use mcp_test_support::create_mock_chat_completions_server;
-use mcp_test_support::create_shell_sse_response;
+use mcp_test_support::create_shell_command_sse_response;
+use mcp_test_support::format_with_current_shell;
 
 // Allow ample time on slower CI or under load to avoid flakes.
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
@@ -71,13 +72,16 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
         "-c".to_string(),
         format!("import pathlib; pathlib.Path('{created_filename}').touch()"),
     ];
+    let expected_shell_command = format_with_current_shell(&format!(
+        "python3 -c \"import pathlib; pathlib.Path('{created_filename}').touch()\""
+    ));
 
     let McpHandle {
         process: mut mcp_process,
         server: _server,
         dir: _dir,
     } = create_mcp_process(vec![
-        create_shell_sse_response(
+        create_shell_command_sse_response(
             shell_command.clone(),
             Some(workdir_for_shell_function_call.path()),
             Some(5_000),
@@ -111,7 +115,7 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
     )?;
     let expected_elicitation_request = create_expected_elicitation_request(
         elicitation_request_id.clone(),
-        shell_command.clone(),
+        expected_shell_command,
         workdir_for_shell_function_call.path(),
         codex_request_id.to_string(),
         params.codex_event_id.clone(),
@@ -218,6 +222,12 @@ async fn test_patch_approval_triggers_elicitation() {
 }
 
 async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
+    if cfg!(windows) {
+        // powershell apply_patch shell calls are not parsed into apply patch approvals
+
+        return Ok(());
+    }
+
     let cwd = TempDir::new()?;
     let test_file = cwd.path().join("destination_file.txt");
     std::fs::write(&test_file, "original content\n")?;

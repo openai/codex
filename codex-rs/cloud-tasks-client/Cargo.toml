@@ -1,7 +1,8 @@
 [package]
 name = "codex-cloud-tasks-client"
-version = { workspace = true }
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [lib]
 name = "codex_cloud_tasks_client"

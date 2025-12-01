@@ -18,6 +18,7 @@ use codex_core::protocol::ReviewOutputEvent;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
+use codex_core::review_format::render_review_output_text;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id_from_str;
@@ -123,22 +124,36 @@ async fn review_op_emits_lifecycle_and_review_output() {
 
     let mut saw_header = false;
     let mut saw_finding_line = false;
+    let expected_assistant_text = render_review_output_text(&expected);
+    let mut saw_assistant_plain = false;
+    let mut saw_assistant_xml = false;
     for line in text.lines() {
         if line.trim().is_empty() {
             continue;
         }
         let v: serde_json::Value = serde_json::from_str(line).expect("jsonl line");
         let rl: RolloutLine = serde_json::from_value(v).expect("rollout line");
-        if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = rl.item
-            && role == "user"
-        {
-            for c in content {
-                if let ContentItem::InputText { text } = c {
-                    if text.contains("full review output from reviewer model") {
-                        saw_header = true;
+        if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = rl.item {
+            if role == "user" {
+                for c in content {
+                    if let ContentItem::InputText { text } = c {
+                        if text.contains("full review output from reviewer model") {
+                            saw_header = true;
+                        }
+                        if text.contains("- Prefer Stylize helpers — /tmp/file.rs:10-20") {
+                            saw_finding_line = true;
+                        }
                     }
-                    if text.contains("- Prefer Stylize helpers — /tmp/file.rs:10-20") {
-                        saw_finding_line = true;
+                }
+            } else if role == "assistant" {
+                for c in content {
+                    if let ContentItem::OutputText { text } = c {
+                        if text.contains("<user_action>") {
+                            saw_assistant_xml = true;
+                        }
+                        if text == expected_assistant_text {
+                            saw_assistant_plain = true;
+                        }
                     }
                 }
             }
@@ -148,6 +163,14 @@ async fn review_op_emits_lifecycle_and_review_output() {
     assert!(
         saw_finding_line,
         "formatted finding line missing from rollout"
+    );
+    assert!(
+        saw_assistant_plain,
+        "assistant review output missing from rollout"
+    );
+    assert!(
+        !saw_assistant_xml,
+        "assistant review output contains user_action markup"
     );
 
     server.verify().await;
@@ -244,7 +267,7 @@ async fn review_filters_agent_message_related_events() {
     let mut saw_entered = false;
     let mut saw_exited = false;
 
-    // Drain until TaskComplete; assert filtered events never surface.
+    // Drain until TaskComplete; assert streaming-related events never surface.
     wait_for_event(&codex, |event| match event {
         EventMsg::TaskComplete(_) => true,
         EventMsg::EnteredReviewMode(_) => {
@@ -262,12 +285,6 @@ async fn review_filters_agent_message_related_events() {
         EventMsg::AgentMessageDelta(_) => {
             panic!("unexpected AgentMessageDelta surfaced during review")
         }
-        EventMsg::ItemCompleted(ev) => match &ev.item {
-            codex_protocol::items::TurnItem::AgentMessage(_) => {
-                panic!("unexpected ItemCompleted for TurnItem::AgentMessage surfaced during review")
-            }
-            _ => false,
-        },
         _ => false,
     })
     .await;
@@ -276,8 +293,9 @@ async fn review_filters_agent_message_related_events() {
     server.verify().await;
 }
 
-/// When the model returns structured JSON in a review, ensure no AgentMessage
-/// is emitted; the UI consumes the structured result via ExitedReviewMode.
+/// When the model returns structured JSON in a review, ensure only a single
+/// non-streaming AgentMessage is emitted; the UI consumes the structured
+/// result via ExitedReviewMode plus a final assistant message.
 // Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
 #[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
 #[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
@@ -325,13 +343,16 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
         .await
         .unwrap();
 
-    // Drain events until TaskComplete; ensure none are AgentMessage.
+    // Drain events until TaskComplete; ensure we only see a final
+    // AgentMessage (no streaming assistant messages).
     let mut saw_entered = false;
     let mut saw_exited = false;
+    let mut agent_messages = 0;
     wait_for_event(&codex, |event| match event {
         EventMsg::TaskComplete(_) => true,
         EventMsg::AgentMessage(_) => {
-            panic!("unexpected AgentMessage during review with structured output")
+            agent_messages += 1;
+            false
         }
         EventMsg::EnteredReviewMode(_) => {
             saw_entered = true;
@@ -344,6 +365,7 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
         _ => false,
     })
     .await;
+    assert_eq!(1, agent_messages, "expected exactly one AgentMessage event");
     assert!(saw_entered && saw_exited, "missing review lifecycle events");
 
     server.verify().await;
@@ -364,7 +386,7 @@ async fn review_uses_custom_review_model_from_config() {
     // Choose a review model different from the main model; ensure it is used.
     let codex = new_conversation_for_server(&server, &codex_home, |cfg| {
         cfg.model = "gpt-4.1".to_string();
-        cfg.review_model = "gpt-5".to_string();
+        cfg.review_model = "gpt-5.1".to_string();
     })
     .await;
 
@@ -394,7 +416,7 @@ async fn review_uses_custom_review_model_from_config() {
     // Assert the request body model equals the configured review model
     let request = &server.received_requests().await.unwrap()[0];
     let body = request.body_json::<serde_json::Value>().unwrap();
-    assert_eq!(body["model"].as_str().unwrap(), "gpt-5");
+    assert_eq!(body["model"].as_str().unwrap(), "gpt-5.1");
 
     server.verify().await;
 }
@@ -577,11 +599,10 @@ async fn review_input_isolated_from_parent_history() {
     server.verify().await;
 }
 
-/// After a review thread finishes, its conversation should not leak into the
-/// parent session. A subsequent parent turn must not include any review
-/// messages in its request `input`.
+/// After a review thread finishes, its conversation should be visible in the
+/// parent session so later turns can reference the results.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn review_history_does_not_leak_into_parent_session() {
+async fn review_history_surfaces_in_parent_session() {
     skip_if_no_network!();
 
     // Respond to both the review request and the subsequent parent request.
@@ -644,20 +665,26 @@ async fn review_history_does_not_leak_into_parent_session() {
     let last_text = last["content"][0]["text"].as_str().unwrap();
     assert_eq!(last_text, followup);
 
-    // Ensure no review-thread content leaked into the parent request
-    let contains_review_prompt = input
-        .iter()
-        .any(|msg| msg["content"][0]["text"].as_str().unwrap_or_default() == "Start a review");
+    // Ensure review-thread content is present for downstream turns.
+    let contains_review_rollout_user = input.iter().any(|msg| {
+        msg["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("User initiated a review task.")
+    });
     let contains_review_assistant = input.iter().any(|msg| {
-        msg["content"][0]["text"].as_str().unwrap_or_default() == "review assistant output"
+        msg["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("review assistant output")
     });
     assert!(
-        !contains_review_prompt,
-        "review prompt leaked into parent turn input"
+        contains_review_rollout_user,
+        "review rollout user message missing from parent turn input"
     );
     assert!(
-        !contains_review_assistant,
-        "review assistant output leaked into parent turn input"
+        contains_review_assistant,
+        "review assistant output missing from parent turn input"
     );
 
     server.verify().await;

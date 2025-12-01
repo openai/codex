@@ -35,7 +35,7 @@ async fn thread_archive_moves_rollout_into_archived_directory() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
     )
     .await??;
-    let ThreadStartResponse { thread } = to_response::<ThreadStartResponse>(start_resp)?;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
     assert!(!thread.id.is_empty());
 
     // Locate the rollout path recorded for this thread id.
