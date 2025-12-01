@@ -545,6 +545,8 @@ index {ZERO_OID}..{right_oid}
             FileChange::Update {
                 unified_diff: "".to_owned(),
                 move_path: None,
+                old_content: "foo\n".to_owned(),
+                new_content: "foo\nbar\n".to_owned(),
             },
         )]);
         acc.on_patch_begin(&update_changes);
@@ -620,6 +622,8 @@ index {left_oid}..{ZERO_OID}
             FileChange::Update {
                 unified_diff: "".to_owned(),
                 move_path: Some(dest.clone()),
+                old_content: "line\n".to_owned(),
+                new_content: "line2\n".to_owned(),
             },
         )]);
         acc.on_patch_begin(&mv_changes);
@@ -660,6 +664,8 @@ index {left_oid}..{right_oid}
             FileChange::Update {
                 unified_diff: "".to_owned(),
                 move_path: Some(dest.clone()),
+                old_content: "same\n".to_owned(),
+                new_content: "same\n".to_owned(),
             },
         )]);
         acc.on_patch_begin(&mv_changes);
@@ -682,6 +688,8 @@ index {left_oid}..{right_oid}
             FileChange::Update {
                 unified_diff: "".into(),
                 move_path: Some(dest.clone()),
+                old_content: String::new(),
+                new_content: "hello\n".to_owned(),
             },
         )]);
         acc.on_patch_begin(&mv);
@@ -722,6 +730,8 @@ index {ZERO_OID}..{right_oid}
             FileChange::Update {
                 unified_diff: "".to_owned(),
                 move_path: None,
+                old_content: "foo\n".to_owned(),
+                new_content: "foo\nbar\n".to_owned(),
             },
         )]);
         acc.on_patch_begin(&update_a);
@@ -802,6 +812,8 @@ index {left_oid_b}..{ZERO_OID}
             FileChange::Update {
                 unified_diff: "".to_owned(),
                 move_path: None,
+                old_content: String::new(),
+                new_content: String::new(),
             },
         )]);
         acc.on_patch_begin(&update_changes);
@@ -868,6 +880,8 @@ index {ZERO_OID}..{right_oid}
             FileChange::Update {
                 unified_diff: "".to_owned(),
                 move_path: None,
+                old_content: "foo\n".to_owned(),
+                new_content: "foo\nbar\n".to_owned(),
             },
         )]);
         acc.on_patch_begin(&update_changes);

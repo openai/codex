@@ -1146,7 +1146,11 @@ pub struct FileUpdateChange {
 pub enum PatchChangeKind {
     Add,
     Delete,
-    Update { move_path: Option<PathBuf> },
+    Update {
+        move_path: Option<PathBuf>,
+        old_content: String,
+        new_content: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

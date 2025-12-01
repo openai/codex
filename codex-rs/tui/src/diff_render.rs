@@ -484,6 +484,8 @@ mod tests {
             FileChange::Update {
                 unified_diff: patch,
                 move_path: None,
+                old_content: original.to_string(),
+                new_content: modified.to_string(),
             },
         );
 
@@ -504,6 +506,8 @@ mod tests {
             FileChange::Update {
                 unified_diff: patch,
                 move_path: Some(PathBuf::from("new_name.rs")),
+                old_content: original.to_string(),
+                new_content: modified.to_string(),
             },
         );
 
@@ -524,6 +528,8 @@ mod tests {
             FileChange::Update {
                 unified_diff: patch_a,
                 move_path: None,
+                old_content: "one\n".to_string(),
+                new_content: "one changed\n".to_string(),
             },
         );
 
@@ -590,6 +596,8 @@ mod tests {
             FileChange::Update {
                 unified_diff: patch,
                 move_path: None,
+                old_content: original.to_string(),
+                new_content: modified.to_string(),
             },
         );
 
@@ -613,6 +621,8 @@ mod tests {
             FileChange::Update {
                 unified_diff: patch,
                 move_path: None,
+                old_content: original.to_string(),
+                new_content: modified.to_string(),
             },
         );
 
@@ -640,6 +650,8 @@ mod tests {
             FileChange::Update {
                 unified_diff: patch,
                 move_path: None,
+                old_content: original.clone(),
+                new_content: modified.clone(),
             },
         );
 
@@ -663,6 +675,8 @@ mod tests {
             FileChange::Update {
                 unified_diff: patch,
                 move_path: Some(abs_new),
+                old_content: original.to_string(),
+                new_content: modified.to_string(),
             },
         );
 

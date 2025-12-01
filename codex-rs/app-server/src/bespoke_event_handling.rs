@@ -968,8 +968,15 @@ fn map_patch_change_kind(change: &CoreFileChange) -> V2PatchChangeKind {
     match change {
         CoreFileChange::Add { .. } => V2PatchChangeKind::Add,
         CoreFileChange::Delete { .. } => V2PatchChangeKind::Delete,
-        CoreFileChange::Update { move_path, .. } => V2PatchChangeKind::Update {
+        CoreFileChange::Update {
+            move_path,
+            old_content,
+            new_content,
+            ..
+        } => V2PatchChangeKind::Update {
             move_path: move_path.clone(),
+            old_content: old_content.clone(),
+            new_content: new_content.clone(),
         },
     }
 }
@@ -981,6 +988,7 @@ fn format_file_change_diff(change: &CoreFileChange) -> String {
         CoreFileChange::Update {
             unified_diff,
             move_path,
+            ..
         } => {
             if let Some(path) = move_path {
                 format!("{unified_diff}\n\nMoved to: {}", path.display())

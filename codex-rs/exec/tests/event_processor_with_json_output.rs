@@ -823,6 +823,8 @@ fn patch_apply_success_produces_item_completed_patchapply() {
         FileChange::Update {
             unified_diff: "--- c/modified.txt\n+++ c/modified.txt\n@@\n-old\n+new\n".to_string(),
             move_path: Some(PathBuf::from("c/renamed.txt")),
+            old_content: "-old\n".to_string(),
+            new_content: "+new\n".to_string(),
         },
     );
 
@@ -895,6 +897,8 @@ fn patch_apply_failure_produces_item_completed_patchapply_failed() {
         FileChange::Update {
             unified_diff: "--- file.txt\n+++ file.txt\n@@\n-old\n+new\n".to_string(),
             move_path: None,
+            old_content: "-old\n".to_string(),
+            new_content: "+new\n".to_string(),
         },
     );
 

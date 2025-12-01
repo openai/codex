@@ -630,9 +630,18 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
 +new line
 *** End Patch
 "#;
+    let update_patch = r#"*** Begin Patch
+*** Update File: README.md
+@@
+-new line
++updated line
+*** End Patch
+"#;
     let responses = vec![
         create_apply_patch_sse_response(patch, "patch-call")?,
         create_final_assistant_message_sse_response("patch applied")?,
+        create_apply_patch_sse_response(update_patch, "patch-call-2")?,
+        create_final_assistant_message_sse_response("patch updated")?,
     ];
     let server = create_mock_chat_completions_server(responses).await;
     create_config_toml(&codex_home, &server.uri(), "untrusted")?;
@@ -707,8 +716,8 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
     assert_eq!(params.item_id, "patch-call");
     assert_eq!(params.thread_id, thread.id);
     assert_eq!(params.turn_id, turn.id);
-    let expected_readme_path = workspace.join("README.md");
-    let expected_readme_path = expected_readme_path.to_string_lossy().into_owned();
+    let readme_path = workspace.join("README.md");
+    let expected_readme_path = readme_path.to_string_lossy().into_owned();
     pretty_assertions::assert_eq!(
         started_changes,
         vec![codex_app_server_protocol::FileUpdateChange {
@@ -775,8 +784,133 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
     )
     .await??;
 
-    let readme_contents = std::fs::read_to_string(expected_readme_path)?;
+    let readme_contents = std::fs::read_to_string(&readme_path)?;
     assert_eq!(readme_contents, "new line\n");
+
+    let second_turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "update patch".into(),
+            }],
+            approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
+            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
+            model: Some("mock-model".to_string()),
+            effort: Some(ReasoningEffort::Medium),
+            summary: Some(ReasoningSummary::Auto),
+            cwd: Some(workspace.clone()),
+        })
+        .await?;
+    let second_turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(second_turn_req)),
+    )
+    .await??;
+    let TurnStartResponse { turn: second_turn } =
+        to_response::<TurnStartResponse>(second_turn_resp)?;
+
+    let started_update_file_change = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let started_notif = mcp
+                .read_stream_until_notification_message("item/started")
+                .await?;
+            let started: ItemStartedNotification =
+                serde_json::from_value(started_notif.params.clone().expect("item/started params"))?;
+            if let ThreadItem::FileChange { .. } = started.item {
+                return Ok::<ThreadItem, anyhow::Error>(started.item);
+            }
+        }
+    })
+    .await??;
+    let ThreadItem::FileChange {
+        ref id,
+        status,
+        ref changes,
+    } = started_update_file_change
+    else {
+        unreachable!("loop ensures we break on file change items");
+    };
+    assert_eq!(id, "patch-call-2");
+    assert_eq!(status, PatchApplyStatus::InProgress);
+    let update_changes = changes.clone();
+    let update_change = update_changes
+        .first()
+        .expect("expected a single update change");
+    assert_eq!(update_change.path, expected_readme_path);
+    match &update_change.kind {
+        PatchChangeKind::Update {
+            move_path,
+            old_content,
+            new_content,
+        } => {
+            assert!(move_path.is_none());
+            assert_eq!(old_content, "new line\n");
+            assert_eq!(new_content, "updated line\n");
+        }
+        other => panic!("expected PatchChangeKind::Update, got: {other:?}"),
+    }
+    assert!(
+        update_change.diff.contains("-new line"),
+        "expected diff to include removal of original line, got: {}",
+        update_change.diff
+    );
+    assert!(
+        update_change.diff.contains("+updated line"),
+        "expected diff to include addition of updated line, got: {}",
+        update_change.diff
+    );
+
+    let output_delta_notif = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("item/fileChange/outputDelta"),
+    )
+    .await??;
+    let output_delta: FileChangeOutputDeltaNotification = serde_json::from_value(
+        output_delta_notif
+            .params
+            .clone()
+            .expect("item/fileChange/outputDelta params"),
+    )?;
+    assert_eq!(output_delta.thread_id, thread.id);
+    assert_eq!(output_delta.turn_id, second_turn.id);
+    assert_eq!(output_delta.item_id, "patch-call-2");
+    assert!(
+        !output_delta.delta.is_empty(),
+        "expected delta to be non-empty, got: {}",
+        output_delta.delta
+    );
+
+    let completed_file_change = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let completed_notif = mcp
+                .read_stream_until_notification_message("item/completed")
+                .await?;
+            let completed: ItemCompletedNotification = serde_json::from_value(
+                completed_notif
+                    .params
+                    .clone()
+                    .expect("item/completed params"),
+            )?;
+            if let ThreadItem::FileChange { .. } = completed.item {
+                return Ok::<ThreadItem, anyhow::Error>(completed.item);
+            }
+        }
+    })
+    .await??;
+    let ThreadItem::FileChange { ref id, status, .. } = completed_file_change else {
+        unreachable!("loop ensures we break on file change items");
+    };
+    assert_eq!(id, "patch-call-2");
+    assert_eq!(status, PatchApplyStatus::Completed);
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+    )
+    .await??;
+
+    let updated_readme_contents = std::fs::read_to_string(&readme_path)?;
+    assert_eq!(updated_readme_contents, "updated line\n");
 
     Ok(())
 }

@@ -1653,6 +1653,8 @@ pub enum FileChange {
     Update {
         unified_diff: String,
         move_path: Option<PathBuf>,
+        old_content: String,
+        new_content: String,
     },
 }
 
@@ -1715,6 +1717,21 @@ mod tests {
         };
 
         assert!(event.as_legacy_events(false).is_empty());
+    }
+
+    #[test]
+    fn file_change_update_serializes_old_and_new_content() {
+        let change = FileChange::Update {
+            unified_diff: "--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new\n".to_string(),
+            move_path: None,
+            old_content: "old\n".to_string(),
+            new_content: "new\n".to_string(),
+        };
+
+        let serialized = serde_json::to_value(change).expect("should serialize");
+
+        assert_eq!(serialized["old_content"], "old\n");
+        assert_eq!(serialized["new_content"], "new\n");
     }
 
     /// Serialize Event to verify that its JSON representation has the expected
