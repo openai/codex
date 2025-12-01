@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use core_test_support::responses::ev_apply_patch_call;
+use core_test_support::responses::ev_shell_command_call;
 use core_test_support::test_codex::ApplyPatchModelOutput;
 use pretty_assertions::assert_eq;
 use std::fs;
@@ -693,11 +694,10 @@ async fn apply_patch_shell_command_heredoc_with_cd_updates_relative_workdir() ->
 
     let script = "cd sub && apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: in_sub.txt\n@@\n-before\n+after\n*** End Patch\nEOF\n";
     let call_id = "shell-heredoc-cd";
-    let args = json!({ "command": script, "timeout_ms": 5_000 });
     let bodies = vec![
         sse(vec![
             ev_response_created("resp-1"),
-            ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+            ev_shell_command_call(call_id, script),
             ev_completed("resp-1"),
         ]),
         sse(vec![
