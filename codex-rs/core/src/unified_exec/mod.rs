@@ -98,8 +98,26 @@ pub(crate) struct UnifiedExecResponse {
 
 #[derive(Default)]
 pub(crate) struct UnifiedExecSessionManager {
-    sessions: Mutex<HashMap<String, SessionEntry>>,
-    used_session_ids: Mutex<HashSet<String>>,
+    session_store: Mutex<SessionStore>,
+}
+
+// Required for mutex sharing.
+#[derive(Default)]
+pub(crate) struct SessionStore {
+    sessions: HashMap<String, SessionEntry>,
+    reserved_sessions_id: HashSet<String>,
+}
+
+impl SessionStore {
+    fn remove(&mut self, session_id: &str) -> Option<SessionEntry> {
+        self.reserved_sessions_id.remove(session_id);
+        self.sessions.remove(session_id)
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.reserved_sessions_id.clear();
+        self.sessions.clear();
+    }
 }
 
 struct SessionEntry {
@@ -384,9 +402,10 @@ mod tests {
             session
                 .services
                 .unified_exec_manager
-                .sessions
+                .session_store
                 .lock()
                 .await
+                .sessions
                 .is_empty()
         );
 
@@ -425,9 +444,10 @@ mod tests {
             session
                 .services
                 .unified_exec_manager
-                .sessions
+                .session_store
                 .lock()
                 .await
+                .sessions
                 .is_empty()
         );
 

@@ -18,6 +18,7 @@ use codex_app_server_protocol::ContextCompactedNotification;
 use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
+use codex_app_server_protocol::FileChangeOutputDeltaNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::FileUpdateChange;
@@ -43,6 +44,8 @@ use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnDiffUpdatedNotification;
 use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptResponse;
+use codex_app_server_protocol::TurnPlanStep;
+use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_core::CodexConversation;
 use codex_core::parse_command::shlex_join;
@@ -60,6 +63,7 @@ use codex_core::protocol::TokenCountEvent;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::review_format::format_review_findings_block;
 use codex_protocol::ConversationId;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::ReviewOutputEvent;
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -257,6 +261,8 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::AgentMessageContentDelta(event) => {
             let notification = AgentMessageDeltaNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
                 item_id: event.item_id,
                 delta: event.delta,
             };
@@ -275,6 +281,8 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::ReasoningContentDelta(event) => {
             let notification = ReasoningSummaryTextDeltaNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
                 item_id: event.item_id,
                 delta: event.delta,
                 summary_index: event.summary_index,
@@ -287,6 +295,8 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::ReasoningRawContentDelta(event) => {
             let notification = ReasoningTextDeltaNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
                 item_id: event.item_id,
                 delta: event.delta,
                 content_index: event.content_index,
@@ -297,6 +307,8 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::AgentReasoningSectionBreak(event) => {
             let notification = ReasoningSummaryPartAddedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
                 item_id: event.item_id,
                 summary_index: event.summary_index,
             };
@@ -490,15 +502,44 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::ExecCommandOutputDelta(exec_command_output_delta_event) => {
-            let notification = CommandExecutionOutputDeltaNotification {
-                item_id: exec_command_output_delta_event.call_id.clone(),
-                delta: String::from_utf8_lossy(&exec_command_output_delta_event.chunk).to_string(),
+            let item_id = exec_command_output_delta_event.call_id.clone();
+            let delta = String::from_utf8_lossy(&exec_command_output_delta_event.chunk).to_string();
+            // The underlying EventMsg::ExecCommandOutputDelta is used for shell, unified_exec,
+            // and apply_patch tool calls. We represent apply_patch with the FileChange item, and
+            // everything else with the CommandExecution item.
+            //
+            // We need to detect which item type it is so we can emit the right notification.
+            // We already have state tracking FileChange items on item/started, so let's use that.
+            let is_file_change = {
+                let map = turn_summary_store.lock().await;
+                map.get(&conversation_id)
+                    .is_some_and(|summary| summary.file_change_started.contains(&item_id))
             };
-            outgoing
-                .send_server_notification(ServerNotification::CommandExecutionOutputDelta(
-                    notification,
-                ))
-                .await;
+            if is_file_change {
+                let notification = FileChangeOutputDeltaNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event_turn_id.clone(),
+                    item_id,
+                    delta,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::FileChangeOutputDelta(
+                        notification,
+                    ))
+                    .await;
+            } else {
+                let notification = CommandExecutionOutputDeltaNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event_turn_id.clone(),
+                    item_id,
+                    delta,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::CommandExecutionOutputDelta(
+                        notification,
+                    ))
+                    .await;
+            }
         }
         EventMsg::ExecCommandEnd(exec_command_end_event) => {
             let ExecCommandEndEvent {
@@ -585,8 +626,18 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::TurnDiff(turn_diff_event) => {
             handle_turn_diff(
+                conversation_id,
                 &event_turn_id,
                 turn_diff_event,
+                api_version,
+                outgoing.as_ref(),
+            )
+            .await;
+        }
+        EventMsg::PlanUpdate(plan_update_event) => {
+            handle_turn_plan_update(
+                &event_turn_id,
+                plan_update_event,
                 api_version,
                 outgoing.as_ref(),
             )
@@ -598,6 +649,7 @@ pub(crate) async fn apply_bespoke_event_handling(
 }
 
 async fn handle_turn_diff(
+    conversation_id: ConversationId,
     event_turn_id: &str,
     turn_diff_event: TurnDiffEvent,
     api_version: ApiVersion,
@@ -605,11 +657,34 @@ async fn handle_turn_diff(
 ) {
     if let ApiVersion::V2 = api_version {
         let notification = TurnDiffUpdatedNotification {
+            thread_id: conversation_id.to_string(),
             turn_id: event_turn_id.to_string(),
             diff: turn_diff_event.unified_diff,
         };
         outgoing
             .send_server_notification(ServerNotification::TurnDiffUpdated(notification))
+            .await;
+    }
+}
+
+async fn handle_turn_plan_update(
+    event_turn_id: &str,
+    plan_update_event: UpdatePlanArgs,
+    api_version: ApiVersion,
+    outgoing: &OutgoingMessageSender,
+) {
+    if let ApiVersion::V2 = api_version {
+        let notification = TurnPlanUpdatedNotification {
+            turn_id: event_turn_id.to_string(),
+            explanation: plan_update_event.explanation,
+            plan: plan_update_event
+                .plan
+                .into_iter()
+                .map(TurnPlanStep::from)
+                .collect(),
+        };
+        outgoing
+            .send_server_notification(ServerNotification::TurnPlanUpdated(notification))
             .await;
     }
 }
@@ -1133,12 +1208,15 @@ mod tests {
     use anyhow::Result;
     use anyhow::anyhow;
     use anyhow::bail;
+    use codex_app_server_protocol::TurnPlanStepStatus;
     use codex_core::protocol::CreditsSnapshot;
     use codex_core::protocol::McpInvocation;
     use codex_core::protocol::RateLimitSnapshot;
     use codex_core::protocol::RateLimitWindow;
     use codex_core::protocol::TokenUsage;
     use codex_core::protocol::TokenUsageInfo;
+    use codex_protocol::plan_tool::PlanItemArg;
+    use codex_protocol::plan_tool::StepStatus;
     use mcp_types::CallToolResult;
     use mcp_types::ContentBlock;
     use mcp_types::TextContent;
@@ -1291,6 +1369,46 @@ mod tests {
                         }
                     }
                 );
+            }
+            other => bail!("unexpected message: {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "no extra messages expected");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_turn_plan_update_emits_notification_for_v2() -> Result<()> {
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = OutgoingMessageSender::new(tx);
+        let update = UpdatePlanArgs {
+            explanation: Some("need plan".to_string()),
+            plan: vec![
+                PlanItemArg {
+                    step: "first".to_string(),
+                    status: StepStatus::Pending,
+                },
+                PlanItemArg {
+                    step: "second".to_string(),
+                    status: StepStatus::Completed,
+                },
+            ],
+        };
+
+        handle_turn_plan_update("turn-123", update, ApiVersion::V2, &outgoing).await;
+
+        let msg = rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("should send one notification"))?;
+        match msg {
+            OutgoingMessage::AppServerNotification(ServerNotification::TurnPlanUpdated(n)) => {
+                assert_eq!(n.turn_id, "turn-123");
+                assert_eq!(n.explanation.as_deref(), Some("need plan"));
+                assert_eq!(n.plan.len(), 2);
+                assert_eq!(n.plan[0].step, "first");
+                assert_eq!(n.plan[0].status, TurnPlanStepStatus::Pending);
+                assert_eq!(n.plan[1].step, "second");
+                assert_eq!(n.plan[1].status, TurnPlanStepStatus::Completed);
             }
             other => bail!("unexpected message: {other:?}"),
         }
@@ -1697,8 +1815,10 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = OutgoingMessageSender::new(tx);
         let unified_diff = "--- a\n+++ b\n".to_string();
+        let conversation_id = ConversationId::new();
 
         handle_turn_diff(
+            conversation_id,
             "turn-1",
             TurnDiffEvent {
                 unified_diff: unified_diff.clone(),
@@ -1716,6 +1836,7 @@ mod tests {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnDiffUpdated(
                 notification,
             )) => {
+                assert_eq!(notification.thread_id, conversation_id.to_string());
                 assert_eq!(notification.turn_id, "turn-1");
                 assert_eq!(notification.diff, unified_diff);
             }
@@ -1729,8 +1850,10 @@ mod tests {
     async fn test_handle_turn_diff_is_noop_for_v1() -> Result<()> {
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = OutgoingMessageSender::new(tx);
+        let conversation_id = ConversationId::new();
 
         handle_turn_diff(
+            conversation_id,
             "turn-1",
             TurnDiffEvent {
                 unified_diff: "diff".to_string(),

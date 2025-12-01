@@ -251,6 +251,7 @@ The app-server streams JSON-RPC notifications while a turn is running. Each turn
 
 - `turn/started` — `{ turn }` with the turn id, empty `items`, and `status: "inProgress"`.
 - `turn/completed` — `{ turn }` where `turn.status` is `completed`, `interrupted`, or `failed`; failures carry `{ error: { message, codexErrorInfo? } }`.
+- `turn/plan/updated` — `{ turnId, explanation?, plan }` whenever the agent shares or changes its plan; each `plan` entry is `{ step, status }` with `status` in `pending`, `inProgress`, or `completed`.
 
 Today both notifications carry an empty `items` array even when item events were streamed; rely on `item/*` notifications for the canonical item list until this is fixed.
 

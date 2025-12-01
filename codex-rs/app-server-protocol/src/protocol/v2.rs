@@ -11,6 +11,8 @@ use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
+use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
+use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
@@ -1230,8 +1232,54 @@ pub struct TurnCompletedNotification {
 /// Notification that the turn-level unified diff has changed.
 /// Contains the latest aggregated diff across all file changes in the turn.
 pub struct TurnDiffUpdatedNotification {
+    pub thread_id: String,
     pub turn_id: String,
     pub diff: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnPlanUpdatedNotification {
+    pub turn_id: String,
+    pub explanation: Option<String>,
+    pub plan: Vec<TurnPlanStep>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnPlanStep {
+    pub step: String,
+    pub status: TurnPlanStepStatus,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum TurnPlanStepStatus {
+    Pending,
+    InProgress,
+    Completed,
+}
+
+impl From<CorePlanItemArg> for TurnPlanStep {
+    fn from(value: CorePlanItemArg) -> Self {
+        Self {
+            step: value.step,
+            status: value.status.into(),
+        }
+    }
+}
+
+impl From<CorePlanStepStatus> for TurnPlanStepStatus {
+    fn from(value: CorePlanStepStatus) -> Self {
+        match value {
+            CorePlanStepStatus::Pending => Self::Pending,
+            CorePlanStepStatus::InProgress => Self::InProgress,
+            CorePlanStepStatus::Completed => Self::Completed,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1257,6 +1305,8 @@ pub struct ItemCompletedNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct AgentMessageDeltaNotification {
+    pub thread_id: String,
+    pub turn_id: String,
     pub item_id: String,
     pub delta: String,
 }
@@ -1265,6 +1315,8 @@ pub struct AgentMessageDeltaNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ReasoningSummaryTextDeltaNotification {
+    pub thread_id: String,
+    pub turn_id: String,
     pub item_id: String,
     pub delta: String,
     pub summary_index: i64,
@@ -1274,6 +1326,8 @@ pub struct ReasoningSummaryTextDeltaNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ReasoningSummaryPartAddedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
     pub item_id: String,
     pub summary_index: i64,
 }
@@ -1282,6 +1336,8 @@ pub struct ReasoningSummaryPartAddedNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ReasoningTextDeltaNotification {
+    pub thread_id: String,
+    pub turn_id: String,
     pub item_id: String,
     pub delta: String,
     pub content_index: i64,
@@ -1291,6 +1347,18 @@ pub struct ReasoningTextDeltaNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct CommandExecutionOutputDeltaNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub delta: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FileChangeOutputDeltaNotification {
+    pub thread_id: String,
+    pub turn_id: String,
     pub item_id: String,
     pub delta: String,
 }
@@ -1299,6 +1367,8 @@ pub struct CommandExecutionOutputDeltaNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct McpToolCallProgressNotification {
+    pub thread_id: String,
+    pub turn_id: String,
     pub item_id: String,
     pub message: String,
 }
