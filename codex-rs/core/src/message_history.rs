@@ -291,7 +291,7 @@ fn history_log_id(metadata: &std::fs::Metadata) -> Option<u64> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        return Some(metadata.ino());
+        Some(metadata.ino())
     }
 
     #[cfg(windows)]
