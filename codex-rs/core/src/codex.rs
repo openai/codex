@@ -1036,6 +1036,10 @@ impl Session {
     }
 
     pub(crate) async fn record_model_warning(&self, message: impl Into<String>) {
+        if !self.enabled(Feature::ModelWarnings) {
+            return;
+        }
+
         let item = ResponseItem::Message {
             id: None,
             role: "user".to_string(),
