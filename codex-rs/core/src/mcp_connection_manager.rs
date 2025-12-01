@@ -12,7 +12,6 @@ use std::env;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::mcp::auth::McpAuthStatusEntry;
@@ -55,6 +54,7 @@ use serde::Serialize;
 use serde_json::json;
 use sha1::Digest;
 use sha1::Sha1;
+use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -128,7 +128,7 @@ struct ElicitationRequestManager {
 }
 
 impl ElicitationRequestManager {
-    fn resolve(
+    async fn resolve(
         &self,
         server_name: String,
         id: RequestId,
@@ -136,7 +136,7 @@ impl ElicitationRequestManager {
     ) -> Result<()> {
         self.requests
             .lock()
-            .map_err(|e| anyhow!("failed to lock elicitation requests: {e:?}"))?
+            .await
             .remove(&(server_name, id))
             .ok_or_else(|| anyhow!("elicitation request not found"))?
             .send(response)
@@ -151,9 +151,8 @@ impl ElicitationRequestManager {
             let server_name = server_name.clone();
             async move {
                 let (tx, rx) = oneshot::channel();
-                if let Ok(mut lock) = elicitation_requests.lock() {
-                    lock.insert((server_name.clone(), id.clone()), tx);
-                }
+                let mut lock = elicitation_requests.lock().await;
+                lock.insert((server_name.clone(), id.clone()), tx);
                 let _ = tx_event
                     .send(Event {
                         id: "mcp_elicitation_request".to_string(),
@@ -365,13 +364,15 @@ impl McpConnectionManager {
             .context("failed to get client")
     }
 
-    pub fn resolve_elicitation(
+    pub async fn resolve_elicitation(
         &self,
         server_name: String,
         id: RequestId,
         response: ElicitationResponse,
     ) -> Result<()> {
-        self.elicitation_requests.resolve(server_name, id, response)
+        self.elicitation_requests
+            .resolve(server_name, id, response)
+            .await
     }
 
     /// Returns a single map that contains all tools. Each key is the
