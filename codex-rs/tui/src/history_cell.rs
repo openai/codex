@@ -15,6 +15,7 @@ use crate::render::renderable::Renderable;
 use crate::style::user_message_style;
 use crate::text_formatting::format_and_truncate_tool_result;
 use crate::text_formatting::truncate_text;
+use crate::tooltips;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
@@ -560,6 +561,44 @@ pub(crate) fn padded_emoji(emoji: &str) -> String {
 }
 
 #[derive(Debug)]
+struct TooltipHistoryCell {
+    tip: &'static str,
+}
+
+impl TooltipHistoryCell {
+    fn new(tip: &'static str) -> Self {
+        Self { tip }
+    }
+}
+
+impl HistoryCell for TooltipHistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let indent: Line<'static> = "  ".into();
+        let mut lines = Vec::new();
+        lines.push(Line::from(""));
+        let tooltip_line: Line<'static> = vec!["Tip: ".cyan(), self.tip.into()].into();
+        let wrap_opts = RtOptions::new(usize::from(width.max(1)))
+            .initial_indent(indent.clone())
+            .subsequent_indent(indent.clone());
+        lines.extend(
+            word_wrap_line(&tooltip_line, wrap_opts.clone())
+                .into_iter()
+                .map(|line| line_to_static(&line)),
+        );
+        let disable_line: Line<'static> =
+            "Disable tips via tui.show_tooltips = false in config.toml"
+                .dim()
+                .into();
+        lines.extend(
+            word_wrap_line(&disable_line, wrap_opts)
+                .into_iter()
+                .map(|line| line_to_static(&line)),
+        );
+        lines
+    }
+}
+
+#[derive(Debug)]
 pub struct SessionInfoCell(CompositeHistoryCell);
 
 impl HistoryCell for SessionInfoCell {
@@ -628,12 +667,21 @@ pub(crate) fn new_session_info(
             ]),
         ];
 
-        CompositeHistoryCell {
-            parts: vec![
-                Box::new(header),
-                Box::new(PlainHistoryCell { lines: help_lines }),
-            ],
+        let tooltip = if config.show_tooltips {
+            tooltips::random_tooltip().map(TooltipHistoryCell::new)
+        } else {
+            None
+        };
+
+        let mut parts: Vec<Box<dyn HistoryCell>> = vec![
+            Box::new(header),
+            Box::new(PlainHistoryCell { lines: help_lines }),
+        ];
+        if let Some(cell) = tooltip {
+            parts.push(Box::new(cell));
         }
+
+        CompositeHistoryCell { parts }
     } else if config.model == model {
         CompositeHistoryCell { parts: vec![] }
     } else {

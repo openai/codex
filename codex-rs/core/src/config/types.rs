@@ -368,6 +368,12 @@ pub struct Tui {
     /// Defaults to `true`.
     #[serde(default = "default_true")]
     pub animations: bool,
+
+    // TODO(jif) toggle default once design is done.
+    /// Show startup tooltips in the TUI welcome screen.
+    /// Defaults to `false`.
+    #[serde(default)]
+    pub show_tooltips: bool,
 }
 
 const fn default_true() -> bool {

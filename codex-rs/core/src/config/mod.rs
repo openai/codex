@@ -160,6 +160,9 @@ pub struct Config {
     /// Enable ASCII animations and shimmer effects in the TUI.
     pub animations: bool,
 
+    /// Show startup tooltips in the TUI welcome screen.
+    pub show_tooltips: bool,
+
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
     /// resolved against this path.
@@ -1258,6 +1261,8 @@ impl Config {
                 .map(|t| t.notifications.clone())
                 .unwrap_or_default(),
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
+            // TODO(jif) toggle default once design is done.
+            show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(false),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
@@ -1436,6 +1441,7 @@ persistence = "none"
         let tui = parsed.tui.expect("config should include tui section");
 
         assert_eq!(tui.notifications, Notifications::Enabled(true));
+        assert!(!tui.show_tooltips);
     }
 
     #[test]
@@ -3009,6 +3015,7 @@ model_verbosity = "high"
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
                 animations: true,
+                show_tooltips: false,
                 otel: OtelConfig::default(),
             },
             o3_profile_config
@@ -3082,6 +3089,7 @@ model_verbosity = "high"
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             animations: true,
+            show_tooltips: false,
             otel: OtelConfig::default(),
         };
 
@@ -3170,6 +3178,7 @@ model_verbosity = "high"
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             animations: true,
+            show_tooltips: false,
             otel: OtelConfig::default(),
         };
 
@@ -3244,6 +3253,7 @@ model_verbosity = "high"
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             animations: true,
+            show_tooltips: false,
             otel: OtelConfig::default(),
         };
 

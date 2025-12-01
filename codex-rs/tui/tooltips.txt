@@ -1,0 +1,7 @@
+Use /compact when the conversation gets long to summarize history and free up context.
+Use /mention path/to/file to pull a specific file into the conversation.
+Start a fresh idea with /new; the previous session stays available in history.
+If a turn went sideways, /undo asks Codex to revert the last changes.
+Use /feedback to send logs to the maintainers when something looks off.
+Switch models or reasoning effort quickly with /model.
+You can run any shell commands from codex using `!` (e.g. `!ls`)
