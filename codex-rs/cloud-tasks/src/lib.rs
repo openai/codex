@@ -9,7 +9,6 @@ pub use cli::Cli;
 
 use anyhow::anyhow;
 use codex_login::AuthManager;
-use std::future::Future;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::path::PathBuf;
@@ -98,35 +97,23 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
     })
 }
 
-type BoxFuture<'a, T> = std::pin::Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-
+#[async_trait::async_trait]
 trait GitInfoProvider {
-    fn default_branch_name<'a>(
-        &'a self,
-        path: &'a std::path::Path,
-    ) -> BoxFuture<'a, Option<String>>;
+    async fn default_branch_name(&self, path: &std::path::Path) -> Option<String>;
 
-    fn current_branch_name<'a>(
-        &'a self,
-        path: &'a std::path::Path,
-    ) -> BoxFuture<'a, Option<String>>;
+    async fn current_branch_name(&self, path: &std::path::Path) -> Option<String>;
 }
 
 struct RealGitInfo;
 
+#[async_trait::async_trait]
 impl GitInfoProvider for RealGitInfo {
-    fn default_branch_name<'a>(
-        &'a self,
-        path: &'a std::path::Path,
-    ) -> BoxFuture<'a, Option<String>> {
-        Box::pin(codex_core::git_info::default_branch_name(path))
+    async fn default_branch_name(&self, path: &std::path::Path) -> Option<String> {
+        codex_core::git_info::default_branch_name(path).await
     }
 
-    fn current_branch_name<'a>(
-        &'a self,
-        path: &'a std::path::Path,
-    ) -> BoxFuture<'a, Option<String>> {
-        Box::pin(codex_core::git_info::current_branch_name(path))
+    async fn current_branch_name(&self, path: &std::path::Path) -> Option<String> {
+        codex_core::git_info::current_branch_name(path).await
     }
 }
 
@@ -1790,19 +1777,14 @@ mod tests {
         }
     }
 
+    #[async_trait::async_trait]
     impl super::GitInfoProvider for StubGitInfo {
-        fn default_branch_name<'a>(
-            &'a self,
-            _path: &'a std::path::Path,
-        ) -> super::BoxFuture<'a, Option<String>> {
-            Box::pin(async move { self.default_branch.clone() })
+        async fn default_branch_name(&self, _path: &std::path::Path) -> Option<String> {
+            self.default_branch.clone()
         }
 
-        fn current_branch_name<'a>(
-            &'a self,
-            _path: &'a std::path::Path,
-        ) -> super::BoxFuture<'a, Option<String>> {
-            Box::pin(async move { self.current_branch.clone() })
+        async fn current_branch_name(&self, _path: &std::path::Path) -> Option<String> {
+            self.current_branch.clone()
         }
     }
 
