@@ -54,7 +54,12 @@ pub enum AmendError {
     },
 }
 
-pub fn append_allow_prefix_rule(policy_path: &Path, prefix: &[String]) -> Result<(), AmendError> {
+/// Note this thread uses advisory file locking and performs blocking I/O, so it should be used with
+/// [`tokio::task::spawn_blocking`] when called from an async context.
+pub fn blocking_append_allow_prefix_rule(
+    policy_path: &Path,
+    prefix: &[String],
+) -> Result<(), AmendError> {
     if prefix.is_empty() {
         return Err(AmendError::EmptyPrefix);
     }
@@ -147,7 +152,7 @@ mod tests {
         let tmp = tempdir().expect("create temp dir");
         let policy_path = tmp.path().join("policy").join("default.codexpolicy");
 
-        append_allow_prefix_rule(
+        blocking_append_allow_prefix_rule(
             &policy_path,
             &[String::from("echo"), String::from("Hello, world!")],
         )
@@ -174,7 +179,7 @@ mod tests {
         )
         .expect("write seed rule");
 
-        append_allow_prefix_rule(
+        blocking_append_allow_prefix_rule(
             &policy_path,
             &[String::from("echo"), String::from("Hello, world!")],
         )
@@ -200,7 +205,7 @@ prefix_rule(pattern=["echo","Hello, world!"], decision="allow")
         )
         .expect("write seed rule without newline");
 
-        append_allow_prefix_rule(
+        blocking_append_allow_prefix_rule(
             &policy_path,
             &[String::from("echo"), String::from("Hello, world!")],
         )

@@ -7,7 +7,7 @@ pub mod policy;
 pub mod rule;
 
 pub use amend::AmendError;
-pub use amend::append_allow_prefix_rule;
+pub use amend::blocking_append_allow_prefix_rule;
 pub use decision::Decision;
 pub use error::Error;
 pub use error::Result;
