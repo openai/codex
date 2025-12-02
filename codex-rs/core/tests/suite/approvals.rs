@@ -1557,3 +1557,134 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approving_allow_prefix_persists_policy_and_skips_future_prompts() -> Result<()> {
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::UnlessTrusted;
+    let sandbox_policy = SandboxPolicy::DangerFullAccess;
+    let sandbox_policy_for_config = sandbox_policy.clone();
+    let mut builder = test_codex().with_config(move |config| {
+        config.approval_policy = approval_policy;
+        config.sandbox_policy = sandbox_policy_for_config;
+    });
+    let test = builder.build(&server).await?;
+
+    let call_id_first = "allow-prefix-first";
+    let (first_event, expected_command) = ActionKind::RunCommand {
+        command: &["printf", "allow-prefix-ok"],
+    }
+    .prepare(&test, &server, call_id_first, false)
+    .await?;
+    let expected_command =
+        expected_command.expect("allow prefix scenario should produce a shell command");
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-allow-prefix-1"),
+            first_event,
+            ev_completed("resp-allow-prefix-1"),
+        ]),
+    )
+    .await;
+    let first_results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-allow-prefix-1", "done"),
+            ev_completed("resp-allow-prefix-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "allow-prefix-first",
+        approval_policy,
+        sandbox_policy.clone(),
+    )
+    .await?;
+
+    let approval = expect_exec_approval(&test, &expected_command).await;
+    assert_eq!(approval.allow_prefix, Some(expected_command.clone()));
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: "0".into(),
+            decision: ReviewDecision::ApprovedAllowPrefix {
+                allow_prefix: expected_command.clone(),
+            },
+        })
+        .await?;
+    wait_for_completion(&test).await;
+
+    let policy_path = test.home.path().join("policy").join("default.codexpolicy");
+    let policy_contents = fs::read_to_string(&policy_path)?;
+    assert!(
+        policy_contents
+            .contains("prefix_rule(pattern=[\"printf\",\"allow-prefix-ok\"], decision=\"allow\")"),
+        "unexpected policy contents: {policy_contents}"
+    );
+
+    let first_output = parse_result(
+        &first_results
+            .single_request()
+            .function_call_output(call_id_first),
+    );
+    assert_eq!(first_output.exit_code.unwrap_or(0), 0);
+    assert!(
+        first_output.stdout.contains("allow-prefix-ok"),
+        "unexpected stdout: {}",
+        first_output.stdout
+    );
+
+    let call_id_second = "allow-prefix-second";
+    let (second_event, second_command) = ActionKind::RunCommand {
+        command: &["printf", "allow-prefix-ok"],
+    }
+    .prepare(&test, &server, call_id_second, false)
+    .await?;
+    assert_eq!(second_command, Some(expected_command.clone()));
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-allow-prefix-3"),
+            second_event,
+            ev_completed("resp-allow-prefix-3"),
+        ]),
+    )
+    .await;
+    let second_results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-allow-prefix-2", "done"),
+            ev_completed("resp-allow-prefix-4"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "allow-prefix-second",
+        approval_policy,
+        sandbox_policy.clone(),
+    )
+    .await?;
+
+    wait_for_completion_without_approval(&test).await;
+
+    let second_output = parse_result(
+        &second_results
+            .single_request()
+            .function_call_output(call_id_second),
+    );
+    assert_eq!(second_output.exit_code.unwrap_or(0), 0);
+    assert!(
+        second_output.stdout.contains("allow-prefix-ok"),
+        "unexpected stdout: {}",
+        second_output.stdout
+    );
+
+    Ok(())
+}
