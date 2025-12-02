@@ -58,13 +58,23 @@ pub(crate) async fn get_user_instructions(config: &Config) -> Option<String> {
 
     let combined_project_docs = merge_project_docs_with_skills(project_docs, skills_section);
 
-    match (config.user_instructions.clone(), combined_project_docs) {
-        (Some(instructions), Some(project_doc)) => Some(format!(
-            "{instructions}{PROJECT_DOC_SEPARATOR}{project_doc}"
-        )),
-        (Some(instructions), None) => Some(instructions),
-        (None, Some(project_doc)) => Some(project_doc),
-        (None, None) => None,
+    let mut parts: Vec<String> = Vec::new();
+
+    if let Some(instructions) = config.user_instructions.clone() {
+        parts.push(instructions);
+    }
+
+    if let Some(project_doc) = combined_project_docs {
+        if !parts.is_empty() {
+            parts.push(PROJECT_DOC_SEPARATOR.to_string());
+        }
+        parts.push(project_doc);
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.concat())
     }
 }
 
