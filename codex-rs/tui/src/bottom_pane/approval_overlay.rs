@@ -471,11 +471,6 @@ impl ApprovalOption {
 }
 
 fn exec_options(allow_prefix: Option<Vec<String>>) -> Vec<ApprovalOption> {
-    let allow_prefix_label = allow_prefix.as_ref().map(|prefix| {
-        let rendered_prefix = strip_bash_lc_and_escape(prefix);
-        format!("Yes, and don't ask again for `{rendered_prefix}` commands")
-    });
-
     vec![ApprovalOption {
         label: "Yes, proceed".to_string(),
         decision: ApprovalDecision::Review(ReviewDecision::Approved),
@@ -483,18 +478,17 @@ fn exec_options(allow_prefix: Option<Vec<String>>) -> Vec<ApprovalOption> {
         additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
     }]
     .into_iter()
-    .chain(
-        allow_prefix
-            .zip(allow_prefix_label)
-            .map(|(prefix, label)| ApprovalOption {
-                label,
-                decision: ApprovalDecision::Review(ReviewDecision::ApprovedAllowPrefix {
-                    allow_prefix: prefix,
-                }),
-                display_shortcut: None,
-                additional_shortcuts: vec![key_hint::plain(KeyCode::Char('p'))],
+    .chain(allow_prefix.map(|prefix| {
+        let rendered_prefix = strip_bash_lc_and_escape(&prefix);
+        ApprovalOption {
+            label: format!("Yes, and don't ask again for `{rendered_prefix}` commands"),
+            decision: ApprovalDecision::Review(ReviewDecision::ApprovedAllowPrefix {
+                allow_prefix: prefix,
             }),
-    )
+            display_shortcut: None,
+            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('p'))],
+        }
+    }))
     .chain([ApprovalOption {
         label: "No, and tell Codex what to do differently".to_string(),
         decision: ApprovalDecision::Review(ReviewDecision::Abort),
