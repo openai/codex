@@ -2094,6 +2094,7 @@ async fn run_turn(
         )
         .await
         {
+            // todo(aibrahim): map special cases and ? on other errors
             Ok(output) => return Ok(output),
             Err(CodexErr::TurnAborted) => {
                 return Err(CodexErr::TurnAborted);
