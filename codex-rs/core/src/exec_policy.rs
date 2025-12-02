@@ -286,10 +286,6 @@ mod tests {
             .expect("policy result");
 
         let commands = [vec!["rm".to_string()]];
-        let evaluation = policy
-            .read()
-            .await
-            .check_multiple(commands.iter(), &|_| Decision::Allow);
         assert_eq!(
             Evaluation {
                 decision: Decision::Allow,
@@ -298,7 +294,10 @@ mod tests {
                     decision: Decision::Allow
                 }],
             },
-            evaluation
+            policy
+            .read()
+            .await
+            .check_multiple(commands.iter(), &|_| Decision::Allow)
         );
         assert!(!temp_dir.path().join(POLICY_DIR_NAME).exists());
     }
@@ -330,10 +329,6 @@ mod tests {
             .await
             .expect("policy result");
         let command = [vec!["rm".to_string()]];
-        let evaluation = policy
-            .read()
-            .await
-            .check_multiple(command.iter(), &|_| Decision::Allow);
         assert_eq!(
             Evaluation {
                 decision: Decision::Forbidden,
@@ -342,7 +337,10 @@ mod tests {
                     decision: Decision::Forbidden
                 }],
             },
-            evaluation
+            policy
+            .read()
+            .await
+            .check_multiple(command.iter(), &|_| Decision::Allow)
         );
     }
 
@@ -359,10 +357,6 @@ mod tests {
             .await
             .expect("policy result");
         let command = [vec!["ls".to_string()]];
-        let evaluation = policy
-            .read()
-            .await
-            .check_multiple(command.iter(), &|_| Decision::Allow);
         assert_eq!(
             Evaluation {
                 decision: Decision::Allow,
@@ -371,7 +365,10 @@ mod tests {
                     decision: Decision::Allow
                 }],
             },
-            evaluation
+            policy
+            .read()
+            .await
+            .check_multiple(command.iter(), &|_| Decision::Allow)
         );
     }
 
