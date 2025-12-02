@@ -1,3 +1,4 @@
+use crate::mcp_cmd::McpCli;
 use clap::Args;
 use clap::CommandFactory;
 use clap::Parser;
@@ -17,6 +18,9 @@ use codex_cli::login::run_login_with_device_code;
 use codex_cli::login::run_logout;
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_common::CliConfigOverrides;
+use codex_core::config::Config;
+use codex_core::config::ConfigOverrides;
+use codex_core::features::is_known_feature_key;
 use codex_exec::Cli as ExecCli;
 use codex_execpolicy::ExecPolicyCheckCommand;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
@@ -28,14 +32,6 @@ use std::path::PathBuf;
 use supports_color::Stream;
 
 mod mcp_cmd;
-#[cfg(not(windows))]
-mod wsl_paths;
-
-use crate::mcp_cmd::McpCli;
-
-use codex_core::config::Config;
-use codex_core::config::ConfigOverrides;
-use codex_core::features::is_known_feature_key;
 
 /// Codex CLI
 ///
@@ -324,16 +320,17 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
                 .args(["/C", &cmd_str])
                 .status()?
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
         {
             let (cmd, args) = action.command_args();
-            let command_path = crate::wsl_paths::normalize_for_wsl(cmd);
-            let normalized_args: Vec<String> = args
-                .iter()
-                .map(crate::wsl_paths::normalize_for_wsl)
-                .collect();
+            std::process::Command::new(cmd).args(args).status()?
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let (cmd, args) = action.command_args();
+            let command_path = codex_core::wsl::normalize_for_wsl(cmd);
             std::process::Command::new(&command_path)
-                .args(&normalized_args)
+                .args(args)
                 .status()?
         }
     };
