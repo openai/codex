@@ -11,6 +11,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::sync::Arc;
 
+type HeuristicsFallback<'a> = Option<&'a dyn Fn(&[String]) -> Decision>;
+
 #[derive(Clone, Debug)]
 pub struct Policy {
     rules_by_program: MultiMap<String, RuleRef>,
@@ -81,7 +83,7 @@ impl Policy {
     pub fn matches_for_command(
         &self,
         cmd: &[String],
-        heuristics_fallback: Option<&dyn Fn(&[String]) -> Decision>,
+        heuristics_fallback: HeuristicsFallback<'_>,
     ) -> Vec<RuleMatch> {
         let mut matched_rules: Vec<RuleMatch> = match cmd.first() {
             Some(first) => self
