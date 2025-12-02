@@ -1572,12 +1572,16 @@ async fn approving_allow_prefix_persists_policy_and_skips_future_prompts() -> Re
 
     let call_id_first = "allow-prefix-first";
     let (first_event, expected_command) = ActionKind::RunCommand {
-        command: &["printf", "allow-prefix-ok"],
+        command: "printf allow-prefix-ok",
     }
     .prepare(&test, &server, call_id_first, false)
     .await?;
     let expected_command =
         expected_command.expect("allow prefix scenario should produce a shell command");
+    let expected_allow_prefix = expected_command
+        .split_whitespace()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
 
     let _ = mount_sse_once(
         &server,
@@ -1605,14 +1609,15 @@ async fn approving_allow_prefix_persists_policy_and_skips_future_prompts() -> Re
     )
     .await?;
 
-    let approval = expect_exec_approval(&test, &expected_command).await;
-    assert_eq!(approval.allow_prefix, Some(expected_command.clone()));
+    let approval =
+        expect_exec_approval(&test, expected_allow_prefix.last().unwrap().as_str()).await;
+    assert_eq!(approval.allow_prefix, Some(expected_allow_prefix.clone()));
 
     test.codex
         .submit(Op::ExecApproval {
             id: "0".into(),
             decision: ReviewDecision::ApprovedAllowPrefix {
-                allow_prefix: expected_command.clone(),
+                allow_prefix: expected_allow_prefix.clone(),
             },
         })
         .await?;
@@ -1640,11 +1645,11 @@ async fn approving_allow_prefix_persists_policy_and_skips_future_prompts() -> Re
 
     let call_id_second = "allow-prefix-second";
     let (second_event, second_command) = ActionKind::RunCommand {
-        command: &["printf", "allow-prefix-ok"],
+        command: "printf allow-prefix-ok",
     }
     .prepare(&test, &server, call_id_second, false)
     .await?;
-    assert_eq!(second_command, Some(expected_command.clone()));
+    assert_eq!(second_command.as_deref(), Some(expected_command.as_str()));
 
     let _ = mount_sse_once(
         &server,
