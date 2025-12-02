@@ -638,7 +638,7 @@ pub struct FeedbackUploadResponse {
 pub struct CommandExecParams {
     pub command: Vec<String>,
     #[ts(type = "number | null")]
-    pub timeout_ms: Option<u64>,
+    pub timeout_ms: Option<i64>,
     pub cwd: Option<PathBuf>,
     pub sandbox_policy: Option<SandboxPolicy>,
 }
