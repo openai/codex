@@ -2,6 +2,7 @@
 package ai.solace.coder.core.tools.runtimes
 
 import ai.solace.coder.core.tools.Approvable
+import ai.solace.coder.core.session.SessionServices
 import ai.solace.coder.core.tools.ApprovalCtx
 import ai.solace.coder.core.tools.ApprovalRequirement
 import ai.solace.coder.core.tools.SandboxAttempt
@@ -120,9 +121,11 @@ class ShellRuntime(
         val env = attempt.envFor(spec)
             .getOrElse { return Result.failure(ToolError.Codex(it.message ?: "Unknown error")) }
 
-        return executeEnv(env, attempt.policy, stdoutStream(ctx))
-            .mapCatching { it }
-            .recoverCatching { throw ToolError.Codex(it.message ?: "Execution failed") }
+        return try {
+            executeEnv(env, attempt.policy, stdoutStream(ctx))
+        } catch (e: Exception) {
+            Result.failure(ToolError.Codex(CodexError.Sandbox(SandboxError(e.message ?: "Execution failed"))))
+        }
     }
 
     private fun stdoutStream(ctx: ToolCtx): StdoutStream {

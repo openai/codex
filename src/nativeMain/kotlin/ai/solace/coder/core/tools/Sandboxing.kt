@@ -55,10 +55,7 @@ suspend fun <K> withCachedApproval(
     return decision
 }
 
-// Placeholder for SessionServices
-class SessionServices {
-    val toolApprovals = ApprovalStore() // Should be Mutex protected
-}
+import ai.solace.coder.core.session.SessionServices
 
 data class ApprovalCtx(
     val session: Session,

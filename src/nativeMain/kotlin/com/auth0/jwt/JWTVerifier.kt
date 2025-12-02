@@ -1,3 +1,4 @@
+```kotlin
 @file:OptIn(kotlin.time.ExperimentalTime::class)
 
 package com.auth0.jwt
@@ -7,12 +8,13 @@ import com.auth0.jwt.exceptions.*
 import com.auth0.jwt.impl.ExpectedCheckHolder
 import com.auth0.jwt.impl.JWTParser
 import com.auth0.jwt.interfaces.Claim
+import com.auth0.jwt.interfaces.Clock
 import com.auth0.jwt.interfaces.DecodedJWT
 import com.auth0.jwt.interfaces.Verification
-import kotlinx.datetime.Clock
-import kotlinx.datetime.Instant
+import kotlin.time.Clock as KotlinClock
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Instant
 
 /**
  * The JWTVerifier class holds the verify method to assert that a given Token has not only a proper JWT format,
