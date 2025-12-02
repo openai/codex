@@ -51,6 +51,8 @@ pub enum Feature {
     ShellTool,
     /// Allow model to call multiple tools in parallel (only for models supporting it).
     ParallelToolCalls,
+    /// Experimental skills injection (CLI flag-driven).
+    Skills,
 }
 
 impl Feature {
@@ -325,5 +327,11 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "shell_tool",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::Skills,
+        key: "skills",
+        stage: Stage::Experimental,
+        default_enabled: false,
     },
 ];

@@ -5,10 +5,10 @@
 // the TUI or the tracing stack).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+pub mod api_bridge;
 mod apply_patch;
 pub mod auth;
 pub mod bash;
-mod chat_completions;
 mod client;
 mod client_common;
 pub mod codex;
@@ -72,6 +72,7 @@ mod rollout;
 pub(crate) mod safety;
 pub mod seatbelt;
 pub mod shell;
+pub mod skills;
 pub mod spawn;
 pub mod terminal;
 mod tools;
