@@ -29,15 +29,15 @@ pub(crate) struct OutputItemResult {
     pub tool_future: Option<InFlightFuture<'static>>,
 }
 
-pub(crate) struct HandleOutputCtx<'a> {
-    pub sess: &'a Arc<Session>,
-    pub turn_context: &'a Arc<TurnContext>,
+pub(crate) struct HandleOutputCtx {
+    pub sess: Arc<Session>,
+    pub turn_context: Arc<TurnContext>,
     pub tool_runtime: Arc<ToolCallRuntime>,
     pub cancellation_token: CancellationToken,
 }
 
 pub(crate) async fn handle_output_item_done(
-    ctx: &mut HandleOutputCtx<'_>,
+    ctx: &mut HandleOutputCtx,
     item: ResponseItem,
     previously_active_item: Option<TurnItem>,
 ) -> Result<OutputItemResult> {
@@ -47,11 +47,11 @@ pub(crate) async fn handle_output_item_done(
             tracing::info!("ToolCall: {} {}", call.tool_name, payload_preview);
 
             ctx.sess
-                .record_conversation_items(ctx.turn_context, std::slice::from_ref(&item))
+                .record_conversation_items(&ctx.turn_context, std::slice::from_ref(&item))
                 .await;
 
-            let sess_for_output: Arc<Session> = Arc::clone(ctx.sess);
-            let turn_for_output: Arc<TurnContext> = Arc::clone(ctx.turn_context);
+            let sess_for_output: Arc<Session> = Arc::clone(&ctx.sess);
+            let turn_for_output: Arc<TurnContext> = Arc::clone(&ctx.turn_context);
             let tool_runtime = Arc::clone(&ctx.tool_runtime);
             let cancellation_token = ctx.cancellation_token.clone();
 
@@ -80,17 +80,17 @@ pub(crate) async fn handle_output_item_done(
             if let Some(turn_item) = handle_non_tool_response_item(&item).await {
                 if previously_active_item.is_none() {
                     ctx.sess
-                        .emit_turn_item_started(ctx.turn_context, &turn_item)
+                        .emit_turn_item_started(&ctx.turn_context, &turn_item)
                         .await;
                 }
 
                 ctx.sess
-                    .emit_turn_item_completed(ctx.turn_context, turn_item)
+                    .emit_turn_item_completed(&ctx.turn_context, turn_item)
                     .await;
             }
 
             ctx.sess
-                .record_conversation_items(ctx.turn_context, std::slice::from_ref(&item))
+                .record_conversation_items(&ctx.turn_context, std::slice::from_ref(&item))
                 .await;
             let last_agent_message = last_assistant_message_from_item(&item);
 
@@ -116,12 +116,12 @@ pub(crate) async fn handle_output_item_done(
                 },
             };
             ctx.sess
-                .record_conversation_items(ctx.turn_context, std::slice::from_ref(&item))
+                .record_conversation_items(&ctx.turn_context, std::slice::from_ref(&item))
                 .await;
             if let Some(response_item) = response_input_to_response_item(&response) {
                 ctx.sess
                     .record_conversation_items(
-                        ctx.turn_context,
+                        &ctx.turn_context,
                         std::slice::from_ref(&response_item),
                     )
                     .await;
@@ -143,12 +143,12 @@ pub(crate) async fn handle_output_item_done(
                 },
             };
             ctx.sess
-                .record_conversation_items(ctx.turn_context, std::slice::from_ref(&item))
+                .record_conversation_items(&ctx.turn_context, std::slice::from_ref(&item))
                 .await;
             if let Some(response_item) = response_input_to_response_item(&response) {
                 ctx.sess
                     .record_conversation_items(
-                        ctx.turn_context,
+                        &ctx.turn_context,
                         std::slice::from_ref(&response_item),
                     )
                     .await;
