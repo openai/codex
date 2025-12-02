@@ -550,17 +550,16 @@ impl ChatWidget {
 
     pub(crate) fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshot>) {
         if let Some(mut snapshot) = snapshot {
-            if snapshot.credits.is_none()
-                && let Some(previous_credits) = self
+            if snapshot.credits.is_none() {
+                snapshot.credits = self
                     .rate_limit_snapshot
                     .as_ref()
                     .and_then(|display| display.credits.as_ref())
-            {
-                snapshot.credits = Some(CreditsSnapshot {
-                    has_credits: previous_credits.has_credits,
-                    unlimited: previous_credits.unlimited,
-                    balance: previous_credits.balance.clone(),
-                });
+                    .map(|credits| CreditsSnapshot {
+                        has_credits: credits.has_credits,
+                        unlimited: credits.unlimited,
+                        balance: credits.balance.clone(),
+                    });
             }
 
             let warnings = self.rate_limit_warnings.take_warnings(
