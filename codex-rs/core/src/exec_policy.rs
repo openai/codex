@@ -164,10 +164,10 @@ fn allow_prefix_if_applicable(
     features: &Features,
 ) -> Option<Vec<String>> {
     if features.enabled(Feature::ExecPolicy) && commands.len() == 1 {
-        return Some(commands[0].clone());
+        Some(commands[0].clone())
+    } else {
+        None
     }
-
-    None
 }
 
 pub(crate) fn create_approval_requirement_for_command(
