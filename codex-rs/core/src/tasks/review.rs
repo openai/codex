@@ -17,14 +17,21 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex_delegate::run_codex_conversation_one_shot;
 use crate::review_format::format_review_findings_block;
+use crate::review_format::render_review_output_text;
 use crate::state::TaskKind;
 use codex_protocol::user_input::UserInput;
 
 use super::SessionTask;
 use super::SessionTaskContext;
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 pub(crate) struct ReviewTask;
+
+impl ReviewTask {
+    pub(crate) fn new() -> Self {
+        Self
+    }
+}
 
 #[async_trait]
 impl SessionTask for ReviewTask {
@@ -176,7 +183,9 @@ pub(crate) async fn exit_review_mode(
     review_output: Option<ReviewOutputEvent>,
     ctx: Arc<TurnContext>,
 ) {
-    let user_message = if let Some(out) = review_output.clone() {
+    const REVIEW_USER_MESSAGE_ID: &str = "review:rollout:user";
+    const REVIEW_ASSISTANT_MESSAGE_ID: &str = "review:rollout:assistant";
+    let (user_message, assistant_message) = if let Some(out) = review_output.clone() {
         let mut findings_str = String::new();
         let text = out.overall_explanation.trim();
         if !text.is_empty() {
@@ -186,16 +195,23 @@ pub(crate) async fn exit_review_mode(
             let block = format_review_findings_block(&out.findings, None);
             findings_str.push_str(&format!("\n{block}"));
         }
-        crate::client_common::REVIEW_EXIT_SUCCESS_TMPL.replace("{results}", &findings_str)
+        let rendered =
+            crate::client_common::REVIEW_EXIT_SUCCESS_TMPL.replace("{results}", &findings_str);
+        let assistant_message = render_review_output_text(&out);
+        (rendered, assistant_message)
     } else {
-        crate::client_common::REVIEW_EXIT_INTERRUPTED_TMPL.to_string()
+        let rendered = crate::client_common::REVIEW_EXIT_INTERRUPTED_TMPL.to_string();
+        let assistant_message =
+            "Review was interrupted. Please re-run /review and wait for it to complete."
+                .to_string();
+        (rendered, assistant_message)
     };
 
     session
         .record_conversation_items(
             &ctx,
             &[ResponseItem::Message {
-                id: None,
+                id: Some(REVIEW_USER_MESSAGE_ID.to_string()),
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText { text: user_message }],
             }],
@@ -205,6 +221,18 @@ pub(crate) async fn exit_review_mode(
         .send_event(
             ctx.as_ref(),
             EventMsg::ExitedReviewMode(ExitedReviewModeEvent { review_output }),
+        )
+        .await;
+    session
+        .record_response_item_and_emit_turn_item(
+            ctx.as_ref(),
+            ResponseItem::Message {
+                id: Some(REVIEW_ASSISTANT_MESSAGE_ID.to_string()),
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: assistant_message,
+                }],
+            },
         )
         .await;
 }

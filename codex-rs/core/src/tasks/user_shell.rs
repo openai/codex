@@ -31,6 +31,8 @@ use crate::user_shell_command::user_shell_command_record_item;
 use super::SessionTask;
 use super::SessionTaskContext;
 
+const USER_SHELL_TIMEOUT_MS: u64 = 60 * 60 * 1000; // 1 hour
+
 #[derive(Clone)]
 pub(crate) struct UserShellCommandTask {
     command: String,
@@ -79,6 +81,7 @@ impl SessionTask for UserShellCommandTask {
                 turn_context.as_ref(),
                 EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                     call_id: call_id.clone(),
+                    process_id: None,
                     turn_id: turn_context.sub_id.clone(),
                     command: command.clone(),
                     cwd: cwd.clone(),
@@ -93,7 +96,9 @@ impl SessionTask for UserShellCommandTask {
             command: command.clone(),
             cwd: cwd.clone(),
             env: create_env(&turn_context.shell_environment_policy),
-            timeout_ms: None,
+            // TODO(zhao-oai): Now that we have ExecExpiration::Cancellation, we
+            // should use that instead of an "arbitrarily large" timeout here.
+            expiration: USER_SHELL_TIMEOUT_MS.into(),
             sandbox: SandboxType::None,
             with_escalated_permissions: None,
             justification: None,
@@ -122,7 +127,11 @@ impl SessionTask for UserShellCommandTask {
                     duration: Duration::ZERO,
                     timed_out: false,
                 };
-                let output_items = [user_shell_command_record_item(&raw_command, &exec_output)];
+                let output_items = [user_shell_command_record_item(
+                    &raw_command,
+                    &exec_output,
+                    &turn_context,
+                )];
                 session
                     .record_conversation_items(turn_context.as_ref(), &output_items)
                     .await;
@@ -131,6 +140,7 @@ impl SessionTask for UserShellCommandTask {
                         turn_context.as_ref(),
                         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                             call_id,
+                            process_id: None,
                             turn_id: turn_context.sub_id.clone(),
                             command: command.clone(),
                             cwd: cwd.clone(),
@@ -153,6 +163,7 @@ impl SessionTask for UserShellCommandTask {
                         turn_context.as_ref(),
                         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                             call_id: call_id.clone(),
+                            process_id: None,
                             turn_id: turn_context.sub_id.clone(),
                             command: command.clone(),
                             cwd: cwd.clone(),
@@ -164,12 +175,19 @@ impl SessionTask for UserShellCommandTask {
                             aggregated_output: output.aggregated_output.text.clone(),
                             exit_code: output.exit_code,
                             duration: output.duration,
-                            formatted_output: format_exec_output_str(&output),
+                            formatted_output: format_exec_output_str(
+                                &output,
+                                turn_context.truncation_policy,
+                            ),
                         }),
                     )
                     .await;
 
-                let output_items = [user_shell_command_record_item(&raw_command, &output)];
+                let output_items = [user_shell_command_record_item(
+                    &raw_command,
+                    &output,
+                    &turn_context,
+                )];
                 session
                     .record_conversation_items(turn_context.as_ref(), &output_items)
                     .await;
@@ -190,6 +208,7 @@ impl SessionTask for UserShellCommandTask {
                         turn_context.as_ref(),
                         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                             call_id,
+                            process_id: None,
                             turn_id: turn_context.sub_id.clone(),
                             command,
                             cwd,
@@ -201,11 +220,18 @@ impl SessionTask for UserShellCommandTask {
                             aggregated_output: exec_output.aggregated_output.text.clone(),
                             exit_code: exec_output.exit_code,
                             duration: exec_output.duration,
-                            formatted_output: format_exec_output_str(&exec_output),
+                            formatted_output: format_exec_output_str(
+                                &exec_output,
+                                turn_context.truncation_policy,
+                            ),
                         }),
                     )
                     .await;
-                let output_items = [user_shell_command_record_item(&raw_command, &exec_output)];
+                let output_items = [user_shell_command_record_item(
+                    &raw_command,
+                    &exec_output,
+                    &turn_context,
+                )];
                 session
                     .record_conversation_items(turn_context.as_ref(), &output_items)
                     .await;

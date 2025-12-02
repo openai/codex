@@ -11,6 +11,8 @@ pub mod event_processor_with_jsonl_output;
 pub mod exec_events;
 
 pub use cli::Cli;
+pub use cli::Command;
+pub use cli::ReviewArgs;
 use codex_common::oss::ensure_oss_provider_ready;
 use codex_common::oss::get_default_model_for_oss_provider;
 use codex_core::AuthManager;
@@ -29,7 +31,10 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
+use codex_core::protocol::ReviewRequest;
+use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::SessionSource;
+use codex_protocol::approvals::ElicitationAction;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::user_input::UserInput;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
@@ -51,6 +56,16 @@ use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 use codex_core::default_client::set_default_originator;
 use codex_core::find_conversation_path_by_id_str;
+
+enum InitialOperation {
+    UserTurn {
+        items: Vec<UserInput>,
+        output_schema: Option<Value>,
+    },
+    Review {
+        review_request: ReviewRequest,
+    },
+}
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     if let Err(err) = set_default_originator("codex_exec".to_string()) {
@@ -77,50 +92,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         output_schema: output_schema_path,
         config_overrides,
     } = cli;
-
-    // Determine the prompt source (parent or subcommand) and read from stdin if needed.
-    let prompt_arg = match &command {
-        // Allow prompt before the subcommand by falling back to the parent-level prompt
-        // when the Resume subcommand did not provide its own prompt.
-        Some(ExecCommand::Resume(args)) => args.prompt.clone().or(prompt),
-        None => prompt,
-    };
-
-    let prompt = match prompt_arg {
-        Some(p) if p != "-" => p,
-        // Either `-` was passed or no positional arg.
-        maybe_dash => {
-            // When no arg (None) **and** stdin is a TTY, bail out early – unless the
-            // user explicitly forced reading via `-`.
-            let force_stdin = matches!(maybe_dash.as_deref(), Some("-"));
-
-            if std::io::stdin().is_terminal() && !force_stdin {
-                eprintln!(
-                    "No prompt provided. Either specify one as an argument or pipe the prompt into stdin."
-                );
-                std::process::exit(1);
-            }
-
-            // Ensure the user knows we are waiting on stdin, as they may
-            // have gotten into this state by mistake. If so, and they are not
-            // writing to stdin, Codex will hang indefinitely, so this should
-            // help them debug in that case.
-            if !force_stdin {
-                eprintln!("Reading prompt from stdin...");
-            }
-            let mut buffer = String::new();
-            if let Err(e) = std::io::stdin().read_to_string(&mut buffer) {
-                eprintln!("Failed to read prompt from stdin: {e}");
-                std::process::exit(1);
-            } else if buffer.trim().is_empty() {
-                eprintln!("No prompt provided via stdin.");
-                std::process::exit(1);
-            }
-            buffer
-        }
-    };
-
-    let output_schema = load_output_schema(output_schema_path);
 
     let (stdout_with_ansi, stderr_with_ansi) = match color {
         cli::Color::Always => (true, true),
@@ -314,8 +285,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         conversation_id: _,
         conversation,
         session_configured,
-    } = if let Some(ExecCommand::Resume(args)) = command {
-        let resume_path = resolve_resume_path(&config, &args).await?;
+    } = if let Some(ExecCommand::Resume(args)) = command.as_ref() {
+        let resume_path = resolve_resume_path(&config, args).await?;
 
         if let Some(path) = resume_path {
             conversation_manager
@@ -331,9 +302,64 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             .new_conversation(config.clone())
             .await?
     };
-    // Print the effective configuration and prompt so users can see what Codex
+    let (initial_operation, prompt_summary) = match (command, prompt, images) {
+        (Some(ExecCommand::Review(review_cli)), _, _) => {
+            let review_request = build_review_request(review_cli)?;
+            let summary = codex_core::review_prompts::user_facing_hint(&review_request.target);
+            (InitialOperation::Review { review_request }, summary)
+        }
+        (Some(ExecCommand::Resume(args)), root_prompt, imgs) => {
+            let prompt_arg = args
+                .prompt
+                .clone()
+                .or_else(|| {
+                    if args.last {
+                        args.session_id.clone()
+                    } else {
+                        None
+                    }
+                })
+                .or(root_prompt);
+            let prompt_text = resolve_prompt(prompt_arg);
+            let mut items: Vec<UserInput> = imgs
+                .into_iter()
+                .map(|path| UserInput::LocalImage { path })
+                .collect();
+            items.push(UserInput::Text {
+                text: prompt_text.clone(),
+            });
+            let output_schema = load_output_schema(output_schema_path.clone());
+            (
+                InitialOperation::UserTurn {
+                    items,
+                    output_schema,
+                },
+                prompt_text,
+            )
+        }
+        (None, root_prompt, imgs) => {
+            let prompt_text = resolve_prompt(root_prompt);
+            let mut items: Vec<UserInput> = imgs
+                .into_iter()
+                .map(|path| UserInput::LocalImage { path })
+                .collect();
+            items.push(UserInput::Text {
+                text: prompt_text.clone(),
+            });
+            let output_schema = load_output_schema(output_schema_path);
+            (
+                InitialOperation::UserTurn {
+                    items,
+                    output_schema,
+                },
+                prompt_text,
+            )
+        }
+    };
+
+    // Print the effective configuration and initial request so users can see what Codex
     // is using.
-    event_processor.print_config_summary(&config, &prompt, &session_configured);
+    event_processor.print_config_summary(&config, &prompt_summary, &session_configured);
 
     info!("Codex initialized with event: {session_configured:?}");
 
@@ -376,31 +402,48 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         });
     }
 
-    // Package images and prompt into a single user input turn.
-    let mut items: Vec<UserInput> = images
-        .into_iter()
-        .map(|path| UserInput::LocalImage { path })
-        .collect();
-    items.push(UserInput::Text { text: prompt });
-    let initial_prompt_task_id = conversation
-        .submit(Op::UserTurn {
+    match initial_operation {
+        InitialOperation::UserTurn {
             items,
-            cwd: default_cwd,
-            approval_policy: default_approval_policy,
-            sandbox_policy: default_sandbox_policy,
-            model: default_model,
-            effort: default_effort,
-            summary: default_summary,
-            final_output_json_schema: output_schema,
-        })
-        .await?;
-    info!("Sent prompt with event ID: {initial_prompt_task_id}");
+            output_schema,
+        } => {
+            let task_id = conversation
+                .submit(Op::UserTurn {
+                    items,
+                    cwd: default_cwd,
+                    approval_policy: default_approval_policy,
+                    sandbox_policy: default_sandbox_policy,
+                    model: default_model,
+                    effort: default_effort,
+                    summary: default_summary,
+                    final_output_json_schema: output_schema,
+                })
+                .await?;
+            info!("Sent prompt with event ID: {task_id}");
+            task_id
+        }
+        InitialOperation::Review { review_request } => {
+            let task_id = conversation.submit(Op::Review { review_request }).await?;
+            info!("Sent review request with event ID: {task_id}");
+            task_id
+        }
+    };
 
     // Run the loop until the task is complete.
     // Track whether a fatal error was reported by the server so we can
     // exit with a non-zero status for automation-friendly signaling.
     let mut error_seen = false;
     while let Some(event) = rx.recv().await {
+        if let EventMsg::ElicitationRequest(ev) = &event.msg {
+            // Automatically cancel elicitation requests in exec mode.
+            conversation
+                .submit(Op::ResolveElicitation {
+                    server_name: ev.server_name.clone(),
+                    request_id: ev.id.clone(),
+                    decision: ElicitationAction::Cancel,
+                })
+                .await?;
+        }
         if matches!(event.msg, EventMsg::Error(_)) {
             error_seen = true;
         }
@@ -476,5 +519,132 @@ fn load_output_schema(path: Option<PathBuf>) -> Option<Value> {
             );
             std::process::exit(1);
         }
+    }
+}
+
+fn resolve_prompt(prompt_arg: Option<String>) -> String {
+    match prompt_arg {
+        Some(p) if p != "-" => p,
+        maybe_dash => {
+            let force_stdin = matches!(maybe_dash.as_deref(), Some("-"));
+
+            if std::io::stdin().is_terminal() && !force_stdin {
+                eprintln!(
+                    "No prompt provided. Either specify one as an argument or pipe the prompt into stdin."
+                );
+                std::process::exit(1);
+            }
+
+            if !force_stdin {
+                eprintln!("Reading prompt from stdin...");
+            }
+            let mut buffer = String::new();
+            if let Err(e) = std::io::stdin().read_to_string(&mut buffer) {
+                eprintln!("Failed to read prompt from stdin: {e}");
+                std::process::exit(1);
+            } else if buffer.trim().is_empty() {
+                eprintln!("No prompt provided via stdin.");
+                std::process::exit(1);
+            }
+            buffer
+        }
+    }
+}
+
+fn build_review_request(args: ReviewArgs) -> anyhow::Result<ReviewRequest> {
+    let target = if args.uncommitted {
+        ReviewTarget::UncommittedChanges
+    } else if let Some(branch) = args.base {
+        ReviewTarget::BaseBranch { branch }
+    } else if let Some(sha) = args.commit {
+        ReviewTarget::Commit {
+            sha,
+            title: args.commit_title,
+        }
+    } else if let Some(prompt_arg) = args.prompt {
+        let prompt = resolve_prompt(Some(prompt_arg)).trim().to_string();
+        if prompt.is_empty() {
+            anyhow::bail!("Review prompt cannot be empty");
+        }
+        ReviewTarget::Custom {
+            instructions: prompt,
+        }
+    } else {
+        anyhow::bail!(
+            "Specify --uncommitted, --base, --commit, or provide custom review instructions"
+        );
+    };
+
+    Ok(ReviewRequest {
+        target,
+        user_facing_hint: None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn builds_uncommitted_review_request() {
+        let request = build_review_request(ReviewArgs {
+            uncommitted: true,
+            base: None,
+            commit: None,
+            commit_title: None,
+            prompt: None,
+        })
+        .expect("builds uncommitted review request");
+
+        let expected = ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: None,
+        };
+
+        assert_eq!(request, expected);
+    }
+
+    #[test]
+    fn builds_commit_review_request_with_title() {
+        let request = build_review_request(ReviewArgs {
+            uncommitted: false,
+            base: None,
+            commit: Some("123456789".to_string()),
+            commit_title: Some("Add review command".to_string()),
+            prompt: None,
+        })
+        .expect("builds commit review request");
+
+        let expected = ReviewRequest {
+            target: ReviewTarget::Commit {
+                sha: "123456789".to_string(),
+                title: Some("Add review command".to_string()),
+            },
+            user_facing_hint: None,
+        };
+
+        assert_eq!(request, expected);
+    }
+
+    #[test]
+    fn builds_custom_review_request_trims_prompt() {
+        let request = build_review_request(ReviewArgs {
+            uncommitted: false,
+            base: None,
+            commit: None,
+            commit_title: None,
+            prompt: Some("  custom review instructions  ".to_string()),
+        })
+        .expect("builds custom review request");
+
+        let expected = ReviewRequest {
+            target: ReviewTarget::Custom {
+                instructions: "custom review instructions".to_string(),
+            },
+            user_facing_hint: None,
+        };
+
+        assert_eq!(request, expected);
     }
 }

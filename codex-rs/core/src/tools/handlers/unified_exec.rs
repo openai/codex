@@ -13,6 +13,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventStage;
+use crate::tools::handlers::apply_patch::intercept_apply_patch;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::unified_exec::ExecCommandRequest;
@@ -46,6 +47,7 @@ struct ExecCommandArgs {
 
 #[derive(Debug, Deserialize)]
 struct WriteStdinArgs {
+    // The model is trained on `session_id`.
     session_id: i32,
     #[serde(default)]
     chars: String,
@@ -102,6 +104,7 @@ impl ToolHandler for UnifiedExecHandler {
         let ToolInvocation {
             session,
             turn,
+            tracker,
             call_id,
             tool_name,
             payload,
@@ -128,6 +131,7 @@ impl ToolHandler for UnifiedExecHandler {
                         "failed to parse exec_command arguments: {err:?}"
                     ))
                 })?;
+                let process_id = manager.allocate_process_id().await;
 
                 let command = get_command(&args);
                 let ExecCommandArgs {
@@ -151,11 +155,25 @@ impl ToolHandler for UnifiedExecHandler {
                     )));
                 }
 
-                let workdir = workdir
-                    .as_deref()
-                    .filter(|value| !value.is_empty())
-                    .map(PathBuf::from);
+                let workdir = workdir.filter(|value| !value.is_empty());
+
+                let workdir = workdir.map(|dir| context.turn.resolve_path(Some(dir)));
                 let cwd = workdir.clone().unwrap_or_else(|| context.turn.cwd.clone());
+
+                if let Some(output) = intercept_apply_patch(
+                    &command,
+                    &cwd,
+                    Some(yield_time_ms),
+                    context.session.as_ref(),
+                    context.turn.as_ref(),
+                    Some(&tracker),
+                    &context.call_id,
+                    tool_name.as_str(),
+                )
+                .await?
+                {
+                    return Ok(output);
+                }
 
                 let event_ctx = ToolEventCtx::new(
                     context.session.as_ref(),
@@ -168,6 +186,7 @@ impl ToolHandler for UnifiedExecHandler {
                     cwd.clone(),
                     ExecCommandSource::UnifiedExecStartup,
                     None,
+                    Some(process_id.clone()),
                 );
                 emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
@@ -175,6 +194,7 @@ impl ToolHandler for UnifiedExecHandler {
                     .exec_command(
                         ExecCommandRequest {
                             command,
+                            process_id,
                             yield_time_ms,
                             max_output_tokens,
                             workdir,
@@ -197,7 +217,7 @@ impl ToolHandler for UnifiedExecHandler {
                 manager
                     .write_stdin(WriteStdinRequest {
                         call_id: &call_id,
-                        session_id: args.session_id,
+                        process_id: &args.session_id.to_string(),
                         input: &args.chars,
                         yield_time_ms: args.yield_time_ms,
                         max_output_tokens: args.max_output_tokens,
@@ -255,8 +275,9 @@ fn format_response(response: &UnifiedExecResponse) -> String {
         sections.push(format!("Process exited with code {exit_code}"));
     }
 
-    if let Some(session_id) = response.session_id {
-        sections.push(format!("Process running with session ID {session_id}"));
+    if let Some(process_id) = &response.process_id {
+        // Training still uses "session ID".
+        sections.push(format!("Process running with session ID {process_id}"));
     }
 
     if let Some(original_token_count) = response.original_token_count {

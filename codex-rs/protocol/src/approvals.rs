@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use crate::parse_command::ParsedCommand;
 use crate::protocol::FileChange;
+use mcp_types::RequestId;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -54,9 +55,31 @@ pub struct ExecApprovalRequestEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ElicitationRequestEvent {
+    pub server_name: String,
+    pub id: RequestId,
+    pub message: String,
+    // TODO: MCP servers can request we fill out a schema for the elicitation. We don't support
+    // this yet.
+    // pub requested_schema: ElicitRequestParamsRequestedSchema,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum ElicitationAction {
+    Accept,
+    Decline,
+    Cancel,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ApplyPatchApprovalRequestEvent {
     /// Responses API call id for the associated patch apply call, if available.
     pub call_id: String,
+    /// Turn ID that this patch belongs to.
+    /// Uses `#[serde(default)]` for backwards compatibility with older senders.
+    #[serde(default)]
+    pub turn_id: String,
     pub changes: HashMap<PathBuf, FileChange>,
     /// Optional explanatory reason (e.g. request for extra write access).
     #[serde(skip_serializing_if = "Option::is_none")]

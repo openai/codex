@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::env;
 use std::ffi::OsString;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,14 +21,18 @@ use anyhow::anyhow;
 use async_channel::Sender;
 use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
+use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpStartupCompleteEvent;
 use codex_protocol::protocol::McpStartupFailure;
 use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpStartupUpdateEvent;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use codex_rmcp_client::RmcpClient;
+use codex_rmcp_client::SendElicitation;
 use futures::future::BoxFuture;
 use futures::future::FutureExt;
 use futures::future::Shared;
@@ -39,13 +44,18 @@ use mcp_types::ListResourcesRequestParams;
 use mcp_types::ListResourcesResult;
 use mcp_types::ReadResourceRequestParams;
 use mcp_types::ReadResourceResult;
+use mcp_types::RequestId;
 use mcp_types::Resource;
 use mcp_types::ResourceTemplate;
 use mcp_types::Tool;
 
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json::json;
 use sha1::Digest;
 use sha1::Sha1;
+use tokio::sync::Mutex;
+use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
@@ -110,12 +120,66 @@ pub(crate) struct ToolInfo {
     pub(crate) tool: Tool,
 }
 
+type ResponderMap = HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>;
+
+#[derive(Clone, Default)]
+struct ElicitationRequestManager {
+    requests: Arc<Mutex<ResponderMap>>,
+}
+
+impl ElicitationRequestManager {
+    async fn resolve(
+        &self,
+        server_name: String,
+        id: RequestId,
+        response: ElicitationResponse,
+    ) -> Result<()> {
+        self.requests
+            .lock()
+            .await
+            .remove(&(server_name, id))
+            .ok_or_else(|| anyhow!("elicitation request not found"))?
+            .send(response)
+            .map_err(|e| anyhow!("failed to send elicitation response: {e:?}"))
+    }
+
+    fn make_sender(&self, server_name: String, tx_event: Sender<Event>) -> SendElicitation {
+        let elicitation_requests = self.requests.clone();
+        Box::new(move |id, elicitation| {
+            let elicitation_requests = elicitation_requests.clone();
+            let tx_event = tx_event.clone();
+            let server_name = server_name.clone();
+            async move {
+                let (tx, rx) = oneshot::channel();
+                {
+                    let mut lock = elicitation_requests.lock().await;
+                    lock.insert((server_name.clone(), id.clone()), tx);
+                }
+                let _ = tx_event
+                    .send(Event {
+                        id: "mcp_elicitation_request".to_string(),
+                        msg: EventMsg::ElicitationRequest(ElicitationRequestEvent {
+                            server_name,
+                            id,
+                            message: elicitation.message,
+                        }),
+                    })
+                    .await;
+                rx.await
+                    .context("elicitation request channel closed unexpectedly")
+            }
+            .boxed()
+        })
+    }
+}
+
 #[derive(Clone)]
 struct ManagedClient {
     client: Arc<RmcpClient>,
     tools: Vec<ToolInfo>,
     tool_filter: ToolFilter,
     tool_timeout: Option<Duration>,
+    server_supports_sandbox_state_capability: bool,
 }
 
 #[derive(Clone)]
@@ -129,19 +193,33 @@ impl AsyncManagedClient {
         config: McpServerConfig,
         store_mode: OAuthCredentialsStoreMode,
         cancel_token: CancellationToken,
+        tx_event: Sender<Event>,
+        elicitation_requests: ElicitationRequestManager,
     ) -> Self {
         let tool_filter = ToolFilter::from_config(&config);
-        let fut = start_server_task(
-            server_name,
-            config.transport,
-            store_mode,
-            config
-                .startup_timeout_sec
-                .unwrap_or(DEFAULT_STARTUP_TIMEOUT),
-            config.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT),
-            tool_filter,
-            cancel_token,
-        );
+        let fut = async move {
+            if let Err(error) = validate_mcp_server_name(&server_name) {
+                return Err(error.into());
+            }
+
+            let client =
+                Arc::new(make_rmcp_client(&server_name, config.transport, store_mode).await?);
+            match start_server_task(
+                server_name,
+                client,
+                config.startup_timeout_sec.or(Some(DEFAULT_STARTUP_TIMEOUT)),
+                config.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT),
+                tool_filter,
+                tx_event,
+                elicitation_requests,
+            )
+            .or_cancel(&cancel_token)
+            .await
+            {
+                Ok(result) => result,
+                Err(CancelErr::Cancelled) => Err(StartupOutcomeError::Cancelled),
+            }
+        };
         Self {
             client: fut.boxed().shared(),
         }
@@ -150,12 +228,42 @@ impl AsyncManagedClient {
     async fn client(&self) -> Result<ManagedClient, StartupOutcomeError> {
         self.client.clone().await
     }
+
+    async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
+        let managed = self.client().await?;
+        if !managed.server_supports_sandbox_state_capability {
+            return Ok(());
+        }
+
+        managed
+            .client
+            .send_custom_notification(
+                MCP_SANDBOX_STATE_NOTIFICATION,
+                Some(serde_json::to_value(sandbox_state)?),
+            )
+            .await
+    }
+}
+
+pub const MCP_SANDBOX_STATE_CAPABILITY: &str = "codex/sandbox-state";
+
+/// Custom MCP notification for sandbox state updates.
+/// When used, the `params` field of the notification is [`SandboxState`].
+pub const MCP_SANDBOX_STATE_NOTIFICATION: &str = "codex/sandbox-state/update";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxState {
+    pub sandbox_policy: SandboxPolicy,
+    pub codex_linux_sandbox_exe: Option<PathBuf>,
+    pub sandbox_cwd: PathBuf,
 }
 
 /// A thin wrapper around a set of running [`RmcpClient`] instances.
 #[derive(Default)]
 pub(crate) struct McpConnectionManager {
     clients: HashMap<String, AsyncManagedClient>,
+    elicitation_requests: ElicitationRequestManager,
 }
 
 impl McpConnectionManager {
@@ -172,6 +280,7 @@ impl McpConnectionManager {
         }
         let mut clients = HashMap::new();
         let mut join_set = JoinSet::new();
+        let elicitation_requests = ElicitationRequestManager::default();
         for (server_name, cfg) in mcp_servers.into_iter().filter(|(_, cfg)| cfg.enabled) {
             let cancel_token = cancel_token.child_token();
             let _ = emit_update(
@@ -182,8 +291,14 @@ impl McpConnectionManager {
                 },
             )
             .await;
-            let async_managed_client =
-                AsyncManagedClient::new(server_name.clone(), cfg, store_mode, cancel_token.clone());
+            let async_managed_client = AsyncManagedClient::new(
+                server_name.clone(),
+                cfg,
+                store_mode,
+                cancel_token.clone(),
+                tx_event.clone(),
+                elicitation_requests.clone(),
+            );
             clients.insert(server_name.clone(), async_managed_client.clone());
             let tx_event = tx_event.clone();
             let auth_entry = auth_entries.get(&server_name).cloned();
@@ -217,6 +332,7 @@ impl McpConnectionManager {
             });
         }
         self.clients = clients;
+        self.elicitation_requests = elicitation_requests.clone();
         tokio::spawn(async move {
             let outcomes = join_set.join_all().await;
             let mut summary = McpStartupCompleteEvent::default();
@@ -248,6 +364,17 @@ impl McpConnectionManager {
             .client()
             .await
             .context("failed to get client")
+    }
+
+    pub async fn resolve_elicitation(
+        &self,
+        server_name: String,
+        id: RequestId,
+        response: ElicitationResponse,
+    ) -> Result<()> {
+        self.elicitation_requests
+            .resolve(server_name, id, response)
+            .await
     }
 
     /// Returns a single map that contains all tools. Each key is the
@@ -477,6 +604,34 @@ impl McpConnectionManager {
             .get(tool_name)
             .map(|tool| (tool.server_name.clone(), tool.tool_name.clone()))
     }
+
+    pub async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
+        let mut join_set = JoinSet::new();
+
+        for async_managed_client in self.clients.values() {
+            let sandbox_state = sandbox_state.clone();
+            let async_managed_client = async_managed_client.clone();
+            join_set.spawn(async move {
+                async_managed_client
+                    .notify_sandbox_state_change(&sandbox_state)
+                    .await
+            });
+        }
+
+        while let Some(join_res) = join_set.join_next().await {
+            match join_res {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => {
+                    warn!("Failed to notify sandbox state change to MCP server: {err:#}");
+                }
+                Err(err) => {
+                    warn!("Task panic when notifying sandbox state change to MCP server: {err:#}");
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 async fn emit_update(
@@ -580,43 +735,12 @@ impl From<anyhow::Error> for StartupOutcomeError {
 
 async fn start_server_task(
     server_name: String,
-    transport: McpServerTransportConfig,
-    store_mode: OAuthCredentialsStoreMode,
-    startup_timeout: Duration, // TODO: cancel_token should handle this.
+    client: Arc<RmcpClient>,
+    startup_timeout: Option<Duration>, // TODO: cancel_token should handle this.
     tool_timeout: Duration,
     tool_filter: ToolFilter,
-    cancel_token: CancellationToken,
-) -> Result<ManagedClient, StartupOutcomeError> {
-    if cancel_token.is_cancelled() {
-        return Err(StartupOutcomeError::Cancelled);
-    }
-    if let Err(error) = validate_mcp_server_name(&server_name) {
-        return Err(error.into());
-    }
-
-    match start_server_work(
-        server_name,
-        transport,
-        store_mode,
-        startup_timeout,
-        tool_timeout,
-        tool_filter,
-    )
-    .or_cancel(&cancel_token)
-    .await
-    {
-        Ok(result) => result,
-        Err(CancelErr::Cancelled) => Err(StartupOutcomeError::Cancelled),
-    }
-}
-
-async fn start_server_work(
-    server_name: String,
-    transport: McpServerTransportConfig,
-    store_mode: OAuthCredentialsStoreMode,
-    startup_timeout: Duration,
-    tool_timeout: Duration,
-    tool_filter: ToolFilter,
+    tx_event: Sender<Event>,
+    elicitation_requests: ElicitationRequestManager,
 ) -> Result<ManagedClient, StartupOutcomeError> {
     let params = mcp_types::InitializeRequestParams {
         capabilities: ClientCapabilities {
@@ -639,7 +763,41 @@ async fn start_server_work(
         protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
     };
 
-    let client_result = match transport {
+    let send_elicitation = elicitation_requests.make_sender(server_name.clone(), tx_event);
+
+    let initialize_result = client
+        .initialize(params, startup_timeout, send_elicitation)
+        .await
+        .map_err(StartupOutcomeError::from)?;
+
+    let tools = list_tools_for_client(&server_name, &client, startup_timeout)
+        .await
+        .map_err(StartupOutcomeError::from)?;
+
+    let server_supports_sandbox_state_capability = initialize_result
+        .capabilities
+        .experimental
+        .as_ref()
+        .and_then(|exp| exp.get(MCP_SANDBOX_STATE_CAPABILITY))
+        .is_some();
+
+    let managed = ManagedClient {
+        client: Arc::clone(&client),
+        tools,
+        tool_timeout: Some(tool_timeout),
+        tool_filter,
+        server_supports_sandbox_state_capability,
+    };
+
+    Ok(managed)
+}
+
+async fn make_rmcp_client(
+    server_name: &str,
+    transport: McpServerTransportConfig,
+    store_mode: OAuthCredentialsStoreMode,
+) -> Result<RmcpClient, StartupOutcomeError> {
+    match transport {
         McpServerTransportConfig::Stdio {
             command,
             args,
@@ -649,16 +807,9 @@ async fn start_server_work(
         } => {
             let command_os: OsString = command.into();
             let args_os: Vec<OsString> = args.into_iter().map(Into::into).collect();
-            match RmcpClient::new_stdio_client(command_os, args_os, env, &env_vars, cwd).await {
-                Ok(client) => {
-                    let client = Arc::new(client);
-                    client
-                        .initialize(params.clone(), Some(startup_timeout))
-                        .await
-                        .map(|_| client)
-                }
-                Err(err) => Err(err.into()),
-            }
+            RmcpClient::new_stdio_client(command_os, args_os, env, &env_vars, cwd)
+                .await
+                .map_err(|err| StartupOutcomeError::from(anyhow!(err)))
         }
         McpServerTransportConfig::StreamableHttp {
             url,
@@ -667,12 +818,12 @@ async fn start_server_work(
             bearer_token_env_var,
         } => {
             let resolved_bearer_token =
-                match resolve_bearer_token(&server_name, bearer_token_env_var.as_deref()) {
+                match resolve_bearer_token(server_name, bearer_token_env_var.as_deref()) {
                     Ok(token) => token,
                     Err(error) => return Err(error.into()),
                 };
-            match RmcpClient::new_streamable_http_client(
-                &server_name,
+            RmcpClient::new_streamable_http_client(
+                server_name,
                 &url,
                 resolved_bearer_token,
                 http_headers,
@@ -680,49 +831,17 @@ async fn start_server_work(
                 store_mode,
             )
             .await
-            {
-                Ok(client) => {
-                    let client = Arc::new(client);
-                    client
-                        .initialize(params.clone(), Some(startup_timeout))
-                        .await
-                        .map(|_| client)
-                }
-                Err(err) => Err(err),
-            }
+            .map_err(StartupOutcomeError::from)
         }
-    };
-
-    let client = match client_result {
-        Ok(client) => client,
-        Err(error) => {
-            return Err(error.into());
-        }
-    };
-
-    let tools = match list_tools_for_client(&server_name, &client, startup_timeout).await {
-        Ok(tools) => tools,
-        Err(error) => {
-            return Err(error.into());
-        }
-    };
-
-    let managed = ManagedClient {
-        client: Arc::clone(&client),
-        tools,
-        tool_timeout: Some(tool_timeout),
-        tool_filter,
-    };
-
-    Ok(managed)
+    }
 }
 
 async fn list_tools_for_client(
     server_name: &str,
     client: &Arc<RmcpClient>,
-    timeout: Duration,
+    timeout: Option<Duration>,
 ) -> Result<Vec<ToolInfo>> {
-    let resp = client.list_tools(None, Some(timeout)).await?;
+    let resp = client.list_tools(None, timeout).await?;
     Ok(resp
         .tools
         .into_iter()

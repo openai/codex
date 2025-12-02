@@ -57,8 +57,6 @@ impl ToolsConfig {
             ConfigShellToolType::Disabled
         } else if features.enabled(Feature::UnifiedExec) {
             ConfigShellToolType::UnifiedExec
-        } else if features.enabled(Feature::ShellCommandTool) {
-            ConfigShellToolType::ShellCommand
         } else {
             model_family.shell_type.clone()
         };
@@ -1292,7 +1290,7 @@ mod tests {
             "gpt-5-codex",
             &Features::with_defaults(),
             &[
-                "shell",
+                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1309,7 +1307,7 @@ mod tests {
             "gpt-5.1-codex",
             &Features::with_defaults(),
             &[
-                "shell",
+                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1384,7 +1382,7 @@ mod tests {
             "gpt-5.1-codex-mini",
             &Features::with_defaults(),
             &[
-                "shell",
+                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1396,12 +1394,46 @@ mod tests {
     }
 
     #[test]
+    fn test_gpt_5_defaults() {
+        assert_model_tools(
+            "gpt-5",
+            &Features::with_defaults(),
+            &[
+                "shell",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "view_image",
+            ],
+        );
+    }
+
+    #[test]
     fn test_gpt_5_1_defaults() {
         assert_model_tools(
             "gpt-5.1",
             &Features::with_defaults(),
             &[
-                "shell",
+                "shell_command",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "apply_patch",
+                "view_image",
+            ],
+        );
+    }
+
+    #[test]
+    fn test_exp_5_1_defaults() {
+        assert_model_tools(
+            "exp-5.1",
+            &Features::with_defaults(),
+            &[
+                "exec_command",
+                "write_stdin",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1450,22 +1482,6 @@ mod tests {
             subset.push(shell_tool);
         }
         assert_contains_tool_names(&tools, &subset);
-    }
-
-    #[test]
-    fn test_build_specs_shell_command_present() {
-        assert_model_tools(
-            "codex-mini-latest",
-            Features::with_defaults().enable(Feature::ShellCommandTool),
-            &[
-                "shell_command",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
-                "update_plan",
-                "view_image",
-            ],
-        );
     }
 
     #[test]

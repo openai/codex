@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use anyhow::Result;
+use base64::Engine;
 use serde_json::Value;
 use wiremock::BodyPrintLimit;
 use wiremock::Match;
@@ -297,12 +298,18 @@ pub fn ev_reasoning_item(id: &str, summary: &[&str], raw_content: &[&str]) -> Va
         .map(|text| serde_json::json!({"type": "summary_text", "text": text}))
         .collect();
 
+    let overhead = "b".repeat(550);
+    let raw_content_joined = raw_content.join("");
+    let encrypted_content =
+        base64::engine::general_purpose::STANDARD.encode(overhead + raw_content_joined.as_str());
+
     let mut event = serde_json::json!({
         "type": "response.output_item.done",
         "item": {
             "type": "reasoning",
             "id": id,
             "summary": summary_entries,
+            "encrypted_content": encrypted_content,
         }
     });
 
@@ -424,6 +431,9 @@ pub fn ev_apply_patch_call(
         ApplyPatchModelOutput::ShellViaHeredoc => {
             ev_apply_patch_shell_call_via_heredoc(call_id, patch)
         }
+        ApplyPatchModelOutput::ShellCommandViaHeredoc => {
+            ev_apply_patch_shell_command_call_via_heredoc(call_id, patch)
+        }
     }
 }
 
@@ -460,6 +470,16 @@ pub fn ev_apply_patch_function_call(call_id: &str, patch: &str) -> Value {
     })
 }
 
+pub fn ev_shell_command_call(call_id: &str, command: &str) -> Value {
+    let args = serde_json::json!({ "command": command });
+    ev_shell_command_call_with_args(call_id, &args)
+}
+
+pub fn ev_shell_command_call_with_args(call_id: &str, args: &serde_json::Value) -> Value {
+    let arguments = serde_json::to_string(args).expect("serialize shell command arguments");
+    ev_function_call(call_id, "shell_command", &arguments)
+}
+
 pub fn ev_apply_patch_shell_call(call_id: &str, patch: &str) -> Value {
     let args = serde_json::json!({ "command": ["apply_patch", patch] });
     let arguments = serde_json::to_string(&args).expect("serialize apply_patch arguments");
@@ -473,6 +493,13 @@ pub fn ev_apply_patch_shell_call_via_heredoc(call_id: &str, patch: &str) -> Valu
     let arguments = serde_json::to_string(&args).expect("serialize apply_patch arguments");
 
     ev_function_call(call_id, "shell", &arguments)
+}
+
+pub fn ev_apply_patch_shell_command_call_via_heredoc(call_id: &str, patch: &str) -> Value {
+    let args = serde_json::json!({ "command": format!("apply_patch <<'EOF'\n{patch}\nEOF\n") });
+    let arguments = serde_json::to_string(&args).expect("serialize apply_patch arguments");
+
+    ev_function_call(call_id, "shell_command", &arguments)
 }
 
 pub fn sse_failed(id: &str, code: &str, message: &str) -> String {
@@ -499,6 +526,14 @@ fn base_mock() -> (MockBuilder, ResponseMock) {
     (mock, response_mock)
 }
 
+fn compact_mock() -> (MockBuilder, ResponseMock) {
+    let response_mock = ResponseMock::new();
+    let mock = Mock::given(method("POST"))
+        .and(path_regex(".*/responses/compact$"))
+        .and(response_mock.clone());
+    (mock, response_mock)
+}
+
 pub async fn mount_sse_once_match<M>(server: &MockServer, matcher: M, body: String) -> ResponseMock
 where
     M: wiremock::Match + Send + Sync + 'static,
@@ -518,6 +553,40 @@ pub async fn mount_sse_once(server: &MockServer, body: String) -> ResponseMock {
         .up_to_n_times(1)
         .mount(server)
         .await;
+    response_mock
+}
+
+pub async fn mount_compact_json_once_match<M>(
+    server: &MockServer,
+    matcher: M,
+    body: serde_json::Value,
+) -> ResponseMock
+where
+    M: wiremock::Match + Send + Sync + 'static,
+{
+    let (mock, response_mock) = compact_mock();
+    mock.and(matcher)
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_json(body.clone()),
+        )
+        .up_to_n_times(1)
+        .mount(server)
+        .await;
+    response_mock
+}
+
+pub async fn mount_compact_json_once(server: &MockServer, body: serde_json::Value) -> ResponseMock {
+    let (mock, response_mock) = compact_mock();
+    mock.respond_with(
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "application/json")
+            .set_body_json(body.clone()),
+    )
+    .up_to_n_times(1)
+    .mount(server)
+    .await;
     response_mock
 }
 

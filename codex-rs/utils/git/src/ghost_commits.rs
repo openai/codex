@@ -1,7 +1,9 @@
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs;
 use std::io;
+use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -21,12 +23,45 @@ use crate::operations::run_git_for_stdout_all;
 
 /// Default commit message used for ghost commits when none is provided.
 const DEFAULT_COMMIT_MESSAGE: &str = "codex snapshot";
+/// Default threshold that triggers a warning about large untracked directories.
+const LARGE_UNTRACKED_WARNING_THRESHOLD: usize = 200;
+/// Directories that should always be ignored when capturing ghost snapshots,
+/// even if they are not listed in .gitignore.
+///
+/// These are typically large dependency or build trees that are not useful
+/// for undo and can cause snapshots to grow without bound.
+const DEFAULT_IGNORED_DIR_NAMES: &[&str] = &[
+    "node_modules",
+    ".venv",
+    "venv",
+    "env",
+    ".env",
+    "dist",
+    "build",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".cache",
+    ".tox",
+];
 
 /// Options to control ghost commit creation.
 pub struct CreateGhostCommitOptions<'a> {
     pub repo_path: &'a Path,
     pub message: Option<&'a str>,
     pub force_include: Vec<PathBuf>,
+}
+
+/// Summary produced alongside a ghost snapshot.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct GhostSnapshotReport {
+    pub large_untracked_dirs: Vec<LargeUntrackedDir>,
+}
+
+/// Directory containing a large amount of untracked content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LargeUntrackedDir {
+    pub path: PathBuf,
+    pub file_count: usize,
 }
 
 impl<'a> CreateGhostCommitOptions<'a> {
@@ -64,10 +99,94 @@ impl<'a> CreateGhostCommitOptions<'a> {
     }
 }
 
+fn detect_large_untracked_dirs(files: &[PathBuf], dirs: &[PathBuf]) -> Vec<LargeUntrackedDir> {
+    let mut counts: BTreeMap<PathBuf, usize> = BTreeMap::new();
+
+    let mut sorted_dirs: Vec<&PathBuf> = dirs.iter().collect();
+    sorted_dirs.sort_by(|a, b| {
+        let a_components = a.components().count();
+        let b_components = b.components().count();
+        b_components.cmp(&a_components).then_with(|| a.cmp(b))
+    });
+
+    for file in files {
+        let mut key: Option<PathBuf> = None;
+        for dir in &sorted_dirs {
+            if file.starts_with(dir.as_path()) {
+                key = Some((*dir).clone());
+                break;
+            }
+        }
+        let key = key.unwrap_or_else(|| {
+            file.parent()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."))
+        });
+        let entry = counts.entry(key).or_insert(0);
+        *entry += 1;
+    }
+
+    let mut result: Vec<LargeUntrackedDir> = counts
+        .into_iter()
+        .filter(|(_, count)| *count >= LARGE_UNTRACKED_WARNING_THRESHOLD)
+        .map(|(path, file_count)| LargeUntrackedDir { path, file_count })
+        .collect();
+    result.sort_by(|a, b| {
+        b.file_count
+            .cmp(&a.file_count)
+            .then_with(|| a.path.cmp(&b.path))
+    });
+    result
+}
+
+fn to_session_relative_path(path: &Path, repo_prefix: Option<&Path>) -> PathBuf {
+    match repo_prefix {
+        Some(prefix) => path
+            .strip_prefix(prefix)
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| path.to_path_buf()),
+        None => path.to_path_buf(),
+    }
+}
+
 /// Create a ghost commit capturing the current state of the repository's working tree.
 pub fn create_ghost_commit(
     options: &CreateGhostCommitOptions<'_>,
 ) -> Result<GhostCommit, GitToolingError> {
+    create_ghost_commit_with_report(options).map(|(commit, _)| commit)
+}
+
+/// Compute a report describing the working tree for a ghost snapshot without creating a commit.
+pub fn capture_ghost_snapshot_report(
+    options: &CreateGhostCommitOptions<'_>,
+) -> Result<GhostSnapshotReport, GitToolingError> {
+    ensure_git_repository(options.repo_path)?;
+
+    let repo_root = resolve_repository_root(options.repo_path)?;
+    let repo_prefix = repo_subdir(repo_root.as_path(), options.repo_path);
+    let existing_untracked =
+        capture_existing_untracked(repo_root.as_path(), repo_prefix.as_deref())?;
+
+    let warning_files = existing_untracked
+        .files
+        .iter()
+        .map(|path| to_session_relative_path(path, repo_prefix.as_deref()))
+        .collect::<Vec<_>>();
+    let warning_dirs = existing_untracked
+        .dirs
+        .iter()
+        .map(|path| to_session_relative_path(path, repo_prefix.as_deref()))
+        .collect::<Vec<_>>();
+
+    Ok(GhostSnapshotReport {
+        large_untracked_dirs: detect_large_untracked_dirs(&warning_files, &warning_dirs),
+    })
+}
+
+/// Create a ghost commit capturing the current state of the repository's working tree along with a report.
+pub fn create_ghost_commit_with_report(
+    options: &CreateGhostCommitOptions<'_>,
+) -> Result<(GhostCommit, GhostSnapshotReport), GitToolingError> {
     ensure_git_repository(options.repo_path)?;
 
     let repo_root = resolve_repository_root(options.repo_path)?;
@@ -75,6 +194,18 @@ pub fn create_ghost_commit(
     let parent = resolve_head(repo_root.as_path())?;
     let existing_untracked =
         capture_existing_untracked(repo_root.as_path(), repo_prefix.as_deref())?;
+
+    let warning_files = existing_untracked
+        .files
+        .iter()
+        .map(|path| to_session_relative_path(path, repo_prefix.as_deref()))
+        .collect::<Vec<_>>();
+    let warning_dirs = existing_untracked
+        .dirs
+        .iter()
+        .map(|path| to_session_relative_path(path, repo_prefix.as_deref()))
+        .collect::<Vec<_>>();
+    let large_untracked_dirs = detect_large_untracked_dirs(&warning_files, &warning_dirs);
 
     let normalized_force = options
         .force_include
@@ -143,11 +274,18 @@ pub fn create_ghost_commit(
         Some(commit_env.as_slice()),
     )?;
 
-    Ok(GhostCommit::new(
+    let ghost_commit = GhostCommit::new(
         commit_id,
         parent,
         existing_untracked.files,
         existing_untracked.dirs,
+    );
+
+    Ok((
+        ghost_commit,
+        GhostSnapshotReport {
+            large_untracked_dirs,
+        },
     ))
 }
 
@@ -215,12 +353,11 @@ fn capture_existing_untracked(
     repo_prefix: Option<&Path>,
 ) -> Result<UntrackedSnapshot, GitToolingError> {
     // Ask git for the zero-delimited porcelain status so we can enumerate
-    // every untracked or ignored path (including ones filtered by prefix).
+    // every untracked path (including ones filtered by prefix).
     let mut args = vec![
         OsString::from("status"),
         OsString::from("--porcelain=2"),
         OsString::from("-z"),
-        OsString::from("--ignored=matching"),
         OsString::from("--untracked-files=all"),
     ];
     if let Some(prefix) = repo_prefix {
@@ -254,6 +391,9 @@ fn capture_existing_untracked(
         }
 
         let normalized = normalize_relative_path(Path::new(path_part))?;
+        if should_ignore_for_snapshot(&normalized) {
+            continue;
+        }
         let absolute = repo_root.join(&normalized);
         let is_dir = absolute.is_dir();
         if is_dir {
@@ -264,6 +404,19 @@ fn capture_existing_untracked(
     }
 
     Ok(snapshot)
+}
+
+fn should_ignore_for_snapshot(path: &Path) -> bool {
+    path.components().any(|component| {
+        if let Component::Normal(name) = component
+            && let Some(name_str) = name.to_str()
+        {
+            return DEFAULT_IGNORED_DIR_NAMES
+                .iter()
+                .any(|ignored| ignored == &name_str);
+        }
+        false
+    })
 }
 
 /// Removes untracked files and directories that were not present when the snapshot was captured.
@@ -361,6 +514,7 @@ mod tests {
     use assert_matches::assert_matches;
     use pretty_assertions::assert_eq;
     use std::process::Command;
+    use walkdir::WalkDir;
 
     /// Runs a git command in the test repository and asserts success.
     fn run_git_in(repo_path: &Path, args: &[&str]) {
@@ -456,6 +610,257 @@ mod tests {
         assert!(!repo.join("ephemeral.txt").exists());
         let notes_after = std::fs::read_to_string(&preexisting_untracked)?;
         assert_eq!(notes_after, "notes before\n");
+
+        Ok(())
+    }
+
+    #[test]
+    fn create_snapshot_reports_large_untracked_dirs() -> Result<(), GitToolingError> {
+        let temp = tempfile::tempdir()?;
+        let repo = temp.path();
+        init_test_repo(repo);
+
+        std::fs::write(repo.join("tracked.txt"), "contents\n")?;
+        run_git_in(repo, &["add", "tracked.txt"]);
+        run_git_in(
+            repo,
+            &[
+                "-c",
+                "user.name=Tester",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "initial",
+            ],
+        );
+
+        let models = repo.join("models");
+        std::fs::create_dir(&models)?;
+        for idx in 0..(LARGE_UNTRACKED_WARNING_THRESHOLD + 1) {
+            let file = models.join(format!("weights-{idx}.bin"));
+            std::fs::write(file, "data\n")?;
+        }
+
+        let (ghost, report) =
+            create_ghost_commit_with_report(&CreateGhostCommitOptions::new(repo))?;
+        assert!(ghost.parent().is_some());
+        assert_eq!(
+            report.large_untracked_dirs,
+            vec![LargeUntrackedDir {
+                path: PathBuf::from("models"),
+                file_count: LARGE_UNTRACKED_WARNING_THRESHOLD + 1,
+            }]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn snapshot_ignores_default_ignored_directories() -> Result<(), GitToolingError> {
+        let temp = tempfile::tempdir()?;
+        let repo = temp.path();
+        init_test_repo(repo);
+
+        std::fs::write(repo.join("tracked.txt"), "contents\n")?;
+        run_git_in(repo, &["add", "tracked.txt"]);
+        run_git_in(
+            repo,
+            &[
+                "-c",
+                "user.name=Tester",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "initial",
+            ],
+        );
+
+        let node_modules = repo.join("node_modules");
+        std::fs::create_dir_all(node_modules.join("@scope/package/src"))?;
+        for idx in 0..50 {
+            let file = node_modules.join(format!("file-{idx}.js"));
+            std::fs::write(file, "console.log('ignored');\n")?;
+        }
+        std::fs::write(
+            node_modules.join("@scope/package/src/index.js"),
+            "console.log('nested ignored');\n",
+        )?;
+
+        let venv = repo.join(".venv");
+        std::fs::create_dir_all(venv.join("lib/python/site-packages"))?;
+        std::fs::write(
+            venv.join("lib/python/site-packages/pkg.py"),
+            "print('ignored')\n",
+        )?;
+
+        let (ghost, report) =
+            create_ghost_commit_with_report(&CreateGhostCommitOptions::new(repo))?;
+        assert!(ghost.parent().is_some());
+
+        for file in ghost.preexisting_untracked_files() {
+            let components = file.components().collect::<Vec<_>>();
+            let mut has_default_ignored_component = false;
+            for component in components {
+                if let Component::Normal(name) = component
+                    && let Some(name_str) = name.to_str()
+                    && DEFAULT_IGNORED_DIR_NAMES
+                        .iter()
+                        .any(|ignored| ignored == &name_str)
+                {
+                    has_default_ignored_component = true;
+                    break;
+                }
+            }
+            assert!(
+                !has_default_ignored_component,
+                "unexpected default-ignored file captured: {file:?}"
+            );
+        }
+
+        for dir in ghost.preexisting_untracked_dirs() {
+            let components = dir.components().collect::<Vec<_>>();
+            let mut has_default_ignored_component = false;
+            for component in components {
+                if let Component::Normal(name) = component
+                    && let Some(name_str) = name.to_str()
+                    && DEFAULT_IGNORED_DIR_NAMES
+                        .iter()
+                        .any(|ignored| ignored == &name_str)
+                {
+                    has_default_ignored_component = true;
+                    break;
+                }
+            }
+            assert!(
+                !has_default_ignored_component,
+                "unexpected default-ignored dir captured: {dir:?}"
+            );
+        }
+
+        for entry in &report.large_untracked_dirs {
+            let components = entry.path.components().collect::<Vec<_>>();
+            let mut has_default_ignored_component = false;
+            for component in components {
+                if let Component::Normal(name) = component
+                    && let Some(name_str) = name.to_str()
+                    && DEFAULT_IGNORED_DIR_NAMES
+                        .iter()
+                        .any(|ignored| ignored == &name_str)
+                {
+                    has_default_ignored_component = true;
+                    break;
+                }
+            }
+            assert!(
+                !has_default_ignored_component,
+                "unexpected default-ignored dir in large_untracked_dirs: {:?}",
+                entry.path
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn restore_preserves_default_ignored_directories() -> Result<(), GitToolingError> {
+        let temp = tempfile::tempdir()?;
+        let repo = temp.path();
+        init_test_repo(repo);
+
+        std::fs::write(repo.join("tracked.txt"), "snapshot version\n")?;
+        run_git_in(repo, &["add", "tracked.txt"]);
+        run_git_in(
+            repo,
+            &[
+                "-c",
+                "user.name=Tester",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "initial",
+            ],
+        );
+
+        let node_modules = repo.join("node_modules");
+        std::fs::create_dir_all(node_modules.join("pkg"))?;
+        std::fs::write(
+            node_modules.join("pkg/index.js"),
+            "console.log('before');\n",
+        )?;
+
+        let ghost = create_ghost_commit(&CreateGhostCommitOptions::new(repo))?;
+
+        std::fs::write(repo.join("tracked.txt"), "snapshot delta\n")?;
+        std::fs::write(node_modules.join("pkg/index.js"), "console.log('after');\n")?;
+        std::fs::write(node_modules.join("pkg/extra.js"), "console.log('extra');\n")?;
+        std::fs::write(repo.join("temp.txt"), "new file\n")?;
+
+        restore_ghost_commit(repo, &ghost)?;
+
+        let tracked_after = std::fs::read_to_string(repo.join("tracked.txt"))?;
+        assert_eq!(tracked_after, "snapshot version\n");
+
+        let node_modules_exists = node_modules.exists();
+        assert!(node_modules_exists);
+
+        let files_under_node_modules: Vec<_> = WalkDir::new(&node_modules)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_file())
+            .collect();
+        assert!(!files_under_node_modules.is_empty());
+
+        assert!(!repo.join("temp.txt").exists());
+
+        Ok(())
+    }
+
+    #[test]
+    fn create_snapshot_reports_nested_large_untracked_dirs_under_tracked_parent()
+    -> Result<(), GitToolingError> {
+        let temp = tempfile::tempdir()?;
+        let repo = temp.path();
+        init_test_repo(repo);
+
+        // Create a tracked src directory.
+        let src = repo.join("src");
+        std::fs::create_dir(&src)?;
+        std::fs::write(src.join("main.rs"), "fn main() {}\n")?;
+        run_git_in(repo, &["add", "src/main.rs"]);
+        run_git_in(
+            repo,
+            &[
+                "-c",
+                "user.name=Tester",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "initial",
+            ],
+        );
+
+        // Create a large untracked tree nested under the tracked src directory.
+        let generated = src.join("generated").join("cache");
+        std::fs::create_dir_all(&generated)?;
+        for idx in 0..(LARGE_UNTRACKED_WARNING_THRESHOLD + 1) {
+            let file = generated.join(format!("file-{idx}.bin"));
+            std::fs::write(file, "data\n")?;
+        }
+
+        let (_, report) = create_ghost_commit_with_report(&CreateGhostCommitOptions::new(repo))?;
+        assert_eq!(report.large_untracked_dirs.len(), 1);
+        let entry = &report.large_untracked_dirs[0];
+        assert_ne!(entry.path, PathBuf::from("src"));
+        assert!(
+            entry.path.starts_with(Path::new("src/generated")),
+            "unexpected path for large untracked directory: {}",
+            entry.path.display()
+        );
+        assert_eq!(entry.file_count, LARGE_UNTRACKED_WARNING_THRESHOLD + 1);
 
         Ok(())
     }
@@ -672,8 +1077,8 @@ mod tests {
     }
 
     #[test]
-    /// Restoring removes ignored directories created after the snapshot.
-    fn restore_removes_new_ignored_directory() -> Result<(), GitToolingError> {
+    /// Restoring leaves ignored directories created after the snapshot untouched.
+    fn restore_preserves_new_ignored_directory() -> Result<(), GitToolingError> {
         let temp = tempfile::tempdir()?;
         let repo = temp.path();
         init_test_repo(repo);
@@ -702,7 +1107,124 @@ mod tests {
 
         restore_ghost_commit(repo, &ghost)?;
 
-        assert!(!vscode.exists());
+        assert!(vscode.exists());
+        let settings_after = std::fs::read_to_string(vscode.join("settings.json"))?;
+        assert_eq!(settings_after, "{\n  \"after\": true\n}\n");
+
+        Ok(())
+    }
+
+    #[test]
+    /// Restoring leaves ignored files created after the snapshot untouched.
+    fn restore_preserves_new_ignored_file() -> Result<(), GitToolingError> {
+        let temp = tempfile::tempdir()?;
+        let repo = temp.path();
+        init_test_repo(repo);
+
+        std::fs::write(repo.join(".gitignore"), "ignored.txt\n")?;
+        std::fs::write(repo.join("tracked.txt"), "snapshot version\n")?;
+        run_git_in(repo, &["add", ".gitignore", "tracked.txt"]);
+        run_git_in(
+            repo,
+            &[
+                "-c",
+                "user.name=Tester",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "initial",
+            ],
+        );
+
+        let ghost = create_ghost_commit(&CreateGhostCommitOptions::new(repo))?;
+
+        let ignored = repo.join("ignored.txt");
+        std::fs::write(&ignored, "created later\n")?;
+
+        restore_ghost_commit(repo, &ghost)?;
+
+        assert!(ignored.exists());
+        let contents = std::fs::read_to_string(&ignored)?;
+        assert_eq!(contents, "created later\n");
+
+        Ok(())
+    }
+
+    #[test]
+    /// Restoring keeps deleted ignored files deleted when they were absent before the snapshot.
+    fn restore_respects_removed_ignored_file() -> Result<(), GitToolingError> {
+        let temp = tempfile::tempdir()?;
+        let repo = temp.path();
+        init_test_repo(repo);
+
+        std::fs::write(repo.join(".gitignore"), "ignored.txt\n")?;
+        std::fs::write(repo.join("tracked.txt"), "snapshot version\n")?;
+        let ignored = repo.join("ignored.txt");
+        std::fs::write(&ignored, "initial state\n")?;
+        run_git_in(repo, &["add", ".gitignore", "tracked.txt"]);
+        run_git_in(
+            repo,
+            &[
+                "-c",
+                "user.name=Tester",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "initial",
+            ],
+        );
+
+        let ghost = create_ghost_commit(&CreateGhostCommitOptions::new(repo))?;
+
+        std::fs::remove_file(&ignored)?;
+
+        restore_ghost_commit(repo, &ghost)?;
+
+        assert!(!ignored.exists());
+
+        Ok(())
+    }
+
+    #[test]
+    /// Restoring leaves files matched by glob ignores intact.
+    fn restore_preserves_ignored_glob_matches() -> Result<(), GitToolingError> {
+        let temp = tempfile::tempdir()?;
+        let repo = temp.path();
+        init_test_repo(repo);
+
+        std::fs::write(repo.join(".gitignore"), "dummy-dir/*.txt\n")?;
+        std::fs::write(repo.join("tracked.txt"), "snapshot version\n")?;
+        run_git_in(repo, &["add", ".gitignore", "tracked.txt"]);
+        run_git_in(
+            repo,
+            &[
+                "-c",
+                "user.name=Tester",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "initial",
+            ],
+        );
+
+        let ghost = create_ghost_commit(&CreateGhostCommitOptions::new(repo))?;
+
+        let dummy_dir = repo.join("dummy-dir");
+        std::fs::create_dir_all(&dummy_dir)?;
+        let file1 = dummy_dir.join("file1.txt");
+        let file2 = dummy_dir.join("file2.txt");
+        std::fs::write(&file1, "first\n")?;
+        std::fs::write(&file2, "second\n")?;
+
+        restore_ghost_commit(repo, &ghost)?;
+
+        assert!(file1.exists());
+        assert!(file2.exists());
+        assert_eq!(std::fs::read_to_string(file1)?, "first\n");
+        assert_eq!(std::fs::read_to_string(file2)?, "second\n");
 
         Ok(())
     }
