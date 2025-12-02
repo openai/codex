@@ -1615,6 +1615,7 @@ dependencies = [
  "textwrap 0.16.2",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "toml",
  "tracing",
  "tracing-appender",
@@ -6600,6 +6601,7 @@ dependencies = [
  "futures-sink",
  "futures-util",
  "pin-project-lite",
+ "slab",
  "tokio",
 ]
 
