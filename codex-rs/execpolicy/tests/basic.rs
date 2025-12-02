@@ -99,10 +99,10 @@ fn add_prefix_rule_rejects_empty_prefix() -> Result<()> {
     let mut policy = Policy::empty();
     let result = policy.add_prefix_rule(&[], Decision::Allow);
 
-    assert!(matches!(
-        result,
-        Err(Error::InvalidPattern(message)) if message == "prefix cannot be empty"
-    ));
+    match result.unwrap_err() {
+        Error::InvalidPattern(message) => assert_eq!(message, "prefix cannot be empty"),
+        other => panic!("expected InvalidPattern(..), got {other:?}"),
+    }
     Ok(())
 }
 
