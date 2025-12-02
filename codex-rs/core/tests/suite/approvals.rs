@@ -1558,7 +1558,7 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "current_thread")]
 async fn approving_allow_prefix_persists_policy_and_skips_future_prompts() -> Result<()> {
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::UnlessTrusted;
