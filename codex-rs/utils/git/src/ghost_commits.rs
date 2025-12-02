@@ -915,4 +915,119 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    /// Restoring leaves ignored files created after the snapshot untouched.
+    fn restore_preserves_new_ignored_file() -> Result<(), GitToolingError> {
+        let temp = tempfile::tempdir()?;
+        let repo = temp.path();
+        init_test_repo(repo);
+
+        std::fs::write(repo.join(".gitignore"), "ignored.txt\n")?;
+        std::fs::write(repo.join("tracked.txt"), "snapshot version\n")?;
+        run_git_in(repo, &["add", ".gitignore", "tracked.txt"]);
+        run_git_in(
+            repo,
+            &[
+                "-c",
+                "user.name=Tester",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "initial",
+            ],
+        );
+
+        let ghost = create_ghost_commit(&CreateGhostCommitOptions::new(repo))?;
+
+        let ignored = repo.join("ignored.txt");
+        std::fs::write(&ignored, "created later\n")?;
+
+        restore_ghost_commit(repo, &ghost)?;
+
+        assert!(ignored.exists());
+        let contents = std::fs::read_to_string(&ignored)?;
+        assert_eq!(contents, "created later\n");
+
+        Ok(())
+    }
+
+    #[test]
+    /// Restoring keeps deleted ignored files deleted when they were absent before the snapshot.
+    fn restore_respects_removed_ignored_file() -> Result<(), GitToolingError> {
+        let temp = tempfile::tempdir()?;
+        let repo = temp.path();
+        init_test_repo(repo);
+
+        std::fs::write(repo.join(".gitignore"), "ignored.txt\n")?;
+        std::fs::write(repo.join("tracked.txt"), "snapshot version\n")?;
+        let ignored = repo.join("ignored.txt");
+        std::fs::write(&ignored, "initial state\n")?;
+        run_git_in(repo, &["add", ".gitignore", "tracked.txt"]);
+        run_git_in(
+            repo,
+            &[
+                "-c",
+                "user.name=Tester",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "initial",
+            ],
+        );
+
+        let ghost = create_ghost_commit(&CreateGhostCommitOptions::new(repo))?;
+
+        std::fs::remove_file(&ignored)?;
+
+        restore_ghost_commit(repo, &ghost)?;
+
+        assert!(!ignored.exists());
+
+        Ok(())
+    }
+
+    #[test]
+    /// Restoring leaves files matched by glob ignores intact.
+    fn restore_preserves_ignored_glob_matches() -> Result<(), GitToolingError> {
+        let temp = tempfile::tempdir()?;
+        let repo = temp.path();
+        init_test_repo(repo);
+
+        std::fs::write(repo.join(".gitignore"), "dummy-dir/*.txt\n")?;
+        std::fs::write(repo.join("tracked.txt"), "snapshot version\n")?;
+        run_git_in(repo, &["add", ".gitignore", "tracked.txt"]);
+        run_git_in(
+            repo,
+            &[
+                "-c",
+                "user.name=Tester",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "initial",
+            ],
+        );
+
+        let ghost = create_ghost_commit(&CreateGhostCommitOptions::new(repo))?;
+
+        let dummy_dir = repo.join("dummy-dir");
+        std::fs::create_dir_all(&dummy_dir)?;
+        let file1 = dummy_dir.join("file1.txt");
+        let file2 = dummy_dir.join("file2.txt");
+        std::fs::write(&file1, "first\n")?;
+        std::fs::write(&file2, "second\n")?;
+
+        restore_ghost_commit(repo, &ghost)?;
+
+        assert!(file1.exists());
+        assert!(file2.exists());
+        assert_eq!(std::fs::read_to_string(file1)?, "first\n");
+        assert_eq!(std::fs::read_to_string(file2)?, "second\n");
+
+        Ok(())
+    }
 }
