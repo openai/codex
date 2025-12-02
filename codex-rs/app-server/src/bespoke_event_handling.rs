@@ -18,6 +18,7 @@ use codex_app_server_protocol::ContextCompactedNotification;
 use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
+use codex_app_server_protocol::FileChangeOutputDeltaNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::FileUpdateChange;
@@ -61,6 +62,7 @@ use codex_core::protocol::ReviewDecision;
 use codex_core::protocol::TokenCountEvent;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::review_format::format_review_findings_block;
+use codex_core::review_prompts;
 use codex_protocol::ConversationId;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::ReviewOutputEvent;
@@ -260,6 +262,8 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::AgentMessageContentDelta(event) => {
             let notification = AgentMessageDeltaNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
                 item_id: event.item_id,
                 delta: event.delta,
             };
@@ -278,6 +282,8 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::ReasoningContentDelta(event) => {
             let notification = ReasoningSummaryTextDeltaNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
                 item_id: event.item_id,
                 delta: event.delta,
                 summary_index: event.summary_index,
@@ -290,6 +296,8 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::ReasoningRawContentDelta(event) => {
             let notification = ReasoningTextDeltaNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
                 item_id: event.item_id,
                 delta: event.delta,
                 content_index: event.content_index,
@@ -300,6 +308,8 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::AgentReasoningSectionBreak(event) => {
             let notification = ReasoningSummaryPartAddedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
                 item_id: event.item_id,
                 summary_index: event.summary_index,
             };
@@ -342,8 +352,32 @@ pub(crate) async fn apply_bespoke_event_handling(
                 }))
                 .await;
         }
+        EventMsg::ViewImageToolCall(view_image_event) => {
+            let item = ThreadItem::ImageView {
+                id: view_image_event.call_id.clone(),
+                path: view_image_event.path.to_string_lossy().into_owned(),
+            };
+            let started = ItemStartedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item: item.clone(),
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemStarted(started))
+                .await;
+            let completed = ItemCompletedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemCompleted(completed))
+                .await;
+        }
         EventMsg::EnteredReviewMode(review_request) => {
-            let review = review_request.user_facing_hint;
+            let review = review_request
+                .user_facing_hint
+                .unwrap_or_else(|| review_prompts::user_facing_hint(&review_request.target));
             let item = ThreadItem::EnteredReviewMode {
                 id: event_turn_id.clone(),
                 review,
@@ -493,15 +527,44 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::ExecCommandOutputDelta(exec_command_output_delta_event) => {
-            let notification = CommandExecutionOutputDeltaNotification {
-                item_id: exec_command_output_delta_event.call_id.clone(),
-                delta: String::from_utf8_lossy(&exec_command_output_delta_event.chunk).to_string(),
+            let item_id = exec_command_output_delta_event.call_id.clone();
+            let delta = String::from_utf8_lossy(&exec_command_output_delta_event.chunk).to_string();
+            // The underlying EventMsg::ExecCommandOutputDelta is used for shell, unified_exec,
+            // and apply_patch tool calls. We represent apply_patch with the FileChange item, and
+            // everything else with the CommandExecution item.
+            //
+            // We need to detect which item type it is so we can emit the right notification.
+            // We already have state tracking FileChange items on item/started, so let's use that.
+            let is_file_change = {
+                let map = turn_summary_store.lock().await;
+                map.get(&conversation_id)
+                    .is_some_and(|summary| summary.file_change_started.contains(&item_id))
             };
-            outgoing
-                .send_server_notification(ServerNotification::CommandExecutionOutputDelta(
-                    notification,
-                ))
-                .await;
+            if is_file_change {
+                let notification = FileChangeOutputDeltaNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event_turn_id.clone(),
+                    item_id,
+                    delta,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::FileChangeOutputDelta(
+                        notification,
+                    ))
+                    .await;
+            } else {
+                let notification = CommandExecutionOutputDeltaNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event_turn_id.clone(),
+                    item_id,
+                    delta,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::CommandExecutionOutputDelta(
+                        notification,
+                    ))
+                    .await;
+            }
         }
         EventMsg::ExecCommandEnd(exec_command_end_event) => {
             let ExecCommandEndEvent {
@@ -588,6 +651,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::TurnDiff(turn_diff_event) => {
             handle_turn_diff(
+                conversation_id,
                 &event_turn_id,
                 turn_diff_event,
                 api_version,
@@ -610,6 +674,7 @@ pub(crate) async fn apply_bespoke_event_handling(
 }
 
 async fn handle_turn_diff(
+    conversation_id: ConversationId,
     event_turn_id: &str,
     turn_diff_event: TurnDiffEvent,
     api_version: ApiVersion,
@@ -617,6 +682,7 @@ async fn handle_turn_diff(
 ) {
     if let ApiVersion::V2 = api_version {
         let notification = TurnDiffUpdatedNotification {
+            thread_id: conversation_id.to_string(),
             turn_id: event_turn_id.to_string(),
             diff: turn_diff_event.unified_diff,
         };
@@ -1774,8 +1840,10 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = OutgoingMessageSender::new(tx);
         let unified_diff = "--- a\n+++ b\n".to_string();
+        let conversation_id = ConversationId::new();
 
         handle_turn_diff(
+            conversation_id,
             "turn-1",
             TurnDiffEvent {
                 unified_diff: unified_diff.clone(),
@@ -1793,6 +1861,7 @@ mod tests {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnDiffUpdated(
                 notification,
             )) => {
+                assert_eq!(notification.thread_id, conversation_id.to_string());
                 assert_eq!(notification.turn_id, "turn-1");
                 assert_eq!(notification.diff, unified_diff);
             }
@@ -1806,8 +1875,10 @@ mod tests {
     async fn test_handle_turn_diff_is_noop_for_v1() -> Result<()> {
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = OutgoingMessageSender::new(tx);
+        let conversation_id = ConversationId::new();
 
         handle_turn_diff(
+            conversation_id,
             "turn-1",
             TurnDiffEvent {
                 unified_diff: "diff".to_string(),
