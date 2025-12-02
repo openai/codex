@@ -25,7 +25,8 @@ use crate::sandboxing::SandboxPermissions;
 use crate::tools::sandboxing::ApprovalRequirement;
 
 const FORBIDDEN_REASON: &str = "execpolicy forbids this command";
-const PROMPT_CONFLICT_REASON: &str = "execpolicy requires approval for this command, but AskForApproval is set to Never";
+const PROMPT_CONFLICT_REASON: &str =
+    "execpolicy requires approval for this command, but AskForApproval is set to Never";
 const PROMPT_REASON: &str = "execpolicy requires approval for this command";
 const POLICY_DIR_NAME: &str = "policy";
 const POLICY_EXTENSION: &str = "codexpolicy";
@@ -203,7 +204,7 @@ pub(crate) fn create_approval_requirement_for_command(
         },
     }
 }
- 
+
 /// Only return PROMPT_REASON when an execpolicy rule drove the prompt decision
 fn derive_prompt_reason(evaluation: &Evaluation) -> Option<String> {
     evaluation.matched_rules.iter().find_map(|rule_match| {
@@ -295,9 +296,9 @@ mod tests {
                 }],
             },
             policy
-            .read()
-            .await
-            .check_multiple(commands.iter(), &|_| Decision::Allow)
+                .read()
+                .await
+                .check_multiple(commands.iter(), &|_| Decision::Allow)
         );
         assert!(!temp_dir.path().join(POLICY_DIR_NAME).exists());
     }
@@ -338,9 +339,9 @@ mod tests {
                 }],
             },
             policy
-            .read()
-            .await
-            .check_multiple(command.iter(), &|_| Decision::Allow)
+                .read()
+                .await
+                .check_multiple(command.iter(), &|_| Decision::Allow)
         );
     }
 
@@ -366,9 +367,9 @@ mod tests {
                 }],
             },
             policy
-            .read()
-            .await
-            .check_multiple(command.iter(), &|_| Decision::Allow)
+                .read()
+                .await
+                .check_multiple(command.iter(), &|_| Decision::Allow)
         );
     }
 
@@ -498,17 +499,15 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             "apple | orange".to_string(),
         ];
 
-        let requirement = create_approval_requirement_for_command(
-            &policy,
-            &Features::with_defaults(),
-            &command,
-            AskForApproval::UnlessTrusted,
-            &SandboxPolicy::DangerFullAccess,
-            SandboxPermissions::UseDefault,
-        );
-
         assert_eq!(
-            requirement,
+            create_approval_requirement_for_command(
+                &policy,
+                &Features::with_defaults(),
+                &command,
+                AskForApproval::UnlessTrusted,
+                &SandboxPolicy::DangerFullAccess,
+                SandboxPermissions::UseDefault,
+            ),
             ApprovalRequirement::NeedsApproval {
                 reason: None,
                 allow_prefix: Some(vec!["orange".to_string()])
@@ -680,17 +679,15 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             "python && echo ok".to_string(),
         ];
 
-        let requirement = create_approval_requirement_for_command(
-            &policy,
-            &Features::with_defaults(),
-            &command,
-            AskForApproval::UnlessTrusted,
-            &SandboxPolicy::ReadOnly,
-            SandboxPermissions::UseDefault,
-        );
-
         assert_eq!(
-            requirement,
+            create_approval_requirement_for_command(
+                &policy,
+                &Features::with_defaults(),
+                &command,
+                AskForApproval::UnlessTrusted,
+                &SandboxPolicy::ReadOnly,
+                SandboxPermissions::UseDefault,
+            ),
             ApprovalRequirement::Skip {
                 bypass_sandbox: true
             }
