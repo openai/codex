@@ -35,7 +35,6 @@ use crate::mcp_cmd::McpCli;
 
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
-use codex_core::features::Feature;
 use codex_core::features::is_known_feature_key;
 
 /// Codex CLI
