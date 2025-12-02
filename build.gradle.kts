@@ -6,8 +6,20 @@ plugins {
 kotlin {
     applyDefaultHierarchyTemplate()
 
-    macosArm64()
-    macosX64()
+    macosArm64 {
+        binaries {
+            executable {
+                entryPoint = "com.auth0.jwt.main"
+            }
+        }
+    }
+    macosX64 {
+        binaries {
+            executable {
+                entryPoint = "com.auth0.jwt.main"
+            }
+        }
+    }
     linuxX64()
     mingwX64()
 
@@ -18,7 +30,8 @@ kotlin {
                 implementation("org.jetbrains.kotlinx:kotlinx-serialization-core:1.9.0")
                 implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
                 implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.7.1")
-                
+                implementation("org.jetbrains.kotlinx:kotlinx-io-core:0.8.2")
+
                 // Ktor HTTP client for native platforms
                 implementation("io.ktor:ktor-client-core:2.3.7")
                 implementation("io.ktor:ktor-client-curl:2.3.7")

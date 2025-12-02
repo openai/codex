@@ -9,7 +9,6 @@ import ai.solace.coder.api.common.TextControls
 import ai.solace.coder.api.provider.Provider
 import ai.solace.coder.api.requests.ResponsesRequest
 import ai.solace.coder.api.requests.ResponsesRequestBuilder
-import ai.solace.coder.api.requests.SessionSource
 import ai.solace.coder.api.telemetry.RequestTelemetry
 import ai.solace.coder.api.telemetry.SseTelemetry
 import io.ktor.client.*
@@ -22,7 +21,7 @@ data class ResponsesOptions(
     val text: TextControls? = null,
     val storeOverride: Boolean? = null,
     val conversationId: String? = null,
-    val sessionSource: SessionSource? = null,
+    val sessionSource: ai.solace.coder.protocol.SessionSource? = null,
 )
 
 /** Client for Responses endpoint. */

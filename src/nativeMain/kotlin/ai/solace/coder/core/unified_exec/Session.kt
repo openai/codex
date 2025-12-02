@@ -1,9 +1,9 @@
 // port-lint: source core/src/unified_exec/session.rs
 package ai.solace.coder.core.unified_exec
 
-import ai.solace.coder.exec.process.ExecToolCallOutput
-import ai.solace.coder.exec.process.SandboxType
-import ai.solace.coder.exec.process.StreamOutput
+import ai.solace.coder.core.ExecToolCallOutput
+import ai.solace.coder.core.SandboxType
+import ai.solace.coder.core.StreamOutput
 import ai.solace.coder.core.context.TruncationPolicy
 import ai.solace.coder.core.context.formattedTruncateText
 import ai.solace.coder.utils.pty.ExecCommandSession
@@ -20,6 +20,8 @@ import kotlinx.coroutines.IO
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
+import ai.solace.coder.core.isLikelySandboxDenied
+import ai.solace.coder.core.unified_exec.UnifiedExecError
 
 // Constants from mod.rs (need to be defined somewhere, assuming in UnifiedExec.kt or here)
 const val UNIFIED_EXEC_OUTPUT_MAX_BYTES = 1024 * 1024 // Placeholder value
@@ -181,9 +183,6 @@ class UnifiedExecSession(
     }
 
     fun sandboxType(): SandboxType = sandboxType
-
-import ai.solace.coder.core.isLikelySandboxDenied
-import ai.solace.coder.core.unified_exec.UnifiedExecError
 
 // ...
 

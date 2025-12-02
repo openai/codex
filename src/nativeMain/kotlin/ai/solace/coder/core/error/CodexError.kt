@@ -204,3 +204,5 @@ sealed class CodexError {
  * Exception wrapper for CodexError.
  */
 class CodexException(val error: CodexError) : Exception(error.toString())
+
+typealias CodexErr = CodexError

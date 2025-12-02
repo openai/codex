@@ -1,11 +1,12 @@
+@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+
 // port-lint: source core/src/shell.rs
 package ai.solace.coder.exec.shell
 
-import ai.solace.coder.exec.process.platformGetUserShellPath
-import ai.solace.coder.exec.process.platformFileExists
-import ai.solace.coder.exec.process.platformFindInPath
-import ai.solace.coder.exec.process.platformIsWindows
-import ai.solace.coder.exec.process.platformIsMacOS
+import kotlinx.cinterop.toKString
+import platform.posix.getenv
+import platform.posix.access
+import platform.posix.F_OK
 
 /**
  * Shell types supported by the system
@@ -284,3 +285,9 @@ class ShellDetector {
         return platformIsMacOS()
     }
 }
+
+private fun platformGetUserShellPath(): String? = getenv("SHELL")?.toKString()
+private fun platformFileExists(path: String): Boolean = access(path, F_OK) == 0
+private fun platformFindInPath(binaryName: String): String? = null // TODO: Implement
+private fun platformIsWindows(): Boolean = false
+private fun platformIsMacOS(): Boolean = true

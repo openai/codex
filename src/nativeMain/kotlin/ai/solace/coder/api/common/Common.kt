@@ -1,7 +1,6 @@
 // port-lint: source codex-rs/codex-api/src/common.rs
 package ai.solace.coder.api.common
 
-import ai.solace.coder.api.error.ApiError
 import ai.solace.coder.protocol.ResponseItem
 import ai.solace.coder.protocol.TokenUsage
 import ai.solace.coder.protocol.RateLimitSnapshot
@@ -70,7 +69,7 @@ data class TextControls(
 /** Verbosity mapping for OpenAI. */
 enum class OpenAiVerbosity { Low, Medium, High }
 
-fun openAiVerbosity_fromVerbosityConfig(v: VerbosityConfig): OpenAiVerbosity = when (v) {
+fun openAiVerbosityConfig(v: VerbosityConfig): OpenAiVerbosity = when (v) {
     VerbosityConfig.Low -> OpenAiVerbosity.Low
     VerbosityConfig.Medium -> OpenAiVerbosity.Medium
     VerbosityConfig.High -> OpenAiVerbosity.High
@@ -107,7 +106,7 @@ fun createTextParamForRequest(
         )
     }
     return TextControls(
-        verbosity = verbosity?.let { openAiVerbosity_fromVerbosityConfig(it) },
+        verbosity = verbosity?.let { openAiVerbosityConfig(it) },
         format = format,
     )
 }

@@ -1,7 +1,7 @@
 // port-lint: source core/src/unified_exec/errors.rs
 package ai.solace.coder.core.unified_exec
 
-import ai.solace.coder.exec.process.ExecToolCallOutput
+import ai.solace.coder.core.ExecToolCallOutput
 
 sealed class UnifiedExecError : Exception() {
     data class CreateSession(override val message: String) : UnifiedExecError()

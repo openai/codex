@@ -1,11 +1,11 @@
 // port-lint: source core/src/unified_exec/session_manager.rs
 package ai.solace.coder.core.unified_exec
 
-import ai.solace.coder.core.CodexSession
-import ai.solace.coder.core.TurnContext
-import ai.solace.coder.exec.process.ExecToolCallOutput
-import ai.solace.coder.exec.process.StreamOutput
-import ai.solace.coder.exec.process.SandboxType
+import ai.solace.coder.core.session.Session as CodexSession
+import ai.solace.coder.core.session.TurnContext
+import ai.solace.coder.core.ExecToolCallOutput
+import ai.solace.coder.core.StreamOutput
+import ai.solace.coder.core.SandboxType
 import ai.solace.coder.core.context.TruncationPolicy
 import ai.solace.coder.core.context.formattedTruncateText
 import ai.solace.coder.core.context.approxTokenCount
@@ -17,10 +17,10 @@ import ai.solace.coder.core.tools.events.ExecCommandSource
 import ai.solace.coder.core.tools.orchestrator.ToolOrchestrator
 import ai.solace.coder.core.tools.runtimes.UnifiedExecRuntime
 import ai.solace.coder.core.tools.runtimes.UnifiedExecRequest
-import ai.solace.coder.core.tools.Sandboxing
+import ai.solace.coder.core.sandboxing.SandboxManager
 import ai.solace.coder.core.tools.ToolCtx
-import ai.solace.coder.core.tools.SandboxPermissions
-import ai.solace.coder.core.tools.createApprovalRequirementForCommand
+import ai.solace.coder.core.sandboxing.SandboxPermissions
+// import ai.solace.coder.core.tools.createApprovalRequirementForCommand // TODO: Implement this
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Job
@@ -223,13 +223,11 @@ class UnifiedExecSessionManager {
         val policy = ai.solace.coder.protocol.SandboxPolicy.DangerFullAccess 
         val sandboxType = ai.solace.coder.core.platformGetSandbox() ?: ai.solace.coder.core.SandboxType.None
         
-        val manager = ai.solace.coder.core.sandboxing.SandboxManager()
+        val manager = SandboxManager()
         val transformResult = manager.transform(
             spec,
             policy,
-            sandboxType,
-            cwd, // sandboxCwd
-            null // linuxSandboxExe
+            cwd
         )
 
         if (transformResult.isFailure()) {
