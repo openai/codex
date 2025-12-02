@@ -393,14 +393,21 @@ fn history_log_id(metadata: &std::fs::Metadata) -> Option<u64> {
     }
 }
 
-#[cfg(all(test, any(unix, windows)))]
+#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
+    use crate::config::ConfigOverrides;
+    use crate::config::ConfigToml;
+    use codex_protocol::ConversationId;
     use pretty_assertions::assert_eq;
+    #[cfg(any(unix, windows))]
     use std::fs::File;
+    #[cfg(any(unix, windows))]
     use std::io::Write;
     use tempfile::TempDir;
 
+    #[cfg(any(unix, windows))]
     #[tokio::test]
     async fn lookup_reads_history_entries() {
         let temp_dir = TempDir::new().expect("create temp dir");
@@ -437,6 +444,7 @@ mod tests {
         assert_eq!(second_entry, entries[1]);
     }
 
+    #[cfg(any(unix, windows))]
     #[tokio::test]
     async fn lookup_uses_stable_log_id_after_appends() {
         let temp_dir = TempDir::new().expect("create temp dir");
@@ -479,17 +487,6 @@ mod tests {
             lookup_history_entry(&history_path, log_id, 1).expect("lookup appended history entry");
         assert_eq!(fetched, appended);
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::Config;
-    use crate::config::ConfigOverrides;
-    use crate::config::ConfigToml;
-    use codex_protocol::ConversationId;
-    use pretty_assertions::assert_eq;
-    use tempfile::TempDir;
 
     #[tokio::test]
     async fn append_entry_trims_history_when_beyond_max_bytes() {
