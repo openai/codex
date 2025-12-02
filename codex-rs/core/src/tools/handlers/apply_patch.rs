@@ -181,6 +181,12 @@ pub(crate) async fn intercept_apply_patch(
 ) -> Result<Option<ToolOutput>, FunctionCallError> {
     match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd) {
         codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
+            session
+                .record_model_warning(
+                    "apply_patch was requested via unified_exec. Use the apply_patch tool instead of exec_command.",
+                    turn,
+                )
+                .await;
             match apply_patch::apply_patch(session, turn, call_id, changes).await {
                 InternalApplyPatchInvocation::Output(item) => {
                     let content = item?;

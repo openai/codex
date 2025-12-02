@@ -13,6 +13,8 @@ use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
@@ -160,6 +162,7 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
         config.include_apply_patch_tool = true;
         config.use_experimental_unified_exec_tool = true;
         config.features.enable(Feature::UnifiedExec);
+        config.features.enable(Feature::ModelWarnings);
     });
     let harness = TestCodexHarness::with_builder(builder).await?;
 
@@ -210,6 +213,7 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
     let mut patch_end = None;
     let mut saw_exec_begin = false;
     let mut saw_exec_end = false;
+    let mut model_warning = None;
     wait_for_event(&codex, |event| match event {
         EventMsg::PatchApplyBegin(begin) if begin.call_id == call_id => {
             saw_patch_begin = true;
@@ -220,6 +224,15 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
                     .any(|path| path.file_name() == Some(OsStr::new("uexec_apply.txt"))),
                 "expected apply_patch changes to target uexec_apply.txt",
             );
+            false
+        }
+        EventMsg::RawResponseItem(raw_item) => {
+            if let ResponseItem::Message { content, .. } = &raw_item.item
+                && let Some(ContentItem::InputText { text }) = content.first()
+                && text.starts_with("Warning: apply_patch was requested via unified_exec")
+            {
+                model_warning = Some(text.clone());
+            }
             false
         }
         EventMsg::PatchApplyEnd(end) if end.call_id == call_id => {
@@ -270,6 +283,14 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
     assert_eq!(
         fs::read_to_string(harness.path("uexec_apply.txt"))?,
         "hello from unified exec\n"
+    );
+    assert_eq!(
+        model_warning,
+        Some(
+            "Warning: apply_patch was requested via unified_exec. Use the apply_patch tool instead of exec_command."
+                .to_string()
+        ),
+        "expected model warning when apply_patch is handled through unified_exec",
     );
 
     Ok(())
