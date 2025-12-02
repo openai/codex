@@ -25,6 +25,7 @@ use crate::sandboxing::SandboxPermissions;
 use crate::tools::sandboxing::ApprovalRequirement;
 
 const FORBIDDEN_REASON: &str = "execpolicy forbids this command";
+const PROMPT_CONFLICT_REASON: &str = "execpolicy requires approval for this command, but AskForApproval is set to Never";
 const PROMPT_REASON: &str = "execpolicy requires approval for this command";
 const POLICY_DIR_NAME: &str = "policy";
 const POLICY_EXTENSION: &str = "codexpolicy";
@@ -189,7 +190,7 @@ pub(crate) async fn create_approval_requirement_for_command(
             let prompt_reason = prompt_reason_for(&evaluation);
             if matches!(approval_policy, AskForApproval::Never) {
                 ApprovalRequirement::Forbidden {
-                    reason: prompt_reason.unwrap_or_else(|| PROMPT_REASON.to_string()),
+                    reason: PROMPT_CONFLICT_REASON.to_string(),
                 }
             } else {
                 ApprovalRequirement::NeedsApproval {
