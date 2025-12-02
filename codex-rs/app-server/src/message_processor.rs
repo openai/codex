@@ -9,6 +9,7 @@ use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadParams;
+use codex_app_server_protocol::ConfigSchemaReadParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::InitializeResponse;
 use codex_app_server_protocol::JSONRPCError;
@@ -148,6 +149,9 @@ impl MessageProcessor {
             ClientRequest::ConfigRead { request_id, params } => {
                 self.handle_config_read(request_id, params).await;
             }
+            ClientRequest::ConfigSchemaRead { request_id, params } => {
+                self.handle_config_schema_read(request_id, params).await;
+            }
             ClientRequest::ConfigValueWrite { request_id, params } => {
                 self.handle_config_value_write(request_id, params).await;
             }
@@ -191,6 +195,17 @@ impl MessageProcessor {
         params: ConfigValueWriteParams,
     ) {
         match self.config_api.write_value(params).await {
+            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn handle_config_schema_read(
+        &self,
+        request_id: RequestId,
+        params: ConfigSchemaReadParams,
+    ) {
+        match self.config_api.schema_read(params).await {
             Ok(response) => self.outgoing.send_response(request_id, response).await,
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }

@@ -6,6 +6,8 @@ use codex_app_server_protocol::ConfigEdit;
 use codex_app_server_protocol::ConfigLayerName;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigReadResponse;
+use codex_app_server_protocol::ConfigSchemaReadParams;
+use codex_app_server_protocol::ConfigSchemaReadResponse;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::JSONRPCError;
@@ -66,6 +68,48 @@ sandbox_mode = "workspace-write"
     assert_eq!(layers.len(), 2);
     assert_eq!(layers[0].name, ConfigLayerName::SessionFlags);
     assert_eq!(layers[1].name, ConfigLayerName::User);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_schema_read_returns_schema() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_config_schema_read_request(ConfigSchemaReadParams::default())
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ConfigSchemaReadResponse { schema } = to_response(resp)?;
+
+    let properties = schema
+        .get("definitions")
+        .and_then(|defs| defs.get("ConfigToml"))
+        .and_then(|v| v.get("properties"))
+        .cloned()
+        .expect("schema properties present");
+
+    assert!(
+        properties
+            .get("mcp_servers")
+            .and_then(|v| v.get("additionalProperties"))
+            .is_some()
+    );
+
+    assert!(
+        properties
+            .get("sandbox_mode")
+            .and_then(|v| v.get("enum"))
+            .and_then(|vals| vals.as_array())
+            .map(|vals| vals.contains(&json!("workspace-write")))
+            .unwrap_or(false)
+    );
 
     Ok(())
 }

@@ -46,6 +46,7 @@ use codex_protocol::config_types::Verbosity;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use dirs::home_dir;
 use dunce::canonicalize;
+use schemars::JsonSchema;
 use serde::Deserialize;
 use similar::DiffableStr;
 use std::collections::BTreeMap;
@@ -60,6 +61,7 @@ use toml_edit::DocumentMut;
 
 pub mod edit;
 pub mod profile;
+pub mod schema;
 pub mod types;
 
 pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5.1-codex";
@@ -560,7 +562,7 @@ fn apply_toml_override(root: &mut TomlValue, path: &str, value: TomlValue) {
 }
 
 /// Base config deserialized from ~/.codex/config.toml.
-#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 pub struct ConfigToml {
     /// Optional override of model selection.
     pub model: Option<String>,
@@ -747,7 +749,7 @@ impl From<ConfigToml> for UserSavedConfig {
     }
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 pub struct ProjectConfig {
     pub trust_level: Option<TrustLevel>,
 }
@@ -762,7 +764,7 @@ impl ProjectConfig {
     }
 }
 
-#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 pub struct ToolsToml {
     #[serde(default, alias = "web_search_request")]
     pub web_search: Option<bool>,

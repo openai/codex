@@ -7,6 +7,8 @@ use codex_app_server_protocol::ConfigLayerMetadata;
 use codex_app_server_protocol::ConfigLayerName;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigReadResponse;
+use codex_app_server_protocol::ConfigSchemaReadParams;
+use codex_app_server_protocol::ConfigSchemaReadResponse;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteErrorCode;
 use codex_app_server_protocol::ConfigWriteResponse;
@@ -15,6 +17,7 @@ use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::OverriddenMetadata;
 use codex_app_server_protocol::WriteStatus;
 use codex_core::config::ConfigToml;
+use codex_core::config::schema::config_json_schema_value;
 use codex_core::config_loader::LoadedConfigLayers;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::load_config_layers_with_overrides;
@@ -82,6 +85,15 @@ impl ConfigApi {
         };
 
         Ok(response)
+    }
+
+    pub(crate) async fn schema_read(
+        &self,
+        _params: ConfigSchemaReadParams,
+    ) -> Result<ConfigSchemaReadResponse, JSONRPCErrorError> {
+        Ok(ConfigSchemaReadResponse {
+            schema: config_json_schema_value(),
+        })
     }
 
     pub(crate) async fn write_value(
