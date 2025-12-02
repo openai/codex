@@ -204,6 +204,49 @@ async fn python_getpwuid_works_under_seatbelt() {
 }
 
 #[tokio::test]
+async fn openpty_works_under_seatbelt() {
+    if std::env::var(CODEX_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {
+        eprintln!("{CODEX_SANDBOX_ENV_VAR} is set to 'seatbelt', skipping test.");
+        return;
+    }
+
+    if which::which("python3").is_err() {
+        eprintln!("python3 not found in PATH, skipping test.");
+        return;
+    }
+
+    let policy = SandboxPolicy::ReadOnly;
+    let command_cwd = std::env::current_dir().expect("getcwd");
+    let sandbox_cwd = command_cwd.clone();
+
+    let mut child = spawn_command_under_seatbelt(
+        vec![
+            "python3".to_string(),
+            "-c".to_string(),
+            r#"import os
+
+master, slave = os.openpty()
+os.write(slave, b"ping")
+assert os.read(master, 4) == b"ping""#
+                .to_string(),
+        ],
+        command_cwd,
+        &policy,
+        sandbox_cwd.as_path(),
+        StdioPolicy::RedirectForShellTool,
+        HashMap::new(),
+    )
+    .await
+    .expect("should be able to spawn python under seatbelt");
+
+    let status = child
+        .wait()
+        .await
+        .expect("should be able to wait for child process");
+    assert!(status.success(), "python exited with {status:?}");
+}
+
+#[tokio::test]
 async fn java_home_finds_runtime_under_seatbelt() {
     if std::env::var(CODEX_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {
         eprintln!("{CODEX_SANDBOX_ENV_VAR} is set to 'seatbelt', skipping test.");
