@@ -98,6 +98,7 @@ pub(crate) enum ApprovalRequirement {
     /// Approval required for this tool call
     NeedsApproval {
         reason: Option<String>,
+        /// Prefix that can be whitelisted via execpolicy to skip future approvals for similar commands
         allow_prefix: Option<Vec<String>>,
     },
     /// Execution forbidden for this tool call
