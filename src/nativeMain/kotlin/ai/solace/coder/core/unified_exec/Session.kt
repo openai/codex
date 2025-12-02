@@ -100,7 +100,7 @@ class UnifiedExecSession(
             scope: CoroutineScope
         ): UnifiedExecSession {
             val outputBuffer = OutputBufferStateWrapper()
-            val outputNotify = Object() // Placeholder
+            val outputNotify = Any() // Placeholder
             val cancellationToken = Job()
             val bufferWrapper = outputBuffer
             

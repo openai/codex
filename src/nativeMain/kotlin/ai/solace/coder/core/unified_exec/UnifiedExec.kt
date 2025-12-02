@@ -1,8 +1,8 @@
 // port-lint: source core/src/unified_exec/mod.rs
 package ai.solace.coder.core.unified_exec
 
-import ai.solace.coder.core.CodexSession
-import ai.solace.coder.core.TurnContext
+import ai.solace.coder.core.session.Session as CodexSession
+import ai.solace.coder.core.session.TurnContext
 import kotlin.time.Duration
 
 const val MIN_YIELD_TIME_MS: Long = 250

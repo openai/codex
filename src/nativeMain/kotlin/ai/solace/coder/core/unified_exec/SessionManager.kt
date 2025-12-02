@@ -8,12 +8,11 @@ import ai.solace.coder.core.StreamOutput
 import ai.solace.coder.core.SandboxType
 import ai.solace.coder.core.context.TruncationPolicy
 import ai.solace.coder.core.context.formattedTruncateText
-import ai.solace.coder.core.context.approxTokenCount
-import ai.solace.coder.core.tools.events.ToolEmitter
-import ai.solace.coder.core.tools.events.ToolEventCtx
-import ai.solace.coder.core.tools.events.ToolEventStage
-import ai.solace.coder.core.tools.events.ToolEventFailure
-import ai.solace.coder.core.tools.events.ExecCommandSource
+import ai.solace.coder.core.tools.ToolEmitter
+import ai.solace.coder.core.tools.ToolEventCtx
+import ai.solace.coder.core.tools.ToolEventStage
+import ai.solace.coder.core.tools.ToolEventFailure
+import ai.solace.coder.core.tools.ExecCommandSource
 import ai.solace.coder.core.tools.orchestrator.ToolOrchestrator
 import ai.solace.coder.core.tools.runtimes.UnifiedExecRuntime
 import ai.solace.coder.core.tools.runtimes.UnifiedExecRequest
@@ -134,7 +133,7 @@ class UnifiedExecSessionManager {
             request.processId
         }
         
-        val originalTokenCount = approxTokenCount(text)
+        val originalTokenCount = TruncationPolicy.approxTokenCount(text)
 
         val response = UnifiedExecResponse(
             eventCallId = context.callId,

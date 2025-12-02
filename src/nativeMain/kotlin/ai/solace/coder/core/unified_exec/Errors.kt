@@ -24,6 +24,8 @@ sealed class UnifiedExecError : Exception() {
         val output: ExecToolCallOutput
     ) : UnifiedExecError()
 
+    data class SandboxError(override val message: String) : UnifiedExecError()
+
     companion object {
         fun createSession(message: String): UnifiedExecError = CreateSession(message)
         fun sandboxDenied(message: String, output: ExecToolCallOutput): UnifiedExecError = SandboxDenied(message, output)

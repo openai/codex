@@ -3,12 +3,8 @@ package ai.solace.coder.core
 
 import ai.solace.coder.core.auth.AuthCredentialsStoreMode
 import ai.solace.coder.core.auth.AuthStorageBackend
-import ai.solace.coder.core.auth.createAuthStorage
-import ai.solace.coder.core.auth.IdTokenInfo
-import ai.solace.coder.core.auth.KnownPlan
-import ai.solace.coder.core.auth.PlanType
 import ai.solace.coder.core.auth.FileAuthStorage
-import io.ktor.client.*
+import ai.solace.coder.core.auth.createAuthStorage
 import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
@@ -195,13 +191,13 @@ data class CodexAuth internal constructor(
     }
 
     /**
-     * Raw plan string from the ID token.
+     * Raw plan string from the ID token (including unknown/new plan types).
      */
     fun rawPlanType(): String? {
         return getPlanType()?.let { planType ->
             when (planType) {
                 is PlanType.Known -> planType.plan.name
-                is PlanType.Unknown -> planType.raw
+                is PlanType.Unknown -> planType.value
             }
         }
     }
@@ -315,7 +311,27 @@ data class RefreshTokenFailedError(
  */
 sealed class PlanType {
     data class Known(val plan: KnownPlan) : PlanType()
-    data class Unknown(val raw: String) : PlanType()
+    data class Unknown(val value: String) : PlanType()
+
+    companion object {
+        fun fromString(value: String): PlanType {
+            val knownPlan = when (value.lowercase()) {
+                "free" -> KnownPlan.Free
+                "plus" -> KnownPlan.Plus
+                "pro" -> KnownPlan.Pro
+                "team" -> KnownPlan.Team
+                "business" -> KnownPlan.Business
+                "enterprise" -> KnownPlan.Enterprise
+                "edu" -> KnownPlan.Edu
+                else -> null
+            }
+            return if (knownPlan != null) {
+                Known(knownPlan)
+            } else {
+                Unknown(value)
+            }
+        }
+    }
 }
 
 enum class KnownPlan {
@@ -734,22 +750,47 @@ private fun tryParseErrorMessage(body: String): String {
 /**
  * Parse ID token JWT and extract claims.
  *
- * TODO: Implement JWT parsing
- * Required steps:
- * 1. Split JWT into header.payload.signature parts
- * 2. Base64-decode the payload section (URL-safe base64)
- * 3. Parse the JSON payload to extract:
- *    - email (String)
- *    - https://api.openai.com/auth.chatgpt_plan_type (String -> PlanType)
- *    - https://api.openai.com/auth.chatgpt_account_id (String)
- * 4. Store the original JWT string in rawJwt field
+ * Uses the com.auth0.jwt library to decode the JWT without verification.
+ * Extracts claims from the payload:
+ * - email
+ * - https://api.openai.com/auth.chatgpt_plan_type
+ * - https://api.openai.com/auth.chatgpt_account_id
  *
- * Reference: codex-rs/core/src/token_data.rs for the full parsing logic
- * Note: We don't need to verify signature for this use case
+ * Note: Signature verification is NOT performed.
+ * This is only for extracting user info from trusted tokens.
+ *
+ * Reference: codex-rs/core/src/token_data.rs - parse_id_token()
  */
 private fun parseIdToken(jwt: String): Result<IdTokenInfo> {
-    // TODO: Implement JWT parsing - see above for requirements
-    return Result.success(IdTokenInfo(rawJwt = jwt))
+    return try {
+        // Decode JWT without verification
+        val decoded = com.auth0.jwt.JWT.decode(jwt)
+
+        // Extract email
+        val email = decoded.getClaim("email").asString()
+
+        // Extract OpenAI auth claims
+        val authClaim = decoded.getClaim("https://api.openai.com/auth")
+        val authMap = authClaim.asMap()
+
+        val planTypeStr = authMap?.get("chatgpt_plan_type") as? String
+        val planType = planTypeStr?.let { PlanType.fromString(it) }
+
+        val accountId = authMap?.get("chatgpt_account_id") as? String
+
+        Result.success(
+            IdTokenInfo(
+                email = email,
+                chatgptPlanType = planType,
+                chatgptAccountId = accountId,
+                rawJwt = jwt
+            )
+        )
+    } catch (e: com.auth0.jwt.exceptions.JWTDecodeException) {
+        Result.failure(Exception("Failed to decode JWT: ${e.message}", e))
+    } catch (e: Exception) {
+        Result.failure(Exception("JWT parsing failed: ${e.message}", e))
+    }
 }
 
 /**

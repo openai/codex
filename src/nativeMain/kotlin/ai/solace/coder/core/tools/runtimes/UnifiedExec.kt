@@ -2,6 +2,8 @@
 package ai.solace.coder.core.tools.runtimes
 
 import ai.solace.coder.core.tools.Approvable
+import ai.solace.coder.core.session.Session as CodexSession
+import ai.solace.coder.core.session.TurnContext
 import ai.solace.coder.core.tools.ApprovalCtx
 import ai.solace.coder.core.tools.ApprovalRequirement
 import ai.solace.coder.core.tools.SandboxAttempt
