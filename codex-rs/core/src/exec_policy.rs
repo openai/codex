@@ -186,7 +186,7 @@ pub(crate) fn create_approval_requirement_for_command(
             reason: FORBIDDEN_REASON.to_string(),
         },
         Decision::Prompt => {
-            let prompt_reason = prompt_reason_for(&evaluation);
+            let prompt_reason = derive_prompt_reason(&evaluation);
             if matches!(approval_policy, AskForApproval::Never) {
                 ApprovalRequirement::Forbidden {
                     reason: PROMPT_CONFLICT_REASON.to_string(),
@@ -203,11 +203,9 @@ pub(crate) fn create_approval_requirement_for_command(
         },
     }
 }
-
-/// Determine the prompt reason: only rule-based prompts surface the execpolicy
-/// message. Heuristics-only prompts leave the reason empty so callers can inject
-/// contextual messaging (e.g. sandbox escalation justifications) when needed.
-fn prompt_reason_for(evaluation: &Evaluation) -> Option<String> {
+ 
+/// Only return PROMPT_REASON when an execpolicy rule drove the prompt decision
+fn derive_prompt_reason(evaluation: &Evaluation) -> Option<String> {
     evaluation.matched_rules.iter().find_map(|rule_match| {
         if !matches!(rule_match, RuleMatch::HeuristicsRuleMatch { .. })
             && rule_match.decision() == Decision::Prompt
