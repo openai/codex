@@ -1,6 +1,7 @@
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use crate::codex::Session;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -8,6 +9,9 @@ use anyhow::bail;
 use codex_client::HttpTransport;
 use codex_client::Request;
 use codex_client::ReqwestTransport;
+use codex_client::RetryOn;
+use codex_client::RetryPolicy;
+use codex_client::run_with_retry;
 use http::header::CONTENT_TYPE;
 use reqwest::Method;
 use serde::Deserialize;
@@ -53,7 +57,6 @@ impl ComponentHealth {
 pub(crate) struct IdleWarning {
     last_event: Instant,
     idle_timeout: Duration,
-    warning_sent: bool,
 }
 
 impl IdleWarning {
@@ -61,7 +64,6 @@ impl IdleWarning {
         Self {
             last_event: Instant::now(),
             idle_timeout,
-            warning_sent: false,
         }
     }
 
@@ -73,22 +75,20 @@ impl IdleWarning {
         self.last_event = Instant::now();
     }
 
-    pub(crate) async fn maybe_warning_message(&mut self) -> Option<String> {
-        if self.warning_sent {
+    pub(crate) async fn maybe_warning_message(&mut self, session: &Session) -> Option<String> {
+        let Ok(status) = fetch_codex_health().await else {
+            return None;
+        };
+
+        let previous = session.replace_codex_backend_status(status).await;
+        if status.is_operational() || previous == Some(status) {
             return None;
         }
 
-        if let Ok(status) = fetch_codex_health().await
-            && !status.is_operational()
-        {
-            self.warning_sent = true;
-            self.mark_event();
-            return Some(format!(
-                "Codex is experiencing a {status}. If a response stalls, try again later. You can follow incident updates at status.openai.com."
-            ));
-        }
-
-        None
+        self.mark_event();
+        Some(format!(
+            "Codex is experiencing a {status}. If a response stalls, try again later. You can follow incident updates at status.openai.com."
+        ))
     }
 }
 
@@ -107,10 +107,27 @@ async fn fetch_codex_health() -> Result<ComponentHealth> {
         .build()
         .context("building HTTP client")?;
 
-    let response = ReqwestTransport::new(client)
-        .execute(Request::new(Method::GET, status_widget_url.clone()))
-        .await
-        .context("requesting status widget")?;
+    let transport = ReqwestTransport::new(client);
+    let policy = RetryPolicy {
+        max_attempts: 2,
+        base_delay: Duration::from_millis(200),
+        retry_on: RetryOn {
+            retry_429: true,
+            retry_5xx: true,
+            retry_transport: true,
+        },
+    };
+
+    let response = run_with_retry(
+        policy,
+        || Request::new(Method::GET, status_widget_url.clone()),
+        |req, _attempt| {
+            let transport = transport.clone();
+            async move { transport.execute(req).await }
+        },
+    )
+    .await
+    .context("requesting status widget")?;
 
     let content_type = response
         .headers

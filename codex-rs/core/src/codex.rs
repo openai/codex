@@ -109,6 +109,7 @@ use crate::shell;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
 use crate::state::SessionState;
+use crate::status::ComponentHealth;
 use crate::status::IdleWarning;
 use crate::tasks::GhostSnapshotTask;
 use crate::tasks::ReviewTask;
@@ -455,6 +456,16 @@ impl Session {
         }
     }
 
+    pub(crate) async fn replace_codex_backend_status(
+        &self,
+        status: ComponentHealth,
+    ) -> Option<ComponentHealth> {
+        let mut guard = self.services.codex_backend_status.lock().await;
+        let previous = *guard;
+        *guard = Some(status);
+        previous
+    }
+
     async fn new(
         session_configuration: SessionConfiguration,
         config: Arc<Config>,
@@ -571,6 +582,7 @@ impl Session {
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager,
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            codex_backend_status: Mutex::new(None),
         };
 
         let sess = Arc::new(Session {
@@ -2217,13 +2229,17 @@ async fn try_run_turn(
             biased;
             result = stream.next().or_cancel(&cancellation_token) => result,
             _ = sleep_until(idle_warning.deadline()) => {
-                if let Some(message) = idle_warning.maybe_warning_message().await {
+                if let Some(message) = idle_warning
+                    .maybe_warning_message(sess.as_ref())
+                    .await
+                {
                     sess.send_event(
                         &turn_context,
                         EventMsg::Warning(WarningEvent { message }),
                     )
                     .await;
                 }
+                idle_warning.mark_event();
                 continue;
             }
         };
@@ -2445,13 +2461,17 @@ where
             biased;
             result = &mut stream_future => return result?,
             _ = sleep_until(idle_warning.deadline()) => {
-                if let Some(message) = idle_warning.maybe_warning_message().await {
+                if let Some(message) = idle_warning
+                    .maybe_warning_message(sess.as_ref())
+                    .await
+                {
                     sess.send_event(
                         turn_context,
                         EventMsg::Warning(WarningEvent { message }),
                     )
                     .await;
                 }
+                idle_warning.mark_event();
             }
         }
     }
@@ -2750,6 +2770,7 @@ mod tests {
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager: otel_event_manager.clone(),
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            codex_backend_status: Mutex::new(None),
         };
 
         let turn_context = Session::make_turn_context(
@@ -2828,6 +2849,7 @@ mod tests {
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager: otel_event_manager.clone(),
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            codex_backend_status: Mutex::new(None),
         };
 
         let turn_context = Arc::new(Session::make_turn_context(
