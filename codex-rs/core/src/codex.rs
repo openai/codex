@@ -1035,7 +1035,7 @@ impl Session {
         state.record_items(items.iter(), turn_context.truncation_policy);
     }
 
-    pub(crate) async fn record_model_warning(&self, message: impl Into<String>) {
+    pub(crate) async fn record_model_warning(&self, message: impl Into<String>, ctx: &TurnContext) {
         if !self.enabled(Feature::ModelWarnings).await {
             return;
         }
@@ -1048,8 +1048,7 @@ impl Session {
             }],
         };
 
-        let mut state = self.state.lock().await;
-        state.record_items([item].iter(), TruncationPolicy::no_truncation());
+        self.record_conversation_items(ctx, &[item]).await;
     }
 
     pub(crate) async fn replace_history(&self, items: Vec<ResponseItem>) {
@@ -2806,7 +2805,7 @@ mod tests {
 
     #[tokio::test]
     async fn record_model_warning_appends_user_message() {
-        let (session, _turn_context) = make_session_and_context();
+        let (session, turn_context) = make_session_and_context();
 
         session
             .state
@@ -2817,7 +2816,7 @@ mod tests {
             .enable(Feature::ModelWarnings);
 
         session
-            .record_model_warning("too many unified exec sessions")
+            .record_model_warning("too many unified exec sessions", turn_context)
             .await;
 
         let mut history = session.clone_history().await;

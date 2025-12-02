@@ -434,6 +434,7 @@ impl UnifiedExecSessionManager {
                 .session
                 .record_model_warning(
                     format!("The maximum number of unified exec sessions you can keep open is {WARNING_UNIFIED_EXEC_SESSIONS} and you currently have {number_sessions} sessions open. Reuse older sessions or close them to prevent automatic pruning of old session"),
+                    &context.turn
                 )
                 .await;
         };
