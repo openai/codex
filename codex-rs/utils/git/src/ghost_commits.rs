@@ -410,11 +410,12 @@ fn capture_existing_untracked(
 fn should_ignore_for_snapshot(path: &Path) -> bool {
     path.components().any(|component| {
         if let Component::Normal(name) = component
-            && let Some(name_str) = name.to_str() {
-                return DEFAULT_IGNORED_DIR_NAMES
-                    .iter()
-                    .any(|ignored| ignored == &name_str);
-            }
+            && let Some(name_str) = name.to_str()
+        {
+            return DEFAULT_IGNORED_DIR_NAMES
+                .iter()
+                .any(|ignored| ignored == &name_str);
+        }
         false
     })
 }
@@ -705,13 +706,13 @@ mod tests {
             for component in components {
                 if let Component::Normal(name) = component
                     && let Some(name_str) = name.to_str()
-                        && DEFAULT_IGNORED_DIR_NAMES
-                            .iter()
-                            .any(|ignored| ignored == &name_str)
-                        {
-                            has_default_ignored_component = true;
-                            break;
-                        }
+                    && DEFAULT_IGNORED_DIR_NAMES
+                        .iter()
+                        .any(|ignored| ignored == &name_str)
+                {
+                    has_default_ignored_component = true;
+                    break;
+                }
             }
             assert!(
                 !has_default_ignored_component,
@@ -725,13 +726,13 @@ mod tests {
             for component in components {
                 if let Component::Normal(name) = component
                     && let Some(name_str) = name.to_str()
-                        && DEFAULT_IGNORED_DIR_NAMES
-                            .iter()
-                            .any(|ignored| ignored == &name_str)
-                        {
-                            has_default_ignored_component = true;
-                            break;
-                        }
+                    && DEFAULT_IGNORED_DIR_NAMES
+                        .iter()
+                        .any(|ignored| ignored == &name_str)
+                {
+                    has_default_ignored_component = true;
+                    break;
+                }
             }
             assert!(
                 !has_default_ignored_component,
@@ -745,13 +746,13 @@ mod tests {
             for component in components {
                 if let Component::Normal(name) = component
                     && let Some(name_str) = name.to_str()
-                        && DEFAULT_IGNORED_DIR_NAMES
-                            .iter()
-                            .any(|ignored| ignored == &name_str)
-                        {
-                            has_default_ignored_component = true;
-                            break;
-                        }
+                    && DEFAULT_IGNORED_DIR_NAMES
+                        .iter()
+                        .any(|ignored| ignored == &name_str)
+                {
+                    has_default_ignored_component = true;
+                    break;
+                }
             }
             assert!(
                 !has_default_ignored_component,
