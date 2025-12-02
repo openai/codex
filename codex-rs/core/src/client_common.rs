@@ -64,6 +64,11 @@ impl PromptBuilder {
         self
     }
 
+    /// For integration tests only.
+    pub fn push_input(&mut self, item: ResponseItem) {
+        self.input.push(item);
+    }
+
     pub(crate) fn with_tools(mut self, tools: Vec<ToolSpec>) -> Self {
         self.tools = tools;
         self
@@ -369,13 +374,6 @@ mod tests {
         pub slug: &'static str,
         pub expects_apply_patch_instructions: bool,
     }
-
-    impl PromptBuilder {
-        pub fn push_input(&mut self, item: ResponseItem) {
-            self.input.push(item);
-        }
-    }
-
     #[test]
     fn get_full_instructions_no_user_content() {
         let prompt = PromptBuilder {
