@@ -14,6 +14,7 @@
 //! 3.  We do **not** walk past the Git root.
 
 use crate::config::Config;
+use crate::features::Feature;
 use crate::skills::load_skills;
 use crate::skills::render_skills_section;
 use dunce::canonicalize as normalize_path;
