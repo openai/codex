@@ -1,5 +1,6 @@
 use crate::protocol::v2::ThreadItem;
 use crate::protocol::v2::Turn;
+use crate::protocol::v2::TurnError;
 use crate::protocol::v2::TurnStatus;
 use crate::protocol::v2::UserInput;
 use codex_protocol::protocol::AgentReasoningEvent;
@@ -142,6 +143,7 @@ impl ThreadHistoryBuilder {
         PendingTurn {
             id: self.next_turn_id(),
             items: Vec::new(),
+            error: None,
             status: TurnStatus::Completed,
         }
     }
@@ -190,6 +192,7 @@ impl ThreadHistoryBuilder {
 struct PendingTurn {
     id: String,
     items: Vec<ThreadItem>,
+    error: Option<TurnError>,
     status: TurnStatus,
 }
 
@@ -198,6 +201,7 @@ impl From<PendingTurn> for Turn {
         Self {
             id: value.id,
             items: value.items,
+            error: value.error,
             status: value.status,
         }
     }
