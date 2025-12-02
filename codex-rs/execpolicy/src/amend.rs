@@ -104,6 +104,7 @@ fn append_locked_line(policy_path: &Path, line: &str) -> Result<(), AmendError> 
         })?
         .len();
 
+    // Ensure file ends in a newline before appending.
     if len > 0 {
         file.seek(SeekFrom::End(-1))
             .map_err(|source| AmendError::SeekPolicyFile {
