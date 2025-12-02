@@ -59,7 +59,7 @@ impl ToolOrchestrator {
         });
         match requirement {
             ApprovalRequirement::Skip { .. } => {
-                otel.tool_decision(otel_tn, otel_ci, ReviewDecision::Approved, otel_cfg);
+                otel.tool_decision(otel_tn, otel_ci, &ReviewDecision::Approved, otel_cfg);
             }
             ApprovalRequirement::Forbidden { reason } => {
                 return Err(ToolError::Rejected(reason));
@@ -88,7 +88,7 @@ impl ToolOrchestrator {
                 };
                 let decision = tool.start_approval_async(req, approval_ctx).await;
 
-                otel.tool_decision(otel_tn, otel_ci, decision.clone(), otel_user.clone());
+                otel.tool_decision(otel_tn, otel_ci, &decision, otel_user.clone());
 
                 match decision {
                     ReviewDecision::Denied | ReviewDecision::Abort => {
@@ -171,7 +171,7 @@ impl ToolOrchestrator {
                     };
 
                     let decision = tool.start_approval_async(req, approval_ctx).await;
-                    otel.tool_decision(otel_tn, otel_ci, decision.clone(), otel_user);
+                    otel.tool_decision(otel_tn, otel_ci, &decision, otel_user);
 
                     match decision {
                         ReviewDecision::Denied | ReviewDecision::Abort => {
