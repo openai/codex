@@ -284,9 +284,7 @@ mod tests {
         assert_eq!(outcome.skills.len(), 0);
         assert_eq!(outcome.errors.len(), 1);
         assert!(
-            outcome.errors[0]
-                .message
-                .contains("description exceeds maximum"),
+            outcome.errors[0].message.contains("invalid description"),
             "expected length error"
         );
     }
