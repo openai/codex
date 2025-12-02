@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs;
 use std::io;
+use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -24,6 +25,24 @@ use crate::operations::run_git_for_stdout_all;
 const DEFAULT_COMMIT_MESSAGE: &str = "codex snapshot";
 /// Default threshold that triggers a warning about large untracked directories.
 const LARGE_UNTRACKED_WARNING_THRESHOLD: usize = 200;
+/// Directories that should always be ignored when capturing ghost snapshots,
+/// even if they are not listed in .gitignore.
+///
+/// These are typically large dependency or build trees that are not useful
+/// for undo and can cause snapshots to grow without bound.
+const DEFAULT_IGNORED_DIR_NAMES: &[&str] = &[
+    "node_modules",
+    ".venv",
+    "venv",
+    "env",
+    ".env",
+    "dist",
+    "build",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".cache",
+    ".tox",
+];
 
 /// Options to control ghost commit creation.
 pub struct CreateGhostCommitOptions<'a> {
@@ -373,6 +392,9 @@ fn capture_existing_untracked(
         }
 
         let normalized = normalize_relative_path(Path::new(path_part))?;
+        if should_ignore_for_snapshot(&normalized) {
+            continue;
+        }
         let absolute = repo_root.join(&normalized);
         let is_dir = absolute.is_dir();
         if is_dir {
@@ -383,6 +405,18 @@ fn capture_existing_untracked(
     }
 
     Ok(snapshot)
+}
+
+fn should_ignore_for_snapshot(path: &Path) -> bool {
+    path.components().any(|component| {
+        if let Component::Normal(name) = component
+            && let Some(name_str) = name.to_str() {
+                return DEFAULT_IGNORED_DIR_NAMES
+                    .iter()
+                    .any(|ignored| ignored == &name_str);
+            }
+        false
+    })
 }
 
 /// Removes untracked files and directories that were not present when the snapshot was captured.
@@ -480,6 +514,7 @@ mod tests {
     use assert_matches::assert_matches;
     use pretty_assertions::assert_eq;
     use std::process::Command;
+    use walkdir::WalkDir;
 
     /// Runs a git command in the test repository and asserts success.
     fn run_git_in(repo_path: &Path, args: &[&str]) {
@@ -617,6 +652,168 @@ mod tests {
                 file_count: LARGE_UNTRACKED_WARNING_THRESHOLD + 1,
             }]
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn snapshot_ignores_default_ignored_directories() -> Result<(), GitToolingError> {
+        let temp = tempfile::tempdir()?;
+        let repo = temp.path();
+        init_test_repo(repo);
+
+        std::fs::write(repo.join("tracked.txt"), "contents\n")?;
+        run_git_in(repo, &["add", "tracked.txt"]);
+        run_git_in(
+            repo,
+            &[
+                "-c",
+                "user.name=Tester",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "initial",
+            ],
+        );
+
+        let node_modules = repo.join("node_modules");
+        std::fs::create_dir_all(node_modules.join("@scope/package/src"))?;
+        for idx in 0..50 {
+            let file = node_modules.join(format!("file-{idx}.js"));
+            std::fs::write(file, "console.log('ignored');\n")?;
+        }
+        std::fs::write(
+            node_modules.join("@scope/package/src/index.js"),
+            "console.log('nested ignored');\n",
+        )?;
+
+        let venv = repo.join(".venv");
+        std::fs::create_dir_all(venv.join("lib/python/site-packages"))?;
+        std::fs::write(
+            venv.join("lib/python/site-packages/pkg.py"),
+            "print('ignored')\n",
+        )?;
+
+        let (ghost, report) =
+            create_ghost_commit_with_report(&CreateGhostCommitOptions::new(repo))?;
+        assert!(ghost.parent().is_some());
+
+        for file in ghost.preexisting_untracked_files() {
+            let components = file.components().collect::<Vec<_>>();
+            let mut has_default_ignored_component = false;
+            for component in components {
+                if let Component::Normal(name) = component
+                    && let Some(name_str) = name.to_str()
+                        && DEFAULT_IGNORED_DIR_NAMES
+                            .iter()
+                            .any(|ignored| ignored == &name_str)
+                        {
+                            has_default_ignored_component = true;
+                            break;
+                        }
+            }
+            assert!(
+                !has_default_ignored_component,
+                "unexpected default-ignored file captured: {file:?}"
+            );
+        }
+
+        for dir in ghost.preexisting_untracked_dirs() {
+            let components = dir.components().collect::<Vec<_>>();
+            let mut has_default_ignored_component = false;
+            for component in components {
+                if let Component::Normal(name) = component
+                    && let Some(name_str) = name.to_str()
+                        && DEFAULT_IGNORED_DIR_NAMES
+                            .iter()
+                            .any(|ignored| ignored == &name_str)
+                        {
+                            has_default_ignored_component = true;
+                            break;
+                        }
+            }
+            assert!(
+                !has_default_ignored_component,
+                "unexpected default-ignored dir captured: {dir:?}"
+            );
+        }
+
+        for entry in &report.large_untracked_dirs {
+            let components = entry.path.components().collect::<Vec<_>>();
+            let mut has_default_ignored_component = false;
+            for component in components {
+                if let Component::Normal(name) = component
+                    && let Some(name_str) = name.to_str()
+                        && DEFAULT_IGNORED_DIR_NAMES
+                            .iter()
+                            .any(|ignored| ignored == &name_str)
+                        {
+                            has_default_ignored_component = true;
+                            break;
+                        }
+            }
+            assert!(
+                !has_default_ignored_component,
+                "unexpected default-ignored dir in large_untracked_dirs: {:?}",
+                entry.path
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn restore_preserves_default_ignored_directories() -> Result<(), GitToolingError> {
+        let temp = tempfile::tempdir()?;
+        let repo = temp.path();
+        init_test_repo(repo);
+
+        std::fs::write(repo.join("tracked.txt"), "snapshot version\n")?;
+        run_git_in(repo, &["add", "tracked.txt"]);
+        run_git_in(
+            repo,
+            &[
+                "-c",
+                "user.name=Tester",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "initial",
+            ],
+        );
+
+        let node_modules = repo.join("node_modules");
+        std::fs::create_dir_all(node_modules.join("pkg"))?;
+        std::fs::write(
+            node_modules.join("pkg/index.js"),
+            "console.log('before');\n",
+        )?;
+
+        let ghost = create_ghost_commit(&CreateGhostCommitOptions::new(repo))?;
+
+        std::fs::write(repo.join("tracked.txt"), "snapshot delta\n")?;
+        std::fs::write(node_modules.join("pkg/index.js"), "console.log('after');\n")?;
+        std::fs::write(node_modules.join("pkg/extra.js"), "console.log('extra');\n")?;
+        std::fs::write(repo.join("temp.txt"), "new file\n")?;
+
+        restore_ghost_commit(repo, &ghost)?;
+
+        let tracked_after = std::fs::read_to_string(repo.join("tracked.txt"))?;
+        assert_eq!(tracked_after, "snapshot version\n");
+
+        let node_modules_exists = node_modules.exists();
+        assert!(node_modules_exists);
+
+        let files_under_node_modules: Vec<_> = WalkDir::new(&node_modules)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_file())
+            .collect();
+        assert!(!files_under_node_modules.is_empty());
+
+        assert!(!repo.join("temp.txt").exists());
 
         Ok(())
     }
