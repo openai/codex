@@ -149,7 +149,6 @@ fn allow_prefix_if_applicable(evaluation: &Evaluation, features: &Features) -> O
                 }
             }
             _ if rule_match.decision() == Decision::Prompt => {
-                // Any rule-based prompt suppresses allow-prefix.
                 return None;
             }
             _ => {}
