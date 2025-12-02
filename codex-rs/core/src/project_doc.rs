@@ -33,15 +33,19 @@ const PROJECT_DOC_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
 /// Combines `Config::instructions` and `AGENTS.md` (if present) into a single
 /// string of instructions.
 pub(crate) async fn get_user_instructions(config: &Config) -> Option<String> {
-    let skills_outcome = load_skills(config);
-    for err in &skills_outcome.errors {
-        error!(
-            "failed to load skill {}: {}",
-            err.path.display(),
-            err.message
-        );
-    }
-    let skills_section = render_skills_section(&skills_outcome.skills);
+    let skills_section = if config.features.enabled(Feature::Skills) {
+        let skills_outcome = load_skills(config);
+        for err in &skills_outcome.errors {
+            error!(
+                "failed to load skill {}: {}",
+                err.path.display(),
+                err.message
+            );
+        }
+        render_skills_section(&skills_outcome.skills)
+    } else {
+        None
+    };
 
     let project_docs = match read_project_docs(config).await {
         Ok(docs) => docs,

@@ -358,6 +358,15 @@ struct FeatureToggles {
     /// Disable a feature (repeatable). Equivalent to `-c features.<name>=false`.
     #[arg(long = "disable", value_name = "FEATURE", action = clap::ArgAction::Append, global = true)]
     disable: Vec<String>,
+
+    /// [experimental] Enable skills loading/injection.
+    #[arg(
+        long = "enable-skills",
+        default_value_t = false,
+        global = true,
+        hide = true
+    )]
+    enable_skills: bool,
 }
 
 impl FeatureToggles {
@@ -370,6 +379,9 @@ impl FeatureToggles {
         for feature in &self.disable {
             Self::validate_feature(feature)?;
             v.push(format!("features.{feature}=false"));
+        }
+        if self.enable_skills {
+            v.push("features.skills=true".to_string());
         }
         Ok(v)
     }
