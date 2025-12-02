@@ -1,6 +1,8 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use anyhow::Context;
+use anyhow::Result;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Error;
 use codex_execpolicy::Evaluation;
@@ -37,16 +39,14 @@ fn rule_snapshots(rules: &[RuleRef]) -> Vec<RuleSnapshot> {
 }
 
 #[test]
-fn basic_match() {
+fn basic_match() -> Result<()> {
     let policy_src = r#"
 prefix_rule(
     pattern = ["git", "status"],
 )
     "#;
     let mut parser = PolicyParser::new();
-    parser
-        .parse("test.codexpolicy", policy_src)
-        .expect("parse policy");
+    parser.parse("test.codexpolicy", policy_src)?;
     let policy = parser.build();
     let cmd = tokens(&["git", "status"]);
     let evaluation = policy.check(&cmd);
@@ -60,16 +60,15 @@ prefix_rule(
         },
         evaluation
     );
+    Ok(())
 }
 
 #[test]
-fn add_prefix_rule_extends_policy() {
+fn add_prefix_rule_extends_policy() -> Result<()> {
     let mut policy = Policy::empty();
-    policy
-        .add_prefix_rule(&tokens(&["ls", "-l"]), Decision::Prompt)
-        .expect("add prefix rule");
+    policy.add_prefix_rule(&tokens(&["ls", "-l"]), Decision::Prompt)?;
 
-    let rules = rule_snapshots(policy.rules().get_vec("ls").expect("ls rules"));
+    let rules = rule_snapshots(policy.rules().get_vec("ls").context("missing ls rules")?);
     assert_eq!(
         vec![RuleSnapshot::Prefix(PrefixRule {
             pattern: PrefixPattern {
@@ -92,10 +91,11 @@ fn add_prefix_rule_extends_policy() {
         },
         evaluation
     );
+    Ok(())
 }
 
 #[test]
-fn add_prefix_rule_rejects_empty_prefix() {
+fn add_prefix_rule_rejects_empty_prefix() -> Result<()> {
     let mut policy = Policy::empty();
     let result = policy.add_prefix_rule(&[], Decision::Allow);
 
@@ -103,10 +103,11 @@ fn add_prefix_rule_rejects_empty_prefix() {
         result,
         Err(Error::InvalidPattern(message)) if message == "prefix cannot be empty"
     ));
+    Ok(())
 }
 
 #[test]
-fn parses_multiple_policy_files() {
+fn parses_multiple_policy_files() -> Result<()> {
     let first_policy = r#"
 prefix_rule(
     pattern = ["git"],
@@ -120,15 +121,11 @@ prefix_rule(
 )
     "#;
     let mut parser = PolicyParser::new();
-    parser
-        .parse("first.codexpolicy", first_policy)
-        .expect("parse policy");
-    parser
-        .parse("second.codexpolicy", second_policy)
-        .expect("parse policy");
+    parser.parse("first.codexpolicy", first_policy)?;
+    parser.parse("second.codexpolicy", second_policy)?;
     let policy = parser.build();
 
-    let git_rules = rule_snapshots(policy.rules().get_vec("git").expect("git rules"));
+    let git_rules = rule_snapshots(policy.rules().get_vec("git").context("missing git rules")?);
     assert_eq!(
         vec![
             RuleSnapshot::Prefix(PrefixRule {
@@ -178,23 +175,27 @@ prefix_rule(
         },
         commit_eval
     );
+    Ok(())
 }
 
 #[test]
-fn only_first_token_alias_expands_to_multiple_rules() {
+fn only_first_token_alias_expands_to_multiple_rules() -> Result<()> {
     let policy_src = r#"
 prefix_rule(
     pattern = [["bash", "sh"], ["-c", "-l"]],
 )
     "#;
     let mut parser = PolicyParser::new();
-    parser
-        .parse("test.codexpolicy", policy_src)
-        .expect("parse policy");
+    parser.parse("test.codexpolicy", policy_src)?;
     let policy = parser.build();
 
-    let bash_rules = rule_snapshots(policy.rules().get_vec("bash").expect("bash rules"));
-    let sh_rules = rule_snapshots(policy.rules().get_vec("sh").expect("sh rules"));
+    let bash_rules = rule_snapshots(
+        policy
+            .rules()
+            .get_vec("bash")
+            .context("missing bash rules")?,
+    );
+    let sh_rules = rule_snapshots(policy.rules().get_vec("sh").context("missing sh rules")?);
     assert_eq!(
         vec![RuleSnapshot::Prefix(PrefixRule {
             pattern: PrefixPattern {
@@ -239,22 +240,21 @@ prefix_rule(
         },
         sh_eval
     );
+    Ok(())
 }
 
 #[test]
-fn tail_aliases_are_not_cartesian_expanded() {
+fn tail_aliases_are_not_cartesian_expanded() -> Result<()> {
     let policy_src = r#"
 prefix_rule(
     pattern = ["npm", ["i", "install"], ["--legacy-peer-deps", "--no-save"]],
 )
     "#;
     let mut parser = PolicyParser::new();
-    parser
-        .parse("test.codexpolicy", policy_src)
-        .expect("parse policy");
+    parser.parse("test.codexpolicy", policy_src)?;
     let policy = parser.build();
 
-    let rules = rule_snapshots(policy.rules().get_vec("npm").expect("npm rules"));
+    let rules = rule_snapshots(policy.rules().get_vec("npm").context("missing npm rules")?);
     assert_eq!(
         vec![RuleSnapshot::Prefix(PrefixRule {
             pattern: PrefixPattern {
@@ -296,10 +296,11 @@ prefix_rule(
         },
         npm_install
     );
+    Ok(())
 }
 
 #[test]
-fn match_and_not_match_examples_are_enforced() {
+fn match_and_not_match_examples_are_enforced() -> Result<()> {
     let policy_src = r#"
 prefix_rule(
     pattern = ["git", "status"],
@@ -311,9 +312,7 @@ prefix_rule(
 )
     "#;
     let mut parser = PolicyParser::new();
-    parser
-        .parse("test.codexpolicy", policy_src)
-        .expect("parse policy");
+    parser.parse("test.codexpolicy", policy_src)?;
     let policy = parser.build();
     let match_eval = policy.check(&tokens(&["git", "status"]));
     assert_eq!(
@@ -334,10 +333,11 @@ prefix_rule(
         "status",
     ]));
     assert_eq!(Evaluation::NoMatch {}, no_match_eval);
+    Ok(())
 }
 
 #[test]
-fn strictest_decision_wins_across_matches() {
+fn strictest_decision_wins_across_matches() -> Result<()> {
     let policy_src = r#"
 prefix_rule(
     pattern = ["git"],
@@ -349,9 +349,7 @@ prefix_rule(
 )
     "#;
     let mut parser = PolicyParser::new();
-    parser
-        .parse("test.codexpolicy", policy_src)
-        .expect("parse policy");
+    parser.parse("test.codexpolicy", policy_src)?;
     let policy = parser.build();
 
     let commit = policy.check(&tokens(&["git", "commit", "-m", "hi"]));
@@ -371,10 +369,11 @@ prefix_rule(
         },
         commit
     );
+    Ok(())
 }
 
 #[test]
-fn strictest_decision_across_multiple_commands() {
+fn strictest_decision_across_multiple_commands() -> Result<()> {
     let policy_src = r#"
 prefix_rule(
     pattern = ["git"],
@@ -386,9 +385,7 @@ prefix_rule(
 )
     "#;
     let mut parser = PolicyParser::new();
-    parser
-        .parse("test.codexpolicy", policy_src)
-        .expect("parse policy");
+    parser.parse("test.codexpolicy", policy_src)?;
     let policy = parser.build();
 
     let commands = vec![
@@ -417,4 +414,5 @@ prefix_rule(
         },
         evaluation
     );
+    Ok(())
 }
