@@ -635,7 +635,7 @@ pub struct FeedbackUploadResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ExecOneOffCommandParams {
+pub struct CommandExecParams {
     pub command: Vec<String>,
     pub timeout_ms: Option<u64>,
     pub cwd: Option<PathBuf>,
@@ -645,7 +645,7 @@ pub struct ExecOneOffCommandParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ExecOneOffCommandResponse {
+pub struct CommandExecResponse {
     pub exit_code: i32,
     pub stdout: String,
     pub stderr: String,

@@ -166,8 +166,8 @@ client_request_definitions! {
 
     /// Execute a command (argv vector) under the server's sandbox.
     OneOffCommandExec => "command/exec" {
-        params: v2::ExecOneOffCommandParams,
-        response: v2::ExecOneOffCommandResponse,
+        params: v2::CommandExecParams,
+        response: v2::CommandExecResponse,
     },
 
     ConfigRead => "config/read" {

@@ -21,9 +21,9 @@ use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginAccountResponse;
 use codex_app_server_protocol::CancelLoginChatGptResponse;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::CommandExecParams;
 use codex_app_server_protocol::ConversationGitInfo;
 use codex_app_server_protocol::ConversationSummary;
-use codex_app_server_protocol::ExecOneOffCommandParams;
 use codex_app_server_protocol::ExecOneOffCommandResponse;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FeedbackUploadResponse;
@@ -467,9 +467,11 @@ impl CodexMessageProcessor {
             ClientRequest::FuzzyFileSearch { request_id, params } => {
                 self.fuzzy_file_search(request_id, params).await;
             }
-            ClientRequest::OneOffCommandExec { request_id, params }
-            | ClientRequest::ExecOneOffCommand { request_id, params } => {
+            ClientRequest::OneOffCommandExec { request_id, params } => {
                 self.exec_one_off_command(request_id, params).await;
+            }
+            ClientRequest::ExecOneOffCommand { request_id, params } => {
+                self.exec_one_off_command(request_id, params.into()).await;
             }
             ClientRequest::ConfigRead { .. }
             | ClientRequest::ConfigValueWrite { .. }
@@ -1155,7 +1157,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn exec_one_off_command(&self, request_id: RequestId, params: ExecOneOffCommandParams) {
+    async fn exec_one_off_command(&self, request_id: RequestId, params: CommandExecParams) {
         tracing::debug!("ExecOneOffCommand params: {params:?}");
 
         if params.command.is_empty() {
