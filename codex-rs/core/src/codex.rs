@@ -2343,10 +2343,7 @@ async fn try_run_turn(
 
     drain_in_flight(&mut in_flight).await?;
 
-    match outcome {
-        Ok(turn_result) => Ok(turn_result),
-        Err(err) => Err(err),
-    }
+    outcome
 }
 
 pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -> Option<String> {
