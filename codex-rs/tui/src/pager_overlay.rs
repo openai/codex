@@ -749,6 +749,49 @@ mod tests {
     }
 
     #[test]
+    fn transcript_overlay_wraps_long_exec_output_lines() {
+        let marker = "Z";
+        let long_line = marker.repeat(200);
+
+        let mut exec_cell = crate::exec_cell::new_active_exec_command(
+            "exec-long".into(),
+            vec!["bash".into(), "-lc".into(), "echo long".into()],
+            vec![ParsedCommand::Unknown {
+                cmd: "echo long".into(),
+            }],
+            ExecCommandSource::Agent,
+            None,
+            false,
+        );
+        exec_cell.complete_call(
+            "exec-long",
+            CommandOutput {
+                exit_code: 0,
+                aggregated_output: format!("{long_line}\n"),
+                formatted_output: long_line,
+            },
+            Duration::from_millis(10),
+        );
+        let exec_cell: Arc<dyn HistoryCell> = Arc::new(exec_cell);
+
+        let mut overlay = TranscriptOverlay::new(vec![exec_cell]);
+        let area = Rect::new(0, 0, 20, 10);
+        let mut buf = Buffer::empty(area);
+
+        overlay.render(area, &mut buf);
+        let rendered = buffer_to_text(&buf, area);
+
+        let wrapped_lines = rendered
+            .lines()
+            .filter(|line| line.contains(marker))
+            .count();
+        assert!(
+            wrapped_lines >= 2,
+            "expected long exec output to wrap into multiple lines in transcript overlay, got:\n{rendered}"
+        );
+    }
+
+    #[test]
     fn transcript_overlay_keeps_scroll_pinned_at_bottom() {
         let mut overlay = TranscriptOverlay::new(
             (0..20)
