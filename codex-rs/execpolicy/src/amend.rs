@@ -64,8 +64,12 @@ pub fn blocking_append_allow_prefix_rule(
         return Err(AmendError::EmptyPrefix);
     }
 
-    let pattern =
-        serde_json::to_string(prefix).map_err(|source| AmendError::SerializePrefix { source })?;
+    let tokens = prefix
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|source| AmendError::SerializePrefix { source })?;
+    let pattern = format!("[{}]", tokens.join(", "));
     let rule = format!(r#"prefix_rule(pattern={pattern}, decision="allow")"#);
 
     let dir = policy_path
@@ -162,7 +166,7 @@ mod tests {
             std::fs::read_to_string(&policy_path).expect("default.codexpolicy should exist");
         assert_eq!(
             contents,
-            r#"prefix_rule(pattern=["echo","Hello, world!"], decision="allow")
+            r#"prefix_rule(pattern=["echo", "Hello, world!"], decision="allow")
 "#
         );
     }
@@ -189,7 +193,7 @@ mod tests {
         assert_eq!(
             contents,
             r#"prefix_rule(pattern=["ls"], decision="allow")
-prefix_rule(pattern=["echo","Hello, world!"], decision="allow")
+prefix_rule(pattern=["echo", "Hello, world!"], decision="allow")
 "#
         );
     }
@@ -215,7 +219,7 @@ prefix_rule(pattern=["echo","Hello, world!"], decision="allow")
         assert_eq!(
             contents,
             r#"prefix_rule(pattern=["ls"], decision="allow")
-prefix_rule(pattern=["echo","Hello, world!"], decision="allow")
+prefix_rule(pattern=["echo", "Hello, world!"], decision="allow")
 "#
         );
     }
