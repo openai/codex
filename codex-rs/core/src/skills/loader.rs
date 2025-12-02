@@ -69,11 +69,10 @@ fn discover_skills_under_root(root: &Path, outcome: &mut SkillLoadOutcome) {
                 continue;
             }
 
-            let Ok(metadata) = entry.metadata() else {
+            let Ok(file_type) = entry.file_type() else {
                 continue;
             };
 
-            let file_type = metadata.file_type();
             if file_type.is_symlink() {
                 continue;
             }
