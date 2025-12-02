@@ -1,5 +1,7 @@
 #![cfg(not(target_os = "windows"))]
 use std::collections::HashMap;
+use std::ffi::OsStr;
+use std::fs;
 use std::sync::OnceLock;
 
 use anyhow::Context;
@@ -23,6 +25,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
@@ -149,6 +152,130 @@ fn collect_tool_outputs(bodies: &[Value]) -> Result<HashMap<String, ParsedUnifie
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let builder = test_codex().with_config(|config| {
+        config.include_apply_patch_tool = true;
+        config.use_experimental_unified_exec_tool = true;
+        config.features.enable(Feature::UnifiedExec);
+    });
+    let harness = TestCodexHarness::with_builder(builder).await?;
+
+    let patch =
+        "*** Begin Patch\n*** Add File: uexec_apply.txt\n+hello from unified exec\n*** End Patch";
+    let command = format!("apply_patch <<'EOF'\n{patch}\nEOF\n");
+    let call_id = "uexec-apply-patch";
+    let args = json!({
+        "cmd": command,
+        "yield_time_ms": 250,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    mount_sse_sequence(harness.server(), responses).await;
+
+    let test = harness.test();
+    let codex = test.codex.clone();
+    let cwd = test.cwd_path().to_path_buf();
+    let session_model = test.session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "apply patch via unified exec".into(),
+            }],
+            final_output_json_schema: None,
+            cwd,
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    let mut saw_patch_begin = false;
+    let mut patch_end = None;
+    let mut saw_exec_begin = false;
+    let mut saw_exec_end = false;
+    wait_for_event(&codex, |event| match event {
+        EventMsg::PatchApplyBegin(begin) if begin.call_id == call_id => {
+            saw_patch_begin = true;
+            assert!(
+                begin
+                    .changes
+                    .keys()
+                    .any(|path| path.file_name() == Some(OsStr::new("uexec_apply.txt"))),
+                "expected apply_patch changes to target uexec_apply.txt",
+            );
+            false
+        }
+        EventMsg::PatchApplyEnd(end) if end.call_id == call_id => {
+            patch_end = Some(end.clone());
+            false
+        }
+        EventMsg::ExecCommandBegin(event) if event.call_id == call_id => {
+            saw_exec_begin = true;
+            false
+        }
+        EventMsg::ExecCommandEnd(event) if event.call_id == call_id => {
+            saw_exec_end = true;
+            false
+        }
+        EventMsg::TaskComplete(_) => true,
+        _ => false,
+    })
+    .await;
+
+    assert!(
+        saw_patch_begin,
+        "expected apply_patch to emit PatchApplyBegin"
+    );
+    let patch_end = patch_end.expect("expected apply_patch to emit PatchApplyEnd");
+    assert!(
+        patch_end.success,
+        "expected apply_patch to finish successfully: stdout={:?} stderr={:?}",
+        patch_end.stdout, patch_end.stderr,
+    );
+    assert!(
+        !saw_exec_begin,
+        "apply_patch should be intercepted before exec_command begin"
+    );
+    assert!(
+        !saw_exec_end,
+        "apply_patch should not emit exec_command end events"
+    );
+
+    let output = harness.function_call_stdout(call_id).await;
+    assert!(
+        output.contains("Success. Updated the following files:"),
+        "expected apply_patch output, got: {output:?}"
+    );
+    assert!(
+        output.contains("A uexec_apply.txt"),
+        "expected apply_patch file summary, got: {output:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(harness.path("uexec_apply.txt"))?,
+        "hello from unified exec\n"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
@@ -218,6 +345,82 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
         ]
     );
     assert_eq!(begin_event.cwd, cwd.path());
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_resolves_relative_workdir() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_model("gpt-5").with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config.features.enable(Feature::UnifiedExec);
+    });
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let workdir_rel = std::path::PathBuf::from("uexec_relative_workdir");
+    std::fs::create_dir_all(cwd.path().join(&workdir_rel))?;
+
+    let call_id = "uexec-workdir-relative";
+    let args = json!({
+        "cmd": "pwd",
+        "yield_time_ms": 250,
+        "workdir": workdir_rel.to_string_lossy().to_string(),
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-1", "finished"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    mount_sse_sequence(&server, responses).await;
+
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "run relative workdir test".into(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    let begin_event = wait_for_event_match(&codex, |msg| match msg {
+        EventMsg::ExecCommandBegin(event) if event.call_id == call_id => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+
+    assert_eq!(
+        begin_event.cwd,
+        cwd.path().join(workdir_rel),
+        "exec_command cwd should resolve relative workdir against turn cwd",
+    );
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 

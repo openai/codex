@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::util::resolve_path;
 use codex_app_server_protocol::GitSha;
 use codex_protocol::protocol::GitInfo;
 use futures::future::join_all;
@@ -548,11 +549,7 @@ pub fn resolve_root_git_project_for_trust(cwd: &Path) -> Option<PathBuf> {
         .trim()
         .to_string();
 
-    let git_dir_path_raw = if Path::new(&git_dir_s).is_absolute() {
-        PathBuf::from(&git_dir_s)
-    } else {
-        base.join(&git_dir_s)
-    };
+    let git_dir_path_raw = resolve_path(base, &PathBuf::from(&git_dir_s));
 
     // Normalize to handle macOS /var vs /private/var and resolve ".." segments.
     let git_dir_path = std::fs::canonicalize(&git_dir_path_raw).unwrap_or(git_dir_path_raw);
