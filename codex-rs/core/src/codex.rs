@@ -1677,11 +1677,7 @@ mod handlers {
         }
     }
 
-    pub async fn exec_approval(
-        sess: &Arc<Session>,
-        id: String,
-        decision: ReviewDecision,
-    ) {
+    pub async fn exec_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) {
         if let ReviewDecision::ApprovedAllowPrefix { allow_prefix } = &decision
             && let Err(err) = sess.persist_command_allow_prefix(allow_prefix).await
         {

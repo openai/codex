@@ -162,16 +162,10 @@ impl ApprovalOverlay {
         };
         if let Some(variant) = self.current_variant.as_ref() {
             match (variant, &option.decision) {
-                (
-                    ApprovalVariant::Exec { id, command, .. },
-                    ApprovalDecision::Review(decision),
-                ) => {
+                (ApprovalVariant::Exec { id, command, .. }, ApprovalDecision::Review(decision)) => {
                     self.handle_exec_decision(id, command, decision.clone());
                 }
-                (
-                    ApprovalVariant::ApplyPatch { id, .. },
-                    ApprovalDecision::Review(decision),
-                ) => {
+                (ApprovalVariant::ApplyPatch { id, .. }, ApprovalDecision::Review(decision)) => {
                     self.handle_patch_decision(id, decision.clone());
                 }
                 (
@@ -494,7 +488,9 @@ fn exec_options(allow_prefix: Option<Vec<String>>) -> Vec<ApprovalOption> {
     .into_iter()
     .chain(allow_prefix.map(|prefix| ApprovalOption {
         label: "Yes, and don't ask again for commands with this prefix".to_string(),
-        decision: ApprovalDecision::Review(ReviewDecision::ApprovedAllowPrefix { allow_prefix: prefix }),
+        decision: ApprovalDecision::Review(ReviewDecision::ApprovedAllowPrefix {
+            allow_prefix: prefix,
+        }),
         display_shortcut: None,
         additional_shortcuts: vec![key_hint::plain(KeyCode::Char('p'))],
     }))
