@@ -354,6 +354,8 @@ async fn helpers_are_available_and_do_not_panic() {
         enhanced_keys_supported: false,
         auth_manager,
         feedback: codex_feedback::CodexFeedback::new(),
+        skills: Vec::new(),
+        skill_mentions_enabled: false,
     };
     let mut w = ChatWidget::new(init, conversation_manager);
     // Basic construction sanity.
@@ -378,6 +380,8 @@ fn make_chatwidget_manual() -> (
         placeholder_text: "Ask Codex to do anything".to_string(),
         disable_paste_burst: false,
         animations_enabled: cfg.animations,
+        skill_mentions_enabled: false,
+        skills: Vec::new(),
     });
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
     let widget = ChatWidget {

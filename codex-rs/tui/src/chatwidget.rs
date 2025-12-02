@@ -54,6 +54,7 @@ use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
+use codex_core::skills::model::SkillMetadata;
 use codex_protocol::ConversationId;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::parse_command::ParsedCommand;
@@ -255,6 +256,8 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) feedback: codex_feedback::CodexFeedback,
+    pub(crate) skills: Vec<SkillMetadata>,
+    pub(crate) skill_mentions_enabled: bool,
 }
 
 #[derive(Default)]
@@ -1217,6 +1220,8 @@ impl ChatWidget {
             enhanced_keys_supported,
             auth_manager,
             feedback,
+            skills,
+            skill_mentions_enabled,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -1234,6 +1239,8 @@ impl ChatWidget {
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
                 animations_enabled: config.animations,
+                skill_mentions_enabled,
+                skills,
             }),
             active_cell: None,
             config: config.clone(),
@@ -1292,6 +1299,8 @@ impl ChatWidget {
             enhanced_keys_supported,
             auth_manager,
             feedback,
+            skills,
+            skill_mentions_enabled,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -1311,6 +1320,8 @@ impl ChatWidget {
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
                 animations_enabled: config.animations,
+                skill_mentions_enabled,
+                skills,
             }),
             active_cell: None,
             config: config.clone(),
@@ -1523,6 +1534,9 @@ impl ChatWidget {
             }
             SlashCommand::Mention => {
                 self.insert_str("@");
+            }
+            SlashCommand::Skills => {
+                self.insert_str("$");
             }
             SlashCommand::Status => {
                 self.add_status_output();

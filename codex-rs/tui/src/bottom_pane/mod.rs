@@ -8,6 +8,7 @@ use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableItem;
 use crate::tui::FrameRequester;
 use bottom_pane_view::BottomPaneView;
+use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -27,6 +28,7 @@ mod file_search_popup;
 mod footer;
 mod list_selection_view;
 mod prompt_args;
+mod skill_popup;
 pub(crate) use list_selection_view::SelectionViewParams;
 mod feedback_view;
 pub(crate) use feedback_view::feedback_selection_params;
@@ -87,6 +89,8 @@ pub(crate) struct BottomPaneParams {
     pub(crate) placeholder_text: String,
     pub(crate) disable_paste_burst: bool,
     pub(crate) animations_enabled: bool,
+    pub(crate) skill_mentions_enabled: bool,
+    pub(crate) skills: Vec<SkillMetadata>,
 }
 
 impl BottomPane {
@@ -99,15 +103,20 @@ impl BottomPane {
             placeholder_text,
             disable_paste_burst,
             animations_enabled,
+            skill_mentions_enabled,
+            skills,
         } = params;
+        let mut composer = ChatComposer::new(
+            has_input_focus,
+            app_event_tx.clone(),
+            enhanced_keys_supported,
+            placeholder_text,
+            disable_paste_burst,
+        );
+        composer.set_skill_mentions(skill_mentions_enabled, skills);
+
         Self {
-            composer: ChatComposer::new(
-                has_input_focus,
-                app_event_tx.clone(),
-                enhanced_keys_supported,
-                placeholder_text,
-                disable_paste_burst,
-            ),
+            composer,
             view_stack: Vec::new(),
             app_event_tx,
             frame_requester,
@@ -578,6 +587,8 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
+            skill_mentions_enabled: false,
+            skills: Vec::new(),
         });
         pane.push_approval_request(exec_request());
         assert_eq!(CancellationEvent::Handled, pane.on_ctrl_c());
@@ -599,6 +610,8 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
+            skill_mentions_enabled: false,
+            skills: Vec::new(),
         });
 
         // Create an approval modal (active view).
@@ -631,6 +644,8 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
+            skill_mentions_enabled: false,
+            skills: Vec::new(),
         });
 
         // Start a running task so the status indicator is active above the composer.
@@ -697,6 +712,8 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
+            skill_mentions_enabled: false,
+            skills: Vec::new(),
         });
 
         // Begin a task: show initial status.
@@ -723,6 +740,8 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
+            skill_mentions_enabled: false,
+            skills: Vec::new(),
         });
 
         // Activate spinner (status view replaces composer) with no live ring.
@@ -753,6 +772,8 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
+            skill_mentions_enabled: false,
+            skills: Vec::new(),
         });
 
         pane.set_task_running(true);
@@ -780,6 +801,8 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
+            skill_mentions_enabled: false,
+            skills: Vec::new(),
         });
 
         pane.set_task_running(true);
