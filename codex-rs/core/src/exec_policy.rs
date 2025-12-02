@@ -317,7 +317,7 @@ mod tests {
         let temp_dir = tempdir().expect("create temp dir");
         fs::write(
             temp_dir.path().join("root.codexpolicy"),
-            r#"prefix_rule(pattern=[\"ls\"], decision=\"prompt\")"#,
+            r#"prefix_rule(pattern=["ls"], decision="prompt")"#,
         )
         .expect("write policy file");
 
@@ -470,7 +470,8 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             .expect("policy file should have been created");
         assert_eq!(
             contents,
-            "prefix_rule(pattern=[\"echo\",\"hello\"], decision=\"allow\")\n"
+            r#"prefix_rule(pattern=["echo", "hello"], decision="allow")
+"#
         );
     }
 
