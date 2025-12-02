@@ -277,9 +277,9 @@ fn track_descendants(kq: libc::c_int, root_pid: i32) -> HashSet<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
     use std::process::Stdio;
     use std::time::Duration;
+    use tokio::process::Command;
 
     #[test]
     fn pid_is_alive_detects_current_process() {
@@ -296,7 +296,7 @@ mod tests {
             .spawn()
             .expect("failed to spawn child process");
 
-        let child_pid = child.id() as i32;
+        let child_pid = child.id().expect("spawned child should have a pid") as i32;
         let parent_pid = std::process::id() as i32;
 
         let mut found = false;
@@ -308,8 +308,8 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
-        let _ = child.kill();
-        let _ = child.wait();
+        let _ = child.kill().await;
+        let _ = child.wait().await;
 
         assert!(found, "expected to find child pid {child_pid} in list");
     }
@@ -325,10 +325,10 @@ mod tests {
             .spawn()
             .expect("failed to spawn child process");
 
-        let child_pid = child.id() as i32;
+        let child_pid = child.id().expect("spawned child should have a pid") as i32;
         let parent_pid = std::process::id() as i32;
 
-        let _ = child.wait();
+        let _ = child.wait().await;
 
         let seen = tracker.stop().await;
 
@@ -356,7 +356,11 @@ mod tests {
             .spawn()
             .expect("failed to spawn bash");
 
-        let output = child.wait_with_output().unwrap().stdout;
+        let output = child
+            .wait_with_output()
+            .await
+            .expect("failed to wait for bash child")
+            .stdout;
         let subshell_pid = String::from_utf8_lossy(&output)
             .trim()
             .parse::<i32>()
