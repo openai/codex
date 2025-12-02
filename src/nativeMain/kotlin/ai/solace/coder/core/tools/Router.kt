@@ -3,7 +3,7 @@ package ai.solace.coder.core.tools
 
 import ai.solace.coder.client.common.tools.ToolSpec
 import ai.solace.coder.core.error.CodexError
-import ai.solace.coder.core.function_tool.FunctionCallError
+import ai.solace.coder.core.FunctionCallError
 import ai.solace.coder.core.session.Session
 import ai.solace.coder.core.session.TurnContext
 import ai.solace.coder.protocol.FunctionCallOutputPayload

@@ -11,8 +11,7 @@ import ai.solace.coder.core.error.CodexError
 import ai.solace.coder.core.unified_exec.UnifiedExecContext
 import ai.solace.coder.core.unified_exec.ExecCommandRequest
 import ai.solace.coder.core.unified_exec.WriteStdinRequest
-import ai.solace.coder.core.sandboxing.assessCommand
-import ai.solace.coder.protocol.SandboxCommandAssessment
+import ai.solace.coder.core.command_safety.isKnownSafeCommand
 import ai.solace.coder.protocol.SandboxPolicy
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.Serializable
@@ -34,8 +33,7 @@ class UnifiedExecHandler : ToolHandler {
         return try {
             val args = Json { ignoreUnknownKeys = true }.decodeFromString<ExecCommandArgs>(arguments)
             val command = getCommand(args)
-            val assessment = assessCommand(command, invocation.turn.sandboxPolicy)
-            assessment != SandboxCommandAssessment.Low
+            !isKnownSafeCommand(command)
         } catch (e: Exception) {
             true
         }
@@ -72,8 +70,7 @@ class UnifiedExecHandler : ToolHandler {
                 // Check permissions
                 if (invocation.turn.sandboxPolicy == SandboxPolicy.ReadOnly) {
                     val command = getCommand(args)
-                    val assessment = assessCommand(command, invocation.turn.sandboxPolicy)
-                    if (assessment != SandboxCommandAssessment.Low) {
+                    if (!isKnownSafeCommand(command)) {
                          return CodexResult.failure(CodexError.Sandbox("Command denied by read-only policy"))
                     }
                 }

@@ -2,7 +2,7 @@
 package ai.solace.coder.core.tools
 
 import ai.solace.coder.client.common.tools.ToolSpec
-import ai.solace.coder.core.function_tool.FunctionCallError
+import ai.solace.coder.core.FunctionCallError
 import ai.solace.coder.protocol.ResponseInputItem
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock

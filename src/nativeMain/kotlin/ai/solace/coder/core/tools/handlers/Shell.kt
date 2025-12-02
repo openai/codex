@@ -16,9 +16,7 @@ import ai.solace.coder.core.tools.SharedTurnDiffTracker
 import ai.solace.coder.protocol.ShellToolCallParams
 import ai.solace.coder.protocol.ShellCommandToolCallParams
 import kotlinx.serialization.json.Json
-import ai.solace.coder.core.sandboxing.assessCommand
-import ai.solace.coder.protocol.SandboxCommandAssessment
-import ai.solace.coder.protocol.SandboxPolicy
+import ai.solace.coder.core.command_safety.isKnownSafeCommand
 
 class ShellHandler : ToolHandler {
     override val kind: ToolKind = ToolKind.Function
@@ -32,12 +30,12 @@ class ShellHandler : ToolHandler {
             is ToolPayload.Function -> {
                 try {
                     val params = Json.decodeFromString<ShellToolCallParams>(payload.arguments)
-                    !isKnownSafeCommand(params.command, invocation.turn.sandboxPolicy)
+                    !isKnownSafeCommand(params.command)
                 } catch (e: Exception) {
                     true
                 }
             }
-            is ToolPayload.LocalShell -> !isKnownSafeCommand(payload.params.command, invocation.turn.sandboxPolicy)
+            is ToolPayload.LocalShell -> !isKnownSafeCommand(payload.params.command)
             else -> true
         }
     }
@@ -200,12 +198,6 @@ class ShellCommandHandler : ToolHandler {
             )
         }
     }
-}
-
-// TODO: Move these to appropriate files
-fun isKnownSafeCommand(command: List<String>, policy: SandboxPolicy): Boolean {
-    val assessment = assessCommand(command, policy)
-    return assessment == SandboxCommandAssessment.Low
 }
 
 fun createEnv(policy: Any): Map<String, String> {

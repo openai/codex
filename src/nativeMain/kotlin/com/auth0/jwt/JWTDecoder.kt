@@ -3,7 +3,6 @@
 package com.auth0.jwt
 
 import com.auth0.jwt.TokenUtils
-import com.auth0.jwt.interfaces.DecodedJWT
 import com.auth0.jwt.interfaces.Claim
 import com.auth0.jwt.interfaces.DecodedJWT
 import com.auth0.jwt.exceptions.JWTDecodeException

@@ -51,6 +51,9 @@ kotlin {
                 implementation("com.fleeksoft.io:io:0.0.4")
                 implementation("com.fleeksoft.charset:charset:0.0.5")
                 implementation("com.fleeksoft.charset:charset-ext:0.0.5")
+
+                // Tree-sitter parsing library bindings
+                implementation("io.github.tree-sitter:ktreesitter:0.24.1")
             }
         }
         

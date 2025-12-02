@@ -6,6 +6,7 @@ import ai.solace.coder.client.common.tools.ToolSpec
 import ai.solace.coder.core.features.Feature
 import ai.solace.coder.core.features.Features
 import ai.solace.coder.core.model_family.ModelFamily
+import ai.solace.coder.core.session.ToolSpec
 import ai.solace.coder.core.tools.handlers.PLAN_TOOL
 import ai.solace.coder.core.tools.handlers.apply_patch.ApplyPatchToolType
 import ai.solace.coder.core.tools.handlers.apply_patch.createApplyPatchFreeformTool

@@ -1,7 +1,7 @@
 // port-lint: source core/src/tools/handlers/mcp_resource.rs
 package ai.solace.coder.core.tools.handlers
 
-import ai.solace.coder.core.function_tool.FunctionCallError
+import ai.solace.coder.core.FunctionCallError
 import ai.solace.coder.core.session.Session
 import ai.solace.coder.core.session.TurnContext
 import ai.solace.coder.core.tools.ToolHandler
