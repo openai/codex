@@ -5,6 +5,8 @@ use crate::skills::model::SkillMetadata;
 use dunce::canonicalize as normalize_path;
 use serde::Deserialize;
 use std::collections::VecDeque;
+use std::error::Error;
+use std::fmt;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -20,6 +22,33 @@ const SKILLS_FILENAME: &str = "SKILL.md";
 const SKILLS_DIR_NAME: &str = "skills";
 const MAX_NAME_LEN: usize = 100;
 const MAX_DESCRIPTION_LEN: usize = 500;
+
+#[derive(Debug)]
+enum SkillParseError {
+    Read(std::io::Error),
+    MissingFrontmatter,
+    InvalidYaml(serde_yaml::Error),
+    MissingField(&'static str),
+    InvalidField { field: &'static str, reason: String },
+}
+
+impl fmt::Display for SkillParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SkillParseError::Read(e) => write!(f, "failed to read file: {e}"),
+            SkillParseError::MissingFrontmatter => {
+                write!(f, "missing YAML frontmatter delimited by ---")
+            }
+            SkillParseError::InvalidYaml(e) => write!(f, "invalid YAML: {e}"),
+            SkillParseError::MissingField(field) => write!(f, "missing field `{field}`"),
+            SkillParseError::InvalidField { field, reason } => {
+                write!(f, "invalid {field}: {reason}")
+            }
+        }
+    }
+}
+
+impl Error for SkillParseError {}
 
 pub fn load_skills(config: &Config) -> SkillLoadOutcome {
     let mut outcome = SkillLoadOutcome::default();
@@ -85,21 +114,23 @@ fn discover_skills_under_root(root: &Path, outcome: &mut SkillLoadOutcome) {
             if file_type.is_file() && file_name == SKILLS_FILENAME {
                 match parse_skill_file(&path) {
                     Ok(skill) => outcome.skills.push(skill),
-                    Err(message) => outcome.errors.push(SkillError { path, message }),
+                    Err(err) => outcome.errors.push(SkillError {
+                        path,
+                        message: err.to_string(),
+                    }),
                 }
             }
         }
     }
 }
 
-fn parse_skill_file(path: &Path) -> Result<SkillMetadata, String> {
-    let contents = fs::read_to_string(path).map_err(|e| format!("failed to read file: {e}"))?;
+fn parse_skill_file(path: &Path) -> Result<SkillMetadata, SkillParseError> {
+    let contents = fs::read_to_string(path).map_err(SkillParseError::Read)?;
 
-    let frontmatter = extract_frontmatter(&contents)
-        .ok_or_else(|| "missing YAML frontmatter delimited by ---".to_string())?;
+    let frontmatter = extract_frontmatter(&contents).ok_or(SkillParseError::MissingFrontmatter)?;
 
     let parsed: SkillFrontmatter =
-        serde_yaml::from_str(&frontmatter).map_err(|e| format!("invalid YAML: {e}"))?;
+        serde_yaml::from_str(&frontmatter).map_err(SkillParseError::InvalidYaml)?;
 
     let name = sanitize_single_line(&parsed.name);
     let description = sanitize_single_line(&parsed.description);
@@ -120,14 +151,19 @@ fn sanitize_single_line(raw: &str) -> String {
     raw.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn validate_field(value: &str, max_len: usize, field_name: &str) -> Result<(), String> {
+fn validate_field(
+    value: &str,
+    max_len: usize,
+    field_name: &'static str,
+) -> Result<(), SkillParseError> {
     if value.is_empty() {
-        return Err(format!("{field_name} is required"));
+        return Err(SkillParseError::MissingField(field_name));
     }
     if value.len() > max_len {
-        return Err(format!(
-            "{field_name} exceeds maximum length of {max_len} characters"
-        ));
+        return Err(SkillParseError::InvalidField {
+            field: field_name,
+            reason: format!("exceeds maximum length of {max_len} characters"),
+        });
     }
     Ok(())
 }
