@@ -492,5 +492,17 @@ mod tests {
                 context_window_used_tokens: None,
             },
         );
+
+        snapshot_footer(
+            "footer_context_tokens_used",
+            FooterProps {
+                mode: FooterMode::ShortcutSummary,
+                esc_backtrack_hint: false,
+                use_shift_enter_hint: false,
+                is_task_running: false,
+                context_window_percent: None,
+                context_window_used_tokens: Some(123_456),
+            },
+        );
     }
 }
