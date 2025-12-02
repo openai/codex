@@ -227,6 +227,19 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::TaskStarted(_) => {
                 // Ignore.
             }
+            EventMsg::ElicitationRequest(ev) => {
+                ts_msg!(
+                    self,
+                    "{} {}",
+                    "elicitation request".style(self.magenta),
+                    ev.server_name.style(self.dimmed)
+                );
+                ts_msg!(
+                    self,
+                    "{}",
+                    "auto-cancelling (not supported in exec mode)".style(self.dimmed)
+                );
+            }
             EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
                 let last_message = last_agent_message.as_deref();
                 if let Some(output_file) = self.last_message_path.as_deref() {
@@ -546,6 +559,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     ts_msg!(self, "task aborted: review ended");
                 }
             },
+            EventMsg::ContextCompacted(_) => {
+                ts_msg!(self, "context compacted");
+            }
             EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
             EventMsg::WebSearchBegin(_)
             | EventMsg::ExecApprovalRequest(_)

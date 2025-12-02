@@ -8,8 +8,8 @@ use crate::codex::get_last_assistant_message_from_turn;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
-use crate::protocol::AgentMessageEvent;
 use crate::protocol::CompactedItem;
+use crate::protocol::ContextCompactedEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::TaskStartedEvent;
 use crate::protocol::TurnContextItem;
@@ -175,9 +175,7 @@ async fn run_compact_task_inner(
     });
     sess.persist_rollout_items(&[rollout_item]).await;
 
-    let event = EventMsg::AgentMessage(AgentMessageEvent {
-        message: "Compact task completed".to_string(),
-    });
+    let event = EventMsg::ContextCompacted(ContextCompactedEvent {});
     sess.send_event(&turn_context, event).await;
 
     let warning = EventMsg::Warning(WarningEvent {

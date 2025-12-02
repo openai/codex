@@ -4,7 +4,6 @@
 use std::time::Duration;
 use std::time::Instant;
 
-use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -56,11 +55,7 @@ async fn run_turn_and_measure(test: &TestCodex, prompt: &str) -> anyhow::Result<
 
 #[allow(clippy::expect_used)]
 async fn build_codex_with_test_tool(server: &wiremock::MockServer) -> anyhow::Result<TestCodex> {
-    let mut builder = test_codex().with_config(|config| {
-        config.model = "test-gpt-5.1-codex".to_string();
-        config.model_family =
-            find_family_for_model("test-gpt-5.1-codex").expect("test-gpt-5.1-codex model family");
-    });
+    let mut builder = test_codex().with_model("test-gpt-5.1-codex");
     builder.build(server).await
 }
 

@@ -1,3 +1,5 @@
+use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use rand::Rng;
@@ -35,6 +37,14 @@ pub(crate) fn try_parse_error_message(text: &str) -> String {
         return "Unknown error".to_string();
     }
     text.to_string()
+}
+
+pub fn resolve_path(base: &Path, path: &PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        path.clone()
+    } else {
+        base.join(path)
+    }
 }
 
 #[cfg(test)]

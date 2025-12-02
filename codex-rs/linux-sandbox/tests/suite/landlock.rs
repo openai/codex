@@ -59,7 +59,6 @@ async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
     let codex_linux_sandbox_exe = Some(PathBuf::from(sandbox_program));
     let res = process_exec_tool_call(
         params,
-        true,
         &sandbox_policy,
         sandbox_cwd.as_path(),
         &codex_linux_sandbox_exe,
@@ -154,7 +153,6 @@ async fn assert_network_blocked(cmd: &[&str]) {
     let codex_linux_sandbox_exe: Option<PathBuf> = Some(PathBuf::from(sandbox_program));
     let result = process_exec_tool_call(
         params,
-        true,
         &sandbox_policy,
         sandbox_cwd.as_path(),
         &codex_linux_sandbox_exe,

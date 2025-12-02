@@ -46,6 +46,4 @@ jobs:
           path-to-document: https://github.com/openai/codex/blob/main/docs/CLA.md
           path-to-signatures: signatures/cla.json
           branch: cla-signatures
-          allowlist: |
-            codex
-            dependabot[bot]
+          allowlist: codex,dependabot,dependabot[bot],github-actions[bot]

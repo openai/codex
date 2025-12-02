@@ -67,6 +67,7 @@ mod resume_picker;
 mod selection_list;
 mod session_log;
 mod shimmer;
+mod skill_error_prompt;
 mod slash_command;
 mod status;
 mod status_indicator_widget;

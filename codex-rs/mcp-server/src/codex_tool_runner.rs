@@ -208,6 +208,10 @@ async fn run_codex_tool_session_inner(
                     EventMsg::Warning(_) => {
                         continue;
                     }
+                    EventMsg::ElicitationRequest(_) => {
+                        // TODO: forward elicitation requests to the client?
+                        continue;
+                    }
                     EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
                         call_id,
                         turn_id: _,
@@ -302,6 +306,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::UndoStarted(_)
                     | EventMsg::UndoCompleted(_)
                     | EventMsg::ExitedReviewMode(_)
+                    | EventMsg::ContextCompacted(_)
                     | EventMsg::DeprecationNotice(_) => {
                         // For now, we do not do anything extra for these
                         // events. Note that

@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use anyhow::Result;
+use base64::Engine;
 use serde_json::Value;
 use wiremock::BodyPrintLimit;
 use wiremock::Match;
@@ -297,12 +298,18 @@ pub fn ev_reasoning_item(id: &str, summary: &[&str], raw_content: &[&str]) -> Va
         .map(|text| serde_json::json!({"type": "summary_text", "text": text}))
         .collect();
 
+    let overhead = "b".repeat(550);
+    let raw_content_joined = raw_content.join("");
+    let encrypted_content =
+        base64::engine::general_purpose::STANDARD.encode(overhead + raw_content_joined.as_str());
+
     let mut event = serde_json::json!({
         "type": "response.output_item.done",
         "item": {
             "type": "reasoning",
             "id": id,
             "summary": summary_entries,
+            "encrypted_content": encrypted_content,
         }
     });
 
@@ -424,6 +431,9 @@ pub fn ev_apply_patch_call(
         ApplyPatchModelOutput::ShellViaHeredoc => {
             ev_apply_patch_shell_call_via_heredoc(call_id, patch)
         }
+        ApplyPatchModelOutput::ShellCommandViaHeredoc => {
+            ev_apply_patch_shell_command_call_via_heredoc(call_id, patch)
+        }
     }
 }
 
@@ -483,6 +493,13 @@ pub fn ev_apply_patch_shell_call_via_heredoc(call_id: &str, patch: &str) -> Valu
     let arguments = serde_json::to_string(&args).expect("serialize apply_patch arguments");
 
     ev_function_call(call_id, "shell", &arguments)
+}
+
+pub fn ev_apply_patch_shell_command_call_via_heredoc(call_id: &str, patch: &str) -> Value {
+    let args = serde_json::json!({ "command": format!("apply_patch <<'EOF'\n{patch}\nEOF\n") });
+    let arguments = serde_json::to_string(&args).expect("serialize apply_patch arguments");
+
+    ev_function_call(call_id, "shell_command", &arguments)
 }
 
 pub fn sse_failed(id: &str, code: &str, message: &str) -> String {

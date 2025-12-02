@@ -34,6 +34,7 @@ use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use crate::util::resolve_path;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -70,7 +71,7 @@ pub const GPT_5_CODEX_MEDIUM_MODEL: &str = "gpt-5.1-codex";
 /// the context window.
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
-pub(crate) const CONFIG_TOML_FILE: &str = "config.toml";
+pub const CONFIG_TOML_FILE: &str = "config.toml";
 
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
@@ -265,6 +266,11 @@ pub struct Config {
 
     /// Collection of various notices we show the user
     pub notices: Notice,
+
+    /// When `true`, checks for Codex updates on startup and surfaces update prompts.
+    /// Set to `false` only if your Codex updates are centrally managed.
+    /// Defaults to `true`.
+    pub check_for_update_on_startup: bool,
 
     /// When true, disables burst-paste detection for typed input entirely.
     /// All characters are inserted as they are received, and no buffering
@@ -684,6 +690,11 @@ pub struct ConfigToml {
     #[serde(default)]
     pub features: Option<FeaturesToml>,
 
+    /// When `true`, checks for Codex updates on startup and surfaces update prompts.
+    /// Set to `false` only if your Codex updates are centrally managed.
+    /// Defaults to `true`.
+    pub check_for_update_on_startup: Option<bool>,
+
     /// When true, disables burst-paste detection for typed input entirely.
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
@@ -1005,15 +1016,8 @@ impl Config {
         let additional_writable_roots: Vec<PathBuf> = additional_writable_roots
             .into_iter()
             .map(|path| {
-                let absolute = if path.is_absolute() {
-                    path
-                } else {
-                    resolved_cwd.join(path)
-                };
-                match canonicalize(&absolute) {
-                    Ok(canonical) => canonical,
-                    Err(_) => absolute,
-                }
+                let absolute = resolve_path(&resolved_cwd, &path);
+                canonicalize(&absolute).unwrap_or(absolute)
             })
             .collect();
         let active_project = cfg
@@ -1161,6 +1165,8 @@ impl Config {
             .or(cfg.review_model)
             .unwrap_or_else(default_review_model);
 
+        let check_for_update_on_startup = cfg.check_for_update_on_startup.unwrap_or(true);
+
         let config = Self {
             model,
             review_model,
@@ -1237,6 +1243,7 @@ impl Config {
             active_project,
             windows_wsl_setup_acknowledged: cfg.windows_wsl_setup_acknowledged.unwrap_or(false),
             notices: cfg.notice.unwrap_or_default(),
+            check_for_update_on_startup,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
             tui_notifications: cfg
                 .tui
@@ -1285,11 +1292,7 @@ impl Config {
             return Ok(None);
         };
 
-        let full_path = if p.is_relative() {
-            cwd.join(p)
-        } else {
-            p.to_path_buf()
-        };
+        let full_path = resolve_path(cwd, p);
 
         let contents = std::fs::read_to_string(&full_path).map_err(|e| {
             std::io::Error::new(
@@ -2991,6 +2994,7 @@ model_verbosity = "high"
                 active_project: ProjectConfig { trust_level: None },
                 windows_wsl_setup_acknowledged: false,
                 notices: Default::default(),
+                check_for_update_on_startup: true,
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
                 animations: true,
@@ -3063,6 +3067,7 @@ model_verbosity = "high"
             active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
+            check_for_update_on_startup: true,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             animations: true,
@@ -3150,6 +3155,7 @@ model_verbosity = "high"
             active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
+            check_for_update_on_startup: true,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             animations: true,
@@ -3223,6 +3229,7 @@ model_verbosity = "high"
             active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
+            check_for_update_on_startup: true,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             animations: true,

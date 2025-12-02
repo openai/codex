@@ -7,6 +7,7 @@ use codex_apply_patch::ApplyPatchFileChange;
 
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use crate::util::resolve_path;
 
 #[cfg(target_os = "windows")]
 use std::sync::atomic::AtomicBool;
@@ -150,11 +151,7 @@ fn is_write_patch_constrained_to_writable_paths(
     // and roots are converted to absolute, normalized forms before the
     // prefix check.
     let is_path_writable = |p: &PathBuf| {
-        let abs = if p.is_absolute() {
-            p.clone()
-        } else {
-            cwd.join(p)
-        };
+        let abs = resolve_path(cwd, p);
         let abs = match normalize(&abs) {
             Some(v) => v,
             None => return false,

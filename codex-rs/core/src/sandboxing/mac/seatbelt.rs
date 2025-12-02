@@ -185,12 +185,13 @@ mod tests {
             &cwd,
         );
 
+        let user_cache_dir = user_cache_dir();
         // Build the expected policy text using a raw string for readability.
         // Note that the policy includes:
         // - the base policy,
         // - read-only access to the filesystem,
         // - write access to WRITABLE_ROOT_0 (but not its .git) and WRITABLE_ROOT_1.
-        let expected_policy = format!(
+        let mut expected_policy = format!(
             r#"{MACOS_SEATBELT_BASE_POLICY}
 ; allow read-only file operations
 (allow file-read*)
@@ -199,6 +200,10 @@ mod tests {
 )
 "#,
         );
+        if user_cache_dir.is_some() {
+            expected_policy
+                .push_str("\n(allow file-write* (subpath (param \"DARWIN_USER_CACHE_DIR\")))");
+        }
 
         let mut expected_args = vec![
             "-p".to_string(),
@@ -218,7 +223,7 @@ mod tests {
             format!("-DWRITABLE_ROOT_2={}", cwd.to_string_lossy()),
         ];
 
-        if let Some(p) = user_cache_dir() {
+        if let Some(p) = &user_cache_dir {
             expected_args.push(format!("-DDARWIN_USER_CACHE_DIR={}", p.to_string_lossy()));
         }
 
@@ -264,6 +269,7 @@ mod tests {
             .map(PathBuf::from)
             .and_then(|p| p.canonicalize().ok())
             .map(|p| p.to_string_lossy().to_string());
+        let user_cache_dir = user_cache_dir();
 
         let tempdir_policy_entry = if tmpdir_env_var.is_some() {
             r#" (subpath (param "WRITABLE_ROOT_2"))"#
@@ -276,7 +282,7 @@ mod tests {
         // - the base policy,
         // - read-only access to the filesystem,
         // - write access to WRITABLE_ROOT_0 (but not its .git) and WRITABLE_ROOT_1.
-        let expected_policy = format!(
+        let mut expected_policy = format!(
             r#"{MACOS_SEATBELT_BASE_POLICY}
 ; allow read-only file operations
 (allow file-read*)
@@ -285,6 +291,10 @@ mod tests {
 )
 "#,
         );
+        if user_cache_dir.is_some() {
+            expected_policy
+                .push_str("\n(allow file-write* (subpath (param \"DARWIN_USER_CACHE_DIR\")))");
+        }
 
         let mut expected_args = vec![
             "-p".to_string(),
@@ -310,7 +320,7 @@ mod tests {
             expected_args.push(format!("-DWRITABLE_ROOT_2={p}"));
         }
 
-        if let Some(p) = user_cache_dir() {
+        if let Some(p) = &user_cache_dir {
             expected_args.push(format!("-DDARWIN_USER_CACHE_DIR={}", p.to_string_lossy()));
         }
 

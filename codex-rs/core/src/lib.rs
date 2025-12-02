@@ -5,10 +5,10 @@
 // the TUI or the tracing stack).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+pub mod api_bridge;
 mod apply_patch;
 pub mod auth;
 pub mod bash;
-mod chat_completions;
 mod client;
 mod client_common;
 pub mod codex;
@@ -31,6 +31,9 @@ mod flags;
 pub mod git_info;
 pub mod mcp;
 mod mcp_connection_manager;
+pub use mcp_connection_manager::MCP_SANDBOX_STATE_CAPABILITY;
+pub use mcp_connection_manager::MCP_SANDBOX_STATE_NOTIFICATION;
+pub use mcp_connection_manager::SandboxState;
 mod mcp_tool_call;
 mod message_history;
 mod model_provider_info;
@@ -54,6 +57,7 @@ pub use model_provider_info::create_oss_provider_with_base_url;
 mod conversation_manager;
 mod event_mapping;
 pub mod review_format;
+pub mod review_prompts;
 pub use codex_protocol::protocol::InitialHistory;
 pub use conversation_manager::ConversationManager;
 pub use conversation_manager::NewConversation;
@@ -67,6 +71,7 @@ pub mod project_doc;
 mod rollout;
 pub(crate) mod safety;
 pub mod shell;
+pub mod skills;
 pub mod spawn;
 pub mod terminal;
 mod tools;
