@@ -554,19 +554,21 @@ impl UnifiedExecSessionManager {
         let env = apply_unified_exec_env(create_env(&context.turn.shell_environment_policy));
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);
+        let approval_requirement = create_approval_requirement_for_command(
+            &context.turn.exec_policy,
+            command,
+            context.turn.approval_policy,
+            &context.turn.sandbox_policy,
+            SandboxPermissions::from(with_escalated_permissions.unwrap_or(false)),
+        )
+        .await;
         let req = UnifiedExecToolRequest::new(
             command.to_vec(),
             cwd,
             env,
             with_escalated_permissions,
             justification,
-            create_approval_requirement_for_command(
-                &context.turn.exec_policy,
-                command,
-                context.turn.approval_policy,
-                &context.turn.sandbox_policy,
-                SandboxPermissions::from(with_escalated_permissions.unwrap_or(false)),
-            ),
+            approval_requirement,
         );
         let tool_ctx = ToolCtx {
             session: context.session.as_ref(),
