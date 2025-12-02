@@ -4,12 +4,11 @@ use std::path::PathBuf;
 use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
-use serde::Serialize;
 
 use crate::Decision;
+use crate::Evaluation;
 use crate::Policy;
 use crate::PolicyParser;
-use crate::RuleMatch;
 
 /// Arguments for evaluating a command against one or more execpolicy files.
 #[derive(Debug, Parser, Clone)]
@@ -36,25 +35,20 @@ impl ExecPolicyCheckCommand {
     /// Load the policies for this command, evaluate the command, and render JSON output.
     pub fn run(&self) -> Result<()> {
         let policy = load_policies(&self.policies)?;
-        let matched_rules = policy.matches_for_command(&self.command, None);
+        let evaluation = policy.check(&self.command, &|_| Decision::Allow);
 
-        let json = format_matches_json(&matched_rules, self.pretty)?;
+        let json = format_evaluation_json(&evaluation, self.pretty)?;
         println!("{json}");
 
         Ok(())
     }
 }
 
-pub fn format_matches_json(matched_rules: &[RuleMatch], pretty: bool) -> Result<String> {
-    let output = ExecPolicyCheckOutput {
-        matched_rules,
-        decision: matched_rules.iter().map(RuleMatch::decision).max(),
-    };
-
+pub fn format_evaluation_json(evaluation: &Evaluation, pretty: bool) -> Result<String> {
     if pretty {
-        serde_json::to_string_pretty(&output).map_err(Into::into)
+        serde_json::to_string_pretty(evaluation).map_err(Into::into)
     } else {
-        serde_json::to_string(&output).map_err(Into::into)
+        serde_json::to_string(evaluation).map_err(Into::into)
     }
 }
 
@@ -71,13 +65,4 @@ pub fn load_policies(policy_paths: &[PathBuf]) -> Result<Policy> {
     }
 
     Ok(parser.build())
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ExecPolicyCheckOutput<'a> {
-    #[serde(rename = "matchedRules")]
-    matched_rules: &'a [RuleMatch],
-    #[serde(skip_serializing_if = "Option::is_none")]
-    decision: Option<Decision>,
 }
