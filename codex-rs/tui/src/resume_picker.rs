@@ -1363,7 +1363,7 @@ mod tests {
 
         let loader: PageLoader = Arc::new(|_| {});
         let mut state = PickerState::new(
-            sessions_root.clone(),
+            PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
@@ -1372,7 +1372,7 @@ mod tests {
         );
 
         let page = block_on_future(RolloutRecorder::list_conversations(
-            &sessions_root,
+            &state.codex_home,
             PAGE_SIZE,
             None,
             INTERACTIVE_SESSION_SOURCES,
