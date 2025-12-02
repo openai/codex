@@ -1,6 +1,5 @@
 use std::any::Any;
 use std::sync::Arc;
-use std::sync::Mutex;
 
 use anyhow::Context;
 use anyhow::Result;
