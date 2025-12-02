@@ -2816,7 +2816,7 @@ mod tests {
             .enable(Feature::ModelWarnings);
 
         session
-            .record_model_warning("too many unified exec sessions", turn_context)
+            .record_model_warning("too many unified exec sessions", &turn_context)
             .await;
 
         let mut history = session.clone_history().await;
