@@ -10,7 +10,7 @@ use codex_execpolicy::Error as ExecPolicyRuleError;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::Policy;
 use codex_execpolicy::PolicyParser;
-use codex_execpolicy::append_allow_prefix_rule;
+use codex_execpolicy::blocking_append_allow_prefix_rule;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use thiserror::Error;
@@ -114,7 +114,7 @@ pub(crate) async fn append_allow_prefix_rule_and_update(
     prefix: &[String],
 ) -> Result<(), ExecPolicyUpdateError> {
     let policy_path = default_policy_path(codex_home);
-    append_allow_prefix_rule(&policy_path, prefix).map_err(|source| {
+    blocking_append_allow_prefix_rule(&policy_path, prefix).map_err(|source| {
         ExecPolicyUpdateError::AppendRule {
             path: policy_path,
             source,
