@@ -37,11 +37,6 @@ pub enum AmendError {
         path: PathBuf,
         source: std::io::Error,
     },
-    #[error("failed to unlock policy file {path}: {source}")]
-    UnlockPolicyFile {
-        path: PathBuf,
-        source: std::io::Error,
-    },
     #[error("failed to seek policy file {path}: {source}")]
     SeekPolicyFile {
         path: PathBuf,
@@ -138,11 +133,7 @@ fn append_locked_line(policy_path: &Path, line: &str) -> Result<(), AmendError> 
             source,
         })?;
 
-    file.unlock()
-        .map_err(|source| AmendError::UnlockPolicyFile {
-            path: policy_path,
-            source,
-        })
+    Ok(())
 }
 
 #[cfg(test)]
