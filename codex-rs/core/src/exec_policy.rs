@@ -207,7 +207,7 @@ pub(crate) async fn create_approval_requirement_for_command(
         },
     }
 }
- 
+
 /// Only return PROMPT_REASON when an execpolicy rule drove the prompt decision
 fn derive_prompt_reason(evaluation: &Evaluation) -> Option<String> {
     evaluation.matched_rules.iter().find_map(|rule_match| {
@@ -514,8 +514,12 @@ prefix_rule(pattern=["rm"], decision="forbidden")
                 AskForApproval::UnlessTrusted,
                 &SandboxPolicy::DangerFullAccess,
                 SandboxPermissions::UseDefault,
+<<<<<<< HEAD
             )
             .await,
+=======
+            ),
+>>>>>>> 1d14bc51e (inlining and cleanup tests)
             ApprovalRequirement::NeedsApproval {
                 reason: None,
                 allow_prefix: Some(vec!["orange".to_string()])
@@ -699,8 +703,12 @@ prefix_rule(pattern=["rm"], decision="forbidden")
                 AskForApproval::UnlessTrusted,
                 &SandboxPolicy::ReadOnly,
                 SandboxPermissions::UseDefault,
+<<<<<<< HEAD
             )
             .await,
+=======
+            ),
+>>>>>>> 1d14bc51e (inlining and cleanup tests)
             ApprovalRequirement::Skip {
                 bypass_sandbox: true
             }
