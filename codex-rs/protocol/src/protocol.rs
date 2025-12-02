@@ -1263,11 +1263,40 @@ pub enum ReviewDelivery {
     Detached,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+pub enum ReviewTarget {
+    /// Review the working tree: staged, unstaged, and untracked files.
+    UncommittedChanges,
+
+    /// Review changes between the current branch and the given base branch.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    BaseBranch { branch: String },
+
+    /// Review the changes introduced by a specific commit.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Commit {
+        sha: String,
+        /// Optional human-readable label (e.g., commit subject) for UIs.
+        title: Option<String>,
+    },
+
+    /// Arbitrary instructions provided by the user.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Custom { instructions: String },
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 /// Review request sent to the review session.
 pub struct ReviewRequest {
-    pub prompt: String,
-    pub user_facing_hint: String,
+    pub target: ReviewTarget,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub user_facing_hint: Option<String>,
 }
 
 /// Structured review result produced by a child review session.

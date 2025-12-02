@@ -632,6 +632,26 @@ pub struct FeedbackUploadResponse {
     pub thread_id: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CommandExecParams {
+    pub command: Vec<String>,
+    #[ts(type = "number | null")]
+    pub timeout_ms: Option<i64>,
+    pub cwd: Option<PathBuf>,
+    pub sandbox_policy: Option<SandboxPolicy>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CommandExecResponse {
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
+
 // === Threads, Turns, and Items ===
 // Thread APIs
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
@@ -766,6 +786,7 @@ pub struct Thread {
     /// Model provider used for this thread (for example, 'openai').
     pub model_provider: String,
     /// Unix timestamp (in seconds) when the thread was created.
+    #[ts(type = "number")]
     pub created_at: i64,
     /// [UNSTABLE] Path to the thread on disk.
     pub path: PathBuf,
@@ -1053,6 +1074,7 @@ pub enum ThreadItem {
         /// The command's exit code.
         exit_code: Option<i32>,
         /// The duration of the command execution in milliseconds.
+        #[ts(type = "number | null")]
         duration_ms: Option<i64>,
     },
     #[serde(rename_all = "camelCase")]
@@ -1319,6 +1341,7 @@ pub struct ReasoningSummaryTextDeltaNotification {
     pub turn_id: String,
     pub item_id: String,
     pub delta: String,
+    #[ts(type = "number")]
     pub summary_index: i64,
 }
 
@@ -1329,6 +1352,7 @@ pub struct ReasoningSummaryPartAddedNotification {
     pub thread_id: String,
     pub turn_id: String,
     pub item_id: String,
+    #[ts(type = "number")]
     pub summary_index: i64,
 }
 
@@ -1340,6 +1364,7 @@ pub struct ReasoningTextDeltaNotification {
     pub turn_id: String,
     pub item_id: String,
     pub delta: String,
+    #[ts(type = "number")]
     pub content_index: i64,
 }
 
@@ -1474,7 +1499,9 @@ impl From<CoreRateLimitSnapshot> for RateLimitSnapshot {
 #[ts(export_to = "v2/")]
 pub struct RateLimitWindow {
     pub used_percent: i32,
+    #[ts(type = "number | null")]
     pub window_duration_mins: Option<i64>,
+    #[ts(type = "number | null")]
     pub resets_at: Option<i64>,
 }
 

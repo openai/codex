@@ -132,6 +132,7 @@ pub enum ResponseItem {
     GhostSnapshot {
         ghost_commit: GhostCommit,
     },
+    #[serde(alias = "compaction")]
     CompactionSummary {
         encrypted_content: String,
     },
@@ -537,6 +538,7 @@ mod tests {
     use anyhow::Result;
     use mcp_types::ImageContent;
     use mcp_types::TextContent;
+    use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
     #[test]
@@ -647,6 +649,21 @@ mod tests {
         let expected_content = serde_json::to_string(&expected_items)?;
         assert_eq!(payload.content, expected_content);
 
+        Ok(())
+    }
+
+    #[test]
+    fn deserializes_compaction_alias() -> Result<()> {
+        let json = r#"{"type":"compaction","encrypted_content":"abc"}"#;
+
+        let item: ResponseItem = serde_json::from_str(json)?;
+
+        assert_eq!(
+            item,
+            ResponseItem::CompactionSummary {
+                encrypted_content: "abc".into(),
+            }
+        );
         Ok(())
     }
 

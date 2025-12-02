@@ -13,6 +13,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventStage;
+use crate::tools::handlers::apply_patch::intercept_apply_patch;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::unified_exec::ExecCommandRequest;
@@ -103,6 +104,7 @@ impl ToolHandler for UnifiedExecHandler {
         let ToolInvocation {
             session,
             turn,
+            tracker,
             call_id,
             tool_name,
             payload,
@@ -153,11 +155,25 @@ impl ToolHandler for UnifiedExecHandler {
                     )));
                 }
 
-                let workdir = workdir
-                    .as_deref()
-                    .filter(|value| !value.is_empty())
-                    .map(PathBuf::from);
+                let workdir = workdir.filter(|value| !value.is_empty());
+
+                let workdir = workdir.map(|dir| context.turn.resolve_path(Some(dir)));
                 let cwd = workdir.clone().unwrap_or_else(|| context.turn.cwd.clone());
+
+                if let Some(output) = intercept_apply_patch(
+                    &command,
+                    &cwd,
+                    Some(yield_time_ms),
+                    context.session.as_ref(),
+                    context.turn.as_ref(),
+                    Some(&tracker),
+                    &context.call_id,
+                    tool_name.as_str(),
+                )
+                .await?
+                {
+                    return Ok(output);
+                }
 
                 let event_ctx = ToolEventCtx::new(
                     context.session.as_ref(),
