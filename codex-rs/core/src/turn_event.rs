@@ -33,7 +33,7 @@ pub(crate) struct OutputItemResult {
 pub(crate) struct HandleOutputCtx {
     pub sess: Arc<Session>,
     pub turn_context: Arc<TurnContext>,
-    pub tool_runtime: Arc<ToolCallRuntime>,
+    pub tool_runtime: ToolCallRuntime,
     pub cancellation_token: CancellationToken,
 }
 
@@ -55,8 +55,8 @@ pub(crate) async fn handle_output_item_done(
 
             let sess_for_output: Arc<Session> = Arc::clone(&ctx.sess);
             let turn_for_output: Arc<TurnContext> = Arc::clone(&ctx.turn_context);
-            let tool_runtime = Arc::clone(&ctx.tool_runtime);
             let cancellation_token = ctx.cancellation_token.clone();
+            let tool_runtime = ctx.tool_runtime.clone();
 
             let tool_future: InFlightFuture<'static> = Box::pin(async move {
                 let response_input = tool_runtime
