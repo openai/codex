@@ -287,7 +287,7 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
     assert_eq!(
         model_warning,
         Some(
-            "Warning: apply_patch was requested via unified_exec. Use the apply_patch tool instead of exec_command."
+            "Warning: apply_patch was requested via exec_command. Use the apply_patch tool instead of exec_command."
                 .to_string()
         ),
         "expected model warning when apply_patch is handled through unified_exec",

@@ -183,7 +183,7 @@ pub(crate) async fn intercept_apply_patch(
         codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
             session
                 .record_model_warning(
-                    "apply_patch was requested via unified_exec. Use the apply_patch tool instead of exec_command.",
+                    format!("apply_patch was requested via {tool_name}. Use the apply_patch tool instead of exec_command."),
                     turn,
                 )
                 .await;
