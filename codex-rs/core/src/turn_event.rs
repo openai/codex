@@ -23,6 +23,7 @@ use tracing::debug;
 /// history and rollout stay in sync even if the turn is later cancelled.
 pub(crate) type InFlightFuture<'f> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'f>>;
 
+#[derive(Default)]
 pub(crate) struct OutputItemResult {
     pub last_agent_message: Option<String>,
     pub needs_follow_up: bool,
@@ -41,7 +42,9 @@ pub(crate) async fn handle_output_item_done(
     item: ResponseItem,
     previously_active_item: Option<TurnItem>,
 ) -> Result<OutputItemResult> {
-    let output = match ToolRouter::build_tool_call(ctx.sess.as_ref(), item.clone()).await {
+    let mut output = OutputItemResult::default();
+
+    match ToolRouter::build_tool_call(ctx.sess.as_ref(), item.clone()).await {
         Ok(Some(call)) => {
             let payload_preview = call.payload.log_payload().into_owned();
             tracing::info!("ToolCall: {} {}", call.tool_name, payload_preview);
@@ -70,11 +73,8 @@ pub(crate) async fn handle_output_item_done(
                 Ok(())
             });
 
-            OutputItemResult {
-                last_agent_message: None,
-                needs_follow_up: true,
-                tool_future: Some(tool_future),
-            }
+            output.needs_follow_up = true;
+            output.tool_future = Some(tool_future);
         }
         Ok(None) => {
             if let Some(turn_item) = handle_non_tool_response_item(&item).await {
@@ -94,11 +94,7 @@ pub(crate) async fn handle_output_item_done(
                 .await;
             let last_agent_message = last_assistant_message_from_item(&item);
 
-            OutputItemResult {
-                last_agent_message,
-                needs_follow_up: false,
-                tool_future: None,
-            }
+            output.last_agent_message = last_agent_message;
         }
         Err(FunctionCallError::MissingLocalShellCallId) => {
             let msg = "LocalShellCall without call_id or id";
@@ -127,11 +123,7 @@ pub(crate) async fn handle_output_item_done(
                     .await;
             }
 
-            OutputItemResult {
-                last_agent_message: None,
-                needs_follow_up: true,
-                tool_future: None,
-            }
+            output.needs_follow_up = true;
         }
         Err(FunctionCallError::RespondToModel(message))
         | Err(FunctionCallError::Denied(message)) => {
@@ -154,16 +146,12 @@ pub(crate) async fn handle_output_item_done(
                     .await;
             }
 
-            OutputItemResult {
-                last_agent_message: None,
-                needs_follow_up: true,
-                tool_future: None,
-            }
+            output.needs_follow_up = true;
         }
         Err(FunctionCallError::Fatal(message)) => {
             return Err(CodexErr::Fatal(message));
         }
-    };
+    }
 
     Ok(output)
 }
