@@ -841,6 +841,11 @@ To disable this behavior, configure `[history]` as follows:
 persistence = "none"  # "save-all" is the default value
 ```
 
+To cap the size of `history.jsonl`, set `history.max_bytes` to a positive byte
+count. When the file grows beyond the limit, Codex removes the oldest entries,
+compacting the file down to roughly 80% of the hard cap while keeping the newest 
+record intact. Omitting the option—or setting it to `0`—disables pruning.
+
 ### file_opener
 
 Identifies the editor/URI scheme to use for hyperlinking citations in model output. If set, citations to files in the model output will be hyperlinked using the specified URI scheme so they can be ctrl/cmd-clicked from the terminal to open them.
@@ -973,7 +978,7 @@ Valid values:
 | `profile`                                        | string                                                            | Active profile name.                                                                                                       |
 | `profiles.<name>.*`                              | various                                                           | Profile‑scoped overrides of the same keys.                                                                                 |
 | `history.persistence`                            | `save-all` \| `none`                                              | History file persistence (default: `save-all`).                                                                            |
-| `history.max_bytes`                              | number                                                            | Currently ignored (not enforced).                                                                                          |
+| `history.max_bytes`                              | number                                                            | Maximum size of `history.jsonl` in bytes; when exceeded, history is compacted to ~80% of this limit by dropping oldest entries. |
 | `file_opener`                                    | `vscode` \| `vscode-insiders` \| `windsurf` \| `cursor` \| `none` | URI scheme for clickable citations (default: `vscode`).                                                                    |
 | `tui`                                            | table                                                             | TUI‑specific options.                                                                                                      |
 | `tui.notifications`                              | boolean \| array<string>                                          | Enable desktop notifications in the tui (default: true).                                                                   |

@@ -40,6 +40,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::ReviewRequest;
+use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
@@ -1812,7 +1813,10 @@ impl ChatWidget {
             self.pre_review_token_info = Some(self.token_info.clone());
         }
         self.is_review_mode = true;
-        let banner = format!(">> Code review started: {} <<", review.user_facing_hint);
+        let hint = review
+            .user_facing_hint
+            .unwrap_or_else(|| codex_core::review_prompts::user_facing_hint(&review.target));
+        let banner = format!(">> Code review started: {hint} <<");
         self.add_to_history(history_cell::new_review_status_line(banner));
         self.request_redraw();
     }
@@ -2889,16 +2893,14 @@ impl ChatWidget {
 
         items.push(SelectionItem {
             name: "Review uncommitted changes".to_string(),
-            actions: vec![Box::new(
-                move |tx: &AppEventSender| {
-                    tx.send(AppEvent::CodexOp(Op::Review {
-                        review_request: ReviewRequest {
-                            prompt: "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.".to_string(),
-                            user_facing_hint: "current changes".to_string(),
-                        },
-                    }));
-                },
-            )],
+            actions: vec![Box::new(move |tx: &AppEventSender| {
+                tx.send(AppEvent::CodexOp(Op::Review {
+                    review_request: ReviewRequest {
+                        target: ReviewTarget::UncommittedChanges,
+                        user_facing_hint: None,
+                    },
+                }));
+            })],
             dismiss_on_select: true,
             ..Default::default()
         });
@@ -2947,10 +2949,10 @@ impl ChatWidget {
                 actions: vec![Box::new(move |tx3: &AppEventSender| {
                     tx3.send(AppEvent::CodexOp(Op::Review {
                         review_request: ReviewRequest {
-                            prompt: format!(
-                                "Review the code changes against the base branch '{branch}'. Start by finding the merge diff between the current branch and {branch}'s upstream e.g. (`git merge-base HEAD \"$(git rev-parse --abbrev-ref \"{branch}@{{upstream}}\")\"`), then run `git diff` against that SHA to see what changes we would merge into the {branch} branch. Provide prioritized, actionable findings."
-                            ),
-                            user_facing_hint: format!("changes against '{branch}'"),
+                            target: ReviewTarget::BaseBranch {
+                                branch: branch.clone(),
+                            },
+                            user_facing_hint: None,
                         },
                     }));
                 })],
@@ -2977,20 +2979,18 @@ impl ChatWidget {
         for entry in commits {
             let subject = entry.subject.clone();
             let sha = entry.sha.clone();
-            let short = sha.chars().take(7).collect::<String>();
             let search_val = format!("{subject} {sha}");
 
             items.push(SelectionItem {
                 name: subject.clone(),
                 actions: vec![Box::new(move |tx3: &AppEventSender| {
-                    let hint = format!("commit {short}");
-                    let prompt = format!(
-                        "Review the code changes introduced by commit {sha} (\"{subject}\"). Provide prioritized, actionable findings."
-                    );
                     tx3.send(AppEvent::CodexOp(Op::Review {
                         review_request: ReviewRequest {
-                            prompt,
-                            user_facing_hint: hint,
+                            target: ReviewTarget::Commit {
+                                sha: sha.clone(),
+                                title: Some(subject.clone()),
+                            },
+                            user_facing_hint: None,
                         },
                     }));
                 })],
@@ -3023,8 +3023,10 @@ impl ChatWidget {
                 }
                 tx.send(AppEvent::CodexOp(Op::Review {
                     review_request: ReviewRequest {
-                        prompt: trimmed.clone(),
-                        user_facing_hint: trimmed,
+                        target: ReviewTarget::Custom {
+                            instructions: trimmed,
+                        },
+                        user_facing_hint: None,
                     },
                 }));
             }),
@@ -3226,20 +3228,18 @@ pub(crate) fn show_review_commit_picker_with_entries(
     for entry in entries {
         let subject = entry.subject.clone();
         let sha = entry.sha.clone();
-        let short = sha.chars().take(7).collect::<String>();
         let search_val = format!("{subject} {sha}");
 
         items.push(SelectionItem {
             name: subject.clone(),
             actions: vec![Box::new(move |tx3: &AppEventSender| {
-                let hint = format!("commit {short}");
-                let prompt = format!(
-                    "Review the code changes introduced by commit {sha} (\"{subject}\"). Provide prioritized, actionable findings."
-                );
                 tx3.send(AppEvent::CodexOp(Op::Review {
                     review_request: ReviewRequest {
-                        prompt,
-                        user_facing_hint: hint,
+                        target: ReviewTarget::Commit {
+                            sha: sha.clone(),
+                            title: Some(subject.clone()),
+                        },
+                        user_facing_hint: None,
                     },
                 }));
             })],

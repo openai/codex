@@ -41,6 +41,7 @@ use super::UnifiedExecContext;
 use super::UnifiedExecError;
 use super::UnifiedExecResponse;
 use super::UnifiedExecSessionManager;
+use super::WARNING_UNIFIED_EXEC_SESSIONS;
 use super::WriteStdinRequest;
 use super::clamp_yield_time;
 use super::generate_chunk_id;
@@ -421,9 +422,22 @@ impl UnifiedExecSessionManager {
             started_at,
             last_used: started_at,
         };
-        let mut store = self.session_store.lock().await;
-        Self::prune_sessions_if_needed(&mut store);
-        store.sessions.insert(process_id, entry);
+        let number_sessions = {
+            let mut store = self.session_store.lock().await;
+            Self::prune_sessions_if_needed(&mut store);
+            store.sessions.insert(process_id, entry);
+            store.sessions.len()
+        };
+
+        if number_sessions >= WARNING_UNIFIED_EXEC_SESSIONS {
+            context
+                .session
+                .record_model_warning(
+                    format!("The maximum number of unified exec sessions you can keep open is {WARNING_UNIFIED_EXEC_SESSIONS} and you currently have {number_sessions} sessions open. Reuse older sessions or close them to prevent automatic pruning of old session"),
+                    &context.turn
+                )
+                .await;
+        };
     }
 
     async fn emit_exec_end_from_entry(
@@ -633,9 +647,9 @@ impl UnifiedExecSessionManager {
         collected
     }
 
-    fn prune_sessions_if_needed(store: &mut SessionStore) {
+    fn prune_sessions_if_needed(store: &mut SessionStore) -> bool {
         if store.sessions.len() < MAX_UNIFIED_EXEC_SESSIONS {
-            return;
+            return false;
         }
 
         let meta: Vec<(String, Instant, bool)> = store
@@ -646,7 +660,10 @@ impl UnifiedExecSessionManager {
 
         if let Some(session_id) = Self::session_id_to_prune_from_meta(&meta) {
             store.remove(&session_id);
+            return true;
         }
+
+        false
     }
 
     // Centralized pruning policy so we can easily swap strategies later.

@@ -66,6 +66,7 @@ The JSON-RPC API exposes dedicated methods for managing Codex conversations. Thr
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
 - `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
+- `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
 
 ### 1) Start or resume a thread
 
@@ -240,6 +241,25 @@ containing an `exitedReviewMode` item with the final review text:
 ```
 
 The `review` string is plain text that already bundles the overall explanation plus a bullet list for each structured finding (matching `ThreadItem::ExitedReviewMode` in the generated schema). Use this notification to render the reviewer output in your client.
+
+### 7) One-off command execution
+
+Run a standalone command (argv vector) in the server’s sandbox without creating a thread or turn:
+
+```json
+{ "method": "command/exec", "id": 32, "params": {
+    "command": ["ls", "-la"],
+    "cwd": "/Users/me/project",                    // optional; defaults to server cwd
+    "sandboxPolicy": { "type": "workspaceWrite" }, // optional; defaults to user config
+    "timeoutMs": 10000                             // optional; ms timeout; defaults to server timeout
+} }
+{ "id": 32, "result": { "exitCode": 0, "stdout": "...", "stderr": "" } }
+```
+
+Notes:
+- Empty `command` arrays are rejected.
+- `sandboxPolicy` accepts the same shape used by `turn/start` (e.g., `dangerFullAccess`, `readOnly`, `workspaceWrite` with flags).
+- When omitted, `timeoutMs` falls back to the server default.
 
 ## Events (work-in-progress)
 
