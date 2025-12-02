@@ -1626,7 +1626,7 @@ async fn approving_allow_prefix_persists_policy_and_skips_future_prompts() -> Re
     let policy_contents = fs::read_to_string(&policy_path)?;
     assert!(
         policy_contents
-            .contains("prefix_rule(pattern=[\"printf\",\"allow-prefix-ok\"], decision=\"allow\")"),
+            .contains(r#"prefix_rule(pattern=["printf", "allow-prefix-ok"], decision="allow")"#),
         "unexpected policy contents: {policy_contents}"
     );
 
