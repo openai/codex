@@ -934,6 +934,7 @@ mod tests {
         let toggles = FeatureToggles {
             enable: vec!["web_search_request".to_string()],
             disable: vec!["unified_exec".to_string()],
+            enable_skills: false,
         };
         let overrides = toggles.to_overrides().expect("valid features");
         assert_eq!(
@@ -950,6 +951,7 @@ mod tests {
         let toggles = FeatureToggles {
             enable: vec!["does_not_exist".to_string()],
             disable: Vec::new(),
+            enable_skills: false,
         };
         let err = toggles
             .to_overrides()

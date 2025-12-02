@@ -254,6 +254,7 @@ mod tests {
 
         config.cwd = root.path().to_path_buf();
         config.project_doc_max_bytes = limit;
+        config.features.enable(Feature::Skills);
 
         config.user_instructions = instructions.map(ToOwned::to_owned);
         config
