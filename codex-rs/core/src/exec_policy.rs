@@ -457,7 +457,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         assert_eq!(
             requirement,
             ApprovalRequirement::Forbidden {
-                reason: PROMPT_REASON.to_string()
+                reason: PROMPT_CONFLICT_REASON.to_string()
             }
         );
     }
