@@ -98,6 +98,9 @@ enum CliCommand {
         #[arg()]
         user_message: Option<String>,
     },
+    /// Start two V2 turns that exercise apply_patch without requiring approval.
+    #[command(name = "trigger-patch-update")]
+    TriggerPatchUpdate,
     /// Start a V2 turn that should not elicit an ExecCommand approval.
     #[command(name = "no-trigger-cmd-approval")]
     NoTriggerCmdApproval,
@@ -128,6 +131,7 @@ fn main() -> Result<()> {
         CliCommand::TriggerPatchApproval { user_message } => {
             trigger_patch_approval(codex_bin, user_message)
         }
+        CliCommand::TriggerPatchUpdate => trigger_patch_update(codex_bin),
         CliCommand::NoTriggerCmdApproval => no_trigger_cmd_approval(codex_bin),
         CliCommand::SendFollowUpV2 {
             first_message,
@@ -188,6 +192,26 @@ fn trigger_patch_approval(codex_bin: String, user_message: Option<String>) -> Re
     )
 }
 
+fn trigger_patch_update(codex_bin: String) -> Result<()> {
+    let first_message =
+        "Create a file called apply_patch_demo.txt containing 'new line' using apply_patch";
+    let follow_up_message =
+        "Update apply_patch_demo.txt to contain just 'updated line' using apply_patch";
+    let workspace_write = SandboxPolicy::WorkspaceWrite {
+        writable_roots: Vec::new(),
+        network_access: false,
+        exclude_tmpdir_env_var: false,
+        exclude_slash_tmp: false,
+    };
+    send_two_turns_with_policies(
+        codex_bin,
+        first_message.to_string(),
+        follow_up_message.to_string(),
+        Some(AskForApproval::Never),
+        Some(workspace_write),
+    )
+}
+
 fn no_trigger_cmd_approval(codex_bin: String) -> Result<()> {
     let prompt = "Run `touch should_not_trigger_approval.txt`";
     send_message_v2_with_policies(codex_bin, prompt.to_string(), None, None)
@@ -227,6 +251,16 @@ fn send_follow_up_v2(
     first_message: String,
     follow_up_message: String,
 ) -> Result<()> {
+    send_two_turns_with_policies(codex_bin, first_message, follow_up_message, None, None)
+}
+
+fn send_two_turns_with_policies(
+    codex_bin: String,
+    first_message: String,
+    follow_up_message: String,
+    approval_policy: Option<AskForApproval>,
+    sandbox_policy: Option<SandboxPolicy>,
+) -> Result<()> {
     let mut client = CodexClient::spawn(codex_bin)?;
 
     let initialize = client.initialize()?;
@@ -240,6 +274,8 @@ fn send_follow_up_v2(
         input: vec![V2UserInput::Text {
             text: first_message,
         }],
+        approval_policy: approval_policy.clone(),
+        sandbox_policy: sandbox_policy.clone(),
         ..Default::default()
     };
     let first_turn_response = client.turn_start(first_turn_params)?;
@@ -251,6 +287,8 @@ fn send_follow_up_v2(
         input: vec![V2UserInput::Text {
             text: follow_up_message,
         }],
+        approval_policy,
+        sandbox_policy,
         ..Default::default()
     };
     let follow_up_response = client.turn_start(follow_up_params)?;
