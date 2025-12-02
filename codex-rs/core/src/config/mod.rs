@@ -34,6 +34,7 @@ use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use crate::util::resolve_path;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -1016,15 +1017,8 @@ impl Config {
         let additional_writable_roots: Vec<PathBuf> = additional_writable_roots
             .into_iter()
             .map(|path| {
-                let absolute = if path.is_absolute() {
-                    path
-                } else {
-                    resolved_cwd.join(path)
-                };
-                match canonicalize(&absolute) {
-                    Ok(canonical) => canonical,
-                    Err(_) => absolute,
-                }
+                let absolute = resolve_path(&resolved_cwd, &path);
+                canonicalize(&absolute).unwrap_or(absolute)
             })
             .collect();
         let active_project = cfg
@@ -1299,11 +1293,7 @@ impl Config {
             return Ok(None);
         };
 
-        let full_path = if p.is_relative() {
-            cwd.join(p)
-        } else {
-            p.to_path_buf()
-        };
+        let full_path = resolve_path(cwd, p);
 
         let contents = std::fs::read_to_string(&full_path).map_err(|e| {
             std::io::Error::new(

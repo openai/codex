@@ -21,6 +21,7 @@ use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecResponse;
 use crate::unified_exec::UnifiedExecSessionManager;
 use crate::unified_exec::WriteStdinRequest;
+use crate::util::resolve_path;
 use async_trait::async_trait;
 use serde::Deserialize;
 
@@ -159,13 +160,8 @@ impl ToolHandler for UnifiedExecHandler {
                     .as_deref()
                     .filter(|value| !value.is_empty())
                     .map(PathBuf::from);
-                let workdir = workdir.map(|dir| {
-                    if dir.is_absolute() {
-                        dir
-                    } else {
-                        context.turn.cwd.join(dir)
-                    }
-                });
+
+                let workdir = workdir.map(|dir| resolve_path(context.turn.cwd.as_path(), &dir));
                 let cwd = workdir.clone().unwrap_or_else(|| context.turn.cwd.clone());
 
                 if let Some(output) = intercept_apply_patch(
