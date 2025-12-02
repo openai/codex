@@ -66,7 +66,7 @@ pub fn append_allow_prefix_rule(policy_path: &Path, prefix: &[String]) -> Result
 
     let pattern =
         serde_json::to_string(prefix).map_err(|source| AmendError::SerializePrefix { source })?;
-    let rule = format!("prefix_rule(pattern={pattern}, decision=\"allow\")");
+    let rule = format!(r#"prefix_rule(pattern={pattern}, decision="allow")"#);
 
     let dir = policy_path
         .parent()
@@ -166,7 +166,8 @@ mod tests {
             std::fs::read_to_string(&policy_path).expect("default.codexpolicy should exist");
         assert_eq!(
             contents,
-            "prefix_rule(pattern=[\"echo\",\"Hello, world!\"], decision=\"allow\")\n"
+            r#"prefix_rule(pattern=["echo","Hello, world!"], decision="allow")
+"#
         );
     }
 
@@ -177,7 +178,8 @@ mod tests {
         std::fs::create_dir_all(policy_path.parent().unwrap()).expect("create policy dir");
         std::fs::write(
             &policy_path,
-            "prefix_rule(pattern=[\"ls\"], decision=\"allow\")\n",
+            r#"prefix_rule(pattern=["ls"], decision="allow")
+"#,
         )
         .expect("write seed rule");
 
@@ -190,7 +192,9 @@ mod tests {
         let contents = std::fs::read_to_string(&policy_path).expect("read policy");
         assert_eq!(
             contents,
-            "prefix_rule(pattern=[\"ls\"], decision=\"allow\")\nprefix_rule(pattern=[\"echo\",\"Hello, world!\"], decision=\"allow\")\n"
+            r#"prefix_rule(pattern=["ls"], decision="allow")
+prefix_rule(pattern=["echo","Hello, world!"], decision="allow")
+"#
         );
     }
 
@@ -201,7 +205,7 @@ mod tests {
         std::fs::create_dir_all(policy_path.parent().unwrap()).expect("create policy dir");
         std::fs::write(
             &policy_path,
-            "prefix_rule(pattern=[\"ls\"], decision=\"allow\")",
+            r#"prefix_rule(pattern=["ls"], decision="allow")"#,
         )
         .expect("write seed rule without newline");
 
@@ -214,7 +218,9 @@ mod tests {
         let contents = std::fs::read_to_string(&policy_path).expect("read policy");
         assert_eq!(
             contents,
-            "prefix_rule(pattern=[\"ls\"], decision=\"allow\")\nprefix_rule(pattern=[\"echo\",\"Hello, world!\"], decision=\"allow\")\n"
+            r#"prefix_rule(pattern=["ls"], decision="allow")
+prefix_rule(pattern=["echo","Hello, world!"], decision="allow")
+"#
         );
     }
 }
