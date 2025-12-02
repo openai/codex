@@ -72,10 +72,6 @@ impl TruncationPolicy {
             TruncationPolicy::Tokens(tokens) => approx_bytes_for_tokens(*tokens),
         }
     }
-
-    pub fn no_truncation() -> Self {
-        TruncationPolicy::Tokens(999_999)
-    }
 }
 
 pub(crate) fn formatted_truncate_text(content: &str, policy: TruncationPolicy) -> String {
