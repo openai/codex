@@ -20,6 +20,7 @@ use codex_core::protocol::AgentReasoningRawContentDeltaEvent;
 use codex_core::protocol::AgentReasoningRawContentEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::BackgroundEventEvent;
+use codex_core::protocol::CreditsSnapshot;
 use codex_core::protocol::DeprecationNoticeEvent;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::Event;
@@ -558,7 +559,19 @@ impl ChatWidget {
     }
 
     pub(crate) fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshot>) {
-        if let Some(snapshot) = snapshot {
+        if let Some(mut snapshot) = snapshot {
+            if snapshot.credits.is_none() {
+                snapshot.credits = self
+                    .rate_limit_snapshot
+                    .as_ref()
+                    .and_then(|display| display.credits.as_ref())
+                    .map(|credits| CreditsSnapshot {
+                        has_credits: credits.has_credits,
+                        unlimited: credits.unlimited,
+                        balance: credits.balance.clone(),
+                    });
+            }
+
             let warnings = self.rate_limit_warnings.take_warnings(
                 snapshot
                     .secondary

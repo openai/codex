@@ -16,7 +16,12 @@
 
 use std::fs::File;
 use std::fs::OpenOptions;
+use std::io::BufRead;
+use std::io::BufReader;
+use std::io::Read;
 use std::io::Result;
+use std::io::Seek;
+use std::io::SeekFrom;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
@@ -39,6 +44,9 @@ use std::os::unix::fs::PermissionsExt;
 
 /// Filename that stores the message history inside `~/.codex`.
 const HISTORY_FILENAME: &str = "history.jsonl";
+
+/// When history exceeds the hard cap, trim it down to this fraction of `max_bytes`.
+const HISTORY_SOFT_CAP_RATIO: f64 = 0.8;
 
 const MAX_RETRIES: usize = 10;
 const RETRY_SLEEP: Duration = Duration::from_millis(100);
@@ -98,11 +106,12 @@ pub(crate) async fn append_entry(
         .map_err(|e| std::io::Error::other(format!("failed to serialise history entry: {e}")))?;
     line.push('\n');
 
-    // Open in append-only mode.
+    // Open the history file for read/write access (append-only on Unix).
     let mut options = OpenOptions::new();
-    options.append(true).read(true).create(true);
+    options.read(true).write(true).create(true);
     #[cfg(unix)]
     {
+        options.append(true);
         options.mode(0o600);
     }
 
@@ -111,6 +120,8 @@ pub(crate) async fn append_entry(
     // Ensure permissions.
     ensure_owner_only_permissions(&history_file).await?;
 
+    let history_max_bytes = config.history.max_bytes;
+
     // Perform a blocking write under an advisory write lock using std::fs.
     tokio::task::spawn_blocking(move || -> Result<()> {
         // Retry a few times to avoid indefinite blocking when contended.
@@ -118,8 +129,12 @@ pub(crate) async fn append_entry(
             match history_file.try_lock() {
                 Ok(()) => {
                     // While holding the exclusive lock, write the full line.
+                    // We do not open the file with `append(true)` on Windows, so ensure the
+                    // cursor is positioned at the end before writing.
+                    history_file.seek(SeekFrom::End(0))?;
                     history_file.write_all(line.as_bytes())?;
                     history_file.flush()?;
+                    enforce_history_limit(&mut history_file, history_max_bytes)?;
                     return Ok(());
                 }
                 Err(std::fs::TryLockError::WouldBlock) => {
@@ -139,6 +154,93 @@ pub(crate) async fn append_entry(
     Ok(())
 }
 
+/// Trim the history file to honor `max_bytes`, dropping the oldest lines while holding
+/// the write lock so the newest entry is always retained. When the file exceeds the
+/// hard cap, it rewrites the remaining tail to a soft cap to avoid trimming again
+/// immediately on the next write.
+fn enforce_history_limit(file: &mut File, max_bytes: Option<usize>) -> Result<()> {
+    let Some(max_bytes) = max_bytes else {
+        return Ok(());
+    };
+
+    if max_bytes == 0 {
+        return Ok(());
+    }
+
+    let max_bytes = match u64::try_from(max_bytes) {
+        Ok(value) => value,
+        Err(_) => return Ok(()),
+    };
+
+    let mut current_len = file.metadata()?.len();
+
+    if current_len <= max_bytes {
+        return Ok(());
+    }
+
+    let mut reader_file = file.try_clone()?;
+    reader_file.seek(SeekFrom::Start(0))?;
+
+    let mut buf_reader = BufReader::new(reader_file);
+    let mut line_lengths = Vec::new();
+    let mut line_buf = String::new();
+
+    loop {
+        line_buf.clear();
+
+        let bytes = buf_reader.read_line(&mut line_buf)?;
+
+        if bytes == 0 {
+            break;
+        }
+
+        line_lengths.push(bytes as u64);
+    }
+
+    if line_lengths.is_empty() {
+        return Ok(());
+    }
+
+    let last_index = line_lengths.len() - 1;
+    let trim_target = trim_target_bytes(max_bytes, line_lengths[last_index]);
+
+    let mut drop_bytes = 0u64;
+    let mut idx = 0usize;
+
+    while current_len > trim_target && idx < last_index {
+        current_len = current_len.saturating_sub(line_lengths[idx]);
+        drop_bytes += line_lengths[idx];
+        idx += 1;
+    }
+
+    if drop_bytes == 0 {
+        return Ok(());
+    }
+
+    let mut reader = buf_reader.into_inner();
+    reader.seek(SeekFrom::Start(drop_bytes))?;
+
+    let capacity = usize::try_from(current_len).unwrap_or(0);
+    let mut tail = Vec::with_capacity(capacity);
+
+    reader.read_to_end(&mut tail)?;
+
+    file.set_len(0)?;
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(&tail)?;
+    file.flush()?;
+
+    Ok(())
+}
+
+fn trim_target_bytes(max_bytes: u64, newest_entry_len: u64) -> u64 {
+    let soft_cap_bytes = ((max_bytes as f64) * HISTORY_SOFT_CAP_RATIO)
+        .floor()
+        .clamp(1.0, max_bytes as f64) as u64;
+
+    soft_cap_bytes.max(newest_entry_len)
+}
+
 /// Asynchronously fetch the history file's *identifier* (inode on Unix) and
 /// the current number of entries by counting newline characters.
 pub(crate) async fn history_metadata(config: &Config) -> (u64, usize) {
@@ -154,7 +256,6 @@ pub(crate) async fn history_metadata(config: &Config) -> (u64, usize) {
 ///
 /// Note this function is not async because it uses a sync advisory file
 /// locking API.
-#[cfg(any(unix, windows))]
 pub(crate) fn lookup(log_id: u64, offset: usize, config: &Config) -> Option<HistoryEntry> {
     let path = history_filepath(config);
     lookup_history_entry(&path, log_id, offset)
@@ -211,7 +312,6 @@ async fn history_metadata_for_file(path: &Path) -> (u64, usize) {
     (log_id, count)
 }
 
-#[cfg(any(unix, windows))]
 fn lookup_history_entry(path: &Path, log_id: u64, offset: usize) -> Option<HistoryEntry> {
     use std::io::BufRead;
     use std::io::BufReader;
@@ -281,23 +381,30 @@ fn lookup_history_entry(path: &Path, log_id: u64, offset: usize) -> Option<Histo
     None
 }
 
+#[cfg(unix)]
 fn history_log_id(metadata: &std::fs::Metadata) -> Option<u64> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        Some(metadata.ino())
-    }
-
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        Some(metadata.creation_time())
-    }
+    use std::os::unix::fs::MetadataExt;
+    Some(metadata.ino())
 }
 
-#[cfg(all(test, any(unix, windows)))]
+#[cfg(windows)]
+fn history_log_id(metadata: &std::fs::Metadata) -> Option<u64> {
+    use std::os::windows::fs::MetadataExt;
+    Some(metadata.creation_time())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn history_log_id(_metadata: &std::fs::Metadata) -> Option<u64> {
+    None
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
+    use crate::config::ConfigOverrides;
+    use crate::config::ConfigToml;
+    use codex_protocol::ConversationId;
     use pretty_assertions::assert_eq;
     use std::fs::File;
     use std::io::Write;
@@ -380,5 +487,132 @@ mod tests {
         let fetched =
             lookup_history_entry(&history_path, log_id, 1).expect("lookup appended history entry");
         assert_eq!(fetched, appended);
+    }
+
+    #[tokio::test]
+    async fn append_entry_trims_history_when_beyond_max_bytes() {
+        let codex_home = TempDir::new().expect("create temp dir");
+
+        let mut config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )
+        .expect("load config");
+
+        let conversation_id = ConversationId::new();
+
+        let entry_one = "a".repeat(200);
+        let entry_two = "b".repeat(200);
+
+        let history_path = codex_home.path().join("history.jsonl");
+
+        append_entry(&entry_one, &conversation_id, &config)
+            .await
+            .expect("write first entry");
+
+        let first_len = std::fs::metadata(&history_path).expect("metadata").len();
+        let limit_bytes = first_len + 10;
+
+        config.history.max_bytes =
+            Some(usize::try_from(limit_bytes).expect("limit should fit into usize"));
+
+        append_entry(&entry_two, &conversation_id, &config)
+            .await
+            .expect("write second entry");
+
+        let contents = std::fs::read_to_string(&history_path).expect("read history");
+
+        let entries = contents
+            .lines()
+            .map(|line| serde_json::from_str::<HistoryEntry>(line).expect("parse entry"))
+            .collect::<Vec<HistoryEntry>>();
+
+        assert_eq!(
+            entries.len(),
+            1,
+            "only one entry left because entry_one should be evicted"
+        );
+        assert_eq!(entries[0].text, entry_two);
+        assert!(std::fs::metadata(&history_path).expect("metadata").len() <= limit_bytes);
+    }
+
+    #[tokio::test]
+    async fn append_entry_trims_history_to_soft_cap() {
+        let codex_home = TempDir::new().expect("create temp dir");
+
+        let mut config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )
+        .expect("load config");
+
+        let conversation_id = ConversationId::new();
+
+        let short_entry = "a".repeat(200);
+        let long_entry = "b".repeat(400);
+
+        let history_path = codex_home.path().join("history.jsonl");
+
+        append_entry(&short_entry, &conversation_id, &config)
+            .await
+            .expect("write first entry");
+
+        let short_entry_len = std::fs::metadata(&history_path).expect("metadata").len();
+
+        append_entry(&long_entry, &conversation_id, &config)
+            .await
+            .expect("write second entry");
+
+        let two_entry_len = std::fs::metadata(&history_path).expect("metadata").len();
+
+        let long_entry_len = two_entry_len
+            .checked_sub(short_entry_len)
+            .expect("second entry length should be larger than first entry length");
+
+        config.history.max_bytes = Some(
+            usize::try_from((2 * long_entry_len) + (short_entry_len / 2))
+                .expect("max bytes should fit into usize"),
+        );
+
+        append_entry(&long_entry, &conversation_id, &config)
+            .await
+            .expect("write third entry");
+
+        let contents = std::fs::read_to_string(&history_path).expect("read history");
+
+        let entries = contents
+            .lines()
+            .map(|line| serde_json::from_str::<HistoryEntry>(line).expect("parse entry"))
+            .collect::<Vec<HistoryEntry>>();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].text, long_entry);
+
+        let pruned_len = std::fs::metadata(&history_path).expect("metadata").len() as u64;
+        let max_bytes = config
+            .history
+            .max_bytes
+            .expect("max bytes should be configured") as u64;
+
+        assert!(pruned_len <= max_bytes);
+
+        let soft_cap_bytes = ((max_bytes as f64) * HISTORY_SOFT_CAP_RATIO)
+            .floor()
+            .clamp(1.0, max_bytes as f64) as u64;
+        let len_without_first = 2 * long_entry_len;
+
+        assert!(
+            len_without_first <= max_bytes,
+            "dropping only the first entry would satisfy the hard cap"
+        );
+        assert!(
+            len_without_first > soft_cap_bytes,
+            "soft cap should require more aggressive trimming than the hard cap"
+        );
+
+        assert_eq!(pruned_len, long_entry_len);
+        assert!(pruned_len <= soft_cap_bytes.max(long_entry_len));
     }
 }
