@@ -102,3 +102,19 @@ If you don’t have the tool:
   let request = mock.single_request();
   // assert using request.function_call_output(call_id) or request.json_body() or other helpers.
   ```
+
+## Kotlin Porting Guidelines
+
+### Semantic Parity (The "Dishonest Code" Rule)
+- **Rule:** Port the *intent* and *behavior* of the code, not just the syntax.
+- **Context:** Rust's `Display` trait often implies specific formatting contracts (e.g., ANSI codes, truncation, padding) that are critical for user experience.
+- **Warning:** Do **not** oversimplify `impl Display` to a simple `toString()` that returns a constant or a raw value if the original code performed formatting.
+    - *Bad Example:* Replacing a `Display` impl that handles ANSI reset codes with `fun toString() = "RESET"`.
+    - *Good Example:* `TruncationPolicy.kt` faithfully reproducing the `formattedTruncateText` logic to preserve output structure.
+- **Action:** When porting `Display` or `Debug`, check if the Rust code does more than just return a field. If so, the Kotlin `toString()` (or a helper method) must replicate that logic.
+
+### Research First
+- **Rule:** Do not guess at the behavior of Rust functions or traits.
+- **Action:** Use the browser to look up the official Rust documentation (e.g., `std::process::ChildStdin`, `core::fmt::Formatter`) if you are not 100% sure of the semantics.
+- **Context:** Rust's type system and traits often carry subtle behaviors (buffering, blocking, formatting state) that are not obvious from the function signature alone.
+- **Example:** `core::fmt::Formatter` manages padding, alignment, and flags. A simple string concatenation in Kotlin is often an insufficient port if the original Rust code used these features.

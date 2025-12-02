@@ -674,13 +674,16 @@ class PortLinter:
         # Phase 1: Match target files with explicit source annotations
         for target_node in self.target_tree.root.flatten_files():
             source = self.target_tree.get_source_annotation(target_node)
-            if source and source in source_by_path:
-                source_node = source_by_path[source]
-                target_node.match_status = MatchStatus.MATCHED
-                target_node.matched_node = source_node
-                source_node.match_status = MatchStatus.MATCHED
-                source_node.matched_node = target_node
-                self._annotation_matches.append((target_node, source_node, source))
+            if source:
+                if source in source_by_path:
+                    source_node = source_by_path[source]
+                    target_node.match_status = MatchStatus.MATCHED
+                    target_node.matched_node = source_node
+                    source_node.match_status = MatchStatus.MATCHED
+                    source_node.matched_node = target_node
+                    self._annotation_matches.append((target_node, source_node, source))
+                else:
+                    print(f"WARNING: Invalid source annotation in {target_node.relative_path(self.target_root)}: '{source}' not found in source tree")
 
         # Phase 2: Match remaining source files by namespace path
         for source_node in self.source_tree.root.flatten_files():

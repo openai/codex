@@ -1,4 +1,4 @@
-// port-lint: source protocol/src/message_history.rs
+// port-lint: source codex-rs/protocol/src/message_history.rs
 package ai.solace.coder.protocol
 
 import kotlinx.serialization.SerialName

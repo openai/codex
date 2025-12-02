@@ -1,14 +1,21 @@
-// port-lint: source exec/src/lib.rs
-package ai.solace.coder.exec.process
+// port-lint: source core/src/spawn.rs
+package ai.solace.coder.core
 
 /**
  * Platform-specific process handle
  */
 expect class ProcessHandle {
-    val stdout: ByteArray?
+    val pid: Int
+    val stdout: ByteArray? // Keep for backward compat or remove? Exec.kt uses it. I'll keep it but it might be empty if streamed.
     val stderr: ByteArray?
 
     suspend fun onAwait(): Int
+    
+    fun readStdout(buffer: ByteArray): Int
+    fun readStderr(buffer: ByteArray): Int
+    fun close()
+    fun kill()
+    fun isAlive(): Boolean
 }
 
 /**

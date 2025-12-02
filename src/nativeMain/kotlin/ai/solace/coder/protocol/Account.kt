@@ -1,4 +1,4 @@
-// port-lint: source protocol/src/account.rs
+// port-lint: source codex-rs/protocol/src/account.rs
 package ai.solace.coder.protocol
 
 import kotlinx.serialization.SerialName

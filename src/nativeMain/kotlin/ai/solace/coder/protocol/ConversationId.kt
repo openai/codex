@@ -1,4 +1,4 @@
-// port-lint: source protocol/src/conversation_id.rs
+// port-lint: source codex-rs/protocol/src/conversation_id.rs
 package ai.solace.coder.protocol
 
 import kotlin.uuid.ExperimentalUuidApi

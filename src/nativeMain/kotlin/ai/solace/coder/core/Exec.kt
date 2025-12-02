@@ -1,5 +1,5 @@
 // port-lint: source core/src/exec.rs
-package ai.solace.coder.exec.process
+package ai.solace.coder.core
 
 import ai.solace.coder.core.error.CodexError
 import ai.solace.coder.core.error.CodexResult
@@ -23,14 +23,7 @@ import kotlin.time.measureTime
 /**
  * Configuration for process execution
  *
- * TODO: Port from Rust codex-rs/core/src/exec.rs:
- * - [ ] Full SandboxType enum (None, MacosSeatbelt, LinuxSeccomp, WindowsRestrictedToken)
- * - [ ] execute_exec_env() with sandbox transformation
- * - [ ] is_likely_sandbox_denied() for detecting sandbox violations
- * - [ ] StdoutStream callback for real-time output streaming
- * - [ ] Windows restricted token sandbox support
- * - [ ] Platform-specific process spawning (see codex-rs/core/src/spawn.rs)
- * - [ ] arg0 override for process naming
+ * Configuration for process execution
  */
 data class ExecParams(
     val command: List<String>,
@@ -49,6 +42,16 @@ sealed class ExecExpiration {
     data class Timeout(val duration: kotlin.time.Duration) : ExecExpiration()
     object DefaultTimeout : ExecExpiration()
     data class Cancellation(val cancelToken: kotlinx.coroutines.Job) : ExecExpiration()
+
+    companion object {
+        fun fromTimeoutMs(timeoutMs: Long?): ExecExpiration {
+            return if (timeoutMs != null) {
+                Timeout(kotlin.time.Duration.milliseconds(timeoutMs))
+            } else {
+                DefaultTimeout
+            }
+        }
+    }
 }
 
 /**
@@ -103,7 +106,10 @@ data class StdoutStream(
 /**
  * Main process executor with timeout and streaming support
  */
-class ProcessExecutor {
+/**
+ * Main process executor with timeout and streaming support
+ */
+class Exec {
     companion object {
         private const val DEFAULT_EXEC_COMMAND_TIMEOUT_MS = 10_000L
         private const val SIGKILL_CODE = 9
@@ -158,7 +164,7 @@ class ProcessExecutor {
             val duration = measureTime {
                 rawOutput = executeEnv(execEnv, sandboxPolicy, stdoutStream, this)
             }
-            val output = finalizeExecResult(rawOutput, duration)
+            val output = finalizeExecResult(rawOutput, execEnv.sandbox, duration)
             
             CodexResult.success(output)
         } catch (e: Exception) {
@@ -207,11 +213,33 @@ class ProcessExecutor {
     /**
      * Execute the transformed environment
      */
-    private suspend fun executeEnv(
+    /**
+     * Execute the transformed environment and return finalized output
+     */
+    suspend fun executeExecEnv(
         env: ExecEnv,
         sandboxPolicy: SandboxPolicy,
-        stdoutStream: StdoutStream?,
-        scope: CoroutineScope
+        stdoutStream: StdoutStream?
+    ): CodexResult<ExecToolCallOutput> = withContext(Dispatchers.Default) {
+        try {
+            lateinit var rawOutput: RawExecToolCallOutput
+            val duration = measureTime {
+                rawOutput = executeEnv(env, sandboxPolicy, stdoutStream)
+            }
+            val output = finalizeExecResult(rawOutput, env.sandbox, duration)
+            CodexResult.success(output)
+        } catch (e: Exception) {
+            CodexResult.failure(CodexError.Io("Process execution failed: ${e.message}"))
+        }
+    }
+
+    /**
+     * Execute the transformed environment (internal, raw output)
+     */
+    internal suspend fun executeEnv(
+        env: ExecEnv,
+        sandboxPolicy: SandboxPolicy,
+        stdoutStream: StdoutStream?
     ): RawExecToolCallOutput {
         return exec(env.command, env.cwd, env.env, env.expiration, stdoutStream)
     }
@@ -334,6 +362,7 @@ class ProcessExecutor {
      */
     private suspend fun finalizeExecResult(
         rawOutput: RawExecToolCallOutput,
+        sandboxType: SandboxType,
         duration: kotlin.time.Duration
     ): ExecToolCallOutput {
         var timedOut = rawOutput.timedOut
@@ -349,7 +378,7 @@ class ProcessExecutor {
         val stderr = rawOutput.stderr.fromUtf8Lossy()
         val aggregatedOutput = rawOutput.aggregatedOutput.fromUtf8Lossy()
 
-        return ExecToolCallOutput(
+        val execOutput = ExecToolCallOutput(
             exitCode = exitCode,
             stdout = stdout,
             stderr = stderr,
@@ -357,39 +386,23 @@ class ProcessExecutor {
             duration = duration,
             timedOut = timedOut
         )
-    }
 
-    /**
-     * Check if execution likely failed due to sandbox restrictions
-     */
-    private fun isLikelySandboxDenied(execOutput: ExecToolCallOutput): Boolean {
-        if (execOutput.exitCode == 0) return false
-
-        // Quick rejects: well-known non-sandbox shell exit codes
-        val quickRejectExitCodes = setOf(2, 126, 127)
-        if (quickRejectExitCodes.contains(execOutput.exitCode)) return false
-
-        val sandboxDeniedKeywords = listOf(
-            "operation not permitted",
-            "permission denied", 
-            "read-only file system",
-            "seccomp",
-            "sandbox",
-            "landlock",
-            "failed to write file"
-        )
-
-        val hasSandboxKeyword = listOf(
-            execOutput.stderr.text,
-            execOutput.stdout.text,
-            execOutput.aggregatedOutput.text
-        ).any { section ->
-            section.lowercase().let { lower ->
-                sandboxDeniedKeywords.any { keyword -> lower.contains(keyword) }
-            }
+        // Check for sandbox denial
+        if (isLikelySandboxDenied(sandboxType, execOutput)) {
+             // In Rust this returns an error. Here we might want to flag it or return failure?
+             // Rust: return Err(CodexErr::Sandbox(SandboxErr::Denied { ... }))
+             // Kotlin: We return ExecToolCallOutput. Maybe we should throw or return Result?
+             // The signature returns ExecToolCallOutput.
+             // But the caller wraps it in CodexResult.success.
+             // If denied, we should probably throw an exception that is caught in execute() and converted to failure?
+             // Or change finalizeExecResult to return CodexResult?
+             // Let's throw a specific exception for now or just log it?
+             // Rust returns Err.
+             // I'll throw a SandboxDeniedException (need to define it or use CodexError)
+             throw CodexError.Sandbox("Sandbox denied execution")
         }
 
-        return hasSandboxKeyword
+        return execOutput
     }
 
     /**
@@ -413,6 +426,58 @@ class ProcessExecutor {
         killPlatformChildProcessGroup(process)
     }
 }
+
+/**
+ * Check if execution likely failed due to sandbox restrictions
+ */
+fun isLikelySandboxDenied(
+    sandboxType: SandboxType, // Added sandboxType arg to match usage in Sandboxing.kt if needed, or just check output
+    execOutput: ExecToolCallOutput
+): Boolean {
+    // Note: The original private method didn't take sandboxType, but Rust does.
+    // Sandboxing.kt calls it with (sandbox, output).
+    // So I should update the signature to match Rust and Sandboxing.kt usage.
+    
+    if (sandboxType == SandboxType.None || execOutput.exitCode == 0) return false
+
+    // Quick rejects: well-known non-sandbox shell exit codes
+    val quickRejectExitCodes = setOf(2, 126, 127)
+    if (quickRejectExitCodes.contains(execOutput.exitCode)) return false
+
+    val sandboxDeniedKeywords = listOf(
+        "operation not permitted",
+        "permission denied", 
+        "read-only file system",
+        "seccomp",
+        "sandbox",
+        "landlock",
+        "failed to write file"
+    )
+
+    val hasSandboxKeyword = listOf(
+        execOutput.stderr.text,
+        execOutput.stdout.text,
+        execOutput.aggregatedOutput.text
+    ).any { section ->
+        section.lowercase().let { lower ->
+            sandboxDeniedKeywords.any { keyword -> lower.contains(keyword) }
+        }
+    }
+
+    return hasSandboxKeyword
+}
+
+/**
+ * Overload for internal usage if needed, or just update internal usage.
+ * The internal usage in finalizeExecResult didn't pass sandboxType.
+ * I need to update finalizeExecResult to pass sandboxType if I change the signature.
+ * But finalizeExecResult doesn't have access to sandboxType in the current structure easily unless passed down.
+ * In Rust, finalize_exec_result takes sandbox_type.
+ * In Kotlin Exec.kt, finalizeExecResult is called from execute.
+ * execute has sandboxEnv which contains sandbox type? No, executeEnv returns RawExecToolCallOutput.
+ * execute has `execEnv` which has `sandbox` field (SandboxType).
+ * So I can pass `execEnv.sandbox` to finalizeExecResult.
+ */
 
 /**
  * Extension function to split list into first element and rest

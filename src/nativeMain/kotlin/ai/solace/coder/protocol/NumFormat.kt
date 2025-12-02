@@ -1,4 +1,4 @@
-// port-lint: source protocol/src/num_format.rs
+// port-lint: source codex-rs/protocol/src/num_format.rs
 package ai.solace.coder.protocol
 
 import kotlin.math.pow

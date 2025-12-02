@@ -1,4 +1,4 @@
-// port-lint: source protocol/src/models.rs
+// port-lint: source codex-rs/protocol/src/models.rs
 package ai.solace.coder.protocol
 
 import ai.solace.coder.protocol.RateLimitSnapshot

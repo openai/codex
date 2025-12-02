@@ -19,42 +19,37 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 class ApprovalStore {
+    private val mutex = Mutex()
     private val map = mutableMapOf<String, ReviewDecision>()
 
-    fun <K> get(key: K): ReviewDecision? where K : Any {
-        // Assuming K is serializable or we have a way to serialize it
-        // For now using toString() as a placeholder if not strictly serializable in Kotlin Native context easily without reflection
-        // Ideally we should use kotlinx.serialization
-        val s = try {
-            // This requires K to be marked @Serializable and using a serializer, which is hard with generics in Kotlin
-            // We might need to pass a serializer or restrict K
-            // For now, let's assume key.toString() is unique enough or use a specific interface
-            key.toString() 
-        } catch (e: Exception) {
-            return null
+    suspend fun <K> get(key: K): ReviewDecision? where K : Any {
+        return mutex.withLock {
+            val s = key.toString()
+            map[s]
         }
-        return map[s]
     }
 
-    fun <K> put(key: K, value: ReviewDecision) where K : Any {
-        val s = key.toString()
-        map[s] = value
+    suspend fun <K> put(key: K, value: ReviewDecision) where K : Any {
+        mutex.withLock {
+            val s = key.toString()
+            map[s] = value
+        }
     }
 }
 
 suspend fun <K> withCachedApproval(
-    services: SessionServices, // Placeholder for SessionServices
+    services: SessionServices,
     key: K,
     fetch: suspend () -> ReviewDecision
 ): ReviewDecision where K : Any {
     val store = services.toolApprovals
-    // lock logic
-    // store.get(key)?.let { return it }
+    
+    store.get(key)?.let { return it }
     
     val decision = fetch()
     
     if (decision == ReviewDecision.ApprovedForSession) {
-        // store.put(key, decision)
+        store.put(key, decision)
     }
     
     return decision

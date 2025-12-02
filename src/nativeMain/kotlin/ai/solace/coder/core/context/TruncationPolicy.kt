@@ -1,4 +1,4 @@
-// port-lint: source core/src/context_manager/normalize.rs
+// port-lint: source core/src/truncate.rs
 package ai.solace.coder.core.context
 
 /**

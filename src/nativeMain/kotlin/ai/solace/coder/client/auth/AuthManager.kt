@@ -1,4 +1,6 @@
-// port-lint: source codex-api/src/auth.rs
+// port-lint: sources codex-rs/codex-api/src/auth.rs, codex-rs/core/src/auth.rs
+// NOTE: Kotlin package ai.solace.coder.client.auth maps conceptually to Rust crates codex-api (auth provider/helpers)
+// and codex-core (AuthManager, storage). The Kotlin file consolidates pieces from both for KMP usage.
 package ai.solace.coder.client.auth
 
 import ai.solace.coder.core.error.CodexError
@@ -14,7 +16,9 @@ import kotlinx.cinterop.toKString
  * Loads once (or on preference change) and then hands out cloned CodexAuth values
  * so the rest of the program has a consistent snapshot.
  *
- * Ported from Rust codex-rs/core/src/auth.rs AuthManager
+ * Port origins (Rust):
+ * - codex-rs/core/src/auth.rs (AuthManager, storage modes)
+ * - codex-rs/codex-api/src/auth.rs (AuthProvider trait, add_auth_headers)
  *
  * Implemented features:
  * - [x] Environment variable detection for API keys (OPENAI_API_KEY, CODEX_API_KEY)

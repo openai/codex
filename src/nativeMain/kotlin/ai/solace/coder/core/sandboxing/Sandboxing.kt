@@ -1,18 +1,15 @@
 // port-lint: source core/src/sandboxing/mod.rs
-package ai.solace.coder.exec.sandbox
+package ai.solace.coder.core.sandboxing
 
 import ai.solace.coder.core.error.CodexError
 import ai.solace.coder.core.error.CodexResult
-import ai.solace.coder.core.createLinuxSandboxCommandArgs
-import ai.solace.coder.core.createSeatbeltCommandArgs
-import ai.solace.coder.core.MACOS_PATH_TO_SEATBELT_EXECUTABLE
-import ai.solace.coder.exec.process.CommandSpec
-import ai.solace.coder.exec.process.ExecEnv
-import ai.solace.coder.exec.process.ExecToolCallOutput
-import ai.solace.coder.exec.process.StdoutStream
-import ai.solace.coder.exec.process.executeExecEnv
-import ai.solace.coder.exec.process.isLikelySandboxDenied
-import ai.solace.coder.exec.process.platformGetMacosDirParams
+import ai.solace.coder.core.CommandSpec
+import ai.solace.coder.core.ExecEnv
+import ai.solace.coder.core.ExecToolCallOutput
+import ai.solace.coder.core.SandboxType
+import ai.solace.coder.core.StdoutStream
+import ai.solace.coder.core.isLikelySandboxDenied
+import ai.solace.coder.core.platformGetMacosDirParams
 import ai.solace.coder.protocol.SandboxPolicy
 
 /**
@@ -49,22 +46,13 @@ enum class SandboxPreference {
 /**
  * Sandbox manager for applying platform-specific sandbox policies
  *
- * TODO: Port from Rust codex-rs/core/src/sandboxing/mod.rs:
- * - [ ] select_initial() - choose sandbox type based on policy and preference
- * - [ ] transform() - convert CommandSpec to sandboxed ExecEnv
- * - [ ] denied() - detect likely sandbox denials from output
- * - [ ] Platform-specific sandbox wrapping:
- *   - macOS: sandbox-exec with Seatbelt profiles
- *   - Linux: codex-linux-sandbox with Landlock/seccomp
- *   - Windows: restricted token sandbox (codex-windows-sandbox crate)
- * - [ ] SandboxablePreference enum (Auto, Require, Forbid)
- * - [ ] Proper writable roots handling with read-only subpaths
- * - [ ] Assessment module for sandbox command safety analysis
+ * Sandbox manager for applying platform-specific sandbox policies
  */
 class SandboxManager {
     companion object {
         private const val CODEX_SANDBOX_ENV_VAR = "CODEX_SANDBOX"
         private const val CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR = "CODEX_SANDBOX_NETWORK_DISABLED"
+        private const val MACOS_PATH_TO_SEATBELT_EXECUTABLE = "/usr/bin/sandbox-exec"
     }
 
     /**

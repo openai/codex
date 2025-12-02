@@ -1,4 +1,4 @@
-// port-lint: source protocol/src/custom_prompts.rs
+// port-lint: source codex-rs/protocol/src/custom_prompts.rs
 package ai.solace.coder.protocol
 
 import kotlinx.serialization.SerialName

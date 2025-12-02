@@ -17,7 +17,7 @@ import okio.use
  *
  * Ported from Rust codex-rs/core/src/tools/handlers/read_file.rs
  */
-class ReadFileHandler : ToolHandler {
+class ReadFileHandler(private val fileSystem: FileSystem = FileSystem.SYSTEM) : ToolHandler {
 
     override val kind: ToolKind = ToolKind.Function
 
@@ -78,6 +78,221 @@ class ReadFileHandler : ToolHandler {
         }
     }
 
+    /**
+     * Read a simple slice of lines from a file.
+     */
+    private fun readSlice(filePath: String, offset: Int, limit: Int): List<String> {
+        val path = filePath.toPath()
+        val collected = mutableListOf<String>()
+        var lineNumber = 0
+
+        fileSystem.source(path).buffer().use { source ->
+            while (true) {
+                val line = source.readUtf8Line() ?: break
+                lineNumber++
+
+                if (lineNumber < offset) continue
+                if (collected.size >= limit) break
+
+                val formatted = formatLine(line)
+                collected.add("L$lineNumber: $formatted")
+            }
+        }
+
+        if (lineNumber < offset) {
+            throw IllegalArgumentException("offset exceeds file length")
+        }
+
+        return collected
+    }
+
+    /**
+     * Read an indentation-aware block from a file.
+     */
+    private fun readIndentationBlock(
+        filePath: String,
+        offset: Int,
+        limit: Int,
+        options: IndentationArgs
+    ): List<String> {
+        val anchorLine = options.anchorLine ?: offset
+        if (anchorLine == 0) {
+            throw IllegalArgumentException("anchorLine must be a 1-indexed line number")
+        }
+
+        val guardLimit = options.maxLines ?: limit
+        if (guardLimit == 0) {
+            throw IllegalArgumentException("max_lines must be greater than zero")
+        }
+
+        // Collect all lines from file
+        val allLines = collectFileLines(filePath)
+        if (allLines.isEmpty() || anchorLine > allLines.size) {
+            throw IllegalArgumentException("anchor_line exceeds file length")
+        }
+
+        val anchorIndex = anchorLine - 1
+        val effectiveIndents = computeEffectiveIndents(allLines)
+        val anchorIndent = effectiveIndents[anchorIndex]
+
+        // Compute min indent based on maxLevels
+        val minIndent = if (options.maxLevels == 0) {
+            0
+        } else {
+            maxOf(0, anchorIndent - options.maxLevels * TAB_WIDTH)
+        }
+
+        // Cap requested lines
+        val finalLimit = minOf(limit, guardLimit, allLines.size)
+
+        if (finalLimit == 1) {
+            return listOf("L${allLines[anchorIndex].number}: ${allLines[anchorIndex].display}")
+        }
+
+        // Build output using bidirectional expansion
+        val out = ArrayDeque<LineRecord>()
+        out.addLast(allLines[anchorIndex])
+
+        var i = anchorIndex - 1  // up cursor
+        var j = anchorIndex + 1  // down cursor
+        var iCounterMinIndent = 0
+        var jCounterMinIndent = 0
+
+        while (out.size < finalLimit) {
+            var progressed = 0
+
+            // Expand upward
+            if (i >= 0) {
+                if (effectiveIndents[i] >= minIndent) {
+                    out.addFirst(allLines[i])
+                    progressed++
+
+                    // Check sibling handling
+                    if (effectiveIndents[i] == minIndent && !options.includeSiblings) {
+                        val allowHeaderComment = options.includeHeader && allLines[i].isComment()
+                        val canTakeLine = allowHeaderComment || iCounterMinIndent == 0
+
+                        if (canTakeLine) {
+                            iCounterMinIndent++
+                        } else {
+                            out.removeFirst()
+                            progressed--
+                            i = -1
+                        }
+                    }
+
+                    i--
+
+                    if (out.size >= finalLimit) break
+                } else {
+                    i = -1
+                }
+            }
+
+            // Expand downward
+            if (j < allLines.size) {
+                if (effectiveIndents[j] >= minIndent) {
+                    out.addLast(allLines[j])
+                    progressed++
+
+                    // Check sibling handling
+                    if (effectiveIndents[j] == minIndent && !options.includeSiblings) {
+                        if (jCounterMinIndent > 0) {
+                            out.removeLast()
+                            progressed--
+                            j = allLines.size
+                        }
+                        jCounterMinIndent++
+                    }
+
+                    j++
+                } else {
+                    j = allLines.size
+                }
+            }
+
+            if (progressed == 0) break
+        }
+
+        // Trim empty lines from both ends
+        while (out.isNotEmpty() && out.first().isBlank()) {
+            out.removeFirst()
+        }
+        while (out.isNotEmpty() && out.last().isBlank()) {
+            out.removeLast()
+        }
+
+        return out.map { "L${it.number}: ${it.display}" }
+    }
+
+    /**
+     * Collect all lines from a file into LineRecord objects.
+     */
+    private fun collectFileLines(filePath: String): List<LineRecord> {
+        val path = filePath.toPath()
+        val lines = mutableListOf<LineRecord>()
+        var number = 0
+
+        fileSystem.source(path).buffer().use { source ->
+            while (true) {
+                val raw = source.readUtf8Line() ?: break
+                number++
+                val indent = measureIndent(raw)
+                val display = formatLine(raw)
+                lines.add(LineRecord(number, raw, display, indent))
+            }
+        }
+
+        return lines
+    }
+
+    /**
+     * Compute effective indentation for each line.
+     * Blank lines inherit the previous line's indentation.
+     */
+    private fun computeEffectiveIndents(records: List<LineRecord>): List<Int> {
+        val effective = mutableListOf<Int>()
+        var previousIndent = 0
+        for (record in records) {
+            if (record.isBlank()) {
+                effective.add(previousIndent)
+            } else {
+                previousIndent = record.indent
+                effective.add(previousIndent)
+            }
+        }
+        return effective
+    }
+
+    /**
+     * Measure the indentation of a line in spaces (tabs count as TAB_WIDTH).
+     */
+    private fun measureIndent(line: String): Int {
+        var indent = 0
+        for (char in line) {
+            when (char) {
+                ' ' -> indent++
+                '\t' -> indent += TAB_WIDTH
+                else -> break
+            }
+        }
+        return indent
+    }
+
+    /**
+     * Format a line for output, truncating if necessary.
+     */
+    private fun formatLine(line: String): String {
+        // Remove trailing CR if present (for CRLF files)
+        val trimmed = if (line.endsWith('\r')) line.dropLast(1) else line
+
+        return if (trimmed.length > MAX_LINE_LENGTH) {
+            trimmed.take(MAX_LINE_LENGTH)
+        } else {
+            trimmed
+        }
+    }
+
     companion object {
         private const val MAX_LINE_LENGTH = 500
         private const val TAB_WIDTH = 4
@@ -85,221 +300,6 @@ class ReadFileHandler : ToolHandler {
         private val json = Json {
             ignoreUnknownKeys = true
             isLenient = true
-        }
-
-        /**
-         * Read a simple slice of lines from a file.
-         */
-        private fun readSlice(filePath: String, offset: Int, limit: Int): List<String> {
-            val path = filePath.toPath()
-            val collected = mutableListOf<String>()
-            var lineNumber = 0
-
-            FileSystem.SYSTEM.source(path).buffer().use { source ->
-                while (true) {
-                    val line = source.readUtf8Line() ?: break
-                    lineNumber++
-
-                    if (lineNumber < offset) continue
-                    if (collected.size >= limit) break
-
-                    val formatted = formatLine(line)
-                    collected.add("L$lineNumber: $formatted")
-                }
-            }
-
-            if (lineNumber < offset) {
-                throw IllegalArgumentException("offset exceeds file length")
-            }
-
-            return collected
-        }
-
-        /**
-         * Read an indentation-aware block from a file.
-         */
-        private fun readIndentationBlock(
-            filePath: String,
-            offset: Int,
-            limit: Int,
-            options: IndentationArgs
-        ): List<String> {
-            val anchorLine = options.anchorLine ?: offset
-            if (anchorLine == 0) {
-                throw IllegalArgumentException("anchorLine must be a 1-indexed line number")
-            }
-
-            val guardLimit = options.maxLines ?: limit
-            if (guardLimit == 0) {
-                throw IllegalArgumentException("max_lines must be greater than zero")
-            }
-
-            // Collect all lines from file
-            val allLines = collectFileLines(filePath)
-            if (allLines.isEmpty() || anchorLine > allLines.size) {
-                throw IllegalArgumentException("anchor_line exceeds file length")
-            }
-
-            val anchorIndex = anchorLine - 1
-            val effectiveIndents = computeEffectiveIndents(allLines)
-            val anchorIndent = effectiveIndents[anchorIndex]
-
-            // Compute min indent based on maxLevels
-            val minIndent = if (options.maxLevels == 0) {
-                0
-            } else {
-                maxOf(0, anchorIndent - options.maxLevels * TAB_WIDTH)
-            }
-
-            // Cap requested lines
-            val finalLimit = minOf(limit, guardLimit, allLines.size)
-
-            if (finalLimit == 1) {
-                return listOf("L${allLines[anchorIndex].number}: ${allLines[anchorIndex].display}")
-            }
-
-            // Build output using bidirectional expansion
-            val out = ArrayDeque<LineRecord>()
-            out.addLast(allLines[anchorIndex])
-
-            var i = anchorIndex - 1  // up cursor
-            var j = anchorIndex + 1  // down cursor
-            var iCounterMinIndent = 0
-            var jCounterMinIndent = 0
-
-            while (out.size < finalLimit) {
-                var progressed = 0
-
-                // Expand upward
-                if (i >= 0) {
-                    if (effectiveIndents[i] >= minIndent) {
-                        out.addFirst(allLines[i])
-                        progressed++
-
-                        // Check sibling handling
-                        if (effectiveIndents[i] == minIndent && !options.includeSiblings) {
-                            val allowHeaderComment = options.includeHeader && allLines[i].isComment()
-                            val canTakeLine = allowHeaderComment || iCounterMinIndent == 0
-
-                            if (canTakeLine) {
-                                iCounterMinIndent++
-                            } else {
-                                out.removeFirst()
-                                progressed--
-                                i = -1
-                            }
-                        }
-
-                        i--
-
-                        if (out.size >= finalLimit) break
-                    } else {
-                        i = -1
-                    }
-                }
-
-                // Expand downward
-                if (j < allLines.size) {
-                    if (effectiveIndents[j] >= minIndent) {
-                        out.addLast(allLines[j])
-                        progressed++
-
-                        // Check sibling handling
-                        if (effectiveIndents[j] == minIndent && !options.includeSiblings) {
-                            if (jCounterMinIndent > 0) {
-                                out.removeLast()
-                                progressed--
-                                j = allLines.size
-                            }
-                            jCounterMinIndent++
-                        }
-
-                        j++
-                    } else {
-                        j = allLines.size
-                    }
-                }
-
-                if (progressed == 0) break
-            }
-
-            // Trim empty lines from both ends
-            while (out.isNotEmpty() && out.first().isBlank()) {
-                out.removeFirst()
-            }
-            while (out.isNotEmpty() && out.last().isBlank()) {
-                out.removeLast()
-            }
-
-            return out.map { "L${it.number}: ${it.display}" }
-        }
-
-        /**
-         * Collect all lines from a file into LineRecord objects.
-         */
-        private fun collectFileLines(filePath: String): List<LineRecord> {
-            val path = filePath.toPath()
-            val lines = mutableListOf<LineRecord>()
-            var number = 0
-
-            FileSystem.SYSTEM.source(path).buffer().use { source ->
-                while (true) {
-                    val raw = source.readUtf8Line() ?: break
-                    number++
-                    val indent = measureIndent(raw)
-                    val display = formatLine(raw)
-                    lines.add(LineRecord(number, raw, display, indent))
-                }
-            }
-
-            return lines
-        }
-
-        /**
-         * Compute effective indentation for each line.
-         * Blank lines inherit the previous line's indentation.
-         */
-        private fun computeEffectiveIndents(records: List<LineRecord>): List<Int> {
-            val effective = mutableListOf<Int>()
-            var previousIndent = 0
-            for (record in records) {
-                if (record.isBlank()) {
-                    effective.add(previousIndent)
-                } else {
-                    previousIndent = record.indent
-                    effective.add(previousIndent)
-                }
-            }
-            return effective
-        }
-
-        /**
-         * Measure the indentation of a line in spaces (tabs count as TAB_WIDTH).
-         */
-        private fun measureIndent(line: String): Int {
-            var indent = 0
-            for (char in line) {
-                when (char) {
-                    ' ' -> indent++
-                    '\t' -> indent += TAB_WIDTH
-                    else -> break
-                }
-            }
-            return indent
-        }
-
-        /**
-         * Format a line for output, truncating if necessary.
-         */
-        private fun formatLine(line: String): String {
-            // Remove trailing CR if present (for CRLF files)
-            val trimmed = if (line.endsWith('\r')) line.dropLast(1) else line
-
-            return if (trimmed.length > MAX_LINE_LENGTH) {
-                trimmed.take(MAX_LINE_LENGTH)
-            } else {
-                trimmed
-            }
         }
     }
 }

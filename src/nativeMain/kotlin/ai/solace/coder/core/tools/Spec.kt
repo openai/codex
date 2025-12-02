@@ -534,6 +534,64 @@ fun mcpToolToOpenAiTool(
 
 // Placeholder for converting generic JSON to our JsonSchema type
 fun convertJsonElementToJsonSchema(element: JsonElement): JsonSchema {
-    // Implementation needed
-    return JsonSchema.Object(emptyMap()) // Stub
+    if (element !is JsonObject) {
+        // Fallback or error. For now, treat as empty object or string?
+        // If it's a primitive, it might be a simplified schema?
+        // But usually schema is an object.
+        return JsonSchema.Object(emptyMap())
+    }
+
+    val type = element["type"]?.jsonPrimitive?.contentOrNull
+    val description = element["description"]?.jsonPrimitive?.contentOrNull
+
+    return when (type) {
+        "object" -> {
+            val properties = element["properties"]?.jsonObject?.mapValues { (_, v) ->
+                convertJsonElementToJsonSchema(v)
+            } ?: emptyMap()
+
+            val required = element["required"]?.jsonArray?.map { it.jsonPrimitive.content }
+
+            val additionalProperties = element["additionalProperties"]?.let { ap ->
+                when {
+                    ap is JsonPrimitive && ap.booleanOrNull != null -> 
+                        AdditionalProperties.from(ap.boolean)
+                    ap is JsonObject -> 
+                        AdditionalProperties.from(convertJsonElementToJsonSchema(ap))
+                    else -> null
+                }
+            }
+
+            JsonSchema.Object(
+                properties = properties,
+                required = required,
+                additionalProperties = additionalProperties
+            )
+        }
+        "array" -> {
+            val items = element["items"]?.let { convertJsonElementToJsonSchema(it) }
+                ?: JsonSchema.String() // Default to string if items missing? Or Object?
+            
+            JsonSchema.Array(
+                items = items,
+                description = description
+            )
+        }
+        "string" -> JsonSchema.String(description)
+        "number", "integer" -> JsonSchema.Number(description)
+        "boolean" -> JsonSchema.Boolean(description)
+        else -> {
+            // Infer type from properties
+            if (element.containsKey("properties")) {
+                val properties = element["properties"]?.jsonObject?.mapValues { (_, v) ->
+                    convertJsonElementToJsonSchema(v)
+                } ?: emptyMap()
+                val required = element["required"]?.jsonArray?.map { it.jsonPrimitive.content }
+                JsonSchema.Object(properties, required)
+            } else {
+                // Default fallback
+                JsonSchema.String(description)
+            }
+        }
+    }
 }

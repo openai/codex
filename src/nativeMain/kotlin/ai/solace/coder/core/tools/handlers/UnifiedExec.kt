@@ -1,235 +1,176 @@
 // port-lint: source core/src/tools/handlers/unified_exec.rs
-package ai.solace.coder.core.tools
+package ai.solace.coder.core.tools.handlers
 
-import ai.solace.coder.core.error.CodexError
+import ai.solace.coder.core.tools.ToolHandler
+import ai.solace.coder.core.tools.ToolKind
+import ai.solace.coder.core.tools.ToolPayload
+import ai.solace.coder.core.tools.ToolInvocation
+import ai.solace.coder.core.tools.ToolOutput
 import ai.solace.coder.core.error.CodexResult
-import ai.solace.coder.exec.process.ExecExpiration
-import ai.solace.coder.exec.process.ExecParams
-import ai.solace.coder.exec.process.ExecToolCallOutput
-import ai.solace.coder.exec.process.ProcessExecutor
-import ai.solace.coder.protocol.ShellCommandToolCallParams
-import kotlin.time.Duration
+import ai.solace.coder.core.error.CodexError
+import ai.solace.coder.core.unified_exec.UnifiedExecSessionManager
+import ai.solace.coder.core.unified_exec.UnifiedExecContext
+import ai.solace.coder.core.unified_exec.ExecCommandRequest
+import ai.solace.coder.core.unified_exec.WriteStdinRequest
+import ai.solace.coder.core.tools.runtimes.UnifiedExecRequest
+import ai.solace.coder.core.tools.Sandboxing
+import ai.solace.coder.core.tools.ToolCtx
+import ai.solace.coder.core.tools.SandboxPermissions
+import ai.solace.coder.core.sandboxing.assessCommand
+import ai.solace.coder.protocol.SandboxCommandAssessment
+import ai.solace.coder.protocol.SandboxPolicy
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
 
-/**
- * Handler for shell_command tool execution.
- * 
- * This handler processes Function payload types with shell_command,
- * executing single shell commands through the user's shell.
- */
-class ShellCommandToolHandler(
-    private val processExecutor: ProcessExecutor
-) : ToolHandler {
-    
+class UnifiedExecHandler : ToolHandler {
     override val kind: ToolKind = ToolKind.Function
-    
+
     override fun matchesKind(payload: ToolPayload): Boolean {
-        return payload is ToolPayload.Function
+        return payload is ToolPayload.Function || payload is ToolPayload.UnifiedExec
     }
-    
+
+    override fun isMutating(invocation: ToolInvocation): Boolean {
+        val arguments = when (val payload = invocation.payload) {
+            is ToolPayload.Function -> payload.arguments
+            is ToolPayload.UnifiedExec -> payload.arguments
+            else -> return true
+        }
+
+        return try {
+            val args = Json { ignoreUnknownKeys = true }.decodeFromString<ExecCommandArgs>(arguments)
+            val command = getCommand(args)
+            val assessment = assessCommand(command, invocation.turn.sandboxPolicy)
+            assessment != SandboxCommandAssessment.Low
+        } catch (e: Exception) {
+            true
+        }
+    }
+
     override suspend fun handle(invocation: ToolInvocation): CodexResult<ToolOutput> {
-        val params = when (val payload = invocation.payload) {
-            is ToolPayload.Function -> {
-                try {
-                    parseShellCommandParams(payload.arguments)
+        val arguments = when (val payload = invocation.payload) {
+            is ToolPayload.Function -> payload.arguments
+            is ToolPayload.UnifiedExec -> payload.arguments
+            else -> return CodexResult.failure(CodexError.Fatal("unified_exec handler received unsupported payload"))
+        }
+
+        // We need access to the session manager.
+        // In Rust: let manager: &UnifiedExecSessionManager = &session.services.unified_exec_manager;
+        // In Kotlin, we assume invocation.session has services or we inject it.
+        // For now, let's assume we can get it from the session (casting or property).
+        // invocation.session is CodexSession.
+        
+        // Access UnifiedExecSessionManager from CodexSession
+        val manager = invocation.session.services.unifiedExecManager
+
+        val context = UnifiedExecContext(invocation.session, invocation.turn, invocation.callId)
+
+        val response = when (invocation.toolName) {
+            "exec_command" -> {
+                val args = try {
+                    Json { ignoreUnknownKeys = true }.decodeFromString<ExecCommandArgs>(arguments)
                 } catch (e: Exception) {
-                    return CodexResult.failure(
-                        CodexError.Fatal("Failed to parse shell_command arguments: ${e.message}")
-                    )
+                    return CodexResult.failure(CodexError.Fatal("failed to parse exec_command arguments: ${e.message}"))
                 }
-            }
-            else -> {
-                return CodexResult.failure(
-                    CodexError.Fatal("Unsupported payload for shell_command handler")
+                
+                val processId = manager.allocateProcessId()
+                
+                // Check permissions
+                if (invocation.turn.sandboxPolicy == SandboxPolicy.ReadOnly) {
+                    val command = getCommand(args)
+                    val assessment = assessCommand(command, invocation.turn.sandboxPolicy)
+                    if (assessment != SandboxCommandAssessment.Low) {
+                         return CodexResult.failure(CodexError.Sandbox("Command denied by read-only policy"))
+                    }
+                }
+                
+                manager.execCommand(
+                    ExecCommandRequest(
+                        command = getCommand(args),
+                        processId = processId,
+                        yieldTimeMs = args.yield_time_ms,
+                        maxOutputTokens = args.max_output_tokens,
+                        workdir = args.workdir,
+                        withEscalatedPermissions = args.with_escalated_permissions,
+                        justification = args.justification
+                    ),
+                    context
                 )
             }
-        }
-        
-        // Execute the command through the user's shell
-        return try {
-            val result = executeShellCommand(invocation, params)
-            val output = formatCommandOutput(result)
-            
-            CodexResult.success(
-                ToolOutput.Function(
-                    content = output,
-                    success = if (result.exitCode == 0) true else false
-                )
-            )
-        } catch (e: Exception) {
-            CodexResult.failure(
-                CodexError.Fatal("Shell command execution failed: ${e.message}")
-            )
-        }
-    }
-    
-    override fun getTimeoutMs(): Long {
-        // Default to 5 minutes for shell commands
-        return 300000L
-    }
-    
-    /**
-     * Execute a shell command with the given parameters.
-     */
-    private suspend fun executeShellCommand(
-        invocation: ToolInvocation,
-        params: ShellCommandToolCallParams
-    ): ExecToolCallOutput {
-        val workingDir = invocation.turn.resolvePath(params.workdir)
-        val timeoutMs = params.timeoutMs ?: getTimeoutMs()
-        
-        // Get the user's shell and derive the full command
-        val shellCommand = deriveShellCommand(params.command)
-        
-        val execParams = ExecParams(
-            command = shellCommand,
-            cwd = workingDir,
-expiration = ExecExpiration.Timeout(
-                Duration.parse("${timeoutMs ?: 30000}ms")
-            ),
-            env = emptyMap(), // Would be populated from turn context
-            withEscalatedPermissions = params.withEscalatedPermissions,
-            justification = params.justification
-        )
-        
-        val result = processExecutor.execute(
-            params = execParams,
-            sandboxPolicy = ai.solace.coder.protocol.SandboxPolicy.DangerFullAccess, // TODO: Convert from protocol SandboxPolicy
-            sandboxCwd = invocation.turn.cwd
-        )
-        
-        return when (result) {
-            is CodexResult.Success -> result.getOrThrow()
-            is CodexResult.Failure -> {
-                throw result.error.toException()
-            }
-        }
-    }
-    
-    /**
-     * Derive the full shell command for executing the user's command.
-     * This simulates what the Rust ShellCommandHandler does.
-     */
-    private fun deriveShellCommand(userCommand: String): List<String> {
-        // In a real implementation, this would detect the user's shell
-        // and construct the appropriate command. For now, we'll use bash.
-        val shellPath = "/bin/bash"
-        val useLoginShell = true
-        
-        return if (useLoginShell) {
-            listOf(shellPath, "-l", "-c", userCommand)
-        } else {
-            listOf(shellPath, "-c", userCommand)
-        }
-    }
-    
-    /**
-     * Format command output for model consumption.
-     */
-    private fun formatCommandOutput(result: ExecToolCallOutput): String {
-        val sections = mutableListOf<String>()
-        
-        sections.add("Exit code: ${result.exitCode}")
-        sections.add("Duration: ${result.duration}")
-        
-        if (result.timedOut) {
-            sections.add("Command timed out after ${result.duration}")
-        }
-        
-        if (result.aggregatedOutput.text.isNotEmpty()) {
-            sections.add("Output:")
-            sections.add(result.aggregatedOutput.text)
-        }
-        
-        if (result.stderr.text.isNotEmpty()) {
-            sections.add("Error output:")
-            sections.add(result.stderr.text)
-        }
-        
-        return sections.joinToString("\n")
-    }
-    
-    /**
-     * Parse shell command tool call parameters from JSON arguments.
-     */
-    private fun parseShellCommandParams(arguments: String): ShellCommandToolCallParams {
-        return try {
-            if (arguments.contains("\"command\"")) {
-                // Parse JSON format
-                parseJsonShellCommandParams(arguments)
-            } else {
-                // Assume it's a simple command string
-                ShellCommandToolCallParams(
-                    command = arguments,
-                    workdir = null,
-                    timeoutMs = null,
-                    withEscalatedPermissions = null,
-                    justification = null
+            "write_stdin" -> {
+                val args = try {
+                    Json { ignoreUnknownKeys = true }.decodeFromString<WriteStdinRequest>(arguments)
+                } catch (e: Exception) {
+                    return CodexResult.failure(CodexError.Fatal("failed to parse write_stdin arguments: ${e.message}"))
+                }
+                
+                manager.writeStdin(args.processId, args.data)
+                
+                UnifiedExecResponse(
+                    eventCallId = invocation.callId,
+                    chunkId = "",
+                    wallTime = kotlin.time.Duration.ZERO,
+                    output = "",
+                    processId = args.processId,
+                    exitCode = null,
+                    originalTokenCount = null,
+                    sessionCommand = emptyList()
                 )
             }
-        } catch (e: Exception) {
-            throw IllegalArgumentException("Invalid shell_command parameters: ${e.message}")
+            else -> return CodexResult.failure(CodexError.Fatal("unsupported unified exec function ${invocation.toolName}"))
         }
+
+        // Emit delta event if needed (skipped for now)
+
+        val content = formatResponse(response)
+
+        return CodexResult.success(ToolOutput.Function(
+            content = content,
+            success = true
+        ))
     }
+
+    override fun getTimeoutMs(): Long = 300000L // Default
+}
+
+@Serializable
+data class ExecCommandArgs(
+    val cmd: String,
+    val workdir: String? = null,
+    val shell: String = "/bin/bash",
+    val login: Boolean = true,
+    val yield_time_ms: Long = 10000,
+    val max_output_tokens: Int? = null,
+    val with_escalated_permissions: Boolean? = null,
+    val justification: String? = null
+)
+
+fun getCommand(args: ExecCommandArgs): List<String> {
+    // Simplified shell derivation
+    return if (args.login) {
+        listOf(args.shell, "-l", "-c", args.cmd)
+    } else {
+        listOf(args.shell, "-c", args.cmd)
+    }
+}
+
+fun formatResponse(response: UnifiedExecResponse): String {
+    val sections = ArrayList<String>()
+    if (response.chunkId.isNotEmpty()) {
+        sections.add("Chunk ID: ${response.chunkId}")
+    }
+    sections.add("Wall time: ${response.wallTime}")
+    if (response.exitCode != null) {
+        sections.add("Process exited with code ${response.exitCode}")
+    }
+    if (response.processId != null) {
+        sections.add("Process running with session ID ${response.processId}")
+    }
+    if (response.originalTokenCount != null) {
+        sections.add("Original token count: ${response.originalTokenCount}")
+    }
+    sections.add("Output:")
+    sections.add(response.output)
     
-    /**
-     * Simple JSON parser for shell command parameters.
-     * In production, this would use kotlinx.serialization.
-     */
-    private fun parseJsonShellCommandParams(json: String): ShellCommandToolCallParams {
-        val command = extractJsonString(json, "command") ?: 
-            throw IllegalArgumentException("Missing command field")
-        
-        val workdir = extractJsonString(json, "workdir")
-        val timeoutMs = extractJsonLong(json, "timeout_ms")
-        val withEscalated = extractJsonBoolean(json, "with_escalated_permissions")
-        val justification = extractJsonString(json, "justification")
-        
-        return ShellCommandToolCallParams(
-            command = command,
-            workdir = workdir,
-            timeoutMs = timeoutMs,
-            withEscalatedPermissions = withEscalated,
-            justification = justification
-        )
-    }
-    
-    /**
-     * Extract a string value from JSON.
-     */
-    private fun extractJsonString(json: String, key: String): String? {
-        val pattern = "\"$key\"\\s*:\\s*\"([^\"]*)\"".toRegex()
-        val match = pattern.find(json)
-        return match?.groupValues?.get(1)
-    }
-    
-    /**
-     * Extract a long value from JSON.
-     */
-    private fun extractJsonLong(json: String, key: String): Long? {
-        val pattern = "\"$key\"\\s*:\\s*(\\d+)".toRegex()
-        val match = pattern.find(json)
-        return match?.groupValues?.get(1)?.toLongOrNull()
-    }
-    
-    /**
-     * Extract a boolean value from JSON.
-     */
-    private fun extractJsonBoolean(json: String, key: String): Boolean? {
-        val pattern = "\"$key\"\\s*:\\s*(true|false)".toRegex()
-        val match = pattern.find(json)
-        return when (match?.groupValues?.get(1)) {
-            "true" -> true
-            "false" -> false
-            else -> null
-        }
-    }
-    
-    companion object {
-        /**
-         * Create a ShellCommandToolHandler with the given process executor.
-         */
-        fun create(processExecutor: ProcessExecutor): ShellCommandToolHandler {
-            return ShellCommandToolHandler(processExecutor)
-        }
-    }
+    return sections.joinToString("\n")
 }
