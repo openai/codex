@@ -1609,8 +1609,7 @@ async fn approving_allow_prefix_persists_policy_and_skips_future_prompts() -> Re
     )
     .await?;
 
-    let approval =
-        expect_exec_approval(&test, expected_allow_prefix.last().unwrap().as_str()).await;
+    let approval = expect_exec_approval(&test, expected_command.as_str()).await;
     assert_eq!(approval.allow_prefix, Some(expected_allow_prefix.clone()));
 
     test.codex
