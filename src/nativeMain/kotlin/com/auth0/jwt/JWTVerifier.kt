@@ -1,19 +1,18 @@
-```kotlin
-@file:OptIn(kotlin.time.ExperimentalTime::class)
+@file:OptIn(ExperimentalTime::class)
 
 package com.auth0.jwt
 
-import com.auth0.jwt.algorithms.Algorithm
+import com.auth0.jwt.JWTDecoder
+import com.auth0.jwt.RegisteredClaims
 import com.auth0.jwt.exceptions.*
-import com.auth0.jwt.impl.ExpectedCheckHolder
-import com.auth0.jwt.impl.JWTParser
 import com.auth0.jwt.interfaces.Claim
-import com.auth0.jwt.interfaces.Clock
 import com.auth0.jwt.interfaces.DecodedJWT
 import com.auth0.jwt.interfaces.Verification
-import kotlin.time.Clock as KotlinClock
-import kotlin.time.Duration
+import com.auth0.jwt.algorithms.Algorithm
+import com.auth0.jwt.impl.ExpectedCheckHolder
+import kotlin.time.Clock
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
 
 /**
@@ -245,6 +244,7 @@ class JWTVerifier internal constructor(
             return this
         }
 
+        @OptIn(ExperimentalTime::class)
         override fun build(): JWTVerifier {
             return build(Clock.System)
         }

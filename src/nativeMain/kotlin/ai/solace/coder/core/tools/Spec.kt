@@ -24,7 +24,6 @@ import ai.solace.coder.core.tools.handlers.UnifiedExecHandler
 import ai.solace.coder.core.tools.handlers.ViewImageHandler
 import ai.solace.coder.protocol.McpTool
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive

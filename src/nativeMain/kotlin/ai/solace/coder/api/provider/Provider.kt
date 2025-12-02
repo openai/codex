@@ -63,7 +63,7 @@ data class Provider(
 
     companion object {
         private fun matchesAzureResponsesBaseUrl(baseUrl: String): Boolean {
-            val AZURE_MARKERS = listOf(
+            val azureMarkers = listOf(
                 "cognitiveservices.azure.",
                 "aoai.azure.",
                 "azure-api.",
@@ -71,7 +71,7 @@ data class Provider(
                 "windows.net/openai",
             )
             val base = baseUrl.lowercase()
-            return AZURE_MARKERS.any { base.contains(it) }
+            return azureMarkers.any { base.contains(it) }
         }
     }
 }

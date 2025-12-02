@@ -158,7 +158,7 @@ class UnifiedExecSession(
         try {
             writerSender().send(data.encodeToByteArray())
         } catch (e: Exception) {
-            throw UnifiedExecError.WriteToStdin
+            throw UnifiedExecError.WriteToStdin()
         }
     }
 

@@ -3,7 +3,8 @@
 package com.auth0.jwt.interfaces
 
 import com.auth0.jwt.JWTVerifier
-import kotlinx.datetime.Instant
+import kotlin.time.Instant
+
 
 /**
  * Constructs and holds the checks required for a JWT to be considered valid. Note that implementations are

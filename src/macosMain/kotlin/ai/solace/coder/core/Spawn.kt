@@ -5,10 +5,10 @@ import platform.posix.*
 import platform.Foundation.*
 
 @OptIn(ExperimentalForeignApi::class)
-private fun WIFEXITED(status: Int): Boolean = (status and 0x7f) == 0
+private fun wifExited(status: Int): Boolean = (status and 0x7f) == 0
 
 @OptIn(ExperimentalForeignApi::class)
-private fun WEXITSTATUS(status: Int): Int = (status shr 8) and 0xff
+private fun wExitStatus(status: Int): Int = (status shr 8) and 0xff
 
 /**
  * Platform-specific process handle implementation for macOS using NSTask
@@ -27,8 +27,8 @@ actual class ProcessHandle(
         return memScoped {
             val status = alloc<IntVar>()
             waitpid(pid, status.ptr, 0)
-            if (WIFEXITED(status.value)) {
-                WEXITSTATUS(status.value)
+            if (wifExited(status.value)) {
+                wExitStatus(status.value)
             } else {
                 -1
             }
@@ -59,7 +59,7 @@ actual class ProcessHandle(
     }
 
     actual fun isAlive(): Boolean {
-        return task?.isRunning ?: false
+        return task?.isRunning() ?: false
     }
 }
 

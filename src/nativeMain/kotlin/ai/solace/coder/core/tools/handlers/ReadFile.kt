@@ -1,8 +1,13 @@
 // port-lint: source core/src/tools/handlers/read_file.rs
-package ai.solace.coder.core.tools
+package ai.solace.coder.core.tools.handlers
 
 import ai.solace.coder.core.error.CodexError
 import ai.solace.coder.core.error.CodexResult
+import ai.solace.coder.core.tools.ToolHandler
+import ai.solace.coder.core.tools.ToolInvocation
+import ai.solace.coder.core.tools.ToolKind
+import ai.solace.coder.core.tools.ToolOutput
+import ai.solace.coder.core.tools.ToolPayload
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -10,6 +15,7 @@ import okio.FileSystem
 import okio.Path.Companion.toPath
 import okio.buffer
 import okio.use
+import kotlin.text.iterator
 
 /**
  * Handler for the read_file tool.
@@ -59,8 +65,8 @@ class ReadFileHandler(private val fileSystem: FileSystem = FileSystem.SYSTEM) : 
 
         return try {
             val content = when (args.mode) {
-                ReadMode.slice -> readSlice(filePath, args.offset, args.limit)
-                ReadMode.indentation -> {
+                ReadMode.Slice -> readSlice(filePath, args.offset, args.limit)
+                ReadMode.Indentation -> {
                     val indentArgs = args.indentation ?: IndentationArgs()
                     readIndentationBlock(filePath, args.offset, args.limit, indentArgs)
                 }
@@ -313,7 +319,7 @@ private data class ReadFileArgs(
     val filePath: String,
     val offset: Int = 1,
     val limit: Int = 2000,
-    val mode: ReadMode = ReadMode.slice,
+    val mode: ReadMode = ReadMode.Slice,
     val indentation: IndentationArgs? = null
 )
 
@@ -321,18 +327,18 @@ private data class ReadFileArgs(
  * Read mode for the read_file tool.
  */
 @Serializable
-private enum class ReadMode {
+enum class ReadMode {
     @SerialName("slice")
-    slice,
+    Slice,
     @SerialName("indentation")
-    indentation
+    Indentation
 }
 
 /**
  * Arguments for indentation-aware reading.
  */
 @Serializable
-private data class IndentationArgs(
+data class IndentationArgs(
     @SerialName("anchor_line")
     val anchorLine: Int? = null,
     @SerialName("max_levels")

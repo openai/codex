@@ -8,20 +8,14 @@ import ai.solace.coder.core.tools.ToolInvocation
 import ai.solace.coder.core.tools.ToolOutput
 import ai.solace.coder.core.error.CodexResult
 import ai.solace.coder.core.error.CodexError
-import ai.solace.coder.core.unified_exec.UnifiedExecSessionManager
 import ai.solace.coder.core.unified_exec.UnifiedExecContext
 import ai.solace.coder.core.unified_exec.ExecCommandRequest
 import ai.solace.coder.core.unified_exec.WriteStdinRequest
-import ai.solace.coder.core.tools.runtimes.UnifiedExecRequest
-import ai.solace.coder.core.tools.Sandboxing
-import ai.solace.coder.core.tools.ToolCtx
-import ai.solace.coder.core.tools.SandboxPermissions
 import ai.solace.coder.core.sandboxing.assessCommand
 import ai.solace.coder.protocol.SandboxCommandAssessment
 import ai.solace.coder.protocol.SandboxPolicy
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.decodeFromString
 
 class UnifiedExecHandler : ToolHandler {
     override val kind: ToolKind = ToolKind.Function
@@ -88,10 +82,10 @@ class UnifiedExecHandler : ToolHandler {
                     ExecCommandRequest(
                         command = getCommand(args),
                         processId = processId,
-                        yieldTimeMs = args.yield_time_ms,
-                        maxOutputTokens = args.max_output_tokens,
+                        yieldTimeMs = args.yieldTimeMs,
+                        maxOutputTokens = args.maxOutputTokens,
                         workdir = args.workdir,
-                        withEscalatedPermissions = args.with_escalated_permissions,
+                        withEscalatedPermissions = args.withEscalatedPermissions,
                         justification = args.justification
                     ),
                     context
@@ -139,9 +133,9 @@ data class ExecCommandArgs(
     val workdir: String? = null,
     val shell: String = "/bin/bash",
     val login: Boolean = true,
-    val yield_time_ms: Long = 10000,
-    val max_output_tokens: Int? = null,
-    val with_escalated_permissions: Boolean? = null,
+    val yieldTimeMs: Long = 10000,
+    val maxOutputTokens: Int? = null,
+    val withEscalatedPermissions: Boolean? = null,
     val justification: String? = null
 )
 

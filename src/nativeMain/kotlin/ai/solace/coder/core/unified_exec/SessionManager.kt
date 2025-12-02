@@ -171,7 +171,7 @@ class UnifiedExecSessionManager {
         val (program, args) = if (env.command.isNotEmpty()) {
             env.command.first() to env.command.drop(1)
         } else {
-            throw UnifiedExecError.MissingCommandLine
+            throw UnifiedExecError.MissingCommandLine()
         }
 
         // Use PTY lib to spawn process
@@ -194,7 +194,7 @@ class UnifiedExecSessionManager {
         context: UnifiedExecContext
     ): UnifiedExecSession {
         if (command.isEmpty()) {
-            throw UnifiedExecError.MissingCommandLine
+            throw UnifiedExecError.MissingCommandLine()
         }
         val (program, args) = command.first() to command.drop(1)
 

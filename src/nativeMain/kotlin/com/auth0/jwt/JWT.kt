@@ -5,14 +5,14 @@ import com.auth0.jwt.exceptions.JWTDecodeException
 import com.auth0.jwt.impl.JWTParser
 import com.auth0.jwt.interfaces.DecodedJWT
 import com.auth0.jwt.interfaces.Verification
-import com.auth0.jwt.interfaces.JWTVerifier
 
 /**
  * The JWT class is the main entry point for the library.
  * It provides methods to create, decode and verify JWTs.
  */
 object JWT {
-    private val decoder = JWTDecoder(JWTParser())
+    private val decoder =
+        _root_ide_package_.com.auth0.jwt.JWTDecoder(_root_ide_package_.com.auth0.jwt.impl.JWTParser())
 
     /**
      * Decode a given Json Web Token.

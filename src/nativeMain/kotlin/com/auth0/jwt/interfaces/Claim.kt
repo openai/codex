@@ -2,7 +2,7 @@
 
 package com.auth0.jwt.interfaces
 
-import kotlinx.datetime.Instant
+import kotlin.time.Instant
 
 /**
  * The Claim class holds the value in a generic way so that it can be recovered in many representations.

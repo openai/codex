@@ -1,21 +1,15 @@
 package ai.solace.coder.core.tools.handlers
 
-import ai.solace.coder.core.tools.IndentationArgs
-import ai.solace.coder.core.tools.ReadFileHandler
-import ai.solace.coder.core.tools.ReadMode
 import ai.solace.coder.core.tools.ToolInvocation
 import ai.solace.coder.core.tools.ToolOutput
 import ai.solace.coder.core.tools.ToolPayload
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import okio.FileSystem
 import okio.Path.Companion.toPath
 import okio.fakefilesystem.FakeFileSystem
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import kotlin.test.fail
 
 class ReadFileTest {
 
@@ -137,7 +131,7 @@ class ReadFileTest {
             filePath = path.toString(),
             offset = 3,
             limit = 10,
-            mode = ReadMode.indentation,
+            mode = ReadMode.Indentation,
             indentation = IndentationArgs(
                 anchorLine = 3,
                 includeSiblings = false,

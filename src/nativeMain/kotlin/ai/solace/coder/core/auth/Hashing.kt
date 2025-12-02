@@ -2,7 +2,7 @@ package ai.solace.coder.core.auth
 
 class Sha256MessageDigest {
     // The K constants
-    private val K = intArrayOf(
+    private val keyName = intArrayOf(
         0x428a2f98, 0x71374491, -0x4a3f0431, -0x164a245b, 0x3956c25b, 0x59f111f1, -0x6dc07d5c, -0x54e3a12b,
         -0x27f85568, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, -0x7f214e02, -0x6423f959, -0x3e640e8c,
         -0x1b64963f, -0x1041b87a, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
@@ -14,7 +14,7 @@ class Sha256MessageDigest {
     )
 
     // Initial Hash values
-    private val H0 = intArrayOf(
+    private val hash0 = intArrayOf(
         0x6a09e667,
         -0x4498517b,
         0x3c6ef372,
@@ -141,44 +141,44 @@ class Sha256MessageDigest {
     }
 
     private fun calculateHash(expandedMessageSchedules: Array<IntArray>): ByteArray {
-        val H = H0.copyOf(H0.size)
+        val hashLocal = hash0.copyOf(hash0.size)
 
         for (expandedMessageSchedule in expandedMessageSchedules) {
-            var a = H[0]
-            var b = H[1]
-            var c = H[2]
-            var d = H[3]
-            var e = H[4]
-            var f = H[5]
-            var g = H[6]
-            var h = H[7]
+            var a = hashLocal[0]
+            var b = hashLocal[1]
+            var c = hashLocal[2]
+            var d = hashLocal[3]
+            var e = hashLocal[4]
+            var f = hashLocal[5]
+            var g = hashLocal[6]
+            var h = hashLocal[7]
 
             for (i in 0..63) {
-                val T1 = h + bigSigma1(e) + ch(e, f, g) + K[i] + expandedMessageSchedule[i]
-                val T2 = bigSigma0(a) + maj(a, b, c)
+                val temp1 = h + bigSigma1(e) + ch(e, f, g) + keyName[i] + expandedMessageSchedule[i]
+                val temp2 = bigSigma0(a) + maj(a, b, c)
                 h = g
                 g = f
                 f = e
-                e = d + T1
+                e = d + temp1
                 d = c
                 c = b
                 b = a
-                a = T1 + T2
+                a = temp1 + temp2
             }
 
-            H[0] += a
-            H[1] += b
-            H[2] += c
-            H[3] += d
-            H[4] += e
-            H[5] += f
-            H[6] += g
-            H[7] += h
+            hashLocal[0] += a
+            hashLocal[1] += b
+            hashLocal[2] += c
+            hashLocal[3] += d
+            hashLocal[4] += e
+            hashLocal[5] += f
+            hashLocal[6] += g
+            hashLocal[7] += h
         }
 
         val result = ByteArray(256 / 8)
-        for (i in H.indices) {
-            putInt(result, i * 4, H[i])
+        for (i in hashLocal.indices) {
+            putInt(result, i * 4, hashLocal[i])
         }
 
         return result

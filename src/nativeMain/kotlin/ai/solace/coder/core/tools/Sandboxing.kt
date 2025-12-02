@@ -3,6 +3,7 @@ package ai.solace.coder.core.tools
 
 import ai.solace.coder.core.error.CodexError
 import ai.solace.coder.core.session.Session
+import ai.solace.coder.core.session.SessionServices
 import ai.solace.coder.core.session.TurnContext
 import ai.solace.coder.exec.sandbox.CommandSpec
 import ai.solace.coder.exec.sandbox.ExecEnv
@@ -55,7 +56,6 @@ suspend fun <K> withCachedApproval(
     return decision
 }
 
-import ai.solace.coder.core.session.SessionServices
 
 data class ApprovalCtx(
     val session: Session,

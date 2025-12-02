@@ -94,7 +94,7 @@ abstract class Algorithm(
          * @return a valid HMAC256 Algorithm.
          * @throws IllegalArgumentException if the provided Secret is null.
          */
-        fun HMAC256(secret: String): Algorithm {
+        fun hmac256(secret: String): Algorithm {
             return HMACAlgorithm("HS256", "HmacSHA256", secret)
         }
 
@@ -106,7 +106,7 @@ abstract class Algorithm(
          * @return a valid HMAC256 Algorithm.
          * @throws IllegalArgumentException if the provided Secret is null.
          */
-        fun HMAC256(secret: ByteArray): Algorithm {
+        fun hmac256(secret: ByteArray): Algorithm {
             return HMACAlgorithm("HS256", "HmacSHA256", secret)
         }
 
@@ -118,7 +118,7 @@ abstract class Algorithm(
          * @return a valid HMAC384 Algorithm.
          * @throws IllegalArgumentException if the provided Secret is null.
          */
-        fun HMAC384(secret: String): Algorithm {
+        fun hmac384(secret: String): Algorithm {
             return HMACAlgorithm("HS384", "HmacSHA384", secret)
         }
 
@@ -130,7 +130,7 @@ abstract class Algorithm(
          * @return a valid HMAC384 Algorithm.
          * @throws IllegalArgumentException if the provided Secret is null.
          */
-        fun HMAC384(secret: ByteArray): Algorithm {
+        fun hmac384(secret: ByteArray): Algorithm {
             return HMACAlgorithm("HS384", "HmacSHA384", secret)
         }
 
@@ -142,7 +142,7 @@ abstract class Algorithm(
          * @return a valid HMAC512 Algorithm.
          * @throws IllegalArgumentException if the provided Secret is null.
          */
-        fun HMAC512(secret: String): Algorithm {
+        fun hmac512(secret: String): Algorithm {
             return HMACAlgorithm("HS512", "HmacSHA512", secret)
         }
 
@@ -154,7 +154,7 @@ abstract class Algorithm(
          * @return a valid HMAC512 Algorithm.
          * @throws IllegalArgumentException if the provided Secret is null.
          */
-        fun HMAC512(secret: ByteArray): Algorithm {
+        fun hmac512(secret: ByteArray): Algorithm {
             return HMACAlgorithm("HS512", "HmacSHA512", secret)
         }
 

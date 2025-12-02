@@ -1,12 +1,11 @@
 // port-lint: source core/src/tools/mod.rs
 package ai.solace.coder.core.tools
 
-import ai.solace.coder.core.exec.ExecToolCallOutput
-import ai.solace.coder.core.truncate.TruncationPolicy
+import ai.solace.coder.core.ExecToolCallOutput
+import ai.solace.coder.core.context.TruncationPolicy
 import ai.solace.coder.core.truncate.formattedTruncateText
 import ai.solace.coder.core.truncate.truncateText
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlin.math.round
 
@@ -28,8 +27,8 @@ fun formatExecOutputForModelStructured(
 
     @Serializable
     data class ExecMetadata(
-        val exit_code: Int,
-        val duration_seconds: Float
+        val exitCode1: Int,
+        val durationSeconds: Float
     )
 
     @Serializable
@@ -46,8 +45,8 @@ fun formatExecOutputForModelStructured(
     val payload = ExecOutput(
         output = formattedOutput,
         metadata = ExecMetadata(
-            exit_code = exitCode,
-            duration_seconds = durationSeconds
+            exitCode1 = exitCode,
+            durationSeconds = durationSeconds
         )
     )
 

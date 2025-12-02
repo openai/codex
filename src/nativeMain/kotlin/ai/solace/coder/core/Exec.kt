@@ -6,23 +6,14 @@ import ai.solace.coder.core.error.CodexResult
 import ai.solace.coder.exec.sandbox.SandboxManager
 import ai.solace.coder.exec.shell.ShellDetector
 import ai.solace.coder.protocol.SandboxPolicy
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.SendChannel
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
-import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.measureTime
 
 /**
- * Configuration for process execution
- *
  * Configuration for process execution
  */
 data class ExecParams(
@@ -41,12 +32,12 @@ data class ExecParams(
 sealed class ExecExpiration {
     data class Timeout(val duration: kotlin.time.Duration) : ExecExpiration()
     object DefaultTimeout : ExecExpiration()
-    data class Cancellation(val cancelToken: kotlinx.coroutines.Job) : ExecExpiration()
+    data class Cancellation(val cancelToken: Job) : ExecExpiration()
 
     companion object {
         fun fromTimeoutMs(timeoutMs: Long?): ExecExpiration {
             return if (timeoutMs != null) {
-                Timeout(kotlin.time.Duration.milliseconds(timeoutMs))
+                Timeout(timeoutMs.milliseconds)
             } else {
                 DefaultTimeout
             }
@@ -294,7 +285,7 @@ class Exec {
                         process.onAwait()
                     }
                     Pair(result, false)
-                } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
                     killChildProcessGroup(process)
                     Pair(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE, true)
                 }
@@ -302,11 +293,11 @@ class Exec {
             is ExecExpiration.DefaultTimeout -> {
                 // Default timeout implementation
                 try {
-                    val result = kotlinx.coroutines.withTimeout(DEFAULT_EXEC_COMMAND_TIMEOUT_MS.toLong()) {
+                    val result = kotlinx.coroutines.withTimeout(DEFAULT_EXEC_COMMAND_TIMEOUT_MS) {
                         process.onAwait()
                     }
                     Pair(result, false)
-                } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
                     killChildProcessGroup(process)
                     Pair(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE, true)
                 }
@@ -316,7 +307,7 @@ class Exec {
                 try {
                     process.onAwait()
                     Pair(0, false) // Success if not cancelled
-                } catch (e: kotlinx.coroutines.CancellationException) {
+                } catch (_: kotlinx.coroutines.CancellationException) {
                     killChildProcessGroup(process)
                     Pair(EXIT_CODE_SIGNAL_BASE + SIGKILL_CODE, false)
                 }
@@ -365,7 +356,7 @@ class Exec {
         sandboxType: SandboxType,
         duration: kotlin.time.Duration
     ): ExecToolCallOutput {
-        var timedOut = rawOutput.timedOut
+        val timedOut = rawOutput.timedOut
         var exitCode = rawOutput.exitStatus
 
         // Handle timeout exit code

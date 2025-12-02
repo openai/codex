@@ -11,11 +11,11 @@ sealed class UnifiedExecError : Exception() {
         override val message: String = "Unknown session id $processId"
     }
     
-    object WriteToStdin : UnifiedExecError() {
+    class WriteToStdin : UnifiedExecError() {
         override val message: String = "failed to write to stdin"
     }
     
-    object MissingCommandLine : UnifiedExecError() {
+    class MissingCommandLine : UnifiedExecError() {
         override val message: String = "missing command line for unified exec request"
     }
     

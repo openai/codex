@@ -1,10 +1,6 @@
-```
 // port-lint: source core/src/tools/runtimes/unified_exec.rs
 package ai.solace.coder.core.tools.runtimes
 
-import ai.solace.coder.core.session.Session as CodexSession
-import ai.solace.coder.core.session.TurnContext
-import ai.solace.coder.core.session.SessionServices
 import ai.solace.coder.core.tools.Approvable
 import ai.solace.coder.core.tools.ApprovalCtx
 import ai.solace.coder.core.tools.ApprovalRequirement
@@ -22,9 +18,9 @@ import ai.solace.coder.core.unified_exec.UnifiedExecSessionManager
 import ai.solace.coder.core.unified_exec.UnifiedExecSession
 import ai.solace.coder.core.unified_exec.UnifiedExecError
 import ai.solace.coder.protocol.ReviewDecision
-import ai.solace.coder.core.ExecExpiration
+import ai.solace.coder.exec.process.ExecExpiration
 import ai.solace.coder.core.error.CodexError
-import ai.solace.coder.core.unified_exec.Errors.SandboxError
+import ai.solace.coder.core.error.SandboxErr
 import ai.solace.coder.core.tools.buildCommandSpec
 
 data class UnifiedExecRequest(
@@ -61,8 +57,7 @@ class UnifiedExecRuntime(
         return true
     }
 
-    // Not overriding because it's not in the interface (commented out in Sandboxing.kt)
-    fun approvalKey(req: UnifiedExecRequest): Any {
+    override fun approvalKey(req: UnifiedExecRequest): Any {
         return UnifiedExecApprovalKey(
             command = req.command,
             cwd = req.cwd,
@@ -140,4 +135,3 @@ class UnifiedExecRuntime(
         }
     }
 }
-```

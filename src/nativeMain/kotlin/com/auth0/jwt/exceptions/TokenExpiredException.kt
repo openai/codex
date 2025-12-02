@@ -2,7 +2,7 @@
 
 package com.auth0.jwt.exceptions
 
-import kotlinx.datetime.Instant
+import kotlin.time.Instant
 
 /**
  * The exception that is thrown if the token is expired.

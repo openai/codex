@@ -22,6 +22,8 @@ import ai.solace.coder.core.StdoutStream
 import ai.solace.coder.core.Exec
 import ai.solace.coder.core.ExecEnv
 import ai.solace.coder.core.tools.buildCommandSpec
+import ai.solace.coder.core.unified_exec.Errors.SandboxError
+import ai.solace.coder.core.error.CodexError
 import kotlin.time.Duration.Companion.milliseconds
 
 data class ShellRequest(

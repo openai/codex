@@ -7,9 +7,7 @@ import com.auth0.jwt.interfaces.Claim
 import com.auth0.jwt.interfaces.Header
 import com.auth0.jwt.interfaces.JWTPartsParser
 import com.auth0.jwt.interfaces.Payload
-import kotlinx.datetime.Instant
-import kotlinx.serialization.SerialName
-import kotlinx.serialization.Serializable
+import kotlin.time.Instant
 import kotlinx.serialization.json.*
 import kotlin.reflect.KClass
 
@@ -87,9 +85,9 @@ internal class PayloadImpl(private val tree: JsonObject) : Payload {
             else -> null
         }
     }
-    override val expiresAt: Instant? get() = tree["exp"]?.jsonPrimitive?.longOrNull?.let { Instant.fromEpochSeconds(it) }
-    override val notBefore: Instant? get() = tree["nbf"]?.jsonPrimitive?.longOrNull?.let { Instant.fromEpochSeconds(it) }
-    override val issuedAt: Instant? get() = tree["iat"]?.jsonPrimitive?.longOrNull?.let { Instant.fromEpochSeconds(it) }
+    override val expiresAt: Instant? get() = tree["exp"]?.jsonPrimitive?.longOrNull?.let { Instant.fromEpochSeconds(it, 0) }
+    override val notBefore: Instant? get() = tree["nbf"]?.jsonPrimitive?.longOrNull?.let { Instant.fromEpochSeconds(it, 0) }
+    override val issuedAt: Instant? get() = tree["iat"]?.jsonPrimitive?.longOrNull?.let { Instant.fromEpochSeconds(it, 0) }
     override val id: String? get() = tree["jti"]?.jsonPrimitive?.contentOrNull
 
     override fun getClaim(name: String): Claim {
@@ -106,7 +104,7 @@ internal class JsonClaim(private val element: JsonElement?) : Claim {
     override fun asLong(): Long? = element?.jsonPrimitive?.longOrNull
     override fun asDouble(): Double? = element?.jsonPrimitive?.doubleOrNull
     override fun asString(): String? = element?.jsonPrimitive?.contentOrNull
-    override fun asDate(): Instant? = element?.jsonPrimitive?.longOrNull?.let { Instant.fromEpochSeconds(it) }
+    override fun asDate(): Instant? = element?.jsonPrimitive?.longOrNull?.let { Instant.fromEpochSeconds(it, 0) }
 
     override fun <T : Any> asList(clazz: KClass<T>): List<T>? {
         if (element !is JsonArray) return null

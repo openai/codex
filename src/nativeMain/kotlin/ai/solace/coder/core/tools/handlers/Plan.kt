@@ -1,8 +1,14 @@
 // port-lint: source core/src/tools/handlers/plan.rs
-package ai.solace.coder.core.tools
+package ai.solace.coder.core.tools.handlers
 
 import ai.solace.coder.core.error.CodexError
 import ai.solace.coder.core.error.CodexResult
+import ai.solace.coder.core.tools.ToolHandler
+import ai.solace.coder.core.tools.ToolInvocation
+import ai.solace.coder.core.tools.ToolKind
+import ai.solace.coder.core.tools.ToolOutput
+import ai.solace.coder.core.tools.ToolPayload
+import ai.solace.coder.protocol.StepStatus
 import ai.solace.coder.protocol.UpdatePlanArgs
 import kotlinx.serialization.json.Json
 
@@ -38,7 +44,7 @@ class PlanHandler : ToolHandler {
 
         // Validate that at most one step is in_progress
         val inProgressCount = args.plan.count {
-            it.status == ai.solace.coder.protocol.StepStatus.InProgress
+            it.status == StepStatus.InProgress
         }
         if (inProgressCount > 1) {
             return CodexResult.failure(

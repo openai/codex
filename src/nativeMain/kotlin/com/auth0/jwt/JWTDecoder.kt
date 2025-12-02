@@ -2,12 +2,14 @@
 
 package com.auth0.jwt
 
-import com.auth0.jwt.exceptions.JWTDecodeException
-import com.auth0.jwt.impl.JWTParser
+import com.auth0.jwt.TokenUtils
+import com.auth0.jwt.interfaces.DecodedJWT
 import com.auth0.jwt.interfaces.Claim
 import com.auth0.jwt.interfaces.DecodedJWT
-import kotlinx.datetime.Instant
+import com.auth0.jwt.exceptions.JWTDecodeException
+import com.auth0.jwt.impl.JWTParser
 import okio.ByteString.Companion.decodeBase64
+import kotlin.time.Instant
 
 internal class JWTDecoder(private val parser: JWTParser) {
 

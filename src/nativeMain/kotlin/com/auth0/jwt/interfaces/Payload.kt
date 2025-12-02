@@ -1,8 +1,6 @@
-@file:OptIn(kotlin.time.ExperimentalTime::class)
-
 package com.auth0.jwt.interfaces
 
-import kotlinx.datetime.Instant
+import kotlin.time.Instant
 
 /**
  * The Payload class represents the 2nd part of the JWT, where the Payload value is held.

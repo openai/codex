@@ -1,8 +1,7 @@
-package com.auth0.jwt
-
+import com.auth0.jwt.JWT
 import com.auth0.jwt.algorithms.Algorithm
-import kotlinx.datetime.Clock
-import kotlinx.datetime.Instant
+import kotlin.time.Clock
+import kotlin.time.Instant
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.ExperimentalTime
 
@@ -13,7 +12,7 @@ fun main() {
     try {
         // 1. Create Algorithm
         val secret = "secret"
-        val algorithm = Algorithm.HMAC256(secret)
+        val algorithm = Algorithm.hmac256(secret)
         println("Algorithm created: ${algorithm.name}")
 
         // 2. Create Token

@@ -5,12 +5,9 @@ package com.auth0.jwt
 import com.auth0.jwt.algorithms.Algorithm
 import com.auth0.jwt.exceptions.JWTCreationException
 import com.auth0.jwt.exceptions.SignatureGenerationException
-import com.auth0.jwt.impl.HeaderImpl
-import com.auth0.jwt.impl.PayloadImpl
-import kotlinx.datetime.Instant
+import kotlin.time.Instant
 import kotlinx.serialization.json.*
 import okio.ByteString.Companion.encodeUtf8
-import okio.ByteString.Companion.toByteString
 
 /**
  * The JWTCreator class holds the sign method to generate a complete JWT (with Signature)

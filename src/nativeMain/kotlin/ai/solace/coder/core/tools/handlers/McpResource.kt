@@ -250,7 +250,7 @@ private suspend fun handleReadResource(
     callId: String,
     arguments: JsonElement?
 ): Result<ToolOutput> {
-    val args: ReadResourceArgs = parseArgs(arguments).getOrElse { throw it }
+    val args: ReadResourceArgs = parseArgs<ReadResourceArgs>(arguments).getOrElse { return Result.failure(it) }
     val server = normalizeRequiredString("server", args.server)
     val uri = normalizeRequiredString("uri", args.uri)
 

@@ -9,6 +9,7 @@ import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
+import kotlinx.cinterop.toKString
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.io.files.Path
@@ -957,30 +958,12 @@ class AuthManager private constructor(
 /**
  * Get environment variable value.
  *
- * TODO: Implement platform-specific environment variable reading
- * Required implementation per platform:
- *
- * JVM:
- *   - Use System.getenv(name)
- *
- * Native (Linux/macOS):
- *   - Use platform.posix.getenv(name)?.toKString()
- *
- * Native (Windows):
- *   - Use platform.windows.GetEnvironmentVariableA() or
- *   - Use kotlinx.cinterop to call C stdlib getenv
- *
- * JS:
- *   - Node.js: process.env[name]
- *   - Browser: Not available (return null)
- *
- * Reference: Standard Kotlin multiplatform pattern for env var access
- * Consider creating an expect/actual implementation in a separate utils file
+ * Uses platform.posix.getenv for Native platforms (macOS/Linux/Windows).
+ * For more complex multiplatform scenarios, consider creating expect/actual.
  */
-@Suppress("UNUSED_PARAMETER")
+@OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
 private fun getEnvironmentVariable(name: String): String? {
-    // TODO: Implement platform-specific env var reading - see above
-    return null
+    return platform.posix.getenv(name)?.toKString()
 }
 
 // Placeholder for Config type
