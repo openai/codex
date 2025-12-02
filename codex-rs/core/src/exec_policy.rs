@@ -130,9 +130,7 @@ pub(crate) async fn append_allow_prefix_rule_and_update(
     Ok(())
 }
 
-/// Return an allow-prefix option when we are prompting solely due to heuristics;
-/// any rule-driven prompt suppresses the opt-in. Only surfaced when execpolicy
-/// feature is enabled.
+/// Return an allow-prefix option when a command needs approval and execpolicy did not drive the decision
 fn allow_prefix_if_applicable(evaluation: &Evaluation, features: &Features) -> Option<Vec<String>> {
     if !features.enabled(Feature::ExecPolicy) {
         return None;
