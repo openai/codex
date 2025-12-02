@@ -1,5 +1,7 @@
+use codex_git::merge_base_with_head;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
+use std::path::Path;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ResolvedReviewRequest {
@@ -10,15 +12,19 @@ pub struct ResolvedReviewRequest {
 
 const UNCOMMITTED_PROMPT: &str = "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.";
 
-const BASE_BRANCH_PROMPT: &str = "Review the code changes against the base branch '{branch}'. Start by finding the merge diff between the current branch and {branch}'s upstream e.g. (`git merge-base HEAD \"$(git rev-parse --abbrev-ref \"{branch}@{upstream}\")\"`), then run `git diff` against that SHA to see what changes we would merge into the {branch} branch. Provide prioritized, actionable findings.";
+const BASE_BRANCH_PROMPT_BACKUP: &str = "Review the code changes against the base branch '{branch}'. Start by finding the merge diff between the current branch and {branch}'s upstream e.g. (`git merge-base HEAD \"$(git rev-parse --abbrev-ref \"{branch}@{upstream}\")\"`), then run `git diff` against that SHA to see what changes we would merge into the {branch} branch. Provide prioritized, actionable findings.";
+const BASE_BRANCH_PROMPT: &str = "Review the code changes against the base branch '{baseBranch}'. The merge base commit for this comparison is {mergeBaseSha}. Run `git diff {mergeBaseSha}` to inspect the changes relative to {baseBranch}. Provide prioritized, actionable findings.";
 
 const COMMIT_PROMPT_WITH_TITLE: &str = "Review the code changes introduced by commit {sha} (\"{title}\"). Provide prioritized, actionable findings.";
 const COMMIT_PROMPT: &str =
     "Review the code changes introduced by commit {sha}. Provide prioritized, actionable findings.";
 
-pub fn resolve_review_request(request: ReviewRequest) -> anyhow::Result<ResolvedReviewRequest> {
+pub fn resolve_review_request(
+    request: ReviewRequest,
+    cwd: &Path,
+) -> anyhow::Result<ResolvedReviewRequest> {
     let target = request.target;
-    let prompt = review_prompt(&target)?;
+    let prompt = review_prompt(&target, cwd)?;
     let user_facing_hint = request
         .user_facing_hint
         .unwrap_or_else(|| user_facing_hint(&target));
@@ -30,10 +36,18 @@ pub fn resolve_review_request(request: ReviewRequest) -> anyhow::Result<Resolved
     })
 }
 
-pub fn review_prompt(target: &ReviewTarget) -> anyhow::Result<String> {
+pub fn review_prompt(target: &ReviewTarget, cwd: &Path) -> anyhow::Result<String> {
     match target {
         ReviewTarget::UncommittedChanges => Ok(UNCOMMITTED_PROMPT.to_string()),
-        ReviewTarget::BaseBranch { branch } => Ok(BASE_BRANCH_PROMPT.replace("{branch}", branch)),
+        ReviewTarget::BaseBranch { branch } => {
+            if let Some(commit) = merge_base_with_head(cwd, branch)? {
+                Ok(BASE_BRANCH_PROMPT
+                    .replace("{baseBranch}", branch)
+                    .replace("{mergeBaseSha}", &commit))
+            } else {
+                Ok(BASE_BRANCH_PROMPT_BACKUP.replace("{branch}", branch))
+            }
+        }
         ReviewTarget::Commit { sha, title } => {
             if let Some(title) = title {
                 Ok(COMMIT_PROMPT_WITH_TITLE
