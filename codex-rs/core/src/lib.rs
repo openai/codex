@@ -72,6 +72,7 @@ mod rollout;
 pub(crate) mod safety;
 pub mod seatbelt;
 pub mod shell;
+pub mod skills;
 pub mod spawn;
 pub mod terminal;
 mod tools;
