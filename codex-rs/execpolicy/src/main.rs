@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
-use codex_execpolicy::Decision;
 use codex_execpolicy::PolicyParser;
+use codex_execpolicy::execpolicycheck::format_matches_json;
 
 /// CLI for evaluating exec policies
 #[derive(Parser)]
@@ -45,12 +45,8 @@ fn main() -> Result<()> {
 fn cmd_check(policy_paths: Vec<PathBuf>, args: Vec<String>, pretty: bool) -> Result<()> {
     let policy = load_policies(&policy_paths)?;
 
-    let eval = policy.check(&args, &|_| Decision::Allow);
-    let json = if pretty {
-        serde_json::to_string_pretty(&eval)?
-    } else {
-        serde_json::to_string(&eval)?
-    };
+    let matched_rules = policy.matches_for_command(&args, None);
+    let json = format_matches_json(&matched_rules, pretty)?;
     println!("{json}");
     Ok(())
 }

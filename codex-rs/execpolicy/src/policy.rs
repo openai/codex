@@ -54,7 +54,7 @@ impl Policy {
     where
         F: Fn(&[String]) -> Decision,
     {
-        let matched_rules = self.matches_for_command(cmd, heuristics_fallback);
+        let matched_rules = self.matches_for_command(cmd, Some(heuristics_fallback));
         Evaluation::from_matches(matched_rules)
     }
 
@@ -70,16 +70,19 @@ impl Policy {
     {
         let matched_rules: Vec<RuleMatch> = commands
             .into_iter()
-            .flat_map(|command| self.matches_for_command(command.as_ref(), heuristics_fallback))
+            .flat_map(|command| {
+                self.matches_for_command(command.as_ref(), Some(heuristics_fallback))
+            })
             .collect();
 
         Evaluation::from_matches(matched_rules)
     }
 
-    fn matches_for_command<F>(&self, cmd: &[String], heuristics_fallback: &F) -> Vec<RuleMatch>
-    where
-        F: Fn(&[String]) -> Decision,
-    {
+    pub fn matches_for_command(
+        &self,
+        cmd: &[String],
+        heuristics_fallback: Option<&dyn Fn(&[String]) -> Decision>,
+    ) -> Vec<RuleMatch> {
         let mut matched_rules: Vec<RuleMatch> = match cmd.first() {
             Some(first) => self
                 .rules_by_program
@@ -89,7 +92,7 @@ impl Policy {
             None => Vec::new(),
         };
 
-        if matched_rules.is_empty() {
+        if let (true, Some(heuristics_fallback)) = (matched_rules.is_empty(), heuristics_fallback) {
             matched_rules.push(RuleMatch::HeuristicsRuleMatch {
                 command: cmd.to_vec(),
                 decision: heuristics_fallback(cmd),
