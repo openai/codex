@@ -5,6 +5,7 @@ use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
 
+use crate::Decision;
 use crate::Evaluation;
 use crate::Policy;
 use crate::PolicyParser;
@@ -34,7 +35,7 @@ impl ExecPolicyCheckCommand {
     /// Load the policies for this command, evaluate the command, and render JSON output.
     pub fn run(&self) -> Result<()> {
         let policy = load_policies(&self.policies)?;
-        let evaluation = policy.check(&self.command);
+        let evaluation = policy.check(&self.command, &|_| Decision::Allow);
 
         let json = format_evaluation_json(&evaluation, self.pretty)?;
         println!("{json}");
