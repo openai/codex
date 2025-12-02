@@ -1,4 +1,4 @@
-#![cfg(not(target_os = "windows"))]
+// #![cfg(not(target_os = "windows"))]
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -168,6 +168,7 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
 
     let call_id = "uexec-begin-event";
     let args = json!({
+        "shell": "bash".to_string(),
         "cmd": "/bin/echo hello unified exec".to_string(),
         "yield_time_ms": 250,
     });
@@ -209,14 +210,8 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
     })
     .await;
 
-    assert_eq!(
-        begin_event.command,
-        vec![
-            "/bin/bash".to_string(),
-            "-lc".to_string(),
-            "/bin/echo hello unified exec".to_string()
-        ]
-    );
+    assert_command(&begin_event.command, "-lc", "/bin/echo hello unified exec");
+
     assert_eq!(begin_event.cwd, cwd.path());
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
@@ -579,6 +574,7 @@ async fn unified_exec_emits_begin_for_write_stdin() -> Result<()> {
 
     let open_call_id = "uexec-open-for-begin";
     let open_args = json!({
+        "shell": "bash".to_string(),
         "cmd": "bash -i".to_string(),
         "yield_time_ms": 200,
     });
@@ -640,14 +636,7 @@ async fn unified_exec_emits_begin_for_write_stdin() -> Result<()> {
     })
     .await;
 
-    assert_eq!(
-        begin_event.command,
-        vec![
-            "/bin/bash".to_string(),
-            "-lc".to_string(),
-            "bash -i".to_string()
-        ]
-    );
+    assert_command(&begin_event.command, "-lc", "bash -i");
     assert_eq!(
         begin_event.interaction_input,
         Some("echo hello".to_string())
@@ -681,6 +670,7 @@ async fn unified_exec_emits_begin_event_for_write_stdin_requests() -> Result<()>
 
     let open_call_id = "uexec-open-session";
     let open_args = json!({
+        "shell": "bash".to_string(),
         "cmd": "bash -i".to_string(),
         "yield_time_ms": 250,
     });
@@ -756,14 +746,9 @@ async fn unified_exec_emits_begin_event_for_write_stdin_requests() -> Result<()>
         .iter()
         .find(|ev| ev.call_id == open_call_id)
         .expect("missing exec_command begin");
-    assert_eq!(
-        open_event.command,
-        vec![
-            "/bin/bash".to_string(),
-            "-lc".to_string(),
-            "bash -i".to_string()
-        ]
-    );
+
+    assert_command(&open_event.command, "-lc", "bash -i");
+
     assert!(
         open_event.interaction_input.is_none(),
         "startup begin events should not include interaction input"
@@ -774,14 +759,9 @@ async fn unified_exec_emits_begin_event_for_write_stdin_requests() -> Result<()>
         .iter()
         .find(|ev| ev.call_id == poll_call_id)
         .expect("missing write_stdin begin");
-    assert_eq!(
-        poll_event.command,
-        vec![
-            "/bin/bash".to_string(),
-            "-lc".to_string(),
-            "bash -i".to_string()
-        ]
-    );
+
+    assert_command(&poll_event.command, "-lc", "bash -i");
+
     assert!(
         poll_event.interaction_input.is_none(),
         "poll begin events should omit interaction input"
@@ -1917,4 +1897,18 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
     );
 
     Ok(())
+}
+
+fn assert_command(command: &[String], expected_args: &str, expected_cmd: &str) {
+    assert_eq!(command.len(), 3);
+    let shell_path = &command[0];
+    assert!(
+        shell_path == "/bin/bash"
+            || shell_path == "/usr/bin/bash"
+            || shell_path == "/usr/local/bin/bash"
+            || shell_path.ends_with("/bash"),
+        "unexpected bash path: {shell_path}"
+    );
+    assert_eq!(command[1], expected_args);
+    assert_eq!(command[2], expected_cmd);
 }
