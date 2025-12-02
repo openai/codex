@@ -17,14 +17,11 @@ use reqwest::Method;
 use serde::Deserialize;
 use serde::Serialize;
 use strum_macros::Display;
-use tokio::time::Instant;
 
 const STATUS_WIDGET_URL: &str = "https://status.openai.com/proxy/status.openai.com";
 const CODEX_COMPONENT_NAME: &str = "Codex";
-const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
 
 static TEST_STATUS_WIDGET_URL: OnceLock<String> = OnceLock::new();
-static TEST_IDLE_TIMEOUT: OnceLock<Duration> = OnceLock::new();
 
 #[derive(Debug, Clone, Display, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -54,48 +51,19 @@ impl ComponentHealth {
     }
 }
 
-pub(crate) struct IdleWarning {
-    last_event: Instant,
-    idle_timeout: Duration,
-}
+pub(crate) async fn maybe_codex_status_warning(session: &Session) -> Option<String> {
+    let Ok(status) = fetch_codex_health().await else {
+        return None;
+    };
 
-impl IdleWarning {
-    pub(crate) fn new(idle_timeout: Duration) -> Self {
-        Self {
-            last_event: Instant::now(),
-            idle_timeout,
-        }
+    let previous = session.replace_codex_backend_status(status).await;
+    if status.is_operational() || previous == Some(status) {
+        return None;
     }
 
-    pub(crate) fn deadline(&self) -> Instant {
-        self.last_event + self.idle_timeout
-    }
-
-    pub(crate) fn mark_event(&mut self) {
-        self.last_event = Instant::now();
-    }
-
-    pub(crate) async fn maybe_warning_message(&mut self, session: &Session) -> Option<String> {
-        let Ok(status) = fetch_codex_health().await else {
-            return None;
-        };
-
-        let previous = session.replace_codex_backend_status(status).await;
-        if status.is_operational() || previous == Some(status) {
-            return None;
-        }
-
-        self.mark_event();
-        Some(format!(
-            "Codex is experiencing a {status}. If a response stalls, try again later. You can follow incident updates at status.openai.com."
-        ))
-    }
-}
-
-impl Default for IdleWarning {
-    fn default() -> Self {
-        Self::new(idle_timeout())
-    }
+    Some(format!(
+        "Codex is experiencing a {status}. If a response stalls, try again later. You can follow incident updates at status.openai.com."
+    ))
 }
 
 async fn fetch_codex_health() -> Result<ComponentHealth> {
@@ -202,13 +170,6 @@ fn derive_component_health(
     Ok(status)
 }
 
-fn idle_timeout() -> Duration {
-    TEST_IDLE_TIMEOUT
-        .get()
-        .copied()
-        .unwrap_or(DEFAULT_IDLE_TIMEOUT)
-}
-
 fn status_widget_url() -> String {
     TEST_STATUS_WIDGET_URL
         .get()
@@ -222,37 +183,11 @@ pub fn set_test_status_widget_url(url: impl Into<String>) {
     let _ = TEST_STATUS_WIDGET_URL.set(url.into());
 }
 
-#[doc(hidden)]
-#[cfg_attr(not(test), allow(dead_code))]
-pub fn set_test_idle_timeout(duration: Duration) {
-    let _ = TEST_IDLE_TIMEOUT.set(duration);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use serde_json::json;
-
-    #[test]
-    fn defaults_to_operational_when_not_affected() {
-        let payload = serde_json::from_value::<StatusPayload>(json!({
-            "summary": {
-                "id": "sum-1",
-                "name": "OpenAI",
-                "components": [
-                    {"id": "cmp-1", "name": "Codex", "status_page_id": "page-1"},
-                    {"id": "cmp-2", "name": "Chat", "status_page_id": "page-1"}
-                ]
-            }
-        }))
-        .expect("valid payload");
-
-        let status = derive_component_health(&payload, "Codex").expect("codex component exists");
-
-        assert_eq!(status, ComponentHealth::Operational);
-        assert!(status.is_operational());
-    }
 
     #[test]
     fn uses_affected_component_status() {

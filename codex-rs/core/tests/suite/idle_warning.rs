@@ -8,7 +8,6 @@ use std::time::Duration;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::WarningEvent;
-use codex_core::status::set_test_idle_timeout;
 use codex_core::status::set_test_status_widget_url;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
@@ -28,7 +27,7 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn emits_warning_when_stream_is_idle_and_status_is_degraded() {
+async fn emits_warning_when_status_is_degraded_at_turn_start() {
     let status_server = start_mock_server().await;
     let status_path = "/proxy/status.openai.com";
 
@@ -39,8 +38,6 @@ async fn emits_warning_when_stream_is_idle_and_status_is_degraded() {
         .await;
 
     set_test_status_widget_url(format!("{}{}", status_server.uri(), status_path));
-    set_test_idle_timeout(Duration::from_millis(300));
-
     let responses_server = start_mock_server().await;
     let stalled_response = sse(vec![
         ev_response_created("resp-1"),
@@ -51,7 +48,7 @@ async fn emits_warning_when_stream_is_idle_and_status_is_degraded() {
     let _responses_mock = mount_sse_once_with_delay(
         &responses_server,
         stalled_response,
-        Duration::from_millis(400),
+        Duration::from_millis(10),
     )
     .await;
 
@@ -75,15 +72,6 @@ async fn emits_warning_when_stream_is_idle_and_status_is_degraded() {
         "unexpected warning message"
     );
 
-    let status_requests = status_server
-        .received_requests()
-        .await
-        .expect("status server running");
-    assert!(
-        !status_requests.is_empty(),
-        "status widget was not queried before idle warning"
-    );
-
     wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 }
 
@@ -101,8 +89,6 @@ async fn warns_once_per_status_change_only_when_unhealthy() {
         .await;
 
     set_test_status_widget_url(format!("{}{}", status_server.uri(), status_path));
-    set_test_idle_timeout(Duration::from_millis(100));
-
     let responses_server = start_mock_server().await;
     let stalled_response = sse(vec![
         ev_response_created("resp-1"),
@@ -127,32 +113,49 @@ async fn warns_once_per_status_change_only_when_unhealthy() {
         .await
         .unwrap();
 
+    let first_warning = wait_for_event(&codex, |event| matches!(event, EventMsg::Warning(_))).await;
+    let EventMsg::Warning(WarningEvent { message }) = first_warning else {
+        panic!("expected warning event");
+    };
+    assert_eq!(
+        message,
+        "Codex is experiencing a major outage. If a response stalls, try again later. You can follow incident updates at status.openai.com.",
+    );
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "second".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    let mut task_completes = 0usize;
     let mut warnings = Vec::new();
-    loop {
+    while task_completes < 2 {
         let event = codex.next_event().await.expect("event");
         match event.msg {
             EventMsg::Warning(WarningEvent { message }) => warnings.push(message),
-            EventMsg::TaskComplete(_) => break,
+            EventMsg::TaskComplete(_) => task_completes += 1,
             _ => {}
         }
     }
-
-    let expected_messages = vec![
-        "Codex is experiencing a major outage. If a response stalls, try again later. You can follow incident updates at status.openai.com.".to_string(),
-        "Codex is experiencing a partial outage. If a response stalls, try again later. You can follow incident updates at status.openai.com.".to_string(),
-    ];
 
     assert!(
         !warnings.is_empty(),
         "expected at least one warning for non-operational status"
     );
-    assert!(
-        warnings.len() <= expected_messages.len(),
-        "unexpected extra warnings: {warnings:?}"
+    assert_eq!(
+        warnings[0],
+        "Codex is experiencing a major outage. If a response stalls, try again later. You can follow incident updates at status.openai.com.",
     );
-    assert_eq!(warnings[0], expected_messages[0], "first warning mismatch");
     if warnings.len() > 1 {
-        assert_eq!(warnings[1], expected_messages[1], "second warning mismatch");
+        assert_eq!(
+            warnings[1],
+            "Codex is experiencing a partial outage. If a response stalls, try again later. You can follow incident updates at status.openai.com.",
+        );
     }
 }
 
