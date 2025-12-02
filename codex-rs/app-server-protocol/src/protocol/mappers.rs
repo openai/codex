@@ -7,7 +7,7 @@ impl From<v1::ExecOneOffCommandParams> for v2::CommandExecParams {
             command: value.command,
             timeout_ms: value.timeout_ms,
             cwd: value.cwd,
-            sandbox_policy: value.sandbox_policy.map(|policy| policy.into()),
+            sandbox_policy: value.sandbox_policy.map(std::convert::Into::into),
         }
     }
 }
