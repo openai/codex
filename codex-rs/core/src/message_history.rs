@@ -129,6 +129,8 @@ pub(crate) async fn append_entry(
             match history_file.try_lock() {
                 Ok(()) => {
                     // While holding the exclusive lock, write the full line.
+                    // We do not open the file with `append(true)` on Windows, so ensure the
+                    // cursor is positioned at the end before writing.
                     history_file.seek(SeekFrom::End(0))?;
                     history_file.write_all(line.as_bytes())?;
                     history_file.flush()?;
@@ -152,6 +154,10 @@ pub(crate) async fn append_entry(
     Ok(())
 }
 
+/// Trim the history file to honor `max_bytes`, dropping the oldest lines while holding
+/// the write lock so the newest entry is always retained. When the file exceeds the
+/// hard cap, it rewrites the remaining tail to a soft cap to avoid trimming again
+/// immediately on the next write.
 fn enforce_history_limit(file: &mut File, max_bytes: Option<usize>) -> Result<()> {
     let Some(max_bytes) = max_bytes else {
         return Ok(());
@@ -177,9 +183,10 @@ fn enforce_history_limit(file: &mut File, max_bytes: Option<usize>) -> Result<()
 
     let mut buf_reader = BufReader::new(reader_file);
     let mut line_lengths = Vec::new();
+    let mut line_buf = String::new();
 
     loop {
-        let mut line_buf = String::new();
+        line_buf.clear();
 
         let bytes = buf_reader.read_line(&mut line_buf)?;
 
@@ -213,11 +220,8 @@ fn enforce_history_limit(file: &mut File, max_bytes: Option<usize>) -> Result<()
     let mut reader = buf_reader.into_inner();
     reader.seek(SeekFrom::Start(drop_bytes))?;
 
-    let mut tail = Vec::new();
-
-    if let Ok(capacity) = usize::try_from(current_len) {
-        tail.reserve_exact(capacity);
-    }
+    let capacity = usize::try_from(current_len).unwrap_or(0);
+    let mut tail = Vec::with_capacity(capacity);
 
     reader.read_to_end(&mut tail)?;
 
@@ -252,7 +256,6 @@ pub(crate) async fn history_metadata(config: &Config) -> (u64, usize) {
 ///
 /// Note this function is not async because it uses a sync advisory file
 /// locking API.
-#[cfg(any(unix, windows))]
 pub(crate) fn lookup(log_id: u64, offset: usize, config: &Config) -> Option<HistoryEntry> {
     let path = history_filepath(config);
     lookup_history_entry(&path, log_id, offset)
@@ -309,7 +312,6 @@ async fn history_metadata_for_file(path: &Path) -> (u64, usize) {
     (log_id, count)
 }
 
-#[cfg(any(unix, windows))]
 fn lookup_history_entry(path: &Path, log_id: u64, offset: usize) -> Option<HistoryEntry> {
     use std::io::BufRead;
     use std::io::BufReader;
@@ -379,18 +381,21 @@ fn lookup_history_entry(path: &Path, log_id: u64, offset: usize) -> Option<Histo
     None
 }
 
+#[cfg(unix)]
 fn history_log_id(metadata: &std::fs::Metadata) -> Option<u64> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        Some(metadata.ino())
-    }
+    use std::os::unix::fs::MetadataExt;
+    Some(metadata.ino())
+}
 
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        Some(metadata.creation_time())
-    }
+#[cfg(windows)]
+fn history_log_id(metadata: &std::fs::Metadata) -> Option<u64> {
+    use std::os::windows::fs::MetadataExt;
+    Some(metadata.creation_time())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn history_log_id(_metadata: &std::fs::Metadata) -> Option<u64> {
+    None
 }
 
 #[cfg(test)]
@@ -401,13 +406,10 @@ mod tests {
     use crate::config::ConfigToml;
     use codex_protocol::ConversationId;
     use pretty_assertions::assert_eq;
-    #[cfg(any(unix, windows))]
     use std::fs::File;
-    #[cfg(any(unix, windows))]
     use std::io::Write;
     use tempfile::TempDir;
 
-    #[cfg(any(unix, windows))]
     #[tokio::test]
     async fn lookup_reads_history_entries() {
         let temp_dir = TempDir::new().expect("create temp dir");
@@ -444,7 +446,6 @@ mod tests {
         assert_eq!(second_entry, entries[1]);
     }
 
-    #[cfg(any(unix, windows))]
     #[tokio::test]
     async fn lookup_uses_stable_log_id_after_appends() {
         let temp_dir = TempDir::new().expect("create temp dir");
@@ -527,7 +528,11 @@ mod tests {
             .map(|line| serde_json::from_str::<HistoryEntry>(line).expect("parse entry"))
             .collect::<Vec<HistoryEntry>>();
 
-        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries.len(),
+            1,
+            "only one entry left because entry_one should be evicted"
+        );
         assert_eq!(entries[0].text, entry_two);
         assert!(std::fs::metadata(&history_path).expect("metadata").len() <= limit_bytes);
     }
