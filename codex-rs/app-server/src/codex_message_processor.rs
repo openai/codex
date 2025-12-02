@@ -45,6 +45,7 @@ use codex_app_server_protocol::InterruptConversationParams;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ListConversationsParams;
 use codex_app_server_protocol::ListConversationsResponse;
+use codex_app_server_protocol::ListMcpServersResponse;
 use codex_app_server_protocol::LoginAccountParams;
 use codex_app_server_protocol::LoginApiKeyParams;
 use codex_app_server_protocol::LoginApiKeyResponse;
@@ -119,6 +120,7 @@ use codex_core::exec_env::create_env;
 use codex_core::features::Feature;
 use codex_core::find_conversation_path_by_id_str;
 use codex_core::git_info::git_diff_to_remote;
+use codex_core::mcp::collect_mcp_snapshot;
 use codex_core::parse_cursor;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -362,6 +364,12 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ModelList { request_id, params } => {
                 self.list_models(request_id, params).await;
+            }
+            ClientRequest::McpServersList {
+                request_id,
+                params: _,
+            } => {
+                self.list_mcp_servers(request_id).await;
             }
             ClientRequest::LoginAccount { request_id, params } => {
                 self.login_v2(request_id, params).await;
@@ -1905,6 +1913,19 @@ impl CodexMessageProcessor {
             data: items,
             next_cursor,
         };
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn list_mcp_servers(&self, request_id: RequestId) {
+        let snapshot = collect_mcp_snapshot(self.config.as_ref()).await;
+
+        let response = ListMcpServersResponse {
+            tools: snapshot.tools,
+            resources: snapshot.resources,
+            resource_templates: snapshot.resource_templates,
+            auth_statuses: snapshot.auth_statuses,
+        };
+
         self.outgoing.send_response(request_id, response).await;
     }
 
