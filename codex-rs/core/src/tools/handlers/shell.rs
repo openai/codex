@@ -3,9 +3,6 @@ use codex_protocol::models::ShellCommandToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use std::sync::Arc;
 
-use crate::apply_patch;
-use crate::apply_patch::InternalApplyPatchInvocation;
-use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::codex::TurnContext;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
@@ -19,11 +16,10 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
+use crate::tools::handlers::apply_patch::intercept_apply_patch;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
-use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
 use crate::tools::runtimes::shell::ShellRequest;
 use crate::tools::runtimes::shell::ShellRuntime;
 use crate::tools::sandboxing::ToolCtx;
@@ -210,81 +206,19 @@ impl ShellHandler {
         }
 
         // Intercept apply_patch if present.
-        match codex_apply_patch::maybe_parse_apply_patch_verified(
+        if let Some(output) = intercept_apply_patch(
             &exec_params.command,
             &exec_params.cwd,
-        ) {
-            codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
-                match apply_patch::apply_patch(session.as_ref(), turn.as_ref(), &call_id, changes)
-                    .await
-                {
-                    InternalApplyPatchInvocation::Output(item) => {
-                        // Programmatic apply_patch path; return its result.
-                        let content = item?;
-                        return Ok(ToolOutput::Function {
-                            content,
-                            content_items: None,
-                            success: Some(true),
-                        });
-                    }
-                    InternalApplyPatchInvocation::DelegateToExec(apply) => {
-                        let emitter = ToolEmitter::apply_patch(
-                            convert_apply_patch_to_protocol(&apply.action),
-                            !apply.user_explicitly_approved_this_action,
-                        );
-                        let event_ctx = ToolEventCtx::new(
-                            session.as_ref(),
-                            turn.as_ref(),
-                            &call_id,
-                            Some(&tracker),
-                        );
-                        emitter.begin(event_ctx).await;
-
-                        let req = ApplyPatchRequest {
-                            patch: apply.action.patch.clone(),
-                            cwd: apply.action.cwd.clone(),
-                            timeout_ms: exec_params.expiration.timeout_ms(),
-                            user_explicitly_approved: apply.user_explicitly_approved_this_action,
-                            codex_exe: turn.codex_linux_sandbox_exe.clone(),
-                        };
-                        let mut orchestrator = ToolOrchestrator::new();
-                        let mut runtime = ApplyPatchRuntime::new();
-                        let tool_ctx = ToolCtx {
-                            session: session.as_ref(),
-                            turn: turn.as_ref(),
-                            call_id: call_id.clone(),
-                            tool_name: tool_name.to_string(),
-                        };
-                        let out = orchestrator
-                            .run(&mut runtime, &req, &tool_ctx, &turn, turn.approval_policy)
-                            .await;
-                        let event_ctx = ToolEventCtx::new(
-                            session.as_ref(),
-                            turn.as_ref(),
-                            &call_id,
-                            Some(&tracker),
-                        );
-                        let content = emitter.finish(event_ctx, out).await?;
-                        return Ok(ToolOutput::Function {
-                            content,
-                            content_items: None,
-                            success: Some(true),
-                        });
-                    }
-                }
-            }
-            codex_apply_patch::MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
-                return Err(FunctionCallError::RespondToModel(format!(
-                    "apply_patch verification failed: {parse_error}"
-                )));
-            }
-            codex_apply_patch::MaybeApplyPatchVerified::ShellParseError(error) => {
-                tracing::trace!("Failed to parse shell command, {error:?}");
-                // Fall through to regular shell execution.
-            }
-            codex_apply_patch::MaybeApplyPatchVerified::NotApplyPatch => {
-                // Fall through to regular shell execution.
-            }
+            exec_params.expiration.timeout_ms(),
+            session.as_ref(),
+            turn.as_ref(),
+            Some(&tracker),
+            &call_id,
+            tool_name,
+        )
+        .await?
+        {
+            return Ok(output);
         }
 
         let source = ExecCommandSource::Agent;

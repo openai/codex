@@ -35,6 +35,7 @@ use codex_core::protocol::ReviewFinding;
 use codex_core::protocol::ReviewLineRange;
 use codex_core::protocol::ReviewOutputEvent;
 use codex_core::protocol::ReviewRequest;
+use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TaskStartedEvent;
@@ -153,9 +154,10 @@ fn entered_review_mode_uses_request_hint() {
     chat.handle_codex_event(Event {
         id: "review-start".into(),
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
-            prompt: "Review the latest changes".to_string(),
-            user_facing_hint: "feature branch".to_string(),
-            append_to_original_thread: true,
+            target: ReviewTarget::BaseBranch {
+                branch: "feature".to_string(),
+            },
+            user_facing_hint: Some("feature branch".to_string()),
         }),
     });
 
@@ -173,9 +175,8 @@ fn entered_review_mode_defaults_to_current_changes_banner() {
     chat.handle_codex_event(Event {
         id: "review-start".into(),
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
-            prompt: "Review the current changes".to_string(),
-            user_facing_hint: "current changes".to_string(),
-            append_to_original_thread: true,
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: None,
         }),
     });
 
@@ -241,9 +242,10 @@ fn review_restores_context_window_indicator() {
     chat.handle_codex_event(Event {
         id: "review-start".into(),
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
-            prompt: "Review the latest changes".to_string(),
-            user_facing_hint: "feature branch".to_string(),
-            append_to_original_thread: true,
+            target: ReviewTarget::BaseBranch {
+                branch: "feature".to_string(),
+            },
+            user_facing_hint: Some("feature branch".to_string()),
         }),
     });
 
@@ -722,6 +724,7 @@ fn begin_exec_with_source(
     let interaction_input = None;
     let event = ExecCommandBeginEvent {
         call_id: call_id.to_string(),
+        process_id: None,
         turn_id: "turn-1".to_string(),
         command,
         cwd,
@@ -760,11 +763,13 @@ fn end_exec(
         parsed_cmd,
         source,
         interaction_input,
+        process_id,
     } = begin_event;
     chat.handle_codex_event(Event {
         id: call_id.clone(),
         msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id,
+            process_id,
             turn_id,
             command,
             cwd,
@@ -1312,12 +1317,13 @@ fn custom_prompt_submit_sends_review_op() {
     match evt {
         AppEvent::CodexOp(Op::Review { review_request }) => {
             assert_eq!(
-                review_request.prompt,
-                "please audit dependencies".to_string()
-            );
-            assert_eq!(
-                review_request.user_facing_hint,
-                "please audit dependencies".to_string()
+                review_request,
+                ReviewRequest {
+                    target: ReviewTarget::Custom {
+                        instructions: "please audit dependencies".to_string(),
+                    },
+                    user_facing_hint: None,
+                }
             );
         }
         other => panic!("unexpected app event: {other:?}"),
@@ -1565,6 +1571,29 @@ fn approvals_selection_popup_snapshot() {
     });
     #[cfg(not(target_os = "windows"))]
     assert_snapshot!("approvals_selection_popup", popup);
+}
+
+#[test]
+fn preset_matching_ignores_extra_writable_roots() {
+    let preset = builtin_approval_presets()
+        .into_iter()
+        .find(|p| p.id == "auto")
+        .expect("auto preset exists");
+    let current_sandbox = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![PathBuf::from("C:\\extra")],
+        network_access: false,
+        exclude_tmpdir_env_var: false,
+        exclude_slash_tmp: false,
+    };
+
+    assert!(
+        ChatWidget::preset_matches_current(AskForApproval::OnRequest, &current_sandbox, &preset),
+        "WorkspaceWrite with extra roots should still match the Agent preset"
+    );
+    assert!(
+        !ChatWidget::preset_matches_current(AskForApproval::Never, &current_sandbox, &preset),
+        "approval mismatch should prevent matching the preset"
+    );
 }
 
 #[test]
@@ -2857,6 +2886,7 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
         id: "c1".into(),
         msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
             call_id: "c1".into(),
+            process_id: None,
             turn_id: "turn-1".into(),
             command: command.clone(),
             cwd: cwd.clone(),
@@ -2869,6 +2899,7 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
         id: "c1".into(),
         msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: "c1".into(),
+            process_id: None,
             turn_id: "turn-1".into(),
             command,
             cwd,

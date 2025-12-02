@@ -5,10 +5,10 @@
 // the TUI or the tracing stack).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+pub mod api_bridge;
 mod apply_patch;
 pub mod auth;
 pub mod bash;
-mod chat_completions;
 mod client;
 mod client_common;
 pub mod codex;
@@ -58,6 +58,7 @@ pub use model_provider_info::create_oss_provider_with_base_url;
 mod conversation_manager;
 mod event_mapping;
 pub mod review_format;
+pub mod review_prompts;
 pub use codex_protocol::protocol::InitialHistory;
 pub use conversation_manager::ConversationManager;
 pub use conversation_manager::NewConversation;
@@ -72,6 +73,7 @@ mod rollout;
 pub(crate) mod safety;
 pub mod seatbelt;
 pub mod shell;
+pub mod skills;
 pub mod spawn;
 pub mod terminal;
 mod tools;

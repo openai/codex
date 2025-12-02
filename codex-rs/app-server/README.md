@@ -1,6 +1,6 @@
 # codex-app-server
 
-`codex app-server` is the interface Codex uses to power rich interfaces such as the [Codex VS Code extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt). The message schema is currently unstable, but those who wish to build experimental UIs on top of Codex may find it valuable.
+`codex app-server` is the interface Codex uses to power rich interfaces such as the [Codex VS Code extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt).
 
 ## Table of Contents
 - [Protocol](#protocol)
@@ -65,7 +65,8 @@ The JSON-RPC API exposes dedicated methods for managing Codex conversations. Thr
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success.
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
-- `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits a `item/completed` notification with a `codeReview` item when results are ready.
+- `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
+- `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
 
 ### 1) Start or resume a thread
 
@@ -190,49 +191,75 @@ Use `review/start` to run Codex’s reviewer on the currently checked-out projec
 - `{"type":"baseBranch","branch":"main"}` — diff against the provided branch’s upstream (see prompt for the exact `git merge-base`/`git diff` instructions Codex will run).
 - `{"type":"commit","sha":"abc1234","title":"Optional subject"}` — review a specific commit.
 - `{"type":"custom","instructions":"Free-form reviewer instructions"}` — fallback prompt equivalent to the legacy manual review request.
-- `appendToOriginalThread` (bool, default `false`) — when `true`, Codex also records a final assistant-style message with the review summary in the original thread. When `false`, only the `codeReview` item is emitted for the review run and no extra message is added to the original thread.
+- `delivery` (`"inline"` or `"detached"`, default `"inline"`) — where the review runs:
+  - `"inline"`: run the review as a new turn on the existing thread. The response’s `reviewThreadId` equals the original `threadId`, and no new `thread/started` notification is emitted.
+  - `"detached"`: fork a new review thread from the parent conversation and run the review there. The response’s `reviewThreadId` is the id of this new review thread, and the server emits a `thread/started` notification for it before streaming review items.
 
 Example request/response:
 
 ```json
 { "method": "review/start", "id": 40, "params": {
     "threadId": "thr_123",
-    "appendToOriginalThread": true,
+    "delivery": "inline",
     "target": { "type": "commit", "sha": "1234567deadbeef", "title": "Polish tui colors" }
 } }
-{ "id": 40, "result": { "turn": {
-    "id": "turn_900",
-    "status": "inProgress",
-    "items": [
-        { "type": "userMessage", "id": "turn_900", "content": [ { "type": "text", "text": "Review commit 1234567: Polish tui colors" } ] }
-    ],
-    "error": null
-} } }
+{ "id": 40, "result": {
+    "turn": {
+        "id": "turn_900",
+        "status": "inProgress",
+        "items": [
+            { "type": "userMessage", "id": "turn_900", "content": [ { "type": "text", "text": "Review commit 1234567: Polish tui colors" } ] }
+        ],
+        "error": null
+    },
+    "reviewThreadId": "thr_123"
+} }
 ```
 
+For a detached review, use `"delivery": "detached"`. The response is the same shape, but `reviewThreadId` will be the id of the new review thread (different from the original `threadId`). The server also emits a `thread/started` notification for that new thread before streaming the review turn.
+
 Codex streams the usual `turn/started` notification followed by an `item/started`
-with the same `codeReview` item id so clients can show progress:
+with an `enteredReviewMode` item so clients can show progress:
 
 ```json
 { "method": "item/started", "params": { "item": {
-    "type": "codeReview",
+    "type": "enteredReviewMode",
     "id": "turn_900",
     "review": "current changes"
 } } }
 ```
 
-When the reviewer finishes, the server emits `item/completed` containing the same
-`codeReview` item with the final review text:
+When the reviewer finishes, the server emits `item/started` and `item/completed`
+containing an `exitedReviewMode` item with the final review text:
 
 ```json
 { "method": "item/completed", "params": { "item": {
-    "type": "codeReview",
+    "type": "exitedReviewMode",
     "id": "turn_900",
     "review": "Looks solid overall...\n\n- Prefer Stylize helpers — app.rs:10-20\n  ..."
 } } }
 ```
 
-The `review` string is plain text that already bundles the overall explanation plus a bullet list for each structured finding (matching `ThreadItem::CodeReview` in the generated schema). Use this notification to render the reviewer output in your client.
+The `review` string is plain text that already bundles the overall explanation plus a bullet list for each structured finding (matching `ThreadItem::ExitedReviewMode` in the generated schema). Use this notification to render the reviewer output in your client.
+
+### 7) One-off command execution
+
+Run a standalone command (argv vector) in the server’s sandbox without creating a thread or turn:
+
+```json
+{ "method": "command/exec", "id": 32, "params": {
+    "command": ["ls", "-la"],
+    "cwd": "/Users/me/project",                    // optional; defaults to server cwd
+    "sandboxPolicy": { "type": "workspaceWrite" }, // optional; defaults to user config
+    "timeoutMs": 10000                             // optional; ms timeout; defaults to server timeout
+} }
+{ "id": 32, "result": { "exitCode": 0, "stdout": "...", "stderr": "" } }
+```
+
+Notes:
+- Empty `command` arrays are rejected.
+- `sandboxPolicy` accepts the same shape used by `turn/start` (e.g., `dangerFullAccess`, `readOnly`, `workspaceWrite` with flags).
+- When omitted, `timeoutMs` falls back to the server default.
 
 ## Events (work-in-progress)
 
@@ -240,10 +267,11 @@ Event notifications are the server-initiated event stream for thread lifecycles,
 
 ### Turn events
 
-The app-server streams JSON-RPC notifications while a turn is running. Each turn starts with `turn/started` (initial `turn`) and ends with `turn/completed` (final `turn` plus token `usage`), and clients subscribe to the events they care about, rendering each item incrementally as updates arrive. The per-item lifecycle is always: `item/started` → zero or more item-specific deltas → `item/completed`.
+The app-server streams JSON-RPC notifications while a turn is running. Each turn starts with `turn/started` (initial `turn`) and ends with `turn/completed` (final `turn` status). Token usage events stream separately via `thread/tokenUsage/updated`. Clients subscribe to the events they care about, rendering each item incrementally as updates arrive. The per-item lifecycle is always: `item/started` → zero or more item-specific deltas → `item/completed`.
 
 - `turn/started` — `{ turn }` with the turn id, empty `items`, and `status: "inProgress"`.
 - `turn/completed` — `{ turn }` where `turn.status` is `completed`, `interrupted`, or `failed`; failures carry `{ error: { message, codexErrorInfo? } }`.
+- `turn/plan/updated` — `{ turnId, explanation?, plan }` whenever the agent shares or changes its plan; each `plan` entry is `{ step, status }` with `status` in `pending`, `inProgress`, or `completed`.
 
 Today both notifications carry an empty `items` array even when item events were streamed; rely on `item/*` notifications for the canonical item list until this is fixed.
 
@@ -257,6 +285,7 @@ Today both notifications carry an empty `items` array even when item events were
 - `fileChange` — `{id, changes, status}` describing proposed edits; `changes` list `{path, kind, diff}` and `status` is `inProgress`, `completed`, `failed`, or `declined`.
 - `mcpToolCall` — `{id, server, tool, status, arguments, result?, error?}` describing MCP calls; `status` is `inProgress`, `completed`, or `failed`.
 - `webSearch` — `{id, query}` for a web search request issued by the agent.
+- `compacted` - `{threadId, turnId}` when codex compacts the conversation history. This can happen automatically.
 
 All items emit two shared lifecycle events:
 - `item/started` — emits the full `item` when a new unit of work begins so the UI can render it immediately; the `item.id` in this payload matches the `itemId` used by deltas.

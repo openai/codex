@@ -1,5 +1,7 @@
 #![cfg(not(target_os = "windows"))]
 use std::collections::HashMap;
+use std::ffi::OsStr;
+use std::fs;
 use std::sync::OnceLock;
 
 use anyhow::Context;
@@ -23,6 +25,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
@@ -44,7 +47,7 @@ fn extract_output_text(item: &Value) -> Option<&str> {
 struct ParsedUnifiedExecOutput {
     chunk_id: Option<String>,
     wall_time_seconds: f64,
-    session_id: Option<i32>,
+    process_id: Option<String>,
     exit_code: Option<i32>,
     original_token_count: Option<usize>,
     output: String,
@@ -59,7 +62,7 @@ fn parse_unified_exec_output(raw: &str) -> Result<ParsedUnifiedExecOutput> {
             r#"(?:Chunk ID: (?P<chunk_id>[^\n]+)\n)?"#,
             r#"Wall time: (?P<wall_time>-?\d+(?:\.\d+)?) seconds\n"#,
             r#"(?:Process exited with code (?P<exit_code>-?\d+)\n)?"#,
-            r#"(?:Process running with session ID (?P<session_id>-?\d+)\n)?"#,
+            r#"(?:Process running with session ID (?P<process_id>-?\d+)\n)?"#,
             r#"(?:Original token count: (?P<original_token_count>\d+)\n)?"#,
             r#"Output:\n?(?P<output>.*)$"#,
         ))
@@ -92,15 +95,9 @@ fn parse_unified_exec_output(raw: &str) -> Result<ParsedUnifiedExecOutput> {
         })
         .transpose()?;
 
-    let session_id = captures
-        .name("session_id")
-        .map(|value| {
-            value
-                .as_str()
-                .parse::<i32>()
-                .context("failed to parse session id from unified exec output")
-        })
-        .transpose()?;
+    let process_id = captures
+        .name("process_id")
+        .map(|value| value.as_str().to_string());
 
     let original_token_count = captures
         .name("original_token_count")
@@ -121,7 +118,7 @@ fn parse_unified_exec_output(raw: &str) -> Result<ParsedUnifiedExecOutput> {
     Ok(ParsedUnifiedExecOutput {
         chunk_id,
         wall_time_seconds,
-        session_id,
+        process_id,
         exit_code,
         original_token_count,
         output,
@@ -152,6 +149,130 @@ fn collect_tool_outputs(bodies: &[Value]) -> Result<HashMap<String, ParsedUnifie
         }
     }
     Ok(outputs)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let builder = test_codex().with_config(|config| {
+        config.include_apply_patch_tool = true;
+        config.use_experimental_unified_exec_tool = true;
+        config.features.enable(Feature::UnifiedExec);
+    });
+    let harness = TestCodexHarness::with_builder(builder).await?;
+
+    let patch =
+        "*** Begin Patch\n*** Add File: uexec_apply.txt\n+hello from unified exec\n*** End Patch";
+    let command = format!("apply_patch <<'EOF'\n{patch}\nEOF\n");
+    let call_id = "uexec-apply-patch";
+    let args = json!({
+        "cmd": command,
+        "yield_time_ms": 250,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    mount_sse_sequence(harness.server(), responses).await;
+
+    let test = harness.test();
+    let codex = test.codex.clone();
+    let cwd = test.cwd_path().to_path_buf();
+    let session_model = test.session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "apply patch via unified exec".into(),
+            }],
+            final_output_json_schema: None,
+            cwd,
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    let mut saw_patch_begin = false;
+    let mut patch_end = None;
+    let mut saw_exec_begin = false;
+    let mut saw_exec_end = false;
+    wait_for_event(&codex, |event| match event {
+        EventMsg::PatchApplyBegin(begin) if begin.call_id == call_id => {
+            saw_patch_begin = true;
+            assert!(
+                begin
+                    .changes
+                    .keys()
+                    .any(|path| path.file_name() == Some(OsStr::new("uexec_apply.txt"))),
+                "expected apply_patch changes to target uexec_apply.txt",
+            );
+            false
+        }
+        EventMsg::PatchApplyEnd(end) if end.call_id == call_id => {
+            patch_end = Some(end.clone());
+            false
+        }
+        EventMsg::ExecCommandBegin(event) if event.call_id == call_id => {
+            saw_exec_begin = true;
+            false
+        }
+        EventMsg::ExecCommandEnd(event) if event.call_id == call_id => {
+            saw_exec_end = true;
+            false
+        }
+        EventMsg::TaskComplete(_) => true,
+        _ => false,
+    })
+    .await;
+
+    assert!(
+        saw_patch_begin,
+        "expected apply_patch to emit PatchApplyBegin"
+    );
+    let patch_end = patch_end.expect("expected apply_patch to emit PatchApplyEnd");
+    assert!(
+        patch_end.success,
+        "expected apply_patch to finish successfully: stdout={:?} stderr={:?}",
+        patch_end.stdout, patch_end.stderr,
+    );
+    assert!(
+        !saw_exec_begin,
+        "apply_patch should be intercepted before exec_command begin"
+    );
+    assert!(
+        !saw_exec_end,
+        "apply_patch should not emit exec_command end events"
+    );
+
+    let output = harness.function_call_stdout(call_id).await;
+    assert!(
+        output.contains("Success. Updated the following files:"),
+        "expected apply_patch output, got: {output:?}"
+    );
+    assert!(
+        output.contains("A uexec_apply.txt"),
+        "expected apply_patch file summary, got: {output:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(harness.path("uexec_apply.txt"))?,
+        "hello from unified exec\n"
+    );
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -224,6 +345,82 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
         ]
     );
     assert_eq!(begin_event.cwd, cwd.path());
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_resolves_relative_workdir() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_model("gpt-5").with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config.features.enable(Feature::UnifiedExec);
+    });
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let workdir_rel = std::path::PathBuf::from("uexec_relative_workdir");
+    std::fs::create_dir_all(cwd.path().join(&workdir_rel))?;
+
+    let call_id = "uexec-workdir-relative";
+    let args = json!({
+        "cmd": "pwd",
+        "yield_time_ms": 250,
+        "workdir": workdir_rel.to_string_lossy().to_string(),
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-1", "finished"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    mount_sse_sequence(&server, responses).await;
+
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "run relative workdir test".into(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    let begin_event = wait_for_event_match(&codex, |msg| match msg {
+        EventMsg::ExecCommandBegin(event) if event.call_id == call_id => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+
+    assert_eq!(
+        begin_event.cwd,
+        cwd.path().join(workdir_rel),
+        "exec_command cwd should resolve relative workdir against turn cwd",
+    );
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 
@@ -335,7 +532,7 @@ async fn unified_exec_emits_exec_command_end_event() -> Result<()> {
     let poll_call_id = "uexec-end-event-poll";
     let poll_args = json!({
         "chars": "",
-        "session_id": 0,
+        "session_id": 1000,
         "yield_time_ms": 250,
     });
 
@@ -493,7 +690,7 @@ async fn unified_exec_emits_output_delta_for_write_stdin() -> Result<()> {
     let stdin_call_id = "uexec-stdin-delta";
     let stdin_args = json!({
         "chars": "echo WSTDIN-MARK\\n",
-        "session_id": 0,
+        "session_id": 1000,
         "yield_time_ms": 800,
     });
 
@@ -592,7 +789,7 @@ async fn unified_exec_emits_begin_for_write_stdin() -> Result<()> {
     let stdin_call_id = "uexec-stdin-begin";
     let stdin_args = json!({
         "chars": "echo hello",
-        "session_id": 0,
+        "session_id": 1000,
         "yield_time_ms": 400,
     });
 
@@ -694,7 +891,7 @@ async fn unified_exec_emits_begin_event_for_write_stdin_requests() -> Result<()>
     let poll_call_id = "uexec-poll-empty";
     let poll_args = json!({
         "chars": "",
-        "session_id": 0,
+        "session_id": 1000,
         "yield_time_ms": 150,
     });
 
@@ -880,8 +1077,8 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
     );
 
     assert!(
-        metadata.session_id.is_none(),
-        "exec_command for a completed process should not include session_id"
+        metadata.process_id.is_none(),
+        "exec_command for a completed process should not include process_id"
     );
 
     let exit_code = metadata.exit_code.expect("expected exit_code");
@@ -973,7 +1170,7 @@ async fn unified_exec_respects_early_exit_notifications() -> Result<()> {
         .expect("missing early exit unified_exec output");
 
     assert!(
-        output.session_id.is_none(),
+        output.process_id.is_none(),
         "short-lived process should not keep a session alive"
     );
     assert_eq!(
@@ -1023,12 +1220,12 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
     });
     let send_args = serde_json::json!({
         "chars": "hello unified exec\n",
-        "session_id": 0,
+        "session_id": 1000,
         "yield_time_ms": 500,
     });
     let exit_args = serde_json::json!({
         "chars": "\u{0004}",
-        "session_id": 0,
+        "session_id": 1000,
         "yield_time_ms": 500,
     });
 
@@ -1099,12 +1296,13 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
     let start_output = outputs
         .get(start_call_id)
         .expect("missing start output for exec_command");
-    let session_id = start_output
-        .session_id
-        .expect("expected session id from exec_command");
+    let process_id = start_output
+        .process_id
+        .clone()
+        .expect("expected process id from exec_command");
     assert!(
-        session_id >= 0,
-        "session_id should be non-negative, got {session_id}"
+        process_id.len() > 3,
+        "process_id should be at least 4 digits, got {process_id}"
     );
     assert!(
         start_output.exit_code.is_none(),
@@ -1120,11 +1318,12 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
         "expected echoed output from cat, got {echoed:?}"
     );
     let echoed_session = send_output
-        .session_id
-        .expect("write_stdin should return session id while process is running");
+        .process_id
+        .clone()
+        .expect("write_stdin should return process id while process is running");
     assert_eq!(
-        echoed_session, session_id,
-        "write_stdin should reuse existing session id"
+        echoed_session, process_id,
+        "write_stdin should reuse existing process id"
     );
     assert!(
         send_output.exit_code.is_none(),
@@ -1135,8 +1334,8 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
         .get(exit_call_id)
         .expect("missing exit metadata output");
     assert!(
-        exit_output.session_id.is_none(),
-        "session_id should be omitted once the process exits"
+        exit_output.process_id.is_none(),
+        "process_id should be omitted once the process exits"
     );
     let exit_code = exit_output
         .exit_code
@@ -1182,14 +1381,14 @@ async fn unified_exec_emits_end_event_when_session_dies_via_stdin() -> Result<()
     let echo_call_id = "uexec-end-on-exit-echo";
     let echo_args = serde_json::json!({
         "chars": "bye-END\n",
-        "session_id": 0,
+        "session_id": 1000,
         "yield_time_ms": 300,
     });
 
     let exit_call_id = "uexec-end-on-exit";
     let exit_args = serde_json::json!({
         "chars": "\u{0004}",
-        "session_id": 0,
+        "session_id": 1000,
         "yield_time_ms": 500,
     });
 
@@ -1285,7 +1484,7 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
     let second_call_id = "uexec-stdin";
     let second_args = serde_json::json!({
         "chars": "hello unified exec\n",
-        "session_id": 0,
+        "session_id": 1000,
         "yield_time_ms": 500,
     });
 
@@ -1347,17 +1546,20 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
     let start_output = outputs
         .get(first_call_id)
         .expect("missing first unified_exec output");
-    let session_id = start_output.session_id.unwrap_or_default();
+    let process_id = start_output.process_id.clone().unwrap_or_default();
     assert!(
-        session_id >= 0,
-        "expected session id in first unified_exec response"
+        !process_id.is_empty(),
+        "expected process id in first unified_exec response"
     );
     assert!(start_output.output.is_empty());
 
     let reuse_output = outputs
         .get(second_call_id)
         .expect("missing reused unified_exec output");
-    assert_eq!(reuse_output.session_id.unwrap_or_default(), session_id);
+    assert_eq!(
+        reuse_output.process_id.clone().unwrap_or_default(),
+        process_id
+    );
     let echoed = reuse_output.output.as_str();
     assert!(
         echoed.contains("hello unified exec"),
@@ -1413,7 +1615,7 @@ PY
     let second_call_id = "uexec-lag-poll";
     let second_args = serde_json::json!({
         "chars": "",
-        "session_id": 0,
+        "session_id": 1000,
         "yield_time_ms": 2_000,
     });
 
@@ -1480,9 +1682,9 @@ PY
     let start_output = outputs
         .get(first_call_id)
         .expect("missing initial unified_exec output");
-    let session_id = start_output.session_id.unwrap_or_default();
+    let process_id = start_output.process_id.clone().unwrap_or_default();
     assert!(
-        session_id >= 0,
+        !process_id.is_empty(),
         "expected session id from initial unified_exec response"
     );
 
@@ -1524,7 +1726,7 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
     let second_call_id = "uexec-poll";
     let second_args = serde_json::json!({
         "chars": "",
-        "session_id": 0,
+        "session_id": 1000,
         "yield_time_ms": 800,
     });
 
@@ -1589,7 +1791,7 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
     let outputs = collect_tool_outputs(&bodies)?;
 
     let first_output = outputs.get(first_call_id).expect("missing timeout output");
-    assert_eq!(first_output.session_id, Some(0));
+    assert!(first_output.process_id.is_some());
     assert!(first_output.output.is_empty());
 
     let poll_output = outputs.get(second_call_id).expect("missing poll output");
@@ -1824,7 +2026,7 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
     let keep_write_call_id = "uexec-prune-keep-write";
     let keep_write_args = serde_json::json!({
         "chars": "still alive\n",
-        "session_id": 0,
+        "session_id": 1000,
         "yield_time_ms": 500,
     });
     events.push(ev_function_call(
@@ -1836,7 +2038,7 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
     let probe_call_id = "uexec-prune-probe";
     let probe_args = serde_json::json!({
         "chars": "should fail\n",
-        "session_id": 1,
+        "session_id": 1001,
         "yield_time_ms": 500,
     });
     events.push(ev_function_call(
@@ -1885,7 +2087,7 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
         .find_map(|req| req.function_call_output_text(keep_call_id))
         .expect("missing initial keep session output");
     let keep_start_output = parse_unified_exec_output(&keep_start)?;
-    pretty_assertions::assert_eq!(keep_start_output.session_id, Some(0));
+    assert!(keep_start_output.process_id.is_some());
     assert!(keep_start_output.exit_code.is_none());
 
     let prune_start = requests
@@ -1893,7 +2095,7 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
         .find_map(|req| req.function_call_output_text(prune_call_id))
         .expect("missing initial prune session output");
     let prune_start_output = parse_unified_exec_output(&prune_start)?;
-    pretty_assertions::assert_eq!(prune_start_output.session_id, Some(1));
+    assert!(prune_start_output.process_id.is_some());
     assert!(prune_start_output.exit_code.is_none());
 
     let keep_write = requests
@@ -1901,7 +2103,7 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
         .find_map(|req| req.function_call_output_text(keep_write_call_id))
         .expect("missing keep write output");
     let keep_write_output = parse_unified_exec_output(&keep_write)?;
-    pretty_assertions::assert_eq!(keep_write_output.session_id, Some(0));
+    assert!(keep_write_output.process_id.is_some());
     assert!(
         keep_write_output.output.contains("still alive"),
         "expected cat session to echo input, got {:?}",
@@ -1913,7 +2115,7 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
         .find_map(|req| req.function_call_output_text(probe_call_id))
         .expect("missing probe output");
     assert!(
-        pruned_probe.contains("UnknownSessionId") || pruned_probe.contains("Unknown session id"),
+        pruned_probe.contains("UnknownSessionId") || pruned_probe.contains("Unknown process id"),
         "expected probe to fail after pruning, got {pruned_probe:?}"
     );
 

@@ -195,6 +195,7 @@ If the selected model is known to support reasoning (for example: `o3`, `o4-mini
 - `"low"`
 - `"medium"` (default)
 - `"high"`
+- `"xhigh"` (available only on `gpt-5.1-codex-max`)
 
 Note: to minimize reasoning, choose `"minimal"`.
 
