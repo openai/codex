@@ -132,8 +132,7 @@ fn append_locked_line(policy_path: &Path, line: &str) -> Result<(), AmendError> 
         }
     }
 
-    file.write_all(line.as_bytes())
-        .and_then(|()| file.write_all(b"\n"))
+    file.write_all(format!("{line}\n").as_bytes())
         .map_err(|source| AmendError::WritePolicyFile {
             path: policy_path.clone(),
             source,
