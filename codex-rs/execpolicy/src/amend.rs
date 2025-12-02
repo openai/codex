@@ -82,25 +82,24 @@ pub fn append_allow_prefix_rule(policy_path: &Path, prefix: &[String]) -> Result
 }
 
 fn append_locked_line(policy_path: &Path, line: &str) -> Result<(), AmendError> {
-    let policy_path = policy_path.to_path_buf();
     let mut file = OpenOptions::new()
         .create(true)
         .read(true)
         .append(true)
-        .open(&policy_path)
+        .open(policy_path)
         .map_err(|source| AmendError::OpenPolicyFile {
-            path: policy_path.clone(),
+            path: policy_path.to_path_buf(),
             source,
         })?;
     file.lock().map_err(|source| AmendError::LockPolicyFile {
-        path: policy_path.clone(),
+        path: policy_path.to_path_buf(),
         source,
     })?;
 
     let len = file
         .metadata()
         .map_err(|source| AmendError::PolicyMetadata {
-            path: policy_path.clone(),
+            path: policy_path.to_path_buf(),
             source,
         })?
         .len();
@@ -108,20 +107,20 @@ fn append_locked_line(policy_path: &Path, line: &str) -> Result<(), AmendError> 
     if len > 0 {
         file.seek(SeekFrom::End(-1))
             .map_err(|source| AmendError::SeekPolicyFile {
-                path: policy_path.clone(),
+                path: policy_path.to_path_buf(),
                 source,
             })?;
         let mut last = [0; 1];
         file.read_exact(&mut last)
             .map_err(|source| AmendError::ReadPolicyFile {
-                path: policy_path.clone(),
+                path: policy_path.to_path_buf(),
                 source,
             })?;
 
         if last[0] != b'\n' {
             file.write_all(b"\n")
                 .map_err(|source| AmendError::WritePolicyFile {
-                    path: policy_path.clone(),
+                    path: policy_path.to_path_buf(),
                     source,
                 })?;
         }
@@ -129,7 +128,7 @@ fn append_locked_line(policy_path: &Path, line: &str) -> Result<(), AmendError> 
 
     file.write_all(format!("{line}\n").as_bytes())
         .map_err(|source| AmendError::WritePolicyFile {
-            path: policy_path.clone(),
+            path: policy_path.to_path_buf(),
             source,
         })?;
 
