@@ -115,3 +115,7 @@ You are producing plain text that will later be styled by the CLI. Follow these 
   * Do not use URIs like file://, vscode://, or https://.
   * Do not provide range of lines
   * Examples: src/app.ts, src/app.ts:42, b/server/index.js#L10, C:\repo\project\main.rs:12:5
+
+# Context window size: 273000
+# Number of context windows already used: 0
+# Number of context windows remaining: 10
