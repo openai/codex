@@ -35,6 +35,7 @@ use crate::mcp_cmd::McpCli;
 
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::features::Feature;
 use codex_core::features::is_known_feature_key;
 
 /// Codex CLI
@@ -358,15 +359,6 @@ struct FeatureToggles {
     /// Disable a feature (repeatable). Equivalent to `-c features.<name>=false`.
     #[arg(long = "disable", value_name = "FEATURE", action = clap::ArgAction::Append, global = true)]
     disable: Vec<String>,
-
-    /// [experimental] Enable skills loading/injection.
-    #[arg(
-        long = "enable-skills",
-        default_value_t = false,
-        global = true,
-        hide = true
-    )]
-    enable_skills: bool,
 }
 
 impl FeatureToggles {
@@ -379,9 +371,6 @@ impl FeatureToggles {
         for feature in &self.disable {
             Self::validate_feature(feature)?;
             v.push(format!("features.{feature}=false"));
-        }
-        if self.enable_skills {
-            v.push("features.skills=true".to_string());
         }
         Ok(v)
     }
@@ -934,7 +923,6 @@ mod tests {
         let toggles = FeatureToggles {
             enable: vec!["web_search_request".to_string()],
             disable: vec!["unified_exec".to_string()],
-            enable_skills: false,
         };
         let overrides = toggles.to_overrides().expect("valid features");
         assert_eq!(
@@ -951,7 +939,6 @@ mod tests {
         let toggles = FeatureToggles {
             enable: vec!["does_not_exist".to_string()],
             disable: Vec::new(),
-            enable_skills: false,
         };
         let err = toggles
             .to_overrides()
