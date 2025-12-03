@@ -55,6 +55,8 @@ use codex_app_server_protocol::LoginChatGptResponse;
 use codex_app_server_protocol::LogoutAccountResponse;
 use codex_app_server_protocol::LogoutChatGptResponse;
 use codex_app_server_protocol::McpServer;
+use codex_app_server_protocol::McpServerOauthLoginParams;
+use codex_app_server_protocol::McpServerOauthLoginResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::NewConversationParams;
@@ -115,6 +117,7 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
 use codex_core::config::edit::ConfigEditsBuilder;
+use codex_core::config::types::McpServerTransportConfig;
 use codex_core::config_loader::load_config_as_toml;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::exec::ExecParams;
@@ -147,6 +150,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::user_input::UserInput as CoreInputItem;
+use codex_rmcp_client::perform_oauth_login_return_url;
 use codex_utils_json_to_toml::json_to_toml;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -368,6 +372,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ModelList { request_id, params } => {
                 self.list_models(request_id, params).await;
+            }
+            ClientRequest::McpServerOauthLogin { request_id, params } => {
+                self.mcp_server_oauth_login(request_id, params).await;
             }
             ClientRequest::McpServersList { request_id, params } => {
                 self.list_mcp_servers(request_id, params).await;
@@ -1914,6 +1921,77 @@ impl CodexMessageProcessor {
             next_cursor,
         };
         self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn mcp_server_oauth_login(
+        &self,
+        request_id: RequestId,
+        params: McpServerOauthLoginParams,
+    ) {
+        if !self.config.features.enabled(Feature::RmcpClient) {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "OAuth login is only supported when [features].rmcp_client is true in config.toml".to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        let McpServerOauthLoginParams { name, scopes } = params;
+
+        let Some(server) = self.config.mcp_servers.get(&name) else {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("No MCP server named '{name}' found."),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        };
+
+        let (url, http_headers, env_http_headers) = match &server.transport {
+            McpServerTransportConfig::StreamableHttp {
+                url,
+                http_headers,
+                env_http_headers,
+                ..
+            } => (url.clone(), http_headers.clone(), env_http_headers.clone()),
+            _ => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: "OAuth login is only supported for streamable HTTP servers."
+                        .to_string(),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match perform_oauth_login_return_url(
+            &name,
+            &url,
+            self.config.mcp_oauth_credentials_store_mode,
+            http_headers,
+            env_http_headers,
+            scopes.as_deref().unwrap_or_default(),
+        )
+        .await
+        {
+            Ok(authorization_url) => {
+                let response = McpServerOauthLoginResponse { authorization_url };
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to login to MCP server '{name}': {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
     }
 
     async fn list_mcp_servers(&self, request_id: RequestId, params: ListMcpServersParams) {
