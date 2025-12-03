@@ -192,7 +192,11 @@ impl UnifiedExecSessionManager {
             chunk_id,
             wall_time,
             output,
-            process_id: Some(request.process_id.clone()),
+            process_id: if has_exited {
+                None
+            } else {
+                Some(request.process_id.clone())
+            },
             exit_code,
             original_token_count: Some(original_token_count),
             session_command: Some(request.command.clone()),
