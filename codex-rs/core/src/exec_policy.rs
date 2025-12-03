@@ -514,12 +514,8 @@ prefix_rule(pattern=["rm"], decision="forbidden")
                 AskForApproval::UnlessTrusted,
                 &SandboxPolicy::DangerFullAccess,
                 SandboxPermissions::UseDefault,
-<<<<<<< HEAD
             )
             .await,
-=======
-            ),
->>>>>>> 1d14bc51e (inlining and cleanup tests)
             ApprovalRequirement::NeedsApproval {
                 reason: None,
                 allow_prefix: Some(vec!["orange".to_string()])
@@ -703,12 +699,8 @@ prefix_rule(pattern=["rm"], decision="forbidden")
                 AskForApproval::UnlessTrusted,
                 &SandboxPolicy::ReadOnly,
                 SandboxPermissions::UseDefault,
-<<<<<<< HEAD
             )
             .await,
-=======
-            ),
->>>>>>> 1d14bc51e (inlining and cleanup tests)
             ApprovalRequirement::Skip {
                 bypass_sandbox: true
             }
