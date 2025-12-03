@@ -1505,8 +1505,8 @@ mod handlers {
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
     use crate::mcp::auth::compute_auth_statuses;
-    use crate::openai_models::model_presets::builtin_model_presets;
     use crate::mcp::collect_mcp_snapshot_from_manager;
+    use crate::openai_models::model_presets::builtin_model_presets;
     use crate::review_prompts::resolve_review_request;
     use crate::tasks::CompactTask;
     use crate::tasks::RegularTask;
