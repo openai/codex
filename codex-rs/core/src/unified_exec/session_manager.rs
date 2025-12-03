@@ -154,7 +154,8 @@ impl UnifiedExecSessionManager {
         let has_exited = session.has_exited();
         let exit_code = session.exit_code();
         let chunk_id = generate_chunk_id();
-         if has_exited {
+        let process_id = request.process_id.clone();
+        if has_exited {
             let exit = exit_code.unwrap_or(-1);
             Self::emit_exec_end_from_context(
                 context,
@@ -165,7 +166,7 @@ impl UnifiedExecSessionManager {
                 wall_time,
                 // We always emit the process ID in order to keep consistency between the Begin
                 // event and the End event.
-                Some(request.process_id),
+                Some(process_id),
             )
             .await;
 
@@ -178,15 +179,14 @@ impl UnifiedExecSessionManager {
                 &request.command,
                 cwd.clone(),
                 start,
-                request.process_id.clone(),
+                process_id,
             )
             .await;
-            Some(request.process_id.clone());
 
             Self::emit_waiting_status(&context.session, &context.turn, &request.command).await;
         };
-        
-        let original_token_count = approx_token_count(&text);s
+
+        let original_token_count = approx_token_count(&text);
         let response = UnifiedExecResponse {
             event_call_id: context.call_id.clone(),
             chunk_id,

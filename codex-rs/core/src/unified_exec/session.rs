@@ -16,7 +16,6 @@ use crate::exec::StreamOutput;
 use crate::exec::is_likely_sandbox_denied;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::formatted_truncate_text;
-use crate::unified_exec::session_manager;
 use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::SpawnedPty;
 
