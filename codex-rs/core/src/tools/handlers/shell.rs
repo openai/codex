@@ -241,7 +241,6 @@ impl ShellHandler {
             SandboxPermissions::from(exec_params.with_escalated_permissions.unwrap_or(false)),
         )
         .await;
-
         let req = ShellRequest {
             command: exec_params.command.clone(),
             cwd: exec_params.cwd.clone(),
