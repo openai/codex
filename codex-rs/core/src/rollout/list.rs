@@ -141,13 +141,6 @@ pub(crate) async fn get_conversations(
     Ok(result)
 }
 
-/// Load the full contents of a single conversation session file at `path`.
-/// Returns the entire file contents as a String.
-#[allow(dead_code)]
-pub(crate) async fn get_conversation(path: &Path) -> io::Result<String> {
-    tokio::fs::read_to_string(path).await
-}
-
 /// Load conversation file paths from disk using directory traversal.
 ///
 /// Directory layout: `~/.codex/sessions/YYYY/MM/DD/rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl`

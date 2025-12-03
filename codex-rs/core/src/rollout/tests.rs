@@ -16,7 +16,6 @@ use crate::rollout::INTERACTIVE_SESSION_SOURCES;
 use crate::rollout::list::ConversationItem;
 use crate::rollout::list::ConversationsPage;
 use crate::rollout::list::Cursor;
-use crate::rollout::list::get_conversation;
 use crate::rollout::list::get_conversations;
 use anyhow::Result;
 use codex_protocol::ConversationId;
@@ -510,7 +509,7 @@ async fn test_get_conversation_contents() {
     .unwrap();
     let path = &page.items[0].path;
 
-    let content = get_conversation(path).await.unwrap();
+    let content = tokio::fs::read_to_string(path).await.unwrap();
 
     // Page equality (single item)
     let expected_path = home
