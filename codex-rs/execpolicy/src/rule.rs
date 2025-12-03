@@ -64,12 +64,17 @@ pub enum RuleMatch {
         matched_prefix: Vec<String>,
         decision: Decision,
     },
+    HeuristicsRuleMatch {
+        command: Vec<String>,
+        decision: Decision,
+    },
 }
 
 impl RuleMatch {
     pub fn decision(&self) -> Decision {
         match self {
             Self::PrefixRuleMatch { decision, .. } => *decision,
+            Self::HeuristicsRuleMatch { decision, .. } => *decision,
         }
     }
 }

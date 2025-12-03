@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use codex_execpolicy::ExecPolicyCheckCommand;
+use codex_execpolicy::execpolicycheck::ExecPolicyCheckCommand;
 
 /// CLI for evaluating exec policies
 #[derive(Parser)]
@@ -13,10 +13,6 @@ enum Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli {
-        Cli::Check(cmd) => cmd_check(cmd),
+        Cli::Check(cmd) => cmd.run(),
     }
-}
-
-fn cmd_check(cmd: ExecPolicyCheckCommand) -> Result<()> {
-    cmd.run()
 }
