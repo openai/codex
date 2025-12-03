@@ -9,7 +9,7 @@ use crate::sandboxing::execute_env;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
-use crate::tools::sandboxing::ExecApprovalRequirement;
+use crate::tools::sandboxing::ApprovalRequirement;
 use crate::tools::sandboxing::ProvidesSandboxRetryData;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::SandboxOverride;
@@ -32,7 +32,7 @@ pub struct ShellRequest {
     pub env: std::collections::HashMap<String, String>,
     pub with_escalated_permissions: Option<bool>,
     pub justification: Option<String>,
-    pub exec_approval_requirement: ExecApprovalRequirement,
+    pub approval_requirement: ApprovalRequirement,
 }
 
 impl ProvidesSandboxRetryData for ShellRequest {
@@ -114,7 +114,9 @@ impl Approvable<ShellRequest> for ShellRuntime {
                         cwd,
                         reason,
                         risk,
-                        req.exec_approval_requirement.allow_prefix().cloned(),
+                        req.approval_requirement
+                            .proposed_execpolicy_amendment()
+                            .cloned(),
                     )
                     .await
             })
@@ -122,15 +124,15 @@ impl Approvable<ShellRequest> for ShellRuntime {
         })
     }
 
-    fn exec_approval_requirement(&self, req: &ShellRequest) -> Option<ExecApprovalRequirement> {
-        Some(req.exec_approval_requirement.clone())
+    fn approval_requirement(&self, req: &ShellRequest) -> Option<ApprovalRequirement> {
+        Some(req.approval_requirement.clone())
     }
 
     fn sandbox_mode_for_first_attempt(&self, req: &ShellRequest) -> SandboxOverride {
         if req.with_escalated_permissions.unwrap_or(false)
             || matches!(
-                req.exec_approval_requirement,
-                ExecApprovalRequirement::Skip {
+                req.approval_requirement,
+                ApprovalRequirement::Skip {
                     bypass_sandbox: true
                 }
             )

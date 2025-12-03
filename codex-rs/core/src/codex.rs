@@ -862,13 +862,9 @@ impl Session {
         .await
     }
 
-    /// Adds a prefix rule to the exec policy
-    ///
-    /// This mutates the in-memory execpolicy so the current conversation can use the new
-    /// prefix and persists the change in default.execpolicy so new conversations will also allow the new prefix.
-    pub(crate) async fn persist_command_allow_prefix(
+    pub(crate) async fn persist_execpolicy_amendment(
         &self,
-        prefix: &[String],
+        amendment: &[String],
     ) -> Result<(), ExecPolicyUpdateError> {
         let (features, codex_home, current_policy) = {
             let state = self.state.lock().await;
@@ -888,10 +884,10 @@ impl Session {
             return Err(ExecPolicyUpdateError::FeatureDisabled);
         }
 
-        crate::exec_policy::append_allow_prefix_rule_and_update(
+        crate::exec_policy::append_execpolicy_amendment_and_update(
             &codex_home,
             &current_policy,
-            prefix,
+            amendment,
         )
         .await?;
 
@@ -912,7 +908,7 @@ impl Session {
         cwd: PathBuf,
         reason: Option<String>,
         risk: Option<SandboxCommandAssessment>,
-        allow_prefix: Option<Vec<String>>,
+        proposed_execpolicy_amendment: Option<Vec<String>>,
     ) -> ReviewDecision {
         let sub_id = turn_context.sub_id.clone();
         // Add the tx_approve callback to the map before sending the request.
@@ -940,7 +936,7 @@ impl Session {
             cwd,
             reason,
             risk,
-            allow_prefix,
+            proposed_execpolicy_amendment,
             parsed_cmd,
         });
         self.send_event(turn_context, event).await;
@@ -1672,13 +1668,17 @@ mod handlers {
         }
     }
 
-    /// Propagate a user's exec approval decision to the session
-    /// Also optionally whitelists command in execpolicy
+    /// Propagate a user's exec approval decision to the session.
+    /// Also optionally applies an execpolicy amendment.
     pub async fn exec_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) {
-        if let ReviewDecision::ApprovedAllowPrefix { allow_prefix } = &decision
-            && let Err(err) = sess.persist_command_allow_prefix(allow_prefix).await
+        if let ReviewDecision::ApprovedExecpolicyAmendment {
+            proposed_execpolicy_amendment,
+        } = &decision
+            && let Err(err) = sess
+                .persist_execpolicy_amendment(proposed_execpolicy_amendment)
+                .await
         {
-            let message = format!("Failed to update execpolicy allow list: {err}");
+            let message = format!("Failed to apply execpolicy amendment: {err}");
             tracing::warn!("{message}");
             let warning = EventMsg::Warning(WarningEvent { message });
             sess.send_event_raw(Event {

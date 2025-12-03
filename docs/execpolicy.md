@@ -53,10 +53,10 @@ When no rules match, `matchedRules` is an empty array and `decision` is omitted.
 
 ```json
 {
-  "matchedRules": [],
+  "matchedRules": []
 }
+```
 
 ## Status
 
 `execpolicy` commands are still in preview. The API may have breaking changes in the future.
-```
