@@ -70,15 +70,15 @@ async fn fetch_codex_health() -> Result<ComponentHealth> {
     let status_widget_url = status_widget_url();
 
     let client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(10))
+        .connect_timeout(Duration::from_millis(200))
+        .timeout(Duration::from_millis(300))
         .build()
         .context("building HTTP client")?;
 
     let transport = ReqwestTransport::new(client);
     let policy = RetryPolicy {
-        max_attempts: 2,
-        base_delay: Duration::from_millis(200),
+        max_attempts: 0,
+        base_delay: Duration::from_millis(100),
         retry_on: RetryOn {
             retry_429: true,
             retry_5xx: true,

@@ -2193,10 +2193,18 @@ async fn try_run_turn(
     });
 
     sess.persist_rollout_items(&[rollout_item]).await;
-    if let Some(message) = maybe_codex_status_warning(sess.as_ref()).await {
-        sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
-            .await;
-    }
+    let sess_clone = Arc::clone(&sess);
+    let turn_context_clone = Arc::clone(&turn_context);
+    tokio::spawn(async move {
+        if let Some(message) = maybe_codex_status_warning(sess_clone.as_ref()).await {
+            sess_clone
+                .send_event(
+                    &turn_context_clone,
+                    EventMsg::Warning(WarningEvent { message }),
+                )
+                .await;
+        }
+    });
 
     let mut stream = turn_context
         .client

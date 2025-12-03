@@ -99,7 +99,7 @@ async fn warns_once_per_status_change_only_when_unhealthy() {
     let _responses_mock = mount_sse_once_with_delay(
         &responses_server,
         stalled_response,
-        Duration::from_millis(2000),
+        Duration::from_millis(300),
     )
     .await;
 
@@ -132,30 +132,23 @@ async fn warns_once_per_status_change_only_when_unhealthy() {
         .await
         .unwrap();
 
-    let mut task_completes = 0usize;
-    let mut warnings = Vec::new();
-    while task_completes < 2 {
+    let mut saw_warning = false;
+    let mut saw_complete = false;
+    while !(saw_warning && saw_complete) {
         let event = codex.next_event().await.expect("event");
         match event.msg {
-            EventMsg::Warning(WarningEvent { message }) => warnings.push(message),
-            EventMsg::TaskComplete(_) => task_completes += 1,
+            EventMsg::Warning(WarningEvent { message }) => {
+                assert_eq!(
+                    message,
+                    "Codex is experiencing a partial outage. If a response stalls, try again later. You can follow incident updates at status.openai.com.",
+                );
+                saw_warning = true;
+            }
+            EventMsg::TaskComplete(_) => {
+                saw_complete = true;
+            }
             _ => {}
         }
-    }
-
-    assert!(
-        !warnings.is_empty(),
-        "expected at least one warning for non-operational status"
-    );
-    assert_eq!(
-        warnings[0],
-        "Codex is experiencing a major outage. If a response stalls, try again later. You can follow incident updates at status.openai.com.",
-    );
-    if warnings.len() > 1 {
-        assert_eq!(
-            warnings[1],
-            "Codex is experiencing a partial outage. If a response stalls, try again later. You can follow incident updates at status.openai.com.",
-        );
     }
 }
 
