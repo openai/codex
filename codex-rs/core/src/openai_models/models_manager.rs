@@ -3,6 +3,7 @@ use codex_protocol::openai_models::ModelPreset;
 use tokio::sync::RwLock;
 
 use crate::openai_models::model_presets::builtin_model_presets;
+use std::time::Duration;
 
 pub struct ModelsManager {
     pub available_models: RwLock<Vec<ModelPreset>>,
@@ -12,6 +13,7 @@ pub struct ModelsManager {
 
 impl ModelsManager {
     pub fn new(auth_mode: Option<AuthMode>) -> Self {
+        std::thread::sleep(Duration::from_secs(1));
         Self {
             available_models: RwLock::new(builtin_model_presets(auth_mode)),
             etag: String::new(),
