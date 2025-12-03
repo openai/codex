@@ -521,7 +521,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         );
     }
 
-#[tokio::test]
+    #[tokio::test]
     async fn append_allow_prefix_rule_updates_policy_and_file() {
         let codex_home = tempdir().expect("create temp dir");
         let current_policy = Arc::new(RwLock::new(Policy::empty()));
