@@ -7,6 +7,11 @@ use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::apply_patch::ApplyPatchToolType;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
+use crate::tools::handlers::collaboration::create_collaboration_close_tool;
+use crate::tools::handlers::collaboration::create_collaboration_get_state_tool;
+use crate::tools::handlers::collaboration::create_collaboration_init_agent_tool;
+use crate::tools::handlers::collaboration::create_collaboration_send_tool;
+use crate::tools::handlers::collaboration::create_collaboration_wait_tool;
 use crate::tools::registry::ToolRegistryBuilder;
 use serde::Deserialize;
 use serde::Serialize;
@@ -974,6 +979,7 @@ pub(crate) fn build_specs(
     mcp_tools: Option<HashMap<String, mcp_types::Tool>>,
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::ApplyPatchHandler;
+    use crate::tools::handlers::CollaborationHandler;
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
@@ -994,6 +1000,7 @@ pub(crate) fn build_specs(
     let plan_handler = Arc::new(PlanHandler);
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
     let view_image_handler = Arc::new(ViewImageHandler);
+    let collaboration_handler = Arc::new(CollaborationHandler);
     let mcp_handler = Arc::new(McpHandler);
     let mcp_resource_handler = Arc::new(McpResourceHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler);
@@ -1036,6 +1043,23 @@ pub(crate) fn build_specs(
 
     builder.push_spec(PLAN_TOOL.clone());
     builder.register_handler("update_plan", plan_handler);
+
+    if config
+        .experimental_supported_tools
+        .contains(&"collaboration".to_string())
+    {
+        builder.push_spec(create_collaboration_init_agent_tool());
+        builder.push_spec(create_collaboration_send_tool());
+        builder.push_spec(create_collaboration_wait_tool());
+        builder.push_spec(create_collaboration_get_state_tool());
+        builder.push_spec(create_collaboration_close_tool());
+
+        builder.register_handler("collaboration_init_agent", collaboration_handler.clone());
+        builder.register_handler("collaboration_send", collaboration_handler.clone());
+        builder.register_handler("collaboration_wait", collaboration_handler.clone());
+        builder.register_handler("collaboration_get_state", collaboration_handler.clone());
+        builder.register_handler("collaboration_close", collaboration_handler);
+    }
 
     if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
         match apply_patch_tool_type {
@@ -1251,6 +1275,10 @@ mod tests {
             create_read_mcp_resource_tool(),
             PLAN_TOOL.clone(),
             create_apply_patch_freeform_tool(),
+            create_grep_files_tool(),
+            create_read_file_tool(),
+            create_list_dir_tool(),
+            create_test_sync_tool(),
             ToolSpec::WebSearch {},
             create_view_image_tool(),
         ] {
@@ -1296,6 +1324,10 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "apply_patch",
+                "grep_files",
+                "read_file",
+                "list_dir",
+                "test_sync_tool",
                 "view_image",
             ],
         );
@@ -1313,6 +1345,10 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "apply_patch",
+                "grep_files",
+                "read_file",
+                "list_dir",
+                "test_sync_tool",
                 "view_image",
             ],
         );
@@ -1333,6 +1369,10 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "apply_patch",
+                "grep_files",
+                "read_file",
+                "list_dir",
+                "test_sync_tool",
                 "web_search",
                 "view_image",
             ],
@@ -1354,7 +1394,37 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "apply_patch",
+                "grep_files",
+                "read_file",
+                "list_dir",
+                "test_sync_tool",
                 "web_search",
+                "view_image",
+            ],
+        );
+    }
+
+    #[test]
+    fn test_build_specs_gpt51_codex_max_default() {
+        assert_model_tools(
+            "gpt-5.1-codex-max",
+            &Features::with_defaults(),
+            &[
+                "shell_command",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "collaboration_init_agent",
+                "collaboration_send",
+                "collaboration_wait",
+                "collaboration_get_state",
+                "collaboration_close",
+                "apply_patch",
+                "grep_files",
+                "read_file",
+                "list_dir",
+                "test_sync_tool",
                 "view_image",
             ],
         );
@@ -1388,6 +1458,10 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "apply_patch",
+                "grep_files",
+                "read_file",
+                "list_dir",
+                "test_sync_tool",
                 "view_image",
             ],
         );

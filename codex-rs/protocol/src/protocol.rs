@@ -437,6 +437,9 @@ impl SandboxPolicy {
 pub struct Event {
     /// Submission `id` that this event is correlated with.
     pub id: String,
+    /// Collaboration agent index that emitted the event. Root agent is 0.
+    #[serde(default)]
+    pub agent_idx: Option<i32>,
     /// Payload
     pub msg: EventMsg,
 }
@@ -1754,6 +1757,7 @@ mod tests {
         let rollout_file = NamedTempFile::new()?;
         let event = Event {
             id: "1234".to_string(),
+            agent_idx: Some(0),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
                 model: "codex-mini-latest".to_string(),
@@ -1813,6 +1817,7 @@ mod tests {
     fn serialize_mcp_startup_update_event() -> Result<()> {
         let event = Event {
             id: "init".to_string(),
+            agent_idx: Some(0),
             msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
                 server: "srv".to_string(),
                 status: McpStartupStatus::Failed {
@@ -1833,6 +1838,7 @@ mod tests {
     fn serialize_mcp_startup_complete_event() -> Result<()> {
         let event = Event {
             id: "init".to_string(),
+            agent_idx: Some(0),
             msg: EventMsg::McpStartupComplete(McpStartupCompleteEvent {
                 ready: vec!["a".to_string()],
                 failed: vec![McpStartupFailure {

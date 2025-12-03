@@ -590,7 +590,7 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].text, long_entry);
 
-        let pruned_len = std::fs::metadata(&history_path).expect("metadata").len() as u64;
+        let pruned_len = std::fs::metadata(&history_path).expect("metadata").len();
         let max_bytes = config
             .history
             .max_bytes
